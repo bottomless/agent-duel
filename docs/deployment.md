@@ -62,7 +62,14 @@ to the compiled runtime because it cannot inspect a source checkout at run time.
 The resulting application contains no database, OpenRouter, OAuth, email, or
 private signing credential.
 
-To publish a release, attach the `.dmg` from `packages/desktop/release/` to a GitHub Release.
+Build releases from a clean, committed checkout and publish that commit to
+`bottomless/agent-duel`. Attach the `.dmg` from `packages/desktop/release/` to a GitHub Release
+tagged at the same commit. Beside the download, include a **Source code for this build** link to
+`https://github.com/bottomless/agent-duel/archive/<full-build-commit>.tar.gz`, replacing
+`<full-build-commit>` with the commit used to build the app. Keep that source available for every
+published binary; a link to the current `main` branch does not identify its matching source.
+The archive must include the vendored `arena-backend/`, dependency lockfiles, and build scripts.
+Record any non-default public build settings in the release notes so the build can be reproduced.
 
 SQLite and artifact migrations run on the desktop because the server cannot access device-local
 data. They must preserve existing history and be safe to resume after interruption.
@@ -97,6 +104,8 @@ Use a fresh macOS user-data directory or clean test machine and verify:
 11. Local SQLite history and artifact files survive an application restart.
 12. Signing out prevents new research, assignment, comparison, and OpenRouter operations while preserving local
     history.
+13. The app's `Contents/Resources/licenses/` contains `LICENSE`, `LICENSE-APACHE`, `NOTICE`, and
+    `arena-backend/LICENSE`. The release's source link downloads the matching source without sign-in.
 
 Compare the happy path with the current `main` desktop build during the first
 release qualification. Follow [qa.md](qa.md) for evidence and

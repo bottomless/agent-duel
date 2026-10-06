@@ -29,6 +29,14 @@ asarUnpack:
   - dist/daemon/node-entrypoint-runner.js
   - node_modules/@getpaseo/server/dist/server/terminal/shell-integration/**/*
 extraResources:
+  - from: ../../LICENSE
+    to: licenses/LICENSE
+  - from: ../../LICENSE-APACHE
+    to: licenses/LICENSE-APACHE
+  - from: ../../NOTICE
+    to: licenses/NOTICE
+  - from: ../../arena-backend/LICENSE
+    to: licenses/arena-backend/LICENSE
   - from: dist/arena
     to: arena
   - from: ../app/dist
