@@ -1,12 +1,16 @@
 Copyright (c) 2025-present Mohamed Boudra
 
-Portions of this software are licensed as follows:
+The combined Agent Duel application is licensed under AGPL-3.0-or-later
+(GNU Affero General Public License, version 3 or any later version).
+The AGPL version 3 text follows below.
 
-* All third party components incorporated into the Paseo Software are
-  licensed under the original license provided by the owner of the
-  applicable component.
-* All content outside of the above mentioned restrictions is available
-  under the "AGPLv3" license as defined below.
+New original contributions are Apache-2.0. See [LICENSE-APACHE](LICENSE-APACHE)
+and the [contribution licensing policy](CONTRIBUTING.md#license).
+
+Inherited OpenCode material in arena-backend/ retains its MIT license and
+notices. See [arena-backend/LICENSE](arena-backend/LICENSE).
+Existing and third-party material retains its applicable licenses.
+See [NOTICE](NOTICE) for upstream attribution.
 
                     GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007

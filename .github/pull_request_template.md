@@ -23,3 +23,4 @@ Closes #
 - [ ] "What and why" is at most 500 characters
 - [ ] `npm run typecheck`, `npm run lint` and `npm run format` pass
 - [ ] Screenshots or video attached for UI changes
+- [ ] I agree to the contribution licensing policy and have authority to license my contribution.

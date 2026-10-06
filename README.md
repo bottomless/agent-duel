@@ -135,15 +135,22 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Questions and help: [SUPPORT.md](SUPPORT
 Security: [SECURITY.md](SECURITY.md). Everyone taking part follows the
 [Code of Conduct](CODE_OF_CONDUCT.md).
 
+## Built on
+
+Agent Duel is a fork of [Paseo](https://github.com/getpaseo/paseo), which provides the desktop app, local daemon, and agent integrations. Its bundled battle engine is built on a vendored fork of [OpenCode](https://github.com/anomalyco/opencode).
+
+Agent Duel adds blinded coding-agent battles, side-by-side comparison, and voting that carries the selected result into your chat and repository.
+
 ## License
 
-- Everything outside `arena-backend/` is AGPL-3.0-or-later. Agent Duel is a fork
-  of [Paseo](https://github.com/getpaseo/paseo), copyright Mohamed Boudra, with
-  modifications by Bottomless. See [LICENSE](LICENSE).
-- `arena-backend/` is MIT. It is a fork of
-  [OpenCode](https://github.com/anomalyco/opencode), copyright opencode, with
-  modifications by Bottomless. See [arena-backend/LICENSE](arena-backend/LICENSE).
-- Third-party components keep their own licences.
+- The combined application is AGPL-3.0-or-later. See [LICENSE](LICENSE).
+- New original contributions are Apache-2.0. See [LICENSE-APACHE](LICENSE-APACHE)
+  and the [contribution licensing policy](CONTRIBUTING.md#license).
+- Inherited OpenCode material in `arena-backend/` retains its MIT license and
+  notices. See [arena-backend/LICENSE](arena-backend/LICENSE).
+- Existing and third-party material retains its applicable licenses.
 
-[NOTICE](NOTICE) has the full mapping. The hosted Agent Duel service is not part
+We plan to move the application to Apache-2.0 after rebasing onto Apache-licensed Paseo and clearing any remaining AGPL-only material.
+
+[NOTICE](NOTICE) has the full licensing and attribution details. The hosted Agent Duel service is not part
 of this repository.
