@@ -86,10 +86,14 @@ which checks a person ran and which an agent ran.
 
 ## License
 
-Contributions use the licence of the directory they change (inbound=outbound):
+All new original contributions, including contributions to `arena-backend/`,
+are submitted under Apache-2.0, to the extent you own or are authorized to grant
+those rights. See [LICENSE-APACHE](LICENSE-APACHE).
 
-- `arena-backend/` is MIT. See [arena-backend/LICENSE](arena-backend/LICENSE).
-- Everything else is AGPL-3.0-or-later. See [LICENSE](LICENSE).
+This policy applies prospectively. Existing and third-party material retains
+its applicable licenses. Keep existing copyright and license notices, including
+the MIT license and notices for inherited OpenCode material in
+[arena-backend/LICENSE](arena-backend/LICENSE).
 
-Keep existing copyright and licence notices. [NOTICE](NOTICE) maps each
-directory to its licence and upstream project.
+The combined application remains AGPL-3.0-or-later. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE) for licensing and upstream attribution.

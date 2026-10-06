@@ -119,13 +119,16 @@ Security: [SECURITY.md](SECURITY.md). Everyone taking part follows the
 
 ## License
 
-- Everything outside `arena-backend/` is AGPL-3.0-or-later. Agent Duel is a fork
+- The combined application is AGPL-3.0-or-later. Agent Duel is a fork
   of [Paseo](https://github.com/getpaseo/paseo), copyright Mohamed Boudra, with
   modifications by Bottomless. See [LICENSE](LICENSE).
-- `arena-backend/` is MIT. It is a fork of
+- New original contributions are Apache-2.0. See [LICENSE-APACHE](LICENSE-APACHE)
+  and the [contribution licensing policy](CONTRIBUTING.md#license).
+- Inherited OpenCode material in `arena-backend/` retains its MIT license and
+  notices. It is a fork of
   [OpenCode](https://github.com/anomalyco/opencode), copyright opencode, with
   modifications by Bottomless. See [arena-backend/LICENSE](arena-backend/LICENSE).
-- Third-party components keep their own licences.
+- Existing and third-party material retains its applicable licenses.
 
 [NOTICE](NOTICE) has the full mapping. The hosted Agent Duel service is not part
 of this repository.
