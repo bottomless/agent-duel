@@ -31,10 +31,15 @@ E-mail signup required for use. No cost for unlimited inference with frontier mo
 
 The hosted version draws from:
 
-- Claude Opus 5
+- Claude Fable 5.1
+- Claude Opus 5.5
+- GPT-6 Astra
+- GPT-6.1 Sol
 - Kimi K3
+- Muse Spark 1.3
+- Grok 4.7
 - Qwen 3.8 Max
-- GPT-5.6 Sol
+- Gemini 3.8 Flash
 
 ## Architecture
 
