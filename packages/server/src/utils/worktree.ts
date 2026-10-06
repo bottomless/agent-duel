@@ -1,15 +1,8 @@
-import { execFile } from "child_process";
-import { promisify } from "util";
-import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
 import { readFile, rm, stat } from "fs/promises";
 import { join, basename, dirname, isAbsolute, resolve, sep } from "path";
 import net from "node:net";
-import { createHash } from "node:crypto";
-import stripAnsi from "strip-ansi";
-import {
-  buildStringCommandShellInvocation,
-  createStringCommandShellEnv,
-} from "./string-command-shell.js";
+import { createHash, randomBytes } from "node:crypto";
 import { readPaseoConfigJson, resolvePaseoConfigPath } from "./paseo-config-file.js";
 export {
   PaseoConfigRawSchema,
@@ -31,18 +24,14 @@ import {
   writePaseoWorktreeRuntimeMetadata,
 } from "./worktree-metadata.js";
 import { runGitCommand } from "./run-git-command.js";
-import { spawnProcess } from "./spawn.js";
 import { resolvePaseoHome } from "../server/paseo-home.js";
 import { writeFileAtomic } from "../server/atomic-file.js";
-import { createExternalProcessEnv } from "../server/paseo-env.js";
 import { parseGitRevParsePath, resolveGitRevParsePath } from "./git-rev-parse-path.js";
 import { validateBranchSlug } from "@getpaseo/protocol/branch-slug";
 import { expandTilde, getRealpathAwareRelativePath, isPathInsideRoot } from "./path.js";
-import { terminateWithTreeKill } from "./tree-kill.js";
 
 export { slugify, validateBranchSlug } from "@getpaseo/protocol/branch-slug";
 
-const execFileAsync = promisify(execFile);
 const READ_ONLY_GIT_ENV = {
   GIT_OPTIONAL_LOCKS: "0",
 } as const;
@@ -175,6 +164,9 @@ export interface WorktreeCheckoutRef {
 export type WorktreeSource =
   | { kind: "branch-off"; baseBranch: string; branchName: string }
   | { kind: "checkout-branch"; branchName: string }
+  // A detached HEAD at `baseRef`. No branch is created or checked out, so the same ref can
+  // back any number of worktrees at once; a branch is created later, in place, if wanted.
+  | { kind: "detached"; baseRef: string }
   | {
       kind: "checkout-change-request";
       forge: string;
@@ -199,6 +191,13 @@ export type WorktreeSource =
       trackOriginHead?: boolean;
     };
 
+/**
+ * Fill a freshly created worktree with the source checkout's ignored content, before its
+ * setup commands run. A dependency tree cloned from the checkout turns `npm install` into a
+ * no-op check, so a new worktree is ready in seconds rather than minutes.
+ */
+export type WorktreeSeedFn = (input: { sourceCwd: string; worktreePath: string }) => Promise<void>;
+
 export interface CreateWorktreeOptions {
   cwd: string;
   worktreeSlug: string;
@@ -206,6 +205,9 @@ export interface CreateWorktreeOptions {
   runSetup: boolean;
   paseoHome?: string;
   worktreesRoot?: string;
+  seedIgnoredContent?: WorktreeSeedFn;
+  onBeforeAdd?: (worktreePath: string) => Promise<void>;
+  onAddFailed?: (worktreePath: string) => Promise<void>;
 }
 
 export class BranchAlreadyCheckedOutError extends Error {
@@ -263,97 +265,16 @@ export function paseoConfigParseError(failure: { configPath: string; error: unkn
   });
 }
 
-function readPaseoConfigOrThrow(repoRoot: string): PaseoConfig | null {
-  const result = readPaseoConfig(repoRoot);
-  if (!result.ok) {
-    throw paseoConfigParseError(result);
-  }
-  return result.config;
-}
-
-export function getWorktreeSetupCommands(repoRoot: string): string[] {
-  return readPaseoConfigOrThrow(repoRoot)?.worktree?.setup ?? [];
-}
-
-export function getWorktreeTeardownCommands(repoRoot: string): string[] {
-  return readPaseoConfigOrThrow(repoRoot)?.worktree?.teardown ?? [];
-}
-
-export function getWorktreeTerminalSpecs(repoRoot: string): WorktreeTerminalConfig[] {
-  const terminals = readPaseoConfigOrThrow(repoRoot)?.worktree?.terminals;
-  if (!Array.isArray(terminals) || terminals.length === 0) {
-    return [];
-  }
-
-  const specs: WorktreeTerminalConfig[] = [];
-  for (const terminal of terminals) {
-    if (!terminal || typeof terminal !== "object") {
-      continue;
-    }
-
-    const rawCommand = terminal.command;
-    if (typeof rawCommand !== "string") {
-      continue;
-    }
-    const command = rawCommand.trim();
-    if (!command) {
-      continue;
-    }
-
-    const rawName = terminal.name;
-    const name =
-      typeof rawName === "string" && rawName.trim().length > 0 ? rawName.trim() : undefined;
-
-    specs.push({
-      ...(name ? { name } : {}),
-      command,
-    });
-  }
-
-  return specs;
-}
-
-export function getScriptConfigs(config: PaseoConfig | null): Map<string, ScriptConfig> {
-  const scripts = config?.scripts;
-  if (!scripts || typeof scripts !== "object") {
-    return new Map();
-  }
-
-  const result = new Map<string, ScriptConfig>();
-  for (const [name, entry] of Object.entries(scripts)) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-
-    const rawCommand = entry.command;
-    if (typeof rawCommand !== "string") {
-      continue;
-    }
-    const command = rawCommand.trim();
-    if (!command) {
-      continue;
-    }
-
-    const scriptConfig: ScriptConfig =
-      entry.type === "service"
-        ? {
-            type: "service",
-            command,
-          }
-        : { command };
-
-    if (
-      isServiceScript(scriptConfig) &&
-      typeof entry.port === "number" &&
-      Number.isFinite(entry.port)
-    ) {
-      scriptConfig.port = entry.port;
-    }
-
-    result.set(name, scriptConfig);
-  }
-
-  return result;
+/**
+ * Agent Duel does not honour paseo.json worktree lifecycle hooks or scripts.
+ * `worktree.setup`, `worktree.teardown`, `worktree.terminals` and `scripts` are
+ * read from nowhere, so every project behaves like one that never configured
+ * them. The file is still parsed for `worktree.arenaCopy` and
+ * `metadataGeneration`, and the project settings editor round-trips the rest of
+ * it untouched.
+ */
+export function getScriptConfigs(): Map<string, ScriptConfig> {
+  return new Map();
 }
 
 export function processCarriageReturns(text: string): string {
@@ -404,151 +325,6 @@ export function processCarriageReturns(text: string): string {
   }
 
   return output.join("");
-}
-
-async function execSetupCommand(
-  command: string,
-  options: { cwd: string; env: NodeJS.ProcessEnv },
-): Promise<WorktreeSetupCommandResult> {
-  const startedAt = Date.now();
-  const shellInvocation = buildStringCommandShellInvocation({ command });
-  try {
-    const { stdout, stderr } = await execFileAsync(shellInvocation.shell, shellInvocation.args, {
-      cwd: options.cwd,
-      env: options.env,
-    });
-    return {
-      command,
-      cwd: options.cwd,
-      stdout: stdout ?? "",
-      stderr: stderr ?? "",
-      exitCode: 0,
-      durationMs: Date.now() - startedAt,
-    };
-  } catch (error) {
-    const execErr = error as { stdout?: string; stderr?: string; code?: unknown } | undefined;
-    return {
-      command,
-      cwd: options.cwd,
-      stdout: execErr?.stdout ?? "",
-      stderr: execErr?.stderr ?? (error instanceof Error ? error.message : String(error)),
-      exitCode: typeof execErr?.code === "number" ? execErr.code : null,
-      durationMs: Date.now() - startedAt,
-    };
-  }
-}
-
-async function execSetupCommandStreamed(options: {
-  command: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  index: number;
-  total: number;
-  signal?: AbortSignal;
-  onEvent?: (event: WorktreeSetupCommandProgressEvent) => void;
-}): Promise<WorktreeSetupCommandResult> {
-  return new Promise((resolvePromise) => {
-    const startedAt = Date.now();
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-    let settled = false;
-    let termination: Promise<unknown> | null = null;
-
-    const emitOutput = (stream: "stdout" | "stderr", chunk: string) => {
-      const text = stripAnsi(chunk);
-      if (!text) {
-        return;
-      }
-      if (stream === "stdout") {
-        stdoutChunks.push(text);
-      } else {
-        stderrChunks.push(text);
-      }
-      options.onEvent?.({
-        type: "output",
-        index: options.index,
-        total: options.total,
-        command: options.command,
-        cwd: options.cwd,
-        stream,
-        chunk: text,
-      });
-    };
-
-    const finish = async (exitCode: number | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      options.signal?.removeEventListener("abort", abort);
-      await termination;
-      const result: WorktreeSetupCommandResult = {
-        command: options.command,
-        cwd: options.cwd,
-        stdout: stdoutChunks.join(""),
-        stderr: stderrChunks.join(""),
-        exitCode,
-        durationMs: Date.now() - startedAt,
-      };
-      options.onEvent?.({
-        type: "command_completed",
-        index: options.index,
-        total: options.total,
-        command: options.command,
-        cwd: options.cwd,
-        exitCode: result.exitCode,
-        durationMs: result.durationMs,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      });
-      resolvePromise(result);
-    };
-
-    options.onEvent?.({
-      type: "command_started",
-      index: options.index,
-      total: options.total,
-      command: options.command,
-      cwd: options.cwd,
-    });
-
-    const shellInvocation = buildStringCommandShellInvocation({ command: options.command });
-    const child = spawnProcess(shellInvocation.shell, shellInvocation.args, {
-      cwd: options.cwd,
-      env: options.env,
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    const abort = () => {
-      termination ??= terminateWithTreeKill(child, {
-        gracefulTimeoutMs: 1000,
-        forceTimeoutMs: 1000,
-      });
-    };
-    if (options.signal?.aborted) {
-      abort();
-    } else {
-      options.signal?.addEventListener("abort", abort, { once: true });
-    }
-
-    child.stdout?.on("data", (chunk: Buffer | string) => {
-      emitOutput("stdout", chunk.toString());
-    });
-
-    child.stderr?.on("data", (chunk: Buffer | string) => {
-      emitOutput("stderr", chunk.toString());
-    });
-
-    child.on("error", (error) => {
-      emitOutput("stderr", error instanceof Error ? error.message : String(error));
-      void finish(null);
-    });
-
-    child.on("close", (code) => {
-      void finish(typeof code === "number" ? code : null);
-    });
-  });
 }
 
 async function getAvailablePort(): Promise<number> {
@@ -626,7 +402,13 @@ async function inferRepoRootPathFromWorktreePath(worktreePath: string): Promise<
   }
 }
 
-export async function runWorktreeSetupCommands(options: {
+/**
+ * Always resolves to no results: there is no source of setup commands any more.
+ * Every worktree takes the path an unconfigured project has always taken — the
+ * setup step runs, finds nothing to do, and reports completion — so the progress
+ * events around it stay exactly as they are today.
+ */
+export async function runWorktreeSetupCommands(_options: {
   worktreePath: string;
   branchName: string;
   cleanupOnFailure: boolean;
@@ -635,58 +417,7 @@ export async function runWorktreeSetupCommands(options: {
   signal?: AbortSignal;
   onEvent?: (event: WorktreeSetupCommandProgressEvent) => void;
 }): Promise<WorktreeSetupCommandResult[]> {
-  // Read paseo.json from the worktree (it will have the same content as the source repo)
-  const setupCommands = getWorktreeSetupCommands(options.worktreePath);
-  if (setupCommands.length === 0) {
-    return [];
-  }
-
-  const runtimeEnv =
-    options.runtimeEnv ??
-    (await resolveWorktreeRuntimeEnv({
-      worktreePath: options.worktreePath,
-      branchName: options.branchName,
-      ...(options.repoRootPath ? { repoRootPath: options.repoRootPath } : {}),
-    }));
-  const setupEnv = createStringCommandShellEnv(createExternalProcessEnv(process.env, runtimeEnv));
-
-  const results: WorktreeSetupCommandResult[] = [];
-  for (const [index, cmd] of setupCommands.entries()) {
-    const result = options.onEvent
-      ? await execSetupCommandStreamed({
-          command: cmd,
-          cwd: options.worktreePath,
-          env: setupEnv,
-          index: index + 1,
-          total: setupCommands.length,
-          signal: options.signal,
-          onEvent: options.onEvent,
-        })
-      : await execSetupCommand(cmd, {
-          cwd: options.worktreePath,
-          env: setupEnv,
-        });
-    results.push(result);
-
-    if (result.exitCode !== 0) {
-      if (options.cleanupOnFailure) {
-        try {
-          await runGitCommand(["worktree", "remove", options.worktreePath, "--force"], {
-            cwd: options.worktreePath,
-            timeout: 120_000,
-          });
-        } catch {
-          rmSync(options.worktreePath, { recursive: true, force: true });
-        }
-      }
-      throw new WorktreeSetupError(
-        `Worktree setup command failed: ${cmd}\n${result.stderr}`.trim(),
-        results,
-      );
-    }
-  }
-
-  return results;
+  return [];
 }
 
 async function resolveBranchNameForWorktreePath(worktreePath: string): Promise<string> {
@@ -740,58 +471,14 @@ export async function resolveWorktreeRuntimeEnv(options: {
   };
 }
 
-export async function runWorktreeTeardownCommands(options: {
+/** Always resolves to no results, for the same reason as `runWorktreeSetupCommands`. */
+export async function runWorktreeTeardownCommands(_options: {
   worktreePath: string;
   teardownCwd?: string;
   branchName?: string;
   repoRootPath?: string;
 }): Promise<WorktreeTeardownCommandResult[]> {
-  const teardownCwd = options.teardownCwd ?? options.worktreePath;
-  if (getRealpathAwareRelativePath(options.worktreePath, teardownCwd) === null) {
-    throw new Error(`Worktree teardown cwd is outside the worktree: ${teardownCwd}`);
-  }
-  const teardownCommands = getWorktreeTeardownCommands(teardownCwd);
-  if (teardownCommands.length === 0) {
-    return [];
-  }
-
-  const repoRootPath =
-    options.repoRootPath ?? (await inferRepoRootPathFromWorktreePath(options.worktreePath));
-  const branchName =
-    options.branchName ?? (await resolveBranchNameForWorktreePath(options.worktreePath));
-  const worktreePort = readPaseoWorktreeRuntimePort(options.worktreePath);
-
-  const teardownEnv: NodeJS.ProcessEnv = createStringCommandShellEnv(
-    createExternalProcessEnv(process.env, {
-      // Source checkout path is the original git repo root (shared across worktrees), not the
-      // worktree itself. This allows lifecycle scripts to copy or clean resources using paths
-      // from the source checkout.
-      PASEO_SOURCE_CHECKOUT_PATH: repoRootPath,
-      // Backward-compatible alias.
-      PASEO_ROOT_PATH: repoRootPath,
-      PASEO_WORKTREE_PATH: options.worktreePath,
-      PASEO_BRANCH_NAME: branchName,
-      ...(worktreePort !== null ? { PASEO_WORKTREE_PORT: String(worktreePort) } : {}),
-    }),
-  );
-
-  const results: WorktreeTeardownCommandResult[] = [];
-  for (const cmd of teardownCommands) {
-    const result = await execSetupCommand(cmd, {
-      cwd: teardownCwd,
-      env: teardownEnv,
-    });
-    results.push(result);
-
-    if (result.exitCode !== 0) {
-      throw new WorktreeTeardownError(
-        `Worktree teardown command failed: ${cmd}\n${result.stderr}`.trim(),
-        results,
-      );
-    }
-  }
-
-  return results;
+  return [];
 }
 
 export async function copySourcePaseoConfigFile(options: {
@@ -849,6 +536,46 @@ export async function deriveWorktreeProjectHash(cwd: string): Promise<string> {
   }
 }
 
+/**
+ * The directory a checkout keeps Agent Duel's state in, excluded from the checkout. The
+ * Arena backend owns the same name (`worktree/layout.ts` there); the two have to agree
+ * because a worktree of the project and the contestants of a battle share this root.
+ */
+export const LOCAL_STATE_DIRNAME = ".agent-duel";
+
+/** Where a project's worktrees live: inside the project, beside its contestants. */
+export function localWorktreesRoot(repoRoot: string): string {
+  return join(repoRoot, LOCAL_STATE_DIRNAME, "worktrees");
+}
+
+/**
+ * A worktree's directory name: eight hex characters, random. It names nothing on purpose.
+ * A directory named after a branch is wrong the moment the branch changes, and a detached
+ * worktree has no branch to begin with; the sidebar carries the readable name.
+ */
+export function randomWorktreeId(): string {
+  return randomBytes(4).toString("hex");
+}
+
+/**
+ * Keep the local-state directory out of the checkout's status and out of any snapshot
+ * taken of it. Written to the repository's exclude file rather than `.gitignore`, so the
+ * checkout's tracked files are untouched. Mirrors what the Arena backend writes before a
+ * battle, so whichever runs first leaves the same line.
+ */
+export async function ensureLocalStateExcluded(repoRoot: string): Promise<void> {
+  const { stdout } = await runGitCommand(
+    ["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"],
+    { cwd: repoRoot },
+  );
+  const file = stdout.trim();
+  const pattern = `/${LOCAL_STATE_DIRNAME}/`;
+  const current = existsSync(file) ? readFileSync(file, "utf8") : "";
+  if (current.split(/\r?\n/).some((line) => line.trim() === pattern)) return;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`);
+}
+
 export function resolvePaseoWorktreesBaseRoot(options?: WorktreeRootOptions): string {
   if (options?.worktreesRoot) {
     const expandedRoot = expandTilde(options.worktreesRoot);
@@ -863,14 +590,63 @@ export function resolvePaseoWorktreesBaseRoot(options?: WorktreeRootOptions): st
   return join(home, "worktrees");
 }
 
+/**
+ * Where new worktrees of the checkout at `cwd` go.
+ *
+ * Inside the project by default, under its local-state directory, so deleting the
+ * project deletes its worktrees and nothing a project produced outlives it. A configured
+ * `worktreesRoot` keeps the older shared layout, `<root>/<project hash>/<slug>`, for
+ * installs that rely on it.
+ */
 export async function getPaseoWorktreesRoot(
   cwd: string,
   paseoHome?: string,
   worktreesRoot?: string,
 ): Promise<string> {
+  if (!worktreesRoot) {
+    try {
+      const commonDir = await getGitCommonDir(cwd);
+      return localWorktreesRoot(
+        resolveRepoRootFromGitCommonDir(normalizePathForOwnership(commonDir)),
+      );
+    } catch {
+      // Not a repository: fall through to the shared layout, which needs no checkout.
+    }
+  }
   const baseRoot = resolvePaseoWorktreesBaseRoot({ paseoHome, worktreesRoot });
   const projectHash = await deriveWorktreeProjectHash(cwd);
   return join(baseRoot, projectHash);
+}
+
+/**
+ * Ownership of a worktree inside a project's local-state directory, by path shape alone:
+ * `<repo>/.agent-duel/worktrees/<id>[/...]`. Path shape has to be enough because git may
+ * already have forgotten the worktree (a previous archive removed its admin dir), and the
+ * checkout above it may be gone. When git does answer, the repository it names has to be
+ * the one the path sits in: a battle contestant has the same shape under its checkout but
+ * belongs to a bare host repository of its own, and is not Paseo's to delete.
+ */
+function resolveProjectLocalOwnership(
+  resolvedCwd: string,
+  repoRoot: string | undefined,
+): PaseoWorktreeOwnership | null {
+  const marker = `${sep}${LOCAL_STATE_DIRNAME}${sep}worktrees${sep}`;
+  const index = resolvedCwd.lastIndexOf(marker);
+  if (index <= 0) return null;
+  const prefix = resolvedCwd.slice(0, index);
+  const rest = resolvedCwd
+    .slice(index + marker.length)
+    .split(sep)
+    .filter((part) => part.length > 0);
+  if (rest.length === 0) return null;
+  if (repoRoot !== undefined && normalizePathForOwnership(repoRoot) !== prefix) return null;
+  const worktreeRoot = localWorktreesRoot(prefix);
+  return {
+    allowed: true,
+    repoRoot: repoRoot ?? prefix,
+    worktreeRoot,
+    worktreePath: join(worktreeRoot, rest[0]!),
+  };
 }
 
 export async function computeWorktreePath(
@@ -948,6 +724,9 @@ export async function isPaseoOwnedWorktreeCwd(
       // ignore
     }
   }
+
+  const projectLocal = resolveProjectLocalOwnership(resolvedCwd, repoRoot);
+  if (projectLocal) return projectLocal;
 
   const worktreesBaseRoot = resolvePaseoWorktreesBaseRoot(options);
   const relativePath = getRealpathAwareRelativePath(worktreesBaseRoot, resolvedCwd);
@@ -1214,10 +993,19 @@ export const createWorktree = async ({
   runSetup,
   paseoHome,
   worktreesRoot,
+  seedIgnoredContent,
+  onBeforeAdd,
+  onAddFailed,
 }: CreateWorktreeOptions): Promise<WorktreeConfig> => {
   const sourcePlan = await resolveWorktreeSourcePlan({ cwd, source, desiredSlug: worktreeSlug });
-  let worktreePath = join(await getPaseoWorktreesRoot(cwd, paseoHome, worktreesRoot), worktreeSlug);
+  const root = await getPaseoWorktreesRoot(cwd, paseoHome, worktreesRoot);
+  let worktreePath = join(root, worktreeSlug);
   mkdirSync(dirname(worktreePath), { recursive: true });
+  // A root inside the checkout has to be excluded before anything lands in it, or the very
+  // first `git status` shows the new worktree as an untracked directory.
+  if (getRealpathAwareRelativePath(cwd, root) !== null) {
+    await ensureLocalStateExcluded(cwd);
+  }
 
   // Also handle worktree path collision
   let finalWorktreePath = worktreePath;
@@ -1227,44 +1015,72 @@ export const createWorktree = async ({
     pathSuffix++;
   }
 
+  await onBeforeAdd?.(normalizePathForOwnership(finalWorktreePath));
+
   // Primitive owner for `git worktree add`; callers route through createWorktreeCore.
-  await runGitCommand(["worktree", "add", finalWorktreePath, ...sourcePlan.addArguments], {
-    cwd,
-    timeout: 120_000,
-  });
+  try {
+    await runGitCommand(["worktree", "add", finalWorktreePath, ...sourcePlan.addArguments], {
+      cwd,
+      timeout: 120_000,
+    });
+  } catch (error) {
+    try {
+      await onAddFailed?.(normalizePathForOwnership(finalWorktreePath));
+    } catch {
+      // Keep the original Git error; a stale marker is checked again on startup.
+    }
+    throw error;
+  }
   worktreePath = normalizePathForOwnership(finalWorktreePath);
 
-  if (sourcePlan.pushRemote) {
-    await configureWorktreePushRemote({
-      cwd,
-      branchName: sourcePlan.branchName,
-      remote: sourcePlan.pushRemote,
-    });
-  }
-  if (sourcePlan.trackingRemote) {
-    await configureWorktreeTrackingRemote({
-      cwd,
-      branchName: sourcePlan.branchName,
-      remote: sourcePlan.trackingRemote,
-    });
-  }
+  try {
+    if (sourcePlan.pushRemote) {
+      await configureWorktreePushRemote({
+        cwd,
+        branchName: sourcePlan.branchName,
+        remote: sourcePlan.pushRemote,
+      });
+    }
+    if (sourcePlan.trackingRemote) {
+      await configureWorktreeTrackingRemote({
+        cwd,
+        branchName: sourcePlan.branchName,
+        remote: sourcePlan.trackingRemote,
+      });
+    }
 
-  writePaseoWorktreeMetadata(worktreePath, {
-    baseRefName: sourcePlan.metadataBaseRefName,
-    ...(sourcePlan.metadataBaseRef ? { baseRef: sourcePlan.metadataBaseRef } : {}),
-    ...(sourcePlan.changeRequestLookupTarget
-      ? { changeRequestLookupTarget: sourcePlan.changeRequestLookupTarget }
-      : {}),
-  });
-
-  await copySourcePaseoConfigFile({ sourceCwd: cwd, targetCwd: worktreePath });
-
-  if (runSetup) {
-    await runWorktreeSetupCommands({
-      worktreePath,
-      branchName: sourcePlan.branchName,
-      cleanupOnFailure: true,
+    writePaseoWorktreeMetadata(worktreePath, {
+      baseRefName: sourcePlan.metadataBaseRefName,
+      ...(sourcePlan.metadataBaseRef ? { baseRef: sourcePlan.metadataBaseRef } : {}),
+      ...(sourcePlan.changeRequestLookupTarget
+        ? { changeRequestLookupTarget: sourcePlan.changeRequestLookupTarget }
+        : {}),
     });
+
+    await copySourcePaseoConfigFile({ sourceCwd: cwd, targetCwd: worktreePath });
+
+    if (seedIgnoredContent) {
+      await seedIgnoredContent({ sourceCwd: cwd, worktreePath });
+    }
+
+    if (runSetup) {
+      await runWorktreeSetupCommands({
+        worktreePath,
+        branchName: sourcePlan.branchName,
+        cleanupOnFailure: true,
+      });
+    }
+  } catch (error) {
+    return rollbackCreatedPaseoWorktree(
+      {
+        cwd,
+        worktreePath,
+        teardownCwds: [],
+        paseoHome,
+        worktreesBaseRoot: worktreesRoot,
+      },
+      error,
+    );
   }
 
   return {
@@ -1300,29 +1116,52 @@ interface WorktreeSourcePlan {
   };
 }
 
+async function planBranchOffWorktreeSource(
+  cwd: string,
+  source: Extract<WorktreeSource, { kind: "branch-off" }>,
+  desiredSlug: string,
+): Promise<WorktreeSourcePlan> {
+  const branchName = source.branchName;
+  validateWorktreeBranchName(branchName);
+  const normalizedBaseBranch = normalizeRequiredBaseBranch(source.baseBranch);
+  const resolvedBaseBranch = await resolveStartPointRef(cwd, source.baseBranch);
+  const branchExists = await localBranchExists(cwd, branchName);
+  const base = branchExists ? branchName : resolvedBaseBranch;
+  const candidateBranch = branchExists ? desiredSlug : branchName;
+  const newBranchName = await resolveUniqueLocalBranchName(cwd, candidateBranch);
+
+  return {
+    branchName: newBranchName,
+    metadataBaseRefName: normalizedBaseBranch,
+    metadataBaseRef: resolvedBaseBranch,
+    addArguments: ["-b", newBranchName, "--no-track", base],
+  };
+}
+
+async function planDetachedWorktreeSource(
+  cwd: string,
+  baseRef: string,
+): Promise<WorktreeSourcePlan> {
+  const resolvedRef = await resolveStartPointRef(cwd, baseRef);
+  return {
+    // No branch: the empty name is what every consumer already treats as "none".
+    branchName: "",
+    metadataBaseRefName: normalizeRequiredBaseBranch(baseRef),
+    metadataBaseRef: resolvedRef,
+    addArguments: ["--detach", resolvedRef],
+  };
+}
+
 async function resolveWorktreeSourcePlan({
   cwd,
   source,
   desiredSlug,
 }: ResolveWorktreeSourcePlanOptions): Promise<WorktreeSourcePlan> {
   switch (source.kind) {
-    case "branch-off": {
-      const branchName = source.branchName;
-      validateWorktreeBranchName(branchName);
-      const normalizedBaseBranch = normalizeRequiredBaseBranch(source.baseBranch);
-      const resolvedBaseBranch = await resolveBaseBranchForWorktree(cwd, source.baseBranch);
-      const branchExists = await localBranchExists(cwd, branchName);
-      const base = branchExists ? branchName : resolvedBaseBranch;
-      const candidateBranch = branchExists ? desiredSlug : branchName;
-      const newBranchName = await resolveUniqueLocalBranchName(cwd, candidateBranch);
-
-      return {
-        branchName: newBranchName,
-        metadataBaseRefName: normalizedBaseBranch,
-        metadataBaseRef: resolvedBaseBranch,
-        addArguments: ["-b", newBranchName, "--no-track", base],
-      };
-    }
+    case "branch-off":
+      return planBranchOffWorktreeSource(cwd, source, desiredSlug);
+    case "detached":
+      return planDetachedWorktreeSource(cwd, source.baseRef);
     case "checkout-branch": {
       await validateExistingWorktreeBranchName(cwd, source.branchName);
       if (!(await localBranchExists(cwd, source.branchName))) {
@@ -1596,15 +1435,20 @@ async function validateExistingWorktreeBranchName(cwd: string, branchName: strin
 function normalizeRequiredBaseBranch(baseBranch: string): string {
   const normalizedBaseBranch = normalizeBaseRefName(baseBranch);
   if (!normalizedBaseBranch) {
-    throw new Error("Base branch is required when creating a Paseo worktree");
+    throw new Error("Base branch is required");
   }
   if (normalizedBaseBranch === "HEAD") {
-    throw new Error("Base branch cannot be HEAD when creating a Paseo worktree");
+    throw new Error("Base branch cannot be HEAD");
   }
   return normalizedBaseBranch;
 }
 
-async function resolveBaseBranchForWorktree(
+/**
+ * The exact ref a base names, or an error. Cutting a worktree and cutting a branch in place
+ * both start from here, so "start from main" means the same commit either way and a base that
+ * has since been deleted fails loudly rather than falling back to somewhere else.
+ */
+export async function resolveStartPointRef(
   cwd: string,
   requestedBaseBranch: string,
 ): Promise<string> {

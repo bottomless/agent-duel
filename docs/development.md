@@ -2,8 +2,19 @@
 
 ## Prerequisites
 
-- Node.js (see `.tool-versions` for exact version)
-- npm workspaces (comes with Node)
+These requirements are for contributors running the stack from source. A packaged desktop user
+does not install Bun or provide an OpenRouter key.
+
+- Node.js 22 with npm
+- Bun 1.3.14 for `arena-backend`
+- An OpenRouter API key for battles
+
+Install both package graphs after cloning:
+
+```bash
+npm install
+cd arena-backend && bun install
+```
 
 ## Running the dev server
 
@@ -22,6 +33,47 @@ Root checkout dev is intentionally split across terminals:
 Desktop dev launches its desktop-managed daemon with `PASEO_NODE_ENV=development`,
 so development-only providers such as Mock Load Test are available. Packaged
 desktop launches always force the daemon to production mode.
+
+`npm run dev:desktop` is the complete local desktop startup path. It builds the server, CLI, and
+Electron main process, then starts the daemon, Metro, and Electron. It assigns free daemon, Metro,
+and debugger ports and prints `healthy` only after the daemon identity and both app listeners
+respond. A port occupied by another worktree is skipped rather than reused or stopped.
+
+This repository has no control plane, so `npm run dev:desktop` runs as a source build: no sign-in,
+and battles on your own OpenRouter key, which you paste in Settings. `npm run dev:desktop -- --byok`
+does the same explicitly.
+
+To develop against an external control plane, set `PASEO_CONTROL_PLANE_URL` to its loopback URL and
+`PASEO_SESSION_PUBLIC_KEY` to its public key before starting the launcher, which then waits for
+`$PASEO_CONTROL_PLANE_URL/api/health`. For a local session without interactive sign-in, pass
+`--dev-login` and set `PASEO_DEV_LOGIN_COMMAND` to a shell command that prints the session JSON. A
+daemon keeps the mode it started in, so run `npm run cli -- daemon stop` when you switch modes.
+
+### Desktop dev runtime
+
+Canonical Arena history stays in the checkout's local `$PASEO_HOME/arena` directory.
+
+On macOS, desktop dev uses an `Agent Duel Dev.app` copy of Electron under
+`~/Library/Application Support/Agent Duel/Development`, with the Agent Duel icon
+and a separate notification identity. Keep this runtime outside temporary
+worktrees: macOS excludes temporary app bundles from notification sender lookup.
+Allow notifications from the app’s Notifications settings; an existing denial
+must be changed in macOS Settings for **Agent Duel Dev**. The Electron permission
+does not carry over. The launcher reuses this local, ad-hoc-signed
+copy until Electron, the icon, or the preparation script changes. Metro still
+serves the renderer with hot reload, and each checkout keeps its existing user data.
+
+The macOS notification permission bridge runs inside Electron’s main process so
+Apple reads the running app’s bundle identity. Keep permission checks and delivery
+on UserNotifications: Electron 41 delivers through the legacy NSUserNotification
+API, which macOS rejects once the app connects through UserNotifications. A helper executable would read its
+own authorization. `build:main` requires Xcode Command Line Tools and builds a
+universal Node-API module; packaging leaves it outside the asar for loading and
+signing. Rebuild and relaunch Electron after changing this bridge.
+
+The dev scripts automatically set `PASEO_ARENA_BACKEND_ROOT` to the bundled
+`arena-backend` directory. Set it explicitly only when testing a different
+backend checkout.
 
 The web and desktop dev launchers pass the current Git branch to Metro as
 `EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL`. The expanded desktop sidebar shows it in
@@ -44,13 +96,12 @@ than downloading a published desktop release.
 
 ### PASEO_HOME
 
-`PASEO_HOME` is the directory that holds runtime state (agents, worktrees, workspace config, sockets, daemon log). Resolution rules:
+`PASEO_HOME` is the directory that holds runtime state (agents, workspace config, sockets, daemon log, and local Arena SQLite/artifacts). Worktrees live inside their project, under `.agent-duel/worktrees`, not here. Resolution rules:
 
 - The **server itself** (e.g. when launched by the desktop app or `npm run start`) defaults to `~/.paseo` (see `packages/server/src/server/paseo-home.ts`).
 - **Repo dev scripts** default to `$ROOT/.dev/paseo-home`, where `$ROOT` is the current checkout or worktree root. This keeps all dev state scoped to the checkout instead of the packaged desktop app.
 - **`npm run cli -- ...`** runs through the same dev-home wrapper as the dev scripts, so the in-repo CLI automatically targets the current checkout's `.dev/paseo-home` and configured dev daemon endpoint.
 - **Paseo-created worktrees** seed `$PASEO_WORKTREE_PATH/.dev/paseo-home` from `$PASEO_SOURCE_CHECKOUT_PATH/.dev/paseo-home` by copying durable JSON metadata. Runtime files like pid files, sockets, and logs are not copied.
-- **This repo's worktree setup** also best-effort seeds `packages/app/ios` and the newest `.dev/ios-build` entry from the source checkout so iOS simulator services can reuse native project and Xcode cache state when it is safe enough to do so.
 
 Override knobs:
 
@@ -75,47 +126,6 @@ In Paseo-managed worktree services, use the injected service environment rather 
 Route ownership, startup restore, and native blank-screen gotchas live in
 [expo-router.md](expo-router.md). Read it before changing `packages/app/src/app`,
 startup routing, remembered workspace restore, or active workspace selection.
-
-### iOS simulator preview service
-
-Paseo worktrees expose the native iOS dev app through the `ios-simulator` service in `paseo.json`. The service URL serves the simulator preview at `/.sim`, so the preview link is `${PASEO_URL}/.sim`.
-
-**Prerequisites (macOS only).** The service shells out to the Apple toolchain, so beyond the `npm ci` that worktree setup runs you must install:
-
-- **Xcode** (the full app, not just the Command Line Tools) — install it from the Mac App Store, or from `developer.apple.com/download` for a specific version. It provides `xcodebuild` and `xcrun simctl`; accept its license and let first-run component installation finish before starting the service.
-- **An iOS Simulator runtime with at least one iPhone device type**. Recent Xcode versions may not bundle a runtime — add one via Xcode → Settings → Components (older Xcode: "Platforms"). The service targets `iPhone 16 Pro` by default (override with `PASEO_IOS_DEVICE_TYPE`) and falls back to any iPhone; it fails with `No iPhone simulator device type is installed` when none exist.
-- **Homebrew** — CocoaPods itself installs automatically: `expo prebuild` runs `pod install` on a cold worktree, and when the CocoaPods CLI is missing the runner installs it for you. It tries `gem install cocoapods` first and falls back to Homebrew (`brew install cocoapods`), so having Homebrew available lets that fallback succeed without a manual step.
-
-`serve-sim`, Expo, and Metro come from `npm ci`, and CocoaPods installs itself on the first prebuild as described above.
-
-The service is designed for concurrent worktrees: it derives a deterministic simulator identity from the worktree path, uses the worktree's assigned `PASEO_PORT`, pins `serve-sim` to that simulator UDID, and only tears down that worktree's helper/simulator state. It must not rely on the globally booted simulator or any fixed Metro port.
-
-Worktree setup best-effort seeds the generated iOS project and newest native build cache from the source checkout before the service runs. The service still validates the native project by running Expo prebuild and Xcode; the seed only avoids paying all setup/build cost from a cold worktree every time.
-
-Starting the service must not create, focus, reveal, or leave behind macOS Simulator.app windows — a guard hides Simulator.app every 250ms, so the native window vanishes if you focus it. The user-visible surface is the interactive `/.sim` preview: a `serve-sim` stream (60 FPS MJPEG + a WebSocket control channel) that Metro mounts at `basePath: "/.sim"` (`packages/app/metro.config.cjs`) and that forwards taps and gestures, so first-launch prompts like "Open in PaseoDebug?" are answered there, not in the native window. Open the `${PASEO_URL}/.sim` link the service prints — not `serve-sim`'s raw stream port (`:3100`), which is view-only. Because the stream sits behind the daemon proxy it is convenient for remote viewing but laggy up close; for fast local dev at the Mac, use the native simulator path below.
-
-**Troubleshooting.** If `xcrun simctl` fails with `unable to find utility "simctl"`, the active developer directory is still the Command Line Tools even though Xcode is installed. Point it at Xcode: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`, then confirm with `xcrun --find simctl`.
-
-### Running the iOS app on a local simulator
-
-For fast, native, interactive iOS dev at the Mac — as opposed to the remote `/.sim` preview above — skip the service and build the dev client directly:
-
-```bash
-npm run ios        # → expo run:ios (packages/app): builds and launches the app in the real Simulator.app
-```
-
-`expo run:ios` starts its own Metro and gives you the normal Simulator.app window (full speed, native touch, no stream).
-
-**Pointing the app at a daemon.** The client resolves its local daemon from `EXPO_PUBLIC_LOCAL_DAEMON` (`packages/app/src/runtime/host-runtime.ts`); when unset it falls back to `localhost:6767`, the production `~/.paseo` daemon. To target a worktree's dev daemon instead, set it on the build command:
-
-```bash
-EXPO_PUBLIC_LOCAL_DAEMON=localhost:${PASEO_SERVICE_DAEMON_PORT} npm run ios   # worktree daemon running as a Paseo service
-EXPO_PUBLIC_LOCAL_DAEMON=localhost:6768 npm run ios                          # standalone `npm run dev:server`
-```
-
-The iOS simulator shares the Mac's loopback, so `localhost:<port>` reaches the host daemon directly.
-
-**Gotcha — `EXPO_PUBLIC_*` is inlined into the JS bundle at Metro bundle time, not read at runtime.** Set it in the same shell that starts Metro. If the app still connects to the old daemon, Metro served a cached bundle; re-bundle clean with `cd packages/app && EXPO_PUBLIC_LOCAL_DAEMON=… npx expo start -c` and reload the app.
 
 ### Desktop renderer profiling
 
@@ -297,80 +307,103 @@ another remote fails closed until the worktree records an explicit local target.
 the optional field and retain the previous local-first behavior; older worktree metadata without the
 exact ref also resolves through its stored branch name.
 
-Worktrees inherit committed Git state. Before lifecycle setup, Paseo copies the source checkout's
-`paseo.json` over the worktree copy so saved Project Settings apply without a commit. Other
-uncommitted source-checkout changes are not copied.
+Worktrees inherit committed Git state. Paseo copies the source checkout's `paseo.json` over the
+worktree copy so saved Project Settings apply without a commit. Other uncommitted source-checkout
+changes are not copied.
 
-## paseo.json service scripts
+## Arena checkout lifecycle
 
-`worktree.setup` and `worktree.teardown` accept either a multiline shell script or an array
-of commands. Both run sequentially.
+Arena chats use the canonical session's existing Git checkout. Chat creation
+does not create or move into a hidden canonical worktree. At each normal-turn
+and battle boundary Arena re-reads that fixed checkout's `HEAD`, branch or
+detached state, and index tree. A branch switch inside the checkout is valid;
+moving the chat to another checkout is not automatic. Removing that checkout
+blocks new turns. A different repository created at the same path stays
+blocked. Restore the checkout with the recorded repository lineage and resolve
+the chat again to return it to ready state.
 
-Lifecycle commands run in the worktree through a stable script shell: `bash`
-resolved from `PATH` on macOS/Linux, and PowerShell with `-NoProfile` on
-Windows. They inherit the daemon environment plus Paseo's lifecycle variables;
-login and interactive shell startup files are not loaded, and Bash's `BASH_ENV`
-hook is unset. ACP single-string terminal commands use the same non-login Bash
-behavior on macOS/Linux, but preserve their existing `cmd.exe /c` string semantics
-on Windows. Service scripts are separate:
-they launch in a terminal and receive the service environment described below.
-
-Because the shell differs per platform, a lifecycle command that must run
-everywhere cannot use POSIX-only syntax — `VAR=1 cmd` env prefixes, `$VAR`
-expansion, `cp`/`rm`, or a `./scripts/*.sh` entrypoint all fail under PowerShell,
-and `bash` is not guaranteed to exist on Windows. Put that logic in a Node script
-that reads what it needs from `process.env` and invoke it as
-`node ./scripts/<name>.mjs`. This repo's own setup does exactly that in
-`scripts/seed-worktree-dev-state.mjs` and `scripts/seed-ios-native-cache.mjs`.
+Each battle captures tracked and nonignored working-tree content through a
+temporary Git index, writes a permanent base ref below `refs/battles/`, and
+clones the checkout's ignored content into each contestant. Everything git
+ignores is carried except `.agent-duel` and ignored roots containing another
+registered Git worktree. A nested checkout is independent source state and its
+`.git` link points outside the copied tree. Other ignored roots are cloned
+copy-on-write rather than copied file by file: on APFS each root is cloned one
+child at a time (`@scope` directories one level deeper) with `clonefile`, and on
+Btrfs or XFS it is one reflink copy, so seeding a contestant takes seconds
+however many files it holds. A single whole-tree `clonefile` would block every
+`rename` on the volume until it returned, and Git commits its config, index
+and refs by rename. The children are cloned into `.agent-duel/worktrees/.staging`
+and the finished root moves into the contestant in one rename; built in place,
+each child would reach the contestant's file watch as a write. Where the filesystem cannot clone, the trees are copied
+and the byte limits apply: 64 MiB per top-level file and 512 MiB in aggregate
+by default. Set project exclusions or lower limits in `paseo.json`; zero selects
+the daemon default:
 
 ```json
 {
   "worktree": {
-    "setup": "npm ci\ncp \"$PASEO_SOURCE_CHECKOUT_PATH/.env\" .env\nnpm run db:migrate",
-    "teardown": "npm run db:drop || true"
-  }
-}
-```
-
-Every `scripts` entry with `"type": "service"` receives these environment variables:
-
-| Variable                    | Value                                                                                                                     |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `PASEO_SERVICE_<NAME>_URL`  | Proxied URL for a declared peer service. Prefer this for peer discovery; it survives peer restarts.                       |
-| `PASEO_SERVICE_<NAME>_PORT` | Raw ephemeral port for a declared peer service. Use only as a bypass escape hatch; it can go stale if that peer restarts. |
-| `PASEO_URL`                 | Self alias for `PASEO_SERVICE_<SELF>_URL`.                                                                                |
-| `PASEO_PORT`                | Self alias for `PASEO_SERVICE_<SELF>_PORT`.                                                                               |
-| `HOST`                      | Bind host for the service process.                                                                                        |
-
-Service proxy hostnames use the double-dash shape: `web--feature-auth--project.localhost` or, on the default branch, `web--project.localhost`. Optional public aliases use the same leftmost label under the configured public base host.
-
-`<NAME>` is normalized from the script name by uppercasing it, replacing each run of non-`A-Z0-9` characters with `_`, and trimming leading or trailing `_`. For example, `app-server` and `app.server` both normalize to `APP_SERVER`; that collision fails at spawn time with an actionable error.
-
-`PORT` is not injected by default. If a framework requires `PORT`, set it in the command:
-
-```json
-{
-  "scripts": {
-    "web": {
-      "type": "service",
-      "command": "PORT=$PASEO_PORT npm run dev:web"
+    "arenaCopy": {
+      "ignoredFileMaxBytes": 0,
+      "ignoredTotalMaxBytes": 0,
+      "exclude": ["tmp/**"]
     }
   }
 }
 ```
 
-Service ports use OS ephemeral allocation by default. Set `worktrees.servicePorts` in
-`$PASEO_HOME/config.json`, or replace it for one project with `worktree.servicePorts` in
-`paseo.json`. The block accepts an inclusive `range` such as `"3000-4000"` or a `portScript`
-executable. Since `portScript` is executed directly without a shell, it must point to a real executable (e.g., a binary or a script with a proper shebang like `#!/bin/sh`) rather than an inline shell command or shell pipeline. For inline shell commands or pipelines, wrap them in a small script. `portScript` runs in the workspace directory with four arguments: service name,
-workspace ID, branch name, and worktree path. A missing branch is passed as an empty string. The same
-values are available as `PASEO_SCRIPTNAME`, `PASEO_WORKSPACE_ID`, `PASEO_BRANCH_NAME`, and
-`PASEO_WORKTREE_PATH`. The script must print one valid TCP port. Paseo trusts the external allocator,
-so the port may already be bound. `portScript` takes precedence when both values are present.
+Arena reuses generation-scoped contestant environments across turns. Do not delete
+`refs/battles/` or the isolated Arena repositories while a chat is active. Voting installs the
+winner's exact commits and remaining Git state in the canonical checkout. A newly created current
+branch is created and checked out there as well. The vote response returns once the choice is durable; transcript retention,
+application, and environment preparation continue while the chat remains active. The selected
+worktree remains live through the next-send boundary. The next pair is warmed
+in generation-scoped paths and reused untouched when the canonical files have
+not changed, including across a transcript-only single-agent turn. A changed
+tracked or ignored source refreshes both paths from one snapshot. Warm recovery
+checks the registered path, branch, Git tree, and post-setup fingerprint of
+copied manifest content. A mismatch removes both warm paths and falls back to
+cold preparation.
+
+Contestant shells receive the current context dynamically:
+
+| Variable                                                        | Value                                                    |
+| --------------------------------------------------------------- | -------------------------------------------------------- |
+| `PASEO_CURRENT_BRANCH`                                          | Persistent branch attached to this contestant.           |
+| `PASEO_TRUNK_DIR`                                               | Canonical checkout path. Contestants must not modify it. |
+| `PASEO_TRUNK_BRANCH`                                            | Canonical branch, or an empty string at detached `HEAD`. |
+| `PASEO_PORT`, `PASEO_PORT2`, `PASEO_PORT3`                      | Three aliases reserved for this contestant environment.  |
+| `ARENA_PREVIEW_URL`, `ARENA_PREVIEW_URL2`, `ARENA_PREVIEW_URL3` | Public URL matching each port alias.                     |
+
+Use `$(pwd)` and these variables in prompts, setup, and diagnostics. Port
+numbers and aliases expire with the environment. Arena records commands from a
+retained winner at the next send, stops their owned process groups, and does
+not replay them in the new worktrees. Bind browser-facing services to
+`HOST=127.0.0.1`, use `PORT`/`PASEO_PORT` for the primary listener or the
+additional aliases for peers, and report `ARENA_PREVIEW_URL` instead of the
+private bind address. Report `ARENA_PREVIEW_URL2` or `ARENA_PREVIEW_URL3` for a
+service bound to the matching additional alias.
+
+## paseo.json
+
+Agent Duel does not honour `worktree.setup`, `worktree.teardown`, `worktree.terminals` or `scripts`.
+A file that carries them parses fine and is preserved on save, but nothing reads them: every project
+gets the environment a project with no `paseo.json` has always got. Two keys are still read —
+`worktree.arenaCopy` (which untracked files a contestant worktree receives) and `metadataGeneration`
+(the prompts behind generated branch names, commit messages, and PR text, edited in Project
+Settings).
+
+The scripts and services runtime beneath those removed keys — the projection, the proxy, the port
+allocator, the health monitor, the CLI's `paseo scripts`, and the MCP script tools — is still wired
+up but has no configuration source, so it always reports an empty list.
 
 ## Bundled daemon web UI
 
-> The user-facing guide for this feature (enabling it, reverse proxy, TLS, tunnels, security) lives at [public-docs/web-ui.md](../public-docs/web-ui.md). This section is the contributor/build reference: how the artifact is produced, bundled, and excluded from desktop packaging.
+> This is an inherited Paseo capability, not an Agent Duel product or deployment
+> target. Keep it working when shared daemon code changes, but do not enable or
+> publish it for an Agent Duel release.
+>
+> The user-facing guide for this feature (enabling it, reverse proxy, TLS, tunnels, security) lives at [web UI](web-ui.md). This section is the contributor/build reference: how the artifact is produced, bundled, and excluded from desktop packaging.
 
 The daemon can optionally serve the browser web client from the same HTTP server. This is disabled by default.
 
@@ -464,7 +497,7 @@ install.
 
 Use `npm run cli` to run the in-repo CLI from source (`npx tsx packages/cli/src/index.ts`). The script wraps the CLI with `scripts/dev-home.sh`, so it automatically uses this checkout's `.dev/paseo-home` and dev daemon endpoint unless you pass an explicit override. The globally installed `paseo` binary on macOS is a symlink into the installed Paseo desktop app, not this checkout — use it to drive the desktop's built-in daemon, but use `npm run cli` when you want to talk to the CLI you are editing.
 
-Canonical automation uses `paseo workspace create/ls/rename/archive`, `paseo heartbeat create/update/delete`, and the full `paseo schedule` group. MCP heartbeat automation is intentionally smaller: create and delete only. Detach remains an explicit user lifecycle action rather than an agent tool. `paseo run --new-workspace local|worktree` composes workspace creation with agent creation. The old `paseo worktree` and `paseo run --worktree` forms are hidden compatibility aliases.
+Canonical automation uses `paseo workspace create/ls/rename/archive`. Detach remains an explicit user lifecycle action rather than an agent tool. `paseo run --new-workspace local|worktree` composes workspace creation with agent creation. The old `paseo worktree` and `paseo run --worktree` forms are hidden compatibility aliases.
 
 ```bash
 npm run cli -- ls -a -g              # List all agents globally
@@ -529,19 +562,12 @@ Point Playwright MCP at the running Expo web target. For root checkout dev, `npm
 
 Do NOT use browser history (back/forward). Always navigate by clicking UI elements or using `browser_navigate` with the full URL — the app uses client-side routing and browser history breaks state.
 
-## App web deploys
+## Browser development surface
 
-`packages/app` exports a single-page Expo web app and deploys the `dist/`
-directory to Cloudflare Pages with `npm run deploy:web --workspace=@getpaseo/app`.
-
-PWA install metadata lives in `packages/app/public/manifest.json` and is linked
-from `packages/app/public/index.html`. Keep the install icons in `public/` so
-Cloudflare serves them from stable root URLs after `expo export`.
-
-Do not add service-worker caching casually. Paseo is a live control surface for
-agents, and an aggressive service worker can strand installed users on stale web
-code. If offline behavior becomes a product requirement, add it deliberately
-with an update strategy and test the installed-app upgrade path.
+`packages/app` can export and run as a browser application for local development,
+Playwright, and Chrome-based QA. It is not a product deployment target. There is
+no browser deployment command; do not publish `packages/app/dist` for Agent Duel
+releases.
 
 ## Expo troubleshooting
 

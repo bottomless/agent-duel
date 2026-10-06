@@ -4,12 +4,12 @@ import {
   connectNewWorkspaceDaemonClient,
   expectNewWorkspaceControlsEnabled,
   expectNewWorkspaceProjectSelected,
-  expectNewWorkspaceTriggerLabelsAligned,
   openGlobalNewWorkspaceComposer,
   openMissingProjectNewWorkspaceComposer,
   openNewWorkspaceComposer,
   openNewWorkspaceProjectPickerWithShortcut,
 } from "../support/helpers/new-workspace";
+import { addProjectFlow, expectAddProjectPage } from "../support/helpers/add-project-flow";
 import { getE2EDaemonPort } from "../support/helpers/daemon-port";
 import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-client";
 import { seedSavedSettingsHosts } from "../support/helpers/settings";
@@ -24,12 +24,10 @@ import {
   waitForSidebarHydration,
 } from "../support/helpers/workspace-ui";
 
-// Model B entry points into the New Workspace screen. The surviving entries are
-// the global button (universal) and each project's per-row New workspace icon
-// (preselects that project) — shown for git projects and for non-git projects on
-// a multiplicity-capable host. These specs prove the global entry opens the
-// screen, the project icon preselects the right project across the reused 'new'
-// screen, and non-git projects never offer the worktree Isolation control.
+// Model B entry points into the New Workspace screen. Cmd/Ctrl+N remains the
+// app-wide composer shortcut, while each project's per-row New chat icon opens
+// the composer with that project preselected. Projects are added from the
+// persistent Add project action in the sidebar footer.
 
 function projectRow(page: import("@playwright/test").Page, projectKey: string) {
   return page.getByTestId(`sidebar-project-row-${projectEquivalenceViewKey(projectKey)}`);
@@ -48,7 +46,7 @@ test.describe("New workspace entry points", () => {
     await client?.close().catch(() => undefined);
   });
 
-  test("the global new-workspace button opens the New Workspace screen", async ({ page }) => {
+  test("only the sidebar footer exposes the Add Project flow", async ({ page }) => {
     const seeded: SeededWorkspace = await seedWorkspace({ repoPrefix: "entry-global-button-" });
 
     try {
@@ -76,20 +74,16 @@ test.describe("New workspace entry points", () => {
         workspaceId: seeded.workspaceId,
       });
 
-      const globalButton = page.getByTestId("sidebar-global-new-workspace");
-      await expect(globalButton).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId("sidebar-global-new-workspace")).toHaveCount(0);
+      await expect(page.getByText("Workspaces", { exact: true })).toHaveCount(0);
 
-      await openGlobalNewWorkspaceComposer(page);
-      await expect(page.getByTestId("host-chooser")).toHaveCount(0);
-
-      await expect(page.getByTestId("new-workspace-project-picker-trigger")).toBeVisible({
-        timeout: 30_000,
-      });
-      await expect(page.getByTestId("host-picker-trigger")).toBeVisible({ timeout: 30_000 });
-      await expectNewWorkspaceTriggerLabelsAligned(page, {
-        projectLabel: seeded.projectDisplayName,
-        hostLabel: "localhost",
-      });
+      const addProjectButton = page.getByTestId("sidebar-add-project");
+      await expect(addProjectButton).toBeVisible({ timeout: 30_000 });
+      await expect(addProjectButton).toContainText("Add project");
+      await addProjectButton.click();
+      await expect(addProjectFlow(page)).toBeVisible({ timeout: 30_000 });
+      await expectAddProjectPage(page, "method");
+      await expect(page).not.toHaveURL(/\/new(?:\?.*)?$/);
     } finally {
       await seeded.cleanup();
     }
@@ -246,7 +240,7 @@ test.describe("New workspace entry points", () => {
     }
   });
 
-  test("the Isolation control is hidden for a non-git project and shown for a git project", async ({
+  test("only worktree-capable projects can be selected and isolation is implicit", async ({
     page,
   }) => {
     const gitProject: SeededWorkspace = await seedWorkspace({ repoPrefix: "entry-iso-git-" });
@@ -261,8 +255,7 @@ test.describe("New workspace entry points", () => {
       await expect(projectRow(page, gitProject.projectKey)).toBeVisible({ timeout: 30_000 });
       await expect(projectRow(page, nonGitProject.projectKey)).toBeVisible({ timeout: 30_000 });
 
-      // Open New Workspace for the non-git project via the global button, then
-      // select it in the picker (the per-row icon would preselect it too).
+      // Non-git projects remain visible for context but cannot be selected.
       await openGlobalNewWorkspaceComposer(page);
       const trigger = page.getByTestId("new-workspace-project-picker-trigger");
       await expect(trigger).toBeVisible({ timeout: 30_000 });
@@ -271,25 +264,16 @@ test.describe("New workspace entry points", () => {
         `new-workspace-project-picker-option-${projectEquivalenceViewKey(nonGitProject.projectKey)}`,
       );
       await expect(nonGitOption).toBeVisible({ timeout: 30_000 });
-      await nonGitOption.click();
-      await expectNewWorkspaceProjectSelected(page, nonGitProject.projectDisplayName);
+      await expect(nonGitOption).toHaveAttribute("aria-disabled", "true");
 
-      // No git checkout means no worktree isolation choice: the Isolation row is
-      // absent entirely.
-      await expect(page.getByTestId("workspace-create-isolation-trigger")).toHaveCount(0);
-
-      // Switching to the git project on the same screen reveals the Isolation row.
-      await trigger.click();
+      // A git project can be selected, and worktree isolation is implicit.
       const gitOption = page.getByTestId(
         `new-workspace-project-picker-option-${projectEquivalenceViewKey(gitProject.projectKey)}`,
       );
       await expect(gitOption).toBeVisible({ timeout: 30_000 });
       await gitOption.click();
       await expectNewWorkspaceProjectSelected(page, gitProject.projectDisplayName);
-
-      await expect(page.getByTestId("workspace-create-isolation-trigger")).toBeVisible({
-        timeout: 30_000,
-      });
+      await expect(page.getByTestId("workspace-create-isolation-trigger")).toHaveCount(0);
     } finally {
       await gitProject.cleanup();
       await nonGitProject.cleanup();

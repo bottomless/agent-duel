@@ -4,11 +4,10 @@ import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { ArrowUpRight, Terminal, Blocks, Check, Settings2 } from "lucide-react-native";
+import { Terminal, Blocks, Check, Settings2 } from "lucide-react-native";
 import { settingsStyles } from "@/styles/settings";
 import { SettingsSection } from "@/screens/settings/settings-section";
 import { Button } from "@/components/ui/button";
-import { openExternalUrl } from "@/utils/open-external-url";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import {
   shouldUseDesktopDaemon,
@@ -18,8 +17,6 @@ import {
 import { SkillSelectionSheet } from "@/desktop/components/skill-selection-sheet";
 import { useCliInstall, useSkillsStatus } from "@/desktop/hooks/use-install-status";
 
-const CLI_DOCS_URL = "https://paseo.sh/docs/cli";
-const SKILLS_DOCS_URL = "https://paseo.sh/docs/skills";
 const OP_KIND_ORDER: Record<SkillOp["kind"], number> = { add: 0, update: 1, delete: 2 };
 const OP_KIND_LABEL_KEY: Record<SkillOp["kind"], string> = {
   add: "settings.integrations.operations.add",
@@ -113,52 +110,9 @@ export function IntegrationsSection() {
     setIsChoosingSkills(false);
   }, []);
 
-  const handleOpenCliDocs = useCallback(() => {
-    void openExternalUrl(CLI_DOCS_URL);
-  }, []);
-
-  const handleOpenSkillsDocs = useCallback(() => {
-    void openExternalUrl(SKILLS_DOCS_URL);
-  }, []);
-
-  const arrowIcon = useMemo(
-    () => <ArrowUpRight size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />,
-    [theme.iconSize.sm, theme.colors.foregroundMuted],
-  );
-
   const chooseSkillsIcon = useMemo(
     () => <Settings2 size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />,
     [theme.iconSize.sm, theme.colors.foregroundMuted],
-  );
-
-  const trailing = useMemo(
-    () => (
-      <View style={styles.headerLinks}>
-        <Button
-          variant="ghost"
-          size="sm"
-          leftIcon={arrowIcon}
-          textStyle={settingsStyles.sectionHeaderLinkText}
-          style={settingsStyles.sectionHeaderLink}
-          onPress={handleOpenCliDocs}
-          accessibilityLabel={t("settings.integrations.docs.openCli")}
-        >
-          {t("settings.integrations.docs.cli")}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          leftIcon={arrowIcon}
-          textStyle={settingsStyles.sectionHeaderLinkText}
-          style={settingsStyles.sectionHeaderLink}
-          onPress={handleOpenSkillsDocs}
-          accessibilityLabel={t("settings.integrations.docs.openSkills")}
-        >
-          {t("settings.integrations.docs.skills")}
-        </Button>
-      </View>
-    ),
-    [arrowIcon, handleOpenCliDocs, handleOpenSkillsDocs, t],
   );
 
   if (!showSection) {
@@ -175,7 +129,7 @@ export function IntegrationsSection() {
       skillsStatus.selection.skills.some((name) => skillsStatus.available.includes(name)));
 
   return (
-    <SettingsSection title={t("settings.integrations.title")} trailing={trailing}>
+    <SettingsSection title={t("settings.integrations.title")}>
       <View style={settingsStyles.card}>
         <View style={settingsStyles.row}>
           <View style={settingsStyles.rowContent}>
@@ -305,11 +259,6 @@ function SkillsActions({ state, isWorking, onInstall, onUpdate, onUninstall }: S
 }
 
 const styles = StyleSheet.create((theme) => ({
-  headerLinks: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[0],
-  },
   rowTitleRow: {
     flexDirection: "row",
     alignItems: "center",

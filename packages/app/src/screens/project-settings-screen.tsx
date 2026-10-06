@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { router } from "expo-router";
 import { StyleSheet } from "react-native-unistyles";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, MoreVertical, Pencil, Plus } from "lucide-react-native";
+import { ArrowLeft, Pencil } from "lucide-react-native";
 import { ProjectIconView } from "@/components/project-icon-view";
 import type {
   PaseoConfigRaw,
@@ -14,37 +14,24 @@ import type {
 } from "@getpaseo/protocol/messages";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Alert } from "@/components/ui/alert";
-import { ExternalLink } from "@/components/ui/external-link";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { Switch } from "@/components/ui/switch";
-import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { ProjectEditSheet } from "@/components/project-edit-sheet";
 import { SettingsTextAreaCard } from "@/components/settings-textarea";
 import { SettingsGroup } from "@/screens/settings/settings-group";
 import { SettingsSection } from "@/screens/settings/settings-section";
-import { settingsStyles } from "@/styles/settings";
 import { useProjects } from "@/hooks/use-projects";
 import type { ProjectEditFormSnapshot } from "@/projects/edit-form";
 import { useProjectIcons } from "@/projects/icons";
 import { useHostRuntimeClient, useHostRuntimeSnapshot } from "@/runtime/host-runtime";
 import { useHostFeature } from "@/runtime/host-features";
 import { useToast } from "@/contexts/toast-context";
-import { confirmDialog } from "@/utils/confirm-dialog";
 import {
   applyDraftToConfig,
   configToDraft,
   METADATA_PROMPT_KEYS,
-  type LifecycleOriginalKind,
   type MetadataPromptKey,
   type ProjectConfigDraft,
-  type ProjectScriptDraft,
 } from "@/utils/project-config-form";
 import { buildProjectsSettingsRoute } from "@/utils/host-routes";
 import {
@@ -53,8 +40,6 @@ import {
   type ProjectHostEntry,
   type ProjectSummary,
 } from "@/utils/projects";
-
-const SCRIPT_SERVICE_TYPE = "service";
 
 const ICON_SIZE = 14;
 
@@ -85,8 +70,6 @@ const METADATA_PROMPT_FIELDS: Record<MetadataPromptKey, MetadataPromptField> = {
     inputTestID: "metadata-prompt-pull-request-input",
   },
 };
-
-const WORKTREE_DOCS_URL = "https://paseo.sh/docs/worktrees";
 
 type ReadProjectConfigData = Awaited<ReturnType<DaemonClient["readProjectConfig"]>>;
 
@@ -458,7 +441,6 @@ function ProjectConfigForm({
 
   const [draft, setDraft] = useState<ProjectConfigDraft>(() => configToDraft(baseConfig));
   const [writeError, setWriteError] = useState<ProjectConfigRpcError | null>(null);
-  const [editingScriptId, setEditingScriptId] = useState<string | null>(null);
 
   const saveMutation = useMutation({
     mutationFn: async (input: {
@@ -504,15 +486,6 @@ function ProjectConfigForm({
     setDraft((prev) => updater(prev));
   }, []);
 
-  const handleSetupChange = useCallback(
-    (text: string) => updateDraft((d) => ({ ...d, setupText: text })),
-    [updateDraft],
-  );
-  const handleTeardownChange = useCallback(
-    (text: string) => updateDraft((d) => ({ ...d, teardownText: text })),
-    [updateDraft],
-  );
-
   const handleMetadataPromptChange = useCallback(
     (key: MetadataPromptKey, text: string) =>
       updateDraft((d) => ({
@@ -522,194 +495,12 @@ function ProjectConfigForm({
     [updateDraft],
   );
 
-  const handleRemoveScript = useCallback(
-    async (script: ProjectScriptDraft) => {
-      const ok = await confirmDialog({
-        title: t("settings.project.scripts.removeTitle"),
-        message: t("settings.project.scripts.removeMessage", {
-          name: script.name || t("settings.project.scripts.removeFallbackName"),
-        }),
-        confirmLabel: t("settings.project.scripts.actions.remove"),
-        cancelLabel: t("settings.project.actions.cancel"),
-        destructive: true,
-      });
-      if (!ok) return;
-      updateDraft((d) => ({
-        ...d,
-        scripts: d.scripts.filter((entry) => entry.id !== script.id),
-      }));
-    },
-    [t, updateDraft],
-  );
-
-  const handleEditScript = useCallback((script: ProjectScriptDraft) => {
-    setEditingScriptId(script.id);
-  }, []);
-
-  const handleAddScript = useCallback(() => {
-    const id = `script-draft-new-${Date.now()}`;
-    updateDraft((d) => ({
-      ...d,
-      scripts: [
-        ...d.scripts,
-        {
-          id,
-          name: "",
-          commandText: "",
-          commandOriginalKind: "missing" satisfies LifecycleOriginalKind,
-          type: "",
-          portText: "",
-          rawEntry: {},
-        },
-      ],
-    }));
-    setEditingScriptId(id);
-  }, [updateDraft]);
-
-  const handleEditingDraftChange = useCallback(
-    (next: ProjectScriptDraft) => {
-      updateDraft((d) => ({
-        ...d,
-        scripts: d.scripts.map((entry) => (entry.id === next.id ? next : entry)),
-      }));
-    },
-    [updateDraft],
-  );
-
-  const handleCancelEditing = useCallback(() => {
-    if (!editingScriptId) {
-      return;
-    }
-    updateDraft((d) => {
-      const entry = d.scripts.find((row) => row.id === editingScriptId);
-      if (!entry) return d;
-      const isEmpty =
-        entry.name.trim().length === 0 &&
-        entry.commandText.trim().length === 0 &&
-        entry.type.trim().length === 0 &&
-        entry.portText.trim().length === 0;
-      if (!isEmpty) return d;
-      return { ...d, scripts: d.scripts.filter((row) => row.id !== editingScriptId) };
-    });
-    setEditingScriptId(null);
-  }, [editingScriptId, updateDraft]);
-
-  const handleSaveEditing = useCallback(() => {
-    setEditingScriptId(null);
-  }, []);
-
-  const editingScript = draft.scripts.find((entry) => entry.id === editingScriptId);
-
-  const hasInvalidScripts = useMemo(
-    () => draft.scripts.some((script) => validateScript(script, t).hasErrors),
-    [draft.scripts, t],
-  );
-
-  const scriptsTrailing = useMemo(
-    () => (
-      <Pressable
-        onPress={handleAddScript}
-        hitSlop={8}
-        style={settingsStyles.sectionHeaderLink}
-        accessibilityRole="button"
-        accessibilityLabel={t("settings.project.scripts.actions.add")}
-        testID="scripts-add-button"
-      >
-        <Plus size={ICON_SIZE} color={styles.iconColor.color} />
-      </Pressable>
-    ),
-    [handleAddScript, t],
-  );
-
-  const setupDocsLink = useMemo(
-    () => (
-      <ExternalLink
-        href={WORKTREE_DOCS_URL}
-        label={t("settings.project.worktree.docs")}
-        tooltip={t("settings.project.worktree.docsTooltip")}
-        testID="worktree-setup-docs-link"
-      />
-    ),
-    [t],
-  );
-  const teardownDocsLink = useMemo(
-    () => (
-      <ExternalLink
-        href={WORKTREE_DOCS_URL}
-        label={t("settings.project.worktree.docs")}
-        tooltip={t("settings.project.worktree.docsTooltip")}
-        testID="worktree-teardown-docs-link"
-      />
-    ),
-    [t],
-  );
-
   const isStale = writeError?.code === "stale_project_config";
   const isWriteFailed = writeError?.code === "write_failed";
-  const saveDisabled = saveMutation.isPending || isStale || hasInvalidScripts;
+  const saveDisabled = saveMutation.isPending || isStale;
 
   return (
     <View>
-      <SettingsGroup
-        title={t("settings.project.worktree.title")}
-        info={t("settings.project.worktree.info")}
-        testID="worktree-group"
-      >
-        <SettingsSection
-          title={t("settings.project.worktree.setup")}
-          testID="worktree-setup-section"
-          trailing={setupDocsLink}
-        >
-          <SettingsTextAreaCard
-            testID="worktree-setup-input"
-            accessibilityLabel={t("settings.project.worktree.setupAccessibility")}
-            value={draft.setupText}
-            onChangeText={handleSetupChange}
-            placeholder="npm install"
-          />
-        </SettingsSection>
-
-        <SettingsSection
-          title={t("settings.project.worktree.teardown")}
-          testID="worktree-teardown-section"
-          trailing={teardownDocsLink}
-          flush
-        >
-          <SettingsTextAreaCard
-            testID="worktree-teardown-input"
-            accessibilityLabel={t("settings.project.worktree.teardownAccessibility")}
-            value={draft.teardownText}
-            onChangeText={handleTeardownChange}
-            placeholder="docker compose down"
-          />
-        </SettingsSection>
-      </SettingsGroup>
-
-      <SettingsGroup
-        title={t("settings.project.scripts.title")}
-        info={t("settings.project.scripts.info")}
-        trailing={scriptsTrailing}
-        testID="scripts-group"
-      >
-        <View style={settingsStyles.card} testID="scripts-list">
-          {draft.scripts.length === 0 ? (
-            <View style={settingsStyles.row}>
-              <Text style={styles.emptyScripts}>{t("settings.project.scripts.empty")}</Text>
-            </View>
-          ) : (
-            draft.scripts.map((script, index) => (
-              <ScriptRow
-                key={script.id}
-                script={script}
-                isFirst={index === 0}
-                onEdit={handleEditScript}
-                onRemove={handleRemoveScript}
-              />
-            ))
-          )}
-        </View>
-      </SettingsGroup>
-
       <SettingsGroup
         title={t("settings.project.metadata.title")}
         info={t("settings.project.metadata.info")}
@@ -789,15 +580,6 @@ function ProjectConfigForm({
             : t("settings.project.actions.save")}
         </Button>
       </View>
-
-      {editingScript ? (
-        <ScriptEditModal
-          script={editingScript}
-          onChange={handleEditingDraftChange}
-          onCancel={handleCancelEditing}
-          onSave={handleSaveEditing}
-        />
-      ) : null}
     </View>
   );
 }
@@ -852,218 +634,6 @@ function MetadataPromptSection({ promptKey, value, onChange, flush }: MetadataPr
         placeholder={t(meta.placeholderKey)}
       />
     </SettingsSection>
-  );
-}
-
-interface ScriptRowProps {
-  script: ProjectScriptDraft;
-  isFirst: boolean;
-  onEdit: (script: ProjectScriptDraft) => void;
-  onRemove: (script: ProjectScriptDraft) => void;
-}
-
-function ScriptRow({ script, isFirst, onEdit, onRemove }: ScriptRowProps) {
-  const { t } = useTranslation();
-  const handleEdit = useCallback(() => onEdit(script), [onEdit, script]);
-  const handleRemove = useCallback(() => onRemove(script), [onRemove, script]);
-  const rowStyle = isFirst ? styles.scriptRow : styles.scriptRowWithBorder;
-
-  return (
-    <View style={rowStyle} testID={`script-row-${script.id}`}>
-      <Pressable style={styles.scriptRowMain} onPress={handleEdit}>
-        <Text style={settingsStyles.rowTitle} numberOfLines={1}>
-          {script.name || t("settings.project.scripts.untitled")}
-        </Text>
-        <Text style={settingsStyles.rowHint} numberOfLines={1}>
-          {scriptHint(script, t)}
-        </Text>
-      </Pressable>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          accessibilityLabel={t("settings.project.scripts.menuAccessibility")}
-          testID={`script-row-menu-${script.id}`}
-          style={styles.scriptKebab}
-        >
-          <MoreVertical size={ICON_SIZE} color={styles.chevronColor.color} />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" minWidth={160}>
-          <DropdownMenuItem testID={`script-action-${script.id}-edit`} onSelect={handleEdit}>
-            {t("settings.project.scripts.actions.edit")}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            testID={`script-action-${script.id}-remove`}
-            destructive
-            onSelect={handleRemove}
-          >
-            {t("settings.project.scripts.actions.remove")}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </View>
-  );
-}
-
-function scriptHint(script: ProjectScriptDraft, t: TFunction): string {
-  const pieces: string[] = [];
-  if (script.type) pieces.push(script.type);
-  if (script.portText) pieces.push(t("settings.project.scripts.port", { port: script.portText }));
-  if (script.commandText) pieces.push(script.commandText.split("\n")[0] ?? "");
-  return pieces.join(" · ");
-}
-
-interface ScriptValidation {
-  hasErrors: boolean;
-  nameError: string | null;
-  commandError: string | null;
-}
-
-function validateScript(script: ProjectScriptDraft, t: TFunction): ScriptValidation {
-  const nameError =
-    script.name.trim().length === 0 ? t("settings.project.scripts.nameRequired") : null;
-  const commandError =
-    script.commandText.trim().length === 0 ? t("settings.project.scripts.commandRequired") : null;
-  return {
-    hasErrors: Boolean(nameError || commandError),
-    nameError,
-    commandError,
-  };
-}
-
-interface ScriptEditModalProps {
-  script: ProjectScriptDraft;
-  onChange: (next: ProjectScriptDraft) => void;
-  onCancel: () => void;
-  onSave: () => void;
-}
-
-interface ScriptFieldsTouched {
-  name: boolean;
-  command: boolean;
-}
-
-const ALL_TOUCHED: ScriptFieldsTouched = { name: true, command: true };
-const NONE_TOUCHED: ScriptFieldsTouched = { name: false, command: false };
-
-function ScriptEditModal({ script, onChange, onCancel, onSave }: ScriptEditModalProps) {
-  const { t } = useTranslation();
-  const [touched, setTouched] = useState<ScriptFieldsTouched>(NONE_TOUCHED);
-
-  useEffect(() => {
-    setTouched(NONE_TOUCHED);
-  }, [script.id]);
-
-  const markTouched = useCallback((field: keyof ScriptFieldsTouched) => {
-    setTouched((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
-  }, []);
-
-  const handleNameChange = useCallback(
-    (text: string) => onChange({ ...script, name: text }),
-    [onChange, script],
-  );
-  const handleCommandChange = useCallback(
-    (text: string) => onChange({ ...script, commandText: text }),
-    [onChange, script],
-  );
-  const handleServiceToggle = useCallback(
-    (next: boolean) => onChange({ ...script, type: next ? SCRIPT_SERVICE_TYPE : "" }),
-    [onChange, script],
-  );
-
-  const handleNameBlur = useCallback(() => markTouched("name"), [markTouched]);
-  const handleCommandBlur = useCallback(() => markTouched("command"), [markTouched]);
-
-  const validation = validateScript(script, t);
-
-  const handleSavePress = useCallback(() => {
-    if (validation.hasErrors) {
-      setTouched(ALL_TOUCHED);
-      return;
-    }
-    onSave();
-  }, [validation.hasErrors, onSave]);
-
-  const showNameError = touched.name && validation.nameError;
-  const showCommandError = touched.command && validation.commandError;
-  const isService = script.type === SCRIPT_SERVICE_TYPE;
-  const sheetHeader = useMemo<SheetHeader>(
-    () => ({
-      title: script.name
-        ? t("settings.project.scripts.editScript", { name: script.name })
-        : t("settings.project.scripts.newScript"),
-    }),
-    [script.name, t],
-  );
-
-  return (
-    <AdaptiveModalSheet
-      visible
-      header={sheetHeader}
-      onClose={onCancel}
-      testID="script-edit-modal"
-      desktopMaxWidth={560}
-    >
-      <View style={styles.modalSection}>
-        <Text style={styles.modalLabel}>{t("settings.project.scripts.name")}</Text>
-        <TextInput
-          testID="script-edit-name"
-          accessibilityLabel={t("settings.project.scripts.nameAccessibility")}
-          value={script.name}
-          onChangeText={handleNameChange}
-          onBlur={handleNameBlur}
-          placeholder="dev"
-          placeholderTextColor={styles.placeholderColor.color}
-          style={styles.modalInput}
-        />
-        {showNameError ? (
-          <Text testID="script-edit-name-error" style={styles.fieldError}>
-            {validation.nameError}
-          </Text>
-        ) : null}
-      </View>
-      <View style={styles.modalSection}>
-        <Text style={styles.modalLabel}>{t("settings.project.scripts.command")}</Text>
-        <TextInput
-          testID="script-edit-command"
-          accessibilityLabel={t("settings.project.scripts.commandAccessibility")}
-          multiline
-          value={script.commandText}
-          onChangeText={handleCommandChange}
-          onBlur={handleCommandBlur}
-          placeholder="npm run dev"
-          placeholderTextColor={styles.placeholderColor.color}
-          style={styles.modalMultilineInput}
-        />
-        {showCommandError ? (
-          <Text testID="script-edit-command-error" style={styles.fieldError}>
-            {validation.commandError}
-          </Text>
-        ) : null}
-      </View>
-      <View style={styles.modalSection}>
-        <View style={styles.serviceToggleRow}>
-          <View style={styles.serviceToggleText}>
-            <Text style={styles.serviceToggleLabel}>
-              {t("settings.project.scripts.runAsService")}
-            </Text>
-            <Text style={styles.modalHint}>{t("settings.project.scripts.serviceHint")}</Text>
-          </View>
-          <Switch
-            value={isService}
-            onValueChange={handleServiceToggle}
-            accessibilityLabel={t("settings.project.scripts.runAsService")}
-            testID="script-edit-service-toggle"
-          />
-        </View>
-      </View>
-      <View style={styles.modalFooter}>
-        <Button onPress={onCancel} variant="ghost" size="md" testID="script-edit-cancel">
-          {t("settings.project.actions.cancel")}
-        </Button>
-        <Button onPress={handleSavePress} variant="default" size="md" testID="script-edit-save">
-          {t("settings.project.actions.save")}
-        </Button>
-      </View>
-    </AdaptiveModalSheet>
   );
 }
 

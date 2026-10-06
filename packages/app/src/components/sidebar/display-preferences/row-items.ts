@@ -12,7 +12,7 @@
  * that knows what an item is.
  */
 
-export const SIDEBAR_ROW_ITEMS = ["host", "changeRequest", "services"] as const;
+export const SIDEBAR_ROW_ITEMS = ["changeRequest", "services"] as const;
 
 export type SidebarRowItem = (typeof SIDEBAR_ROW_ITEMS)[number];
 
@@ -24,7 +24,6 @@ export type SidebarRowItems = Record<SidebarRowItem, boolean>;
  * key has to mean "default", not "off".
  */
 export const DEFAULT_SIDEBAR_ROW_ITEMS: SidebarRowItems = {
-  host: true,
   changeRequest: true,
   services: true,
 };

@@ -4,8 +4,7 @@ import type {
   SessionOutboundMessage,
   WorkspaceScriptPayload,
 } from "@getpaseo/protocol/messages";
-import type { PaseoConfig } from "@getpaseo/protocol/paseo-config-schema";
-import { getScriptConfigs, isServiceScript, readPaseoConfig } from "../utils/worktree.js";
+import { getScriptConfigs, isServiceScript } from "../utils/worktree.js";
 import { deriveProjectSlug } from "./workspace-git-metadata.js";
 import type { ScriptHealthEntry, ScriptHealthState } from "./script-health-monitor.js";
 import type {
@@ -21,7 +20,6 @@ interface SessionEmitter {
 interface BuildWorkspaceScriptPayloadsOptions {
   workspaceId: string;
   workspaceDirectory: string;
-  paseoConfig: PaseoConfig | null;
   serviceProxy: ServiceProxySubsystem;
   runtimeStore: WorkspaceScriptRuntimeStore;
   daemonPort: number | null;
@@ -31,21 +29,6 @@ interface BuildWorkspaceScriptPayloadsOptions {
     currentBranch: string | null;
   };
   resolveHealth?: (hostname: string) => ScriptHealthState | null;
-}
-
-export function readPaseoConfigForProjection(
-  workspaceDirectory: string,
-  logger: Logger,
-): PaseoConfig | null {
-  const result = readPaseoConfig(workspaceDirectory);
-  if (result.ok) {
-    return result.config;
-  }
-  logger.warn(
-    { configPath: result.configPath, workspaceDirectory, err: result.error },
-    "Failed to parse paseo.json; treating workspace as having no scripts",
-  );
-  return null;
 }
 
 function resolveDaemonPort(daemonPort: number | null | (() => number | null)): number | null {
@@ -218,7 +201,7 @@ export function buildWorkspaceScriptPayloads(
   const workspaceDirectory = options.workspaceDirectory;
   const projectSlug = options.gitMetadata?.projectSlug ?? deriveProjectSlug(workspaceDirectory);
   const branchName = options.gitMetadata?.currentBranch ?? null;
-  const scriptConfigs = getScriptConfigs(options.paseoConfig);
+  const scriptConfigs = getScriptConfigs();
   const runtimeEntries = new Map(
     options.runtimeStore
       .listForWorkspace(workspaceId)
@@ -279,7 +262,7 @@ export function createScriptStatusEmitter({
   daemonPort,
   serviceProxyPublicBaseUrl,
   resolveWorkspaceDirectory,
-  logger,
+  logger: _logger,
 }: {
   sessions: () => SessionEmitter[];
   serviceProxy: ServiceProxySubsystem;
@@ -304,7 +287,6 @@ export function createScriptStatusEmitter({
       const projected = buildWorkspaceScriptPayloads({
         workspaceId,
         workspaceDirectory,
-        paseoConfig: readPaseoConfigForProjection(workspaceDirectory, logger),
         serviceProxy,
         runtimeStore,
         daemonPort: resolvedDaemonPort,

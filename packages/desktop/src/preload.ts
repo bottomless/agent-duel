@@ -30,6 +30,21 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
         agentId: string;
       } | null>,
   },
+  accounts: {
+    createReturnUrl: () => ipcRenderer.invoke("paseo:accounts:createReturnUrl") as Promise<string>,
+    session: {
+      load: () => ipcRenderer.invoke("paseo:accounts:session:load") as Promise<string | null>,
+      save: (value: string) => ipcRenderer.invoke("paseo:accounts:session:save", value),
+      clear: () => ipcRenderer.invoke("paseo:accounts:session:clear"),
+    },
+  },
+  byok: {
+    key: {
+      load: () => ipcRenderer.invoke("paseo:byok:key:load") as Promise<string | null>,
+      save: (value: string) => ipcRenderer.invoke("paseo:byok:key:save", value),
+      clear: () => ipcRenderer.invoke("paseo:byok:key:clear"),
+    },
+  },
   events: {
     on: (event: string, handler: EventHandler): Promise<() => void> => {
       const listener = (_ipcEvent: Electron.IpcRendererEvent, payload: unknown) => {
@@ -64,7 +79,8 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
           ipcRenderer.removeListener("paseo:window:resized", listener);
         };
       },
-      setBadgeCount: (count?: number) => ipcRenderer.invoke("paseo:window:setBadgeCount", count),
+      setBadgeEntries: (entries: Record<string, string>) =>
+        ipcRenderer.invoke("paseo:window:setBadgeEntries", entries),
     }),
   },
   dialog: {
@@ -75,6 +91,9 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
     open: (options?: Record<string, unknown>) => ipcRenderer.invoke("paseo:dialog:open", options),
   },
   notification: {
+    getPermission: () => ipcRenderer.invoke("paseo:notification:getPermission"),
+    requestPermission: () => ipcRenderer.invoke("paseo:notification:requestPermission"),
+    openSettings: () => ipcRenderer.invoke("paseo:notification:openSettings"),
     isSupported: () => ipcRenderer.invoke("paseo:notification:isSupported"),
     sendNotification: (payload: { title: string; body?: string; data?: Record<string, unknown> }) =>
       ipcRenderer.invoke("paseo:notification:send", payload),
@@ -118,11 +137,5 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
       ipcRenderer.invoke("paseo:browser:clear-profile", legacyBrowserIds),
     executeAutomationCommand: (request: Record<string, unknown>) =>
       ipcRenderer.invoke("paseo:browser:execute-automation-command", request),
-    captureElement: (
-      browserId: string,
-      rect: { x: number; y: number; width: number; height: number },
-    ) => ipcRenderer.invoke("paseo:browser:capture-element", browserId, rect),
-    copyElement: (payload: { text?: string; imageDataUrl?: string }) =>
-      ipcRenderer.invoke("paseo:browser:copy-element", payload),
   },
 });

@@ -5,9 +5,7 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 
 interface BrowserPaneProps {
   browserId: string;
-  serverId: string;
   workspaceId: string;
-  cwd: string | null;
   isInteractive?: boolean;
   onFocusPane?: () => void;
 }

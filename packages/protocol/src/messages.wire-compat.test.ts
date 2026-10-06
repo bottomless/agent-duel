@@ -149,6 +149,15 @@ describe("wire schema compatibility", () => {
         },
       ],
     });
+    expect(
+      AgentTimelineItemPayloadSchema.parse({
+        type: "todo",
+        items: [{ text: "Abandoned task", status: "cancelled", completed: false }],
+      }),
+    ).toEqual({
+      type: "todo",
+      items: [{ text: "Abandoned task", status: "cancelled", completed: false }],
+    });
   });
 
   test("sub_agent tool-call payload still parses against the v0.1.65-beta.3 schema", () => {

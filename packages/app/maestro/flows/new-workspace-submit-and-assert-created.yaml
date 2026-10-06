@@ -17,7 +17,6 @@ appId: ${PASEO_MAESTRO_APP_ID}
       id: "message-input-root"
     timeout: 30000
 
-- assertNotVisible: "New workspace"
 - assertNotVisible: "Select a model"
 - assertNotVisible: "There was a problem loading the project."
 - assertNotVisible: "The specified child already has a parent"

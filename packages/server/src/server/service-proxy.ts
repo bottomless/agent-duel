@@ -20,6 +20,12 @@ export interface ServiceProxyRouteEntry extends ServiceProxyRoute {
   workspaceId: string;
   projectSlug: string;
   scriptName: string;
+  /** True for routes registered by the Arena runtime rather than paseo.json scripts. */
+  arenaPreview?: boolean;
+  /** Additional host aliases owned by this route (for example a public URL host). */
+  hostAliases?: string[];
+  /** Fully-built URL supplied by an Arena backend route registration. */
+  proxyUrl?: string;
   localHostname?: string;
   publicHostname?: string | null;
   publicBaseUrl?: string | null;
@@ -56,6 +62,17 @@ export interface WorkspaceServiceIdentity {
 export interface RegisterWorkspaceServiceInput extends WorkspaceServiceIdentity {
   port: number;
   publicBaseUrl?: string | null;
+}
+
+export interface RegisterArenaPreviewRouteInput {
+  /** Stable Arena run/preview owner. It is never inferred from a port. */
+  ownerId: string;
+  hostname: string;
+  port: number;
+  /** Optional aliases emitted by a backend route registration. */
+  hostAliases?: readonly string[];
+  /** A fully-built URL from the backend, if one exists. */
+  url?: string;
 }
 
 interface HostClassificationRegistered {
@@ -214,7 +231,7 @@ export function projectWorkspaceService(input: {
 export function projectRegisteredServiceProxyUrls(options: {
   route: Pick<
     ServiceProxyRouteEntry,
-    "hostname" | "publicHostname" | "publicBaseUrl" | "projectSlug" | "scriptName"
+    "hostname" | "publicHostname" | "publicBaseUrl" | "projectSlug" | "scriptName" | "proxyUrl"
   >;
   daemonPort: number | null | undefined;
 }): ServiceProxyUrlProjection {
@@ -231,7 +248,7 @@ export function projectRegisteredServiceProxyUrls(options: {
   return {
     localProxyUrl,
     publicProxyUrl,
-    proxyUrl: publicProxyUrl ?? localProxyUrl,
+    proxyUrl: options.route.proxyUrl ?? publicProxyUrl ?? localProxyUrl,
   };
 }
 
@@ -315,6 +332,47 @@ function buildForwardedHeaders({
   return forwardedHeaders;
 }
 
+function sendPreviewError(
+  req: Parameters<RequestHandler>[0],
+  res: Parameters<RequestHandler>[1],
+  status: 404 | 502,
+): void {
+  res.setHeader("Cache-Control", "no-store");
+  if (!req.headers.accept?.includes("text/html")) {
+    res
+      .status(status)
+      .type("text/plain")
+      .send(status === 404 ? "404 Not Found" : "502 Bad Gateway");
+    return;
+  }
+  const title =
+    status === 404 ? "This preview is no longer available" : "Preview is not responding";
+  const message =
+    status === 404
+      ? "Return to the chat and open the current Preview."
+      : "Reload to try again, or return to the chat to start a new preview.";
+  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+  res.status(status).type("html").send(`<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>
+  :root { color-scheme: light dark; font: 14px/1.6 system-ui, sans-serif; }
+  body { margin: 0; padding: 32px 24px; background: Canvas; color: CanvasText; }
+  main { max-width: 440px; margin: 12vh auto; }
+  h1 { font-size: 20px; line-height: 1.3; font-weight: 600; }
+  p { opacity: .75; }
+  a { color: inherit; text-underline-offset: 3px; }
+</style>
+<main>
+  <h1>${title}</h1>
+  <p>${message}</p>
+  ${status === 502 ? '<a href="">Reload</a>' : ""}
+</main>
+</html>`);
+}
+
 function proxyHttpRequest({
   req,
   res,
@@ -348,8 +406,7 @@ function proxyHttpRequest({
       "Service proxy: upstream unreachable",
     );
     if (!res.headersSent) {
-      res.writeHead(502, { "content-type": "text/plain" });
-      res.end("502 Bad Gateway");
+      sendPreviewError(req, res, 502);
     }
   });
   req.pipe(proxyReq, { end: true });
@@ -450,6 +507,28 @@ export class ServiceProxyRouteRegistry {
     return { ...entry };
   }
 
+  registerArenaPreviewRoute(input: RegisterArenaPreviewRouteInput): ServiceProxyRouteEntry {
+    const hostname = normalizeHostHeader(input.hostname);
+    if (!hostname || !Number.isInteger(input.port) || input.port < 1 || input.port > MAX_TCP_PORT) {
+      throw new Error("Arena preview route requires a valid hostname and port");
+    }
+    const hostAliases = [
+      ...new Set((input.hostAliases ?? []).map(normalizeHostHeader).filter(Boolean)),
+    ].filter((alias) => alias !== hostname);
+    const entry: ServiceProxyRouteEntry = {
+      hostname,
+      port: input.port,
+      workspaceId: input.ownerId,
+      projectSlug: "arena",
+      scriptName: "preview",
+      arenaPreview: true,
+      ...(hostAliases.length > 0 ? { hostAliases } : {}),
+      ...(input.url ? { proxyUrl: input.url } : {}),
+    };
+    this.registerRoute(entry);
+    return { ...entry, hostAliases: hostAliases.length > 0 ? hostAliases : undefined };
+  }
+
   registerRoute(entry: ServiceProxyRouteEntry): void {
     this.assertCanRegister(entry);
     const previous = this.routes.get(entry.hostname);
@@ -541,6 +620,19 @@ export class ServiceProxyRouteRegistry {
 
   removeWorkspaceService(params: { workspaceId: string; scriptName: string }): void {
     this.removeRouteForWorkspaceScript(params);
+  }
+
+  removeArenaPreviewRoutes(ownerId: string): void {
+    for (const route of this.listRoutesForWorkspace(ownerId)) {
+      if (route.arenaPreview) this.removeRoute(route.hostname);
+    }
+  }
+
+  removeArenaPreviewRoute(params: { ownerId: string; hostname: string }): void {
+    const entry = this.getRouteByHostname(normalizeHostHeader(params.hostname));
+    if (entry?.arenaPreview && entry.workspaceId === params.ownerId) {
+      this.removeRoute(entry.hostname);
+    }
   }
 
   projectUrls(input: {
@@ -716,11 +808,13 @@ export class ServiceProxyRouteRegistry {
   }
 
   private getRouteHostnames(
-    entry: Pick<ServiceProxyRouteEntry, "hostname" | "publicHostname">,
+    entry: Pick<ServiceProxyRouteEntry, "hostname" | "publicHostname" | "hostAliases">,
   ): string[] {
-    return [entry.hostname, ...(entry.publicHostname ? [entry.publicHostname] : [])].map((host) =>
-      host.toLowerCase(),
-    );
+    return [
+      entry.hostname,
+      ...(entry.publicHostname ? [entry.publicHostname] : []),
+      ...(entry.hostAliases ?? []),
+    ].map((host) => host.toLowerCase());
   }
 
   private addHostnameToWorkspaceIndex(workspaceId: string, hostname: string): void {
@@ -768,7 +862,7 @@ export function createScriptProxyMiddleware({
       return;
     }
     if (classification.type === "known-service-miss") {
-      res.status(404).send("404 Not Found");
+      sendPreviewError(req, res, 404);
       return;
     }
     proxyHttpRequest({ req, res, route: classification.route, logger });
@@ -798,7 +892,11 @@ export function createScriptProxyUpgradeHandler({
 
 export interface ServiceProxySubsystem {
   registerWorkspaceService(input: RegisterWorkspaceServiceInput): ServiceProxyRouteEntry;
+  registerArenaPreviewRoute(input: RegisterArenaPreviewRouteInput): ServiceProxyRouteEntry;
   removeWorkspaceService(params: { workspaceId: string; scriptName: string }): void;
+  removeArenaPreviewRoutes(ownerId: string): void;
+  removeArenaPreviewRoute(params: { ownerId: string; hostname: string }): void;
+  listRoutesForWorkspace(workspaceId: string): ServiceProxyRouteEntry[];
   removeServiceRoutesByHostnames(hostnames: string[]): void;
   replaceWorkspaceBranchRoutes(params: { workspaceId: string; newBranch: string | null }): boolean;
   getHealthCheckTargets(): ServiceProxyHealthTarget[];
@@ -862,8 +960,24 @@ class NodeServiceProxySubsystem implements ServiceProxySubsystem {
     return this.routes.registerWorkspaceService(input);
   }
 
+  registerArenaPreviewRoute(input: RegisterArenaPreviewRouteInput): ServiceProxyRouteEntry {
+    return this.routes.registerArenaPreviewRoute(input);
+  }
+
   removeWorkspaceService(params: { workspaceId: string; scriptName: string }): void {
     this.routes.removeRouteForWorkspaceScript(params);
+  }
+
+  removeArenaPreviewRoutes(ownerId: string): void {
+    this.routes.removeArenaPreviewRoutes(ownerId);
+  }
+
+  removeArenaPreviewRoute(params: { ownerId: string; hostname: string }): void {
+    this.routes.removeArenaPreviewRoute(params);
+  }
+
+  listRoutesForWorkspace(workspaceId: string): ServiceProxyRouteEntry[] {
+    return this.routes.listRoutesForWorkspace(workspaceId);
   }
 
   removeServiceRoutesByHostnames(hostnames: string[]): void {

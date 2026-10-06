@@ -7,11 +7,6 @@ const projectRoot = __dirname;
 const appNodeModulesRoot = path.resolve(projectRoot, "node_modules");
 const appSrcRoot = path.resolve(projectRoot, "src");
 const relaySrcRoot = path.resolve(projectRoot, "../relay/src");
-const isFdroidBuild = process.env.PASEO_FDROID_BUILD === "1";
-const fdroidModuleOverrides = {
-  "expo-camera": path.resolve(appSrcRoot, "fdroid/expo-camera.tsx"),
-  "expo-notifications": path.resolve(appSrcRoot, "fdroid/expo-notifications.ts"),
-};
 const customWebPlatform = (process.env.PASEO_WEB_PLATFORM ?? "")
   .trim()
   .replace(/^\./, "")
@@ -77,10 +72,6 @@ function resolveWithCustomWebOverlay(context, moduleName, platform) {
 }
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (isFdroidBuild && platform === "android" && fdroidModuleOverrides[moduleName]) {
-    return resolveWithCustomWebOverlay(context, fdroidModuleOverrides[moduleName], platform);
-  }
-
   const origin = context.originModulePath;
   if (origin && origin.startsWith(relaySrcRoot) && moduleName.endsWith(".js")) {
     const tsModuleName = moduleName.replace(/\.js$/, ".ts");
@@ -92,32 +83,5 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
 
   return resolveWithCustomWebOverlay(context, moduleName, platform);
 };
-
-if (process.env.PASEO_SERVE_SIM_PREVIEW === "1") {
-  const { simMiddleware } = require("serve-sim/middleware");
-  const originalEnhanceMiddleware = config.server?.enhanceMiddleware;
-  config.server = config.server ?? {};
-  config.server.enhanceMiddleware = (metroMiddleware, server) => {
-    const middleware = originalEnhanceMiddleware
-      ? originalEnhanceMiddleware(metroMiddleware, server)
-      : metroMiddleware;
-    const serveSimulator = simMiddleware({
-      basePath: "/.sim",
-      device: process.env.PASEO_SERVE_SIM_DEVICE_UDID,
-    });
-    return (req, res, next) => {
-      serveSimulator(req, res, (error) => {
-        if (error) {
-          if (next) {
-            next(error);
-            return;
-          }
-          throw error;
-        }
-        middleware(req, res, next);
-      });
-    };
-  };
-}
 
 module.exports = config;

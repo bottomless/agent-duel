@@ -4,7 +4,9 @@ Paseo proxies HTTP traffic to services running inside your workspaces. Localhost
 
 ## How it works
 
-When a `paseo.json` script of `"type": "service"` starts, Paseo assigns it a local port and registers a route in the service proxy. Incoming requests whose `Host` header matches the script's generated hostname are forwarded to that port.
+> Nothing declares a script any more: `paseo.json` `scripts` is not read in Agent Duel, so no service ever starts through this path. The proxy below is retained but unreachable.
+
+When a script of `"type": "service"` starts, Paseo assigns it a local port and registers a route in the service proxy. Incoming requests whose `Host` header matches the script's generated hostname are forwarded to that port.
 
 The generated hostname is built from the script name, branch, and project:
 
@@ -26,9 +28,31 @@ dev--feature-auth--miniweb.localhost
 
 Local and public routes use one combined leftmost label (`script--branch--project`). This keeps the hostname compatible with normal single-level wildcard DNS and TLS. If the combined label would exceed DNS's 63-character label limit, Paseo truncates it with a deterministic hash suffix to avoid collisions.
 
+### Arena preview routes
+
+Each live Arena contestant reserves three distinct ports and registers one
+route per alias. The primary host has the form
+`turn<n>-<side>--<chat>.localhost`; the other hosts add `port2--` and
+`port3--`. These labels identify positions in the current environment, not
+semantic services.
+
+The Arena runtime owns allocation and reports the explicit alias-to-port
+mapping to the daemon. The daemon keys proxy ownership by contestant run ID,
+never by a port, and does not allocate another bank. A winning run keeps its
+routes after voting. Routes are released only after Arena captures the owned
+processes and verifies that they or their listeners are absent at the next
+send. Historical run records retain the same routes marked inactive.
+Environment transitions keep one shutdown record per owned process group and
+include the number and aliases of its released listeners. They redact the old
+port numbers so the next contestant does not treat them as reusable.
+Contestant shells stamp child processes with a worktree ownership ID. Arena
+combines that ID with process-group and start identity, so a service remains
+discoverable after changing its current directory. Ports identify listeners
+and routes only; they never establish process ownership.
+
 ## Managing workspace scripts
 
-Configured `paseo.json` scripts can be managed without addressing their backing terminal directly:
+Configured scripts can be managed without addressing their backing terminal directly:
 
 ```bash
 paseo script ls [--cwd <path> | --workspace <workspace-id>]

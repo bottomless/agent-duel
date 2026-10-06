@@ -5,9 +5,7 @@ import { useTranslation } from "react-i18next";
 
 interface BrowserPaneProps {
   browserId: string;
-  serverId: string;
   workspaceId: string;
-  cwd: string | null;
   isInteractive?: boolean;
   onFocusPane?: () => void;
 }

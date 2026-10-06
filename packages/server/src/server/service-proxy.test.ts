@@ -54,6 +54,79 @@ function httpGet(port: number, host: string, options: HttpGetOptions = {}) {
 }
 
 describe("service proxy subsystem shape", () => {
+  it("explains unavailable browser previews without replacing upstream errors or API responses", async () => {
+    const upstreamPort = await findFreePort();
+    const upstream = http.createServer((req, res) => {
+      res.statusCode = req.url === "/missing" ? 404 : 200;
+      res.end(req.url === "/missing" ? "app-specific missing page" : "preview alive");
+    });
+    await new Promise<void>((resolve) => upstream.listen(upstreamPort, "127.0.0.1", resolve));
+    const serviceProxy = createServiceProxySubsystem({ logger });
+    const hostname = "turn1-a--preview-qa.localhost";
+    serviceProxy.registerArenaPreviewRoute({ ownerId: "preview-qa", hostname, port: upstreamPort });
+    const app = express();
+    app.use(serviceProxy.middleware());
+    const server = http.createServer(app);
+    const port = await findFreePort();
+    await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+    const browser = { path: "/", headers: { accept: "text/html" } };
+    try {
+      await expect(httpGet(port, hostname, browser)).resolves.toEqual({
+        status: 200,
+        body: "preview alive",
+      });
+      await expect(httpGet(port, hostname, { ...browser, path: "/missing" })).resolves.toEqual({
+        status: 404,
+        body: "app-specific missing page",
+      });
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      const stopped = await httpGet(port, hostname, browser);
+      expect(stopped.status).toBe(502);
+      expect(stopped.body).toContain("Preview is not responding");
+      expect(stopped.body).toContain("return to the chat to start a new preview.");
+      expect(stopped.body).toContain('<a href="">Reload</a>');
+      await expect(
+        httpGet(port, hostname, { headers: { accept: "application/json" } }),
+      ).resolves.toEqual({
+        status: 502,
+        body: "502 Bad Gateway",
+      });
+      await new Promise<void>((resolve) => upstream.listen(upstreamPort, "127.0.0.1", resolve));
+      await expect(httpGet(port, hostname, browser)).resolves.toEqual({
+        status: 200,
+        body: "preview alive",
+      });
+      serviceProxy.removeArenaPreviewRoutes("preview-qa");
+      const removed = await httpGet(port, hostname, browser);
+      expect(removed.status).toBe(404);
+      expect(removed.body).not.toContain("<a ");
+      expect(removed.body).toContain("This preview is no longer available");
+      expect(removed.body).toContain("Return to the chat and open the current Preview.");
+      await expect(httpGet(port, hostname)).resolves.toEqual({
+        status: 404,
+        body: "404 Not Found",
+      });
+      const nextHostname = "turn2-a--preview-qa.localhost";
+      serviceProxy.registerArenaPreviewRoute({
+        ownerId: "preview-qa-next",
+        hostname: nextHostname,
+        port: upstreamPort,
+      });
+      await expect(httpGet(port, nextHostname, browser)).resolves.toEqual({
+        status: 200,
+        body: "preview alive",
+      });
+      await expect(httpGet(port, hostname, browser)).resolves.toEqual(removed);
+    } finally {
+      upstream.closeAllConnections();
+      server.closeAllConnections();
+      await Promise.all([
+        new Promise<void>((resolve) => upstream.close(() => resolve())),
+        new Promise<void>((resolve) => server.close(() => resolve())),
+      ]);
+    }
+  });
+
   it("keeps production imports behind the service-proxy entrypoint", () => {
     const offenders: string[] = [];
     for (const filePath of readServerSourceFiles()) {

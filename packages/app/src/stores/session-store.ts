@@ -112,6 +112,7 @@ export interface WorkspaceDescriptor {
   projectCustomIconRevision?: string | null;
   projectRootPath: string;
   workspaceDirectory: string;
+  filesState?: WorkspaceDescriptorPayload["filesState"];
   worktreeSlug?: WorkspaceDescriptorPayload["worktreeSlug"];
   projectKind: WorkspaceDescriptorPayload["projectKind"];
   workspaceKind: WorkspaceDescriptorPayload["workspaceKind"];
@@ -119,6 +120,7 @@ export interface WorkspaceDescriptor {
   title?: string | null;
   pinnedAt?: string | null;
   status: WorkspaceDescriptorPayload["status"];
+  arenaActivity?: WorkspaceDescriptorPayload["arenaActivity"];
   statusEnteredAt: Date | null;
   archivingAt: string | null;
   diffStat: { additions: number; deletions: number } | null;
@@ -148,6 +150,7 @@ export function normalizeWorkspaceDescriptor(
     // consumer can read workspace.workspaceDirectory directly. Empty means "no
     // usable directory" (older daemons may omit it; the wire field is optional).
     workspaceDirectory: normalizeWorkspacePath(payload.workspaceDirectory) ?? "",
+    filesState: payload.filesState ?? "available",
     worktreeSlug: payload.worktreeSlug,
     projectKind: payload.projectKind,
     workspaceKind: payload.workspaceKind,
@@ -155,6 +158,7 @@ export function normalizeWorkspaceDescriptor(
     title: payload.title ?? null,
     pinnedAt: payload.pinnedAt ?? null,
     status: payload.status,
+    arenaActivity: payload.arenaActivity,
     statusEnteredAt,
     archivingAt: payload.archivingAt ?? null,
     diffStat: payload.diffStat ?? null,
@@ -398,6 +402,7 @@ export interface SessionState {
   // Focus
   focusedAgentId: string | null;
   focusedTerminalId: string | null;
+  activeWorkspaceId: string | null;
 
   // Stream state (head/tail model)
   agentStreamTail: Map<string, StreamItem[]>;
@@ -436,7 +441,13 @@ export interface SessionState {
   // Queued messages
   queuedMessages: Map<
     string,
-    Array<{ id: string; text: string; attachments: ComposerAttachment[] }>
+    Array<{
+      id: string;
+      text: string;
+      attachments: ComposerAttachment[];
+      arenaFollowUp?: "battle" | "single_agent";
+      arenaFollowUpQueuedAt?: number;
+    }>
   >;
 }
 
@@ -469,6 +480,7 @@ interface SessionStoreActions {
   // Focus
   setFocusedAgentId: (serverId: string, agentId: string | null) => void;
   setFocusedTerminalId: (serverId: string, terminalId: string | null) => void;
+  setActiveWorkspaceId: (serverId: string, workspaceId: string | null) => void;
 
   // Stream state (head/tail model)
   setAgentStreamTail: (
@@ -656,6 +668,7 @@ function createInitialSessionState(
     isPlayingAudio: false,
     focusedAgentId: null,
     focusedTerminalId: null,
+    activeWorkspaceId: null,
     agentStreamTail: new Map(),
     agentStreamHead: new Map(),
     agentTasks: new Map(),
@@ -988,6 +1001,22 @@ export const useSessionStore = create<SessionStore>()(
                 ...session,
                 focusedTerminalId: terminalId,
               },
+            },
+          };
+        });
+      },
+
+      setActiveWorkspaceId: (serverId, workspaceId) => {
+        set((prev) => {
+          const session = prev.sessions[serverId];
+          if (!session || session.activeWorkspaceId === workspaceId) {
+            return prev;
+          }
+          return {
+            ...prev,
+            sessions: {
+              ...prev.sessions,
+              [serverId]: { ...session, activeWorkspaceId: workspaceId },
             },
           };
         });

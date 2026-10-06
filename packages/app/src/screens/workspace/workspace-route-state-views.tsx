@@ -1,13 +1,20 @@
+import { useCallback, useState } from "react";
+import { ArchivedTranscript } from "./archived-transcript";
 import { Text, View } from "react-native";
 import { ArrowLeftToLine, RotateCw, Settings } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatConnectionStatus } from "@/utils/daemons";
 import type { WorkspaceRouteState } from "@/screens/workspace/workspace-route-state";
 import type { Theme } from "@/styles/theme";
+import type { WorkspaceRecoveryModel } from "@/workspace-recovery/model";
+import { resolveFilesRecoveryDetails } from "@/screens/workspace/workspace-files-recovery";
+
+export { resolveFilesRecoveryDetails } from "@/screens/workspace/workspace-files-recovery";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -24,6 +31,7 @@ interface WorkspaceRouteStateActions {
 
 export function renderWorkspaceRouteGate(input: {
   state: WorkspaceRouteState;
+  archivedChat?: { serverId: string; agentId: string } | null;
   actions: WorkspaceRouteStateActions;
 }): React.ReactNode {
   switch (input.state.kind) {
@@ -33,7 +41,8 @@ export function renderWorkspaceRouteGate(input: {
       return (
         <WorkspaceEmptyState
           titleKey="workspace.route.recovery.unavailableTitle"
-          hostName={input.state.hostName}
+          description={`This workspace is no longer listed on ${input.state.hostName}. Check again for an archived copy, or return to your projects.`}
+          onRetry={input.actions.onRetryRecoveryInspection}
           onDismiss={input.actions.onDismissMissingWorkspace}
         />
       );
@@ -41,6 +50,7 @@ export function renderWorkspaceRouteGate(input: {
       return (
         <ArchivedWorkspaceRecovery
           state={input.state}
+          archivedChat={input.archivedChat}
           onRecover={input.actions.onRecoverWorkspace}
         />
       );
@@ -65,6 +75,7 @@ export function renderWorkspaceRouteGate(input: {
         <WorkspaceEmptyState
           titleKey="workspace.route.recovery.unavailableTitle"
           description={input.state.message}
+          onRetry={input.actions.onRetryRecoveryInspection}
           onDismiss={input.actions.onDismissMissingWorkspace}
         />
       );
@@ -80,6 +91,77 @@ export function renderWorkspaceRouteGate(input: {
     case "reconnecting":
       return null;
   }
+}
+
+export function WorkspaceFilesRecoveryBanner({
+  filesState,
+  recovery,
+  onRecover,
+  onRetryInspection,
+}: {
+  filesState: "available" | "cleaning" | "cleaned" | "restoring" | undefined;
+  recovery: WorkspaceRecoveryModel;
+  onRecover: () => void;
+  onRetryInspection: () => void;
+}) {
+  const { t } = useTranslation();
+  if (!filesState || filesState === "available") {
+    return null;
+  }
+
+  const isCleaning = filesState === "cleaning";
+  const isRestoring = filesState === "restoring";
+  let title = t("workspace.route.recovery.filesCleanedTitle");
+  if (isCleaning) {
+    title = t("workspace.route.recovery.filesCleaningTitle");
+  } else if (isRestoring) {
+    title = t("workspace.route.recovery.filesRestoringTitle");
+  }
+  // Cleanup can still stand down, so this state describes only what is
+  // happening now and promises no outcome it may not reach.
+  const description = isCleaning
+    ? t("workspace.route.recovery.filesCleaningDescription")
+    : t("workspace.route.recovery.filesCleanedDescription");
+  const details = isCleaning
+    ? { error: null, action: null, actionLabel: "", actionDisabled: true }
+    : resolveFilesRecoveryDetails(recovery, t);
+  if (details.title) {
+    title = details.title;
+  }
+  // Restoring moves a whole checkout, so the control carries its own progress
+  // the way every other pending action in the app does.
+  const isRestorePending =
+    isRestoring || (recovery.kind === "recoverable" && recovery.phase === "restoring");
+
+  return (
+    <Alert
+      variant={details.error ? "error" : "info"}
+      title={title}
+      description={description}
+      testID="workspace-files-recovery-banner"
+    >
+      {details.action ? (
+        <Button
+          size="sm"
+          // The alert's outline border is borderAccent on a transparent
+          // surface, which is ~1.4:1 on dark and cannot be seen. A filled
+          // low-emphasis surface stays quiet beside the accent and is visible.
+          variant="secondary"
+          onPress={details.action === "recover" ? onRecover : onRetryInspection}
+          disabled={details.actionDisabled}
+          loading={isRestorePending}
+          testID="workspace-files-recovery-action"
+        >
+          {details.actionLabel}
+        </Button>
+      ) : null}
+      {details.error ? (
+        <Text style={styles.error} testID="workspace-files-recovery-error">
+          {details.error}
+        </Text>
+      ) : null}
+    </Alert>
+  );
 }
 
 function getWorkspaceHostStateTitle(
@@ -111,30 +193,57 @@ function WorkspaceConnecting({ hostName }: { hostName: string }) {
 
 function ArchivedWorkspaceRecovery({
   state,
+  archivedChat,
   onRecover,
 }: {
   state: Extract<WorkspaceRouteState, { kind: "archived" }>;
+  archivedChat?: { serverId: string; agentId: string } | null;
   onRecover: () => void;
 }) {
   const { t } = useTranslation();
+  const [reading, setReading] = useState(false);
+  const readTranscript = useCallback(() => setReading(true), []);
+  const closeTranscript = useCallback(() => setReading(false), []);
   const { recovery } = state;
   const isRestoring = recovery.phase === "restoring";
+  const isCleanupRecovery = recovery.recovery.source === "cleanup";
   let actionLabel = t("workspace.route.recovery.unarchiveAction");
   if (recovery.recovery.action === "restore") {
     actionLabel = t("workspace.route.recovery.restoreAction");
+    if (isCleanupRecovery) {
+      actionLabel = t("workspace.route.recovery.restoreFilesAction");
+    }
   }
   if (recovery.phase === "failed") {
     actionLabel = t("common.actions.retry");
   }
-  const description =
-    recovery.recovery.action === "restore"
-      ? t("workspace.route.recovery.restoreDescription", {
-          workspaceName: recovery.recovery.workspaceName,
-          branch: recovery.recovery.branch,
-        })
-      : t("workspace.route.recovery.unarchiveDescription", {
-          workspaceName: recovery.recovery.workspaceName,
-        });
+  let description = t("workspace.route.recovery.unarchiveDescription", {
+    workspaceName: recovery.recovery.workspaceName,
+  });
+  if (isCleanupRecovery) {
+    description = t("workspace.route.recovery.filesCleanedDescription");
+  } else if (recovery.recovery.action === "restore") {
+    description = t("workspace.route.recovery.restoreDescription", {
+      workspaceName: recovery.recovery.workspaceName,
+      branch: recovery.recovery.branch,
+    });
+  }
+  let title = t("workspace.route.recovery.archivedTitle");
+  if (isRestoring) {
+    title = t("workspace.route.recovery.restoringTitle");
+    if (isCleanupRecovery) {
+      title = t("workspace.route.recovery.filesRestoringTitle");
+    }
+  }
+
+  if (reading && archivedChat)
+    return (
+      <ArchivedTranscript
+        key={`${archivedChat.serverId}:${archivedChat.agentId}`}
+        {...archivedChat}
+        onClose={closeTranscript}
+      />
+    );
 
   return (
     <View style={styles.emptyState}>
@@ -142,11 +251,7 @@ function ArchivedWorkspaceRecovery({
         <ThemedLoadingSpinner size="small" uniProps={foregroundMutedColorMapping} />
       ) : null}
       <View style={styles.textStack}>
-        <Text style={styles.title}>
-          {isRestoring
-            ? t("workspace.route.recovery.restoringTitle")
-            : t("workspace.route.recovery.archivedTitle")}
-        </Text>
+        <Text style={styles.title}>{title}</Text>
         <Text style={styles.description}>{description}</Text>
         {recovery.error ? (
           <Text style={styles.error} testID="workspace-recovery-error">
@@ -155,6 +260,11 @@ function ArchivedWorkspaceRecovery({
         ) : null}
       </View>
       <View style={styles.actions}>
+        {archivedChat ? (
+          <Button size="sm" variant="outline" onPress={readTranscript}>
+            Read transcript
+          </Button>
+        ) : null}
         <Button
           size="sm"
           variant="default"
@@ -256,11 +366,13 @@ function WorkspaceEmptyState({
   hostName,
   description,
   onDismiss,
+  onRetry,
 }: {
   titleKey: "workspace.route.needsHostUpgrade" | "workspace.route.recovery.unavailableTitle";
   hostName?: string;
   description?: string;
   onDismiss: () => void;
+  onRetry?: () => void;
 }) {
   const { t } = useTranslation();
 
@@ -271,6 +383,11 @@ function WorkspaceEmptyState({
         <Text style={styles.description}>{description ?? hostName}</Text>
       </View>
       <View style={styles.actions}>
+        {onRetry ? (
+          <Button size="sm" variant="outline" onPress={onRetry}>
+            Check again
+          </Button>
+        ) : null}
         <Button size="sm" variant="default" leftIcon={ArrowLeftToLine} onPress={onDismiss}>
           {t("common.actions.back")}
         </Button>

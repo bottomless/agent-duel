@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
@@ -31,6 +32,20 @@ import { requireWorkspaceDirectory } from "@/utils/workspace-directory";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
 import type { MessagePayload } from "@/composer/types";
+import {
+  ARENA_PROVIDER,
+  ARENA_BOOTSTRAP_MODEL,
+  ARENA_THINKING_OPTIONS,
+  arenaAgentPreferenceKey,
+  arenaDraftPreferenceKey,
+  type ArenaThinkingLevel,
+} from "@/arena/constants";
+import { arenaComposerMaxImages } from "@/arena/composer-state";
+import { copyArenaPreferences, useArenaPreferences } from "@/arena/preferences";
+import { markArenaBattleHandoff } from "@/arena/battle-handoff";
+import { arenaSessionQueryKey } from "@/arena/use-arena-session";
+import { ensureBattleRepository } from "@/arena/battle-repository";
+import { arenaByokKey } from "@/byok/key";
 
 function toProjectIconDataUri(icon: { mimeType: string; data: string } | null): string | null {
   if (!icon) {
@@ -76,7 +91,12 @@ function buildChatDraftComposerArgs({
     initialServerId: serverId || null,
     initialValues:
       workspaceDirectory || sourceDirectory
-        ? { workingDir: workspaceDirectory || sourceDirectory }
+        ? {
+            workingDir: workspaceDirectory || sourceDirectory,
+            provider: ARENA_PROVIDER,
+            model: ARENA_BOOTSTRAP_MODEL,
+            thinkingOptionId: "high",
+          }
         : undefined,
     isVisible: pendingWorkspaceSetup !== null,
     onlineServerIds: isConnected && serverId ? [serverId] : [],
@@ -114,54 +134,38 @@ function failureMessageForCreationMethod(
 }
 
 function buildCreateAgentOptions({
-  composerState,
   text,
   attachments,
   encodedImages,
   workspaceDirectory,
   workspaceId,
-  provider,
+  battleMode,
+  thinking,
 }: {
-  composerState: {
-    modeOptions: { id: string }[];
-    selectedMode: string;
-    effectiveModelId: string | null;
-    effectiveThinkingOptionId: string | null;
-  };
   text: string;
   attachments: NonNullable<CreateAgentRequestOptions["attachments"]>;
   encodedImages: NonNullable<CreateAgentRequestOptions["images"]> | null;
   workspaceDirectory: string;
   workspaceId: string;
-  provider: CreateAgentRequestOptions["provider"];
+  battleMode: boolean;
+  thinking: ArenaThinkingLevel;
 }): CreateAgentRequestOptions {
-  // Reconcile the selected mode against the discovered modes. The mode picker
-  // shows modeOptions[0] when the stored mode isn't in the list (e.g. a stale
-  // globally-remembered mode this workspace's provider config no longer
-  // defines), so the submitted mode must match that display rather than send a
-  // stale mode the provider would reject.
-  const modeOptionIds = composerState.modeOptions.map((mode) => mode.id);
-  const reconciledMode = modeOptionIds.includes(composerState.selectedMode)
-    ? composerState.selectedMode
-    : (modeOptionIds[0] ?? "");
   return {
-    provider,
+    provider: ARENA_PROVIDER,
     cwd: workspaceDirectory,
     workspaceId,
-    ...(reconciledMode !== "" ? { modeId: reconciledMode } : {}),
-    ...(composerState.effectiveModelId ? { model: composerState.effectiveModelId } : {}),
-    ...(composerState.effectiveThinkingOptionId
-      ? { thinkingOptionId: composerState.effectiveThinkingOptionId }
-      : {}),
-    ...(text.trim() ? { initialPrompt: text.trim() } : {}),
-    ...(encodedImages && encodedImages.length > 0 ? { images: encodedImages } : {}),
-    ...(attachments.length > 0 ? { attachments } : {}),
+    model: ARENA_BOOTSTRAP_MODEL,
+    thinkingOptionId: thinking,
+    ...(!battleMode && text.trim() ? { initialPrompt: text.trim() } : {}),
+    ...(!battleMode && encodedImages && encodedImages.length > 0 ? { images: encodedImages } : {}),
+    ...(!battleMode && attachments.length > 0 ? { attachments } : {}),
   };
 }
 
 export function WorkspaceSetupDialog() {
   const { t } = useTranslation();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const pendingWorkspaceSetup = useWorkspaceSetupStore((state) => state.pendingWorkspaceSetup);
   const clearWorkspaceSetup = useWorkspaceSetupStore((state) => state.clearWorkspaceSetup);
   const mergeWorkspaces = useSessionStore((state) => state.mergeWorkspaces);
@@ -178,12 +182,15 @@ export function WorkspaceSetupDialog() {
     (state) => state.sessions[serverId]?.serverInfo?.features?.forgeSearch === true,
   );
   const sourceDirectory = pendingWorkspaceSetup?.sourceDirectory ?? "";
+  const draftKey = `workspace-setup:${serverId}:${sourceDirectory}`;
+  const arenaPreferenceKey = arenaDraftPreferenceKey(serverId, draftKey);
+  const arenaPreferences = useArenaPreferences(arenaPreferenceKey);
   const displayName = pendingWorkspaceSetup?.displayName?.trim() ?? "";
   const workspace = createdWorkspace;
   const client = useHostRuntimeClient(serverId);
   const isConnected = useHostRuntimeIsConnected(serverId);
   const chatDraft = useAgentInputDraft({
-    draftKey: `workspace-setup:${serverId}:${sourceDirectory}`,
+    draftKey,
     composer: buildChatDraftComposerArgs({
       serverId,
       isConnected,
@@ -306,15 +313,15 @@ export function WorkspaceSetupDialog() {
       try {
         setPendingAction("chat");
         setErrorMessage(null);
+        if (arenaPreferences.battleMode) {
+          await arenaByokKey.ensure(withConnectedClient());
+          await ensureBattleRepository({ client: withConnectedClient(), cwd });
+        }
         const ensuredWorkspace = await ensureWorkspace({ cwd, attachments });
         const connectedClient = withConnectedClient();
         if (!composerState) {
           throw new Error(t("workspaceSetup.errors.composerStateRequired"));
         }
-        if (!composerState.selectedProvider) {
-          throw new Error(t("workspaceSetup.errors.selectModel"));
-        }
-
         const wirePayload = splitComposerAttachmentsForSubmit(attachments, {
           format: resolveComposerAttachmentSubmitFormat({
             supportsForgeAttachments: supportsForgeSearch,
@@ -327,15 +334,27 @@ export function WorkspaceSetupDialog() {
         });
         const agent = await connectedClient.createAgent(
           buildCreateAgentOptions({
-            composerState,
             text,
             attachments: wirePayload.attachments,
             encodedImages: encodedImages ?? null,
             workspaceDirectory,
             workspaceId: ensuredWorkspace.id,
-            provider: composerState.selectedProvider,
+            battleMode: arenaPreferences.battleMode,
+            thinking: arenaPreferences.thinking,
           }),
         );
+        copyArenaPreferences(arenaPreferenceKey, arenaAgentPreferenceKey(serverId, agent.id));
+        if (arenaPreferences.battleMode) {
+          const snapshot = await connectedClient.arenaResolve(agent.id);
+          const started = await connectedClient.arenaStart(agent.id, snapshot.chat.id, text, {
+            ...(encodedImages && encodedImages.length > 0 ? { images: encodedImages } : {}),
+            ...(wirePayload.attachments.length > 0 ? { attachments: wirePayload.attachments } : {}),
+          });
+          // The panel this navigates to paints the started battle from here, rather than
+          // spinning over a new agent until the daemon's history for it lands.
+          queryClient.setQueryData(arenaSessionQueryKey(serverId, agent.id), started);
+          markArenaBattleHandoff({ serverId, agentId: agent.id });
+        }
 
         if (!getIsStillActive()) {
           return;
@@ -365,8 +384,11 @@ export function WorkspaceSetupDialog() {
     },
     [
       composerState,
+      arenaPreferenceKey,
+      arenaPreferences,
       getIsStillActive,
       navigateAfterCreation,
+      queryClient,
       serverId,
       setAgents,
       ensureWorkspace,
@@ -387,10 +409,19 @@ export function WorkspaceSetupDialog() {
       composerState
         ? {
             ...composerState.agentControls,
+            thinkingOptions: [...ARENA_THINKING_OPTIONS],
+            selectedThinkingOptionId: arenaPreferences.thinking,
+            onSelectThinkingOption: (thinking: string) => {
+              if (!ARENA_THINKING_OPTIONS.some((option) => option.id === thinking)) return;
+              arenaPreferences.setThinking(thinking as ArenaThinkingLevel);
+            },
+            battleMode: arenaPreferences.battleMode,
+            onBattleModeChange: arenaPreferences.setBattleMode,
+            battleModeDisabled: pendingAction !== null,
             disabled: pendingAction !== null,
           }
         : undefined,
-    [composerState, pendingAction],
+    [arenaPreferences, composerState, pendingAction],
   );
 
   const subtitleContent = useMemo(
@@ -447,6 +478,7 @@ export function WorkspaceSetupDialog() {
           commandDraftConfig={composerState?.commandDraftConfig}
           agentControls={agentControlsWithDisabled}
           inputWrapperStyle={styles.composerInputWrapper}
+          maxImages={arenaComposerMaxImages(arenaPreferences.battleMode)}
         />
       </FileDropZone>
 

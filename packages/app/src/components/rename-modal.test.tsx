@@ -4,13 +4,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AdaptiveRenameModal } from "./rename-modal";
 
-const { theme, adaptiveInputState } = vi.hoisted(() => ({
+const { theme, adaptiveInputState, layoutState } = vi.hoisted(() => ({
   adaptiveInputState: {
+    factory: null as unknown,
     latestProps: null as {
       onChangeText?: (next: string) => void;
       onSubmitEditing?: () => void;
+      size?: string;
     } | null,
   },
+  layoutState: { isCompact: false },
   theme: {
     spacing: { 2: 8, 3: 12 },
     fontSize: { sm: 13, base: 15 },
@@ -35,6 +38,10 @@ vi.mock("react-native-unistyles", () => ({
 vi.mock("@/constants/platform", () => ({
   isWeb: true,
   isNative: false,
+}));
+
+vi.mock("@/constants/layout", () => ({
+  useIsCompactFormFactor: () => layoutState.isCompact,
 }));
 
 vi.mock("@/components/adaptive-modal-sheet", async () => {
@@ -79,12 +86,14 @@ vi.mock("@/components/adaptive-modal-sheet", async () => {
         editable?: boolean;
         maxLength?: number;
         testID?: string;
+        size?: string;
         onChangeText?: (next: string) => void;
         onSubmitEditing?: () => void;
       };
       adaptiveInputState.latestProps = {
         onChangeText: p.onChangeText,
         onSubmitEditing: p.onSubmitEditing,
+        size: p.size,
       };
       return ReactModule.createElement("input", {
         ref,
@@ -102,7 +111,24 @@ vi.mock("@/components/adaptive-modal-sheet", async () => {
       });
     },
   );
+  adaptiveInputState.factory = AdaptiveTextInput;
   return { AdaptiveModalSheet, AdaptiveTextInput };
+});
+
+// The modal renders the form kit's field, so the same stub stands in for it. Its geometry is
+// control-geometry.ts's business; what this test pins is the size the modal asks for. The stub
+// is resolved at render time, not when this factory runs, so the two mocks can evaluate in
+// either order.
+vi.mock("@/components/ui/form-field", async () => {
+  const ReactModule = await import("react");
+  const FormTextInput = ReactModule.forwardRef<HTMLInputElement, Record<string, unknown>>(
+    (props, ref) =>
+      ReactModule.createElement(
+        adaptiveInputState.factory as React.ComponentType<Record<string, unknown>>,
+        { ...props, ref },
+      ),
+  );
+  return { FormTextInput };
 });
 
 vi.mock("@/components/ui/button", async () => {
@@ -151,6 +177,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   adaptiveInputState.latestProps = null;
+  layoutState.isCompact = false;
 });
 
 afterEach(() => {
@@ -319,6 +346,8 @@ describe("RenameModal", () => {
     typeInto("bad");
     const submit = querySubmit()!;
     expect(submit.disabled).toBe(true);
+    // The rule states itself as you type; a disabled submit is never unexplained.
+    expect(queryError()?.textContent).toContain("Invalid name");
 
     pressEnter();
     await flush();
@@ -326,6 +355,31 @@ describe("RenameModal", () => {
     expect(onSubmit).not.toHaveBeenCalled();
     const errorNode = queryError();
     expect(errorNode?.textContent).toContain("Invalid name");
+  });
+
+  // One size for all fields, from control-geometry.ts: sm on desktop, md compact
+  // (docs/forms.md). The modal used to declare its own 48px field instead.
+  it("asks the form kit for the desktop field size", () => {
+    layoutState.isCompact = false;
+    renderModal({ initialValue: "main" });
+    expect(adaptiveInputState.latestProps?.size).toBe("sm");
+  });
+
+  it("asks the form kit for the compact field size on a compact form factor", () => {
+    layoutState.isCompact = true;
+    renderModal({ initialValue: "main" });
+    expect(adaptiveInputState.latestProps?.size).toBe("md");
+  });
+
+  it("clears a validate error once the name is valid again", async () => {
+    const validate = vi.fn((value: string) => (value === "bad" ? "Invalid name" : null));
+    renderModal({ initialValue: "ok", validate });
+
+    typeInto("bad");
+    expect(queryError()?.textContent).toContain("Invalid name");
+
+    typeInto("good");
+    expect(queryError()).toBeNull();
   });
 
   it("disables the submit button while onSubmit is pending", async () => {

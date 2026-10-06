@@ -9,6 +9,7 @@ import type {
   CheckoutCommitFileDiffRequest,
   CheckoutRefreshRequest,
   CheckoutRenameBranchRequest,
+  CheckoutCreateBranchRequest,
   CheckoutStatusRequest,
   SessionInboundMessage,
   SessionOutboundMessage,
@@ -73,6 +74,11 @@ export interface CheckoutSessionHost {
     cwd: string,
     branch: string,
   ): Promise<{ previousBranch: string | null; currentBranch: string | null }>;
+  createBranch(
+    cwd: string,
+    branch: string,
+    options?: { baseRef?: string },
+  ): Promise<{ currentBranch: string | null }>;
 }
 
 type CurrentWorkspacePullRequest = NonNullable<
@@ -234,7 +240,11 @@ export class CheckoutSession {
     const resolvedCwd = expandTilde(cwd);
 
     try {
-      const snapshot = await this.workspaceGitService.getSnapshot(resolvedCwd);
+      // Branch selection needs fresh local Git facts, not a remote PR refresh.
+      const options = msg.refreshGit
+        ? { force: true as const, includeForge: false, reason: "checkout-status-request" }
+        : undefined;
+      const snapshot = await this.workspaceGitService.getSnapshot(resolvedCwd, options);
       this.host.emit({
         type: "checkout_status_response",
         payload: buildCheckoutStatusPayloadFromSnapshot({
@@ -311,7 +321,11 @@ export class CheckoutSession {
       const resolvedCwd = expandTilde(cwd);
       assertSafeGitRef(branchName, "branch");
 
-      const resolution = await this.workspaceGitService.validateBranchRef(resolvedCwd, branchName);
+      const resolution = await this.workspaceGitService.validateBranchRef(
+        resolvedCwd,
+        branchName,
+        msg.refreshGit ? { force: true, reason: "validate-branch-request" } : undefined,
+      );
       switch (resolution.kind) {
         case "local":
           this.host.emit({
@@ -373,10 +387,14 @@ export class CheckoutSession {
 
     try {
       const resolvedCwd = expandTilde(cwd);
-      const branchDetails = await this.workspaceGitService.suggestBranchesForCwd(resolvedCwd, {
-        query,
-        limit,
-      });
+      const branchDetails = await this.workspaceGitService.suggestBranchesForCwd(
+        resolvedCwd,
+        {
+          query,
+          limit,
+        },
+        msg.refreshGit ? { force: true, reason: "branch-suggestions-request" } : undefined,
+      );
       this.host.emit({
         type: "branch_suggestions_response",
         payload: {
@@ -543,6 +561,55 @@ export class CheckoutSession {
           cwd,
           success: false,
           branch,
+          error: toCheckoutError(error),
+          requestId,
+        },
+      });
+    }
+  }
+
+  async handleCheckoutCreateBranchRequest(msg: CheckoutCreateBranchRequest): Promise<void> {
+    const { cwd, branch, baseRef, requestId } = msg;
+    const validation = validateBranchSlug(branch);
+
+    if (!validation.valid) {
+      this.host.emit({
+        type: "checkout.create_branch.response",
+        payload: {
+          cwd,
+          success: false,
+          currentBranch: null,
+          error: toCheckoutError(new Error(validation.error ?? "Invalid branch name")),
+          requestId,
+        },
+      });
+      return;
+    }
+
+    try {
+      const result = await this.host.createBranch(cwd, branch, baseRef ? { baseRef } : undefined);
+      await this.gitMutation.notifyGitMutation(cwd, "create-branch", { invalidateForge: true });
+      this.scheduleDiffRefresh(cwd);
+      this.host.handleWorkspaceGitBranchSnapshot(cwd, result.currentBranch);
+      await this.host.emitWorkspaceUpdateForCwd(cwd);
+
+      this.host.emit({
+        type: "checkout.create_branch.response",
+        payload: {
+          cwd,
+          success: true,
+          currentBranch: result.currentBranch,
+          error: null,
+          requestId,
+        },
+      });
+    } catch (error) {
+      this.host.emit({
+        type: "checkout.create_branch.response",
+        payload: {
+          cwd,
+          success: false,
+          currentBranch: null,
           error: toCheckoutError(error),
           requestId,
         },

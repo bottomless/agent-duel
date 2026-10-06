@@ -89,7 +89,7 @@ describe("useCliInstall", () => {
       expect(result.current.error).toBe(error);
     });
 
-    expect(toast.error).toHaveBeenCalledWith("Unable to install the Paseo CLI.");
+    expect(toast.error).toHaveBeenCalledWith("Unable to install the Agent Duel CLI.");
     expect(console.error).toHaveBeenCalledWith("[Integrations] Failed to install CLI", error);
   });
 
@@ -112,7 +112,7 @@ describe("useCliInstall", () => {
       expect(result.current.error).toBe(error);
     });
 
-    expect(toast.error).toHaveBeenCalledWith("无法安装 Paseo CLI。");
+    expect(toast.error).toHaveBeenCalledWith("无法安装 Agent Duel CLI。");
   });
 });
 

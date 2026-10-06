@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef } from "react";
 import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, GitBranch } from "lucide-react-native";
+import { ChevronDown, GitBranch, Swords } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import type { Theme } from "@/styles/theme";
@@ -10,6 +10,16 @@ import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-
 import { useToast } from "@/contexts/toast-context";
 import { useBranchSwitcher } from "@/hooks/use-branch-switcher";
 
+/**
+ * A destination that is not a branch — an Arena contestant worktree, which lives
+ * on a detached HEAD. Pinned options head the list and never reach git.
+ */
+export interface BranchSwitcherPinnedOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
 interface BranchSwitcherProps {
   currentBranchName: string | null;
   serverId: string;
@@ -17,14 +27,25 @@ interface BranchSwitcherProps {
   workspaceDirectory: string | null;
   isGitCheckout: boolean;
   testID?: string;
+  pinnedOptions?: BranchSwitcherPinnedOption[];
+  pinnedSelectedId?: string | null;
+  /** Receives a pinned id, or null when a real branch takes over. */
+  onPinnedSelect?: (id: string | null) => void;
 }
 
 const foregroundMutedIconColorMapping = (theme: Theme) => ({
   color: theme.colors.foregroundMuted,
 });
 
+const accentIconColorMapping = (theme: Theme) => ({
+  color: theme.colors.accentBright,
+});
+
 const ThemedGitBranch = withUnistyles(GitBranch);
+const ThemedSwords = withUnistyles(Swords);
 const ThemedChevronDown = withUnistyles(ChevronDown);
+
+const EMPTY_PINNED_OPTIONS: BranchSwitcherPinnedOption[] = [];
 
 export function BranchSwitcher({
   currentBranchName,
@@ -33,6 +54,9 @@ export function BranchSwitcher({
   workspaceDirectory,
   isGitCheckout,
   testID = "workspace-header-branch-switcher",
+  pinnedOptions = EMPTY_PINNED_OPTIONS,
+  pinnedSelectedId = null,
+  onPinnedSelect,
 }: BranchSwitcherProps) {
   const { t } = useTranslation();
   const anchorRef = useRef<View>(null);
@@ -63,8 +87,40 @@ export function BranchSwitcher({
     [],
   );
 
+  const pinnedIds = useMemo(
+    () => new Set(pinnedOptions.map((option) => option.id)),
+    [pinnedOptions],
+  );
+  const pinnedSelected = useMemo(
+    () => pinnedOptions.find((option) => option.id === pinnedSelectedId) ?? null,
+    [pinnedOptions, pinnedSelectedId],
+  );
+
+  const options = useMemo(
+    () => [...pinnedOptions, ...branchOptions],
+    [branchOptions, pinnedOptions],
+  );
+
+  const handleSelect = useCallback(
+    (id: string) => {
+      if (pinnedIds.has(id)) {
+        onPinnedSelect?.(id);
+        setIsOpen(false);
+        return;
+      }
+      // Leaving a contestant worktree behind before the checkout moves under it.
+      onPinnedSelect?.(null);
+      handleBranchSelect(id);
+    },
+    [handleBranchSelect, onPinnedSelect, pinnedIds, setIsOpen],
+  );
+
   const branchLeadingSlot = useMemo(
     () => <ThemedGitBranch size={14} uniProps={foregroundMutedIconColorMapping} />,
+    [],
+  );
+  const pinnedLeadingSlot = useMemo(
+    () => <ThemedSwords size={14} uniProps={accentIconColorMapping} />,
     [],
   );
 
@@ -72,18 +128,21 @@ export function BranchSwitcher({
     ({ option, selected, active, onPress }) => (
       <ComboboxItem
         label={option.label}
+        description={option.description}
         selected={selected}
         active={active}
         onPress={onPress}
-        leadingSlot={branchLeadingSlot}
+        leadingSlot={pinnedIds.has(option.id) ? pinnedLeadingSlot : branchLeadingSlot}
       />
     ),
-    [branchLeadingSlot],
+    [branchLeadingSlot, pinnedIds, pinnedLeadingSlot],
   );
 
-  if (!currentBranchName) {
+  if (!currentBranchName && !pinnedSelected && pinnedOptions.length === 0) {
     return null;
   }
+
+  const triggerLabel = pinnedSelected?.label ?? currentBranchName ?? "";
 
   return (
     <View ref={anchorRef} collapsable={false} style={styles.anchor}>
@@ -92,18 +151,29 @@ export function BranchSwitcher({
         onPress={handleOpen}
         style={triggerStyle}
         accessibilityRole="button"
-        accessibilityLabel={t("branchSwitcher.currentBranch", { branchName: currentBranchName })}
+        accessibilityLabel={
+          pinnedSelected
+            ? pinnedSelected.label
+            : t("branchSwitcher.currentBranch", { branchName: currentBranchName })
+        }
       >
-        <ThemedGitBranch size={14} uniProps={foregroundMutedIconColorMapping} />
-        <Text style={styles.branchLabel} numberOfLines={1}>
-          {currentBranchName}
+        {pinnedSelected ? (
+          <ThemedSwords size={14} uniProps={accentIconColorMapping} />
+        ) : (
+          <ThemedGitBranch size={14} uniProps={foregroundMutedIconColorMapping} />
+        )}
+        <Text
+          style={[styles.branchLabel, pinnedSelected ? styles.pinnedLabel : null]}
+          numberOfLines={1}
+        >
+          {triggerLabel}
         </Text>
         <ThemedChevronDown size={12} uniProps={foregroundMutedIconColorMapping} />
       </Pressable>
       <Combobox
-        options={branchOptions}
-        value={currentBranchName}
-        onSelect={handleBranchSelect}
+        options={options}
+        value={pinnedSelected?.id ?? currentBranchName ?? ""}
+        onSelect={handleSelect}
         searchable
         placeholder={t("branchSwitcher.placeholder")}
         searchPlaceholder={t("branchSwitcher.searchPlaceholder")}
@@ -145,5 +215,8 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.medium,
     flexShrink: 1,
+  },
+  pinnedLabel: {
+    color: theme.colors.accentBright,
   },
 }));

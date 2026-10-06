@@ -12,6 +12,7 @@ import type { ToastApi } from "@/components/toast-host";
 import type { OpenFileDisposition } from "@/workspace/file-open";
 import type { InlinePathTarget } from "./parse";
 import type { AssistantFileLinkContext, GetDirectorySuggestions } from "./resolver";
+import { useWorkspaceBrowserLinkOpener } from "@/workspace/browser-link-opener";
 
 export interface AssistantFileLinkDaemonClient {
   getDirectorySuggestions: GetDirectorySuggestions;
@@ -22,6 +23,7 @@ export interface AssistantFileLinkResolverConfig {
   serverId?: string;
   workspaceRoot?: string;
   onOpenWorkspaceFile?: (target: InlinePathTarget, disposition: OpenFileDisposition) => void;
+  onOpenExternalUrl?: (url: string) => boolean;
   toast?: ToastApi | null;
 }
 
@@ -42,17 +44,28 @@ export function AssistantFileLinkResolverProvider({
   serverId,
   workspaceRoot,
   onOpenWorkspaceFile,
+  onOpenExternalUrl,
   toast,
   children,
 }: AssistantFileLinkResolverProviderProps) {
+  const workspaceBrowserLinkOpener = useWorkspaceBrowserLinkOpener();
+  const resolvedOpenExternalUrl = onOpenExternalUrl ?? workspaceBrowserLinkOpener ?? undefined;
   const configRef = useRef<AssistantFileLinkResolverConfig>({
     client,
     serverId,
     workspaceRoot,
     onOpenWorkspaceFile,
+    onOpenExternalUrl: resolvedOpenExternalUrl,
     toast,
   });
-  configRef.current = { client, serverId, workspaceRoot, onOpenWorkspaceFile, toast };
+  configRef.current = {
+    client,
+    serverId,
+    workspaceRoot,
+    onOpenWorkspaceFile,
+    onOpenExternalUrl: resolvedOpenExternalUrl,
+    toast,
+  };
 
   const getDirectorySuggestions = useCallback<GetDirectorySuggestions>(async (input) => {
     const activeClient = configRef.current.client;

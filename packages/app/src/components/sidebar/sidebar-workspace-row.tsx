@@ -4,7 +4,6 @@ import { View, Text, type GestureResponderEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useMutation } from "@tanstack/react-query";
 import * as Clipboard from "expo-clipboard";
-import type { HostBadgeModel } from "@/hosts/appearance";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
 import type { DraggableListDragHandleProps } from "@/components/draggable-list.types";
 import type { ShortcutKey } from "@/utils/format-shortcut";
@@ -51,7 +50,6 @@ interface SidebarWorkspaceRowProps {
   canCopyBranchName: boolean;
   onPress: () => void;
   /** The host pill after the title. Absent → the sidebar spans one host, or this one is hidden. */
-  hostBadge?: HostBadgeModel | null;
   /** Project grouping only: shows a transient "creating" affordance. */
   isCreating?: boolean;
   /** Project grouping only: drag-to-reorder wiring. Absent → not draggable. */
@@ -67,7 +65,6 @@ export function SidebarWorkspaceRow({
   showShortcutBadge,
   canCopyBranchName,
   onPress,
-  hostBadge,
   isCreating = false,
   drag,
   isDragging = false,
@@ -77,6 +74,7 @@ export function SidebarWorkspaceRow({
   const toast = useToast();
   const [isHidingWorkspace, setIsHidingWorkspace] = useState(false);
   const [isRenameOpen, setIsRenameOpen] = useState(false);
+  const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
   const isArchiving = workspace.archivingAt !== null || isHidingWorkspace;
 
   const redirectAfterArchive = useCallback(() => {
@@ -143,6 +141,33 @@ export function SidebarWorkspaceRow({
     },
   });
 
+  // A detached checkout has no branch to rename; it gets one here instead.
+  const isDetached = workspace.projectKind === "git" && workspace.currentBranch === null;
+  const createBranchMutation = useMutation({
+    mutationFn: async (branch: string) => {
+      const client = getHostRuntimeStore().getClient(workspace.serverId);
+      if (!client) {
+        throw new Error(t("sidebar.workspace.toasts.hostDisconnected"));
+      }
+      const result = await client.createBranch({ cwd: workspace.workspaceDirectory, branch });
+      if (!result.success) {
+        throw new Error(result.error?.message ?? t("sidebar.workspace.toasts.createBranchFailed"));
+      }
+    },
+  });
+  const handleOpenCreateBranch = useCallback(() => {
+    setIsCreateBranchOpen(true);
+  }, []);
+  const handleCloseCreateBranch = useCallback(() => {
+    setIsCreateBranchOpen(false);
+  }, []);
+  const handleSubmitCreateBranch = useCallback(
+    async (value: string) => {
+      await createBranchMutation.mutateAsync(value.trim());
+    },
+    [createBranchMutation],
+  );
+
   const handleOpenRename = useCallback(() => {
     setIsRenameOpen(true);
   }, []);
@@ -187,7 +212,6 @@ export function SidebarWorkspaceRow({
         selected={selected}
         shortcutNumber={shortcutNumber}
         showShortcutBadge={showShortcutBadge}
-        hostBadge={hostBadge}
         isCreating={isCreating}
         isArchiving={isArchiving}
         onPress={onPress}
@@ -201,6 +225,7 @@ export function SidebarWorkspaceRow({
         onCopyBranchName={canCopyBranchName ? handleCopyBranchName : undefined}
         onCopyPath={handleCopyPath}
         onRename={handleOpenRename}
+        onCreateBranch={isDetached ? handleOpenCreateBranch : undefined}
         onMarkAsRead={hasClearableAttention ? handleMarkAsRead : undefined}
         archiveShortcutKeys={selected ? archiveShortcutKeys : null}
       />
@@ -214,6 +239,16 @@ export function SidebarWorkspaceRow({
         onSubmit={handleSubmitRename}
         testID={`sidebar-workspace-rename-modal-${workspace.workspaceKey}`}
       />
+      <AdaptiveRenameModal
+        visible={isCreateBranchOpen}
+        title={t("sidebar.workspace.createBranch.title")}
+        initialValue=""
+        placeholder={t("sidebar.workspace.createBranch.placeholder")}
+        submitLabel={t("sidebar.workspace.createBranch.submit")}
+        onClose={handleCloseCreateBranch}
+        onSubmit={handleSubmitCreateBranch}
+        testID={`sidebar-workspace-create-branch-modal-${workspace.workspaceKey}`}
+      />
     </>
   );
 }
@@ -223,7 +258,6 @@ interface WorkspaceRowBodyProps {
   selected: boolean;
   shortcutNumber: number | null;
   showShortcutBadge: boolean;
-  hostBadge?: HostBadgeModel | null;
   isCreating: boolean;
   isArchiving: boolean;
   onPress: () => void;
@@ -237,6 +271,7 @@ interface WorkspaceRowBodyProps {
   onCopyBranchName?: () => void;
   onCopyPath?: () => void;
   onRename?: () => void;
+  onCreateBranch?: () => void;
   onMarkAsRead?: () => void;
   archiveShortcutKeys?: ShortcutKey[][] | null;
 }
@@ -246,7 +281,6 @@ function WorkspaceRowBody({
   selected,
   shortcutNumber,
   showShortcutBadge,
-  hostBadge,
   isCreating,
   isArchiving,
   onPress,
@@ -260,6 +294,7 @@ function WorkspaceRowBody({
   onCopyBranchName,
   onCopyPath,
   onRename,
+  onCreateBranch,
   onMarkAsRead,
   archiveShortcutKeys,
 }: WorkspaceRowBodyProps) {
@@ -324,12 +359,12 @@ function WorkspaceRowBody({
               contextMenuOpen={contextMenuOpen}
               onContextMenuOpenChange={onContextMenuOpenChange}
               workspace={workspace}
-              hostBadgeLabel={hostBadge?.label}
               serviceSummary={serviceSummary}
               workspaceKey={workspace.workspaceKey}
               onCopyPath={onCopyPath}
               onCopyBranchName={onCopyBranchName}
               onRename={onRename}
+              onCreateBranch={onCreateBranch}
               onMarkAsRead={onMarkAsRead}
               onArchive={onArchive}
               archiveLabel={archiveLabel}
@@ -351,7 +386,6 @@ function WorkspaceRowBody({
             >
               <SidebarWorkspaceRowContent
                 workspace={workspace}
-                hostBadge={hostBadge}
                 serviceSummary={serviceSummary}
                 backdrop={getSidebarRowBackdrop({ isDragging, isPressed, selected, isHovered })}
                 isHovered={isHovered}
@@ -376,6 +410,7 @@ function WorkspaceRowBody({
                   onCopyBranchName={onCopyBranchName}
                   onCopyPath={onCopyPath}
                   onRename={onRename}
+                  onCreateBranch={onCreateBranch}
                   onMarkAsRead={onMarkAsRead}
                 />
               </SidebarWorkspaceRowContent>
@@ -404,6 +439,7 @@ function WorkspaceRowTrailingActions({
   onCopyBranchName,
   onCopyPath,
   onRename,
+  onCreateBranch,
 }: {
   workspace: SidebarWorkspaceEntry;
   trailing: SidebarWorkspaceTrailing;
@@ -421,6 +457,7 @@ function WorkspaceRowTrailingActions({
   onCopyBranchName?: () => void;
   onCopyPath?: () => void;
   onRename?: () => void;
+  onCreateBranch?: () => void;
 }) {
   const { t } = useTranslation();
   const showShortcut = showShortcutBadge && shortcutNumber !== null;
@@ -458,6 +495,7 @@ function WorkspaceRowTrailingActions({
                 onCopyPath={onCopyPath}
                 onCopyBranchName={onCopyBranchName}
                 onRename={onRename}
+                onCreateBranch={onCreateBranch}
                 onMarkAsRead={onMarkAsRead}
                 onArchive={onArchive}
                 archiveLabel={archiveLabel}

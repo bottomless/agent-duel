@@ -19,16 +19,15 @@ export const APP_SETTINGS_KEY = "@paseo:app-settings";
 export const APP_SETTINGS_QUERY_KEY = ["app-settings"];
 const LEGACY_SETTINGS_KEY = "@paseo:settings";
 
-export type SendBehavior = "interrupt" | "queue";
 export type ReleaseChannel = "stable" | "beta";
-export type ServiceUrlBehavior = "ask" | "in-app" | "external";
 export type WorkspaceTitleSource = "title" | "branch";
 /** What a sidebar workspace row shows in the space to the right of its title. */
 export type SidebarWorkspaceTrailing = "diff" | "timestamp" | "none";
 export type ToolCallDetailLevel = "overview" | "detailed";
+/** Which edge of the workspace the side panel is docked to. */
+export type SidePanelPlacement = "right" | "bottom";
 
 const VALID_THEMES = new Set<string>(THEME_OPTIONS.map((option) => option.name));
-const VALID_SERVICE_URL_BEHAVIORS = new Set<ServiceUrlBehavior>(["ask", "in-app", "external"]);
 const VALID_WORKSPACE_TITLE_SOURCES = new Set<WorkspaceTitleSource>(["title", "branch"]);
 const VALID_SIDEBAR_WORKSPACE_TRAILINGS = new Set<SidebarWorkspaceTrailing>([
   "diff",
@@ -36,6 +35,7 @@ const VALID_SIDEBAR_WORKSPACE_TRAILINGS = new Set<SidebarWorkspaceTrailing>([
   "none",
 ]);
 const VALID_TOOL_CALL_DETAIL_LEVELS = new Set<ToolCallDetailLevel>(["overview", "detailed"]);
+const VALID_SIDE_PANEL_PLACEMENTS = new Set<SidePanelPlacement>(["right", "bottom"]);
 export const DEFAULT_TERMINAL_SCROLLBACK_LINES = 10_000;
 export const MIN_TERMINAL_SCROLLBACK_LINES = 0;
 export const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000;
@@ -50,8 +50,6 @@ export const MAX_FONT_FAMILY_LENGTH = 200;
 export interface AppSettings {
   theme: ThemePreference;
   language: AppLanguage;
-  sendBehavior: SendBehavior;
-  serviceUrlBehavior: ServiceUrlBehavior;
   terminalScrollbackLines: number;
   useLegacyTerminalRenderer: boolean;
   uiFontFamily: string; // "" = platform default UI stack
@@ -67,6 +65,7 @@ export interface AppSettings {
   toolCallDetailLevel: ToolCallDetailLevel;
   chatOutlineEnabled: boolean;
   vimKeybindings: boolean;
+  sidePanelPlacement: SidePanelPlacement;
 }
 
 export interface Settings extends AppSettings {
@@ -86,8 +85,6 @@ type StoredAppSettings = Partial<Omit<AppSettings, "sidebarRowItems">> & {
 export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   theme: "auto",
   language: "system",
-  sendBehavior: "interrupt",
-  serviceUrlBehavior: "ask",
   terminalScrollbackLines: DEFAULT_TERMINAL_SCROLLBACK_LINES,
   useLegacyTerminalRenderer: false,
   uiFontFamily: "",
@@ -100,9 +97,10 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   sidebarRowItems: DEFAULT_SIDEBAR_ROW_ITEMS,
   sidebarChecksDisplay: DEFAULT_SIDEBAR_CHECKS_DISPLAY,
   autoExpandReasoning: false,
-  toolCallDetailLevel: "detailed",
+  toolCallDetailLevel: "overview",
   chatOutlineEnabled: true,
   vimKeybindings: false,
+  sidePanelPlacement: "right",
 };
 
 export const DEFAULT_APP_SETTINGS: Settings = {
@@ -130,18 +128,25 @@ export interface SettingsDeps {
   desktop: DesktopSettingsBridge;
 }
 
+const settingsWrites = new WeakMap<QueryClient, Promise<void>>();
+
 export async function saveAppSettings(input: {
   queryClient: QueryClient;
   updates: Partial<AppSettings>;
   deps: SettingsDeps;
 }): Promise<void> {
-  const storedCurrent =
-    input.queryClient.getQueryData<AppSettings>(APP_SETTINGS_QUERY_KEY) ??
-    (await loadAppSettingsFromStorage(input.deps));
-  const current = normalizeAppSettings(storedCurrent);
-  const next = { ...current, ...input.updates };
-  input.queryClient.setQueryData<AppSettings>(APP_SETTINGS_QUERY_KEY, next);
-  await input.deps.storage.setItem(APP_SETTINGS_KEY, JSON.stringify(next));
+  const previous = settingsWrites.get(input.queryClient) ?? Promise.resolve();
+  const write = (async () => {
+    await previous.catch(() => undefined);
+    const storedCurrent =
+      input.queryClient.getQueryData<AppSettings>(APP_SETTINGS_QUERY_KEY) ??
+      (await loadAppSettingsFromStorage(input.deps));
+    const next = { ...normalizeAppSettings(storedCurrent), ...input.updates };
+    await input.deps.storage.setItem(APP_SETTINGS_KEY, JSON.stringify(next));
+    input.queryClient.setQueryData<AppSettings>(APP_SETTINGS_QUERY_KEY, next);
+  })();
+  settingsWrites.set(input.queryClient, write);
+  return write;
 }
 
 export async function loadAppSettingsFromStorage(deps: SettingsDeps): Promise<AppSettings> {
@@ -256,15 +261,6 @@ function pickEnumAppSettings(stored: StoredAppSettings): Partial<AppSettings> {
   if (typeof stored.theme === "string" && VALID_THEMES.has(stored.theme)) {
     result.theme = stored.theme;
   }
-  if (stored.sendBehavior === "interrupt" || stored.sendBehavior === "queue") {
-    result.sendBehavior = stored.sendBehavior;
-  }
-  if (
-    typeof stored.serviceUrlBehavior === "string" &&
-    VALID_SERVICE_URL_BEHAVIORS.has(stored.serviceUrlBehavior)
-  ) {
-    result.serviceUrlBehavior = stored.serviceUrlBehavior;
-  }
   if (typeof stored.syntaxTheme === "string" && isSyntaxThemeId(stored.syntaxTheme)) {
     result.syntaxTheme = stored.syntaxTheme;
   }
@@ -279,6 +275,12 @@ function pickEnumAppSettings(stored: StoredAppSettings): Partial<AppSettings> {
     VALID_SIDEBAR_WORKSPACE_TRAILINGS.has(stored.sidebarWorkspaceTrailing)
   ) {
     result.sidebarWorkspaceTrailing = stored.sidebarWorkspaceTrailing;
+  }
+  if (
+    typeof stored.sidePanelPlacement === "string" &&
+    VALID_SIDE_PANEL_PLACEMENTS.has(stored.sidePanelPlacement)
+  ) {
+    result.sidePanelPlacement = stored.sidePanelPlacement;
   }
   return result;
 }

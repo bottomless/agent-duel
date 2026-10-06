@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  collectImageFilesFromClipboardData,
+  collectFilesFromClipboardData,
   filesToImageAttachments,
 } from "./image-attachments-from-files";
+import { UnreadableImageError, type ImageCodec } from "@/attachments/sendable-image";
 import { __setAttachmentStoreForTests } from "@/attachments/store";
 import type { AttachmentStore } from "@/attachments/types";
 
@@ -13,6 +14,18 @@ function createClipboardItem(params: { kind: string; type: string; file?: File |
     getAsFile: () => params.file ?? null,
   };
 }
+
+/** Decodes any bytes but a leading zero, the way a corrupted file fails to decode. */
+const testCodec: ImageCodec = {
+  async decode(blob) {
+    const [first] = new Uint8Array(await blob.arrayBuffer());
+    if (first === 0) throw new Error("decode failed");
+    return {
+      toPng: async () => new Blob([new Uint8Array([9, 9])], { type: "image/png" }),
+      close: () => {},
+    };
+  },
+};
 
 function createTestStore(): AttachmentStore {
   let sequence = 0;
@@ -62,77 +75,56 @@ afterEach(() => {
   __setAttachmentStoreForTests(null);
 });
 
-describe("collectImageFilesFromClipboardData", () => {
-  it("returns only image files from clipboard items", () => {
-    const imagePng = new File([new Uint8Array([0, 1, 2, 3])], "paste.png", {
-      type: "image/png",
-    });
-    const textFile = new File(["not image"], "notes.txt", {
-      type: "text/plain",
-    });
+describe("collectFilesFromClipboardData", () => {
+  it("splits pasted files into raster images and other files", () => {
+    const imagePng = new File([new Uint8Array([1, 2, 3])], "paste.png", { type: "image/png" });
+    const textFile = new File(["not image"], "notes.txt", { type: "text/plain" });
 
-    const files = collectImageFilesFromClipboardData({
+    const files = collectFilesFromClipboardData({
       items: [
         createClipboardItem({ kind: "string", type: "text/plain" }),
-        createClipboardItem({
-          kind: "file",
-          type: "text/plain",
-          file: textFile,
-        }),
-        createClipboardItem({
-          kind: "file",
-          type: "image/png",
-          file: imagePng,
-        }),
-        createClipboardItem({
-          kind: "file",
-          type: "image/jpeg",
-          file: null,
-        }),
+        createClipboardItem({ kind: "file", type: "text/plain", file: textFile }),
+        createClipboardItem({ kind: "file", type: "image/png", file: imagePng }),
+        createClipboardItem({ kind: "file", type: "image/jpeg", file: null }),
       ],
     });
 
-    expect(files).toEqual([{ file: imagePng, mimeType: "image/png" }]);
+    expect(files).toEqual({
+      images: [{ file: imagePng, mimeType: "image/png" }],
+      others: [textFile],
+    });
   });
 
-  it("ignores SVG clipboard files", () => {
-    const svgFile = new File(["<svg />"], "logo.svg", {
-      type: "image/svg+xml",
+  it("keeps an SVG as a file rather than dropping it", () => {
+    const svgFile = new File(["<svg />"], "logo.svg", { type: "image/svg+xml" });
+
+    const files = collectFilesFromClipboardData({
+      items: [createClipboardItem({ kind: "file", type: "image/svg+xml", file: svgFile })],
     });
 
-    const files = collectImageFilesFromClipboardData({
-      items: [
-        createClipboardItem({
-          kind: "file",
-          type: "image/svg+xml",
-          file: svgFile,
-        }),
-      ],
-    });
-
-    expect(files).toEqual([]);
+    expect(files).toEqual({ images: [], others: [svgFile] });
   });
 
-  it("returns an empty array when clipboard data is missing", () => {
-    expect(collectImageFilesFromClipboardData(undefined)).toEqual([]);
+  it("returns nothing when clipboard data is missing", () => {
+    expect(collectFilesFromClipboardData(undefined)).toEqual({ images: [], others: [] });
   });
 });
 
 describe("filesToImageAttachments", () => {
-  it("persists files as attachment metadata in order", async () => {
-    const pngFile = new File([new Uint8Array([0, 1, 2, 3])], "first.png", {
-      type: "image/png",
-    });
-    const typeLessFile = new File([new Uint8Array([4, 5, 6, 7])], "second", {
-      type: "",
-    });
+  it("persists sendable images as they are, in order", async () => {
+    const first = new File([new Uint8Array([1, 2, 3, 4])], "first.png", { type: "image/png" });
+    const second = new File([new Uint8Array([5, 6, 7, 8])], "second.jpg", { type: "" });
 
-    const attachments = await filesToImageAttachments([
-      { file: pngFile, mimeType: "image/png" },
-      { file: typeLessFile, mimeType: "image/png" },
-    ]);
+    const result = await filesToImageAttachments(
+      [
+        { file: first, mimeType: "image/png" },
+        { file: second, mimeType: "image/jpeg" },
+      ],
+      testCodec,
+    );
 
-    expect(attachments).toEqual([
+    expect(result.errors).toEqual([]);
+    expect(result.attachments).toEqual([
       {
         id: "att-1",
         mimeType: "image/png",
@@ -144,24 +136,44 @@ describe("filesToImageAttachments", () => {
       },
       {
         id: "att-2",
-        mimeType: "image/png",
+        mimeType: "image/jpeg",
         storageType: "web-indexeddb",
         storageKey: "att-2",
-        fileName: "second",
+        fileName: "second.jpg",
         byteSize: 4,
         createdAt: 1700000000002,
       },
     ]);
   });
 
-  it("handles large files without creating data URLs", async () => {
-    const large = new File([new Uint8Array(4 * 1024 * 1024)], "large.png", {
-      type: "image/png",
-    });
+  it("re-encodes a BMP as PNG", async () => {
+    const bmp = new File([new Uint8Array([0x42, 0x4d, 1, 2])], "photo.bmp", { type: "image/bmp" });
 
-    const [attachment] = await filesToImageAttachments([{ file: large, mimeType: "image/png" }]);
+    const { attachments } = await filesToImageAttachments(
+      [{ file: bmp, mimeType: "image/bmp" }],
+      testCodec,
+    );
 
-    expect(attachment?.storageType).toBe("web-indexeddb");
-    expect(attachment?.byteSize).toBe(4 * 1024 * 1024);
+    expect(attachments).toMatchObject([
+      { mimeType: "image/png", fileName: "photo.png", byteSize: 2 },
+    ]);
+  });
+
+  it("refuses an image that does not decode and keeps the others", async () => {
+    const broken = new File([new Uint8Array([0, 1])], "broken.png", { type: "image/png" });
+    const good = new File([new Uint8Array([1, 1])], "good.png", { type: "image/png" });
+
+    const { attachments, errors } = await filesToImageAttachments(
+      [
+        { file: broken, mimeType: "image/png" },
+        { file: good, mimeType: "image/png" },
+      ],
+      testCodec,
+    );
+
+    expect(attachments.map((attachment) => attachment.fileName)).toEqual(["good.png"]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(UnreadableImageError);
+    expect((errors[0] as UnreadableImageError).fileName).toBe("broken.png");
   });
 });

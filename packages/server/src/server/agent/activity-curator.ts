@@ -291,6 +291,16 @@ function buildForkContextText(input: {
   return `<chat-history-summary>\n${header.join("\n")}\n\n${input.body}\n</chat-history-summary>`;
 }
 
+function findLastProviderMessageId(items: readonly AgentTimelineItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item?.type !== "user_message" && item?.type !== "assistant_message") continue;
+    const messageId = item.messageId?.trim();
+    if (messageId) return messageId;
+  }
+  return null;
+}
+
 export function buildAgentForkContextAttachment(input: {
   rows: readonly AgentTimelineRow[];
   cursorBoundary?: ForkCursorBoundary | null;
@@ -302,6 +312,7 @@ export function buildAgentForkContextAttachment(input: {
   itemCount: number;
   boundaryCursor: { epoch: string; seq: number } | null;
   boundaryMessageId: string | null;
+  throughMessageId: string | null;
 } {
   const selected = selectForkContextRows({
     rows: input.rows,
@@ -333,5 +344,6 @@ export function buildAgentForkContextAttachment(input: {
     itemCount: selected.items.length,
     boundaryCursor: selected.boundaryCursor,
     boundaryMessageId: selected.boundaryMessageId,
+    throughMessageId: findLastProviderMessageId(selected.items),
   };
 }

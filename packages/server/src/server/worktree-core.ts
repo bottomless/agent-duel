@@ -3,6 +3,8 @@ import { createNameId } from "mnemonic-id";
 import type { ForgeService } from "../services/forge-service.js";
 import {
   createWorktree,
+  randomWorktreeId,
+  type WorktreeSeedFn,
   slugify,
   validateBranchSlug,
   type WorktreeConfig,
@@ -22,7 +24,7 @@ export interface CreateWorktreeCoreInput {
   worktreeSlug?: string;
   branchName?: string;
   refName?: string;
-  action?: "branch-off" | "checkout";
+  action?: "branch-off" | "checkout" | "detach";
   checkoutSource?: ChangeRequestCheckoutSource;
   githubPrNumber?: number;
   firstAgentContext?: FirstAgentContext;
@@ -38,6 +40,9 @@ export interface CreateWorktreeCoreDeps {
     "resolveRepoRoot" | "resolveDefaultBranch" | "resolveForge"
   >;
   resolveDefaultBranch?: (repoRoot: string) => Promise<string>;
+  seedIgnoredContent?: WorktreeSeedFn;
+  onBeforeAdd?: (worktreePath: string, repoRoot: string) => Promise<void>;
+  onAddFailed?: (worktreePath: string) => Promise<void>;
 }
 
 export interface CreateWorktreeCoreResult {
@@ -45,6 +50,12 @@ export interface CreateWorktreeCoreResult {
   intent: WorktreeCreationIntent;
   repoRoot: string;
   created: boolean;
+  /**
+   * Whether the branch name was invented here rather than asked for. A caller that names a
+   * branch gets that name and keeps it; everything else starts on a stand-in that the first
+   * prompt is allowed to replace.
+   */
+  branchNameIsPlaceholder: boolean;
 }
 
 export async function createWorktreeCore(
@@ -75,6 +86,12 @@ async function createWorktreeCoreWithPriority(
       githubPrNumber: input.githubPrNumber,
       worktreeSlug: requestedWorktreeSlug,
     };
+  } else if (input.action === "detach") {
+    intentInput = {
+      action: "detach",
+      refName: input.refName,
+      worktreeSlug: requestedWorktreeSlug,
+    };
   } else if (input.checkoutSource !== undefined || input.githubPrNumber !== undefined) {
     intentInput = {
       checkoutSource: input.checkoutSource,
@@ -83,12 +100,13 @@ async function createWorktreeCoreWithPriority(
       worktreeSlug: requestedWorktreeSlug,
     };
   } else {
-    const worktreeSlug = requestedWorktreeSlug ?? normalizeWorktreeSlug(createNameId());
+    // The placeholder branch a branch-off worktree starts on, renamed once the first prompt
+    // names it. A word pair rather than the directory id: this one is a branch people see.
     intentInput = {
       action: "branch-off",
       refName: input.refName,
-      branchName: requestedBranchName,
-      worktreeSlug,
+      branchName: requestedBranchName ?? normalizeWorktreeSlug(createNameId()),
+      worktreeSlug: requestedWorktreeSlug,
     };
   }
 
@@ -98,37 +116,33 @@ async function createWorktreeCoreWithPriority(
     forgeService: forge.service,
     resolveDefaultBranch: (root) => resolveDefaultBranch(root, deps),
   });
-  let normalizedSlug: string;
+  // The directory is named by id whatever the worktree checks out. A name derived from
+  // the branch would go stale as soon as the branch is renamed, created, or switched.
+  const normalizedSlug = requestedWorktreeSlug ?? randomWorktreeId();
 
-  switch (intent.kind) {
-    case "branch-off": {
-      normalizedSlug = requestedWorktreeSlug ?? normalizeWorktreeSlug(intent.branchName);
-      break;
-    }
-    case "checkout-branch": {
-      normalizedSlug = requestedWorktreeSlug ?? normalizeWorktreeSlug(intent.branchName);
-      break;
-    }
-    case "checkout-change-request":
-    case "checkout-github-pr": {
-      normalizedSlug =
-        requestedWorktreeSlug ?? normalizeWorktreeSlug(intent.localBranchName ?? intent.headRef);
-      break;
-    }
-  }
+  const worktree = await createWorktree({
+    cwd: repoRoot,
+    worktreeSlug: normalizedSlug,
+    source: intent,
+    runSetup: input.runSetup ?? true,
+    paseoHome: input.paseoHome,
+    worktreesRoot: input.worktreesRoot,
+    seedIgnoredContent: deps.seedIgnoredContent,
+    onBeforeAdd: deps.onBeforeAdd
+      ? (worktreePath) => deps.onBeforeAdd!(worktreePath, repoRoot)
+      : undefined,
+    onAddFailed: deps.onAddFailed,
+  });
 
   return {
-    worktree: await createWorktree({
-      cwd: repoRoot,
-      worktreeSlug: normalizedSlug,
-      source: intent,
-      runSetup: input.runSetup ?? true,
-      paseoHome: input.paseoHome,
-      worktreesRoot: input.worktreesRoot,
-    }),
+    worktree,
     intent,
     repoRoot,
     created: true,
+    // Read from the branch that exists rather than from the request: a requested name that
+    // was already taken lands on the generated slug instead, and that slug is a placeholder
+    // like any other.
+    branchNameIsPlaceholder: worktree.branchName !== requestedBranchName,
   };
 }
 

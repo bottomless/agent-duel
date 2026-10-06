@@ -1113,9 +1113,14 @@ describe("workspace message schemas", () => {
       source: {
         kind: "directory",
         path: "/tmp/repo",
+        expectedBranch: "main",
       },
     });
     expect(newDirectory.type).toBe("workspace.create.request");
-    expect(newDirectory.source.kind).toBe("directory");
+    expect(newDirectory.source).toEqual({
+      kind: "directory",
+      path: "/tmp/repo",
+      expectedBranch: "main",
+    });
   });
 });

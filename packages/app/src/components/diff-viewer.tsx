@@ -18,9 +18,10 @@ interface DiffViewerProps {
   maxHeight?: number;
   emptyLabel?: string;
   fillAvailableHeight?: boolean;
+  compact?: boolean;
 }
 
-function DiffLineRow({ line }: { line: DiffLine }) {
+function DiffLineRow({ line, compact }: { line: DiffLine; compact: boolean }) {
   const lineContainerStyle = React.useMemo(
     () => [
       styles.line,
@@ -31,15 +32,20 @@ function DiffLineRow({ line }: { line: DiffLine }) {
     ],
     [line.type],
   );
+  const lineTextStyle = React.useMemo(
+    () => [styles.lineText, compact && styles.lineTextCompact],
+    [compact],
+  );
   const plainLineTextStyle = React.useMemo(
     () => [
       styles.lineText,
+      compact && styles.lineTextCompact,
       line.type === "header" && styles.headerText,
       line.type === "add" && styles.addText,
       line.type === "remove" && styles.removeText,
       line.type === "context" && styles.contextText,
     ],
-    [line.type],
+    [line.type, compact],
   );
 
   const prefixStyle = React.useMemo(
@@ -54,7 +60,7 @@ function DiffLineRow({ line }: { line: DiffLine }) {
   if (line.tokens) {
     return (
       <View style={lineContainerStyle}>
-        <Text style={styles.lineText}>
+        <Text style={lineTextStyle}>
           <Text style={prefixStyle}>{diffLinePrefix(line)}</Text>
           <DiffTokens tokens={line.tokens} />
         </Text>
@@ -65,7 +71,7 @@ function DiffLineRow({ line }: { line: DiffLine }) {
   return (
     <View style={lineContainerStyle}>
       {line.segments ? (
-        <Text style={styles.lineText}>
+        <Text style={lineTextStyle}>
           <Text style={line.type === "add" ? styles.addText : styles.removeText}>
             {line.content[0]}
           </Text>
@@ -122,6 +128,7 @@ export function DiffViewer({
   maxHeight,
   emptyLabel,
   fillAvailableHeight = false,
+  compact = false,
 }: DiffViewerProps) {
   const { t } = useTranslation();
   const [scrollViewWidth, setScrollViewWidth] = React.useState(0);
@@ -167,7 +174,7 @@ export function DiffViewer({
   const lines = (
     <View style={linesContainerStyle} dataSet={CODE_SURFACE_DATASET}>
       {keyedDiffLines.map(({ key, line }) => (
-        <DiffLineRow key={key} line={line} />
+        <DiffLineRow key={key} line={line} compact={compact} />
       ))}
     </View>
   );
@@ -234,6 +241,9 @@ const styles = StyleSheet.create((theme) => {
             overflowWrap: "normal",
           }
         : null),
+    },
+    lineTextCompact: {
+      fontSize: theme.fontSize.code - 1,
     },
     headerLine: {
       backgroundColor: theme.colors.surface1,

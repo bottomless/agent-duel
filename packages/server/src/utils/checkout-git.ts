@@ -28,7 +28,11 @@ import {
 } from "../services/forge-cli-command.js";
 import { parseGitRevParsePath, resolveGitRevParsePath } from "./git-rev-parse-path.js";
 import { runGitCommand } from "./run-git-command.js";
-import { isPaseoOwnedWorktreeCwd, resolvePaseoWorktreesBaseRoot } from "./worktree.js";
+import {
+  isPaseoOwnedWorktreeCwd,
+  resolvePaseoWorktreesBaseRoot,
+  resolveStartPointRef,
+} from "./worktree.js";
 import {
   branchNameFromRef,
   getPaseoWorktreeChangeRequestHintForBranch,
@@ -915,7 +919,10 @@ export async function getCurrentBranch(cwd: string): Promise<string | null> {
   }
 }
 
-async function getCurrentHeadSha(cwd: string, context?: CheckoutContext): Promise<string | null> {
+export async function getCurrentHeadSha(
+  cwd: string,
+  context?: CheckoutContext,
+): Promise<string | null> {
   const knownSha = context?.facts?.isGit
     ? context.facts.pullRequestLookupTarget?.headSha
     : undefined;
@@ -1039,6 +1046,7 @@ export function isPaseoWorktreePath(
   p: string,
   options?: { paseoHome?: string; worktreesRoot?: string },
 ): boolean {
+  if (/[/\\]\.agent-duel[/\\]worktrees[/\\]/.test(p)) return true;
   if (options?.worktreesRoot || options?.paseoHome) {
     return isDescendantPath(p, resolvePaseoWorktreesBaseRoot(options));
   }
@@ -1126,6 +1134,33 @@ export async function renameCurrentBranch(
     rebindPaseoWorktreeChangeRequestHint(worktreeRoot, previousBranch, currentBranch);
   }
   return { previousBranch, currentBranch };
+}
+
+/**
+ * Create a branch and switch to it.
+ *
+ * Without a base this cuts at HEAD: how a worktree cut detached is given a branch. With one it
+ * cuts at that exact ref, which is what the new-workspace picker needs — the base it showed has
+ * to be the base it uses, whatever the checkout has moved to since. `--no-track` matches how a
+ * worktree branches off, so an upstream base does not turn into a tracking branch here and a
+ * plain branch there.
+ */
+export async function createBranch(
+  cwd: string,
+  name: string,
+  options?: { baseRef?: string },
+): Promise<{ currentBranch: string | null }> {
+  await requireGitWorktreeRoot(cwd);
+  const requestedBaseRef = options?.baseRef?.trim();
+  const startPoint = requestedBaseRef ? await resolveStartPointRef(cwd, requestedBaseRef) : null;
+  await runGitCommand(
+    startPoint ? ["switch", "-c", name, "--no-track", startPoint] : ["switch", "-c", name],
+    {
+      cwd,
+      timeout: 120_000,
+    },
+  );
+  return { currentBranch: await getCurrentBranch(cwd) };
 }
 
 type PaseoWorktreeForCwd =

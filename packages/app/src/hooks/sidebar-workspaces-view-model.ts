@@ -36,6 +36,7 @@ export interface SidebarStatusWorkspacePlacement extends SidebarWorkspacePlaceme
 }
 
 export interface SidebarWorkspaceEntry extends SidebarStatusWorkspacePlacement {
+  arenaActivity?: WorkspaceDescriptor["arenaActivity"];
   workspaceDirectory: string;
   workspaceDirectoryLabel: string;
   // Raw user-set title (null when the name is derived from branch/directory).
@@ -134,6 +135,24 @@ function projectNameForWorkspace(workspace: WorkspaceDescriptor): string {
   );
 }
 
+/**
+ * The diff stat a workspace row shows.
+ *
+ * `workspace.diffStat` is the checkout's, measured against its base ref, and a chat started with
+ * Isolation "Local" runs in the checkout it was created from. Several chats then share one
+ * directory and one number, which reads as if each of them made all of those changes. The engine
+ * reports what a chat changed on its own, so that wins wherever it exists.
+ *
+ * It arrives only once a turn has been applied. Before that the checkout's number stands in: a
+ * chat that has not changed anything yet shows what is already there, which is the same thing
+ * every row showed before.
+ */
+export function resolveSidebarWorkspaceDiffStat(
+  workspace: WorkspaceDescriptor,
+): { additions: number; deletions: number } | null {
+  return workspace.arenaActivity?.chatDiff ?? workspace.diffStat;
+}
+
 function normalizeCurrentBranch(currentBranch: string | null | undefined): string | null {
   if (!currentBranch) {
     return null;
@@ -168,9 +187,10 @@ export function createSidebarWorkspaceEntry(input: {
     pinnedAt: input.workspace.pinnedAt,
     currentBranch: normalizeCurrentBranch(input.workspace.gitRuntime?.currentBranch),
     statusBucket: effectiveStatus.status,
+    arenaActivity: input.workspace.arenaActivity,
     statusEnteredAt: effectiveStatus.enteredAt,
     archivingAt: input.workspace.archivingAt,
-    diffStat: input.workspace.diffStat,
+    diffStat: resolveSidebarWorkspaceDiffStat(input.workspace),
     prHint: selectPrHintFromStatus(
       input.workspace.githubRuntime?.pullRequest,
       input.workspace.forge,

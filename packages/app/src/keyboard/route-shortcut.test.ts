@@ -28,7 +28,6 @@ function makeCtx(overrides: Partial<ShortcutRoutingContext> = {}): ShortcutRouti
 describe("routeKeyboardShortcut — dispatch passthroughs", () => {
   it.each([
     ["agent.interrupt", { id: "agent.interrupt", scope: "global" }],
-    ["workspace.tab.new", { id: "workspace.tab.new", scope: "workspace" }],
     ["workspace.new", { id: "workspace.new", scope: "sidebar" }],
     ["workspace.project.pick", { id: "workspace.project.pick", scope: "workspace" }],
     ["workspace.archive", { id: "workspace.archive", scope: "sidebar" }],
@@ -37,16 +36,10 @@ describe("routeKeyboardShortcut — dispatch passthroughs", () => {
     ["workspace.terminal.new", { id: "workspace.terminal.new", scope: "workspace" }],
     ["workspace.tab.close.current", { id: "workspace.tab.close-current", scope: "workspace" }],
     ["sidebar.toggle.right", { id: "sidebar.toggle.right", scope: "sidebar" }],
-    ["workspace.pane.split.right", { id: "workspace.pane.split.right", scope: "workspace" }],
-    ["workspace.pane.split.down", { id: "workspace.pane.split.down", scope: "workspace" }],
     ["workspace.pane.focus.left", { id: "workspace.pane.focus.left", scope: "workspace" }],
     ["workspace.pane.focus.right", { id: "workspace.pane.focus.right", scope: "workspace" }],
-    ["workspace.pane.focus.up", { id: "workspace.pane.focus.up", scope: "workspace" }],
-    ["workspace.pane.focus.down", { id: "workspace.pane.focus.down", scope: "workspace" }],
     ["workspace.pane.move-tab.left", { id: "workspace.pane.move-tab.left", scope: "workspace" }],
     ["workspace.pane.move-tab.right", { id: "workspace.pane.move-tab.right", scope: "workspace" }],
-    ["workspace.pane.move-tab.up", { id: "workspace.pane.move-tab.up", scope: "workspace" }],
-    ["workspace.pane.move-tab.down", { id: "workspace.pane.move-tab.down", scope: "workspace" }],
     ["workspace.pane.close", { id: "workspace.pane.close", scope: "workspace" }],
     ["view.toggle.focus", { id: "workspace.focus.toggle", scope: "workspace" }],
   ])("%s → dispatch %j", (action, expected) => {
@@ -277,8 +270,6 @@ describe("routeKeyboardShortcut — message-input.action", () => {
     ["dictation-toggle", "message-input.dictation-toggle"],
     ["dictation-cancel", "message-input.dictation-cancel"],
     ["dictation-confirm", "message-input.dictation-confirm"],
-    ["voice-toggle", "message-input.voice-toggle"],
-    ["voice-mute-toggle", "message-input.voice-mute-toggle"],
     ["mode-cycle", "message-input.mode-cycle"],
   ] as const)("kind=%s → dispatch %s", (kind, id) => {
     expect(

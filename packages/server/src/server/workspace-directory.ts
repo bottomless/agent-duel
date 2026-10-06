@@ -1,3 +1,4 @@
+import { arenaActivityStatus, type ArenaActivity } from "@getpaseo/protocol/arena/activity";
 import { resolve } from "node:path";
 import type pino from "pino";
 import type {
@@ -27,6 +28,12 @@ const FETCH_WORKSPACES_SORT_KEYS = [
   "name",
   "project_id",
 ] as const;
+
+function resolveWorkspaceFilesState(
+  workspace: PersistedWorkspaceRecord,
+): NonNullable<WorkspaceDescriptorPayload["filesState"]> {
+  return workspace.cleanup?.phase ?? "available";
+}
 
 /**
  * Per-workspace bucket history. Drives the priority-unmasking semantic for
@@ -76,6 +83,7 @@ export interface WorkspaceDirectoryDeps {
   workspaceRegistry: {
     list(): Promise<PersistedWorkspaceRecord[]>;
   };
+  listArenaActivity?(): ArenaActivity[];
   listAgentPayloads(): Promise<AgentSnapshotPayload[]>;
   listProviderSubagentActivity(): Promise<ProviderSubagentWorkspaceActivity[]>;
   listTerminalActivityContributions(): Promise<
@@ -251,6 +259,7 @@ export class WorkspaceDirectory {
       const workspaceId = includedWorkspaces[i].workspaceId;
       descriptorsByWorkspaceId.set(workspaceId, {
         ...workspaceDescriptors[i],
+        filesState: resolveWorkspaceFilesState(includedWorkspaces[i]),
         archivingAt: this.archivingByWorkspaceId.get(workspaceId) ?? null,
       });
     }
@@ -274,6 +283,27 @@ export class WorkspaceDirectory {
       descriptorsByWorkspaceId,
       activityEntriesByWorkspaceId,
     });
+
+    for (const activity of this.deps.listArenaActivity?.() ?? []) {
+      const descriptor = descriptorsByWorkspaceId.get(activity.workspaceId);
+      if (!descriptor) continue;
+      const status = arenaActivityStatus(activity);
+      const previousActivity = descriptor.arenaActivity;
+      if (
+        !previousActivity ||
+        getWorkspaceStateBucketPriority(status.bucket) <
+          getWorkspaceStateBucketPriority(arenaActivityStatus(previousActivity).bucket)
+      )
+        descriptor.arenaActivity = activity;
+      if (
+        getWorkspaceStateBucketPriority(status.bucket) <
+        getWorkspaceStateBucketPriority(descriptor.status)
+      )
+        descriptor.status = status.bucket;
+      const entries = activityEntriesByWorkspaceId.get(activity.workspaceId) ?? [];
+      entries.push({ bucket: status.bucket, changedAtIso: new Date().toISOString() });
+      activityEntriesByWorkspaceId.set(activity.workspaceId, entries);
+    }
 
     const contributingAgentsByWorkspaceId = groupAgentsByWorkspaceId(
       activeAgents,

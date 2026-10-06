@@ -5,12 +5,10 @@ import { selectCheckSummary, type CheckSummary } from "./check-summary";
 import type { WorkspaceServiceSummary } from "./service-summary";
 
 /**
- * What ends up on the line under a workspace title, in the order it is read: where the
- * workspace lives, what change it belongs to, whether that change is passing, and what it is
- * running. Identity first, then the work, then the work's state.
+ * What ends up on the line under a workspace title, in the order it is read: what change
+ * the workspace belongs to, whether that change is passing, and what it is running.
  */
 export type MetaRowItem =
-  | { kind: "host" }
   | { kind: "changeRequest"; hint: PrHint }
   | { kind: "checks"; summary: CheckSummary; label: boolean }
   | { kind: "services"; summary: WorkspaceServiceSummary };
@@ -21,23 +19,17 @@ export type MetaRowItem =
  * Kept out of the component because this — not the markup — is the part with rules in it: every
  * toggle answers for itself, so a row can end up showing checks with no change request beside
  * them, and CI resolves from the hint even when the hint itself is not drawn.
- *
- * The host is filtered upstream, where the badge map is built: a host that should show nothing
- * has no badge to hand down, so by the time a row sees one it is meant to be drawn.
+
  */
 export function selectMetaRowItems(input: {
-  hasHostBadge: boolean;
   prHint: PrHint | null;
   serviceSummary: WorkspaceServiceSummary | null;
   visible: SidebarRowItems;
   checksDisplay: SidebarChecksDisplay;
 }): MetaRowItem[] {
-  const { hasHostBadge, prHint, serviceSummary, visible, checksDisplay } = input;
+  const { prHint, serviceSummary, visible, checksDisplay } = input;
   const items: MetaRowItem[] = [];
 
-  if (hasHostBadge) {
-    items.push({ kind: "host" });
-  }
   if (prHint && visible.changeRequest) {
     items.push({ kind: "changeRequest", hint: prHint });
   }

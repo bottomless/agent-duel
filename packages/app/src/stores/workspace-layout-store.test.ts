@@ -24,9 +24,10 @@ import {
   findPaneById,
   findPaneContainingTab,
   getFocusedBrowserId,
-  getTreeDepth,
-  insertSplit,
+  getWorkspaceMainPane,
+  getWorkspaceSidePane,
   normalizeLayout,
+  selectIsWorkspaceSidePanelOpen,
   removePaneFromTree,
   removeTabFromTree,
   stripEphemeralTabsFromLayout,
@@ -139,7 +140,6 @@ describe("workspace-layout-store helpers", () => {
 
     expect(findPaneById(root, "top-right")?.tabIds).toEqual(["tab-c"]);
     expect(findPaneContainingTab(root, "tab-b")?.id).toBe("left");
-    expect(getTreeDepth(root)).toBe(3);
     expect(collectAllPanes(root).map((pane) => pane.id)).toEqual([
       "left",
       "top-right",
@@ -206,12 +206,7 @@ describe("workspace-layout-store tree transforms", () => {
     workspaceLayoutIds.reset();
   });
 
-  it("insertSplit wraps root-level same-direction splits in a nested group", () => {
-    useWorkspaceLayoutIds(
-      "11111111-1111-1111-1111-111111111111",
-      "22222222-2222-2222-2222-222222222222",
-    );
-
+  it("normalizeLayout flattens a persisted free-form split into main and side panes", () => {
     const root: SplitNode = {
       kind: "group",
       group: {
@@ -219,31 +214,66 @@ describe("workspace-layout-store tree transforms", () => {
         direction: "horizontal",
         sizes: [0.25, 0.75],
         children: [
-          createPane({ id: "left", tabIds: ["tab-a"] }),
-          createPane({ id: "right", tabIds: ["tab-b", "tab-c"] }),
+          createPane({
+            id: "left",
+            tabIds: ["agent_a", "terminal_t1"],
+            focusedTabId: "terminal_t1",
+            targetsByTabId: {
+              agent_a: { kind: "agent", agentId: "a" },
+              terminal_t1: { kind: "terminal", terminalId: "t1" },
+            },
+          }),
+          {
+            kind: "group",
+            group: {
+              id: "group-right",
+              direction: "vertical",
+              sizes: [0.5, 0.5],
+              children: [
+                createPane({
+                  id: "top-right",
+                  tabIds: ["file_/a.ts"],
+                  targetsByTabId: { "file_/a.ts": { kind: "file", path: "/a.ts" } },
+                }),
+                createPane({ id: "bottom-right", tabIds: ["draft-b"] }),
+              ],
+            },
+          },
         ],
       },
     };
 
-    const nextRoot = insertSplit(root, "right", "tab-c", "right", workspaceLayoutIds.createNodeId);
-    const nextGroup = expectGroup(nextRoot);
-    const nestedGroup = expectGroup(nextGroup.group.children[1]);
+    const layout = normalizeLayout({ root, focusedPaneId: "top-right" });
+    const group = expectGroup(layout.root);
 
-    expect(nextGroup.group.direction).toBe("horizontal");
-    expect(nextGroup.group.children).toHaveLength(2);
-    expect(nextGroup.group.sizes).toEqual([0.25, 0.75]);
-    expect(nestedGroup.group.id).toBe("group_22222222-2222-2222-2222-222222222222");
-    expect(nestedGroup.group.direction).toBe("horizontal");
-    expect(nestedGroup.group.sizes).toEqual([0.5, 0.5]);
-    expect(collectAllPanes(nextRoot).map((pane) => pane.id)).toEqual([
-      "left",
-      "right",
-      "pane_11111111-1111-1111-1111-111111111111",
-    ]);
-    expect(findPaneById(nextRoot, "right")?.tabIds).toEqual(["tab-b"]);
-    expect(findPaneById(nextRoot, "pane_11111111-1111-1111-1111-111111111111")?.tabIds).toEqual([
-      "tab-c",
-    ]);
+    expect(group.group.direction).toBe("horizontal");
+    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual(["left", "top-right"]);
+    expect(getWorkspaceMainPane(layout.root).tabIds).toEqual(["agent_a", "draft-b"]);
+    expect(getWorkspaceSidePane(layout.root)?.tabIds).toEqual(["terminal_t1", "file_/a.ts"]);
+    expect(getWorkspaceSidePane(layout.root)?.focusedTabId).toBe("terminal_t1");
+    expect(layout.focusedPaneId).toBe("top-right");
+  });
+
+  it("normalizeLayout keeps a layout without side-panel tabs to its main pane", () => {
+    const root: SplitNode = {
+      kind: "group",
+      group: {
+        id: "group-root",
+        direction: "vertical",
+        sizes: [0.5, 0.5],
+        children: [
+          createPane({ id: "top", tabIds: ["draft-a"] }),
+          createPane({ id: "bottom", tabIds: ["draft-b"] }),
+        ],
+      },
+    };
+
+    const layout = normalizeLayout({ root, focusedPaneId: "bottom" });
+
+    expect(layout.root.kind).toBe("pane");
+    expect(getWorkspaceMainPane(layout.root).tabIds).toEqual(["draft-a", "draft-b"]);
+    expect(getWorkspaceSidePane(layout.root)).toBeNull();
+    expect(layout.focusedPaneId).toBe("top");
   });
 
   it("removePaneFromTree unwraps single-child groups and renormalizes siblings", () => {
@@ -310,13 +340,51 @@ describe("workspace-layout-store actions", () => {
     workspaceLayoutStore.setState({
       layoutByWorkspace: {},
       splitSizesByWorkspace: {},
+      sidePanelOpenByWorkspace: {},
       pinnedAgentIdsByWorkspace: {},
       hiddenAgentIdsByWorkspace: {},
       focusRestorationByWorkspace: {},
     });
   });
 
-  it("opens tabs into the focused pane and focuses duplicate opens instead of creating them", () => {
+  it("routes chats to the main pane and side-panel tabs to a side pane it creates", () => {
+    useWorkspaceLayoutIds("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+
+    const draftTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    const fileTabId = store.openTabFocused(workspaceKey, {
+      kind: "file",
+      path: "/repo/worktree/a.ts",
+    });
+    const terminalTabId = store.openTabFocused(workspaceKey, {
+      kind: "terminal",
+      terminalId: "term-1",
+    });
+    const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    const group = expectGroup(layout.root);
+
+    expect(group.group.id).toBe("group_generated-1");
+    expect(group.group.direction).toBe("horizontal");
+    expect(getWorkspaceMainPane(layout.root)).toMatchObject({
+      id: "main",
+      tabIds: [draftTabId],
+      focusedTabId: draftTabId,
+    });
+    expect(getWorkspaceSidePane(layout.root)).toMatchObject({
+      id: "pane_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      tabIds: [fileTabId, terminalTabId],
+      focusedTabId: terminalTabId,
+    });
+    expect(layout.focusedPaneId).toBe("pane_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+
+    const agentTabId = store.openTabFocused(workspaceKey, { kind: "agent", agentId: "agent-1" });
+    const layoutAfterAgent = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    expect(getWorkspaceMainPane(layoutAfterAgent.root).tabIds).toEqual([draftTabId, agentTabId]);
+    expect(layoutAfterAgent.focusedPaneId).toBe("main");
+  });
+
+  it("focuses duplicate opens instead of creating a second tab", () => {
     useWorkspaceLayoutIds("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
@@ -329,14 +397,6 @@ describe("workspace-layout-store actions", () => {
       kind: "file",
       path: "/repo/worktree/b.ts",
     });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: secondTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
-
-    expect(splitPaneId).toBe("pane_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
-
     store.focusPane(workspaceKey, "main");
     const duplicateTabId = store.openTabFocused(workspaceKey, {
       kind: "file",
@@ -398,10 +458,13 @@ describe("workspace-layout-store actions", () => {
     });
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
     const pane = findPaneById(layout.root, "main")!;
+    const sidePane = getWorkspaceSidePane(layout.root)!;
 
     expect(agentTabId).toBe("agent_agent-1");
     expect(setupTabId).toBe("setup_ws-main");
-    expect(pane.tabIds).toEqual([agentTabId, setupTabId]);
+    // Setup is a side panel tab; it lands there without taking focus.
+    expect(pane.tabIds).toEqual([agentTabId]);
+    expect(sidePane.tabIds).toEqual([setupTabId]);
     expect(pane.focusedTabId).toBe(agentTabId);
     expect(layout.focusedPaneId).toBe("main");
   });
@@ -423,7 +486,7 @@ describe("workspace-layout-store actions", () => {
       path: "/repo/worktree/a.ts",
     });
     const layoutAfter = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
-    const pane = findPaneById(layoutAfter.root, "main")!;
+    const pane = getWorkspaceSidePane(layoutAfter.root)!;
 
     expect(duplicateTabId).toBe(firstTabId);
     expect(pane.tabIds).toEqual([firstTabId, secondTabId]);
@@ -536,12 +599,8 @@ describe("workspace-layout-store actions", () => {
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    const firstTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
-    store.splitPane(workspaceKey, {
-      tabId: firstTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
+    store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
     store.focusPane(workspaceKey, "main");
 
     const token = store.unfocusPane(workspaceKey);
@@ -598,28 +657,82 @@ describe("workspace-layout-store actions", () => {
     ]);
   });
 
-  it("splitPaneEmpty plus openTab opens a draft tab in the new pane", () => {
+  it("opening the side panel without side tabs creates an empty side pane and focuses it", () => {
     useWorkspaceLayoutIds("77777777-7777-7777-7777-777777777777");
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
-    const newPaneId = store.splitPaneEmpty(workspaceKey, {
-      targetPaneId: "main",
-      position: "right",
-    });
-    const draftTabId = store.openTabFocused(workspaceKey, {
-      kind: "draft",
-      draftId: "draft-split",
-    });
-    const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    store.setSidePanelOpen(workspaceKey, true);
+    let layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
 
-    expect(newPaneId).toBe("pane_77777777-7777-7777-7777-777777777777");
-    expect(draftTabId).toBe("draft-split");
-    expect(layout.focusedPaneId).toBe(newPaneId);
-    expect(findPaneById(layout.root, "main")?.tabIds).toEqual(["file_/repo/worktree/a.ts"]);
-    expect(findPaneById(layout.root, newPaneId)?.tabIds).toEqual([draftTabId!]);
-    expect(findPaneById(layout.root, newPaneId)?.focusedTabId).toBe(draftTabId);
+    expect(getWorkspaceSidePane(layout.root)).toMatchObject({
+      id: "pane_77777777-7777-7777-7777-777777777777",
+      tabIds: [],
+    });
+    expect(layout.focusedPaneId).toBe("pane_77777777-7777-7777-7777-777777777777");
+    expect(selectIsWorkspaceSidePanelOpen(workspaceLayoutStore.getState(), workspaceKey)).toBe(
+      true,
+    );
+
+    // A chat opened while the empty side pane is focused still lands in main.
+    const draftTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-2" });
+    layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    expect(getWorkspaceMainPane(layout.root).tabIds).toEqual(["draft-1", draftTabId]);
+    expect(layout.focusedPaneId).toBe("main");
+
+    // Hiding an empty side panel drops the pane it created.
+    store.setSidePanelOpen(workspaceKey, false);
+    layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    expect(layout.root.kind).toBe("pane");
+    expect(selectIsWorkspaceSidePanelOpen(workspaceLayoutStore.getState(), workspaceKey)).toBe(
+      false,
+    );
+  });
+
+  it("hiding the side panel keeps its tabs and focusing one of them reveals it again", () => {
+    useWorkspaceLayoutIds("88888888-8888-8888-8888-888888888888");
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+
+    const draftTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    const fileTabId = store.openTabFocused(workspaceKey, {
+      kind: "file",
+      path: "/repo/worktree/a.ts",
+    });
+
+    store.toggleSidePanel(workspaceKey);
+    let layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    expect(selectIsWorkspaceSidePanelOpen(workspaceLayoutStore.getState(), workspaceKey)).toBe(
+      false,
+    );
+    expect(layout.focusedPaneId).toBe("main");
+    expect(getWorkspaceSidePane(layout.root)?.tabIds).toEqual([fileTabId]);
+
+    store.focusTab(workspaceKey, fileTabId!);
+    layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    expect(selectIsWorkspaceSidePanelOpen(workspaceLayoutStore.getState(), workspaceKey)).toBe(
+      true,
+    );
+    expect(layout.focusedPaneId).toBe("pane_88888888-8888-8888-8888-888888888888");
+
+    store.setSidePanelOpen(workspaceKey, false);
+    store.focusTab(workspaceKey, draftTabId!);
+    expect(selectIsWorkspaceSidePanelOpen(workspaceLayoutStore.getState(), workspaceKey)).toBe(
+      false,
+    );
+
+    // A background open into the hidden side pane leaves it hidden.
+    store.openTabInBackground(workspaceKey, { kind: "terminal", terminalId: "term-1" });
+    expect(selectIsWorkspaceSidePanelOpen(workspaceLayoutStore.getState(), workspaceKey)).toBe(
+      false,
+    );
+
+    // A focused open into it reveals it.
+    store.openTabFocused(workspaceKey, { kind: "terminal", terminalId: "term-2" });
+    expect(selectIsWorkspaceSidePanelOpen(workspaceLayoutStore.getState(), workspaceKey)).toBe(
+      true,
+    );
   });
 
   it("focusTab moves workspace focus to the pane containing the tab", () => {
@@ -627,29 +740,21 @@ describe("workspace-layout-store actions", () => {
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    const fileTabId = store.openTabFocused(workspaceKey, {
-      kind: "file",
-      path: "/repo/worktree/a.ts",
-    });
+    const draftTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
     const terminalTabId = store.openTabFocused(workspaceKey, {
       kind: "terminal",
       terminalId: "term-1",
     });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: terminalTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
 
-    store.focusTab(workspaceKey, fileTabId!);
+    store.focusTab(workspaceKey, draftTabId!);
     let layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
     expect(layout.focusedPaneId).toBe("main");
 
     store.focusTab(workspaceKey, terminalTabId!);
     layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey]!;
-    expect(splitPaneId).toBe("pane_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
-    expect(layout.focusedPaneId).toBe(splitPaneId);
-    expect(findPaneById(layout.root, splitPaneId)?.focusedTabId).toBe(terminalTabId);
+    const sidePaneId = "pane_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    expect(layout.focusedPaneId).toBe(sidePaneId);
+    expect(findPaneById(layout.root, sidePaneId)?.focusedTabId).toBe(terminalTabId);
   });
 
   it("convertDraftToAgent replaces the draft tab with a canonical agent tab in the same pane", () => {
@@ -659,21 +764,16 @@ describe("workspace-layout-store actions", () => {
 
     store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
     const secondTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-2" });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: secondTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
 
     const nextTabId = store.convertDraftToAgent(workspaceKey, secondTabId!, "agent-1");
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
-    const splitPane = findPaneById(layout.root, splitPaneId);
+    const mainPane = getWorkspaceMainPane(layout.root);
     const convertedTab = collectAllTabs(layout.root).find((tab) => tab.tabId === nextTabId);
 
-    expect(splitPaneId).toBe("pane_12121212-1212-1212-1212-121212121212");
     expect(nextTabId).toBe("agent_agent-1");
-    expect(splitPane?.tabIds).toEqual(["agent_agent-1"]);
-    expect(findPaneContainingTab(layout.root, "agent_agent-1")?.id).toBe(splitPaneId);
+    expect(mainPane.tabIds).toEqual(["agent_agent-1"]);
+    expect(findPaneContainingTab(layout.root, "agent_agent-1")?.id).toBe("main");
+    expect(getWorkspaceSidePane(layout.root)?.tabIds).toEqual(["file_/repo/worktree/a.ts"]);
     expect(convertedTab).toEqual({
       tabId: "agent_agent-1",
       target: { kind: "agent", agentId: "agent-1" },
@@ -743,11 +843,6 @@ describe("workspace-layout-store actions", () => {
       path: "/repo/worktree/existing.ts",
     });
     const draftTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-dup" });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: draftTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
     const secondDraftTabId = store.openTabFocused(workspaceKey, {
       kind: "draft",
       draftId: "draft-dup-2",
@@ -758,17 +853,17 @@ describe("workspace-layout-store actions", () => {
       path: "/repo/worktree/existing.ts",
     });
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    const sidePaneId = "pane_55555555-5555-5555-5555-555555555555";
 
     expect(existingFileTabId).toBe("file_/repo/worktree/existing.ts");
     expect(draftTabId).toBe("draft-dup");
-    expect(splitPaneId).toBe("pane_55555555-5555-5555-5555-555555555555");
     expect(nextTabId).toBe(existingFileTabId);
     expect(collectAllTabs(layout.root).map((tab) => tab.tabId)).toEqual([
-      existingFileTabId!,
       draftTabId!,
+      existingFileTabId!,
     ]);
-    expect(layout.focusedPaneId).toBe("main");
-    expect(findPaneById(layout.root, "main")?.focusedTabId).toBe(existingFileTabId);
+    expect(layout.focusedPaneId).toBe(sidePaneId);
+    expect(findPaneById(layout.root, sidePaneId)?.focusedTabId).toBe(existingFileTabId);
   });
 
   it("retargetTab closes a draft tab and focuses an existing matching target tab", () => {
@@ -810,18 +905,9 @@ describe("workspace-layout-store actions", () => {
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    const firstTabId = store.openTabFocused(workspaceKey, {
-      kind: "file",
-      path: "/repo/worktree/a.ts",
-    });
-    const secondTabId = store.openTabFocused(workspaceKey, {
-      kind: "file",
-      path: "/repo/worktree/b.ts",
-    });
-    const thirdTabId = store.openTabFocused(workspaceKey, {
-      kind: "file",
-      path: "/repo/worktree/c.ts",
-    });
+    const firstTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-a" });
+    const secondTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-b" });
+    const thirdTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-c" });
 
     store.reorderTabs(workspaceKey, [thirdTabId!, firstTabId!]);
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
@@ -833,17 +919,17 @@ describe("workspace-layout-store actions", () => {
       tabs: [
         {
           tabId: thirdTabId,
-          target: { kind: "file", path: "/repo/worktree/c.ts" },
+          target: { kind: "draft", draftId: "draft-c" },
           createdAt: expect.any(Number),
         },
         {
           tabId: firstTabId,
-          target: { kind: "file", path: "/repo/worktree/a.ts" },
+          target: { kind: "draft", draftId: "draft-a" },
           createdAt: expect.any(Number),
         },
         {
           tabId: secondTabId,
-          target: { kind: "file", path: "/repo/worktree/b.ts" },
+          target: { kind: "draft", draftId: "draft-b" },
           createdAt: expect.any(Number),
         },
       ],
@@ -855,11 +941,6 @@ describe("workspace-layout-store actions", () => {
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
-    store.openTabFocused(workspaceKey, {
-      kind: "file",
-      path: "/repo/worktree/b.ts",
-    });
     const thirdTabId = store.openTabFocused(workspaceKey, {
       kind: "file",
       path: "/repo/worktree/c.ts",
@@ -868,21 +949,15 @@ describe("workspace-layout-store actions", () => {
       kind: "file",
       path: "/repo/worktree/d.ts",
     });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: thirdTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
+    const sidePaneId = "pane_34343434-3434-3434-3434-343434343434";
 
-    store.moveTabToPane(workspaceKey, fourthTabId!, splitPaneId!);
     store.focusPane(workspaceKey, "main");
-    store.reorderTabsInPane(workspaceKey, splitPaneId!, [fourthTabId!, thirdTabId!]);
+    store.reorderTabsInPane(workspaceKey, sidePaneId, [fourthTabId!, thirdTabId!]);
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
 
-    expect(splitPaneId).toBe("pane_34343434-3434-3434-3434-343434343434");
     expect(layout.focusedPaneId).toBe("main");
-    expect(findPaneById(layout.root, splitPaneId)).toEqual({
-      id: splitPaneId,
+    expect(findPaneById(layout.root, sidePaneId)).toEqual({
+      id: sidePaneId,
       tabIds: [fourthTabId!, thirdTabId!],
       focusedTabId: fourthTabId,
       tabs: [
@@ -905,196 +980,152 @@ describe("workspace-layout-store actions", () => {
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
-    const secondTabId = store.openTabFocused(workspaceKey, {
-      kind: "file",
-      path: "/repo/worktree/b.ts",
-    });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: secondTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
+    store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/b.ts" });
+    const sidePaneId = "pane_56565656-5656-5656-5656-565656565656";
 
     store.focusPane(workspaceKey, "main");
     let layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
     expect(layout.focusedPaneId).toBe("main");
 
-    store.focusPane(workspaceKey, splitPaneId!);
+    store.focusPane(workspaceKey, sidePaneId);
     layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey]!;
 
-    expect(splitPaneId).toBe("pane_56565656-5656-5656-5656-565656565656");
-    expect(layout.focusedPaneId).toBe(splitPaneId);
+    expect(layout.focusedPaneId).toBe(sidePaneId);
   });
 
-  it("closeTab collapses an emptied pane and keeps the nearest sibling focused", () => {
+  it("closeTab keeps an emptied side pane so the panel stays open on its launcher", () => {
     useWorkspaceLayoutIds("cccccccc-cccc-cccc-cccc-cccccccccccc");
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
-    const secondTabId = store.openTabFocused(workspaceKey, {
+    store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    const fileTabId = store.openTabFocused(workspaceKey, {
       kind: "file",
       path: "/repo/worktree/b.ts",
     });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: secondTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
+    const sidePaneId = "pane_cccccccc-cccc-cccc-cccc-cccccccccccc";
 
-    store.closeTab(workspaceKey, secondTabId!);
+    store.closeTab(workspaceKey, fileTabId!);
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
 
-    expect(splitPaneId).toBe("pane_cccccccc-cccc-cccc-cccc-cccccccccccc");
-    expect(layout.focusedPaneId).toBe("main");
-    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual(["main"]);
+    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual(["main", sidePaneId]);
+    expect(layout.focusedPaneId).toBe(sidePaneId);
   });
 
-  it("splitPane enforces the maximum depth of four", () => {
-    useWorkspaceLayoutIds(
-      "11111111-1111-1111-1111-111111111111",
-      "22222222-2222-2222-2222-222222222222",
-      "33333333-3333-3333-3333-333333333333",
-      "44444444-4444-4444-4444-444444444444",
-      "55555555-5555-5555-5555-555555555555",
-      "66666666-6666-6666-6666-666666666666",
-      "77777777-7777-7777-7777-777777777777",
-      "88888888-8888-8888-8888-888888888888",
-    );
-
+  it("hiding the panel is what drops a side pane emptied by closeTab", () => {
+    useWorkspaceLayoutIds("cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd");
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
-    const a = store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
-    const b = store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/b.ts" });
-    const c = store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/c.ts" });
-    const d = store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/d.ts" });
-    const e = store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/e.ts" });
 
-    expect(a).toBeTruthy();
-    const pane1 = store.splitPane(workspaceKey, {
-      tabId: b!,
-      targetPaneId: "main",
-      position: "right",
-    });
-    const pane2 = store.splitPane(workspaceKey, {
-      tabId: c!,
-      targetPaneId: pane1!,
-      position: "bottom",
-    });
-    const pane3 = store.splitPane(workspaceKey, {
-      tabId: d!,
-      targetPaneId: pane2!,
-      position: "right",
-    });
-    const pane4 = store.splitPane(workspaceKey, {
-      tabId: e!,
-      targetPaneId: pane3!,
-      position: "bottom",
+    store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    const fileTabId = store.openTabFocused(workspaceKey, {
+      kind: "file",
+      path: "/repo/worktree/b.ts",
     });
 
+    store.closeTab(workspaceKey, fileTabId!);
+    store.setSidePanelOpen(workspaceKey, false);
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
-    expect(pane1).toBe("pane_11111111-1111-1111-1111-111111111111");
-    expect(pane2).toBe("pane_33333333-3333-3333-3333-333333333333");
-    expect(pane3).toBe("pane_55555555-5555-5555-5555-555555555555");
-    expect(pane4).toBeNull();
-    expect(getTreeDepth(layout.root)).toBe(4);
+
+    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual(["main"]);
+    expect(layout.focusedPaneId).toBe("main");
   });
 
-  it("moveTabToPane collapses the source pane when its last tab moves out", () => {
+  it("keeps a single side pane however many side-panel tabs open", () => {
+    useWorkspaceLayoutIds("11111111-1111-1111-1111-111111111111");
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+
+    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
+    store.openTabFocused(workspaceKey, { kind: "terminal", terminalId: "term-1" });
+    store.openTabFocused(workspaceKey, { kind: "browser", browserId: "browser-1" });
+    store.openTabFocused(workspaceKey, { kind: "working_diff" });
+    store.openTabFocused(workspaceKey, { kind: "changes" });
+    store.openTabFocused(workspaceKey, { kind: "files" });
+    store.openTabFocused(workspaceKey, { kind: "pull_request" });
+
+    const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual([
+      "main",
+      "pane_11111111-1111-1111-1111-111111111111",
+    ]);
+    expect(getWorkspaceMainPane(layout.root).tabIds).toEqual([]);
+    expect(getWorkspaceSidePane(layout.root)?.tabIds).toEqual([
+      "file_/repo/worktree/a.ts",
+      "terminal_term-1",
+      "browser_browser-1",
+      "working_diff",
+      "changes",
+      "files",
+      "pull_request",
+    ]);
+  });
+
+  it("moveTabToPane collapses the side pane when its last tab moves to main", () => {
     useWorkspaceLayoutIds("dddddddd-dddd-dddd-dddd-dddddddddddd");
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    const leftTabId = store.openTabFocused(workspaceKey, {
-      kind: "file",
-      path: "/repo/worktree/a.ts",
-    });
-    const rightTabId = store.openTabFocused(workspaceKey, {
+    const draftTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    const fileTabId = store.openTabFocused(workspaceKey, {
       kind: "file",
       path: "/repo/worktree/b.ts",
     });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: rightTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
 
-    store.moveTabToPane(workspaceKey, leftTabId!, splitPaneId!);
+    store.moveTabToPane(workspaceKey, fileTabId!, "main");
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
 
-    expect(layout.focusedPaneId).toBe(splitPaneId);
-    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual([splitPaneId!]);
-    expect(findPaneById(layout.root, splitPaneId)?.tabIds).toEqual([
-      "file_/repo/worktree/b.ts",
-      "file_/repo/worktree/a.ts",
-    ]);
+    expect(layout.focusedPaneId).toBe("main");
+    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual(["main"]);
+    expect(findPaneById(layout.root, "main")?.tabIds).toEqual([draftTabId, fileTabId]);
   });
 
-  it("closeTab cascades group unwrapping when an inner split collapses to a single pane", () => {
-    useWorkspaceLayoutIds(
-      "78787878-7878-7878-7878-787878787878",
-      "89898989-8989-8989-8989-898989898989",
-      "9a9a9a9a-9a9a-9a9a-9a9a-9a9a9a9a9a9a",
-    );
-
+  it("moveTabToPane keeps an emptied main pane so the side pane is never promoted", () => {
+    useWorkspaceLayoutIds("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
-    const secondTabId = store.openTabFocused(workspaceKey, {
+    const draftTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    const fileTabId = store.openTabFocused(workspaceKey, {
       kind: "file",
       path: "/repo/worktree/b.ts",
     });
-    const thirdTabId = store.openTabFocused(workspaceKey, {
-      kind: "file",
-      path: "/repo/worktree/c.ts",
-    });
-    const paneBId = store.splitPane(workspaceKey, {
-      tabId: secondTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
-    const paneCId = store.splitPane(workspaceKey, {
-      tabId: thirdTabId!,
-      targetPaneId: paneBId!,
-      position: "bottom",
-    });
+    const sidePaneId = "pane_eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 
-    store.closeTab(workspaceKey, secondTabId!);
+    store.moveTabToPane(workspaceKey, draftTabId!, sidePaneId);
+    const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+
+    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual(["main", sidePaneId]);
+    expect(getWorkspaceMainPane(layout.root).tabIds).toEqual([]);
+    expect(getWorkspaceSidePane(layout.root)?.tabIds).toEqual([fileTabId, draftTabId]);
+    expect(layout.focusedPaneId).toBe(sidePaneId);
+  });
+
+  it("closeTab keeps an emptied main pane beside the side pane", () => {
+    useWorkspaceLayoutIds("78787878-7878-7878-7878-787878787878");
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+
+    const draftTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    const fileTabId = store.openTabFocused(workspaceKey, {
+      kind: "file",
+      path: "/repo/worktree/b.ts",
+    });
+    store.focusTab(workspaceKey, draftTabId!);
+
+    store.closeTab(workspaceKey, draftTabId!);
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
     const rootGroup = expectGroup(layout.root);
 
-    expect(paneBId).toBe("pane_78787878-7878-7878-7878-787878787878");
-    expect(paneCId).toBe("pane_9a9a9a9a-9a9a-9a9a-9a9a-9a9a9a9a9a9a");
-    expect(layout.focusedPaneId).toBe(paneCId);
     expect(rootGroup.group.direction).toBe("horizontal");
-    expect(rootGroup.group.children).toHaveLength(2);
     expect(
-      rootGroup.group.children.map((child) => {
-        expect(child.kind).toBe("pane");
-        if (child.kind !== "pane") {
-          throw new Error("Expected pane child");
-        }
-        return {
-          id: child.pane.id,
-          tabIds: child.pane.tabIds,
-          focusedTabId: child.pane.focusedTabId,
-        };
-      }),
+      collectAllPanes(layout.root).map((pane) => ({ id: pane.id, tabIds: pane.tabIds })),
     ).toEqual([
-      {
-        id: "main",
-        tabIds: ["file_/repo/worktree/a.ts"],
-        focusedTabId: "file_/repo/worktree/a.ts",
-      },
-      {
-        id: paneCId!,
-        tabIds: ["file_/repo/worktree/c.ts"],
-        focusedTabId: "file_/repo/worktree/c.ts",
-      },
+      { id: "main", tabIds: [] },
+      { id: "pane_78787878-7878-7878-7878-787878787878", tabIds: [fileTabId] },
     ]);
-    expect(rootGroup.group.sizes).toEqual([0.5, 0.5]);
+    expect(layout.focusedPaneId).toBe("main");
   });
 
   it("openTab focuses the existing tab instead of creating a duplicate entry", () => {
@@ -1107,11 +1138,7 @@ describe("workspace-layout-store actions", () => {
       kind: "file",
       path: "/repo/worktree/b.ts",
     });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: secondTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
+    const sidePaneId = "pane_abababab-abab-abab-abab-abababababab";
 
     store.focusPane(workspaceKey, "main");
     const duplicateTabId = store.openTabFocused(workspaceKey, {
@@ -1120,9 +1147,8 @@ describe("workspace-layout-store actions", () => {
     });
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
 
-    expect(splitPaneId).toBe("pane_abababab-abab-abab-abab-abababababab");
     expect(duplicateTabId).toBe(secondTabId);
-    expect(layout.focusedPaneId).toBe(splitPaneId);
+    expect(layout.focusedPaneId).toBe(sidePaneId);
     expect(collectAllTabs(layout.root).map((tab) => tab.tabId)).toEqual([
       "file_/repo/worktree/a.ts",
       "file_/repo/worktree/b.ts",
@@ -1151,6 +1177,7 @@ describe("workspace-layout-store actions", () => {
     expect(persisted).toEqual({
       layoutByWorkspace: { [workspaceKey]: layout },
       splitSizesByWorkspace: currentState.splitSizesByWorkspace,
+      sidePanelOpenByWorkspace: currentState.sidePanelOpenByWorkspace,
     });
     expect(layout && collectAllTabs(layout.root).map((tab) => tab.target)).toEqual([
       {
@@ -1197,45 +1224,26 @@ describe("workspace-layout-store actions", () => {
   });
 
   it("resizeSplit keeps sizes normalized while enforcing the minimum proportion", () => {
-    useWorkspaceLayoutIds(
-      "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
-      "ffffffff-ffff-ffff-ffff-ffffffffffff",
-      "11111111-1111-1111-1111-111111111111",
-    );
+    useWorkspaceLayoutIds("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
 
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
-    const a = store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
-    const b = store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/b.ts" });
-    const c = store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/c.ts" });
-
-    expect(a).toBeTruthy();
-    const rightPaneId = store.splitPane(workspaceKey, {
-      tabId: b!,
-      targetPaneId: "main",
-      position: "right",
-    });
-    const farRightPaneId = store.splitPane(workspaceKey, {
-      tabId: c!,
-      targetPaneId: rightPaneId!,
-      position: "right",
-    });
+    store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/b.ts" });
 
     const splitRoot = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey].root;
     const splitGroup = expectGroup(splitRoot);
-    const nestedGroup = expectGroup(splitGroup.group.children[1]);
-    store.resizeSplit(workspaceKey, nestedGroup.group.id, [0.01, 0.99]);
+    expect(splitGroup.group.sizes[0]).toBeCloseTo(0.58, 10);
+    expect(splitGroup.group.sizes[1]).toBeCloseTo(0.42, 10);
+    store.resizeSplit(workspaceKey, splitGroup.group.id, [0.01, 0.99]);
 
-    const resizedRoot = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey].root;
-    const resizedGroup = expectGroup(resizedRoot);
-    const resizedNestedGroup = expectGroup(resizedGroup.group.children[1]);
-    const total = resizedNestedGroup.group.sizes.reduce((sum, size) => sum + size, 0);
+    const sizes =
+      workspaceLayoutStore.getState().splitSizesByWorkspace[workspaceKey]?.[splitGroup.group.id];
+    const total = sizes!.reduce((sum, size) => sum + size, 0);
 
-    expect(rightPaneId).toBe("pane_eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
-    expect(farRightPaneId).toBe("pane_11111111-1111-1111-1111-111111111111");
-    expect(resizedNestedGroup.group.sizes[0]).toBeGreaterThanOrEqual(0.1);
-    expect(resizedNestedGroup.group.sizes[1]).toBeGreaterThanOrEqual(0.1);
+    expect(sizes![0]).toBeGreaterThanOrEqual(0.1);
+    expect(sizes![1]).toBeGreaterThanOrEqual(0.1);
     expect(total).toBeCloseTo(1, 10);
   });
 
@@ -1283,6 +1291,7 @@ describe("workspace-layout-store actions", () => {
     expect(partialize?.(state)).toEqual({
       layoutByWorkspace: {},
       splitSizesByWorkspace: {},
+      sidePanelOpenByWorkspace: {},
     });
   });
 
@@ -1319,6 +1328,7 @@ describe("workspace-layout-store actions", () => {
     expect(partialize?.(state)).toEqual({
       layoutByWorkspace: {},
       splitSizesByWorkspace: {},
+      sidePanelOpenByWorkspace: {},
     });
   });
 
@@ -1331,21 +1341,16 @@ describe("workspace-layout-store actions", () => {
       kind: "draft",
       draftId: "draft-existing",
     });
-    const agentTabId = store.openTabFocused(workspaceKey, { kind: "agent", agentId: "agent-1" });
-    const splitPaneId = store.splitPane(workspaceKey, {
-      tabId: agentTabId!,
-      targetPaneId: "main",
-      position: "right",
-    });
+    store.openTabFocused(workspaceKey, { kind: "agent", agentId: "agent-1" });
+    store.focusTab(workspaceKey, draftTabId!);
 
     const nextTabId = store.convertDraftToAgent(workspaceKey, draftTabId!, "agent-1");
     const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
 
-    expect(splitPaneId).toBe("pane_67676767-6767-6767-6767-676767676767");
     expect(nextTabId).toBe("agent_agent-1");
     expect(collectAllTabs(layout.root).map((tab) => tab.tabId)).toEqual(["agent_agent-1"]);
-    expect(layout.focusedPaneId).toBe(splitPaneId);
-    expect(findPaneContainingTab(layout.root, "agent_agent-1")?.id).toBe(splitPaneId);
+    expect(layout.focusedPaneId).toBe("main");
+    expect(findPaneById(layout.root, "main")?.focusedTabId).toBe("agent_agent-1");
   });
 
   it("reconcileTabs canonicalizes duplicates and prunes stale entity tabs from hydrated snapshots", () => {

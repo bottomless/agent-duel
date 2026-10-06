@@ -1,8 +1,14 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useRetainedPanelActive } from "@/components/retained-panel";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Clipboard from "expo-clipboard";
-import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
+import {
+  Pressable,
+  Text,
+  View,
+  type LayoutChangeEvent,
+  type PressableStateCallbackType,
+} from "react-native";
 import Animated, { runOnJS, useAnimatedReaction } from "react-native-reanimated";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { Keyboard as KeyboardIcon, KeyboardOff as KeyboardOffIcon } from "lucide-react-native";
@@ -38,6 +44,7 @@ import { pasteTerminalClipboard } from "@/terminal/runtime/terminal-paste";
 import { getWorkspaceTerminalSession } from "@/terminal/runtime/workspace-terminal-session";
 import {
   EMPTY_FOCUS_CLAIM_STATE,
+  canAttachWithSizeClaim,
   canRequestFocusClaim,
   reconcileFocusClaim,
   resolveTerminalResizeClaim,
@@ -53,6 +60,7 @@ import { useBlockMobilePanelOpenGestures } from "@/mobile-panels/provider";
 import { useSessionStore } from "@/stores/session-store";
 import { toXtermTheme } from "@/utils/to-xterm-theme";
 import TerminalEmulator, { type TerminalEmulatorHandle } from "./terminal-emulator";
+import { resolveBelowCursorTop } from "./terminal-below-cursor";
 import { TerminalFloatingCopyAction, TerminalPasteAction } from "./terminal-copy-paste-actions";
 import {
   createTerminalResizeDebouncer,
@@ -87,6 +95,17 @@ interface TerminalPaneProps {
   isPaneFocused: boolean;
   onOpenFileExplorer: () => void;
   onOpenWorkspaceFile: (request: WorkspaceFileOpenRequest) => void;
+  /**
+   * Show the buffer but take nothing: typing, virtual keys and paste are dropped rather than
+   * queued, so nothing arrives late when the pane becomes writable again. The output the shell
+   * is still producing keeps arriving — this is about what the reader can put in.
+   */
+  readOnly?: boolean;
+  /**
+   * A note to hang off the end of the output, anchored under the cursor rather than pinned to the
+   * top of the pane, so it reads as the next thing the shell has to say.
+   */
+  belowCursor?: ReactNode;
 }
 
 const TERMINAL_REFIT_DELAYS_MS = [0, 48, 144, 320];
@@ -208,8 +227,15 @@ export function TerminalPane({
   isPaneFocused,
   onOpenFileExplorer,
   onOpenWorkspaceFile,
+  readOnly = false,
+  belowCursor,
 }: TerminalPaneProps) {
   const { t } = useTranslation();
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
+  const [cursorAnchorTop, setCursorAnchorTop] = useState<number | null>(null);
+  const [outputHeight, setOutputHeight] = useState(0);
+  const [belowCursorHeight, setBelowCursorHeight] = useState(0);
   const retainedPanelActive = useRetainedPanelActive();
   const isAppActivelyVisible = useAppActivelyVisible();
   const { theme } = useUnistyles();
@@ -480,6 +506,13 @@ export function TerminalPane({
     lastSentTerminalSizeRef.current = null;
   }, [scopeKey]);
 
+  // A new subscription is a new conversation about size. The daemon keeps whatever the last
+  // owner set, and that owner may be a session that has since gone away, so forget what this
+  // pane last sent and let the next measurement reach the daemon.
+  useEffect(() => {
+    lastSentTerminalSizeRef.current = null;
+  }, [terminalStreamKey]);
+
   const handleStreamControllerStatus = useCallback((status: TerminalStreamControllerStatus) => {
     setIsAttaching(status.isAttaching);
     setStreamError(status.error);
@@ -487,7 +520,7 @@ export function TerminalPane({
 
   const getPreferredStreamSize = useStableEvent(() => {
     if (
-      !canRequestFocusClaim({
+      !canAttachWithSizeClaim({
         isWorkspaceFocused: terminalActiveRef.current,
         isPaneFocused,
         isAppActivelyVisible,
@@ -533,7 +566,7 @@ export function TerminalPane({
   const getStreamRestoreOptions = useStableEvent(() =>
     resolveTerminalRestoreOptions({
       supportsTerminalRestoreModes,
-      canClaimSize: canRequestFocusClaim({
+      canClaimSize: canAttachWithSizeClaim({
         isWorkspaceFocused: terminalActiveRef.current,
         isPaneFocused,
         isAppActivelyVisible,
@@ -686,6 +719,9 @@ export function TerminalPane({
       alt: boolean;
       meta?: boolean;
     }): boolean => {
+      if (readOnlyRef.current) {
+        return true;
+      }
       if (!client || !terminalIdRef.current) {
         enqueuePendingTerminalInput({
           type: "key",
@@ -726,7 +762,7 @@ export function TerminalPane({
 
   const handleTerminalData = useCallback(
     async (data: string) => {
-      if (data.length === 0) {
+      if (data.length === 0 || readOnlyRef.current) {
         return;
       }
 
@@ -975,6 +1011,18 @@ export function TerminalPane({
     emulatorRef.current?.blur();
     onOpenFileExplorer();
   }, [swipeGesturesEnabled, onOpenFileExplorer]);
+  const handleOutputLayout = useCallback((event: LayoutChangeEvent) => {
+    setOutputHeight(event.nativeEvent.layout.height);
+  }, []);
+  const handleBelowCursorLayout = useCallback((event: LayoutChangeEvent) => {
+    setBelowCursorHeight(event.nativeEvent.layout.height);
+  }, []);
+  const belowCursorTop = resolveBelowCursorTop({
+    anchor: cursorAnchorTop,
+    outputHeight,
+    noticeHeight: belowCursorHeight,
+  });
+
   const showPasteAction = shouldShowTerminalPasteAction({ isNative });
   const showFloatingCopyAction = shouldShowTerminalFloatingCopyAction({
     hasSelection,
@@ -1041,7 +1089,7 @@ export function TerminalPane({
 
   return (
     <Animated.View style={containerStyle}>
-      <View style={styles.outputContainer}>
+      <View style={styles.outputContainer} onLayout={handleOutputLayout}>
         <View style={styles.terminalGestureContainer}>
           <TerminalEmulator
             ref={emulatorRef}
@@ -1051,6 +1099,8 @@ export function TerminalPane({
             testId="terminal-surface"
             xtermTheme={xtermTheme}
             scrollbackLines={settings.terminalScrollbackLines}
+            inputEnabled={!readOnly}
+            {...(belowCursor ? { onCursorAnchorChange: setCursorAnchorTop } : {})}
             fontFamily={terminalFontFamily}
             fontSize={settings.codeFontSize}
             keyboardInset={keyboardInset}
@@ -1078,6 +1128,16 @@ export function TerminalPane({
         {showLoadingOverlay ? (
           <View style={styles.attachOverlay} pointerEvents="none" testID="terminal-attach-loading">
             <LoadingSpinner size="small" color={theme.colors.foregroundMuted} />
+          </View>
+        ) : null}
+
+        {belowCursor ? (
+          <View
+            pointerEvents="none"
+            style={[styles.belowCursorSlot, { top: belowCursorTop }]}
+            onLayout={handleBelowCursorLayout}
+          >
+            {belowCursor}
           </View>
         ) : null}
 
@@ -1135,6 +1195,13 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(0, 0, 0, 0.16)",
+  },
+  belowCursorSlot: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    // A blank row between the last line of output and the note, so the two do not touch.
+    paddingTop: theme.spacing[2],
   },
   floatingCopyContainer: {
     position: "absolute",

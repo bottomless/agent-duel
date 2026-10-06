@@ -1,12 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pino, { type Logger } from "pino";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { ForgeService } from "../services/forge-service.js";
-import { createRealpathAwarePathMatcher } from "../utils/path.js";
 import { createWorktree, type WorktreeConfig } from "../utils/worktree.js";
 import type { ManagedAgent } from "./agent/agent-manager.js";
 import type { AgentStorage, StoredAgentRecord } from "./agent/agent-storage.js";
@@ -218,23 +217,8 @@ describe("archiveByScope", () => {
     expect(existsSync(worktree.worktreePath)).toBe(false);
   });
 
-  test("workspace scope runs teardown while keeping a directory referenced by a sibling", async () => {
+  test("workspace scope keeps a directory referenced by a sibling workspace", async () => {
     const { tempDir, repoDir } = createGitRepo();
-    writeFileSync(
-      path.join(repoDir, "paseo.json"),
-      JSON.stringify({
-        worktree: {
-          teardown: [
-            "node -e \"require('fs').writeFileSync(process.env.PASEO_SOURCE_CHECKOUT_PATH + '/shared-teardown.log', 'ok')\"",
-          ],
-        },
-      }),
-    );
-    execFileSync("git", ["add", "."], { cwd: repoDir, stdio: "pipe" });
-    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "shared teardown"], {
-      cwd: repoDir,
-      stdio: "pipe",
-    });
     const paseoHome = path.join(tempDir, ".paseo");
     const worktree = await createPaseoOwnedWorktree(repoDir, paseoHome, "sibling-workspace");
     const workspaceA = "ws-sibling-a";
@@ -259,7 +243,6 @@ describe("archiveByScope", () => {
       removedDirectory: false,
     });
     expect(existsSync(worktree.worktreePath)).toBe(true);
-    expect(readFileSync(path.join(repoDir, "shared-teardown.log"), "utf8")).toBe("ok");
   });
 
   test("workspace scope keeps a worktree for an active workspace in a subdirectory", async () => {
@@ -346,90 +329,16 @@ describe("archiveByScope", () => {
     expect(existsSync(worktree.worktreePath)).toBe(true);
   });
 
-  test("workspace scope runs teardown from the exact nested workspace before deleting its worktree", async () => {
-    const { tempDir, repoDir } = createGitRepo();
-    const nestedRelative = path.join("packages", "app");
-    const sourceNested = path.join(repoDir, nestedRelative);
-    mkdirSync(sourceNested, { recursive: true });
-    writeFileSync(
-      path.join(sourceNested, "paseo.json"),
-      JSON.stringify({
-        worktree: {
-          teardown: [
-            "node -e \"require('fs').writeFileSync(process.env.PASEO_SOURCE_CHECKOUT_PATH + '/nested-teardown.log', process.cwd())\"",
-          ],
-        },
-      }),
-    );
-    execFileSync("git", ["add", "."], { cwd: repoDir, stdio: "pipe" });
-    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "nested teardown"], {
-      cwd: repoDir,
-      stdio: "pipe",
-    });
-
-    const paseoHome = path.join(tempDir, ".paseo");
-    const worktree = await createPaseoOwnedWorktree(repoDir, paseoHome, "nested-teardown");
-    const workspaceCwd = path.join(worktree.worktreePath, nestedRelative);
-    const matchesWorkspaceCwd = createRealpathAwarePathMatcher(workspaceCwd);
-    const workspaceId = "ws-nested-teardown";
-
-    const result = await archiveByScope(
-      createArchiveDeps({
-        paseoHome,
-        activeWorkspaces: [
-          {
-            workspaceId,
-            cwd: workspaceCwd,
-            kind: "worktree",
-            worktreeRoot: worktree.worktreePath,
-            isPaseoOwnedWorktree: true,
-            mainRepoRoot: repoDir,
-          },
-        ],
-      }),
-      {
-        scope: { kind: "workspace", workspaceId },
-        requestId: "req-nested-teardown",
-      },
-    );
-
-    assertArchiveResult(result, {
-      archivedWorkspaceIds: [workspaceId],
-      removedDirectory: true,
-    });
-    expect(existsSync(worktree.worktreePath)).toBe(false);
-    expect(
-      matchesWorkspaceCwd(readFileSync(path.join(repoDir, "nested-teardown.log"), "utf8")),
-    ).toBe(true);
-  });
-
   test("worktree scope archives root and subdirectory workspaces before removing the backing worktree", async () => {
     const { tempDir, repoDir } = createGitRepo();
     const nestedRelative = path.join("packages", "app");
     const sourceNested = path.join(repoDir, nestedRelative);
     mkdirSync(sourceNested, { recursive: true });
-    writeFileSync(
-      path.join(repoDir, "paseo.json"),
-      JSON.stringify({
-        worktree: {
-          teardown: [
-            "node -e \"const fs=require('fs');const out=process.env.PASEO_SOURCE_CHECKOUT_PATH+'/root-scope-teardown.log';if(fs.existsSync(out))process.exit(2);fs.writeFileSync(out,'ok')\"",
-          ],
-        },
-      }),
-    );
-    writeFileSync(
-      path.join(sourceNested, "paseo.json"),
-      JSON.stringify({
-        worktree: {
-          teardown: [
-            "node -e \"require('fs').writeFileSync(process.env.PASEO_SOURCE_CHECKOUT_PATH+'/nested-scope-teardown.log','ok')\"",
-          ],
-        },
-      }),
-    );
+    // Git does not track empty directories, and the subdirectory workspace needs
+    // its cwd to exist inside the worktree.
+    writeFileSync(path.join(sourceNested, "index.ts"), "export {};\n");
     execFileSync("git", ["add", "."], { cwd: repoDir, stdio: "pipe" });
-    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "scope teardown"], {
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "nested package"], {
       cwd: repoDir,
       stdio: "pipe",
     });
@@ -479,8 +388,6 @@ describe("archiveByScope", () => {
     expect(result.archivedWorkspaceIds).toHaveLength(3);
     expect(result.removedDirectory).toBe(true);
     expect(existsSync(worktree.worktreePath)).toBe(false);
-    expect(readFileSync(path.join(repoDir, "root-scope-teardown.log"), "utf8")).toBe("ok");
-    expect(readFileSync(path.join(repoDir, "nested-scope-teardown.log"), "utf8")).toBe("ok");
   });
 
   test("workspace scope never removes a non-Paseo-owned directory", async () => {

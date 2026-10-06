@@ -133,6 +133,9 @@ function getCloseButtonTestId(tab: WorkspaceTabDescriptor): string {
   if (tab.target.kind === "terminal") {
     return `workspace-terminal-close-${tab.target.terminalId}`;
   }
+  if (tab.target.kind === "arena_terminal") {
+    return `workspace-arena-terminal-close-${tab.target.instanceId}`;
+  }
   if (tab.target.kind === "draft") {
     return `workspace-draft-close-${tab.target.draftId}`;
   }
@@ -150,6 +153,13 @@ function getCloseButtonTestId(tab: WorkspaceTabDescriptor): string {
   }
   if (tab.target.kind === "working_diff") {
     return `workspace-working-diff-close-${encodeFilePathForPathSegment(buildDeterministicWorkspaceTabId(tab.target))}`;
+  }
+  if (
+    tab.target.kind === "changes" ||
+    tab.target.kind === "files" ||
+    tab.target.kind === "pull_request"
+  ) {
+    return `workspace-${tab.target.kind.replace("_", "-")}-close`;
   }
   return `workspace-file-close-${encodeFilePathForPathSegment(tab.target.path)}`;
 }

@@ -26,12 +26,32 @@ describe("shared messages attachments", () => {
         itemCount: 2,
         boundaryMessageId: null,
         boundaryCursor,
+        throughMessageId: "assistant-1",
         error: null,
       },
     });
 
     expect(request.boundaryCursor).toEqual(boundaryCursor);
     expect(response.payload.boundaryCursor).toEqual(boundaryCursor);
+  });
+
+  it("keeps the native session fork source on create-agent requests", () => {
+    const parsed = CreateAgentRequestMessageSchema.parse({
+      type: "create_agent_request",
+      requestId: "create-fork",
+      config: { provider: "opencode", cwd: "/tmp/fork" },
+      attachments: [],
+      labels: {},
+      forkFrom: {
+        sourceAgentId: "agent-source",
+        throughMessageId: "msg-assistant-1",
+      },
+    });
+
+    expect(parsed.forkFrom).toEqual({
+      sourceAgentId: "agent-source",
+      throughMessageId: "msg-assistant-1",
+    });
   });
 
   it("accepts a legacy fork-context response without a timeline cursor", () => {

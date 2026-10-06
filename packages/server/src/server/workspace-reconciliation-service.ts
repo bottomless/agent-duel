@@ -238,7 +238,7 @@ export class WorkspaceReconciliationService {
 
     // 1. Archive workspaces whose directories no longer exist
     const missingWorkspaces = workspaceDirectoryStates
-      .filter(({ state }) => state === "missing")
+      .filter(({ state, workspace }) => state === "missing" && !workspace.cleanup)
       .map(({ workspace }) => workspace);
     await Promise.all(
       missingWorkspaces.map(async (workspace) => {

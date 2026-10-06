@@ -80,7 +80,10 @@ import { formatDuration, formatMessageTimestamp } from "@/utils/time";
 import { writeMarkdownToRichClipboard } from "@/utils/rich-clipboard";
 import { getDefaultMarkdownClipboardEnvironment } from "@/utils/rich-clipboard-default-environment";
 import { setAssistantMarkdownBlockHeight } from "@/utils/assistant-message-height-estimate";
-import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
+import {
+  getAgentAttachmentPillContent,
+  type AttachmentPillContent,
+} from "@/attachments/attachment-pill-content";
 import { PlanCard } from "./plan-card";
 import { useToolCallSheet } from "./tool-call-sheet";
 import { ToolCallDetailsContent } from "./tool-call-details";
@@ -114,6 +117,7 @@ import {
   markdownCopyTableCellDataSet,
   type MarkdownCopyInlineTag,
 } from "@/assistant-selection-copy/markup";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 export type { InlinePathTarget } from "@/assistant-file-links";
 export type { AssistantForkTarget };
 
@@ -124,6 +128,8 @@ interface UserMessageProps {
   message: string;
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
+  /** Attachments known only by their label, such as a battle prompt's; shown after `attachments`. */
+  attachmentPills?: readonly UserMessageAttachmentPill[];
   timestamp: number;
   capabilities?: AgentCapabilityFlags;
   client?: DaemonClient | null;
@@ -131,6 +137,12 @@ interface UserMessageProps {
   isLastInGroup?: boolean;
   isPending?: boolean;
   disableOuterSpacing?: boolean;
+  /**
+   * Leave out the hover-revealed timestamp and actions row. The row reserves its height even
+   * while hidden so the chat never shifts on hover; in a narrow surface such as a contestant
+   * thread that reserved band reads as an empty gap under the bubble.
+   */
+  withoutTrailingRow?: boolean;
 }
 
 const MessageOuterSpacingContext = createContext(false);
@@ -190,6 +202,13 @@ const WEB_TOOLCALL_SHIMMER_KEYFRAME_CSS = `
     }
     100% {
       background-position: var(--paseo-shimmer-end, 200px) 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [style*="--paseo-shimmer-start"] {
+      animation: none !important;
+      background-image: none !important;
+      color: inherit !important;
     }
   }
 `;
@@ -358,19 +377,16 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
   text: {
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
-    ...(isWeb ? { lineHeight: 22, overflowWrap: "anywhere" as const } : {}),
+    ...(isWeb
+      ? { lineHeight: Math.round(theme.fontSize.base * 1.4), overflowWrap: "anywhere" as const }
+      : {}),
   },
-  imagePreviewContainer: {
+  attachmentTray: {
     flexDirection: "row",
     gap: theme.spacing[2],
     flexWrap: "wrap",
   },
-  attachmentPreviewContainer: {
-    flexDirection: "row",
-    gap: theme.spacing[2],
-    flexWrap: "wrap",
-  },
-  imagePreviewSpacing: {
+  attachmentTraySpacing: {
     marginBottom: theme.spacing[2],
   },
   copyButton: {
@@ -396,7 +412,7 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
   },
   timestampText: {
     color: theme.colors.foregroundMuted,
-    fontSize: STREAM_METADATA_FONT_SIZE,
+    fontSize: Math.round((theme.fontSize.sm * 13) / 14),
   },
 }));
 
@@ -417,6 +433,73 @@ function UserMessageImagePill({ image, onOpen, accessibilityLabel }: UserMessage
   );
 }
 
+export interface UserMessageAttachmentPill extends AttachmentPillContent {
+  key: string;
+}
+
+function hasAnyAttachment(
+  images: readonly UserMessageImageAttachment[],
+  attachments: readonly AgentAttachment[],
+  attachmentPills: readonly UserMessageAttachmentPill[] | undefined,
+): boolean {
+  return images.length > 0 || attachments.length > 0 || Boolean(attachmentPills?.length);
+}
+
+/** Images and other attachments share one wrapping row above the text, as in the composer. */
+function UserMessageAttachmentTray({
+  images,
+  attachments,
+  attachmentPills = [],
+  hasText,
+  onOpenImage,
+}: {
+  images: UserMessageImageAttachment[];
+  attachments: AgentAttachment[];
+  attachmentPills: readonly UserMessageAttachmentPill[] | undefined;
+  hasText: boolean;
+  onOpenImage: (image: UserMessageImageAttachment) => void;
+}) {
+  const { t } = useTranslation();
+  const containerStyle = useMemo(
+    () => [
+      userMessageStylesheet.attachmentTray,
+      hasText ? userMessageStylesheet.attachmentTraySpacing : undefined,
+    ],
+    [hasText],
+  );
+  return (
+    <View style={containerStyle}>
+      {images.map((image) => (
+        <UserMessageImagePill
+          key={image.id}
+          image={image}
+          onOpen={onOpenImage}
+          accessibilityLabel={t("composer.attachments.openImage")}
+        />
+      ))}
+      {attachments.map((attachment, index) => {
+        const content = getAgentAttachmentPillContent(attachment, t);
+        return (
+          <AttachmentFrame
+            key={`${attachment.type}:${"number" in attachment ? attachment.number : index}`}
+          >
+            <AttachmentLabel
+              icon={content.icon}
+              title={content.title}
+              subtitle={content.subtitle}
+            />
+          </AttachmentFrame>
+        );
+      })}
+      {attachmentPills.map((pill) => (
+        <AttachmentFrame key={pill.key}>
+          <AttachmentLabel icon={pill.icon} title={pill.title} subtitle={pill.subtitle} />
+        </AttachmentFrame>
+      ))}
+    </View>
+  );
+}
+
 export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
@@ -424,6 +507,7 @@ export const UserMessage = memo(function UserMessage({
   message,
   images = [],
   attachments = [],
+  attachmentPills,
   timestamp,
   capabilities,
   client,
@@ -431,6 +515,7 @@ export const UserMessage = memo(function UserMessage({
   isLastInGroup = true,
   isPending = false,
   disableOuterSpacing,
+  withoutTrailingRow = false,
 }: UserMessageProps) {
   const isCompact = useIsCompactFormFactor();
   const { t } = useTranslation();
@@ -439,8 +524,7 @@ export const UserMessage = memo(function UserMessage({
   const handleLightboxClose = useCallback(() => setLightboxMetadata(null), []);
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
   const hasText = message.trim().length > 0;
-  const hasImages = images.length > 0;
-  const hasAttachments = attachments.length > 0;
+  const hasAttachments = hasAnyAttachment(images, attachments, attachmentPills);
   const showTrailingRow = !isPending && hasText && (isCompact || isNative || isHovered);
   const formattedTimestamp = useMemo(
     () => formatMessageTimestamp(new Date(timestamp)),
@@ -469,20 +553,6 @@ export const UserMessage = memo(function UserMessage({
     ],
     [resolvedDisableOuterSpacing, isFirstInGroup, isLastInGroup],
   );
-  const imagePreviewContainerStyle = useMemo(
-    () => [
-      userMessageStylesheet.imagePreviewContainer,
-      hasText || hasAttachments ? userMessageStylesheet.imagePreviewSpacing : undefined,
-    ],
-    [hasAttachments, hasText],
-  );
-  const attachmentPreviewContainerStyle = useMemo(
-    () => [
-      userMessageStylesheet.attachmentPreviewContainer,
-      hasText ? userMessageStylesheet.imagePreviewSpacing : undefined,
-    ],
-    [hasText],
-  );
   const trailingRowStyle = useMemo(
     () => [
       userMessageStylesheet.trailingRow,
@@ -501,35 +571,14 @@ export const UserMessage = memo(function UserMessage({
         onPointerLeave={handlePointerLeave}
       >
         <View style={userMessageStylesheet.bubble}>
-          {hasImages ? (
-            <View style={imagePreviewContainerStyle}>
-              {images.map((image) => (
-                <UserMessageImagePill
-                  key={image.id}
-                  image={image}
-                  onOpen={setLightboxMetadata}
-                  accessibilityLabel={t("composer.attachments.openImage")}
-                />
-              ))}
-            </View>
-          ) : null}
           {hasAttachments ? (
-            <View style={attachmentPreviewContainerStyle}>
-              {attachments.map((attachment, index) => {
-                const content = getAgentAttachmentPillContent(attachment, t);
-                return (
-                  <AttachmentFrame
-                    key={`${attachment.type}:${"number" in attachment ? attachment.number : index}`}
-                  >
-                    <AttachmentLabel
-                      icon={content.icon}
-                      title={content.title}
-                      subtitle={content.subtitle}
-                    />
-                  </AttachmentFrame>
-                );
-              })}
-            </View>
+            <UserMessageAttachmentTray
+              images={images}
+              attachments={attachments}
+              attachmentPills={attachmentPills}
+              hasText={hasText}
+              onOpenImage={setLightboxMetadata}
+            />
           ) : null}
           {hasText ? (
             <Text selectable style={userMessageStylesheet.text}>
@@ -537,7 +586,7 @@ export const UserMessage = memo(function UserMessage({
             </Text>
           ) : null}
         </View>
-        {hasText ? (
+        {hasText && !withoutTrailingRow ? (
           <View
             style={trailingRowStyle}
             pointerEvents={showTrailingRow ? "auto" : "none"}
@@ -592,7 +641,7 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
   },
   labelSizer: {
     color: theme.colors.foregroundMuted,
-    fontSize: STREAM_METADATA_FONT_SIZE,
+    fontSize: Math.round((theme.fontSize.sm * 13) / 14),
     opacity: 0,
   },
   labelOverlay: {
@@ -600,7 +649,7 @@ const assistantTurnFooterStylesheet = StyleSheet.create((theme) => ({
     top: 0,
     left: 0,
     color: theme.colors.foregroundMuted,
-    fontSize: STREAM_METADATA_FONT_SIZE,
+    fontSize: Math.round((theme.fontSize.sm * 13) / 14),
   },
 }));
 
@@ -656,12 +705,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
       revealTimerRef.current = null;
     }, TIMESTAMP_REVEAL_MS);
   }, [canSwap]);
-  const handleFork = useCallback(
-    (target: AssistantForkTarget) => {
-      return onFork?.(target);
-    },
-    [onFork],
-  );
+  const handleFork = useCallback((target: AssistantForkTarget) => onFork?.(target), [onFork]);
   const canFork = Boolean(onFork);
 
   return (
@@ -978,6 +1022,10 @@ const turnCopyButtonStylesheet = StyleSheet.create((theme) => ({
   iconHoveredColor: {
     color: theme.colors.foreground,
   },
+  tooltipText: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.xs,
+  },
 }));
 
 interface TurnCopyButtonProps {
@@ -1029,34 +1077,48 @@ export const TurnCopyButton = memo(function TurnCopyButton({
     [containerStyle],
   );
 
+  const label = copied
+    ? (copiedAccessibilityLabel ?? t("message.actions.copied"))
+    : (accessibilityLabel ?? t("message.actions.copyTurn"));
+
+  // The trigger is the button itself, as the composer's dictation button does, so hover and
+  // press stay on one element. Rewind and Fork beside it already had tooltips.
   return (
-    <Pressable
-      onPress={handleCopy}
-      style={pressableStyle}
-      accessibilityRole="button"
-      accessibilityLabel={
-        copied
-          ? (copiedAccessibilityLabel ?? t("message.actions.copied"))
-          : (accessibilityLabel ?? t("message.actions.copyTurn"))
-      }
-    >
-      {({ hovered }) => {
-        const iconColor = hovered
-          ? turnCopyButtonStylesheet.iconHoveredColor.color
-          : turnCopyButtonStylesheet.iconColor.color;
-        return copied ? (
-          <Check size={ICON_SIZE.sm} color={iconColor} />
-        ) : (
-          <Copy size={ICON_SIZE.sm} color={iconColor} />
-        );
-      }}
-    </Pressable>
+    <Tooltip delayDuration={250} enabledOnDesktop enabledOnMobile={false}>
+      <TooltipTrigger
+        onPress={handleCopy}
+        style={pressableStyle}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+      >
+        {({ hovered }) => {
+          const iconColor = hovered
+            ? turnCopyButtonStylesheet.iconHoveredColor.color
+            : turnCopyButtonStylesheet.iconColor.color;
+          return copied ? (
+            <Check size={ICON_SIZE.sm} color={iconColor} />
+          ) : (
+            <Copy size={ICON_SIZE.sm} color={iconColor} />
+          );
+        }}
+      </TooltipTrigger>
+      <TooltipContent side="top" align="center" offset={8}>
+        <Text style={turnCopyButtonStylesheet.tooltipText}>{label}</Text>
+      </TooltipContent>
+    </Tooltip>
   );
 });
 
+/**
+ * How far an expandable badge hangs into its container's padding, so its icon
+ * sits on the message text's rail. Details rendered under one start at the
+ * container's own origin, so they add this back to line up with the heading.
+ */
+export const EXPANDABLE_BADGE_DETAIL_INSET = 13;
+
 const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
   container: {
-    marginHorizontal: -13,
+    marginHorizontal: -EXPANDABLE_BADGE_DETAIL_INSET,
   },
   containerSpacing: {
     marginBottom: theme.spacing[1],
@@ -1074,6 +1136,17 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
   },
   pressablePressed: {
     opacity: 0.9,
+  },
+  // A flush row hugs its icon badge, so a thread's rhythm stays the gap between blocks
+  // rather than that gap plus the row's own slack.
+  pressableCompact: {
+    paddingVertical: 0,
+  },
+  // Expanded, the flush row's band paints 4px taller above and below without changing its
+  // layout box, so the bar reads at the row tier while the label stays put on click.
+  pressableCompactExpanded: {
+    marginVertical: -theme.spacing[1],
+    paddingVertical: theme.spacing[1],
   },
   headerRow: {
     flexDirection: "row",
@@ -1107,6 +1180,12 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     opacity: 0.72,
   },
+  // The compact row sits beside 14px prose (Agent Arena's contestant threads, the compact
+  // thinking block), so its label matches that prose instead of outranking it.
+  labelCompact: {
+    fontSize: theme.fontSize.sm,
+    lineHeight: Math.round(theme.fontSize.sm * 1.4),
+  },
   secondaryLabel: {
     flexShrink: 1,
     minWidth: 0,
@@ -1118,10 +1197,18 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
   secondaryLabelActive: {
     color: theme.colors.foreground,
   },
+  secondaryLabelCompact: {
+    fontSize: theme.fontSize.sm,
+    lineHeight: Math.round(theme.fontSize.sm * 1.4),
+  },
   shimmerText: {
     color: "transparent",
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.normal,
+  },
+  shimmerTextCompact: {
+    fontSize: theme.fontSize.sm,
+    lineHeight: Math.round(theme.fontSize.sm * 1.4),
   },
   spacer: {
     flex: 1,
@@ -1154,6 +1241,13 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
   },
   pressableExpanded: {
     backgroundColor: theme.colors.surface1,
+  },
+  // Inside a pane the expanded heading is a band across it, not a chip on a
+  // page: one surface up, because the pane is already the colour the ordinary
+  // highlight paints, and square, because it spans the pane's whole width.
+  pressableExpandedBand: {
+    backgroundColor: theme.colors.surface2,
+    borderRadius: 0,
   },
   pressableExpandedAttached: {
     borderColor: theme.colors.border,
@@ -1960,7 +2054,7 @@ const speakMessageStylesheet = StyleSheet.create((theme) => ({
   text: {
     fontFamily: theme.fontFamily.ui,
     fontSize: theme.fontSize.base,
-    lineHeight: 22,
+    lineHeight: Math.round(theme.fontSize.base * 1.4),
     color: theme.colors.foreground,
   },
 }));
@@ -2046,7 +2140,7 @@ const activityLogStylesheet = StyleSheet.create((theme) => ({
   },
   messageText: {
     fontSize: theme.fontSize.sm,
-    lineHeight: 20,
+    lineHeight: Math.round(theme.fontSize.sm * 1.4),
   },
   detailsRow: {
     flexDirection: "row",
@@ -2070,7 +2164,7 @@ const activityLogStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     fontSize: theme.fontSize.code,
     fontFamily: theme.fontFamily.mono,
-    lineHeight: 16,
+    lineHeight: theme.lineHeight.diff,
   },
 }));
 
@@ -2205,7 +2299,7 @@ const compactionStylesheet = StyleSheet.create((theme) => ({
   },
   text: {
     fontFamily: theme.fontFamily.ui,
-    fontSize: 13,
+    fontSize: Math.round((theme.fontSize.sm * 13) / 14),
     color: theme.colors.foregroundMuted,
   },
 }));
@@ -2253,6 +2347,8 @@ function taskActivityIcon(activity: TaskActivity) {
       return CircleDot;
     case "completed":
       return Check;
+    case "cancelled":
+      return XCircle;
     case "reopened":
       return RotateCcw;
     default:
@@ -2277,13 +2373,20 @@ function TodoListItemRow({ text, completed, status }: TodoListItemRowProps) {
   return (
     <View style={todoListCardStylesheet.itemRow}>
       <View
-        style={[badgeStyle, status === "in_progress" && todoListCardStylesheet.radioBadgeActive]}
+        style={[
+          badgeStyle,
+          status === "in_progress" && todoListCardStylesheet.radioBadgeActive,
+          status === "cancelled" && todoListCardStylesheet.radioBadgeCancelled,
+        ]}
       >
         {completed ? (
           <ThemedTodoCheckIcon size={12} uniProps={primaryForegroundColorMapping} />
         ) : null}
+        {status === "cancelled" ? <XCircle size={12} color="#a1a1aa" /> : null}
       </View>
-      <Text style={textStyle}>{text}</Text>
+      <Text style={[textStyle, status === "cancelled" && todoListCardStylesheet.itemTextCancelled]}>
+        {text}
+      </Text>
     </View>
   );
 }
@@ -2314,6 +2417,9 @@ const todoListCardStylesheet = StyleSheet.create((theme) => ({
   radioBadgeComplete: {
     opacity: 0.95,
   },
+  radioBadgeCancelled: {
+    backgroundColor: "transparent",
+  },
   radioBadgeActive: {
     borderWidth: 2,
     borderColor: theme.colors.primary,
@@ -2326,6 +2432,10 @@ const todoListCardStylesheet = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
   },
   itemTextCompleted: {
+    color: theme.colors.foregroundMuted,
+    textDecorationLine: "line-through",
+  },
+  itemTextCancelled: {
     color: theme.colors.foregroundMuted,
     textDecorationLine: "line-through",
   },
@@ -2408,6 +2518,16 @@ interface ExpandableBadgeProps {
   isLastInSequence?: boolean;
   disableOuterSpacing?: boolean;
   borderlessWhenExpanded?: boolean;
+  transparentWhenExpanded?: boolean;
+  /** Draws the expanded highlight as a band across a pane instead of a chip. */
+  bandWhenExpanded?: boolean;
+  compactLabel?: boolean;
+  /**
+   * No vertical padding, so the row hugs its icon badge. For a work summary sitting in prose,
+   * where the row's own padding would add to the prose rhythm; rows inside an expanded list
+   * keep their padding so they stay readable as a list.
+   */
+  flushRow?: boolean;
   testID?: string;
 }
 
@@ -2606,14 +2726,30 @@ function ExpandableBadgeLabelRow({
 const LUCIDE_TOOL_ICON_NUDGE_LEFT: ViewStyle = { marginLeft: -1 };
 const LUCIDE_CHEVRON_NUDGE_LEFT: ViewStyle = { marginLeft: -4 };
 
+/** What an expanded badge paints behind itself, given what it sits on. */
+function expandedSurfaceStyle(input: {
+  transparentWhenExpanded: boolean;
+  bandWhenExpanded: boolean | undefined;
+}): ViewStyle | false {
+  if (input.transparentWhenExpanded) {
+    return false;
+  }
+  return input.bandWhenExpanded
+    ? expandableBadgeStylesheet.pressableExpandedBand
+    : expandableBadgeStylesheet.pressableExpanded;
+}
+
 function renderExpandableBadgeIcon({
   isError,
   isActive,
   ThemedIcon,
+  compact,
 }: {
   isError: boolean;
   isActive: boolean;
   ThemedIcon: ComponentType<{ size?: number; uniProps?: typeof foregroundColorMapping }> | null;
+  /** The compact label is 14px, so its icon takes the 14px tier beside it. */
+  compact: boolean;
 }): ReactNode {
   if (isError) {
     return (
@@ -2626,7 +2762,7 @@ function renderExpandableBadgeIcon({
     return (
       <View style={LUCIDE_TOOL_ICON_NUDGE_LEFT}>
         <ThemedIcon
-          size={12}
+          size={compact ? ICON_SIZE.sm : 12}
           uniProps={isActive ? foregroundColorMapping : mutedForegroundColorMapping}
         />
       </View>
@@ -2771,6 +2907,10 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   isLastInSequence = false,
   disableOuterSpacing,
   borderlessWhenExpanded = false,
+  transparentWhenExpanded = false,
+  bandWhenExpanded,
+  compactLabel = false,
+  flushRow,
   testID,
 }: ExpandableBadgeProps) {
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
@@ -2939,11 +3079,21 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   const pressableStyle = useMemo(
     () => [
       expandableBadgeStylesheet.pressable,
+      flushRow && expandableBadgeStylesheet.pressableCompact,
+      flushRow && isExpanded && expandableBadgeStylesheet.pressableCompactExpanded,
       isPressed && isInteractive ? expandableBadgeStylesheet.pressablePressed : null,
-      isExpanded && expandableBadgeStylesheet.pressableExpanded,
+      isExpanded && expandedSurfaceStyle({ transparentWhenExpanded, bandWhenExpanded }),
       isExpanded && !borderlessWhenExpanded && expandableBadgeStylesheet.pressableExpandedAttached,
     ],
-    [borderlessWhenExpanded, isExpanded, isInteractive, isPressed],
+    [
+      bandWhenExpanded,
+      borderlessWhenExpanded,
+      flushRow,
+      isExpanded,
+      isInteractive,
+      isPressed,
+      transparentWhenExpanded,
+    ],
   );
 
   const detailWrapperStyle = useMemo(
@@ -2966,16 +3116,18 @@ export const ExpandableBadge = memo(function ExpandableBadge({
       expandableBadgeStylesheet.label,
       isActive && expandableBadgeStylesheet.labelActive,
       isLoading && expandableBadgeStylesheet.labelLoading,
+      compactLabel && expandableBadgeStylesheet.labelCompact,
     ],
-    [isActive, isLoading],
+    [isActive, isLoading, compactLabel],
   );
 
   const secondaryLabelStyle = useMemo(
     () => [
       expandableBadgeStylesheet.secondaryLabel,
       isActive && expandableBadgeStylesheet.secondaryLabelActive,
+      compactLabel && expandableBadgeStylesheet.secondaryLabelCompact,
     ],
-    [isActive],
+    [isActive, compactLabel],
   );
 
   const shimmerLabelTextStyle = useMemo(
@@ -2983,18 +3135,20 @@ export const ExpandableBadge = memo(function ExpandableBadge({
       expandableBadgeStylesheet.label,
       isLoading && expandableBadgeStylesheet.labelLoading,
       expandableBadgeStylesheet.shimmerText,
+      compactLabel && expandableBadgeStylesheet.shimmerTextCompact,
       shimmerLabelStyle,
     ],
-    [isLoading, shimmerLabelStyle],
+    [isLoading, shimmerLabelStyle, compactLabel],
   );
 
   const shimmerSecondaryTextStyle = useMemo(
     () => [
       expandableBadgeStylesheet.secondaryLabel,
       expandableBadgeStylesheet.shimmerText,
+      compactLabel && expandableBadgeStylesheet.shimmerTextCompact,
       shimmerSecondaryStyle,
     ],
-    [shimmerSecondaryStyle],
+    [shimmerSecondaryStyle, compactLabel],
   );
 
   const chevronStyle = useMemo(
@@ -3009,7 +3163,12 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   );
 
   const ThemedIcon = useMemo(() => (icon ? withUnistyles(icon) : null), [icon]);
-  const iconNode = renderExpandableBadgeIcon({ isError, isActive, ThemedIcon });
+  const iconNode = renderExpandableBadgeIcon({
+    isError,
+    isActive,
+    ThemedIcon,
+    compact: compactLabel,
+  });
   const iconSlotNode = renderExpandableBadgeIconSlot({
     showChevron: isInteractive && (isHovered || isExpanded),
     chevronStyle,
@@ -3091,7 +3250,9 @@ function areExpandableBadgePropsEqual(previous: ExpandableBadgeProps, next: Expa
   if (previous.isError !== next.isError) return false;
   if (previous.isLastInSequence !== next.isLastInSequence) return false;
   if (previous.disableOuterSpacing !== next.disableOuterSpacing) return false;
+  if (previous.flushRow !== next.flushRow) return false;
   if (previous.borderlessWhenExpanded !== next.borderlessWhenExpanded) return false;
+  if (previous.transparentWhenExpanded !== next.transparentWhenExpanded) return false;
   if (previous.testID !== next.testID) return false;
   if (previous.onToggle !== next.onToggle) return false;
   if (previous.onOpenFile !== next.onOpenFile) return false;
@@ -3117,6 +3278,7 @@ interface ToolCallProps {
   defaultExpanded?: boolean;
   forceInline?: boolean;
   maxDetailHeight?: number;
+  compactLabel?: boolean;
 }
 
 export const ToolCall = memo(function ToolCall({
@@ -3136,6 +3298,7 @@ export const ToolCall = memo(function ToolCall({
   defaultExpanded,
   forceInline = false,
   maxDetailHeight = 400,
+  compactLabel = false,
 }: ToolCallProps) {
   const { openToolCall } = useToolCallSheet();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded ?? false);
@@ -3238,6 +3401,7 @@ export const ToolCall = memo(function ToolCall({
         errorText={presentation.errorText}
         maxHeight={maxDetailHeight}
         showLoadingSkeleton={presentation.isLoadingDetails}
+        compact={compactLabel}
       />
     );
   }, [
@@ -3246,6 +3410,7 @@ export const ToolCall = memo(function ToolCall({
     presentation.errorText,
     presentation.isLoadingDetails,
     maxDetailHeight,
+    compactLabel,
   ]);
 
   if (presentation.isPlan && effectiveDetail?.type === "plan") {
@@ -3273,6 +3438,7 @@ export const ToolCall = memo(function ToolCall({
       isLastInSequence={isLastInSequence}
       disableOuterSpacing={disableOuterSpacing}
       onDetailHoverChange={onInlineDetailsHoverChange}
+      compactLabel={compactLabel}
     />
   );
 }, areToolCallPropsEqual);
@@ -3292,5 +3458,6 @@ function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
   if (previous.defaultExpanded !== next.defaultExpanded) return false;
   if (previous.forceInline !== next.forceInline) return false;
   if (previous.maxDetailHeight !== next.maxDetailHeight) return false;
+  if (previous.compactLabel !== next.compactLabel) return false;
   return true;
 }

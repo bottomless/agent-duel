@@ -3,14 +3,11 @@ import { createAgentCommand } from "./commands/agent/index.js";
 import { createDaemonCommand } from "./commands/daemon/index.js";
 import { createPermitCommand } from "./commands/permit/index.js";
 import { createProviderCommand } from "./commands/provider/index.js";
-import { createScheduleCommand } from "./commands/schedule/index.js";
 import { createSpeechCommand } from "./commands/speech/index.js";
 import { createScriptCommand } from "./commands/script/index.js";
 import { createTerminalCommand } from "./commands/terminal/index.js";
 import { createWorktreeCommand } from "./commands/worktree/index.js";
 import { createWorkspaceCommand } from "./commands/workspace/index.js";
-import { createHeartbeatCommand } from "./commands/heartbeat/index.js";
-import { createHubCommand } from "./commands/hub/index.js";
 import { createHooksCommand } from "./commands/hooks.js";
 import { startCommand as daemonStartCommand } from "./commands/daemon/start.js";
 import { runStatusCommand as runDaemonStatusCommand } from "./commands/daemon/status.js";
@@ -163,7 +160,6 @@ export function createCli(): Command {
 
   // Daemon commands
   program.addCommand(createDaemonCommand());
-  program.addCommand(createHubCommand());
 
   // Chat commands
 
@@ -172,10 +168,6 @@ export function createCli(): Command {
 
   // Workspace script commands
   program.addCommand(createScriptCommand());
-
-  // Schedule commands
-  program.addCommand(createScheduleCommand());
-  program.addCommand(createHeartbeatCommand());
 
   // Permission commands
   program.addCommand(createPermitCommand());

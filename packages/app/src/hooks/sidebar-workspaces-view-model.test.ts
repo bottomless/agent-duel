@@ -68,6 +68,49 @@ describe("createSidebarWorkspaceEntry forge threading", () => {
   });
 });
 
+describe("createSidebarWorkspaceEntry diff stat", () => {
+  function arenaActivity(chatDiff?: {
+    files: number;
+    additions: number;
+    deletions: number;
+  }): NonNullable<WorkspaceDescriptor["arenaActivity"]> {
+    return {
+      sessionID: "ses-1",
+      chatID: "chat-1",
+      turnID: null,
+      state: null,
+      resolved: true,
+      requiresDecision: false,
+      runs: [],
+      agentId: "agent-1",
+      workspaceId: "ws-1",
+      title: "Chat",
+      stale: false,
+      ...(chatDiff ? { chatDiff } : {}),
+    };
+  }
+
+  it("shows what the chat changed rather than what its checkout holds", () => {
+    const descriptor = workspaceWithForge(undefined, "https://github.com/acme/repo/pull/42");
+    descriptor.diffStat = { additions: 23, deletions: 4 };
+    descriptor.arenaActivity = arenaActivity({ files: 2, additions: 6, deletions: 1 });
+
+    const entry = createSidebarWorkspaceEntry({ serverId: "srv", workspace: descriptor });
+
+    expect(entry.diffStat).toEqual({ files: 2, additions: 6, deletions: 1 });
+  });
+
+  it("falls back to the checkout until a turn has been applied", () => {
+    const descriptor = workspaceWithForge(undefined, "https://github.com/acme/repo/pull/42");
+    descriptor.diffStat = { additions: 23, deletions: 4 };
+    descriptor.arenaActivity = arenaActivity();
+
+    const entry = createSidebarWorkspaceEntry({ serverId: "srv", workspace: descriptor });
+
+    expect(entry.diffStat).toEqual({ additions: 23, deletions: 4 });
+  });
+});
+
 describe("createSidebarWorkspaceEntry workspace directory label", () => {
   it("uses the daemon-provided slug for a Paseo-owned worktree", () => {
     const descriptor = workspaceWithForge(undefined, "https://github.com/acme/repo/pull/42");

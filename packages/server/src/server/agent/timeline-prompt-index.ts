@@ -4,6 +4,7 @@ const PROMPT_PREVIEW_MAX_LENGTH = 120;
 
 export interface TimelinePromptIndexEntry {
   seq: number;
+  messageId?: string;
   timestamp: string;
   preview: string;
 }
@@ -32,6 +33,7 @@ export function buildTimelinePromptIndex(
         ? [
             {
               seq: row.seq,
+              ...(row.item.messageId ? { messageId: row.item.messageId } : {}),
               timestamp: row.timestamp,
               preview: promptPreview(row.item.text),
             },

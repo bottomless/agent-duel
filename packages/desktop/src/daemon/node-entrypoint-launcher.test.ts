@@ -14,20 +14,20 @@ describe("node-entrypoint-launcher", () => {
     it("uses the packaged runner when the desktop app is packaged", () => {
       expect(
         createNodeEntrypointInvocation({
-          execPath: "/Applications/Paseo.app/Contents/MacOS/Paseo",
+          execPath: "/Applications/Agent Duel.app/Contents/MacOS/Agent Duel",
           isPackaged: true,
           packagedRunnerPath:
-            "/Applications/Paseo.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
+            "/Applications/Agent Duel.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
           entrypoint: CLI_ENTRYPOINT,
           argvMode: "node-script",
           args: ["ls", "--json"],
           baseEnv: { PATH: "/usr/bin" },
         }),
       ).toEqual({
-        command: "/Applications/Paseo.app/Contents/MacOS/Paseo",
+        command: "/Applications/Agent Duel.app/Contents/MacOS/Agent Duel",
         args: [
           "--disable-warning=DEP0040",
-          "/Applications/Paseo.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
+          "/Applications/Agent Duel.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
           "node-script",
           "/tmp/paseo-cli.js",
           "ls",
@@ -66,10 +66,10 @@ describe("node-entrypoint-launcher", () => {
     it("forces packaged launches to production even when NODE_ENV is inherited as development", () => {
       expect(
         createNodeEntrypointInvocation({
-          execPath: "/Applications/Paseo.app/Contents/MacOS/Paseo",
+          execPath: "/Applications/Agent Duel.app/Contents/MacOS/Agent Duel",
           isPackaged: true,
           packagedRunnerPath:
-            "/Applications/Paseo.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
+            "/Applications/Agent Duel.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
           entrypoint: CLI_ENTRYPOINT,
           argvMode: "node-script",
           args: [],
@@ -86,20 +86,20 @@ describe("node-entrypoint-launcher", () => {
     it("keeps node-style argv for packaged script entrypoints", () => {
       expect(
         createNodeEntrypointInvocation({
-          execPath: "/Applications/Paseo.app/Contents/MacOS/Paseo",
+          execPath: "/Applications/Agent Duel.app/Contents/MacOS/Agent Duel",
           isPackaged: true,
           packagedRunnerPath:
-            "/Applications/Paseo.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
+            "/Applications/Agent Duel.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
           entrypoint: CLI_ENTRYPOINT,
           argvMode: "node-script",
           args: ["--dev"],
           baseEnv: { PATH: "/usr/bin" },
         }),
       ).toEqual({
-        command: "/Applications/Paseo.app/Contents/MacOS/Paseo",
+        command: "/Applications/Agent Duel.app/Contents/MacOS/Agent Duel",
         args: [
           "--disable-warning=DEP0040",
-          "/Applications/Paseo.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
+          "/Applications/Agent Duel.app/Contents/Resources/app.asar/dist/daemon/node-entrypoint-runner.js",
           "node-script",
           "/tmp/paseo-cli.js",
           "--dev",

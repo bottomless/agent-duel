@@ -17,6 +17,7 @@ import {
   type GitActions,
 } from "@/git/policy";
 import { deriveMergeCapability } from "@/git/merge-capability";
+import { openGitCreateBranchDialog } from "@/git/create-branch-dialog";
 import type { CheckoutPrMergeMethod } from "@getpaseo/protocol/messages";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { useToast } from "@/contexts/toast-context";
@@ -195,6 +196,7 @@ interface UseGitActionsInput {
     pullAndPush: ReactElement;
     merge: ReactElement;
     mergeFromBase: ReactElement;
+    createBranch: ReactElement;
     archive: ReactElement;
   };
 }
@@ -440,6 +442,9 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
   const mergeFromBaseStatus = useCheckoutGitActionsStore((s) =>
     s.getStatus({ serverId, cwd, actionId: "merge-from-base" }),
   );
+  const createBranchStatus = useCheckoutGitActionsStore((s) =>
+    s.getStatus({ serverId, cwd, actionId: "create-branch" }),
+  );
 
   const runCommit = useCheckoutGitActionsStore((s) => s.commit);
   const runPull = useCheckoutGitActionsStore((s) => s.pull);
@@ -639,6 +644,12 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     t,
   });
 
+  // The name is typed in the dialog, so this action only opens it; the create itself runs
+  // from there.
+  const handleCreateBranch = useCallback(() => {
+    openGitCreateBranchDialog({ serverId, cwd });
+  }, [cwd, serverId]);
+
   const handleArchiveWorkspace = useCallback(() => {
     archiveController.archive();
   }, [archiveController]);
@@ -787,6 +798,12 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
           icon: icons.mergeFromBase,
           handler: handleMergeFromBase,
         },
+        "create-branch": {
+          disabled: isActionDisabled(actionsDisabled, createBranchStatus),
+          status: createBranchStatus,
+          icon: icons.createBranch,
+          handler: handleCreateBranch,
+        },
         "archive-workspace": {
           disabled: !archiveController.canArchive || archiveController.isArchiving,
           status: archiveController.isArchiving ? "pending" : "idle",
@@ -834,6 +851,7 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     disablePrAutoMergeStatus,
     mergeStatus,
     mergeFromBaseStatus,
+    createBranchStatus,
     archiveController.canArchive,
     archiveController.isArchiving,
     handleCommit,
@@ -846,6 +864,7 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
     handleDisablePrAutoMerge,
     handleMergeBranch,
     handleMergeFromBase,
+    handleCreateBranch,
     handleArchiveWorkspace,
     icons,
     prIcon,
@@ -1012,6 +1031,12 @@ function getTranslatedGitActionLabels(
         pendingLabel: t("workspace.git.actions.mergeFromBase.pending"),
         successLabel: t("workspace.git.actions.mergeFromBase.success"),
       };
+    case "create-branch":
+      return {
+        label: t("workspace.git.actions.createBranch.label"),
+        pendingLabel: t("workspace.git.actions.createBranch.pending"),
+        successLabel: t("workspace.git.actions.createBranch.success"),
+      };
     case "archive-workspace":
       return {
         label: t("workspace.git.actions.archive.label"),
@@ -1065,7 +1090,7 @@ function translateGitActionUnavailableMessage(
       "workspace.git.actions.unavailable.updateDirty",
     "Merge PR isn't available right now because GitHub isn't connected":
       "workspace.git.actions.unavailable.mergePrNoGithub",
-    "Archive isn't available here because this workspace was not created as a Paseo worktree":
+    "Archive isn't available here because this workspace was not created as a Agent Duel worktree":
       "workspace.git.actions.unavailable.archiveNotWorktree",
     "Merge PR isn't available because there isn't a pull request yet":
       "workspace.git.actions.unavailable.mergePrMissing",

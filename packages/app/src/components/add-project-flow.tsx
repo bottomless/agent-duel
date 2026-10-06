@@ -7,7 +7,6 @@ import {
   FolderPlus,
   Github,
   HardDrive,
-  Plus,
   Search,
   Server,
 } from "lucide-react-native";
@@ -68,9 +67,9 @@ import {
 } from "@/components/project-picker-options";
 import { Shortcut } from "@/components/ui/shortcut";
 import { useKeyboardShortcutsAvailable } from "@/keyboard/availability";
-import { getIsElectronRuntime } from "@/constants/layout";
 import { isNative, isWeb } from "@/constants/platform";
 import { pickDirectory } from "@/desktop/pick-directory";
+import { useIsElectronRuntime } from "@/desktop/hooks/use-is-electron-runtime";
 import { useFetchQuery } from "@/data/query";
 import { getOpenProjectFailureReason, registerProjectDescriptor } from "@/hooks/open-project";
 import { useIsLocalDaemon, useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
@@ -91,7 +90,7 @@ import { useRecommendedProjectPaths } from "@/stores/session-store-hooks";
 import type { AddProjectFlowRequest } from "@/stores/add-project-flow-store";
 import type { Theme } from "@/styles/theme";
 import { shortenPath } from "@/utils/shorten-path";
-import { buildNewWorkspaceRoute, buildSettingsAddHostRoute } from "@/utils/host-routes";
+import { buildNewWorkspaceRoute } from "@/utils/host-routes";
 
 interface AddProjectFlowProps {
   request: AddProjectFlowRequest;
@@ -325,6 +324,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
   // COMPAT(projectCreateDirectory): added in v0.1.108, remove gate after 2027-01-15.
   const createDirectoryByHost = useHostFeatureMap(hostIds, "projectCreateDirectory");
   const localServerId = useLocalDaemonServerId();
+  const isElectronRuntime = useIsElectronRuntime();
   const availableHosts = useMemo<AddProjectHost[]>(
     () =>
       hosts.flatMap((host) => {
@@ -337,7 +337,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
             serverId: host.serverId,
             label: host.label,
             canAddProject,
-            canBrowse: canAddProject && getIsElectronRuntime() && localServerId === host.serverId,
+            canBrowse: canAddProject && isElectronRuntime && localServerId === host.serverId,
             canCloneGithubRepositories: githubCloneByHost.get(host.serverId) === true,
             canSearchGithubRepositories: githubSearchByHost.get(host.serverId) === true,
             canCreateDirectory: createDirectoryByHost.get(host.serverId) === true,
@@ -350,6 +350,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
       githubCloneByHost,
       githubSearchByHost,
       hosts,
+      isElectronRuntime,
       localServerId,
       projectAddByHost,
       stableProjectIdentityByHost,
@@ -375,7 +376,9 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
   const submissionInFlightRef = useRef(false);
   const browseInFlightRef = useRef(false);
   const query = page.kind === "new-directory-name" || page.kind === "method" ? "" : page.query;
-  const [debouncedQuery, setDebouncedQuery] = useState(query);
+  const browseHome = page.kind === "new-directory-parent" && !query.trim();
+  const searchQuery = browseHome ? "~/" : query;
+  const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
 
   useEffect(() => {
     setState((current) =>
@@ -384,9 +387,9 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
   }, [availableHosts, request.preferredHostId]);
 
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(query), 250);
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 250);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [searchQuery]);
 
   useEffect(() => {
     const timer = setTimeout(() => inputRef.current?.focus(), 0);
@@ -521,17 +524,17 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
   );
 
   const directoryPaths = useMemo(
-    () => (directoryQuery.data?.query === query ? directoryQuery.data.paths : EMPTY_PATHS),
-    [directoryQuery.data, query],
+    () => (directoryQuery.data?.query === searchQuery ? directoryQuery.data.paths : EMPTY_PATHS),
+    [directoryQuery.data, searchQuery],
   );
   const pathOptions = useMemo(
     () =>
       buildProjectPickerOptions({
         recommendedPaths,
         serverPaths: directoryPaths,
-        query,
+        query: searchQuery,
       }),
-    [directoryPaths, query, recommendedPaths],
+    [directoryPaths, searchQuery, recommendedPaths],
   );
   const cloneRepository = useCallback(
     async (locationPage: GithubLocationPage, parentPath: string) => {
@@ -582,19 +585,6 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
           select: () => setState((current) => chooseAddProjectHost(current, choice.serverId)),
         }),
       );
-      if (state.hosts.length === 0) {
-        choices.push({
-          id: "add-host",
-          title: "Add host",
-          subtitle: "No connected hosts",
-          icon: Plus,
-          testID: "add-project-flow-add-host",
-          select: () => {
-            onClose();
-            router.push(buildSettingsAddHostRoute(Date.now()));
-          },
-        });
-      }
       return choices;
     }
     if (page.kind === "method") {
@@ -690,7 +680,6 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
     directoryPaths,
     githubQuery.data,
     host,
-    onClose,
     openAddedProject,
     page,
     pathOptions,
@@ -815,7 +804,7 @@ export function AddProjectFlow({ request, onClose }: AddProjectFlowProps) {
       ? githubQuery.data.payload
       : null;
   const loading =
-    (searchesDirectories && (query !== debouncedQuery || directoryQuery.isFetching)) ||
+    (searchesDirectories && (searchQuery !== debouncedQuery || directoryQuery.isFetching)) ||
     (page.kind === "github-search" &&
       host?.canSearchGithubRepositories === true &&
       (query !== debouncedQuery || githubQuery.isFetching));

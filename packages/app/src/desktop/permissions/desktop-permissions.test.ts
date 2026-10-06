@@ -67,6 +67,84 @@ describe("desktop-permissions", () => {
     expect(snapshot.checkedAt).toBeTypeOf("number");
   });
 
+  it.each(["granted", "denied", "default"])(
+    "keeps native permission system-managed when Chromium reports %s",
+    async (permission) => {
+      const permissions = createDesktopPermissions(
+        fakeEnvironment({
+          desktopHost: { notification: { isSupported: async () => true } },
+          notification: { permission },
+        }),
+      );
+
+      const snapshot = await permissions.getDesktopPermissionSnapshot();
+
+      expect(snapshot.notifications.state).toBe("system-managed");
+      expect(snapshot.notifications.detail).toContain("System Settings");
+    },
+  );
+
+  it("reports unavailable native notifications even if Chromium grants permission", async () => {
+    const permissions = createDesktopPermissions(
+      fakeEnvironment({
+        desktopHost: { notification: { isSupported: async () => false } },
+        notification: { permission: "granted" },
+      }),
+    );
+
+    const snapshot = await permissions.getDesktopPermissionSnapshot();
+
+    expect(snapshot.notifications.state).toBe("unavailable");
+  });
+
+  it("does not fall back to Chromium permission when the native check fails", async () => {
+    const permissions = createDesktopPermissions(
+      fakeEnvironment({
+        desktopHost: {
+          notification: {
+            isSupported: async () => {
+              throw new Error("IPC unavailable");
+            },
+          },
+        },
+        notification: { permission: "granted" },
+      }),
+    );
+
+    const snapshot = await permissions.getDesktopPermissionSnapshot();
+
+    expect(snapshot.notifications.state).toBe("unknown");
+    expect(snapshot.notifications.detail).toContain("refreshing");
+  });
+
+  it("does not use Chromium permission when the desktop notification bridge is absent", async () => {
+    const permissions = createDesktopPermissions(
+      fakeEnvironment({
+        desktopHost: {},
+        notification: { permission: "granted" },
+      }),
+    );
+
+    const snapshot = await permissions.getDesktopPermissionSnapshot();
+
+    expect(snapshot.notifications.state).toBe("unavailable");
+  });
+
+  it("does not request Chromium permission for native notifications", async () => {
+    const requestPermission = vi.fn(async () => "granted");
+    const permissions = createDesktopPermissions(
+      fakeEnvironment({
+        desktopHost: { notification: { isSupported: async () => true } },
+        notification: { requestPermission },
+      }),
+    );
+
+    const result = await permissions.requestDesktopPermission({ kind: "notifications" });
+
+    expect(result.state).toBe("system-managed");
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
   it("queries microphone permission with correct Permissions instance binding", async () => {
     const permissionsApi = {
       query(this: unknown, _descriptor: { name: string }) {
@@ -206,3 +284,66 @@ describe("desktop-permissions", () => {
     }
   });
 });
+
+it.each([
+  ["authorized", "granted"],
+  ["provisional", "granted"],
+  ["denied", "denied"],
+  ["not-determined", "prompt"],
+  ["unknown", "unknown"],
+] as const)("maps macOS %s to %s instead of Chromium permission", async (native, expected) => {
+  const permissions = createDesktopPermissions(
+    fakeEnvironment({
+      desktopHost: {
+        platform: "darwin",
+        notification: { isSupported: async () => true, getPermission: async () => native },
+      },
+      notification: { permission: "granted" },
+    }),
+  );
+  expect((await permissions.getDesktopPermissionSnapshot()).notifications.state).toBe(expected);
+});
+
+it("maps failed native reads to unknown, never Chromium granted", async () => {
+  const permissions = createDesktopPermissions(
+    fakeEnvironment({
+      desktopHost: {
+        platform: "darwin",
+        notification: {
+          isSupported: async () => true,
+          getPermission: async () => {
+            throw new Error("query failed");
+          },
+        },
+      },
+      notification: { permission: "granted" },
+    }),
+  );
+  expect((await permissions.getDesktopPermissionSnapshot()).notifications.state).toBe("unknown");
+});
+
+it.each(["authorized", "denied"] as const)(
+  "returns the native %s decision from the initial prompt",
+  async (decision) => {
+    let requests = 0;
+    const permissions = createDesktopPermissions(
+      fakeEnvironment({
+        desktopHost: {
+          platform: "darwin",
+          notification: {
+            isSupported: async () => true,
+            getPermission: async () => "not-determined",
+            requestPermission: async () => {
+              requests++;
+              return decision;
+            },
+          },
+        },
+      }),
+    );
+    expect((await permissions.requestDesktopPermission({ kind: "notifications" })).state).toBe(
+      decision === "authorized" ? "granted" : "denied",
+    );
+    expect(requests).toBe(1);
+  },
+);

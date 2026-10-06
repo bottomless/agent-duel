@@ -1,5 +1,10 @@
-import { Fragment, type ReactNode } from "react";
+import { Component, Fragment, type ReactNode } from "react";
 import { withUnistyles } from "react-native-unistyles";
+import {
+  captureAppearancePosition,
+  restoreAppearancePosition,
+  type AppearancePosition,
+} from "./appearance-position";
 import type { Theme } from "@/styles/theme";
 
 interface AppearanceStyleBoundaryProps {
@@ -7,8 +12,34 @@ interface AppearanceStyleBoundaryProps {
   children: ReactNode;
 }
 
-function AppearanceStyleBoundaryBase({ appearanceKey, children }: AppearanceStyleBoundaryProps) {
-  return <Fragment key={appearanceKey}>{children}</Fragment>;
+class AppearanceStyleBoundaryBase extends Component<AppearanceStyleBoundaryProps> {
+  private restoreFrame: number | null = null;
+
+  getSnapshotBeforeUpdate(previous: AppearanceStyleBoundaryProps): AppearancePosition | null {
+    return previous.appearanceKey !== this.props.appearanceKey ? captureAppearancePosition() : null;
+  }
+
+  componentDidUpdate(
+    _previous: AppearanceStyleBoundaryProps,
+    _state: unknown,
+    position: AppearancePosition | null,
+  ) {
+    if (!position) return;
+    restoreAppearancePosition(position);
+    if (this.restoreFrame !== null) cancelAnimationFrame(this.restoreFrame);
+    this.restoreFrame = requestAnimationFrame(() => {
+      restoreAppearancePosition(position);
+      this.restoreFrame = null;
+    });
+  }
+
+  componentWillUnmount() {
+    if (this.restoreFrame !== null) cancelAnimationFrame(this.restoreFrame);
+  }
+
+  render() {
+    return <Fragment key={this.props.appearanceKey}>{this.props.children}</Fragment>;
+  }
 }
 
 const appearanceStyleBoundaryMapping = (theme: Theme): Partial<AppearanceStyleBoundaryProps> => ({

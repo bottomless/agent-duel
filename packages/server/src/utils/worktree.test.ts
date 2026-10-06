@@ -77,6 +77,29 @@ describe("paseo worktree manager", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it("clears a pending add intent if another directory claims the worktree path", async () => {
+    let intendedPath: string | undefined;
+    let failedPath: string | undefined;
+    await expect(
+      createWorktreePrimitive({
+        cwd: repoDir,
+        worktreeSlug: "claimed-path",
+        source: { kind: "branch-off", baseBranch: "main", branchName: "claimed-branch" },
+        runSetup: false,
+        paseoHome,
+        onBeforeAdd: async (worktreePath) => {
+          intendedPath = worktreePath;
+          mkdirSync(worktreePath);
+          writeFileSync(join(worktreePath, "occupied.txt"), "claimed by another operation\n");
+        },
+        onAddFailed: async (worktreePath) => {
+          failedPath = worktreePath;
+        },
+      }),
+    ).rejects.toThrow();
+    expect(failedPath).toBe(intendedPath);
+  });
+
   it("treats a worktree as paseo-owned even when its .git admin is missing", async () => {
     const created = await createLegacyWorktreeForTest({
       branchName: "orphan-admin-branch",
@@ -102,6 +125,42 @@ describe("paseo worktree manager", () => {
       allowed: true,
       worktreePath: created.worktreePath,
     });
+  });
+
+  it("owns a worktree inside the project by path shape, even when git cannot answer", async () => {
+    const created = await createLegacyWorktreeForTest({
+      branchName: "shape-branch",
+      cwd: repoDir,
+      baseBranch: "main",
+      worktreeSlug: "1a2b3c4d",
+      paseoHome,
+    });
+    expect(created.worktreePath).toBe(join(repoDir, ".agent-duel", "worktrees", "1a2b3c4d"));
+
+    const ownership = await isPaseoOwnedWorktreeCwd(join(created.worktreePath, "src"), {});
+    expect(ownership).toMatchObject({
+      allowed: true,
+      worktreeRoot: join(repoDir, ".agent-duel", "worktrees"),
+      worktreePath: created.worktreePath,
+    });
+
+    // The root itself is not a worktree.
+    await expect(
+      isPaseoOwnedWorktreeCwd(join(repoDir, ".agent-duel", "worktrees"), {}),
+    ).resolves.toMatchObject({ allowed: false });
+
+    // A contestant has the same shape under its checkout but belongs to another repository.
+    const contestant = join(
+      repoDir,
+      ".agent-duel",
+      "worktrees",
+      "0123456789abcdef",
+      "generation-1-a",
+    );
+    mkdirSync(contestant, { recursive: true });
+    await expect(
+      isPaseoOwnedWorktreeCwd(contestant, { knownGitCommonDir: join(tempDir, "elsewhere.git") }),
+    ).resolves.toMatchObject({ allowed: false });
   });
 
   it("rejects paths that are not under the paseo worktrees root", async () => {

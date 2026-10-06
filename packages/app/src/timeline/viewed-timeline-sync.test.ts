@@ -349,6 +349,23 @@ test("a failed catch-up reports once and retries through the explicit retry poli
   world.expectNoPendingMembership();
 });
 
+test("a missing agent is negative-cached until it leaves the viewed set", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-gone"]);
+  const membership = await world.nextMembership();
+  membership.succeed();
+  const failed = await world.nextFetch("agent-gone");
+  failed.fail("Agent agent-gone not found");
+  await world.nextError();
+
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-gone"]);
+  world.elapse(60_000);
+
+  expect(world.sync.getAgentTimelineStatus("agent-gone")).toBe("error");
+  world.expectNoPendingFetch();
+});
+
 test("gap recovery supersedes completed catch-up and pages through the current tail", async () => {
   const world = new TimelineWorld();
   world.sync.setConnected(true);

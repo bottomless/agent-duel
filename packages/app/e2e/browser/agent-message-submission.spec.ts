@@ -627,7 +627,6 @@ async function expectRenderedBefore(first: Locator, second: Locator): Promise<vo
 async function openWorkspaceDraft(page: Page, workspaceId: string): Promise<void> {
   await page.goto(buildHostWorkspaceRoute(getServerId(), workspaceId));
   await waitForWorkspaceTabsVisible(page);
-  await page.getByTestId("workspace-new-agent-tab-inline").click();
   await expectComposerVisible(page);
 }
 

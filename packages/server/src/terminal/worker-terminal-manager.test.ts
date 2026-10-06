@@ -627,6 +627,32 @@ it("includes only stamped terminals in workspace-scoped local reads", async () =
   ]);
 });
 
+it("includes owned terminals outside the workspace root in workspace-scoped local reads", async () => {
+  const worker = new FakeTerminalWorker();
+  manager = createWorkerTerminalManager({
+    requestTimeoutMs: 5,
+    forkWorker: () => worker,
+  });
+
+  worker.emitWorkerMessage({
+    type: "terminalCreated",
+    terminal: {
+      id: "terminal-external",
+      name: "Arena worktree",
+      cwd: "/arena/worktree",
+      workspaceId: "ws-owned",
+      activity: null,
+    },
+    state: createTerminalState(),
+  });
+
+  const scoped = await manager.getTerminals("/workspace", { workspaceId: "ws-owned" });
+  const unscoped = await manager.getTerminals("/workspace");
+
+  expect(scoped.map((terminal) => terminal.id)).toEqual(["terminal-external"]);
+  expect(unscoped).toEqual([]);
+});
+
 it("rejects non-absolute cwd in getTerminals", async () => {
   const worker = new FakeTerminalWorker();
   manager = createWorkerTerminalManager({

@@ -129,7 +129,7 @@ buildNpmPackage rec {
 
     # Create wrapper for the server entry point (for systemd / direct use)
     mkdir -p $out/bin
-    # Keep Paseo's runtime mode separate from NODE_ENV, which belongs to spawned agents.
+    # Keep Agent Duel's runtime mode separate from NODE_ENV, which belongs to spawned agents.
     makeWrapper ${nodejs}/bin/node $out/bin/paseo-server \
       --add-flags "$out/lib/paseo/packages/server/dist/scripts/supervisor-entrypoint.js" \
       --set PASEO_NODE_ENV production

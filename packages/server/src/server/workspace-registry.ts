@@ -41,6 +41,9 @@ const PersistedProjectRecordSchema = z.object({
 });
 
 const PersistedWorkspaceRecordSchema = z.object({
+  // Written with the workspace, before the provider fork can start.
+  pendingFork: z.literal(true).optional(),
+  recoveryReason: z.literal("interrupted_fork").optional(),
   workspaceId: z.string(),
   projectId: z.string(),
   cwd: z.string(),
@@ -77,6 +80,13 @@ const PersistedWorkspaceRecordSchema = z.object({
     .transform((value) => value ?? null),
   isPaseoOwnedWorktree: z.boolean().default(false),
   mainRepoRoot: z.string().nullable().default(null),
+  cleanup: z
+    .object({
+      snapshotId: z.string(),
+      phase: z.enum(["cleaning", "cleaned", "restoring"]),
+    })
+    .optional(),
+  lastChatActivityAt: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   archivedAt: z.string().nullable(),
@@ -477,11 +487,19 @@ export class FileBackedWorkspaceRegistry
     record: PersistedWorkspaceRecord,
     context?: WorkspaceMutationContext,
   ): Promise<void> {
-    await super.upsert(record);
+    // Checkout refreshes can carry an old snapshot from before fork completion.
+    // Only creation and an explicit update may change the recovery marker.
+    const updated = await super.update(record.workspaceId, (current) => ({
+      ...record,
+      pendingFork: current.pendingFork,
+      recoveryReason: current.recoveryReason,
+    }));
+    if (!updated) await super.upsert(record);
+    const workspace = updated ?? record;
     await this.notifyMutation({
       kind: "upsert",
       workspaceId: record.workspaceId,
-      workspace: record,
+      workspace,
       ...(context?.expectsInitialAgent ? { expectsInitialAgent: true } : {}),
     });
   }
@@ -540,6 +558,8 @@ export function resolveProjectDisplayName(record: PersistedProjectRecord): strin
 }
 
 export function createPersistedWorkspaceRecord(input: {
+  pendingFork?: true;
+  recoveryReason?: "interrupted_fork";
   workspaceId: string;
   projectId: string;
   cwd: string;

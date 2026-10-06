@@ -4,6 +4,7 @@ import path from "node:path";
 import { app } from "electron";
 import { UUID } from "builder-util-runtime";
 import { autoUpdater } from "electron-updater";
+import { readPackagedDeploymentConfig } from "../deployment-config.js";
 import {
   createAppUpdateService,
   type AppUpdateCheckResult,
@@ -34,6 +35,16 @@ export {
 let cachedStagingUserIdPromise: Promise<string> | null = null;
 
 const UPDATE_CHANNEL_NOT_PUBLISHED_CODE = "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND";
+
+function arePackagedUpdatesEnabled(): boolean {
+  if (!app.isPackaged) return false;
+  try {
+    return readPackagedDeploymentConfig().updatesEnabled;
+  } catch (error) {
+    console.error("[auto-updater] Packaged update configuration is invalid:", error);
+    return false;
+  }
+}
 
 function isUpdateChannelNotPublished(error: unknown): boolean {
   return (
@@ -102,7 +113,7 @@ class ElectronAppUpdateRuntime implements AppUpdateRuntime {
   configure(input: AppUpdateRuntimeConfiguration): void {
     autoUpdater.autoDownload = true;
     autoUpdater.autoRunAppAfterInstall = true;
-    // Paseo revalidates the current manifest before explicitly installing on quit.
+    // Agent Duel revalidates the current manifest before explicitly installing on quit.
     // Electron's built-in handler would install an older download without checking
     // whether a newer release has superseded it.
     autoUpdater.autoInstallOnAppQuit = false;
@@ -121,7 +132,7 @@ class ElectronAppUpdateRuntime implements AppUpdateRuntime {
     this.configured = true;
 
     // electron-updater logs every emitted error before consumers can classify it.
-    // Paseo reports genuine check, runtime, and install failures through the
+    // Agent Duel reports genuine check, runtime, and install failures through the
     // callbacks below, so leave internal error logging disabled to avoid both
     // duplicate logs and expected missing-channel noise.
     const updaterLogger = autoUpdater.logger;
@@ -173,7 +184,7 @@ class ElectronAppUpdateRuntime implements AppUpdateRuntime {
 
 const appUpdateService = createAppUpdateService({
   runtime: new ElectronAppUpdateRuntime(),
-  isPackaged: () => app.isPackaged,
+  isPackaged: arePackagedUpdatesEnabled,
   now: () => Date.now(),
   bucket: async () => bucketFromStagingUserId(await getStagingUserId()),
   reportCheckError: (error) => {

@@ -1,4 +1,4 @@
-import { expect, test } from "../../app/e2e/support/fixtures";
+import { test } from "../../app/e2e/support/fixtures";
 import {
   startIsolatedHostDaemon,
   type IsolatedHostDaemon,
@@ -15,7 +15,6 @@ import {
   expectRelayUpdateRequired,
   expectRelayConsent,
   openPairDeviceModal,
-  openPairDeviceFromHome,
   openRelaySecurityDocs,
   observePairingOfferRequests,
   prepareLocalPairingHost,
@@ -84,14 +83,6 @@ test.describe("local device relay pairing", () => {
     await prepareLocalPairingHost(page, relayOffDaemon);
     await openPairDeviceModal(page);
     await openRelaySecurityDocs(page);
-  });
-
-  test("opens the same relay consent dialog from the home screen", async ({ page }) => {
-    await prepareLocalPairingHost(page, relayOffDaemon);
-    await openPairDeviceFromHome(page);
-    const modal = page.getByTestId("open-project-pair-device-modal");
-    await expect(modal.getByText("Enable relay?", { exact: true })).toBeVisible();
-    await expect(modal.getByRole("button", { name: "Enable relay", exact: true })).toBeVisible();
   });
 
   test("shows an actionable error when the daemon disconnects", async ({ page }) => {

@@ -22,6 +22,7 @@ interface HighlightedCodeBlockProps {
   language: string | null | undefined;
   inheritedStyles: TextStyle;
   textStyle: TextStyle;
+  horizontalScroll?: boolean;
 }
 
 // Fence info strings ("```ts", "```typescript", "```ts {1,3}") map to the
@@ -59,13 +60,14 @@ export const HighlightedCodeBlock = React.memo(function HighlightedCodeBlock({
   language,
   inheritedStyles,
   textStyle,
+  horizontalScroll = false,
 }: HighlightedCodeBlockProps) {
   // Box styles (bg / padding / border / radius / margin) go on the wrapper View
   // so the absolute copy button positions relative to the visible code area,
   // not to a parent that includes the Text's own marginVertical.
   const { containerStyle, innerTextStyle } = useMemo(
-    () => splitFenceStyle(inheritedStyles, textStyle),
-    [inheritedStyles, textStyle],
+    () => splitFenceStyle(inheritedStyles, textStyle, horizontalScroll),
+    [horizontalScroll, inheritedStyles, textStyle],
   );
   const renderedCode = useMemo(() => stripTerminalFenceNewline(code), [code]);
   const copyDataSet = useMemo(
@@ -90,7 +92,7 @@ export const HighlightedCodeBlock = React.memo(function HighlightedCodeBlock({
 
   return (
     <View
-      style={containerStyle}
+      style={[containerStyle, horizontalScroll ? HORIZONTAL_SCROLL_CONTAINER : undefined]}
       dataSet={copyDataSet}
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}
@@ -150,10 +152,23 @@ interface SplitStyles {
 
 const CONTAINER_BASE: ViewStyle = { position: "relative" };
 const WEB_SELECTABLE: TextStyle = isWeb ? ({ userSelect: "text" } as TextStyle) : {};
+const HORIZONTAL_SCROLL_CONTAINER: ViewStyle = isWeb
+  ? ({ maxWidth: "100%", overflowX: "auto" } as ViewStyle)
+  : {};
+const HORIZONTAL_SCROLL_TEXT: TextStyle = isWeb
+  ? ({ overflowWrap: "normal", whiteSpace: "pre" } as TextStyle)
+  : {};
 
-function splitFenceStyle(inheritedStyles: TextStyle, textStyle: TextStyle): SplitStyles {
+function splitFenceStyle(
+  inheritedStyles: TextStyle,
+  textStyle: TextStyle,
+  horizontalScroll: boolean,
+): SplitStyles {
   const { fontFamily, fontSize, color, ...box } = textStyle;
-  const textOnly: TextStyle = { ...WEB_SELECTABLE };
+  const textOnly: TextStyle = {
+    ...WEB_SELECTABLE,
+    ...(horizontalScroll ? HORIZONTAL_SCROLL_TEXT : {}),
+  };
   if (fontFamily !== undefined) textOnly.fontFamily = fontFamily;
   if (fontSize !== undefined) textOnly.fontSize = fontSize;
   if (fontSize !== undefined) textOnly.lineHeight = Math.round(fontSize * 1.45);

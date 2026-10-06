@@ -9,6 +9,12 @@ const desktopTargets = [
     icon: { kind: "symbol" as const, name: "terminal" as const },
   },
   {
+    id: "terminal",
+    label: "Terminal",
+    kind: "terminal" as const,
+    icon: { kind: "symbol" as const, name: "terminal" as const },
+  },
+  {
     id: "finder",
     label: "Finder",
     kind: "file-manager" as const,
@@ -62,6 +68,17 @@ describe("planWorkspaceOpenTargets", () => {
         filePath: "/repo/src/app.ts",
       },
     });
+  });
+
+  it("keeps terminal targets out of the general editor menu", () => {
+    const targets = planWorkspaceOpenTargets({
+      workspaceDirectory: "/repo",
+      desktopTargets,
+      canUseDesktopBridge: true,
+      isLocalExecution: true,
+    });
+
+    expect(targets.map((target) => target.id)).toEqual(["vscode", "finder"]);
   });
 
   it("plans no active file as opening the workspace folder", () => {

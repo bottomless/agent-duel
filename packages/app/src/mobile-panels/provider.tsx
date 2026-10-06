@@ -40,14 +40,10 @@ import {
 const ANIMATION_DURATION = 220;
 const ANIMATION_EASING = Easing.bezier(0.25, 0.1, 0.25, 1);
 const LEFT_PANEL_MASK = 1;
-const RIGHT_PANEL_MASK = 2;
 
 function getPanelMask(panel: MobilePanelView): number {
   if (panel === "agent-list") {
     return LEFT_PANEL_MASK;
-  }
-  if (panel === "file-explorer") {
-    return RIGHT_PANEL_MASK;
   }
   return 0;
 }
@@ -60,8 +56,6 @@ interface MobilePanelsRuntime {
   motionState: SharedValue<MobilePanelMotionState>;
   openGesturesBlocked: SharedValue<boolean>;
   position: SharedValue<number>;
-  rightCloseGestureRef: RefObject<GestureType | undefined>;
-  rightOpenGestureRef: RefObject<GestureType | undefined>;
   updateGesture: (startedRevision: number, nextPosition: number) => boolean;
   setOpenGestureBlocked: (owner: symbol, blocked: boolean) => void;
   windowWidth: number;
@@ -90,8 +84,6 @@ export function MobilePanelsProvider({ children }: { children: ReactNode }) {
   const openGestureBlockersRef = useRef(new Set<symbol>());
   const leftOpenGestureRef = useRef<GestureType | undefined>(undefined);
   const leftCloseGestureRef = useRef<GestureType | undefined>(undefined);
-  const rightOpenGestureRef = useRef<GestureType | undefined>(undefined);
-  const rightCloseGestureRef = useRef<GestureType | undefined>(undefined);
   const [presentedPanels, setPresentedPanels] = useState(getPanelMask(initialSelection.target));
 
   const setOpenGestureBlocked = useCallback(
@@ -246,8 +238,6 @@ export function MobilePanelsProvider({ children }: { children: ReactNode }) {
       motionState,
       openGesturesBlocked,
       position,
-      rightCloseGestureRef,
-      rightOpenGestureRef,
       updateGesture,
       setOpenGestureBlocked,
       windowWidth,

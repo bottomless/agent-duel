@@ -379,6 +379,15 @@ export function createWorkerTerminalManager(
       kill(): void {
         sendBestEffortRequest({ type: "killTerminal", terminalId: record.info.id });
       },
+      rehome(request: { cwd: string; bannerLabel?: string }): Promise<void> {
+        record.info = { ...record.info, cwd: request.cwd };
+        return sendRequest({
+          type: "rehomeTerminal",
+          terminalId: record.info.id,
+          cwd: request.cwd,
+          ...(request.bannerLabel === undefined ? {} : { bannerLabel: request.bannerLabel }),
+        }).then(() => undefined);
+      },
       killAndWait(options?: {
         gracefulTimeoutMs?: number;
         forceTimeoutMs?: number;
@@ -457,6 +466,7 @@ export function createWorkerTerminalManager(
     }
     emitTerminalsChanged({
       cwd: record.info.cwd,
+      workspaceId: record.info.workspaceId,
       terminals: listTerminalItemsForCwd(record.info.cwd),
     });
   }
@@ -484,6 +494,7 @@ export function createWorkerTerminalManager(
     }
     emitTerminalsChanged({
       cwd: record.info.cwd,
+      workspaceId: record.info.workspaceId,
       terminals: listTerminalItemsForCwd(record.info.cwd),
     });
   }
@@ -535,6 +546,7 @@ export function createWorkerTerminalManager(
     }
     emitTerminalsChanged({
       cwd: record.info.cwd,
+      workspaceId: record.info.workspaceId,
       terminals: listTerminalItemsForCwd(record.info.cwd),
     });
   }
@@ -542,13 +554,15 @@ export function createWorkerTerminalManager(
   function handleWorkerEvent(message: TerminalWorkerToParentMessage): void {
     switch (message.type) {
       case "terminalCreated": {
+        const terminal = asRequiredWorkerTerminalInfo(message.terminal);
         registerRecord({
-          info: asRequiredWorkerTerminalInfo(message.terminal),
+          info: terminal,
           state: message.state,
         });
         emitTerminalsChanged({
-          cwd: message.terminal.cwd,
-          terminals: listTerminalItemsForCwd(message.terminal.cwd),
+          cwd: terminal.cwd,
+          workspaceId: terminal.workspaceId,
+          terminals: listTerminalItemsForCwd(terminal.cwd),
         });
         return;
       }
@@ -653,6 +667,14 @@ export function createWorkerTerminalManager(
     ): Promise<TerminalSession[]> {
       assertAbsolutePath(cwd);
 
+      // Workspace ownership is authoritative when present. A workspace can own
+      // terminals in Arena worktrees outside its primary directory.
+      if (options?.workspaceId !== undefined) {
+        return Array.from(recordsById.values())
+          .map((record) => record.session)
+          .filter((session) => session.workspaceId === options.workspaceId);
+      }
+
       // Served from the local mirror, exactly like every other parent read.
       // Terminals are bucketed by exact cwd, but an agent can open a terminal in
       // a subdirectory of the workspace. A query for the workspace root must
@@ -670,12 +692,6 @@ export function createWorkerTerminalManager(
         }
       }
 
-      // When the query carries a workspaceId, two workspaces sharing a cwd must
-      // not see each other's terminals. A missing owner is not workspace
-      // membership; unscoped callers can still list those legacy terminals.
-      if (options?.workspaceId !== undefined) {
-        return sessions.filter((session) => session.workspaceId === options.workspaceId);
-      }
       return sessions;
     },
 
@@ -777,6 +793,31 @@ export function createWorkerTerminalManager(
       }
       await sendRequest({ type: "clearAttention", terminalId: id });
       return true;
+    },
+
+    async rehomeTerminal(input: { id: string; cwd: string; bannerLabel?: string }): Promise<void> {
+      const record = recordsById.get(input.id);
+      if (!record) {
+        return;
+      }
+      const previousCwd = record.info.cwd;
+      await record.session.rehome({
+        cwd: input.cwd,
+        ...(input.bannerLabel === undefined ? {} : { bannerLabel: input.bannerLabel }),
+      });
+      // Keep the mirror agreeing with the directory the shell now stands in: listings read
+      // `info.cwd`, and so does the bucket cleanup when the terminal finally exits.
+      record.info.cwd = input.cwd;
+      const previous = terminalIdsByCwd.get(previousCwd);
+      if (previous) {
+        previous.delete(input.id);
+        if (previous.size === 0) {
+          terminalIdsByCwd.delete(previousCwd);
+        }
+      }
+      const next = terminalIdsByCwd.get(input.cwd) ?? new Set<string>();
+      next.add(input.id);
+      terminalIdsByCwd.set(input.cwd, next);
     },
 
     killTerminal(id: string): void {

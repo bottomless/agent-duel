@@ -109,6 +109,45 @@ describe("MockLoadTestAgentClient", () => {
     expect(events.at(-1)).toMatchObject({ type: "turn_completed", provider: "mock" });
   });
 
+  test("streams a configured reasoning response before a deterministic final message", async () => {
+    vi.useFakeTimers();
+    const reasoning = "Check the layout, then render `inline` and a fenced block.";
+    const client = new MockLoadTestAgentClient();
+    const session = await client.createSession({
+      provider: "mock",
+      cwd: process.cwd(),
+      model: "ten-second-stream",
+      featureValues: {
+        mockStreamingReasoningResponse: reasoning,
+        mockStreamingReasoningIntervalMs: 20,
+      },
+    });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+
+    const resultPromise = session.run("Stream controlled reasoning.");
+    await vi.runAllTimersAsync();
+
+    await expect(resultPromise).resolves.toMatchObject({
+      finalText: "Reasoning stream complete.",
+      canceled: false,
+    });
+    const timelineItems = events.flatMap((event) =>
+      event.type === "timeline" ? [event.item] : [],
+    );
+    expect(
+      timelineItems
+        .filter((item) => item.type === "reasoning")
+        .map((item) => (item.type === "reasoning" ? item.text : ""))
+        .join(""),
+    ).toBe(reasoning);
+    expect(timelineItems.at(-1)).toMatchObject({
+      type: "assistant_message",
+      text: "Reasoning stream complete.",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "turn_completed", provider: "mock" });
+  });
+
   test("can withhold the provider user-message echo until an immediate interrupt", async () => {
     vi.useFakeTimers();
     const client = new MockLoadTestAgentClient();

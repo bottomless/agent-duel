@@ -1,91 +1,112 @@
 # Security
 
-Paseo follows a client-server architecture, similar to Docker. The daemon runs on your machine and manages your coding agents. Clients (the mobile app, CLI, or web interface) connect to the daemon to monitor and control those agents.
+## Reporting a vulnerability
 
-Your code never leaves your machine. Paseo is a local-first tool that connects directly to your development environment.
+Report it privately through GitHub: open the repository's **Security** tab and choose **Report a
+vulnerability**. Do not open a public issue, pull request, or discussion for a vulnerability.
 
-## Architecture
+Include:
 
-The Paseo daemon can run anywhere you want to execute agents: your laptop, a Mac Mini, a VPS, or a Docker container. The daemon listens for connections and manages agent lifecycles.
+- the version (Settings → About) or the commit you built from
+- whether you run the official download or a source build with your own OpenRouter key (`--byok`)
+- your OS and version
+- the affected component: desktop app, daemon, battle engine, CLI, or the hosted control plane
+  (sign-in, battle assignments, the model proxy, research uploads)
+- steps to reproduce, or a proof of concept
+- the impact you observed and what an attacker gains
 
-Clients connect to the daemon over WebSocket. There are two ways to establish this connection:
+Do not include real API keys, session tokens, or private source code. Redact them from logs.
 
-- **Relay connection** — The daemon connects outbound to our relay server, and clients meet it there. No open ports required.
-- **Direct connection** — The daemon listens on a network address and clients connect directly.
+Reports about the hosted service are welcome here even though its code is not in this repository.
 
-## Relay threat model
+## Supported versions
 
-The relay is designed to be untrusted. All traffic between your phone and daemon is end-to-end encrypted. The relay server cannot read your messages, see your code, or modify traffic without detection. Even if the relay is compromised, your data remains protected.
+Agent Duel is pre-1.0. Security fixes land on `main` and ship in the next release. Only the latest
+release of the official download and the current `main` branch are supported. Update before you
+report.
 
-### How it works
+Most of the daemon, CLI, and relay code is inherited from [Paseo](https://github.com/getpaseo/paseo).
+If a vulnerability is in code this repository has not changed, report it to Paseo as well.
 
-1. The daemon generates a persistent Curve25519 keypair on first run and stores it at `$PASEO_HOME/daemon-keypair.json` with mode `0600`
-2. The pairing URL (rendered as a QR code or opened directly) carries the daemon's public key in its URL fragment (`https://app.paseo.sh/#offer=...`). Fragments are not sent to the web server, so `app.paseo.sh` never sees the key.
-3. When the phone connects via the relay, it generates a fresh ephemeral Curve25519 keypair and sends an `e2ee_hello` message containing its public key. The daemon will not process any application messages until this handshake completes.
-4. Both sides perform a Curve25519 ECDH key exchange to derive a shared key. All subsequent messages are encrypted with XSalsa20-Poly1305 (NaCl `box`). The encrypted bundle is `[24-byte nonce][ciphertext]`. Peers optionally negotiate `binaryCiphertext` in `e2ee_hello` / `e2ee_ready`: negotiated application text is carried as a base64 WebSocket text frame, while application binary is carried as a raw WebSocket binary frame. A peer that does not negotiate the capability uses base64 text frames for both kinds.
+## Agent Duel control plane
 
-The WebSocket opcode is preserved end to end after negotiation; the receiver never guesses whether authenticated plaintext is text or binary from its byte contents. The plaintext handshake remains WebSocket text and contains only public keys and capability declarations.
+Agent Duel runs a local daemon that manages your coding agents and a bundled battle engine (a
+vendored OpenCode fork). The desktop app and the CLI connect to the daemon over WebSocket.
+Contestants run in local worktrees with your user's permissions. Prompts, code context, and tool
+output go to the model providers the contestants call.
 
-The relay sees only: IP addresses, timing, message sizes, session IDs, and the plaintext `e2ee_hello` / `e2ee_ready` handshake frames (which contain only public keys). It cannot read message contents, forge messages, or derive encryption keys from observing the handshake.
+There are two builds:
 
-### Why the relay can't attack you
+- **Official download.** You sign in to a hosted control plane, which is not part of this
+  repository. It holds the contestant pool, the model assignments, and the OpenRouter key. The
+  desktop receives only opaque assignment ids before you vote, and the control plane authorizes
+  every routed request against your account and the battle it belongs to. The official download
+  also uploads battle records, including transcripts and patches, to the control plane.
+- **Source build with your own key (`--byok`).** There is no sign-in, and no battle records leave
+  your machine except the model calls themselves, which go to OpenRouter with your key. You paste
+  an OpenRouter key in Settings; the daemon keeps it in memory and passes it to the engine over a
+  private startup pipe, never through an environment variable or a file. Blinding in this build is
+  a UI convention: you own the key, the process that routes the calls, and the local store that
+  holds the mapping.
 
-The daemon requires a valid cryptographic handshake before processing any commands. A compromised relay cannot:
+See [docs/arena.md](docs/arena.md#blinding) for the full identity boundary.
 
-- **Impersonate the daemon to your phone** — Without the daemon's secret key, it cannot derive the shared key, so any traffic it injects fails authenticated decryption on the phone
-- **Send commands as you** — The daemon only accepts traffic that decrypts and authenticates under a shared key derived with its own secret key. The phone's keypair is ephemeral per connection, so there is no persistent phone-side secret to steal; protection comes from the daemon's secret key never leaving the daemon.
-- **Read your traffic** — All messages are encrypted with XSalsa20-Poly1305 (NaCl box) after the handshake
-- **Forge messages** — NaCl box provides authenticated encryption; tampered messages are rejected
-- **Replay old messages across sessions** — Each session derives fresh encryption keys, so ciphertext from one session cannot be replayed into another session. Within a live session, replay protection is not yet implemented; the protocol uses random nonces and does not track nonce reuse or message counters.
+### Bundled engine boundary
 
-### Trust model
-
-The QR code or pairing link is the trust anchor. It contains the daemon's public key, which is required to establish the encrypted connection. Treat it like a password — don't share it publicly.
+The bundled OpenCode server denies local HTTP routes by default and accepts `GET /global/health`
+without credentials for liveness only. The `/session` namespace and the battle routes require a
+private control token held by the daemon. The daemon sends the engine only a SHA-256 verifier over
+its one-time startup pipe; the renderer, command line, environment, logs, and contestant processes
+never receive the token. The legacy `/api/*` surface is disabled, and `/doc` stays hidden unless
+`OPENCODE_ARENA_ENABLE_DOCS=1` is set for local development.
 
 ## Local daemon trust boundary
 
-By default, the daemon binds to `127.0.0.1`. With no password configured, the local control plane is trusted by network reachability — anything that can reach the daemon socket can control the daemon. This is the same security model Docker documents for its daemon: the security boundary is access to the socket or listening address.
+The daemon binds to `127.0.0.1` by default. With no password configured, anything that can reach
+the daemon socket can control the daemon, the same model Docker uses for its daemon.
 
-The daemon also supports an optional shared-secret password (set via `auth.password` in `config.json` or the `PASEO_PASSWORD` env var; stored bcrypt-hashed). When configured, every HTTP request must carry `Authorization: Bearer <password>` and every WebSocket upgrade must include a `Sec-WebSocket-Protocol: paseo.bearer.<password>` subprotocol. Browser WebSocket cannot set custom headers, which is why the token rides in the subprotocol. Health (`GET /api/health`) and CORS preflight (`OPTIONS`) are exempt. The password is intended for direct-TCP exposure (e.g. `tcp://host:port?ssl=true&password=...`); it is **not** a substitute for the relay's E2E encryption when traversing untrusted networks.
+You can set a shared-secret password with `auth.password` in `config.json` or the `PASEO_PASSWORD`
+environment variable (stored bcrypt-hashed). Every HTTP request must then carry
+`Authorization: Bearer <password>`, and every WebSocket upgrade must send a
+`Sec-WebSocket-Protocol: paseo.bearer.<password>` subprotocol, because browser WebSockets cannot set
+custom headers. `GET /api/health` and CORS preflight are exempt.
 
-Connected clients are trusted operators of the daemon user. File previews follow that authority: a preview request may read any regular file the daemon process can read, while keeping path normalization and symlink checks in the daemon file service. Workspace-relative paths remain a UI convenience, not a security boundary.
+Connected clients are trusted operators of the daemon user. A file preview may read any regular
+file the daemon process can read; workspace-relative paths are a UI convenience, not a security
+boundary.
 
-If you expose the daemon beyond loopback, such as by binding to `0.0.0.0`, forwarding it through a tunnel or reverse proxy, or publishing it from a Docker container, you are responsible for restricting and securing that access. Setting a password is strongly recommended in that case.
-
-In Docker, the official image runs the daemon and agents as the non-root
-`paseo` user by default. Mounted workspaces and credentials are still fully
-available to anything the agents run inside the container.
-
-For remote access, use the relay connection. It is the supported path for reaching the daemon off-machine, and it adds end-to-end encryption plus a pairing handshake before commands are accepted.
-
-Host header validation and CORS origin checks are defense-in-depth controls for localhost exposure. They help block DNS rebinding and browser-based attacks, but they do not replace network isolation.
+If you expose the daemon beyond loopback (binding to `0.0.0.0`, a tunnel, a reverse proxy), you are
+responsible for securing that access. Set a password.
 
 ## DNS rebinding protection
 
-CORS is not a complete security boundary. It controls which browser origins can make requests, but does not prevent a malicious website from resolving its domain to your local machine (DNS rebinding).
-
-Paseo validates the `Host` header on every HTTP request and every WebSocket upgrade against an allowlist (Vite-style semantics). By default, only `localhost`, `*.localhost`, and any literal IP address (IPv4 or IPv6) are accepted. Additional hostnames can be configured via `hostnames` in `config.json` or the `PASEO_HOSTNAMES` env var (comma-separated; entries beginning with `.` match a domain and its subdomains; the value `true` disables the allowlist entirely). Requests with unrecognized hosts are rejected with `403 Host not allowed`.
+CORS does not stop a malicious site from resolving its domain to your machine. The daemon validates
+the `Host` header on every HTTP request and WebSocket upgrade against an allowlist. By default only
+`localhost`, `*.localhost`, and literal IP addresses are accepted. Add hostnames with `hostnames` in
+`config.json` or `PASEO_HOSTNAMES` (comma-separated; a leading `.` matches a domain and its
+subdomains; `true` disables the check). Other hosts get `403 Host not allowed`.
 
 ## HTML file preview
 
-Previewing an `.html` file in the file pane renders it as a page, so markup an agent wrote — or markup that arrived with a repo you cloned — executes when you open it. The preview is built to contain that, not to trust it.
+Previewing an `.html` file runs its markup, including markup an agent wrote or that came with a repo
+you cloned. The preview loads it with an opaque origin and a policy that allows inline script and
+style and refuses everything else: no remote resources, no network requests, no form posts, no
+plugins, no nested frames, no popups, no top-window navigation, and no access to the app's DOM,
+storage, cookies, or other files.
 
-The document loads with an opaque origin and a policy that permits inline script and style and refuses everything else: no remote script, font, image, or media; no `fetch`, XHR, WebSocket, or beacon; no form posts; no plugins; no nested frames. It has no access to Paseo's DOM, and storage and cookie APIs throw inside it rather than returning anything. It cannot navigate the top window, and it cannot open popups. It cannot read any file but itself.
+One gap remains: a sandboxed document may navigate itself, and no CSP directive in current browsers
+prevents it. A hostile page can reach a server that way, carrying data available inside the
+preview: its own contents, browser properties, input typed into it, and your IP address. If you
+don't trust a page, open it in `Source`, which runs nothing.
 
-One gap remains on web and desktop: a sandboxed document may navigate _itself_, and no CSP directive in current browsers prevents that. `navigate-to` was dropped from CSP Level 3 and is not enforced, and `<meta http-equiv="refresh">` needs no script at all. A hostile page can therefore reach a server by navigating away, carrying data available inside the preview, such as its own contents, browser and device properties, user input inside the page, and your IP address. It cannot read Paseo, another file, storage, or cookies.
+## Agent credentials
 
-Native builds narrow this gap rather than closing it outright. The WebView refuses every navigation after the initial document, but that decision is made in the app's JavaScript, and on Android the WebView falls back to allowing a navigation when the decision doesn't come back in time. Treat it as a strong mitigation, not a guarantee: if the JS thread is stalled at the moment a page navigates, the same leak is possible there too.
-
-If you don't trust a page, read it in `Source`, which executes nothing. Source is available as an editable view on supported web hosts and a read-only view everywhere else.
-
-## Agent authentication
-
-Paseo wraps agent CLIs (Claude Code, Codex, OpenCode) but does not manage their authentication. Each agent provider handles its own credentials. Paseo never stores or transmits provider API keys. Agents run in your user context with your existing credentials.
+Agent Duel wraps agent CLIs (Claude Code, Codex, GitHub Copilot, OpenCode, Pi) and does not manage
+their authentication. Each provider handles its own credentials, and agents run in your user
+context with them. Contestants run unsandboxed as your user, so they can read anything your user
+can.
 
 ## Forge host trust
 
-Paseo only talks to a forge host that is either a known cloud host or one the forge CLI is already authenticated to. It never probes or routes credentials to an unauthenticated, remote-derived host.
-
-## Reporting vulnerabilities
-
-If you discover a security vulnerability, please report it privately by emailing hello@moboudra.com. Do not open a public issue.
+The app talks only to a forge host that is a known cloud host or one the forge CLI is already
+authenticated to. It never routes credentials to an unauthenticated, remote-derived host.

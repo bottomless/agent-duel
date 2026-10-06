@@ -7,6 +7,7 @@ import {
   type DesktopPermissionKind,
   type DesktopPermissionSnapshot,
 } from "@/desktop/permissions/desktop-permissions";
+import { isWeb } from "@/constants/platform";
 import { sendOsNotification } from "@/utils/os-notifications";
 
 export interface UseDesktopPermissionsReturn {
@@ -30,6 +31,7 @@ export function useDesktopPermissions(): UseDesktopPermissionsReturn {
   const { t } = useTranslation();
   const isDesktopApp = shouldShowDesktopPermissionSection();
   const isMountedRef = useRef(true);
+  const refreshVersion = useRef(0);
   const [snapshot, setSnapshot] = useState<DesktopPermissionSnapshot | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [requestingPermission, setRequestingPermission] = useState<DesktopPermissionKind | null>(
@@ -40,31 +42,42 @@ export function useDesktopPermissions(): UseDesktopPermissionsReturn {
   });
 
   useEffect(() => {
+    isMountedRef.current = true;
+    refreshVersion.current++;
     return () => {
       isMountedRef.current = false;
     };
   }, []);
 
   const refreshPermissions = useCallback(async () => {
-    if (!isDesktopApp) {
+    if (!isDesktopApp || !isMountedRef.current) {
       return;
     }
 
+    const version = ++refreshVersion.current;
     setIsRefreshing(true);
     try {
       const nextSnapshot = await getDesktopPermissionSnapshot();
-      if (!isMountedRef.current) {
-        return;
-      }
+      if (!isMountedRef.current || version !== refreshVersion.current) return;
       setSnapshot(nextSnapshot);
     } catch (error) {
       console.error("[Settings] Failed to load desktop permission status", error);
+      if (isMountedRef.current && version === refreshVersion.current) {
+        setSnapshot({
+          checkedAt: Date.now(),
+          notifications: {
+            state: "unknown",
+            detail: t("desktop.permissions.notifications.nativeUnknown"),
+          },
+          microphone: { state: "unknown", detail: t("desktop.permissions.empty.microphone") },
+        });
+      }
     } finally {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && version === refreshVersion.current) {
         setIsRefreshing(false);
       }
     }
-  }, [isDesktopApp]);
+  }, [isDesktopApp, t]);
 
   const requestPermission = useCallback(
     async (kind: DesktopPermissionKind) => {
@@ -156,6 +169,19 @@ export function useDesktopPermissions(): UseDesktopPermissionsReturn {
     }
 
     void refreshPermissions();
+    if (!isWeb) return;
+    const onFocus = () => {
+      void refreshPermissions();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") onFocus();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [isDesktopApp, refreshPermissions]);
 
   return {

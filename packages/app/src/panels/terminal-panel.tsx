@@ -2,27 +2,20 @@ import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Terminal } from "lucide-react-native";
-import { Text, View } from "react-native";
 import invariant from "tiny-invariant";
 import type { ListTerminalsResponse } from "@getpaseo/protocol/messages";
 import { deriveTerminalActivityStatusBucket } from "@getpaseo/protocol/terminal-activity";
 import { TerminalPane } from "@/components/terminal-pane";
 import { usePaneContext, usePaneFocus } from "@/panels/pane-context";
+import { SidePanelDirectoryMissing } from "@/panels/side-panel-directory-missing";
 import type { PanelDescriptor, PanelRegistration } from "@/panels/panel-registry";
 import { queryClient } from "@/data/query-client";
 import { buildTerminalsQueryKey } from "@/screens/workspace/terminals/state";
-import { usePanelStore } from "@/stores/panel-store";
 import { useSessionStore } from "@/stores/session-store";
 import { useWorkspaceDirectory, useWorkspaceFields } from "@/stores/session-store-hooks";
+import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
 
 type ListTerminalsPayload = ListTerminalsResponse["payload"];
-
-const CENTERED_PADDED_STYLE = {
-  flex: 1,
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 16,
-} as const;
 
 function trimNonEmpty(value: string | null | undefined): string | null {
   if (typeof value !== "string") {
@@ -80,28 +73,15 @@ function TerminalPanel() {
   const { isWorkspaceFocused, isPaneFocused } = usePaneFocus();
   const workspaceFields = useWorkspaceFields(serverId, workspaceId, (w) => ({
     workspaceDirectory: w.workspaceDirectory,
-    isGitCheckout: w.projectKind === "git",
   }));
   const workspaceDirectory = workspaceFields?.workspaceDirectory || null;
-  const isGitCheckout = workspaceFields?.isGitCheckout ?? false;
-  const openFileExplorerForCheckout = usePanelStore((state) => state.openFileExplorerForCheckout);
   const handleOpenFileExplorer = useCallback(() => {
-    if (!workspaceDirectory) {
-      return;
-    }
-    openFileExplorerForCheckout({
-      isCompact: true,
-      checkout: { serverId, cwd: workspaceDirectory, isGit: isGitCheckout },
-    });
-  }, [isGitCheckout, openFileExplorerForCheckout, serverId, workspaceDirectory]);
+    openWorkspaceSidePanelTab({ serverId, workspaceId, target: { kind: "files" } });
+  }, [serverId, workspaceId]);
   invariant(target.kind === "terminal", "TerminalPanel requires terminal target");
 
   if (!workspaceDirectory) {
-    return (
-      <View style={CENTERED_PADDED_STYLE}>
-        <Text>Workspace directory not found.</Text>
-      </View>
-    );
+    return <SidePanelDirectoryMissing />;
   }
 
   return (

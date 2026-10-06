@@ -255,10 +255,22 @@ function selectReplicaInput(session: SessionState, agentId: string | null): Repl
   };
 }
 
+/**
+ * A message's images stay out of the cache. A replayed message holds them inline, and a few
+ * screenshots would fill the cache's budget. A local send names the composer's stored copy, which
+ * attachment garbage collection removes once no loaded message refers to it, so after a reload the
+ * cached reference can point at nothing and would win over the daemon's copy. The daemon's timeline
+ * keeps every message's images and brings them back.
+ */
+function withoutImages(item: StreamItem): StreamItem {
+  if (item.kind !== "user_message" || !item.images) return item;
+  return { ...item, images: undefined };
+}
+
 function serializeHost(serverId: string, input: ReplicaInput): StoredHost {
-  const items = input.timelineItems?.filter(
-    (item) => item.kind !== "user_message" || !isUnreconciledLocalUserMessage(item),
-  );
+  const items = input.timelineItems
+    ?.filter((item) => item.kind !== "user_message" || !isUnreconciledLocalUserMessage(item))
+    .map(withoutImages);
   return {
     serverId,
     agents: input.agent ? [serializeAgent(input.agent)] : [],

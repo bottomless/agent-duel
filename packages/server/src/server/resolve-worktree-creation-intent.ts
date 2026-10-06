@@ -7,7 +7,7 @@ export interface ResolveWorktreeCreationIntentInput {
   worktreeSlug?: string;
   branchName?: string;
   refName?: string;
-  action?: "branch-off" | "checkout";
+  action?: "branch-off" | "checkout" | "detach";
   checkoutSource?: {
     kind: "change_request";
     forge?: string;
@@ -64,6 +64,13 @@ export async function resolveWorktreeCreationIntent(
   repoRoot: string,
   deps: ResolveWorktreeCreationIntentDeps,
 ): Promise<WorktreeCreationIntent> {
+  if (input.action === "detach") {
+    return {
+      kind: "detached",
+      baseRef: input.refName?.trim() || (await resolveDefaultBranch(repoRoot, deps)),
+    };
+  }
+
   if (input.action === "branch-off") {
     return {
       kind: "branch-off",

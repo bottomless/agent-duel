@@ -1,3 +1,4 @@
+import { getIsAppActivelyVisible } from "@/utils/app-visibility";
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -15,6 +16,7 @@ interface ClientActivityOptions {
   client: DaemonClient;
   focusedAgentId: string | null;
   focusedTerminalId: string | null;
+  focusedWorkspaceId: string | null;
   onAppResumed?: (awayMs: number) => void;
 }
 
@@ -28,6 +30,7 @@ export function useClientActivity({
   client,
   focusedAgentId,
   focusedTerminalId,
+  focusedWorkspaceId,
   onAppResumed,
 }: ClientActivityOptions): void {
   const onAppResumedRef = useRef(onAppResumed);
@@ -40,8 +43,10 @@ export function useClientActivity({
       deviceType: isWeb ? "web" : "mobile",
       initialFocusedAgentId: focusedAgentId,
       initialFocusedTerminalId: focusedTerminalId,
+      initialFocusedWorkspaceId: focusedWorkspaceId,
       initialAppVisible: AppState.currentState === "active",
       now: () => Date.now(),
+      getAppFocused: () => getIsAppActivelyVisible(AppState.currentState),
       onAppResumed: (awayMs) => onAppResumedRef.current?.(awayMs),
     });
   }
@@ -69,13 +74,17 @@ export function useClientActivity({
     const handleVisibilityChange = () => {
       const visible = document.visibilityState === "visible";
       const { changed } = tracker.notifyAppVisibility(visible);
-      if (changed && visible) {
-        tracker.maybeSendImmediateHeartbeat();
-      }
+      if (changed) tracker.sendHeartbeat();
     };
 
+    const handleWindowFocus = () => {
+      handleUserActivity();
+      tracker.sendHeartbeat();
+    };
+    const handleWindowBlur = () => tracker.sendHeartbeat();
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("focus", handleUserActivity);
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("pointerdown", handleUserActivity, { passive: true });
     window.addEventListener("keydown", handleUserActivity);
     window.addEventListener("wheel", handleUserActivity, { passive: true });
@@ -83,7 +92,8 @@ export function useClientActivity({
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("focus", handleUserActivity);
+      window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("blur", handleWindowBlur);
       window.removeEventListener("pointerdown", handleUserActivity);
       window.removeEventListener("keydown", handleUserActivity);
       window.removeEventListener("wheel", handleUserActivity);
@@ -121,6 +131,10 @@ export function useClientActivity({
   useEffect(() => {
     tracker.setFocusedTerminalId(focusedTerminalId);
   }, [focusedTerminalId, tracker]);
+
+  useEffect(() => {
+    tracker.setFocusedWorkspaceId(focusedWorkspaceId);
+  }, [focusedWorkspaceId, tracker]);
 
   // Periodic heartbeat gated by connection status.
   useEffect(() => {

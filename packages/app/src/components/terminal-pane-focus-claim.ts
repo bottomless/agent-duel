@@ -61,6 +61,19 @@ export function resolveTerminalResizeClaim(input: {
   };
 }
 
+/**
+ * Whether an attaching pane may tell the daemon its size.
+ *
+ * Deliberately weaker than a focus claim: the pane that just mounted is visible but not
+ * necessarily focused yet, and until the daemon knows its width the shell keeps drawing for
+ * whatever width the previous owner left behind — a reload or another window ends its session
+ * without giving the size back. What the reader sees then is a prompt laid out for the wrong
+ * width: characters missing where the line wrapped, and a second prompt drawn beneath it.
+ */
+export function canAttachWithSizeClaim(input: FocusClaimReadiness): boolean {
+  return canRequestOwnedSizeUpdate(input);
+}
+
 function canRequestOwnedSizeUpdate(input: FocusClaimReadiness): boolean {
   return (
     input.isWorkspaceFocused &&

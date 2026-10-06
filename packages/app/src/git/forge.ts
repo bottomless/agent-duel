@@ -77,7 +77,7 @@ export interface ForgePresentation {
   numberPrefix: string;
   /** Prefix the forge puts before an issue number ("#" on every forge so far). */
   issueNumberPrefix: string;
-  /** Auth CLI binary for the install hint, or null for a forge with no Paseo-driven sign-in. */
+  /** Auth CLI binary for the install hint, or null for a forge with no Agent Duel-driven sign-in. */
   signInCli: string | null;
   /**
    * i18next context selecting the change-request vocabulary family for any key

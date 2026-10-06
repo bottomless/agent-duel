@@ -8,6 +8,7 @@ import type { Href } from "expo-router";
 import {
   buildHostRootRoute,
   buildHostWorkspaceRoute,
+  buildNewWorkspaceRoute,
   buildOpenProjectRoute,
 } from "@/utils/host-routes";
 
@@ -130,6 +131,26 @@ export type StartupRouteDecision =
   | { kind: "redirect"; href: Href };
 
 export type WorkspaceSelectionStatus = "unknown" | "exists" | "missing";
+
+export type OpenProjectRouteDecision =
+  | { kind: "render" }
+  | { kind: "splash" }
+  | { kind: "redirect"; href: ReturnType<typeof buildNewWorkspaceRoute> };
+
+export function resolveOpenProjectRoute(input: {
+  hasProjects: boolean;
+  isLoadingProjects: boolean;
+}): OpenProjectRouteDecision {
+  if (input.hasProjects) {
+    return { kind: "redirect", href: buildNewWorkspaceRoute() };
+  }
+
+  if (input.isLoadingProjects) {
+    return { kind: "splash" };
+  }
+
+  return { kind: "render" };
+}
 
 function shouldRestoreWorkspaceSelection(input: {
   workspaceSelection: ActiveWorkspaceSelection | null;

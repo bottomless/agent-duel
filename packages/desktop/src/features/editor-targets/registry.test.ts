@@ -6,6 +6,7 @@ import { cursorTarget } from "./targets/cursor.js";
 import { explorerTarget, fileManagerTarget, finderTarget } from "./targets/file-manager.js";
 import { intellijIdeaTarget } from "./targets/intellij-idea.js";
 import { pycharmTarget } from "./targets/pycharm.js";
+import { terminalTarget } from "./targets/terminal.js";
 import { vscodeTarget } from "./targets/vscode.js";
 import { webstormTarget } from "./targets/webstorm.js";
 import { zedTarget } from "./targets/zed.js";
@@ -288,5 +289,24 @@ describe("editor target registry", () => {
 
     expect(macTargets.map((target) => target.id)).toEqual(["finder"]);
     expect(windowsTargets.map((target) => target.id)).toEqual(["explorer"]);
+  });
+
+  it("opens macOS Terminal in the selected worktree", async () => {
+    const runtime = new FakeEditorTargets("darwin");
+    runtime.installMacApplication("Terminal");
+
+    expect(await terminalTarget.describe(runtime)).toEqual({
+      id: "terminal",
+      label: "Terminal",
+      kind: "terminal",
+      icon: { kind: "symbol", name: "terminal" },
+    });
+    expect(await terminalTarget.isInstalled(runtime)).toBe(true);
+
+    await terminalTarget.launch({ workspacePath: "/repo/worktree-a" }, runtime);
+
+    expect(runtime.openedMacApplications).toEqual([
+      { applicationName: "Terminal", paths: ["/repo/worktree-a"] },
+    ]);
   });
 });

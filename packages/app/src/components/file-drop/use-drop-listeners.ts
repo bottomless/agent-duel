@@ -1,14 +1,15 @@
 import { useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import type { SharedValue } from "react-native-reanimated";
-import type { ImageAttachment } from "@/composer/types";
 import { getDesktopHost } from "@/desktop/host";
-import { persistAttachmentFromBlob, persistAttachmentFromFileUri } from "@/attachments/service";
+import { persistSendableImages } from "@/attachments/sendable-image";
 import {
   isRasterImageFile,
   isRasterImagePath,
   resolveRasterImageMimeType,
 } from "@/attachments/file-types";
+import { getFileNameFromPath } from "@/attachments/utils";
+import type { PickedImageAttachmentInput } from "@/hooks/image-attachment-picker";
 import { isWeb } from "@/constants/platform";
 import type { DroppedItem, DroppedPathItem, FileDropSink } from "./types";
 import {
@@ -26,24 +27,33 @@ interface DesktopDragDropEvent {
   payload: DesktopDragDropPayload;
 }
 
-async function filePathToImageAttachment(path: string): Promise<ImageAttachment> {
+function filePathToPickedImage(path: string): PickedImageAttachmentInput {
   const mimeType = resolveRasterImageMimeType({ path });
   if (!mimeType) {
     throw new Error(`Unsupported image type for '${path}'.`);
   }
-  return await persistAttachmentFromFileUri({ uri: path, mimeType });
+  return { source: { kind: "file_uri", uri: path }, mimeType, fileName: getFileNameFromPath(path) };
 }
 
-async function fileToImageAttachment(file: File): Promise<ImageAttachment> {
+function fileToPickedImage(file: File): PickedImageAttachmentInput {
   const mimeType = resolveRasterImageMimeType({ mimeType: file.type, path: file.name });
   if (!mimeType) {
     throw new Error(`Unsupported image type for '${file.name}'.`);
   }
-  return await persistAttachmentFromBlob({
-    blob: file,
-    mimeType,
-    fileName: file.name,
-  });
+  return { source: { kind: "blob", blob: file }, mimeType, fileName: file.name };
+}
+
+/** Hand the sink every image that attached and every one that did not, from the same drop. */
+async function deliverDroppedImages(
+  sink: FileDropSink,
+  images: PickedImageAttachmentInput[],
+): Promise<void> {
+  const { attachments, errors } = await persistSendableImages(images);
+  if (attachments.length > 0) sink.onFiles(attachments);
+  if (errors.length > 0) {
+    if (sink.onImageErrors) sink.onImageErrors(errors);
+    else console.error("[useDropListeners] Failed to process dropped images:", errors);
+  }
 }
 
 interface UseDropListenersOptions {
@@ -153,21 +163,11 @@ export function useDropListeners({
             return;
           }
 
-          void Promise.all(imagePaths.map(filePathToImageAttachment))
-            .then((attachments) => {
-              if (attachments.length === 0) {
-                return;
-              }
-              // Use the sink captured at drop time, not a fresh getSink() — routing belongs to the
-              // composer the user dropped on (matches the web path below). No post-persist busy
-              // re-check: a mixed drop's own generic upload flips the busy flag, and re-checking
-              // would discard the image from the same drop.
-              sink.onFiles(attachments);
-              return;
-            })
-            .catch((error) => {
-              console.error("[useDropListeners] Failed to persist dropped files:", error);
-            });
+          // Use the sink captured at drop time, not a fresh getSink() — routing belongs to the
+          // composer the user dropped on (matches the web path below). No post-persist busy
+          // re-check: a mixed drop's own generic upload flips the busy flag, and re-checking
+          // would discard the image from the same drop.
+          void deliverDroppedImages(sink, imagePaths.map(filePathToPickedImage));
         });
 
         if (disposed) {
@@ -266,15 +266,10 @@ export function useDropListeners({
 
         if (imageFiles.length === 0) return;
 
-        try {
-          const attachments = await Promise.all(imageFiles.map(fileToImageAttachment));
-          // No post-persist busy re-check: a mixed drop's own generic upload flips the busy flag,
-          // and re-checking would discard the image from the same drop. The guard at drop start
-          // already rejects drops that begin while busy.
-          sink.onFiles(attachments);
-        } catch (error) {
-          console.error("[useDropListeners] Failed to process dropped files:", error);
-        }
+        // No post-persist busy re-check: a mixed drop's own generic upload flips the busy flag,
+        // and re-checking would discard the image from the same drop. The guard at drop start
+        // already rejects drops that begin while busy.
+        await deliverDroppedImages(sink, imageFiles.map(fileToPickedImage));
       }
 
       element.addEventListener("dragenter", handleDragEnter);

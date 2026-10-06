@@ -2,7 +2,16 @@ import { useMemo, type ComponentProps, type PropsWithChildren, type ReactNode } 
 import { useTranslation } from "react-i18next";
 import { type PressableStateCallbackType } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { Archive, CircleCheck, Copy, MoreVertical, Pencil, Pin, PinOff } from "lucide-react-native";
+import {
+  Archive,
+  CircleCheck,
+  Copy,
+  GitBranchPlus,
+  MoreVertical,
+  Pencil,
+  Pin,
+  PinOff,
+} from "lucide-react-native";
 import { isWeb } from "@/constants/platform";
 import { getForgePresentation, normalizeForge } from "@/git/forge";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
@@ -38,12 +47,16 @@ const ThemedMoreVertical = withUnistyles(MoreVertical);
 const ThemedCopy = withUnistyles(Copy);
 const ThemedArchive = withUnistyles(Archive);
 const ThemedPencil = withUnistyles(Pencil);
+const ThemedGitBranchPlus = withUnistyles(GitBranchPlus);
 const ThemedCircleCheck = withUnistyles(CircleCheck);
 const ThemedPin = withUnistyles(Pin);
 const ThemedPinOff = withUnistyles(PinOff);
 
 const copyLeadingIcon = <ThemedCopy size={14} uniProps={foregroundMutedColorMapping} />;
 const renameLeadingIcon = <ThemedPencil size={14} uniProps={foregroundMutedColorMapping} />;
+const createBranchLeadingIcon = (
+  <ThemedGitBranchPlus size={14} uniProps={foregroundMutedColorMapping} />
+);
 const markAsReadLeadingIcon = (
   <ThemedCircleCheck size={14} uniProps={foregroundMutedColorMapping} />
 );
@@ -65,6 +78,8 @@ export interface SidebarWorkspaceMenuProps {
   onCopyPath?: () => void;
   onCopyBranchName?: () => void;
   onRename?: () => void;
+  /** Offered only while the checkout is detached: give the work a branch, in place. */
+  onCreateBranch?: () => void;
   onMarkAsRead?: () => void;
   onArchive: () => void;
   archiveLabel?: string;
@@ -110,6 +125,7 @@ function SidebarWorkspaceMenuItems({
   onCopyPath,
   onCopyBranchName,
   onRename,
+  onCreateBranch,
   onMarkAsRead,
   onArchive,
   archiveLabel,
@@ -156,6 +172,16 @@ function SidebarWorkspaceMenuItems({
           onSelect={onRename}
         >
           {t("sidebar.workspace.actions.rename")}
+        </WorkspaceMenuItem>
+      ) : null}
+      {onCreateBranch ? (
+        <WorkspaceMenuItem
+          surface={surface}
+          testID={`sidebar-workspace-menu-create-branch-${workspaceKey}`}
+          leading={createBranchLeadingIcon}
+          onSelect={onCreateBranch}
+        >
+          {t("sidebar.workspace.actions.createBranch")}
         </WorkspaceMenuItem>
       ) : null}
       {onMarkAsRead ? (
@@ -205,6 +231,7 @@ export function SidebarWorkspaceMenu({
   onCopyPath,
   onCopyBranchName,
   onRename,
+  onCreateBranch,
   onMarkAsRead,
   onArchive,
   archiveLabel,
@@ -236,6 +263,7 @@ export function SidebarWorkspaceMenu({
           onCopyPath={onCopyPath}
           onCopyBranchName={onCopyBranchName}
           onRename={onRename}
+          onCreateBranch={onCreateBranch}
           onMarkAsRead={onMarkAsRead}
           onArchive={onArchive}
           archiveLabel={archiveLabel}
@@ -262,12 +290,12 @@ export function SidebarWorkspaceContextMenu({
   onContextMenuOpenChange,
   workspace,
   leadingProjectName,
-  hostBadgeLabel,
   serviceSummary,
   workspaceKey,
   onCopyPath,
   onCopyBranchName,
   onRename,
+  onCreateBranch,
   onMarkAsRead,
   onArchive,
   archiveLabel,
@@ -287,7 +315,6 @@ export function SidebarWorkspaceContextMenu({
       onContextMenuOpenChange: (open: boolean) => void;
       workspace: SidebarWorkspaceEntry;
       leadingProjectName?: string | null;
-      hostBadgeLabel?: string | null;
       serviceSummary?: WorkspaceServiceSummary | null;
       highlightStyle: ComponentProps<typeof ContextMenuTrigger>["highlightStyle"];
     }
@@ -306,7 +333,6 @@ export function SidebarWorkspaceContextMenu({
     workspace,
     workspaceTitleSource,
     leadingProjectName,
-    hostBadgeLabel,
     pullRequestLabel,
     serviceLabel: serviceSummary
       ? t(workspaceServiceLabelKey(serviceSummary), { name: serviceSummary.name })
@@ -334,6 +360,7 @@ export function SidebarWorkspaceContextMenu({
           onCopyPath={onCopyPath}
           onCopyBranchName={onCopyBranchName}
           onRename={onRename}
+          onCreateBranch={onCreateBranch}
           onMarkAsRead={onMarkAsRead}
           onArchive={onArchive}
           archiveLabel={archiveLabel}

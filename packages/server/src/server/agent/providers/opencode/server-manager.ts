@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import net from "node:net";
@@ -11,16 +12,50 @@ import { terminateWithTreeKill, type ProcessTerminator } from "../../../../utils
 import type { ManagedProcessRegistry } from "../../../managed-processes/managed-processes.js";
 import {
   createProviderEnvSpec,
-  resolveProviderCommandPrefix,
+  resolveProviderLaunch,
+  type ProviderLaunchSource,
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
 import { resolveOpenCodeHomeDir } from "./paths.js";
+import {
+  isArenaCredentialsCurrent,
+  issueArenaLaunchCredentials,
+  revokeArenaRuntimeCredentials,
+  type ArenaCredentials,
+  type ArenaCredentialsSnapshot,
+} from "../../../accounts/credentials.js";
 
 const OPENCODE_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 5_000;
 const OPENCODE_SERVER_FORCE_SHUTDOWN_TIMEOUT_MS = 1_000;
+const OPENCODE_CONTROL_TOKEN_ENV = "PASEO_OPENCODE_CONTROL_TOKEN";
+export const ARENA_BACKEND_ROOT_ENV = "PASEO_ARENA_BACKEND_ROOT";
+export const ARENA_BACKEND_EXECUTABLE_ENV = "PASEO_ARENA_BACKEND_EXECUTABLE";
+
+function hashControlToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/** The engine's one-time stdin startup payload; `mode` tells it which credential follows. */
+function arenaStdinPayload(credentials: ArenaCredentials, controlTokenHash: string): string {
+  switch (credentials.mode) {
+    case "hosted":
+      return JSON.stringify({
+        mode: "hosted",
+        token: credentials.token,
+        controlPlaneUrl: credentials.controlPlaneUrl,
+        controlTokenHash,
+      });
+    case "byok":
+      return JSON.stringify({
+        mode: "byok",
+        openRouterApiKey: credentials.openRouterApiKey,
+        controlTokenHash,
+      });
+  }
+}
 
 export interface OpenCodeServerAcquisition {
-  server: { port: number; url: string };
+  server: { port: number; url: string; controlToken: string };
   release: () => Promise<void>;
 }
 
@@ -36,20 +71,151 @@ export interface OpenCodeServerGeneration {
   process: ChildProcess;
   port: number;
   url: string;
+  controlToken: string;
   refCount: number;
   retired: boolean;
   ready: Promise<void>;
   managedProcessId?: string;
   managedProcessRecord?: Promise<{ id: string } | null>;
+  arenaRuntimeToken?: string;
 }
 
 export type OpenCodePortAllocator = () => Promise<number>;
-export type OpenCodeCommandPrefixResolver = () => Promise<{ command: string; args: string[] }>;
+export type OpenCodeCommandPrefixResolver = () => Promise<{
+  command: string;
+  args: string[];
+  kind?: ResolvedOpenCodeServerLaunch["kind"];
+}>;
 export type OpenCodeServerProcessSpawner = (
   command: string,
   args: string[],
   options: SpawnProcessOptions,
 ) => ChildProcess;
+
+export interface ResolvedOpenCodeServerLaunch {
+  command: string;
+  args: string[];
+  source: ProviderLaunchSource;
+  kind: "arena-source" | "arena-binary" | "configured" | "stock";
+  arenaBackendRoot: string | null;
+}
+
+interface ResolveOpenCodeServerLaunchOptions {
+  arenaBackendRoot?: string | null;
+  arenaBackendExecutable?: string | null;
+  findBunBinary?: () => Promise<string | null>;
+  fileExists?: (filePath: string) => Promise<boolean>;
+  resolveStockBinary?: () => Promise<string>;
+}
+
+async function resolveArenaSourceLaunch(
+  arenaBackendRoot: string,
+  runtimeSettings: ProviderRuntimeSettings | undefined,
+  options: ResolveOpenCodeServerLaunchOptions,
+): Promise<ResolvedOpenCodeServerLaunch> {
+  const packageDirectory = path.resolve(arenaBackendRoot, "packages", "opencode");
+  const entrypoint = path.join(packageDirectory, "src", "index.ts");
+  const fileExists = options.fileExists ?? pathExists;
+  if (!(await fileExists(entrypoint))) {
+    throw new Error(
+      `${ARENA_BACKEND_ROOT_ENV} does not point to an Agent Arena backend checkout: ${entrypoint} was not found.`,
+    );
+  }
+
+  const findBunBinary = options.findBunBinary ?? (() => findExecutable("bun"));
+  const bunBinary = await findBunBinary();
+  if (!bunBinary) {
+    throw new Error(
+      `Bun is required to launch the Agent Arena backend from ${ARENA_BACKEND_ROOT_ENV}.`,
+    );
+  }
+
+  const appendedArgs =
+    runtimeSettings?.command?.mode === "append" ? (runtimeSettings.command.args ?? []) : [];
+  return {
+    command: bunBinary,
+    args: [
+      "--no-env-file",
+      // Same heap policy as the packaged runtime (`build-arena-runtime.mjs`): collect more often
+      // and keep a smaller heap, which a long-lived engine otherwise never gives back.
+      "--smol",
+      "--cwd",
+      packageDirectory,
+      "--conditions=browser",
+      "src/index.ts",
+      "--hostname",
+      "127.0.0.1",
+      ...appendedArgs,
+    ],
+    source: runtimeSettings?.command?.mode === "append" ? "append" : "default",
+    kind: "arena-source",
+    arenaBackendRoot: path.resolve(arenaBackendRoot),
+  };
+}
+
+async function resolveArenaExecutableLaunch(
+  executable: string,
+  runtimeSettings: ProviderRuntimeSettings | undefined,
+  options: ResolveOpenCodeServerLaunchOptions,
+): Promise<ResolvedOpenCodeServerLaunch> {
+  const fileExists = options.fileExists ?? pathExists;
+  if (!(await fileExists(executable))) {
+    throw new Error(`${ARENA_BACKEND_EXECUTABLE_ENV} does not exist: ${executable}`);
+  }
+  const appendedArgs =
+    runtimeSettings?.command?.mode === "append" ? (runtimeSettings.command.args ?? []) : [];
+  return {
+    command: executable,
+    args: ["--hostname", "127.0.0.1", ...appendedArgs],
+    source: runtimeSettings?.command?.mode === "append" ? "append" : "default",
+    kind: "arena-binary",
+    arenaBackendRoot: null,
+  };
+}
+
+export async function resolveOpenCodeServerLaunch(
+  runtimeSettings?: ProviderRuntimeSettings,
+  options: ResolveOpenCodeServerLaunchOptions = {},
+): Promise<ResolvedOpenCodeServerLaunch> {
+  if (runtimeSettings?.command?.mode === "replace") {
+    const launch = await resolveProviderLaunch({ commandConfig: runtimeSettings.command });
+    return {
+      ...launch,
+      kind: "configured",
+      arenaBackendRoot: null,
+    };
+  }
+
+  const configuredExecutable =
+    options.arenaBackendExecutable === undefined
+      ? process.env[ARENA_BACKEND_EXECUTABLE_ENV]
+      : options.arenaBackendExecutable;
+  const arenaBackendExecutable = configuredExecutable?.trim();
+  if (arenaBackendExecutable) {
+    return resolveArenaExecutableLaunch(arenaBackendExecutable, runtimeSettings, options);
+  }
+
+  const configuredRoot =
+    options.arenaBackendRoot === undefined
+      ? process.env[ARENA_BACKEND_ROOT_ENV]
+      : options.arenaBackendRoot;
+  const arenaBackendRoot = configuredRoot?.trim();
+  if (arenaBackendRoot) {
+    return resolveArenaSourceLaunch(arenaBackendRoot, runtimeSettings, options);
+  }
+
+  const resolveStockBinary = options.resolveStockBinary ?? resolveOpenCodeBinary;
+  const stockBinary = await resolveStockBinary();
+  const launch = await resolveProviderLaunch({
+    commandConfig: runtimeSettings?.command,
+    defaultBinary: stockBinary,
+  });
+  return {
+    ...launch,
+    kind: "stock",
+    arenaBackendRoot: null,
+  };
+}
 
 export interface OpenCodeServerManagerOptions {
   logger: Logger;
@@ -61,6 +227,8 @@ export interface OpenCodeServerManagerOptions {
   resolveCommandPrefix?: OpenCodeCommandPrefixResolver;
   resolveHomeDir?: () => string;
   spawnServerProcess?: OpenCodeServerProcessSpawner;
+  getArenaPreviewBaseUrl?: () => string | null;
+  controlToken?: string;
 }
 
 export class OpenCodeServerManager implements OpenCodeServerManagerLike {
@@ -70,6 +238,9 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   private retiredServers = new Set<OpenCodeServerGeneration>();
   private startPromise: Promise<OpenCodeServerGeneration> | null = null;
   private newServerPromise: Promise<OpenCodeServerGeneration> | null = null;
+  private allServers = new Set<OpenCodeServerGeneration>();
+  private shutdownPromise: Promise<void> | null = null;
+  private lifecycleGeneration = 0;
   private readonly logger: Logger;
   private readonly baseEnv?: SpawnProcessOptions["baseEnv"];
   private readonly runtimeSettings?: ProviderRuntimeSettings;
@@ -80,6 +251,8 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   private readonly resolveCommandPrefix: OpenCodeCommandPrefixResolver;
   private readonly resolveHomeDir: () => string;
   private readonly spawnServerProcess: OpenCodeServerProcessSpawner;
+  private readonly getArenaPreviewBaseUrl?: () => string | null;
+  private readonly controlToken: string;
 
   constructor(options: OpenCodeServerManagerOptions) {
     this.logger = options.logger;
@@ -91,9 +264,14 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     this.portAllocator = options.portAllocator ?? findAvailablePort;
     this.resolveCommandPrefix =
       options.resolveCommandPrefix ??
-      (() => resolveProviderCommandPrefix(this.runtimeSettings?.command, resolveOpenCodeBinary));
+      (async () => {
+        const launch = await resolveOpenCodeServerLaunch(this.runtimeSettings);
+        return launch;
+      });
     this.resolveHomeDir = options.resolveHomeDir ?? resolveOpenCodeHomeDir;
     this.spawnServerProcess = options.spawnServerProcess ?? spawnProcess;
+    this.getArenaPreviewBaseUrl = options.getArenaPreviewBaseUrl;
+    this.controlToken = options.controlToken ?? randomUUID();
   }
 
   static getInstance(
@@ -121,6 +299,17 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     return OpenCodeServerManager.instance;
   }
 
+  static async shutdownInstance(): Promise<void> {
+    const instance = OpenCodeServerManager.instance;
+    OpenCodeServerManager.instance = null;
+    await instance?.shutdown();
+  }
+
+  /** Stops Arena with its current credential while keeping manager identity stable. */
+  static async restartInstance(): Promise<void> {
+    await OpenCodeServerManager.instance?.shutdown();
+  }
+
   private static registerExitHandler(): void {
     if (OpenCodeServerManager.exitHandlerRegistered) {
       return;
@@ -128,8 +317,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     OpenCodeServerManager.exitHandlerRegistered = true;
 
     const cleanup = () => {
-      const instance = OpenCodeServerManager.instance;
-      void instance?.shutdown();
+      void OpenCodeServerManager.shutdownInstance();
     };
 
     process.on("exit", cleanup);
@@ -162,6 +350,9 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   acquireExisting(url: string): OpenCodeServerAcquisition | null {
+    if (this.shutdownPromise) {
+      return null;
+    }
     const server = this.findLiveServerByUrl(url);
     return server ? this.acquireServer(server) : null;
   }
@@ -186,7 +377,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     server.refCount += 1;
     let releasePromise: Promise<void> | null = null;
     return {
-      server: { port: server.port, url: server.url },
+      server: { port: server.port, url: server.url, controlToken: server.controlToken },
       release: async () => {
         if (releasePromise) {
           return releasePromise;
@@ -216,6 +407,9 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   private async getNewServer(): Promise<OpenCodeServerGeneration> {
+    if (this.shutdownPromise) {
+      await this.shutdownPromise;
+    }
     if (this.newServerPromise) {
       return this.newServerPromise;
     }
@@ -237,6 +431,9 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   private async getCurrentServer(): Promise<OpenCodeServerGeneration> {
+    if (this.shutdownPromise) {
+      await this.shutdownPromise;
+    }
     if (this.newServerPromise) {
       return this.newServerPromise;
     }
@@ -286,25 +483,60 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   private async startServer(launchEnv?: Record<string, string>): Promise<OpenCodeServerGeneration> {
+    if (this.shutdownPromise) {
+      await this.shutdownPromise;
+    }
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const ensureCurrentGeneration = () => {
+      if (this.lifecycleGeneration !== lifecycleGeneration) {
+        throw new Error("OpenCode server startup was interrupted by shutdown");
+      }
+    };
     const port = await this.portAllocator();
+    ensureCurrentGeneration();
     const url = `http://127.0.0.1:${port}`;
     const launchPrefix = await this.resolveCommandPrefix();
-    const serverArgs = [...launchPrefix.args, "serve", "--port", String(port)];
+    ensureCurrentGeneration();
+    const isArenaLaunch =
+      launchPrefix.kind === "arena-source" || launchPrefix.kind === "arena-binary";
+    const serverArgs = [
+      ...launchPrefix.args,
+      ...(isArenaLaunch ? ["--arena-credentials-stdin"] : []),
+      "serve",
+      "--port",
+      String(port),
+    ];
     // Use a neutral OpenCode home as the server cwd. Launching from the user's
     // home directory causes OpenCode to treat it as the default workspace and
     // index the entire home tree.
     const serverCwd = this.resolveHomeDir();
     mkdirSync(serverCwd, { recursive: true });
 
-    const serverProcess = this.spawnServerProcess(launchPrefix.command, serverArgs, {
-      cwd: serverCwd,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-      ...createProviderEnvSpec({
-        baseEnv: this.baseEnv,
-        runtimeSettings: this.runtimeSettings,
-        overlays: [launchEnv],
-      }),
+    ensureCurrentGeneration();
+    const arenaCredentials = isArenaLaunch
+      ? issueArenaLaunchCredentials(this.getArenaPreviewBaseUrl?.() ?? null)
+      : null;
+    if (isArenaLaunch && !arenaCredentials) {
+      throw new Error(
+        "Arena credentials are unavailable; sign in on a TCP daemon, or add an OpenRouter API key, before starting Arena",
+      );
+    }
+    if (arenaCredentials && !isArenaCredentialsCurrent(arenaCredentials)) {
+      throw new Error("Arena credentials changed while starting the server");
+    }
+
+    const arenaRuntimeToken =
+      arenaCredentials?.credentials.mode === "hosted"
+        ? arenaCredentials.credentials.token
+        : undefined;
+
+    const serverProcess = this.spawnServer({
+      launchPrefix,
+      serverArgs,
+      serverCwd,
+      isArenaLaunch,
+      launchEnv,
+      arenaCredentials,
     });
     const managedProcessRecord = this.recordManagedServerProcess({
       process: serverProcess,
@@ -316,11 +548,14 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       process: serverProcess,
       port,
       url,
+      controlToken: this.controlToken,
       refCount: 0,
       retired: false,
       ready: Promise.resolve(),
       managedProcessRecord,
+      arenaRuntimeToken,
     };
+    this.allServers.add(server);
     void managedProcessRecord.then((record) => {
       if (record && server.managedProcessRecord === managedProcessRecord) {
         server.managedProcessId = record.id;
@@ -386,12 +621,22 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
         this.logger.error({ stderr: output.trim() }, "OpenCode server stderr");
       });
 
+      serverProcess.stdin?.on("error", (error) => {
+        const headline = error instanceof Error ? error.message : String(error);
+        failStartup(new Error(buildStartupErrorMessage(headline)));
+      });
+
       serverProcess.on("error", (error) => {
         const headline = error instanceof Error ? error.message : String(error);
         failStartup(new Error(buildStartupErrorMessage(headline)));
       });
 
       serverProcess.on("exit", (code) => {
+        if (server.arenaRuntimeToken) {
+          revokeArenaRuntimeCredentials(server.arenaRuntimeToken);
+          server.arenaRuntimeToken = undefined;
+        }
+        this.allServers.delete(server);
         this.removeManagedServerRecord(server);
         if (!started) {
           failStartup(
@@ -418,17 +663,97 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       throw error;
     });
 
+    if (arenaCredentials) {
+      if (!isArenaCredentialsCurrent(arenaCredentials)) {
+        await this.killServer(server);
+        await server.ready.catch(() => undefined);
+        throw new Error("Arena credentials changed while starting the server");
+      }
+      if (!serverProcess.stdin) {
+        await this.killServer(server);
+        await server.ready.catch(() => undefined);
+        throw new Error("Arena server stdin is unavailable");
+      }
+      serverProcess.stdin.end(
+        arenaStdinPayload(arenaCredentials.credentials, hashControlToken(this.controlToken)),
+      );
+    }
+
     return server;
   }
 
+  private spawnServer(input: {
+    launchPrefix: Awaited<ReturnType<OpenCodeCommandPrefixResolver>>;
+    serverArgs: string[];
+    serverCwd: string;
+    isArenaLaunch: boolean;
+    launchEnv?: Record<string, string>;
+    arenaCredentials: ArenaCredentialsSnapshot | null;
+  }): ChildProcess {
+    try {
+      return this.spawnServerProcess(input.launchPrefix.command, input.serverArgs, {
+        cwd: input.serverCwd,
+        detached: process.platform !== "win32",
+        stdio: [input.isArenaLaunch ? "pipe" : "ignore", "pipe", "pipe"],
+        ...createProviderEnvSpec({
+          baseEnv: this.baseEnv,
+          runtimeSettings: this.runtimeSettings,
+          overlays: [
+            this.getArenaPreviewBaseUrl
+              ? {
+                  PASEO_ARENA_PREVIEW_BASE_URL: this.getArenaPreviewBaseUrl() ?? undefined,
+                }
+              : undefined,
+            input.launchEnv,
+            ...(input.isArenaLaunch
+              ? [
+                  {
+                    OPENROUTER_API_KEY: undefined,
+                    PASEO_ARENA_SESSION_TOKEN: undefined,
+                    PASEO_OPENROUTER_BASE_URL: undefined,
+                  },
+                ]
+              : []),
+            {
+              [OPENCODE_CONTROL_TOKEN_ENV]: input.isArenaLaunch ? undefined : this.controlToken,
+            },
+          ],
+        }),
+      });
+    } catch (error) {
+      if (input.arenaCredentials?.credentials.mode === "hosted") {
+        revokeArenaRuntimeCredentials(input.arenaCredentials.credentials.token);
+      }
+      throw error;
+    }
+  }
+
   async shutdown(): Promise<void> {
+    if (this.shutdownPromise) {
+      return this.shutdownPromise;
+    }
+    this.lifecycleGeneration += 1;
     const servers = [
       ...(this.currentServer ? [this.currentServer] : []),
       ...Array.from(this.retiredServers),
+      ...Array.from(this.allServers).filter(
+        (server) => server !== this.currentServer && !this.retiredServers.has(server),
+      ),
     ];
-    await Promise.all(servers.map((server) => this.killServer(server)));
-    this.currentServer = null;
-    this.retiredServers.clear();
+    const shutdown = Promise.all(servers.map((server) => this.killServer(server))).then(() => {
+      this.currentServer = null;
+      this.retiredServers.clear();
+      this.allServers.clear();
+      return undefined;
+    });
+    let barrier: Promise<void>;
+    barrier = shutdown.finally(() => {
+      if (this.shutdownPromise === barrier) {
+        this.shutdownPromise = null;
+      }
+    });
+    this.shutdownPromise = barrier;
+    return barrier;
   }
 
   private async cleanupRetiredServers(): Promise<void> {
@@ -443,6 +768,10 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   private async killServer(server: OpenCodeServerGeneration): Promise<void> {
+    if (server.arenaRuntimeToken) {
+      revokeArenaRuntimeCredentials(server.arenaRuntimeToken);
+      server.arenaRuntimeToken = undefined;
+    }
     if (
       (server.process.exitCode !== null && server.process.exitCode !== undefined) ||
       (server.process.signalCode !== null && server.process.signalCode !== undefined)

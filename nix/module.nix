@@ -14,20 +14,20 @@ in
   ];
 
   options.services.paseo = {
-    enable = lib.mkEnableOption "Paseo, a self-hosted daemon for AI coding agents";
+    enable = lib.mkEnableOption "Agent Duel, a self-hosted daemon for AI coding agents";
 
     package = lib.mkPackageOption pkgs "paseo" { };
 
     user = lib.mkOption {
       type = lib.types.str;
       default = "paseo";
-      description = "User account under which Paseo runs.";
+      description = "User account under which Agent Duel runs.";
     };
 
     group = lib.mkOption {
       type = lib.types.str;
       default = "paseo";
-      description = "Group under which Paseo runs.";
+      description = "Group under which Agent Duel runs.";
     };
 
     dataDir = lib.mkOption {
@@ -41,25 +41,25 @@ in
         then "/var/lib/paseo"
         else "/home/''${cfg.user}/.paseo"
       '';
-      description = "Directory for Paseo state (PASEO_HOME). Stores agent data, config, and logs.";
+      description = "Directory for Agent Duel state (PASEO_HOME). Stores agent data, config, and logs.";
     };
 
     port = lib.mkOption {
       type = lib.types.port;
       default = 6767;
-      description = "Port for the Paseo daemon to listen on.";
+      description = "Port for the Agent Duel daemon to listen on.";
     };
 
     listenAddress = lib.mkOption {
       type = lib.types.str;
       default = "127.0.0.1";
-      description = "Address for the Paseo daemon to bind to.";
+      description = "Address for the Agent Duel daemon to bind to.";
     };
 
     openFirewall = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Whether to open the firewall for the Paseo daemon port.";
+      description = "Whether to open the firewall for the Agent Duel daemon port.";
     };
 
     hostnames = lib.mkOption {
@@ -67,7 +67,7 @@ in
       default = [ ];
       example = [ ".example.com" "myhost.local" ];
       description = ''
-        Hostnames the Paseo daemon accepts in the Host header (DNS rebinding protection).
+        Hostnames the Agent Duel daemon accepts in the Host header (DNS rebinding protection).
         Localhost and IP addresses are always allowed by default.
 
         Use a leading dot to match a domain and all its subdomains
@@ -144,7 +144,7 @@ in
       description = ''
         Whether to include the user's profile PATH in the service environment.
 
-        When Paseo runs as a real user (not the default system user), AI agents
+        When Agent Duel runs as a real user (not the default system user), AI agents
         need access to the user's tools (git, ssh, etc.). This adds the user's
         NixOS profile, home-manager profile (`~/.nix-profile/bin` and
         `~/.local/state/nix/profile/bin`), and system paths so agents can use
@@ -162,7 +162,7 @@ in
           PASEO_RELAY_ENDPOINT = "relay.paseo.sh:443";
         }
       '';
-      description = "Extra environment variables for the Paseo daemon.";
+      description = "Extra environment variables for the Agent Duel daemon.";
     };
 
     settings = lib.mkOption {
@@ -184,7 +184,7 @@ in
         and installed on every service start.
 
         Runtime mutations to `config.json` (e.g. via `paseo daemon set-password`
-        or the mobile app toggling MCP injection / provider overrides) are
+        or the app toggling MCP injection / provider overrides) are
         overwritten on the next restart. Pick one: manage via this option, or
         manage via the CLI — not both.
 
@@ -221,7 +221,7 @@ in
     ];
 
     systemd.services.paseo = {
-      description = "Paseo - self-hosted daemon for AI coding agents";
+      description = "Agent Duel - self-hosted daemon for AI coding agents";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
 

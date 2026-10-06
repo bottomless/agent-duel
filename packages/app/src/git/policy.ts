@@ -21,6 +21,7 @@ export type GitActionId =
   | "disable-pr-auto-merge"
   | "merge-branch"
   | "merge-from-base"
+  | "create-branch"
   | "archive-workspace";
 
 export interface GitAction {
@@ -282,6 +283,18 @@ export function buildGitActions(input: BuildGitActionsInput): GitActions {
     handler: input.runtime["merge-from-base"].handler,
   });
 
+  allActions.set("create-branch", {
+    id: "create-branch",
+    label: i18n.t("workspace.git.actions.createBranch.label"),
+    pendingLabel: i18n.t("workspace.git.actions.createBranch.pending"),
+    successLabel: i18n.t("workspace.git.actions.createBranch.success"),
+    disabled: input.runtime["create-branch"].disabled,
+    status: input.runtime["create-branch"].status,
+    icon: input.runtime["create-branch"].icon,
+    startsGroup: true,
+    handler: input.runtime["create-branch"].handler,
+  });
+
   allActions.set("archive-workspace", {
     id: "archive-workspace",
     label: i18n.t("workspace.git.actions.archive.label"),
@@ -297,19 +310,26 @@ export function buildGitActions(input: BuildGitActionsInput): GitActions {
   const primaryActionId = getPrimaryActionId(input);
   const primary = primaryActionId ? (allActions.get(primaryActionId) ?? null) : null;
 
-  const secondaryIds = [...REMOTE_ACTION_IDS];
+  // Cutting a branch works from any checkout, on the base branch or off it, so it sits
+  // between the remote actions and the ones that only make sense on a feature branch.
+  const secondaryIds: GitActionId[] = [...REMOTE_ACTION_IDS, "create-branch"];
   if (!input.isOnBaseBranch) {
     secondaryIds.push(...getFeatureActionIds(input));
   }
   secondaryIds.push("archive-workspace");
 
-  return {
-    primary,
-    secondary: secondaryIds
-      .filter((id) => id !== "archive-workspace" || primaryActionId !== "archive-workspace")
-      .map((id) => allActions.get(id)!),
-    menu: [],
-  };
+  const listed = secondaryIds
+    .filter((id) => id !== "archive-workspace" || primaryActionId !== "archive-workspace")
+    .map((id) => allActions.get(id)!);
+
+  // A clean checkout sitting on its base branch has nothing to promote, and the split button is
+  // the caret's only home — with no primary action there is no button, and everything here goes
+  // with it. They move to the overflow menu, which stands on its own.
+  if (!primary) {
+    return { primary: null, secondary: [], menu: listed };
+  }
+
+  return { primary, secondary: listed, menu: [] };
 }
 
 function getPrimaryActionId(input: BuildGitActionsInput): GitActionId | null {
@@ -347,7 +367,7 @@ function getPrimaryActionId(input: BuildGitActionsInput): GitActionId | null {
     return "pr";
   }
 
-  // Only Paseo-owned worktrees get Archive as a fallback primary action.
+  // Only Agent Duel-owned worktrees get Archive as a fallback primary action.
   // Regular Git checkouts should not show the destructive archive CTA by default.
   if (input.isPaseoOwnedWorktree) {
     return "archive-workspace";
@@ -521,7 +541,7 @@ function hasPushableCommits(input: BuildGitActionsInput): boolean {
   if ((input.aheadOfOrigin ?? 0) > 0) {
     return true;
   }
-  // No-upstream Paseo worktrees are first-pushable: the daemon push sets upstream with `git push -u`.
+  // No-upstream Agent Duel worktrees are first-pushable: the daemon push sets upstream with `git push -u`.
   // Do not fold this into aheadOfOrigin; null also covers deleted/pruned upstream branches.
   return input.isPaseoOwnedWorktree && input.aheadOfOrigin === null && input.aheadCount > 0;
 }

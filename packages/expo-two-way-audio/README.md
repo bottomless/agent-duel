@@ -1,5 +1,9 @@
 # Speechmatics Two Way Audio
 
+> Retained upstream Paseo reference. Native, packaging, and contribution details
+> here do not define Agent Duel requirements. See the
+> [Agent Duel documentation index](../../docs/README.md).
+
 Expo module for capturing and playing pcm audio data in react-native apps (iOS and Android).
 
 The aim of the module is to facilitate creating real-time conversational apps. The following features are provided:

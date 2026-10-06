@@ -35,10 +35,9 @@ import {
   type DesktopSettingsBridge,
   type KeyValueStorage,
   type ReleaseChannel,
-  type SendBehavior,
-  type ServiceUrlBehavior,
   type Settings,
   type SidebarWorkspaceTrailing,
+  type SidePanelPlacement,
   type SettingsDeps,
   type WorkspaceTitleSource,
 } from "./storage";
@@ -66,11 +65,10 @@ export type {
   DesktopSettingsBridge,
   KeyValueStorage,
   ReleaseChannel,
-  SendBehavior,
-  ServiceUrlBehavior,
   Settings,
   SettingsDeps,
   SidebarWorkspaceTrailing,
+  SidePanelPlacement,
   WorkspaceTitleSource,
 };
 

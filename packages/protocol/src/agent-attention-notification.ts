@@ -81,7 +81,7 @@ const stripMarkdownToText = (markdown: string): string => {
   return text;
 };
 
-const buildNotificationPreview = (text: string | null | undefined): string | null => {
+export const buildNotificationPreview = (text: string | null | undefined): string | null => {
   if (!text) {
     return null;
   }

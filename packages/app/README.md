@@ -1,54 +1,30 @@
-# Welcome to your Expo app 👋
+# Agent Duel renderer
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+This Expo project is the renderer packaged inside the Agent Duel Electron app.
+Its browser target exists for local development, Playwright, and Chrome-based
+QA; it is not deployed as a product.
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+Use the repository-level desktop launcher for normal work:
 
 ```bash
-npm run reset-project
+npm run dev:desktop
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Run only the browser QA surface against the development daemon with:
 
-## Learn more
+```bash
+npm run dev:app
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+The renderer connects to the local daemon over WebSocket. It never calls
+OpenRouter or the control plane directly. Authentication requests pass through the local
+daemon to the control plane.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Routes live under `app/`; application code lives under `src/`; Arena UI lives
+under `src/arena/`. Read [../../docs/expo-router.md](../../docs/expo-router.md)
+before changing startup or routes and [../../docs/development.md](../../docs/development.md)
+for testing.
 
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
-
-## Dictation debugging
-
-Set `EXPO_PUBLIC_ENABLE_AUDIO_DEBUG=1` before running `npx expo start` to render the in-app audio debug card. Pair it with the server-side `STT_DEBUG_AUDIO_DIR` flag so every dictation includes a copyable path to the saved raw audio file.
+Set `EXPO_PUBLIC_ENABLE_AUDIO_DEBUG=1` before starting Expo to show the dictation
+debug card. Pair it with the daemon's `STT_DEBUG_AUDIO_DIR` setting when raw
+audio evidence is required.

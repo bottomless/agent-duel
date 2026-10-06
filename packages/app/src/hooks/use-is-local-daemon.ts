@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { getDesktopDaemonStatus, shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
+import { getDesktopDaemonStatus } from "@/desktop/daemon/desktop-daemon";
+import { useIsElectronRuntime } from "@/desktop/hooks/use-is-electron-runtime";
 
 const DESKTOP_DAEMON_SERVER_ID_QUERY_KEY = ["desktop-daemon-server-id"] as const;
 
@@ -16,9 +17,9 @@ async function loadDesktopDaemonServerId(): Promise<DesktopDaemonServerIdResult>
 }
 
 function useLocalDaemonServerIdQuery() {
-  const isDesktopApp = shouldUseDesktopDaemon();
+  const isDesktopApp = useIsElectronRuntime();
 
-  return useQuery({
+  const query = useQuery({
     queryKey: DESKTOP_DAEMON_SERVER_ID_QUERY_KEY,
     queryFn: loadDesktopDaemonServerId,
     enabled: isDesktopApp,
@@ -30,11 +31,11 @@ function useLocalDaemonServerIdQuery() {
     refetchOnWindowFocus: false,
     retry: false,
   });
+  return { isDesktopApp, query };
 }
 
 export function useLocalDaemonServerId(): string | null {
-  const isDesktopApp = shouldUseDesktopDaemon();
-  const query = useLocalDaemonServerIdQuery();
+  const { isDesktopApp, query } = useLocalDaemonServerIdQuery();
 
   if (!isDesktopApp) {
     return null;
@@ -49,8 +50,7 @@ export type LocalDaemonServerIdState =
   | { status: "resolved"; serverId: string | null };
 
 export function useLocalDaemonServerIdState(): LocalDaemonServerIdState {
-  const isDesktopApp = shouldUseDesktopDaemon();
-  const query = useLocalDaemonServerIdQuery();
+  const { isDesktopApp, query } = useLocalDaemonServerIdQuery();
 
   if (!isDesktopApp) {
     return { status: "resolved", serverId: null };

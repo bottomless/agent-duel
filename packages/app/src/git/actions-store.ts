@@ -25,6 +25,7 @@ export type CheckoutGitAsyncActionId =
   | "disable-pr-auto-merge"
   | "merge-branch"
   | "merge-from-base"
+  | "create-branch"
   | "discard-changes";
 
 type CheckoutKey = string;
@@ -120,6 +121,7 @@ interface CheckoutGitActionsStoreState {
   disablePrAutoMerge: (params: { serverId: string; cwd: string }) => Promise<void>;
   mergeBranch: (params: { serverId: string; cwd: string; baseRef: string }) => Promise<void>;
   mergeFromBase: (params: { serverId: string; cwd: string; baseRef: string }) => Promise<void>;
+  createBranch: (params: { serverId: string; cwd: string; branch: string }) => Promise<void>;
   discardChanges: (params: { serverId: string; cwd: string; paths: string[] }) => Promise<void>;
 }
 
@@ -362,6 +364,24 @@ export const useCheckoutGitActionsStore = create<CheckoutGitActionsStoreState>()
           baseRef,
           requireCleanTarget: true,
         });
+        if (payload.error) {
+          throw new Error(payload.error.message);
+        }
+      },
+    });
+  },
+
+  createBranch: async ({ serverId, cwd, branch }) => {
+    await runCheckoutAction({
+      serverId,
+      cwd,
+      actionId: "create-branch",
+      run: async () => {
+        const client = resolveClient(serverId);
+        // No base ref: the branch is cut at HEAD and checked out, which is what "branch off
+        // what I am looking at" means. The daemon validates the name again and answers with
+        // git's own message when the name is taken.
+        const payload = await client.createBranch({ cwd, branch });
         if (payload.error) {
           throw new Error(payload.error.message);
         }

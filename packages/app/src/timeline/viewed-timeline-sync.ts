@@ -40,6 +40,11 @@ export interface ViewedTimelineSync extends ViewedTimelineUiBridge {
 const RETRY_DELAY_MS = 1_000;
 const VIEWED_TIMELINE_HOT_AGENT_LIMIT = 5;
 
+export function isMissingAgentTimelineError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:agent .* not found|agent not found:)/i.test(message);
+}
+
 type CatchUpStatus = "running" | "complete" | "error";
 
 interface CatchUpState {
@@ -100,6 +105,7 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
   const pendingCatchUps = new Map<string, ProjectedTimelineForwardFetchPlan>();
   const visibilityCatchUpPending = new Set<string>();
   const visibilityCatchUpErrors = new Set<string>();
+  const terminalCatchUpErrors = new Set<string>();
   const listeners = new Set<() => void>();
   let active = true;
   let connected = false;
@@ -164,32 +170,23 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     pendingCatchUps.delete(agentId);
   };
 
+  const isCatchUpActive = (agentId: string, generation: number) =>
+    !disposed &&
+    connected &&
+    isDesired(agentId) &&
+    isAcknowledged(agentId) &&
+    catchUps.get(agentId)?.generation === generation;
+
   const fetchUntilCurrent = async (
     agentId: string,
     generation: number,
     request: ProjectedTimelineForwardFetchPlan,
   ): Promise<void> => {
-    if (
-      disposed ||
-      !connected ||
-      !isDesired(agentId) ||
-      !isAcknowledged(agentId) ||
-      catchUps.get(agentId)?.generation !== generation
-    ) {
-      return;
-    }
+    if (!isCatchUpActive(agentId, generation)) return;
 
     try {
       const page = await ports.fetchPage(agentId, request);
-      if (
-        disposed ||
-        !connected ||
-        !isDesired(agentId) ||
-        !isAcknowledged(agentId) ||
-        catchUps.get(agentId)?.generation !== generation
-      ) {
-        return;
-      }
+      if (!isCatchUpActive(agentId, generation)) return;
       if (page.hasNewer && page.endCursor) {
         await fetchUntilCurrent(agentId, generation, planTimelineCatchUpAfter(page.endCursor));
         return;
@@ -206,6 +203,13 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
       setVisibilityCatchUpReady(agentId);
     } catch (error) {
       if (catchUps.get(agentId)?.generation === generation) {
+        if (isMissingAgentTimelineError(error)) {
+          catchUps.set(agentId, { generation, status: "error" });
+          terminalCatchUpErrors.add(agentId);
+          setVisibilityCatchUpError([agentId]);
+          ports.reportError(error);
+          return;
+        }
         const cancelRetry = ports.schedule(() => {
           const current = catchUps.get(agentId);
           if (current?.generation !== generation || current.status !== "error") return;
@@ -325,7 +329,9 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
 
   const retryFailedCatchUps = () => {
     for (const agentId of acknowledged) {
-      if (catchUps.get(agentId)?.status === "error") startCatchUp(agentId);
+      if (catchUps.get(agentId)?.status === "error" && !terminalCatchUpErrors.has(agentId)) {
+        startCatchUp(agentId);
+      }
     }
   };
 
@@ -353,12 +359,14 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     for (const agentId of desired) {
       if (!nextDesired.includes(agentId)) {
         cancelCatchUp(agentId);
+        terminalCatchUpErrors.delete(agentId);
         visibilityCatchUpPending.delete(agentId);
         visibilityCatchUpErrors.delete(agentId);
       }
     }
     for (const agentId of nextDesired) {
       if (!desired.includes(agentId)) {
+        terminalCatchUpErrors.delete(agentId);
         visibilityCatchUpPending.add(agentId);
         visibilityCatchUpErrors.delete(agentId);
       }
@@ -444,6 +452,7 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
       desired = visible;
       visibilityCatchUpPending.clear();
       visibilityCatchUpErrors.clear();
+      terminalCatchUpErrors.clear();
       for (const agentId of desired) visibilityCatchUpPending.add(agentId);
       acknowledged = deliveryMode === "legacy" && connected ? desired : [];
       notifyListeners();
@@ -469,6 +478,7 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
       recentlyViewedAgentIds = [];
       visibilityCatchUpPending.clear();
       visibilityCatchUpErrors.clear();
+      terminalCatchUpErrors.clear();
       notifyListeners();
       listeners.clear();
     },

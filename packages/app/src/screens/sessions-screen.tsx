@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect, type ReactElement } from "react";
+import { useMemo, useState, useCallback, type ReactElement } from "react";
 import { View, Text } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { router } from "expo-router";
@@ -11,17 +11,16 @@ import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { AgentList } from "@/components/agent-list";
 import { SearchField } from "@/components/ui/search-field";
-import { HostFilter } from "@/components/hosts/host-filter";
-import { ALL_HOSTS_OPTION_ID } from "@/components/hosts/host-picker";
 import { type AgentHistoryHostError, useAgentHistory } from "@/hooks/use-agent-history";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import { useHosts } from "@/runtime/host-runtime";
 import { buildOpenProjectRoute } from "@/utils/host-routes";
+import {
+  useWorkspaceRecoveryHistory,
+  WorkspaceRecoveryHistory,
+} from "@/workspace-recovery/history";
 
 /** Long enough that a typed word is one request, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 200;
-
-const sessionsHostOptionTestID = (serverId: string) => `sessions-host-filter-item-${serverId}`;
 
 /**
  * A host that failed while others answered. Without this the list silently
@@ -49,14 +48,25 @@ function SessionHostErrorsBanner({
 }
 
 /** An empty list means something different once a query is narrowing it. */
-function resolveEmptyText(input: {
-  t: TFunction;
-  isSearching: boolean;
-  isAllHosts: boolean;
-}): string {
+function resolveEmptyText(input: { t: TFunction; isSearching: boolean }): string {
   if (input.isSearching) return input.t("sessions.noMatches");
-  if (input.isAllHosts) return input.t("sessions.empty");
-  return "No sessions for this host";
+  return input.t("sessions.empty");
+}
+
+function historyVisibility(input: {
+  agents: number;
+  recoveries: number;
+  recoveryErrors: number;
+  loading: boolean;
+  loadingRecoveries: boolean;
+  loadError: boolean;
+}) {
+  const hasRows = input.agents > 0 || input.recoveries > 0 || input.recoveryErrors > 0;
+  return {
+    loading: input.loading || input.loadingRecoveries,
+    empty: !input.loading && !input.loadingRecoveries && !input.loadError && !hasRows,
+    list: !input.loading && hasRows,
+  };
 }
 
 export function SessionsScreen() {
@@ -72,11 +82,8 @@ export function SessionsScreen() {
 function SessionsScreenContent() {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
-  const hosts = useHosts();
-  const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);
   const [searchInput, setSearchInput] = useState("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
-  const historyServerId = selectedHost === ALL_HOSTS_OPTION_ID ? null : selectedHost;
   const {
     agents,
     hasMore,
@@ -90,36 +97,42 @@ function SessionsScreenContent() {
     loadMore,
     refreshAll,
   } = useAgentHistory({
-    serverId: historyServerId,
+    serverId: null,
     search,
   });
   const isSearching = isSearchSupported && search.length > 0;
-
-  useEffect(() => {
-    if (
-      selectedHost !== ALL_HOSTS_OPTION_ID &&
-      !hosts.some((host) => host.serverId === selectedHost)
-    ) {
-      setSelectedHost(ALL_HOSTS_OPTION_ID);
-    }
-  }, [hosts, selectedHost]);
+  const recoveries = useWorkspaceRecoveryHistory(null, search);
+  const refreshRecoveries = recoveries.refresh;
 
   const [isManualRefresh, setIsManualRefresh] = useState(false);
 
   const handleRefresh = useCallback(() => {
     setIsManualRefresh(true);
-    void refreshAll().finally(() => setIsManualRefresh(false));
-  }, [refreshAll]);
+    void Promise.all([refreshAll(), refreshRecoveries()]).finally(() => setIsManualRefresh(false));
+  }, [refreshAll, refreshRecoveries]);
 
   // `useAgentHistory` owns the order: recency at rest, relevance under a query.
-  const emptyText = resolveEmptyText({
-    t,
-    isSearching,
-    isAllHosts: selectedHost === ALL_HOSTS_OPTION_ID,
-  });
-  const showHostFilter = hosts.length > 1;
-  const showFilterRow = showHostFilter || isSearchSupported;
+  const emptyText = resolveEmptyText({ t, isSearching });
+  const showFilterRow = isSearchSupported;
   const showLoadError = isError && agents.length === 0;
+  const visibility = historyVisibility({
+    agents: agents.length,
+    recoveries: recoveries.entries.length,
+    recoveryErrors: recoveries.failedHosts.length,
+    loading: isInitialLoad,
+    loadingRecoveries: recoveries.isLoading,
+    loadError: showLoadError,
+  });
+  const listHeaderComponent = useMemo(
+    () => (
+      <WorkspaceRecoveryHistory
+        entries={recoveries.entries}
+        failedHosts={recoveries.failedHosts}
+        onRefresh={handleRefresh}
+      />
+    ),
+    [recoveries.entries, recoveries.failedHosts, handleRefresh],
+  );
 
   const handleBack = useCallback(() => {
     router.navigate(buildOpenProjectRoute());
@@ -164,19 +177,10 @@ function SessionsScreenContent() {
               clearTestID="sessions-search-clear"
             />
           ) : null}
-          {showHostFilter ? (
-            <HostFilter
-              hosts={hosts}
-              selectedHost={selectedHost}
-              onSelectHost={setSelectedHost}
-              triggerTestID="sessions-host-filter-trigger"
-              hostOptionTestID={sessionsHostOptionTestID}
-            />
-          ) : null}
         </View>
       ) : null}
       {hostErrors.length > 0 ? <SessionHostErrorsBanner errors={hostErrors} t={t} /> : null}
-      {isInitialLoad ? (
+      {visibility.loading ? (
         <View style={styles.loadingContainer}>
           <LoadingSpinner size="large" color={theme.colors.foregroundMuted} />
         </View>
@@ -189,7 +193,7 @@ function SessionsScreenContent() {
           </Button>
         </View>
       ) : null}
-      {!isInitialLoad && !showLoadError && agents.length === 0 ? (
+      {visibility.empty ? (
         <View style={styles.emptyContainer} testID="sessions-empty">
           <Text style={styles.emptyText}>{emptyText}</Text>
           {isSearching ? (
@@ -203,13 +207,14 @@ function SessionsScreenContent() {
           )}
         </View>
       ) : null}
-      {!isInitialLoad && !showLoadError && agents.length > 0 ? (
+      {visibility.list ? (
         <AgentList
           agents={agents}
           showCheckoutInfo={false}
           isRefreshing={isManualRefresh}
           onRefresh={handleRefresh}
           listFooterComponent={listFooterComponent}
+          listHeaderComponent={listHeaderComponent}
           showAttentionIndicator={false}
           showHostColumn
           searchMatchesByAgentKey={isSearching ? searchMatchesByAgentKey : undefined}

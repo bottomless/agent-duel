@@ -4,6 +4,7 @@ import { buildHostWorkspaceRoute } from "@/utils/host-routes";
 import { expect, test } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import {
+  addProjectViaDaemon,
   archiveWorkspaceFromDaemon,
   archiveLocalWorkspaceFromDaemon,
   assertNewWorkspaceSidebarAndHeader,
@@ -16,10 +17,12 @@ import {
   expectPickerClosed,
   expectPickerOpen,
   expectPickerSelected,
+  expectNewBranchNameRejected,
   expectStartingRefPickerTriggerPr,
   fillNewWorkspaceDraft,
   openGlobalNewWorkspaceComposer,
   openBranchPicker,
+  openNewBranchDialog,
   openNewWorkspaceComposer,
   openProjectViaDaemon,
   openStartingRefPicker,
@@ -30,17 +33,20 @@ import {
   submitNewWorkspaceEmpty,
   searchAndSelectBranchInPicker,
   selectBranchInPicker,
+  selectNewWorkspaceIsolation,
+  submitNewBranchName,
   selectGitHubPrInPicker,
   selectPickerOptionByKeyboard,
-  selectWorkspaceIsolation,
   submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
 import {
   commitLocalOnly,
   createTempGitRepo,
+  deleteRepoBranchOutsideApp,
   readRepoRef,
   readWorktreeBaseMetadata,
   readWorktreeBranchInfo,
+  switchRepoBranchOutsideApp,
   trackForkUpstream,
 } from "../support/helpers/workspace";
 import {
@@ -50,11 +56,10 @@ import {
   hasGithubAuth,
   type LocalGhPrFixture,
 } from "../support/helpers/github-fixtures";
+import { getCurrentWorkspaceIdFromRoute } from "../support/helpers/workspace-setup";
 import { getServerId } from "../support/helpers/server-id";
 import { selectSidebarStatusGrouping } from "../support/helpers/sidebar";
-import { getE2EDaemonPort } from "../support/helpers/daemon-port";
 import { chooseAddProjectMethod, expectAddProjectPage } from "../support/helpers/add-project-flow";
-import { seedSavedSettingsHosts } from "../support/helpers/settings";
 import {
   expectSidebarWorkspaceSelected,
   expectWorkspaceHeader,
@@ -248,26 +253,12 @@ test.describe("New workspace flow", () => {
     localGithubFixtures.clear();
   });
 
-  test("adds a project from the selected empty host", async ({ page }) => {
+  test("adds a project when the search has no matching project", async ({ page }) => {
     const repo = await createTempGitRepo("new-workspace-project-picker-");
-    const primaryServerId = getServerId();
-    const emptyServerId = "empty-new-workspace-host";
 
     try {
       const openedProject = await openProjectViaDaemon(client, repo.path);
       localWorkspaceIds.add(openedProject.workspaceId);
-      await seedSavedSettingsHosts(page, [
-        {
-          serverId: primaryServerId,
-          label: "Primary host",
-          endpoint: `127.0.0.1:${getE2EDaemonPort()}`,
-        },
-        {
-          serverId: emptyServerId,
-          label: "Empty host",
-          endpoint: "127.0.0.1:9",
-        },
-      ]);
 
       await gotoAppShell(page);
       await waitForSidebarHydration(page);
@@ -279,9 +270,6 @@ test.describe("New workspace flow", () => {
       await expect(page.getByTestId("new-workspace-project-picker-add-project")).toBeVisible();
       await page.keyboard.press("Escape");
 
-      await page.getByTestId("host-picker-trigger").click();
-      await page.getByTestId(`new-workspace-host-picker-option-${emptyServerId}`).click();
-      await expect(projectTrigger).toContainText("Choose project");
       await projectTrigger.click();
 
       const addProject = page.getByTestId("new-workspace-project-picker-add-project");
@@ -723,7 +711,7 @@ test.describe("New workspace flow", () => {
         projectKey: openedProject.projectKey,
         projectDisplayName: openedProject.projectDisplayName,
       });
-      await selectWorkspaceIsolation(page, "worktree");
+      await selectNewWorkspaceIsolation(page, "worktree");
       await openStartingRefPicker(page);
       await selectBranchInPicker(page, "dev");
 
@@ -746,8 +734,333 @@ test.describe("New workspace flow", () => {
       const branchInfo = await readWorktreeBranchInfo({
         worktreePath: createdWorkspace.workspaceDirectory,
       });
-      expect(branchInfo.currentBranch).toBe(path.basename(createdWorkspace.workspaceDirectory));
+      expect(branchInfo.currentBranch).toBe("");
       expect(branchInfo.hasAncestor(tempRepo.branchHeads.main)).toBe(true);
+      expect(branchInfo.hasAncestor(tempRepo.branchHeads.dev)).toBe(true);
+    } finally {
+      await tempRepo.cleanup();
+    }
+  });
+
+  // Picking a branch in Local mode is a checkout, not a form value. The pair matters as much as
+  // either half: Worktree mode must leave the source checkout exactly where it was.
+  test("picking a branch checks it out in Local mode and leaves the checkout alone in Worktree mode", async ({
+    page,
+  }) => {
+    const tempRepo = await createTempGitRepo("pick-branch-checkout-", {
+      branches: ["main", "dev"],
+    });
+
+    try {
+      const openedProject = await openProjectViaDaemon(client, tempRepo.path);
+      localWorkspaceIds.add(openedProject.workspaceId);
+
+      await gotoAppShell(page);
+      await waitForSidebarHydration(page);
+      await openNewWorkspaceComposer(page, {
+        projectKey: openedProject.projectKey,
+        projectDisplayName: openedProject.projectDisplayName,
+      });
+
+      await selectNewWorkspaceIsolation(page, "local");
+      await openStartingRefPicker(page);
+      await selectBranchInPicker(page, "dev");
+      await expect
+        .poll(
+          async () => (await readWorktreeBranchInfo({ worktreePath: tempRepo.path })).currentBranch,
+          {
+            timeout: 30_000,
+          },
+        )
+        .toBe("dev");
+
+      await selectNewWorkspaceIsolation(page, "worktree");
+      await openStartingRefPicker(page);
+      await selectBranchInPicker(page, "main");
+      // Nothing to wait for: the assertion is that no checkout happens at all.
+      await page.waitForTimeout(1_000);
+      expect((await readWorktreeBranchInfo({ worktreePath: tempRepo.path })).currentBranch).toBe(
+        "dev",
+      );
+    } finally {
+      await tempRepo.cleanup();
+    }
+  });
+
+  // Local mode is the checkout the developer is looking at, so confirming the dialog has to move
+  // it there and then — the same thing Codex's create-and-checkout does. Nothing is submitted
+  // here on purpose: the assertion is that git already changed.
+  test("naming a branch in Local mode checks it out before anything is submitted", async ({
+    page,
+  }) => {
+    const tempRepo = await createTempGitRepo("new-branch-local-now-", {
+      branches: ["main", "dev"],
+    });
+
+    try {
+      const openedProject = await openProjectViaDaemon(client, tempRepo.path);
+      localWorkspaceIds.add(openedProject.workspaceId);
+
+      await gotoAppShell(page);
+      await waitForSidebarHydration(page);
+      await openNewWorkspaceComposer(page, {
+        projectKey: openedProject.projectKey,
+        projectDisplayName: openedProject.projectDisplayName,
+      });
+      await selectNewWorkspaceIsolation(page, "local");
+
+      expect((await readWorktreeBranchInfo({ worktreePath: tempRepo.path })).currentBranch).toBe(
+        "main",
+      );
+
+      await openStartingRefPicker(page);
+      await openNewBranchDialog(page, "main");
+      await submitNewBranchName(page, "feature/checked-out-now");
+
+      const branchInfo = await readWorktreeBranchInfo({ worktreePath: tempRepo.path });
+      expect(branchInfo.currentBranch).toBe("feature/checked-out-now");
+      expect(branchInfo.hasAncestor(tempRepo.branchHeads.main)).toBe(true);
+    } finally {
+      await tempRepo.cleanup();
+    }
+  });
+
+  // The first chat in a project is its own case: until a workspace exists the daemon registers no
+  // git observer for the cwd, so no checkout-status push ever corrects the app's cached branch.
+  // Submitting used to redo the create the dialog had already done and die on "branch already
+  // exists", which every other test here misses because opening a project also opens a chat.
+  test("submits the first chat in a project after naming a branch", async ({ page }) => {
+    const serverId = getServerId();
+
+    const tempRepo = await createTempGitRepo("first-chat-new-branch-", {
+      branches: ["main", "dev"],
+    });
+
+    try {
+      const project = await addProjectViaDaemon(client, tempRepo.path);
+
+      await gotoAppShell(page);
+      await waitForSidebarHydration(page);
+      await openNewWorkspaceComposer(page, {
+        projectKey: project.projectKey,
+        projectDisplayName: project.projectDisplayName,
+      });
+      await selectNewWorkspaceIsolation(page, "local");
+
+      await openStartingRefPicker(page);
+      await openNewBranchDialog(page, "main");
+      await submitNewBranchName(page, "feature/first-chat");
+
+      await submitNewWorkspaceEmpty(page);
+
+      const workspaceId = await getCurrentWorkspaceIdFromRoute(page);
+      localWorkspaceIds.add(workspaceId);
+      await expect(page).toHaveURL(buildHostWorkspaceRoute(serverId, workspaceId), {
+        timeout: 30_000,
+      });
+
+      const branchInfo = await readWorktreeBranchInfo({ worktreePath: tempRepo.path });
+      expect(branchInfo.currentBranch).toBe("feature/first-chat");
+      expect(branchInfo.hasAncestor(tempRepo.branchHeads.main)).toBe(true);
+    } finally {
+      await tempRepo.cleanup();
+    }
+  });
+
+  // The base the dialog names is a promise about which commit the branch starts at, and the
+  // checkout can move out from under it. An explicit selection must survive a status refresh
+  // when the picker reopens, even for a project with no checkout-status pushes. These
+  // three cover what that promise is worth in each isolation mode, and when it cannot be kept.
+  //
+  // "dev" is created before "main" so the two diverge from the initial commit. Branches that
+  // stack would make the wrong base an ancestor of the right one and prove nothing.
+  const STALE_BASE_BRANCHES = ["dev", "main"];
+
+  test("cuts a named branch from the base the picker showed, not the branch the checkout moved to", async ({
+    page,
+  }) => {
+    const tempRepo = await createTempGitRepo("new-branch-stale-base-local-", {
+      branches: STALE_BASE_BRANCHES,
+    });
+
+    try {
+      const project = await addProjectViaDaemon(client, tempRepo.path);
+      localProjectIds.add(project.projectId);
+
+      await gotoAppShell(page);
+      await waitForSidebarHydration(page);
+      await openNewWorkspaceComposer(page, {
+        projectKey: project.projectKey,
+        projectDisplayName: project.projectDisplayName,
+      });
+      await selectNewWorkspaceIsolation(page, "local");
+
+      // Keep the explicit base selection while Git moves outside the app.
+      await expect(page.getByTestId("new-workspace-ref-picker-trigger")).toContainText("main");
+      await openStartingRefPicker(page);
+      await selectBranchInPicker(page, "main");
+      await expectPickerClosed(page);
+      switchRepoBranchOutsideApp(tempRepo.path, "dev");
+
+      await openStartingRefPicker(page);
+      await openNewBranchDialog(page, "main");
+      await submitNewBranchName(page, "feature/from-shown-base");
+
+      await expect
+        .poll(
+          async () => (await readWorktreeBranchInfo({ worktreePath: tempRepo.path })).currentBranch,
+        )
+        .toBe("feature/from-shown-base");
+      const branchInfo = await readWorktreeBranchInfo({ worktreePath: tempRepo.path });
+      expect(branchInfo.hasAncestor(tempRepo.branchHeads.main)).toBe(true);
+      expect(branchInfo.hasAncestor(tempRepo.branchHeads.dev)).toBe(false);
+    } finally {
+      await tempRepo.cleanup();
+    }
+  });
+
+  test("cuts a named worktree branch from the base the picker showed after the checkout moved", async ({
+    page,
+  }) => {
+    const serverId = getServerId();
+    const tempRepo = await createTempGitRepo("new-branch-stale-base-worktree-", {
+      branches: STALE_BASE_BRANCHES,
+    });
+
+    try {
+      const project = await addProjectViaDaemon(client, tempRepo.path);
+      localProjectIds.add(project.projectId);
+
+      await gotoAppShell(page);
+      await waitForSidebarHydration(page);
+      await openNewWorkspaceComposer(page, {
+        projectKey: project.projectKey,
+        projectDisplayName: project.projectDisplayName,
+      });
+      await selectNewWorkspaceIsolation(page, "worktree");
+
+      await expect(page.getByTestId("new-workspace-ref-picker-trigger")).toContainText("main");
+      await openStartingRefPicker(page);
+      await selectBranchInPicker(page, "main");
+      await expectPickerClosed(page);
+      switchRepoBranchOutsideApp(tempRepo.path, "dev");
+
+      await openStartingRefPicker(page);
+      await openNewBranchDialog(page, "main");
+      await submitNewBranchName(page, "feature/worktree-from-shown-base");
+
+      await submitNewWorkspaceEmpty(page);
+      const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
+        serverId,
+        client,
+        // The project has no chats, so any workspace id on the route is the created one.
+        previousWorkspaceId: "",
+        projectDisplayName: project.projectDisplayName,
+      });
+      createdWorktreeDirectories.add(createdWorkspace.workspaceDirectory);
+
+      const branchInfo = await readWorktreeBranchInfo({
+        worktreePath: createdWorkspace.workspaceDirectory,
+      });
+      expect(branchInfo.currentBranch).toBe("feature/worktree-from-shown-base");
+      expect(branchInfo.hasAncestor(tempRepo.branchHeads.main)).toBe(true);
+      expect(branchInfo.hasAncestor(tempRepo.branchHeads.dev)).toBe(false);
+    } finally {
+      await tempRepo.cleanup();
+    }
+  });
+
+  test("refuses to name a branch when the base the picker showed is gone", async ({ page }) => {
+    const tempRepo = await createTempGitRepo("new-branch-deleted-base-", {
+      branches: STALE_BASE_BRANCHES,
+    });
+
+    try {
+      const project = await addProjectViaDaemon(client, tempRepo.path);
+      localProjectIds.add(project.projectId);
+
+      await gotoAppShell(page);
+      await waitForSidebarHydration(page);
+      await openNewWorkspaceComposer(page, {
+        projectKey: project.projectKey,
+        projectDisplayName: project.projectDisplayName,
+      });
+      await selectNewWorkspaceIsolation(page, "local");
+
+      await expect(page.getByTestId("new-workspace-ref-picker-trigger")).toContainText("main");
+      await openStartingRefPicker(page);
+      await selectBranchInPicker(page, "main");
+      await expectPickerClosed(page);
+      await openStartingRefPicker(page);
+      await openNewBranchDialog(page, "main");
+      // Delete after opening the dialog: reopening the menu now validates and
+      // clears a deleted selection before a new branch can be named from it.
+      switchRepoBranchOutsideApp(tempRepo.path, "dev");
+      deleteRepoBranchOutsideApp(tempRepo.path, "main");
+
+      await expectNewBranchNameRejected(page, {
+        name: "feature/no-base",
+        error: "Branch main no longer exists.",
+      });
+
+      // Refusing means refusing: nothing was cut, and the checkout stays where it was.
+      const branchInfo = await readWorktreeBranchInfo({ worktreePath: tempRepo.path });
+      expect(branchInfo.currentBranch).toBe("dev");
+    } finally {
+      await tempRepo.cleanup();
+    }
+  });
+
+  // A branch named in the picker is only a name until the workspace is created, so the proof
+  // is the created worktree's branch and its commits — never the trigger text.
+  test("a branch named in the picker is cut from the picked ref", async ({ page }) => {
+    const serverId = getServerId();
+
+    const tempRepo = await createTempGitRepo("new-workspace-new-branch-", {
+      branches: ["main", "dev"],
+    });
+
+    try {
+      const openedProject = await openProjectViaDaemon(client, tempRepo.path);
+      localWorkspaceIds.add(openedProject.workspaceId);
+
+      await gotoAppShell(page);
+      await waitForSidebarHydration(page);
+      await openNewWorkspaceComposer(page, {
+        projectKey: openedProject.projectKey,
+        projectDisplayName: openedProject.projectDisplayName,
+      });
+
+      await openStartingRefPicker(page);
+      await selectBranchInPicker(page, "dev");
+      await openStartingRefPicker(page);
+      await openNewBranchDialog(page, "dev");
+
+      await expectNewBranchNameRejected(page, {
+        name: "feature/",
+        error: "Branch name cannot end with",
+      });
+      // The checkout, not the suggestion list, decides whether a name is free.
+      await expectNewBranchNameRejected(page, { name: "dev", error: "Branch already exists." });
+
+      await submitNewBranchName(page, "feature/from-dev");
+      await expect(page.getByTestId("new-workspace-ref-picker-trigger")).toContainText(
+        "feature/from-dev",
+      );
+
+      await submitNewWorkspaceEmpty(page);
+      const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
+        serverId,
+        client,
+        previousWorkspaceId: openedProject.workspaceId,
+        projectDisplayName: openedProject.projectDisplayName,
+      });
+      createdWorktreeDirectories.add(createdWorkspace.workspaceDirectory);
+
+      const branchInfo = await readWorktreeBranchInfo({
+        worktreePath: createdWorkspace.workspaceDirectory,
+      });
+      expect(branchInfo.currentBranch).toBe("feature/from-dev");
       expect(branchInfo.hasAncestor(tempRepo.branchHeads.dev)).toBe(true);
     } finally {
       await tempRepo.cleanup();
@@ -771,7 +1084,10 @@ test.describe("New workspace flow", () => {
         projectKey: openedProject.projectKey,
         projectDisplayName: openedProject.projectDisplayName,
       });
-      await selectWorkspaceIsolation(page, "worktree");
+      // Isolation defaults to Local, where the checkout is switched by branch name rather than
+      // branched off a ref. Every assertion in this block reads a worktree's commits, so the
+      // mode has to be chosen rather than inherited.
+      await selectNewWorkspaceIsolation(page, "worktree");
       return openedProject;
     }
 
@@ -810,6 +1126,34 @@ test.describe("New workspace flow", () => {
 
         expect(created.branchInfo.hasAncestor(originHead)).toBe(true);
         expect(created.branchInfo.hasAncestor(localHead)).toBe(false);
+      } finally {
+        await tempRepo.cleanup();
+      }
+    });
+
+    // Detaching a worktree defaults to the upstream so unpushed commits stay out of a workspace
+    // nobody asked to carry them into. Naming a branch is the opposite intent, so the same
+    // untouched picker has to resolve to the local ref and bring those commits along.
+    test("cuts a named branch from the local ref even though the picker defaults to the upstream", async ({
+      page,
+    }) => {
+      const tempRepo = await createTempGitRepo("ref-new-branch-local-", { withRemote: true });
+
+      try {
+        const originHead = readRepoRef(tempRepo.path, "refs/remotes/origin/main");
+        commitLocalOnly(tempRepo.path, "one");
+        const localHead = commitLocalOnly(tempRepo.path, "two");
+
+        const openedProject = await openWorktreeComposerForRepo(page, tempRepo.path);
+
+        await openStartingRefPicker(page);
+        await openNewBranchDialog(page, "main");
+        await submitNewBranchName(page, "feature/from-local");
+
+        const created = await createWorktreeAndRead(page, openedProject);
+        expect(created.branchInfo.currentBranch).toBe("feature/from-local");
+        expect(created.branchInfo.hasAncestor(originHead)).toBe(true);
+        expect(created.branchInfo.hasAncestor(localHead)).toBe(true);
       } finally {
         await tempRepo.cleanup();
       }
@@ -905,8 +1249,6 @@ test.describe("New workspace flow", () => {
         projectKey: openedProject.projectKey,
         projectDisplayName: openedProject.projectDisplayName,
       });
-      await selectWorkspaceIsolation(page, "worktree");
-
       await openBranchPicker(page);
       await expectPickerOpen(page);
       await selectPickerOptionByKeyboard(page, "dev");
@@ -930,8 +1272,6 @@ test.describe("New workspace flow", () => {
         projectKey: openedProject.projectKey,
         projectDisplayName: openedProject.projectDisplayName,
       });
-      await selectWorkspaceIsolation(page, "worktree");
-
       await openBranchPicker(page);
       await expectPickerOpen(page);
       await closeBranchPicker(page);
@@ -960,7 +1300,6 @@ test.describe("New workspace flow", () => {
         projectKey: openedProject.projectKey,
         projectDisplayName: openedProject.projectDisplayName,
       });
-      await selectWorkspaceIsolation(page, "worktree");
       await openStartingRefPicker(page);
       await selectGitHubPrInPicker(page, pr.number);
 
@@ -996,7 +1335,6 @@ test.describe("New workspace flow", () => {
       projectKey: openedProject.projectKey,
       projectDisplayName: openedProject.projectDisplayName,
     });
-    await selectWorkspaceIsolation(page, "worktree");
     await openStartingRefPicker(page);
     await selectBranchInPicker(page, "main");
 
@@ -1054,7 +1392,6 @@ test.describe("New workspace flow", () => {
       projectKey: openedProject.projectKey,
       projectDisplayName: openedProject.projectDisplayName,
     });
-    await selectWorkspaceIsolation(page, "worktree");
     await pasteGithubPrUrl(page, context, pr.url);
     await expectStartingRefPickerTriggerPr(page, {
       number: pr.number,
@@ -1102,7 +1439,6 @@ test.describe("New workspace flow", () => {
         projectKey: openedProject.projectKey,
         projectDisplayName: openedProject.projectDisplayName,
       });
-      await selectWorkspaceIsolation(page, "worktree");
       await openStartingRefPicker(page);
       await selectGitHubPrInPicker(page, pr.number);
       await submitNewWorkspaceWithoutPrompt(page);

@@ -10,6 +10,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/contexts/toast-context";
@@ -27,12 +28,23 @@ import { planWorkspaceOpenTargets } from "@/workspace/open-target-planner";
 import type { Theme } from "@/styles/theme";
 import { ForgeBrandIcon } from "@/git/forge-icon";
 import { getForgePresentation } from "@/git/forge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-interface WorkspaceOpenInEditorButtonProps {
+export interface WorkspaceOpenInEditorMenuItemsProps {
   serverId: string;
   cwd: string;
   activeFile?: WorkspaceFileLocation | null;
+  additionalFiles?: readonly WorkspaceFileLocation[];
+}
+
+export interface WorkspaceOpenInEditorButtonProps extends WorkspaceOpenInEditorMenuItemsProps {
+  buttonLabel?: string;
   hideLabels?: boolean;
+}
+
+export interface WorkspaceOpenInEditorSubTriggerProps extends WorkspaceOpenInEditorMenuItemsProps {
+  id: string;
+  testID?: string;
 }
 
 interface OpenTarget {
@@ -58,9 +70,10 @@ interface OpenTargetMenuItemProps {
   target: OpenTarget;
   isPreferred: boolean;
   onOpen: (target: OpenTarget) => void;
+  label?: string;
 }
 
-function OpenTargetMenuItem({ target, isPreferred, onOpen }: OpenTargetMenuItemProps) {
+function OpenTargetMenuItem({ target, isPreferred, onOpen, label }: OpenTargetMenuItemProps) {
   const handleSelect = useCallback(() => onOpen(target), [onOpen, target]);
   const trailing = useMemo(
     () => (isPreferred ? <ThemedCheckIcon size={16} uniProps={mutedColorMapping} /> : undefined),
@@ -73,17 +86,17 @@ function OpenTargetMenuItem({ target, isPreferred, onOpen }: OpenTargetMenuItemP
       trailing={trailing}
       onSelect={handleSelect}
     >
-      {target.label}
+      {label ?? target.label}
     </DropdownMenuItem>
   );
 }
 
-export function WorkspaceOpenInEditorButton({
+function useWorkspaceOpenInEditor({
   serverId,
   cwd,
   activeFile,
-  hideLabels,
-}: WorkspaceOpenInEditorButtonProps) {
+  additionalFiles,
+}: WorkspaceOpenInEditorMenuItemsProps) {
   const { t } = useTranslation();
   const toast = useToast();
   const isConnected = useHostRuntimeIsConnected(serverId);
@@ -143,11 +156,26 @@ export function WorkspaceOpenInEditorButton({
           icon: (
             <ThemedEditorTargetIcon icon={target.icon} size={16} uniProps={mutedColorMapping} />
           ),
-          onOpen: () => openDesktopTarget(target.openInput),
+          onOpen: async () => {
+            await openDesktopTarget(target.openInput);
+            const editor = desktopOpenTargets.find((item) => item.id === target.id);
+            if (editor?.kind !== "editor") return;
+            for (const file of additionalFiles ?? []) {
+              const resolved = resolveWorkspaceFilePaths({ path: file.path, workspaceRoot: cwd });
+              if (!resolved) throw new Error(`Could not resolve file: ${file.path}`);
+              await openDesktopTarget({
+                editorId: target.id,
+                workspacePath: cwd,
+                filePath: resolved.absolutePath,
+                ...(file.lineStart ? { line: file.lineStart } : {}),
+              });
+            }
+          },
         };
       }),
     [
       activeFile,
+      additionalFiles,
       checkoutStatus,
       cwd,
       desktopOpenTargets,
@@ -182,13 +210,115 @@ export function WorkspaceOpenInEditorButton({
     [openMutation, updatePreferredEditor],
   );
 
+  return {
+    activeFileName,
+    canResolveWorkspace,
+    effectivePreferredEditorId,
+    handleOpenTarget,
+    isPending: openMutation.isPending,
+    primaryOption,
+    targets,
+  };
+}
+
+export function WorkspaceOpenInEditorMenuItems({
+  serverId,
+  cwd,
+  activeFile,
+  additionalFiles,
+}: WorkspaceOpenInEditorMenuItemsProps): ReactElement | null {
+  const { t } = useTranslation();
+  const {
+    activeFileName,
+    canResolveWorkspace,
+    effectivePreferredEditorId,
+    handleOpenTarget,
+    targets,
+  } = useWorkspaceOpenInEditor({ serverId, cwd, activeFile, additionalFiles });
+
+  if (!canResolveWorkspace || targets.length === 0) {
+    return null;
+  }
+
+  const label = activeFileName
+    ? (target: OpenTarget) =>
+        t("workspace.git.openInEditor.openFileIn", {
+          fileName: activeFileName,
+          target: target.label,
+        })
+    : (target: OpenTarget) =>
+        t("workspace.git.openInEditor.openIn", {
+          target: target.label,
+        });
+
+  return (
+    <>
+      {targets.map((target) => (
+        <OpenTargetMenuItem
+          key={target.id}
+          target={target}
+          isPreferred={target.id === effectivePreferredEditorId}
+          onOpen={handleOpenTarget}
+          label={label(target)}
+        />
+      ))}
+    </>
+  );
+}
+
+export function WorkspaceOpenInEditorSubTrigger({
+  id,
+  testID,
+  serverId,
+  cwd,
+  activeFile,
+  additionalFiles,
+}: WorkspaceOpenInEditorSubTriggerProps): ReactElement | null {
+  const { t } = useTranslation();
+  const { canResolveWorkspace, targets } = useWorkspaceOpenInEditor({
+    serverId,
+    cwd,
+    activeFile,
+    additionalFiles,
+  });
+
+  if (!canResolveWorkspace || targets.length === 0) {
+    return null;
+  }
+
+  return (
+    <DropdownMenuSubTrigger id={id} testID={testID}>
+      {t("workspace.git.openInEditor.chooseEditor")}
+    </DropdownMenuSubTrigger>
+  );
+}
+
+export function WorkspaceOpenInEditorButton({
+  serverId,
+  cwd,
+  activeFile,
+  additionalFiles,
+  buttonLabel,
+  hideLabels,
+}: WorkspaceOpenInEditorButtonProps) {
+  const { t } = useTranslation();
+  const {
+    activeFileName,
+    canResolveWorkspace,
+    effectivePreferredEditorId,
+    handleOpenTarget,
+    isPending,
+    primaryOption,
+    targets,
+  } = useWorkspaceOpenInEditor({ serverId, cwd, activeFile, additionalFiles });
+
   const primaryPressableStyle = useCallback(
     ({ pressed, hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.splitButtonPrimary,
       (Boolean(hovered) || pressed) && styles.splitButtonPrimaryHovered,
-      openMutation.isPending && styles.splitButtonPrimaryDisabled,
+      isPending && styles.splitButtonPrimaryDisabled,
     ],
-    [openMutation.isPending],
+    [isPending],
   );
 
   const caretTriggerStyle = useCallback(
@@ -216,20 +346,21 @@ export function WorkspaceOpenInEditorButton({
           testID="workspace-open-in-editor-primary"
           style={primaryPressableStyle}
           onPress={handlePrimaryPress}
-          disabled={openMutation.isPending}
+          disabled={isPending}
           accessibilityRole="button"
           accessibilityLabel={
-            activeFileName
+            buttonLabel ??
+            (activeFileName
               ? t("workspace.git.openInEditor.openFileIn", {
                   fileName: activeFileName,
                   target: primaryOption.label,
                 })
               : t("workspace.git.openInEditor.openIn", {
                   target: primaryOption.label,
-                })
+                }))
           }
         >
-          {openMutation.isPending ? (
+          {isPending ? (
             <ThemedLoadingSpinner
               size="small"
               uniProps={foregroundColorMapping}
@@ -239,21 +370,32 @@ export function WorkspaceOpenInEditorButton({
             <View style={styles.splitButtonContent}>
               {primaryOption.icon}
               {!hideLabels && (
-                <Text style={styles.splitButtonText}>{t("workspace.git.openInEditor.open")}</Text>
+                <Text style={styles.splitButtonText}>
+                  {buttonLabel ?? t("workspace.git.openInEditor.open")}
+                </Text>
               )}
             </View>
           )}
         </Pressable>
         {targets.length > 1 ? (
           <DropdownMenu>
-            <DropdownMenuTrigger
-              testID="workspace-open-in-editor-caret"
-              style={caretTriggerStyle}
-              accessibilityRole="button"
-              accessibilityLabel={t("workspace.git.openInEditor.chooseEditor")}
-            >
-              <ThemedChevronDown size={16} uniProps={mutedColorMapping} />
-            </DropdownMenuTrigger>
+            <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger
+                  testID="workspace-open-in-editor-caret"
+                  style={caretTriggerStyle}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("workspace.git.openInEditor.chooseEditor")}
+                >
+                  <ThemedChevronDown size={16} uniProps={mutedColorMapping} />
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="center" offset={8}>
+                <Text style={styles.tooltipText}>
+                  {t("workspace.git.openInEditor.chooseEditor")}
+                </Text>
+              </TooltipContent>
+            </Tooltip>
             <DropdownMenuContent
               align="end"
               minWidth={148}
@@ -277,6 +419,10 @@ export function WorkspaceOpenInEditorButton({
 }
 
 const styles = StyleSheet.create((theme) => ({
+  tooltipText: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.popoverForeground,
+  },
   row: {
     flexDirection: "row",
     alignItems: "center",

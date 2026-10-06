@@ -2,6 +2,10 @@ import type { Command } from "commander";
 import { createRequire } from "node:module";
 import { getOrCreateServerId, findExecutable, execCommand } from "@getpaseo/server";
 import { connectToDaemon } from "../../utils/client.js";
+import {
+  ACCOUNTS_UNAVAILABLE_REASON,
+  SIGN_IN_REQUIRED_REASON,
+} from "@getpaseo/protocol/accounts/schemas";
 import type { CommandOptions, ListResult, OutputSchema } from "../../output/index.js";
 import { resolveLocalDaemonState } from "./local-daemon.js";
 import { resolveNodePathFromPid } from "./runtime-toolchain.js";
@@ -18,7 +22,14 @@ interface ProviderBinaryStatus {
 interface DaemonStatus {
   serverId: string | null;
   localDaemon: "running" | "stopped" | "stale_pid" | "unresponsive";
-  connectedDaemon: "reachable" | "unreachable" | "auth_required" | "auth_failed" | "not_probed";
+  connectedDaemon:
+    | "reachable"
+    | "unreachable"
+    | "auth_required"
+    | "auth_failed"
+    | "sign_in_required"
+    | "accounts_unavailable"
+    | "not_probed";
   home: string;
   listen: string;
   relay: string;
@@ -96,7 +107,14 @@ function createStatusSchema(status: DaemonStatus): OutputSchema<StatusRow> {
           }
           if (item.key === "Connected Daemon") {
             if (item.value === "reachable") return "green";
-            if (item.value === "not_probed" || item.value === "auth_required") return "yellow";
+            if (
+              item.value === "not_probed" ||
+              item.value === "auth_required" ||
+              item.value === "sign_in_required" ||
+              item.value === "accounts_unavailable"
+            ) {
+              return "yellow";
+            }
             return "red";
           }
           if (item.key.startsWith("  ")) {
@@ -208,18 +226,35 @@ interface DaemonProbeResult {
   note?: string;
 }
 
-type DaemonAuthProbeFailure = "auth_required" | "auth_failed";
+type DaemonAuthProbeFailure =
+  | "auth_required"
+  | "auth_failed"
+  | "sign_in_required"
+  | "accounts_unavailable";
 
+/**
+ * A daemon that refuses the probe is still up. Classifying these as reachable
+ * rather than unresponsive is what stops the desktop shell from deciding its
+ * daemon died and launching a second one onto the same port.
+ */
 function classifyDaemonAuthProbeFailure(error: unknown): DaemonAuthProbeFailure | null {
   if (!(error instanceof Error)) return null;
   if (error.message === "Password required") return "auth_required";
   if (error.message === "Incorrect password") return "auth_failed";
+  if (error.message === SIGN_IN_REQUIRED_REASON) return "sign_in_required";
+  if (error.message === ACCOUNTS_UNAVAILABLE_REASON) return "accounts_unavailable";
   return null;
 }
 
 function describeDaemonAuthProbeFailure(host: string, failure: DaemonAuthProbeFailure): string {
   if (failure === "auth_required") {
     return `Daemon is reachable at ${host} but requires a password. Set PASEO_PASSWORD and retry.`;
+  }
+  if (failure === "sign_in_required") {
+    return `Daemon is reachable at ${host} but no account is signed in. Sign in from the app.`;
+  }
+  if (failure === "accounts_unavailable") {
+    return `Daemon is reachable at ${host} but its accounts service is still starting.`;
   }
   return `Daemon is reachable at ${host} but the supplied password was rejected. Check PASEO_PASSWORD and retry.`;
 }

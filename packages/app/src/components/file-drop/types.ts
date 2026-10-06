@@ -18,6 +18,8 @@ export type DroppedItem = DroppedFileItem | DroppedPathItem;
  */
 export interface FileDropSink {
   onFiles: (images: ImageAttachment[]) => void;
+  /** Dropped images that could not be attached, such as one that does not decode. */
+  onImageErrors?: (errors: unknown[]) => void;
   onGenericFiles?: (items: DroppedItem[]) => void;
   onWorkspaceFile?: (payload: WorkspaceFileDragPayload) => void;
 }

@@ -115,9 +115,9 @@ test.describe("Project picker search", () => {
 });
 
 // Projects are parents in the sidebar. Archiving the last workspace leaves the
-// project row in place with a ghost "+ New workspace" child row.
+// project row in place with a ghost "+ New chat" child row.
 test.describe("Project with no workspaces persists", () => {
-  test("adding a project starts with only a new-workspace child row", async ({ page }) => {
+  test("adding a project starts with only a new-chat child row", async ({ page }) => {
     const repo = await createTempGitRepo("empty-project-add-");
     const client = await connectSeedClient();
     let projectId: string | null = null;
@@ -134,7 +134,7 @@ test.describe("Project with no workspaces persists", () => {
 
       const newWorkspaceRow = page.getByTestId(`sidebar-project-new-workspace-row-${projectId}`);
       await expect(newWorkspaceRow).toBeVisible({ timeout: 30_000 });
-      await expect(newWorkspaceRow).toContainText("New workspace");
+      await expect(newWorkspaceRow).toContainText("New chat");
 
       const workspaces = await client.fetchWorkspaces({ filter: { projectId } });
       expect(workspaces.entries).toEqual([]);
@@ -158,7 +158,7 @@ test.describe("Project with no workspaces persists", () => {
       const newWorkspaceRow = page.getByTestId(
         `sidebar-project-new-workspace-row-${projectViewKey}`,
       );
-      const globalNewWorkspace = page.getByTestId("sidebar-global-new-workspace");
+      const addProjectButton = page.getByTestId("sidebar-add-project");
 
       await gotoAppShell(page);
       await waitForSidebarHydration(page);
@@ -180,8 +180,8 @@ test.describe("Project with no workspaces persists", () => {
       expect(existsSync(workspace.repoPath)).toBe(true);
       await expect(projectRow).toBeVisible({ timeout: 30_000 });
       await expect(newWorkspaceRow).toBeVisible({ timeout: 30_000 });
-      await expect(newWorkspaceRow).toContainText("New workspace");
-      await expect(globalNewWorkspace).toBeVisible({ timeout: 30_000 });
+      await expect(newWorkspaceRow).toContainText("New chat");
+      await expect(addProjectButton).toBeVisible({ timeout: 30_000 });
 
       // The project survives a reload after its last workspace is archived.
       await page.reload();

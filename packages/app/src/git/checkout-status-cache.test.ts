@@ -5,6 +5,7 @@ import type { CheckoutStatusUpdate } from "@getpaseo/protocol/messages";
 import {
   checkoutCommitsQueryKey,
   checkoutPrStatusQueryKey,
+  checkoutStatusRefreshQueryKey,
   checkoutStatusQueryKey,
 } from "@/git/query-keys";
 import {
@@ -18,6 +19,7 @@ import {
   type CheckoutPrStatusPayload,
   type CheckoutStatusPayload,
   fetchCheckoutStatus,
+  refreshCheckoutStatus,
 } from "./checkout-status-cache";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({
@@ -110,7 +112,7 @@ describe("fetchCheckoutStatus", () => {
     const result = await fetchCheckoutStatus({ client, serverId, cwd });
 
     expect(result).toEqual(fetched);
-    expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd);
+    expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd, { refreshGit: false });
   });
 
   it("expires a manual diff-mode override when the fetched dirty state flipped", async () => {
@@ -134,7 +136,7 @@ describe("ensureCheckoutStatus", () => {
 
     expect(first).toEqual(fetched);
     expect(second).toEqual(fetched);
-    expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd);
+    expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd, { refreshGit: false });
   });
 
   it("awaits a refetch when the canonical cached status was invalidated", async () => {
@@ -153,7 +155,74 @@ describe("ensureCheckoutStatus", () => {
     const result = await ensureCheckoutStatus({ queryClient, client, serverId, cwd });
 
     expect(result.currentBranch).toBe("feature/current");
-    expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd);
+    expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd, { refreshGit: false });
+  });
+});
+
+describe("refreshCheckoutStatus", () => {
+  it("waits for an in-flight cached read before fetching fresh Git status", async () => {
+    const queryClient = createQueryClient();
+    const cachedRead = Promise.withResolvers<CheckoutStatusPayload>();
+    const client = {
+      getCheckoutStatus: vi.fn(async (_cwd: string, options?: { refreshGit?: boolean }) =>
+        options?.refreshGit
+          ? checkoutStatus({ currentBranch: "feature/current" })
+          : cachedRead.promise,
+      ),
+    };
+
+    const cachedResultPromise = ensureCheckoutStatus({ queryClient, client, serverId, cwd });
+    const freshResultPromise = refreshCheckoutStatus({ queryClient, client, serverId, cwd });
+    const refreshWasPending = queryClient.isFetching({
+      queryKey: checkoutStatusRefreshQueryKey(serverId, cwd),
+      exact: true,
+    });
+    cachedRead.resolve(checkoutStatus({ currentBranch: "feature/stale" }));
+
+    await expect(cachedResultPromise).resolves.toMatchObject({ currentBranch: "feature/stale" });
+    await expect(freshResultPromise).resolves.toMatchObject({ currentBranch: "feature/current" });
+    expect(client.getCheckoutStatus).toHaveBeenNthCalledWith(1, cwd, { refreshGit: false });
+    expect(client.getCheckoutStatus).toHaveBeenNthCalledWith(2, cwd, { refreshGit: true });
+    expect(
+      queryClient.getQueryData<CheckoutStatusPayload>(checkoutStatusQueryKey(serverId, cwd)),
+    ).toMatchObject({ currentBranch: "feature/current" });
+    expect(refreshWasPending).toBe(1);
+    expect(
+      queryClient.isFetching({
+        queryKey: checkoutStatusRefreshQueryKey(serverId, cwd),
+        exact: true,
+      }),
+    ).toBe(0);
+  });
+
+  it("refetches past a cached status the push stream never corrected", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(
+      checkoutStatusQueryKey(serverId, cwd),
+      checkoutStatus({ currentBranch: "feature/stale" }),
+    );
+    const client = {
+      getCheckoutStatus: vi.fn(async () => checkoutStatus({ currentBranch: "feature/current" })),
+    };
+
+    const result = await refreshCheckoutStatus({ queryClient, client, serverId, cwd });
+
+    expect(result.currentBranch).toBe("feature/current");
+    expect(client.getCheckoutStatus).toHaveBeenCalledExactlyOnceWith(cwd, { refreshGit: true });
+  });
+
+  it("writes the fresh status to the canonical key so mounted readers see it", async () => {
+    const queryClient = createQueryClient();
+    const client = {
+      getCheckoutStatus: vi.fn(async () => checkoutStatus({ currentBranch: "feature/current" })),
+    };
+
+    await refreshCheckoutStatus({ queryClient, client, serverId, cwd });
+
+    const cached = queryClient.getQueryData<CheckoutStatusPayload>(
+      checkoutStatusQueryKey(serverId, cwd),
+    );
+    expect(cached?.currentBranch).toBe("feature/current");
   });
 });
 

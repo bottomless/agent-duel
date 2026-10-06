@@ -1,0 +1,1655 @@
+.shell {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.city-picker {
+  position: relative;
+  width: min(420px, 100%);
+}
+
+.city-search {
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  font-size: 15px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.city-search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.city-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  max-height: min(420px, 70vh);
+  overflow: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.city-option {
+  appearance: none;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font: inherit;
+  text-align: left;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-h);
+}
+
+.city-option.active,
+.city-option:hover {
+  background: var(--accent-bg);
+}
+
+.city-option.current .city-option-name {
+  color: var(--accent);
+}
+
+.city-option-name {
+  font-size: 15px;
+}
+
+.city-option-region {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.city-empty {
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.main {
+  flex: 1;
+  display: grid;
+  place-items: start center;
+  padding: 32px 24px 48px;
+}
+
+.weather {
+  width: min(680px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.card {
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.card h1 {
+  margin: 0 0 6px;
+  font-size: clamp(28px, 5vw, 40px);
+}
+
+.hourly,
+.climate {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  padding: 20px 28px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.hourly-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.hourly-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.swatch {
+  width: 16px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.swatch.temp,
+.swatch.high {
+  background: var(--text-h);
+}
+
+.swatch.low {
+  width: 16px;
+  height: 0;
+  border-top: 2px dashed var(--text);
+  border-radius: 0;
+  background: transparent;
+}
+
+.swatch.precip {
+  background: var(--accent);
+  opacity: 0.55;
+}
+
+.swatch.climate-high {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--hot);
+}
+
+.swatch.climate-low {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--cold);
+}
+
+.swatch.climate-feels {
+  height: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.swatch.climate-feels-high {
+  border-top: 2px dotted var(--hot);
+}
+
+.swatch.climate-feels-low {
+  border-top: 2px dotted var(--cold);
+}
+
+.swatch.climate-band {
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--hot-band) 0,
+    var(--hot-band) 50%,
+    var(--cold-band) 50%,
+    var(--cold-band) 100%
+  );
+  border: 1px solid var(--border);
+}
+
+.hourly-chart-wrap {
+  width: 100%;
+}
+
+.hourly-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.hourly-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.hourly-axis {
+  fill: var(--text);
+  font-size: 11px;
+}
+
+.hourly-bar {
+  fill: var(--accent);
+  opacity: 0.35;
+}
+
+.hourly-area {
+  fill: var(--text-h);
+  opacity: 0.06;
+}
+
+.hourly-line {
+  fill: none;
+  stroke: var(--text-h);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.hourly-line.low {
+  stroke: var(--text);
+  stroke-dasharray: 5 4;
+}
+
+.hourly-dot {
+  fill: var(--bg);
+  stroke: var(--text-h);
+  stroke-width: 2;
+}
+
+.hourly-dot.low {
+  stroke: var(--text);
+}
+
+.climate-band {
+  stroke: none;
+}
+
+.climate-band.hot {
+  fill: var(--hot-band);
+}
+
+.climate-band.cold {
+  fill: var(--cold-band);
+}
+
+.climate-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.climate-line.hot {
+  stroke: var(--hot);
+}
+
+.climate-line.cold {
+  stroke: var(--cold);
+}
+
+.climate-line.feels {
+  stroke-width: 1.5;
+  stroke-dasharray: 2 4;
+  opacity: 0.75;
+}
+
+.climate-line.feels.hot {
+  stroke: var(--hot);
+}
+
+.climate-line.feels.cold {
+  stroke: var(--cold);
+}
+
+.climate-dot {
+  fill: var(--bg);
+  stroke-width: 2;
+}
+
+.climate-dot.hot {
+  stroke: var(--hot);
+}
+
+.climate-dot.cold {
+  stroke: var(--cold);
+}
+
+.cc-area {
+  stroke: var(--bg);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+}
+
+.cc-area.clear {
+  fill: var(--cc-clear);
+}
+
+.cc-area.mostly-clear {
+  fill: var(--cc-mostly-clear);
+}
+
+.cc-area.partly {
+  fill: var(--cc-partly);
+}
+
+.cc-area.mostly-cloudy {
+  fill: var(--cc-mostly-cloudy);
+}
+
+.cc-area.overcast {
+  fill: var(--cc-overcast);
+}
+
+.cc-swatch {
+  height: 10px;
+  border-radius: 3px;
+}
+
+.cc-swatch.clear {
+  background: var(--cc-clear);
+}
+
+.cc-swatch.mostly-clear {
+  background: var(--cc-mostly-clear);
+}
+
+.cc-swatch.partly {
+  background: var(--cc-partly);
+}
+
+.cc-swatch.mostly-cloudy {
+  background: var(--cc-mostly-cloudy);
+}
+
+.cc-swatch.overcast {
+  background: var(--cc-overcast);
+}
+
+.cc-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.cc-note {
+  margin-top: 12px;
+}
+
+.precip-area.rain {
+  fill: var(--precip-rain-fill);
+  stroke: none;
+}
+
+.precip-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.precip-line.rain {
+  stroke: var(--precip-rain);
+}
+
+.precip-line.mixed {
+  stroke: var(--precip-mixed);
+  stroke-dasharray: 5 4;
+}
+
+.precip-line.snow {
+  stroke: var(--precip-snow);
+  stroke-dasharray: 2 3;
+}
+
+.precip-dot {
+  fill: var(--bg);
+  stroke-width: 2;
+}
+
+.precip-dot.rain {
+  stroke: var(--precip-rain);
+}
+
+.precip-dot.mixed {
+  stroke: var(--precip-mixed);
+}
+
+.precip-dot.snow {
+  stroke: var(--precip-snow);
+}
+
+.precip-swatch.rain {
+  background: var(--precip-rain);
+}
+
+.precip-swatch.mixed {
+  height: 0;
+  border-radius: 0;
+  background: transparent;
+  border-top: 2px dashed var(--precip-mixed);
+}
+
+.precip-swatch.snow {
+  height: 0;
+  border-radius: 0;
+  background: transparent;
+  border-top: 2px dotted var(--precip-snow);
+}
+
+.swatch.rain-avg {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--precip-rain);
+}
+
+.swatch.rain-pct {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--precip-rain-fill);
+  border: 1px solid var(--border);
+}
+
+.rain-band {
+  fill: var(--precip-rain-fill);
+  stroke: none;
+}
+
+.rain-avg-line {
+  fill: none;
+  stroke: var(--precip-rain);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.rain-dot {
+  fill: var(--bg);
+  stroke: var(--precip-rain);
+  stroke-width: 2;
+}
+
+.swatch.snow-avg {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--precip-snow);
+}
+
+.swatch.snow-pct {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--precip-snow-fill);
+  border: 1px solid var(--border);
+}
+
+.snow-band {
+  fill: var(--precip-snow-fill);
+  stroke: none;
+}
+
+.snow-avg-line {
+  fill: none;
+  stroke: var(--precip-snow);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.snow-dot {
+  fill: var(--bg);
+  stroke: var(--precip-snow);
+  stroke-width: 2;
+}
+
+.swatch.wind-avg {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--wind);
+}
+
+.swatch.wind-pct {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--wind-fill);
+  border: 1px solid var(--border);
+}
+
+.wind-band {
+  fill: var(--wind-fill);
+  stroke: none;
+}
+
+.wind-avg-line {
+  fill: none;
+  stroke: var(--wind);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.wind-dot {
+  fill: var(--bg);
+  stroke: var(--wind);
+  stroke-width: 2;
+}
+
+.swatch.ri-bar {
+  height: 10px;
+  border-radius: 3px;
+}
+
+.swatch.ri-bar.light {
+  background: var(--precip-rain);
+  opacity: 0.4;
+}
+
+.swatch.ri-bar.moderate {
+  background: var(--precip-rain);
+  opacity: 0.7;
+}
+
+.swatch.ri-bar.heavy {
+  background: var(--precip-rain);
+}
+
+.swatch.ri-days {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.ri-bar-rect {
+  stroke: var(--bg);
+  stroke-width: 0.5;
+}
+
+.ri-bar-rect.light {
+  fill: var(--precip-rain);
+  opacity: 0.4;
+}
+
+.ri-bar-rect.moderate {
+  fill: var(--precip-rain);
+  opacity: 0.7;
+}
+
+.ri-bar-rect.heavy {
+  fill: var(--precip-rain);
+}
+
+.ri-days-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.ri-days-dot {
+  fill: var(--bg);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.ri-axis-right {
+  fill: var(--text);
+}
+
+.ri-axis-cap {
+  font-size: 8px;
+  fill: var(--text);
+}
+
+.swatch.ov-rain {
+  height: 10px;
+  border-radius: 3px;
+  background: var(--precip-rain-fill);
+  border: 1px solid var(--precip-rain);
+}
+
+.swatch.ov-temp {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--hot);
+}
+
+.swatch.ov-sun {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--sun);
+  border-top: 2px dashed var(--sun);
+  border-bottom: 0;
+}
+
+.ov-rain-bar {
+  fill: var(--precip-rain-fill);
+  stroke: var(--precip-rain);
+  stroke-width: 1;
+}
+
+.ov-temp-line {
+  fill: none;
+  stroke: var(--hot);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.ov-sun-line {
+  fill: none;
+  stroke: var(--sun);
+  stroke-width: 2;
+  stroke-dasharray: 5 3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.ov-temp-dot {
+  fill: var(--bg);
+  stroke: var(--hot);
+  stroke-width: 2;
+}
+
+.ov-sun-dot {
+  fill: var(--bg);
+  stroke: var(--sun);
+  stroke-width: 2;
+}
+
+.dl-area {
+  stroke: var(--bg);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+}
+
+.dl-area.daylight {
+  fill: var(--dl-daylight);
+}
+
+.dl-area.civil {
+  fill: var(--dl-civil);
+}
+
+.dl-area.nautical {
+  fill: var(--dl-nautical);
+}
+
+.dl-area.astro {
+  fill: var(--dl-astro);
+}
+
+.dl-area.night {
+  fill: var(--dl-night);
+}
+
+.dl-solstice {
+  stroke: var(--text-h);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  opacity: 0.35;
+}
+
+.swatch.dl-swatch {
+  height: 10px;
+  border-radius: 3px;
+}
+
+.swatch.dl-swatch.daylight {
+  background: var(--dl-daylight);
+}
+
+.swatch.dl-swatch.civil {
+  background: var(--dl-civil);
+}
+
+.swatch.dl-swatch.nautical {
+  background: var(--dl-nautical);
+}
+
+.swatch.dl-swatch.astro {
+  background: var(--dl-astro);
+}
+
+.swatch.dl-swatch.night {
+  background: var(--dl-night);
+}
+
+.dl-dst {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  opacity: 0.55;
+}
+
+.dl-curve-line {
+  fill: none;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.dl-curve-line.sunrise,
+.dl-curve-line.sunset {
+  stroke: var(--text-h);
+  stroke-width: 1.5;
+  opacity: 0.85;
+}
+
+.dl-curve-line.noon,
+.dl-curve-line.midnight {
+  stroke: var(--text-h);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.5;
+}
+
+.swatch.dl-curve {
+  height: 0;
+  width: 18px;
+  border-radius: 0;
+  background: transparent;
+  border-top: 2px solid var(--text-h);
+}
+
+.swatch.dl-curve.noon {
+  border-top-style: dashed;
+  opacity: 0.6;
+}
+
+.swatch.dl-dst-mark {
+  height: 0;
+  width: 18px;
+  border-radius: 0;
+  background: transparent;
+  border-top: 2px dashed var(--accent);
+  opacity: 0.7;
+}
+
+.hc-area {
+  stroke: var(--bg);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+}
+
+.hc-area.dry {
+  fill: var(--hc-dry);
+}
+
+.hc-area.comfortable {
+  fill: var(--hc-comfortable);
+}
+
+.hc-area.humid {
+  fill: var(--hc-humid);
+}
+
+.hc-area.muggy {
+  fill: var(--hc-muggy);
+}
+
+.hc-area.oppressive {
+  fill: var(--hc-oppressive);
+}
+
+.hc-area.miserable {
+  fill: var(--hc-miserable);
+}
+
+.hc-swatch {
+  height: 10px;
+  border-radius: 3px;
+}
+
+.hc-swatch.dry {
+  background: var(--hc-dry);
+}
+
+.hc-swatch.comfortable {
+  background: var(--hc-comfortable);
+}
+
+.hc-swatch.humid {
+  background: var(--hc-humid);
+}
+
+.hc-swatch.muggy {
+  background: var(--hc-muggy);
+}
+
+.hc-swatch.oppressive {
+  background: var(--hc-oppressive);
+}
+
+.hc-swatch.miserable {
+  background: var(--hc-miserable);
+}
+
+.hc-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+
+.heatmap-border {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.heatmap-legend-tick {
+  font-size: 10px;
+}
+
+.hourly-details {
+  margin-top: 12px;
+}
+
+.hourly-details summary {
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--accent);
+  width: fit-content;
+}
+
+.hourly-details summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hourly-table-wrap {
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.hourly-table-wrap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hourly-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.hourly-table-wrap th,
+.hourly-table-wrap td {
+  text-align: left;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.hourly-table-wrap thead th {
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-top: none;
+}
+
+.hourly-table-wrap tbody th {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.forecast-title {
+  margin: 0 0 12px;
+  font-size: 18px;
+  color: var(--text-h);
+}
+
+.card.muted {
+  width: min(560px, 100%);
+  text-align: left;
+}
+
+.duo {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+}
+
+.panel-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-h);
+}
+
+.panel-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.mini-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.mini-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.mini-axis {
+  fill: var(--text);
+  font-size: 10px;
+}
+
+.mini-bar.sun {
+  fill: var(--sun);
+  opacity: 0.55;
+}
+
+.mini-bar.cloud {
+  fill: var(--text);
+  opacity: 0.4;
+}
+
+.mini-bar.peak {
+  opacity: 1;
+}
+
+.card.muted h1,
+.card.muted p {
+  color: var(--text);
+}
+
+.card p {
+  margin: 0;
+  max-width: 42ch;
+}
+
+.aqi-band {
+  opacity: 0.14;
+  stroke: none;
+}
+
+.aqi-line {
+  fill: none;
+  stroke: var(--text-h);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.aqi-dot {
+  fill: var(--bg);
+  stroke: var(--text-h);
+  stroke-width: 2;
+}
+
+.swatch.aqi-avg {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--text-h);
+}
+
+.aqi-swatch {
+  height: 10px;
+  border-radius: 3px;
+}
+
+.aqi-band-label {
+  font-size: 10px;
+}
+
+.aqi-current-info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.aqi-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 14px;
+  border-radius: 999px;
+}
+
+.aqi-badge-value {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.aqi-badge-label {
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.aqi-pollutants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.aqi-advice {
+  margin-top: 10px;
+  max-width: 50ch;
+}
+
+.aqi-day-bar {
+  stroke: var(--bg);
+  stroke-width: 0.5;
+}
+
+.header-back {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.back-btn {
+  appearance: none;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--accent);
+  padding: 6px 16px;
+  margin-bottom: 20px;
+}
+
+.back-btn:hover {
+  background: var(--accent-bg);
+}
+
+.city-back-row {
+  width: min(680px, 100%);
+}
+
+.index {
+  width: min(900px, 100%);
+}
+
+.index-hero {
+  text-align: center;
+  padding: 24px 0 20px;
+}
+
+.index-title {
+  font-size: clamp(32px, 6vw, 52px);
+  margin: 0 0 8px;
+}
+
+.index-subtitle {
+  margin: 0 0 24px;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.index-search-wrap {
+  width: min(520px, 100%);
+  margin: 0 auto;
+}
+
+.index-search-inner {
+  position: relative;
+}
+
+.index-search {
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  font-size: 16px;
+  padding: 12px 44px 12px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  box-shadow: var(--shadow);
+}
+
+.index-search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.index-clear {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.index-clear:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.index-results-section {
+  margin-top: 24px;
+}
+
+.index-results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.index-count {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.index-results {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  max-height: min(520px, 70vh);
+  overflow: auto;
+}
+
+.index-result {
+  appearance: none;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font: inherit;
+  text-align: left;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-h);
+}
+
+.index-result.active,
+.index-result:hover {
+  background: var(--accent-bg);
+}
+
+.index-result-name {
+  font-size: 15px;
+}
+
+.index-result-region {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.index-result-badge {
+  font-size: 11px;
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.index-no-results {
+  text-align: center;
+}
+
+.index-no-results p {
+  max-width: 40ch;
+  margin: 0 auto;
+}
+
+.index-browse {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+  margin-top: 32px;
+}
+
+.index-section-title {
+  font-size: 18px;
+  color: var(--text-h);
+  margin: 0 0 16px;
+}
+
+.city-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.city-card {
+  appearance: none;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  font: inherit;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text-h);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.city-card:hover,
+.city-card:focus-visible {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow);
+  outline: none;
+}
+
+.city-card-ribbon {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-bottom: 8px;
+  border-radius: 6px;
+}
+
+.city-card-name {
+  font-size: 15px;
+  font-weight: 560;
+}
+
+.city-card-region {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.swatch.skyline-height {
+  height: 14px;
+  width: 10px;
+  border-radius: 2px 2px 0 0;
+  background: var(--text);
+}
+
+.swatch.skyline-temp {
+  background: linear-gradient(to right, #2848b0, #5ac8c0, #ebbe46, #aa232d);
+}
+
+.swatch.skyline-zero {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cold);
+}
+
+.swatch.skyline-missing {
+  background: transparent;
+  border: 1.5px dashed #94949c;
+}
+
+.skyline-baseline {
+  stroke: var(--text);
+  stroke-width: 1.25;
+}
+
+.skyline-building {
+  stroke: none;
+}
+
+.skyline-mark {
+  outline: none;
+}
+
+.skyline-mark:focus-visible .skyline-building,
+.skyline-mark.is-focused .skyline-building {
+  stroke: var(--text-h);
+  stroke-width: 2;
+}
+
+.skyline-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.skyline-zero-dot {
+  stroke: var(--bg);
+  stroke-width: 1.5;
+}
+
+.skyline-mark:focus-visible .skyline-zero-dot,
+.skyline-mark.is-focused .skyline-zero-dot {
+  stroke: var(--text-h);
+  stroke-width: 2;
+}
+
+.skyline-missing-stub {
+  fill: none;
+  stroke: #94949c;
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}
+
+.skyline-legend-bar {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.skyline-readout {
+  min-height: 1.4em;
+}
+
+.swatch.ribbon-ramp {
+  width: 56px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.swatch.ribbon-thickness {
+  height: 12px;
+  border-radius: 999px / 60%;
+  background: var(--text);
+  opacity: 0.45;
+  clip-path: polygon(0 35%, 50% 0, 100% 35%, 100% 65%, 50% 100%, 0 65%);
+}
+
+.ribbon-svg {
+  border-radius: 10px;
+}
+
+.ribbon-svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ribbon-boundary {
+  stroke: var(--border);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.ribbon-thread {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  opacity: 0.5;
+}
+
+.ribbon-slice {
+  stroke: none;
+}
+
+.ribbon-outline {
+  fill: none;
+  stroke: var(--text-h);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  opacity: 0.35;
+}
+
+.ribbon-hit {
+  fill: transparent;
+  pointer-events: all;
+  cursor: pointer;
+}
+
+.ribbon-focus {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.ribbon-readout {
+  min-height: 1.4em;
+}
+
+.ww-wrap,
+.ww-svg {
+  overflow: visible;
+}
+
+.ww-hub-disk {
+  fill: var(--bg);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.ww-ring {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1;
+  opacity: 0.85;
+}
+
+.ww-ring-label {
+  font-size: 10px;
+}
+
+.ww-petal {
+  stroke: var(--bg);
+  stroke-width: 1.5;
+  cursor: pointer;
+}
+
+.ww-petal:focus {
+  outline: none;
+}
+
+.ww-petal:focus-visible,
+.ww-petal-focus {
+  stroke: var(--text-h);
+  stroke-width: 2.5;
+}
+
+.ww-month {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--text-h);
+}
+
+.ww-hub-month {
+  fill: var(--text-h);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.ww-hub-temp,
+.ww-hub-precip {
+  fill: var(--text);
+  font-size: 11px;
+}
+
+.ww-temp-legend {
+  margin: 0 0 12px;
+}
+
+.ww-temp-bar {
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.ww-temp-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.climate-extremes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.climate-extremes-title {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-h);
+}
+
+.climate-extremes-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.climate-extremes-chip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.climate-extremes-chip-hot {
+  background: var(--hot-band);
+}
+
+.climate-extremes-chip-wet {
+  background: var(--precip-rain-fill);
+}
+
+.climate-extremes-kind {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.climate-extremes-value {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.climate-extremes-meta {
+  font-size: 13px;
+  color: var(--text);
+}
+
+@media (max-width: 640px) {
+  .header {
+    padding: 16px;
+  }
+
+  .main {
+    padding: 24px 16px 40px;
+    place-items: start stretch;
+  }
+
+  .card,
+  .hourly,
+  .climate {
+    padding: 20px;
+  }
+
+  .duo {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .panel-compact,
+  .climate-extremes {
+    padding: 16px;
+  }
+
+  .hourly-tick-minor,
+  .climate-tick-minor {
+    display: none;
+  }
+
+  .ww-month {
+    display: inherit;
+  }
+
+  .index-hero {
+    padding: 12px 0 16px;
+  }
+
+  .index-search {
+    font-size: 15px;
+    padding: 10px 40px 10px 16px;
+  }
+
+  .city-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+  }
+
+  .city-card {
+    padding: 12px 14px;
+  }
+}

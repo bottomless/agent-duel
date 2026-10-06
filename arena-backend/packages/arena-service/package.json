@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@agent-duel/arena-service",
+  "version": "0.1.0",
+  "description": "Blinded contestant assignment, model proxy and comparison routes, composed by the hosted control plane and run in process by BYOK engines",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "test": "bun test --timeout 30000"
+  },
+  "dependencies": {
+    "mongodb": "6.20.0",
+    "zod": "4.1.8"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "1.0.9",
+    "@types/bun": "1.3.13",
+    "@typescript/native-preview": "7.0.0-dev.20251207.1"
+  }
+}

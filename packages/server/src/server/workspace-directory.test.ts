@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
+import type { ArenaActivity } from "@getpaseo/protocol/arena/activity";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import type { AgentSnapshotPayload, WorkspaceDescriptorPayload } from "./messages.js";
 import { WorkspaceDirectory } from "./workspace-directory.js";
@@ -59,6 +60,7 @@ class WorkspaceStatus {
   private readonly workspaces = [this.workspace];
 
   private readonly agents: AgentSnapshotPayload[] = [];
+  readonly arenaActivities: ArenaActivity[] = [];
   private readonly providerSubagents: ProviderSubagentWorkspaceActivity[] = [];
   private readonly terminals: Array<{
     cwd: string;
@@ -70,6 +72,7 @@ class WorkspaceStatus {
     projectRegistry: { list: async () => [this.project] },
     workspaceRegistry: { list: async () => this.workspaces },
     listAgentPayloads: async () => this.agents,
+    listArenaActivity: () => this.arenaActivities,
     listProviderSubagentActivity: async () => this.providerSubagents,
     listTerminalActivityContributions: async () => this.terminals,
     isProviderVisibleToClient: () => true,
@@ -644,4 +647,42 @@ describe("WorkspaceDirectory empty projects", () => {
 
     expect(result.emptyProjects.map((p) => p.projectId)).toEqual(["empty"]);
   });
+});
+
+test("battle status follows workspace ownership and survives opening the chat until selection", async () => {
+  const workspace = new WorkspaceStatus();
+  workspace.hasSiblingWorkspaceSameCwd();
+  const activity: ArenaActivity = {
+    agentId: "battle",
+    workspaceId: "workspace-1",
+    sessionID: "native",
+    chatID: "chat",
+    turnID: "turn",
+    title: "Battle",
+    state: "awaiting_vote",
+    resolved: false,
+    requiresDecision: true,
+    stale: false,
+    runs: [],
+  };
+  workspace.arenaActivities.push(activity);
+  expect(await workspace.workspaceStatuses()).toEqual({
+    "workspace-1": "attention",
+    "workspace-1-sibling": "done",
+  });
+  expect((await workspace.workspaceDescriptor()).arenaActivity).toEqual(activity);
+  // Reading the directory does not consume the unresolved decision.
+  expect(await workspace.workspaceStatus()).toBe("attention");
+  workspace.arenaActivities[0] = {
+    ...activity,
+    resolved: true,
+    requiresDecision: false,
+    state: "cleanup_pending",
+  };
+  expect(await workspace.workspaceStatus()).toBe("done");
+  expect((await workspace.workspaceDescriptor()).arenaActivity?.state).toBe("cleanup_pending");
+  workspace.hasRootAgent({ id: "next-turn", status: "running" });
+  expect(await workspace.workspaceStatus()).toBe("running");
+  workspace.hasRootAgent({ id: "permission", status: "idle", pendingPermissionCount: 1 });
+  expect(await workspace.workspaceStatus()).toBe("needs_input");
 });

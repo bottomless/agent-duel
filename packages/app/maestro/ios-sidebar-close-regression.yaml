@@ -14,13 +14,13 @@ appId: sh.paseo.debug
     direction: RIGHT
     duration: 300
 - assertVisible:
-    id: "sidebar-schedules"
+    id: "sidebar-sessions"
 - swipe:
     start: "85%,19%"
     end: "10%,19%"
     duration: 300
 - assertNotVisible:
-    id: "sidebar-schedules"
+    id: "sidebar-sessions"
 - assertVisible:
     id: "sessions-host-filter-trigger"
 

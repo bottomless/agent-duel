@@ -1,3 +1,15 @@
+import { ArenaSessionActivitySchema } from "@getpaseo/protocol/arena/activity";
+import {
+  parseOpenCodeTodoList,
+  parseOpenCodeTodoWriteState,
+  type OpenCodeTodo,
+} from "@getpaseo/protocol/arena/todo";
+import type { ArenaActivitySource, ArenaCheckoutCleanupSource } from "../agent-sdk-types.js";
+import {
+  ArenaStreamFrameSchema,
+  type ArenaStreamFrame,
+  type ArenaStreamTarget,
+} from "@getpaseo/protocol/arena/stream";
 import {
   createOpencodeClient,
   type AssistantMessage as OpenCodeAssistantMessage,
@@ -12,10 +24,18 @@ import {
   type TextPartInput as OpenCodeTextPartInput,
 } from "@opencode-ai/sdk/v2/client";
 import fs from "node:fs/promises";
+import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { createPathEquivalenceMatcher } from "../../../utils/path.js";
 import pLimit from "p-limit";
 import type { Logger } from "pino";
 import { z } from "zod";
+import {
+  ArenaComparisonDiffSchema,
+  ArenaReviewIngestResultSchema,
+  ArenaSnapshotSchema,
+  type ArenaComparisonDiff,
+  type ArenaSnapshot,
+} from "@getpaseo/protocol/arena/rpc-schemas";
 
 import {
   getAgentStreamEventTurnId,
@@ -23,6 +43,7 @@ import {
   type AgentClient,
   type AgentCreateSessionOptions,
   type AgentFeature,
+  type AgentForkSessionInput,
   type AgentLaunchContext,
   type AgentMode,
   type AgentModelDefinition,
@@ -60,7 +81,6 @@ import {
 import {
   checkProviderLaunchAvailable,
   createProviderEnvSpec,
-  resolveProviderLaunch,
   type ProviderRuntimeSettings,
 } from "../provider-launch-config.js";
 import { withTimeout } from "../../../utils/promise-timeout.js";
@@ -68,6 +88,8 @@ import { execCommand } from "../../../utils/spawn.js";
 import { mapOpencodeToolCall } from "./opencode/tool-call-mapper.js";
 import {
   OpenCodeServerManager,
+  resolveOpenCodeServerLaunch,
+  type OpenCodeServerAcquisition,
   type OpenCodeServerManagerLike,
 } from "./opencode/server-manager.js";
 import { resolveOpenCodeHomeDir } from "./opencode/paths.js";
@@ -273,6 +295,8 @@ function resolveOpenCodePermissionReply(
 type OpenCodeAgentConfig = Omit<AgentSessionConfig, "providerOptions"> & {
   provider: "opencode";
   providerOptions: OpenCodeProviderOptions;
+  /** The daemon's `$PASEO_HOME/uploads`; see `uploadDirectoriesForPrompt`. */
+  uploadsRoot?: string;
 };
 type OpenCodeMessageRole = "user" | "assistant";
 type OpenCodePersistedSession = OpenCodeSession | OpenCodeGlobalSession;
@@ -954,6 +978,32 @@ function buildOpenCodePromptParts(
   return output;
 }
 
+/**
+ * The directories of a prompt's uploaded files. The prompt names each upload by its path, but the
+ * agent may only be given its own uploads, so each is found by its id under the daemon's uploads
+ * root rather than by the path the client sent.
+ */
+export function uploadDirectoriesForPrompt(
+  prompt: AgentPromptInput,
+  uploadsRoot: string | undefined,
+): string[] {
+  if (!uploadsRoot || typeof prompt === "string") {
+    return [];
+  }
+  const root = resolvePath(uploadsRoot);
+  const directories = prompt.flatMap((part) => {
+    if (part.type !== "uploaded_file") {
+      return [];
+    }
+    const directory = resolvePath(root, part.id);
+    const inside = relative(root, directory);
+    return inside && !inside.startsWith("..") && !isAbsolute(inside) && !inside.includes(sep)
+      ? [directory]
+      : [];
+  });
+  return [...new Set(directories)];
+}
+
 function buildOpenCodeUserTimelineText(prompt: AgentPromptInput): string {
   if (typeof prompt === "string") {
     return prompt;
@@ -1056,7 +1106,11 @@ function buildOpenCodeReplayPartTimelineEvent(params: {
   const { part, message } = params;
   if (part.type === "text" && part.text) {
     return buildOpenCodeReplayTimelineEvent({
-      item: { type: "assistant_message", text: part.text, messageId: message.id },
+      item: {
+        type: "assistant_message",
+        text: part.text,
+        messageId: message.id,
+      },
       message,
       part,
     });
@@ -1205,6 +1259,57 @@ function readOpenCodeMessageModel(
   };
 }
 
+// The Arena engine tags a battle attachment's text part with this key and the label to show.
+const ARENA_ATTACHMENT_METADATA_KEY = "arenaAttachment";
+
+/**
+ * A replayed user message with what it carried: images as base64, and a battle's attachments by
+ * label and kind rather than as text glued onto the prompt. OpenCode's own synthetic text stays out.
+ */
+function buildOpenCodeReplayUserMessage(
+  messageId: string,
+  parts: readonly OpenCodePart[],
+): Extract<AgentTimelineItem, { type: "user_message" }> | null {
+  let text = "";
+  const images: Array<{ mimeType: string; data: string }> = [];
+  const labeledAttachments: LabeledAttachment[] = [];
+  for (const part of parts) {
+    if (part.type === "text") {
+      const attachment = arenaAttachment(part.metadata);
+      if (attachment !== undefined) labeledAttachments.push(attachment);
+      else if (part.synthetic !== true) text += part.text;
+      continue;
+    }
+    if (part.type === "file" && part.mime.startsWith("image/")) {
+      const match = part.url.match(/^data:([^;,]+);base64,(.+)$/);
+      if (match?.[1] && match[2]) images.push({ mimeType: match[1], data: match[2] });
+    }
+  }
+  if (!text && images.length === 0 && labeledAttachments.length === 0) return null;
+  return {
+    type: "user_message",
+    text,
+    messageId,
+    ...(images.length > 0 ? { images } : {}),
+    ...(labeledAttachments.length > 0 ? { labeledAttachments } : {}),
+  };
+}
+
+interface LabeledAttachment {
+  label: string;
+  kind?: "file" | "text";
+}
+
+function arenaAttachment(
+  metadata: Record<string, unknown> | undefined,
+): LabeledAttachment | undefined {
+  const attachment = metadata?.[ARENA_ATTACHMENT_METADATA_KEY];
+  if (typeof attachment !== "object" || attachment === null) return undefined;
+  const { label, kind } = attachment as { label?: unknown; kind?: unknown };
+  if (typeof label !== "string") return undefined;
+  return kind === "file" || kind === "text" ? { label, kind } : { label };
+}
+
 function buildOpenCodeReplayTimelineEvents(
   message: OpenCodeSessionMessage,
 ): Extract<AgentStreamEvent, { type: "timeline" }>[] {
@@ -1213,19 +1318,8 @@ function buildOpenCodeReplayTimelineEvents(
     return [];
   }
   if (info.role === "user") {
-    const text = parts
-      .filter((part): part is Extract<OpenCodePart, { type: "text" }> => part.type === "text")
-      .map((part) => part.text)
-      .join("");
-
-    return text
-      ? [
-          buildOpenCodeReplayTimelineEvent({
-            item: { type: "user_message", text, messageId: info.id },
-            message: info,
-          }),
-        ]
-      : [];
+    const item = buildOpenCodeReplayUserMessage(info.id, parts);
+    return item ? [buildOpenCodeReplayTimelineEvent({ item, message: info })] : [];
   }
 
   const events: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
@@ -1257,6 +1351,7 @@ function buildOpenCodeReplayTimelineEvents(
 
 export const __openCodeInternals = {
   buildOpenCodePromptParts,
+  buildOpenCodeReplayUserMessage,
   buildOpenCodeSessionTimeline,
   buildOpenCodeModelContextWindowLookup,
   buildOpenCodeModelDefinition,
@@ -1280,12 +1375,126 @@ interface OpenCodeAgentClientDeps {
   createClient?: OpenCodeClientFactory;
   resolveHomeDir?: () => string;
   managedProcesses?: ManagedProcessRegistry;
+  arenaMode?: boolean;
+  getArenaPreviewBaseUrl?: () => string | null;
+  uploadsRoot?: string;
+  moveSession?: (input: OpenCodeMoveSessionInput) => Promise<void>;
+  forkArenaSession?: (input: OpenCodeArenaForkInput) => Promise<string>;
 }
 
-type OpenCodeClientFactory = (options: { baseUrl: string; directory: string }) => OpencodeClient;
+interface OpenCodeArenaForkInput {
+  serverUrl: string;
+  controlToken: string;
+  sessionId: string;
+  sourceCwd: string;
+  targetCwd: string;
+  /** Exclusive boundary: the first source message left out of the copy. */
+  messageId?: string;
+}
 
-function createSdkOpenCodeClient(options: { baseUrl: string; directory: string }): OpencodeClient {
-  return createOpencodeClient(options satisfies OpencodeClientConfig & { directory: string });
+interface OpenCodeMoveSessionInput {
+  serverUrl: string;
+  controlToken: string;
+  sessionId: string;
+  sourceCwd: string;
+  targetCwd: string;
+  copyChanges: boolean;
+}
+
+class OpenCodeMoveSessionError extends Error {
+  constructor(
+    readonly status: number,
+    body: string,
+  ) {
+    super(`Failed to move forked OpenCode session (${status})${body ? `: ${body}` : ""}`);
+  }
+}
+
+function isMissingOpenCodeMoveSessionRoute(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "status" in error &&
+    (error as Error & { status?: unknown }).status === 404
+  );
+}
+
+/**
+ * The Arena backend forks, moves, and rewrites the copy in one operation: a plain
+ * `session.fork` plus move keeps every source path in the copied transcript, and a model that
+ * reads them keeps working in the source checkout.
+ */
+async function forkArenaOpenCodeSession(input: OpenCodeArenaForkInput): Promise<string> {
+  const response = await fetch(
+    new URL(
+      `/arena/sessions/${encodeURIComponent(input.sessionId)}/fork`,
+      `${input.serverUrl.replace(/\/$/, "")}/`,
+    ),
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "x-paseo-control-token": input.controlToken,
+        "x-opencode-directory": input.sourceCwd,
+      },
+      body: JSON.stringify({
+        destination: input.targetCwd,
+        ...(input.messageId ? { messageID: input.messageId } : {}),
+      }),
+    },
+  );
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Failed to fork Arena session (${response.status})${body ? `: ${body}` : ""}`);
+  }
+  const data = (await response.json()) as { sessionID?: unknown };
+  if (typeof data.sessionID !== "string" || !data.sessionID) {
+    throw new Error("Arena session fork returned no session id");
+  }
+  return data.sessionID;
+}
+
+async function moveOpenCodeSession(input: OpenCodeMoveSessionInput): Promise<void> {
+  const response = await fetch(
+    new URL("/experimental/control-plane/move-session", `${input.serverUrl.replace(/\/$/, "")}/`),
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "x-paseo-control-token": input.controlToken,
+        "x-opencode-directory": input.sourceCwd,
+      },
+      body: JSON.stringify({
+        sessionID: input.sessionId,
+        destination: { directory: input.targetCwd },
+        moveChanges: false,
+        copyChanges: input.copyChanges,
+      }),
+    },
+  );
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new OpenCodeMoveSessionError(response.status, body);
+  }
+}
+
+type OpenCodeClientFactory = (options: {
+  baseUrl: string;
+  directory: string;
+  controlToken?: string;
+}) => OpencodeClient;
+
+function createSdkOpenCodeClient(options: {
+  baseUrl: string;
+  directory: string;
+  controlToken?: string;
+}): OpencodeClient {
+  return createOpencodeClient({
+    baseUrl: options.baseUrl,
+    directory: options.directory,
+    ...(options.controlToken ? { headers: { "x-paseo-control-token": options.controlToken } } : {}),
+  } satisfies OpencodeClientConfig & { directory: string });
 }
 
 export class OpenCodeAgentClient implements AgentClient {
@@ -1300,6 +1509,10 @@ export class OpenCodeAgentClient implements AgentClient {
   private readonly logger: Logger;
   private readonly runtimeSettings?: ProviderRuntimeSettings;
   private readonly modelContextWindows = new Map<string, number>();
+  private readonly arenaMode: boolean;
+  private readonly moveSession: (input: OpenCodeMoveSessionInput) => Promise<void>;
+  private readonly forkArenaSession: (input: OpenCodeArenaForkInput) => Promise<string>;
+  private readonly uploadsRoot: string | undefined;
 
   constructor(
     logger: Logger,
@@ -1313,9 +1526,145 @@ export class OpenCodeAgentClient implements AgentClient {
       OpenCodeServerManager.getInstance(this.logger, runtimeSettings, {
         managedProcesses: deps.managedProcesses,
         resolveHomeDir: deps.resolveHomeDir,
+        getArenaPreviewBaseUrl: deps.getArenaPreviewBaseUrl,
       });
     this.createOpenCodeClient = deps.createClient ?? createSdkOpenCodeClient;
     this.resolveHomeDir = deps.resolveHomeDir ?? resolveOpenCodeHomeDir;
+    this.uploadsRoot = deps.uploadsRoot;
+    this.arenaMode =
+      deps.arenaMode ??
+      Boolean(
+        process.env["PASEO_ARENA_BACKEND_ROOT"]?.trim() ||
+        process.env["PASEO_ARENA_BACKEND_EXECUTABLE"]?.trim(),
+      );
+    this.moveSession = deps.moveSession ?? moveOpenCodeSession;
+    this.forkArenaSession = deps.forkArenaSession ?? forkArenaOpenCodeSession;
+  }
+
+  private createServerClient(
+    server: OpenCodeServerAcquisition["server"],
+    directory: string,
+  ): OpencodeClient {
+    return this.createOpenCodeClient({
+      baseUrl: server.url,
+      directory,
+      ...(this.arenaMode ? { controlToken: server.controlToken } : {}),
+    });
+  }
+
+  async openArenaActivitySource(cwd: string): Promise<ArenaActivitySource | null> {
+    if (!this.arenaMode) return null;
+    let acquisition = await this.serverManager.acquireCurrent();
+    return {
+      read: async (sessionIDs) => {
+        // Follow backend rotations without restarting a healthy server on a
+        // transient read failure. Keep a reference until its replacement exists.
+        const current = await this.serverManager.acquireCurrent();
+        await acquisition.release();
+        acquisition = current;
+        const response = await fetch(new URL("/arena/activity", acquisition.server.url), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-directory": cwd,
+            "x-paseo-control-token": acquisition.server.controlToken,
+          },
+          body: JSON.stringify({ sessionIDs }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) throw new Error(`Arena activity request failed: ${response.status}`);
+        return ArenaSessionActivitySchema.array().parse(await response.json());
+      },
+      close: () => acquisition.release(),
+    };
+  }
+
+  async openArenaCheckoutCleanupSource(
+    sourceRepoRoot: string,
+  ): Promise<ArenaCheckoutCleanupSource | null> {
+    if (!this.arenaMode) return null;
+    let acquisition = await this.serverManager.acquireCurrent();
+    const request = async (operation: "inspect" | "prepare" | "release", worktreeRoot: string) => {
+      const current = await this.serverManager.acquireCurrent();
+      await acquisition.release();
+      acquisition = current;
+      const response = await fetch(
+        new URL(`/arena/checkout/${operation}`, acquisition.server.url),
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-opencode-directory": sourceRepoRoot,
+            "x-paseo-control-token": acquisition.server.controlToken,
+          },
+          body: JSON.stringify({ root: worktreeRoot }),
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(
+          `Arena checkout ${operation} failed with status ${response.status}: ${detail}`,
+        );
+      }
+      if (operation !== "inspect") return;
+      const result: unknown = await response.json();
+      if (typeof result !== "object" || result === null)
+        throw new Error("Arena checkout inspect returned invalid data");
+      const value = result as {
+        eligible?: unknown;
+        lastActivityAt?: unknown;
+        reason?: unknown;
+      };
+      if (
+        typeof value.eligible !== "boolean" ||
+        (value.lastActivityAt !== null && typeof value.lastActivityAt !== "string")
+      ) {
+        throw new Error("Arena checkout inspect returned invalid data");
+      }
+      return {
+        eligible: value.eligible,
+        lastActivityAt: value.lastActivityAt,
+        ...(typeof value.reason === "string" ? { reason: value.reason } : {}),
+      };
+    };
+    return {
+      inspect: (worktreeRoot) =>
+        request("inspect", worktreeRoot) as Promise<{
+          eligible: boolean;
+          lastActivityAt: string | null;
+          reason?: string;
+        }>,
+      prepare: async (worktreeRoot) => {
+        await request("prepare", worktreeRoot);
+      },
+      release: async (worktreeRoot) => {
+        await request("release", worktreeRoot);
+      },
+      close: () => acquisition.release(),
+    };
+  }
+
+  private acquireSessionServer(
+    launchContext?: AgentLaunchContext,
+  ): Promise<OpenCodeServerAcquisition> {
+    // Arena's backend already isolates contestant state by chat, session, and
+    // worktree. Sharing one ref-counted server avoids retaining a heavyweight
+    // Bun process for every open Arena workspace.
+    if (this.arenaMode || !launchContext?.env) {
+      return this.serverManager.acquireCurrent();
+    }
+    return this.serverManager.acquireDedicated(launchContext.env);
+  }
+
+  private arenaRecovery(config: OpenCodeAgentConfig): ArenaRuntimeRecovery | undefined {
+    if (!this.arenaMode) return;
+    return {
+      acquire: async (url) =>
+        this.serverManager.acquireExisting(url) ?? (await this.serverManager.acquireCurrent()),
+      createClient: (server) => this.createServerClient(server, config.cwd),
+    };
   }
 
   async createSession(
@@ -1324,14 +1673,9 @@ export class OpenCodeAgentClient implements AgentClient {
     options?: AgentCreateSessionOptions,
   ): Promise<AgentSession> {
     const openCodeConfig = this.assertConfig(config);
-    const acquisition = launchContext?.env
-      ? await this.serverManager.acquireDedicated(launchContext.env)
-      : await this.serverManager.acquireCurrent();
+    const acquisition = await this.acquireSessionServer(launchContext);
     const { url } = acquisition.server;
-    const client = this.createOpenCodeClient({
-      baseUrl: url,
-      directory: openCodeConfig.cwd,
-    });
+    const client = this.createServerClient(acquisition.server, openCodeConfig.cwd);
 
     try {
       const response = await withTimeout(
@@ -1361,11 +1705,168 @@ export class OpenCodeAgentClient implements AgentClient {
         options?.persistSession,
         launchContext?.agentId,
         url,
+        false,
+        this.arenaRecovery(openCodeConfig),
+        this.arenaMode ? acquisition.server.controlToken : undefined,
       );
     } catch (error) {
       await acquisition.release();
       throw error;
     }
+  }
+
+  async forkSession(input: AgentForkSessionInput): Promise<AgentSession> {
+    if (input.source.provider !== "opencode") {
+      throw new Error(`OpenCode cannot fork a ${input.source.provider} session`);
+    }
+    const sourceSessionId = input.source.sessionId.trim();
+    if (!sourceSessionId) {
+      throw new Error("OpenCode fork requires a source session id");
+    }
+    const openCodeConfig = this.assertConfig(input.config);
+    let acquisition = await this.acquireSessionServer(input.launchContext);
+    let { url } = acquisition.server;
+    const sourceClient = this.createServerClient(acquisition.server, input.sourceCwd);
+    let forkedSessionId: string | null = null;
+    let forkCwd = input.sourceCwd;
+
+    try {
+      const exclusiveBoundaryMessageId = input.throughMessageId
+        ? await this.resolveExclusiveForkBoundary(sourceClient, {
+            sessionId: sourceSessionId,
+            cwd: input.sourceCwd,
+            throughMessageId: input.throughMessageId,
+          })
+        : undefined;
+
+      if (this.arenaMode) {
+        forkedSessionId = await withTimeout(
+          this.forkArenaSession({
+            serverUrl: url,
+            controlToken: acquisition.server.controlToken,
+            sessionId: sourceSessionId,
+            sourceCwd: input.sourceCwd,
+            targetCwd: openCodeConfig.cwd,
+            ...(exclusiveBoundaryMessageId ? { messageId: exclusiveBoundaryMessageId } : {}),
+          }),
+          30_000,
+          "Arena session fork timed out after 30s",
+        );
+        forkCwd = openCodeConfig.cwd;
+      } else {
+        const forkResponse = await withTimeout(
+          sourceClient.session.fork({
+            sessionID: sourceSessionId,
+            directory: input.sourceCwd,
+            ...(exclusiveBoundaryMessageId ? { messageID: exclusiveBoundaryMessageId } : {}),
+          }),
+          10_000,
+          "OpenCode session.fork timed out after 10s",
+        );
+        if (forkResponse.error) {
+          throw new Error(
+            `Failed to fork OpenCode session: ${toDiagnosticErrorMessage(forkResponse.error)}`,
+          );
+        }
+        if (!forkResponse.data) {
+          throw new Error("OpenCode session fork returned no data");
+        }
+        forkedSessionId = forkResponse.data.id;
+      }
+
+      if (!this.arenaMode && !createPathEquivalenceMatcher(input.sourceCwd)(openCodeConfig.cwd)) {
+        const moveInput = {
+          serverUrl: url,
+          controlToken: acquisition.server.controlToken,
+          sessionId: forkedSessionId,
+          sourceCwd: input.sourceCwd,
+          targetCwd: openCodeConfig.cwd,
+          copyChanges: exclusiveBoundaryMessageId === undefined,
+        };
+        try {
+          await this.moveSession(moveInput);
+        } catch (error) {
+          if (!isMissingOpenCodeMoveSessionRoute(error)) {
+            throw error;
+          }
+          const refreshedAcquisition = await this.serverManager.acquireNew();
+          try {
+            await this.moveSession({
+              ...moveInput,
+              serverUrl: refreshedAcquisition.server.url,
+              controlToken: refreshedAcquisition.server.controlToken,
+            });
+          } catch (retryError) {
+            await refreshedAcquisition.release();
+            throw retryError;
+          }
+          await acquisition.release();
+          acquisition = refreshedAcquisition;
+          url = refreshedAcquisition.server.url;
+        }
+        forkCwd = openCodeConfig.cwd;
+      }
+
+      const targetClient = this.createServerClient(acquisition.server, openCodeConfig.cwd);
+      await this.populateModelContextWindowCache(targetClient, openCodeConfig.cwd);
+
+      return new OpenCodeAgentSession(
+        openCodeConfig,
+        targetClient,
+        forkedSessionId,
+        this.logger,
+        new Map(this.modelContextWindows),
+        acquisition.release,
+        input.options?.persistSession,
+        input.launchContext?.agentId,
+        url,
+        false,
+        this.arenaRecovery(openCodeConfig),
+        this.arenaMode ? acquisition.server.controlToken : undefined,
+      );
+    } catch (error) {
+      if (forkedSessionId) {
+        const cleanupClient = this.createServerClient(acquisition.server, forkCwd);
+        await cleanupClient.session
+          .delete({ sessionID: forkedSessionId, directory: forkCwd })
+          .catch((cleanupError) => {
+            this.logger.warn(
+              { err: cleanupError, sessionId: forkedSessionId },
+              "Failed to clean up forked OpenCode session",
+            );
+          });
+      }
+      await acquisition.release();
+      throw error;
+    }
+  }
+
+  /**
+   * OpenCode forks up to an exclusive message; the daemon selects an inclusive one, so the
+   * boundary is the message after the selected one, or nothing when it was the last.
+   */
+  private async resolveExclusiveForkBoundary(
+    sourceClient: OpencodeClient,
+    input: { sessionId: string; cwd: string; throughMessageId: string },
+  ): Promise<string | undefined> {
+    const messagesResponse = await sourceClient.session.messages({
+      sessionID: input.sessionId,
+      directory: input.cwd,
+      limit: 0,
+    });
+    if (messagesResponse.error) {
+      throw new Error(
+        `Failed to read source OpenCode history: ${toDiagnosticErrorMessage(messagesResponse.error)}`,
+      );
+    }
+    const messages = messagesResponse.data ?? [];
+    const throughIndex = messages.findIndex(
+      (message) => message.info.id === input.throughMessageId,
+    );
+    if (throughIndex < 0) {
+      throw new Error("The selected source message is no longer available");
+    }
+    return messages[throughIndex + 1]?.info.id;
   }
 
   async resumeSession(
@@ -1390,16 +1891,9 @@ export class OpenCodeAgentClient implements AgentClient {
     const registeredAcquisition = registeredServerUrl
       ? this.serverManager.acquireExisting(registeredServerUrl)
       : null;
-    const acquisition =
-      registeredAcquisition ??
-      (launchContext?.env
-        ? await this.serverManager.acquireDedicated(launchContext.env)
-        : await this.serverManager.acquireCurrent());
+    const acquisition = registeredAcquisition ?? (await this.acquireSessionServer(launchContext));
     const { url } = acquisition.server;
-    const client = this.createOpenCodeClient({
-      baseUrl: url,
-      directory: openCodeConfig.cwd,
-    });
+    const client = this.createServerClient(acquisition.server, openCodeConfig.cwd);
 
     try {
       await this.populateModelContextWindowCache(client, openCodeConfig.cwd);
@@ -1415,6 +1909,8 @@ export class OpenCodeAgentClient implements AgentClient {
         launchContext?.agentId,
         url,
         registeredAcquisition !== null,
+        this.arenaRecovery(openCodeConfig),
+        this.arenaMode ? acquisition.server.controlToken : undefined,
       );
     } catch (error) {
       await acquisition.release();
@@ -1426,7 +1922,6 @@ export class OpenCodeAgentClient implements AgentClient {
     const acquisition = options.force
       ? await this.serverManager.acquireNew()
       : await this.serverManager.acquireCurrent();
-    const { url } = acquisition.server;
     const isGlobalCatalog = options.scope === "global";
 
     try {
@@ -1442,7 +1937,7 @@ export class OpenCodeAgentClient implements AgentClient {
         );
       }
 
-      const client = this.createOpenCodeClient({ baseUrl: url, directory });
+      const client = this.createServerClient(acquisition.server, directory);
       const [models, modes] = await Promise.all([
         this.fetchModelsFromClient(client, directory),
         this.fetchModesFromClient(client, directory),
@@ -1456,11 +1951,7 @@ export class OpenCodeAgentClient implements AgentClient {
   async listCommands(config: AgentSessionConfig): Promise<AgentSlashCommand[]> {
     const openCodeConfig = this.assertConfig(config);
     const acquisition = await this.serverManager.acquireCurrent();
-    const { url } = acquisition.server;
-    const client = this.createOpenCodeClient({
-      baseUrl: url,
-      directory: openCodeConfig.cwd,
-    });
+    const client = this.createServerClient(acquisition.server, openCodeConfig.cwd);
 
     try {
       return await listOpenCodeCommandsFromSdk(client, openCodeConfig.cwd);
@@ -1473,15 +1964,76 @@ export class OpenCodeAgentClient implements AgentClient {
     return [buildOpenCodeAutoAcceptFeature(this.assertConfig(config))];
   }
 
+  /**
+   * The Arena backend owns the copy-on-write clone a contestant is seeded with, and it runs
+   * on Bun where the daemon does not, so a new worktree is seeded by asking it over HTTP.
+   */
+  async seedWorktreeIgnoredContent(input: {
+    sourceCwd: string;
+    worktreePath: string;
+  }): Promise<void> {
+    if (!this.arenaMode) return;
+    const acquisition = await this.serverManager.acquireCurrent();
+    try {
+      const response = await fetch(
+        new URL("/arena/worktrees/seed", `${acquisition.server.url.replace(/\/$/, "")}/`),
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-opencode-directory": input.sourceCwd,
+            "x-paseo-control-token": acquisition.server.controlToken,
+          },
+          body: JSON.stringify({
+            source: input.sourceCwd,
+            target: input.worktreePath,
+          }),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`Arena worktree seed failed with status ${response.status}: ${text}`);
+      }
+    } finally {
+      await acquisition.release();
+    }
+  }
+
+  /**
+   * OpenCode caches each directory's project, Git or not, for the life of the server, and
+   * refuses worktrees for a directory it cached as non-Git. Dispose that directory's instance
+   * after Git is set up under it so the next request detects the repository. OpenCode's own
+   * `project/git/init` reloads the instance the same way.
+   */
+  async refreshProjectDirectory(cwd: string): Promise<void> {
+    const acquisition = await this.serverManager.acquireCurrent();
+    try {
+      const response = await fetch(
+        new URL("/instance/dispose", `${acquisition.server.url.replace(/\/$/, "")}/`),
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "x-opencode-directory": cwd,
+            ...(this.arenaMode ? { "x-paseo-control-token": acquisition.server.controlToken } : {}),
+          },
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`OpenCode instance dispose failed with status ${response.status}: ${text}`);
+      }
+    } finally {
+      await acquisition.release();
+    }
+  }
+
   async listImportableSessions(
     options?: ListImportableSessionsOptions,
   ): Promise<ImportableProviderSession[]> {
     const acquisition = await this.serverManager.acquireCurrent();
-    const { url } = acquisition.server;
-    const client = this.createOpenCodeClient({
-      baseUrl: url,
-      directory: options?.cwd ?? "",
-    });
+    const client = this.createServerClient(acquisition.server, options?.cwd ?? "");
 
     try {
       return await collectOpenCodeImportableSessionsFromSdk(client, options);
@@ -1492,11 +2044,7 @@ export class OpenCodeAgentClient implements AgentClient {
 
   async importSession(input: ImportProviderSessionInput, context: ImportProviderSessionContext) {
     const acquisition = await this.serverManager.acquireCurrent();
-    const { url } = acquisition.server;
-    const client = this.createOpenCodeClient({
-      baseUrl: url,
-      directory: input.cwd,
-    });
+    const client = this.createServerClient(acquisition.server, input.cwd);
 
     try {
       const sessionResponse = await client.session.get({
@@ -1547,10 +2095,7 @@ export class OpenCodeAgentClient implements AgentClient {
     const acquisition =
       (registeredServerUrl ? this.serverManager.acquireExisting(registeredServerUrl) : null) ??
       (await this.serverManager.acquireCurrent());
-    const client = this.createOpenCodeClient({
-      baseUrl: acquisition.server.url,
-      directory: metadata.cwd,
-    });
+    const client = this.createServerClient(acquisition.server, metadata.cwd);
     try {
       // OpenCode accepts null to clear the archive timestamp, but this SDK
       // release's generated request type still exposes only number.
@@ -1568,7 +2113,9 @@ export class OpenCodeAgentClient implements AgentClient {
       );
       if (response?.error) {
         throw new Error(
-          `Failed to ${archivedAt === null ? "unarchive" : "archive"} OpenCode session: ${toDiagnosticErrorMessage(response.error)}`,
+          `Failed to ${
+            archivedAt === null ? "unarchive" : "archive"
+          } OpenCode session: ${toDiagnosticErrorMessage(response.error)}`,
         );
       }
     } finally {
@@ -1577,12 +2124,13 @@ export class OpenCodeAgentClient implements AgentClient {
   }
 
   async isAvailable(): Promise<boolean> {
-    const launch = await resolveProviderLaunch({
-      commandConfig: this.runtimeSettings?.command,
-      defaultBinary: "opencode",
-    });
-    const availability = await checkProviderLaunchAvailable(launch);
-    return availability.available;
+    try {
+      const launch = await resolveOpenCodeServerLaunch(this.runtimeSettings);
+      const availability = await checkProviderLaunchAvailable(launch);
+      return availability.available;
+    } catch {
+      return false;
+    }
   }
 
   async shutdown(): Promise<void> {
@@ -1591,39 +2139,54 @@ export class OpenCodeAgentClient implements AgentClient {
 
   async getDiagnostic(): Promise<{ diagnostic: string }> {
     try {
-      const launch = await resolveProviderLaunch({
-        commandConfig: this.runtimeSettings?.command,
-        defaultBinary: "opencode",
-      });
+      const launch = await resolveOpenCodeServerLaunch(this.runtimeSettings);
       const availability = await checkProviderLaunchAvailable(launch);
 
-      let authValue = "Not checked";
-      const authCommand = availability.available
-        ? (availability.resolvedPath ?? launch.command)
-        : null;
-      if (authCommand) {
-        try {
-          const { stdout, stderr } = await execCommand(
-            authCommand,
-            [...launch.args, "auth", "list"],
-            {
-              ...createProviderEnvSpec(),
-              timeout: 5_000,
-            },
-          );
-          const text = (stdout.trim() || stderr.trim()).trim();
-          authValue = text ? `\n    ${text.replace(/\n/g, "\n    ")}` : "(empty)";
-        } catch (error) {
-          authValue = `Error - ${toDiagnosticErrorMessage(error)}`;
+      let authValue = "Validated by the Agent Arena backend at request time";
+      if (launch.kind === "stock") {
+        authValue = "Not checked";
+        const authCommand = availability.available
+          ? (availability.resolvedPath ?? launch.command)
+          : null;
+        if (authCommand) {
+          try {
+            const { stdout, stderr } = await execCommand(
+              authCommand,
+              [...launch.args, "auth", "list"],
+              {
+                ...createProviderEnvSpec(),
+                timeout: 5_000,
+              },
+            );
+            const text = (stdout.trim() || stderr.trim()).trim();
+            authValue = text ? `\n    ${text.replace(/\n/g, "\n    ")}` : "(empty)";
+          } catch (error) {
+            authValue = `Error - ${toDiagnosticErrorMessage(error)}`;
+          }
         }
       }
+
+      const binaryRows =
+        launch.kind === "stock"
+          ? await buildBinaryDiagnosticRows(launch, availability)
+          : [
+              { label: "Backend command", value: launch.command },
+              {
+                label: "Resolved path",
+                value: availability.resolvedPath ?? "not found",
+              },
+            ];
 
       return {
         diagnostic: formatProviderDiagnostic("OpenCode", [
           ...(await buildCommandResolutionDiagnosticRows(launch, {
             knownBinaryNames: ["opencode"],
+            includeCommandProbes: launch.kind === "stock",
           })),
-          ...(await buildBinaryDiagnosticRows(launch, availability)),
+          ...binaryRows,
+          ...(launch.arenaBackendRoot
+            ? [{ label: "Arena backend", value: launch.arenaBackendRoot }]
+            : []),
           { label: "Auth", value: authValue },
         ]),
       };
@@ -1642,7 +2205,9 @@ export class OpenCodeAgentClient implements AgentClient {
       withTimeout(
         client.provider.list({ directory }),
         OPENCODE_PROVIDER_LIST_TIMEOUT_MS,
-        `OpenCode provider.list timed out after ${OPENCODE_PROVIDER_LIST_TIMEOUT_MS / 1000}s - server may not be authenticated or connected to any providers`,
+        `OpenCode provider.list timed out after ${
+          OPENCODE_PROVIDER_LIST_TIMEOUT_MS / 1000
+        }s - server may not be authenticated or connected to any providers`,
       ),
     );
 
@@ -1661,6 +2226,29 @@ export class OpenCodeAgentClient implements AgentClient {
       connectedProviderIds.has(provider.id) || provider.source === "api";
 
     if (!providers.all.some(isAccessible)) {
+      if (this.arenaMode && providers.all.length === 0 && providers.connected.length === 0) {
+        return [
+          {
+            provider: "opencode",
+            id: "openrouter/deepseek/deepseek-v4-flash",
+            label: "DeepSeek V4 Flash",
+            description: "OpenRouter",
+            thinkingOptions: [
+              { id: "low", label: "Low" },
+              { id: "high", label: "High", isDefault: true },
+              { id: "max", label: "Max" },
+            ],
+            defaultThinkingOptionId: "high",
+            metadata: {
+              providerId: "openrouter",
+              providerName: "OpenRouter",
+              modelId: "deepseek/deepseek-v4-flash",
+              supportsReasoning: true,
+              supportsToolCall: true,
+            },
+          },
+        ];
+      }
       throw new Error(
         "OpenCode has no connected providers. Please authenticate with at least one provider " +
           "(e.g., openai, anthropic), set appropriate environment variables (e.g., OPENAI_API_KEY), " +
@@ -1719,7 +2307,12 @@ export class OpenCodeAgentClient implements AgentClient {
       throw new Error(`OpenCodeAgentClient received config for provider '${config.provider}'`);
     }
     const providerOptions = OpenCodeProviderOptionsSchema.parse(config.providerOptions ?? {});
-    return normalizeOpenCodeConfig({ ...config, provider: "opencode", providerOptions });
+    return normalizeOpenCodeConfig({
+      ...config,
+      provider: "opencode",
+      providerOptions,
+      ...(this.uploadsRoot ? { uploadsRoot: this.uploadsRoot } : {}),
+    });
   }
 
   private async populateModelContextWindowCache(
@@ -1860,78 +2453,24 @@ function isOpenCodeTodoWriteToolPart(part: OpenCodeToolPartEventPart | OpenCodeP
   return part.type === "tool" && part.tool.trim().toLowerCase() === "todowrite";
 }
 
-function readOpenCodeTodoItems(
-  value: unknown,
-): Array<{ content?: string | null; status?: string | null }> | null {
-  if (typeof value === "string") {
-    try {
-      return readOpenCodeTodoItems(JSON.parse(value));
-    } catch {
-      return null;
-    }
-  }
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => {
-      const record = readOpenCodeRecord(entry);
-      if (!record) {
-        return [];
-      }
-      const content = readNonEmptyString(record.content);
-      if (!content) {
-        return [];
-      }
-      return [
-        {
-          content,
-          status: readNonEmptyString(record.status),
-        },
-      ];
-    });
-  }
-  const record = readOpenCodeRecord(value);
-  if (!record) {
-    return null;
-  }
-  return readOpenCodeTodoItems(record.todos);
-}
-
 function readOpenCodeTodoItemsFromToolPart(
   part: Extract<OpenCodePart, { type: "tool" }>,
-): Array<{ content?: string | null; status?: string | null }> | null {
-  const state = readOpenCodeRecord(part.state);
-  return (
-    readOpenCodeTodoItems(state?.input) ??
-    readOpenCodeTodoItems(state?.output) ??
-    readOpenCodeTodoItems(state?.metadata)
-  );
+): OpenCodeTodo[] | null {
+  if (part.state.status !== "completed") return null;
+  return parseOpenCodeTodoWriteState(part.state);
 }
 
 function mapOpenCodeTodosToTimelineItems(
-  todos: Array<{ content?: string | null; status?: string | null }>,
+  todos: OpenCodeTodo[],
 ): Extract<AgentTimelineItem, { type: "todo" }> {
   return {
     type: "todo",
-    items: todos.flatMap((todo) => {
-      const text = readNonEmptyString(todo.content);
-      if (!text) {
-        return [];
-      }
-
-      return [
-        {
-          text,
-          status: normalizeOpenCodeTodoStatus(todo.status),
-          completed: todo.status === "completed",
-        },
-      ];
-    }),
+    items: todos.map((todo) => ({
+      text: todo.content,
+      status: todo.status,
+      completed: todo.status === "completed",
+    })),
   };
-}
-
-function normalizeOpenCodeTodoStatus(status?: string | null) {
-  if (status === "completed") return "completed" as const;
-  if (status === "in_progress" || status === "inProgress") return "in_progress" as const;
-  return "pending" as const;
 }
 
 function createCompactionTimelineItem(
@@ -2033,6 +2572,14 @@ function buildOpenCodePermissionDetail(params: {
     };
   }
 
+  // The scope is already the request's description. Name the file the request is for, if it names
+  // one, rather than show the raw request, which carries internal message and call ids.
+  if (params.permission === "external_directory") {
+    const metadata = readOpenCodeRecord(params.input.metadata);
+    const filePath = readFirstStringFromRecord(metadata, ["filepath", "filePath", "path"]);
+    return { type: "plain_text", ...(filePath ? { text: filePath } : {}), icon: "eye" };
+  }
+
   return {
     type: "unknown",
     input: {
@@ -2088,10 +2635,12 @@ export function translateOpenCodeEvent(
       break;
     case "todo.updated":
       if (event.properties.sessionID === state.sessionId) {
+        const todos = parseOpenCodeTodoList(event.properties.todos);
+        if (todos === null) break;
         events.push({
           type: "timeline",
           provider: "opencode",
-          item: mapOpenCodeTodosToTimelineItems(event.properties.todos),
+          item: mapOpenCodeTodosToTimelineItems(todos),
         });
       }
       break;
@@ -2107,7 +2656,11 @@ export function translateOpenCodeEvent(
     case "session.idle":
       if (event.properties.sessionID === state.sessionId) {
         resetOpenCodeTurnTrackingState(state);
-        events.push({ type: "turn_completed", provider: "opencode", usage: undefined });
+        events.push({
+          type: "turn_completed",
+          provider: "opencode",
+          usage: undefined,
+        });
       }
       break;
     case "session.error":
@@ -2636,14 +3189,23 @@ function appendOpenCodeTextPart(
   events: AgentStreamEvent[],
 ): void {
   if (messageRole === "user") {
-    if (!part.time?.end || !part.text || state.emittedUserMessageIds?.has(part.messageID)) {
+    if (
+      part.synthetic ||
+      !part.time?.end ||
+      !part.text ||
+      state.emittedUserMessageIds?.has(part.messageID)
+    ) {
       return;
     }
     state.emittedUserMessageIds?.add(part.messageID);
     events.push({
       type: "timeline",
       provider: "opencode",
-      item: { type: "user_message", text: part.text, messageId: part.messageID },
+      item: {
+        type: "user_message",
+        text: part.text,
+        messageId: part.messageID,
+      },
     });
     return;
   }
@@ -2658,7 +3220,11 @@ function appendOpenCodeTextPart(
     events.push({
       type: "timeline",
       provider: "opencode",
-      item: { type: "assistant_message", text: part.text, messageId: part.messageID },
+      item: {
+        type: "assistant_message",
+        text: part.text,
+        messageId: part.messageID,
+      },
     });
   }
 }
@@ -2762,7 +3328,12 @@ function appendOpenCodePermissionAsked(
   const command = readPermissionField(metadata, PERMISSION_COMMAND_KEYS);
   const cwd = readPermissionField(metadata, PERMISSION_CWD_KEYS);
   const reason = readPermissionField(metadata, PERMISSION_REASON_KEYS);
-  const input = buildOpenCodePermissionInput({ patterns, metadata, tool, command });
+  const input = buildOpenCodePermissionInput({
+    patterns,
+    metadata,
+    tool,
+    command,
+  });
   const detail = buildOpenCodePermissionDetail({
     permission: event.properties.permission,
     input,
@@ -2879,7 +3450,11 @@ function appendOpenCodeSessionStatus(
   const { status } = event.properties;
   if (status.type === "idle") {
     resetOpenCodeTurnTrackingState(state);
-    events.push({ type: "turn_completed", provider: "opencode", usage: undefined });
+    events.push({
+      type: "turn_completed",
+      provider: "opencode",
+      usage: undefined,
+    });
     return;
   }
   if (status.type === "retry") {
@@ -2957,6 +3532,10 @@ function unwrapOpenCodeGlobalEvent(event: unknown): OpenCodeEvent | null {
   }
 
   return null;
+}
+
+function getOpenCodeGlobalEventDirectory(event: unknown): string | undefined {
+  return readNonEmptyString(readOpenCodeRecord(event)?.directory) ?? undefined;
 }
 
 function getOpenCodeEventSessionId(event: OpenCodeEvent): string | null {
@@ -3087,12 +3666,17 @@ async function listOpenCodeChildSessions(
   return readOpenCodeChildSessionInfosFromResponse(sessionIdResponse) ?? [];
 }
 
+interface ArenaRuntimeRecovery {
+  acquire(url: string): Promise<OpenCodeServerAcquisition>;
+  createClient(server: OpenCodeServerAcquisition["server"]): OpencodeClient;
+}
+
 class OpenCodeAgentSession implements AgentSession {
   readonly provider = "opencode" as const;
   readonly capabilities = OPENCODE_CAPABILITIES;
 
   private readonly config: OpenCodeAgentConfig;
-  private readonly client: OpencodeClient;
+  private client: OpencodeClient;
   private readonly sessionId: string;
   private readonly logger: Logger;
   private readonly modelContextWindowsByModelKey: ReadonlyMap<string, number>;
@@ -3146,6 +3730,8 @@ class OpenCodeAgentSession implements AgentSession {
   private readonly unrelatedSessionIds = new Set<string>();
   private selectedModelContextWindowMaxTokens: number | undefined;
   private releaseServer: (() => Promise<void>) | null;
+  private readonly arenaStreamKey: string;
+  private arenaRecoveryTask: Promise<void> | undefined;
   private eventStreamAbortController: AbortController | null = null;
   private eventStreamReady: Deferred<void> | null = null;
   private eventStreamTask: Promise<void> | null = null;
@@ -3161,11 +3747,14 @@ class OpenCodeAgentSession implements AgentSession {
     releaseServer?: () => Promise<void>,
     persistSession = true,
     private readonly agentId?: string,
-    private readonly serverUrl?: string,
+    private serverUrl?: string,
     private readonly externallyDriven = false,
+    private readonly arenaRuntimeRecovery?: ArenaRuntimeRecovery,
+    private controlToken?: string,
   ) {
     this.config = config;
     this.client = client;
+    this.arenaStreamKey = JSON.stringify([serverUrl, sessionId]);
     this.sessionId = sessionId;
     this.logger = logger.child({ agentId: this.agentId });
     this.modelContextWindowsByModelKey = modelContextWindowsByModelKey;
@@ -3189,6 +3778,255 @@ class OpenCodeAgentSession implements AgentSession {
 
   get features(): AgentFeature[] {
     return [buildOpenCodeAutoAcceptFeature(this.config)];
+  }
+
+  get arena(): AgentSession["arena"] {
+    if (!this.serverUrl) return undefined;
+    return {
+      streamKey: this.arenaStreamKey,
+      stream: (target, signal, userId) => this.arenaStream(target, signal, userId),
+      resolve: (userId) =>
+        this.arenaRequest(
+          `/arena/sessions/${encodeURIComponent(this.sessionId)}${
+            userId ? `?userID=${encodeURIComponent(userId)}` : ""
+          }`,
+        ),
+      singleAgentVote: (ratingId, vote, participantId) =>
+        this.arenaRequest(
+          `/arena/sessions/${encodeURIComponent(this.sessionId)}/single-agent-vote`,
+          {
+            method: "POST",
+            body: { ratingID: ratingId, vote, participantID: participantId },
+          },
+        ),
+      archive: () =>
+        this.arenaOptionalRequest(`/arena/sessions/${encodeURIComponent(this.sessionId)}/archive`, {
+          method: "POST",
+        }),
+      snapshot: (chatId) => this.arenaRequest(`/arena/chats/${encodeURIComponent(chatId)}`),
+      turn: (turnId) => this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}`),
+      start: (chatId, prompt, participantId, autoAccept, attachments) =>
+        this.arenaRequest(`/arena/chats/${encodeURIComponent(chatId)}/turns`, {
+          method: "POST",
+          body: {
+            prompt,
+            participantID: participantId,
+            autoAccept,
+            ...(attachments?.length ? { attachments } : {}),
+          },
+        }),
+      reply: (turnId, prompt, target, attachments) =>
+        this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/reply`, {
+          method: "POST",
+          body: { prompt, target, ...(attachments?.length ? { attachments } : {}) },
+        }),
+      vote: (turnId, vote, participantId) =>
+        this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/vote`, {
+          method: "POST",
+          body: { vote, participantID: participantId },
+        }),
+      recordReview: (turnId, events, participantId, ipAddress) =>
+        this.arenaFetch(
+          `/arena/turns/${encodeURIComponent(turnId)}/review-events`,
+          ArenaReviewIngestResultSchema,
+          {
+            method: "POST",
+            body: {
+              events: [...events],
+              participantID: participantId,
+              ...(ipAddress ? { ipAddress } : {}),
+            },
+          },
+        ),
+      stop: (turnId) =>
+        this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/stop`, {
+          method: "POST",
+        }),
+      resolveStop: (turnId, resolution) =>
+        this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/stop-resolution`, {
+          method: "POST",
+          body: { resolution },
+        }),
+      retryComparison: (turnId) =>
+        this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/retry-comparison`, {
+          method: "POST",
+        }),
+      retryResolution: (turnId, mode, answers) =>
+        this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/retry-resolution`, {
+          method: "POST",
+          body: { ...(mode ? { mode } : {}), ...(answers?.length ? { answers } : {}) },
+        }),
+      diff: (turnId) => this.arenaDiff(`/arena/turns/${encodeURIComponent(turnId)}/diff`),
+      replyQuestion: (runId, requestId, answers) =>
+        this.arenaRequest(
+          `/arena/runs/${encodeURIComponent(
+            runId,
+          )}/questions/${encodeURIComponent(requestId)}/reply`,
+          { method: "POST", body: { answers } },
+        ),
+      rejectQuestion: (runId, requestId) =>
+        this.arenaRequest(
+          `/arena/runs/${encodeURIComponent(
+            runId,
+          )}/questions/${encodeURIComponent(requestId)}/reject`,
+          { method: "POST" },
+        ),
+      replyPermission: (runId, requestId, response) =>
+        this.arenaRequest(
+          `/arena/runs/${encodeURIComponent(
+            runId,
+          )}/permissions/${encodeURIComponent(requestId)}/reply`,
+          { method: "POST", body: { response } },
+        ),
+    };
+  }
+
+  private ensureArenaRuntime(): Promise<void> {
+    if (!this.arenaRuntimeRecovery || !this.serverUrl) return Promise.resolve();
+    if (!this.arenaRecoveryTask) {
+      this.arenaRecoveryTask = this.recoverArenaRuntime().finally(() => {
+        this.arenaRecoveryTask = undefined;
+      });
+    }
+    return this.arenaRecoveryTask;
+  }
+
+  private async recoverArenaRuntime(): Promise<void> {
+    const recovery = this.arenaRuntimeRecovery;
+    const url = this.serverUrl;
+    if (!recovery || !url) return;
+    const acquisition = await recovery.acquire(url);
+    let adopted = false;
+    try {
+      if (this.closed) throw new Error("OpenCode session is closed");
+      if (acquisition.server.url === url) return;
+      const client = recovery.createClient(acquisition.server);
+      this.eventStreamAbortController?.abort();
+      await this.eventStreamTask?.catch(() => {});
+      if (this.closed) throw new Error("OpenCode session is closed");
+      const release = this.releaseServer;
+      this.client = client;
+      this.serverUrl = acquisition.server.url;
+      this.controlToken = acquisition.server.controlToken;
+      this.releaseServer = acquisition.release;
+      adopted = true;
+      await release?.();
+      // Arena reconnects must also move canonical transcript reads to the new backend.
+      // The stream namespace stays stable while the managed backend changes ports.
+      this.startEventStream();
+    } finally {
+      if (!adopted) await acquisition.release();
+    }
+  }
+
+  private async *arenaStream(
+    target: ArenaStreamTarget,
+    signal: AbortSignal,
+    userId?: string,
+  ): AsyncGenerator<ArenaStreamFrame> {
+    await this.ensureArenaRuntime();
+    if (!this.serverUrl) throw new Error("OpenCode Arena runtime is unavailable");
+    const url = new URL(
+      `/arena/sessions/${encodeURIComponent(this.sessionId)}/stream`,
+      this.serverUrl,
+    );
+    if (target.kind === "turn") url.searchParams.set("turnID", target.turnId);
+    if (userId) url.searchParams.set("userID", userId);
+    const response = await fetch(url, {
+      signal,
+      headers: {
+        Accept: "text/event-stream",
+        "x-opencode-directory": this.config.cwd,
+        ...(this.controlToken ? { "x-paseo-control-token": this.controlToken } : {}),
+      },
+    });
+    if (!response.ok || !response.body) throw new Error(`Arena stream failed (${response.status})`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (!signal.aborted) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, "\n");
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+          const event = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = event
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (data) yield ArenaStreamFrameSchema.parse(JSON.parse(data));
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  }
+
+  private async arenaRequest(
+    path: string,
+    options?: { method: "POST"; body?: Record<string, unknown> },
+  ): Promise<ArenaSnapshot> {
+    return this.arenaFetch(path, ArenaSnapshotSchema, options);
+  }
+
+  private async arenaOptionalRequest(
+    path: string,
+    options: { method: "POST"; body?: Record<string, unknown> },
+  ): Promise<ArenaSnapshot | null> {
+    return this.arenaFetch(path, ArenaSnapshotSchema.nullable(), {
+      ...options,
+      allowNotFound: true,
+    });
+  }
+
+  private async arenaDiff(path: string): Promise<ArenaComparisonDiff> {
+    return this.arenaFetch(path, ArenaComparisonDiffSchema);
+  }
+
+  private async arenaFetch<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    options?: {
+      method: "POST";
+      body?: Record<string, unknown>;
+      allowNotFound?: boolean;
+    },
+  ): Promise<T> {
+    await this.ensureArenaRuntime();
+    if (!this.serverUrl) throw new Error("OpenCode Arena runtime is unavailable");
+    const response = await fetch(new URL(path, `${this.serverUrl.replace(/\/$/, "")}/`), {
+      method: options?.method ?? "GET",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "x-opencode-directory": this.config.cwd,
+        ...(this.controlToken ? { "x-paseo-control-token": this.controlToken } : {}),
+      },
+      ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
+    });
+    const value: unknown = await response.json().catch(() => null);
+    if (response.status === 404 && options?.allowNotFound) {
+      return schema.parse(null);
+    }
+    if (!response.ok) {
+      const message =
+        value &&
+        typeof value === "object" &&
+        "data" in value &&
+        value.data &&
+        typeof value.data === "object" &&
+        "message" in value.data &&
+        typeof value.data.message === "string"
+          ? value.data.message
+          : `Arena request failed with status ${response.status}`;
+      throw new Error(message);
+    }
+    return schema.parse(value);
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
@@ -3352,14 +4190,20 @@ class OpenCodeAgentSession implements AgentSession {
       }
     } catch (error) {
       this.logger.warn(
-        { err: error, sessionId: this.sessionId, turnId: stop.pendingCancellationTurnId },
+        {
+          err: error,
+          sessionId: this.sessionId,
+          turnId: stop.pendingCancellationTurnId,
+        },
         "Failed to reconcile the OpenCode stop with provider session status",
       );
     }
   }
 
   private async readProviderRunnerStatus(): Promise<OpenCodeRunnerStatus> {
-    const response = await this.client.session.status({ directory: this.config.cwd });
+    const response = await this.client.session.status({
+      directory: this.config.cwd,
+    });
     if (response.error) {
       throw new Error(
         `Failed to confirm OpenCode session status: ${toDiagnosticErrorMessage(response.error)}`,
@@ -3379,6 +4223,40 @@ class OpenCodeAgentSession implements AgentSession {
       throw new Error(`OpenCode returned an unknown session status '${statusType ?? "missing"}'`);
     }
     return statusType;
+  }
+
+  /**
+   * An uploaded file sits outside the agent's working directory, so OpenCode would ask before
+   * reading it. Open each upload's own directory to this session first, the way a battle opens it to
+   * its contestants; other uploads stay closed. A failed grant only means the agent asks.
+   */
+  private async allowReadingUploads(prompt: AgentPromptInput): Promise<void> {
+    const directories = uploadDirectoriesForPrompt(prompt, this.config.uploadsRoot);
+    if (directories.length === 0) {
+      return;
+    }
+    try {
+      const response = await this.client.session.update({
+        sessionID: this.sessionId,
+        directory: this.config.cwd,
+        permission: directories.map((directory) => ({
+          permission: "external_directory",
+          pattern: `${directory}/*`,
+          action: "allow" as const,
+        })),
+      });
+      if (response.error) {
+        this.logger.warn(
+          { err: response.error, sessionId: this.sessionId },
+          "OpenCode did not open uploaded files to the session",
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        { err: error, sessionId: this.sessionId },
+        "OpenCode did not open uploaded files to the session",
+      );
+    }
   }
 
   async startTurn(
@@ -3508,7 +4386,11 @@ class OpenCodeAgentSession implements AgentSession {
             return;
           }
           this.finishForegroundTurn(
-            { type: "turn_failed", provider: "opencode", error: toDiagnosticErrorMessage(err) },
+            {
+              type: "turn_failed",
+              provider: "opencode",
+              error: toDiagnosticErrorMessage(err),
+            },
             turnId,
           );
         });
@@ -3534,6 +4416,7 @@ class OpenCodeAgentSession implements AgentSession {
             this.config.providerOptions,
             this.config.toolPolicy,
           );
+          await this.allowReadingUploads(prompt);
           const promptResponse = await this.client.session.promptAsync({
             sessionID: this.sessionId,
             directory: this.config.cwd,
@@ -3573,7 +4456,11 @@ class OpenCodeAgentSession implements AgentSession {
             turnId,
             error:
               error instanceof Error
-                ? { name: error.name, message: error.message, stack: error.stack }
+                ? {
+                    name: error.name,
+                    message: error.message,
+                    stack: error.stack,
+                  }
                 : String(error),
           });
           this.finishForegroundTurn(
@@ -3741,8 +4628,11 @@ class OpenCodeAgentSession implements AgentSession {
     messages: ReadonlyArray<OpenCodeSessionMessage>,
   ): void {
     const lastAssistant = messages.findLast(
-      (message): message is OpenCodeSessionMessage & { info: OpenCodeAssistantMessage } =>
-        message.info.role === "assistant",
+      (
+        message,
+      ): message is OpenCodeSessionMessage & {
+        info: OpenCodeAssistantMessage;
+      } => message.info.role === "assistant",
     );
     if (!lastAssistant) {
       return;
@@ -3916,13 +4806,14 @@ class OpenCodeAgentSession implements AgentSession {
   }): Promise<void> {
     const { rawEvent, eventCount } = params;
     let turnId = this.activeForegroundTurnId;
+    const eventDirectory = getOpenCodeGlobalEventDirectory(rawEvent);
     const event = unwrapOpenCodeGlobalEvent(rawEvent);
     this.traceOpenCode("provider.opencode.raw_event", {
       turnId: turnId ?? undefined,
       n: eventCount,
       type: event?.type,
       rawType: readOpenCodeRecord(rawEvent)?.type,
-      directory: readOpenCodeRecord(rawEvent)?.directory,
+      directory: eventDirectory,
       rawEvent,
       properties: event?.properties,
     });
@@ -3933,7 +4824,7 @@ class OpenCodeAgentSession implements AgentSession {
     if (this.discardEventWhileStopping(event, eventCount)) {
       return;
     }
-    const translated = await this.translateEvent(event);
+    const translated = await this.translateEvent(event, eventDirectory);
     const foregroundEvents: AgentStreamEvent[] = [];
     for (const translatedEvent of translated) {
       if (isOpenCodeProviderInternalEvent(translatedEvent)) {
@@ -3964,7 +4855,10 @@ class OpenCodeAgentSession implements AgentSession {
 
     for (const e of foregroundEvents) {
       if (this.activeForegroundTurnId !== turnId) {
-        this.traceOpenCode("provider.opencode.parsed_event.skip_active", { turnId, type: e.type });
+        this.traceOpenCode("provider.opencode.parsed_event.skip_active", {
+          turnId,
+          type: e.type,
+        });
         return;
       }
       if (e.type === "timeline" && e.item.type === "tool_call") {
@@ -4300,6 +5194,13 @@ class OpenCodeAgentSession implements AgentSession {
     }
 
     const enabled = value === true;
+    if (this.controlToken) {
+      await this.arenaFetch(
+        `/arena/sessions/${encodeURIComponent(this.sessionId)}/auto-accept`,
+        z.null(),
+        { method: "POST", body: { enabled } },
+      );
+    }
     this.autoAcceptEnabled = enabled;
     this.config.featureValues = {
       ...this.config.featureValues,
@@ -4718,7 +5619,10 @@ class OpenCodeAgentSession implements AgentSession {
     });
   }
 
-  private async translateEvent(event: OpenCodeEvent): Promise<AgentStreamEvent[]> {
+  private async translateEvent(
+    event: OpenCodeEvent,
+    eventDirectory?: string,
+  ): Promise<AgentStreamEvent[]> {
     const eventSessionId = getOpenCodeEventSessionId(event);
     if (
       event.type !== "session.created" &&
@@ -4749,7 +5653,10 @@ class OpenCodeAgentSession implements AgentSession {
     for (const translatedEvent of translated) {
       this.recordProviderInternalEvent(translatedEvent);
       if (translatedEvent.type === "permission_requested") {
+        // Arena can move the main session into a chat worktree without changing its session ID.
+        // The global event envelope identifies the InstanceState that owns the pending request.
         const directory =
+          eventDirectory ??
           (eventSessionId ? this.childSessionCwds.get(eventSessionId) : undefined) ??
           this.config.cwd;
         const autoApproved = await this.tryAutoApproveToolPermission(

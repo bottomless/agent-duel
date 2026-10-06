@@ -31,15 +31,12 @@ function source(gitActions: GitActions): {
       gitActions,
       labels: {
         section: "Workspace actions",
-        newAgent: "New agent",
         newTerminal: "New terminal",
         newBrowser: "New browser",
-        splitRight: "Split pane right",
-        splitDown: "Split pane down",
       },
       icons: {},
       shortcuts: {},
-      capabilities: { canSplitPanes: true, canOpenBrowserTabs: true },
+      capabilities: { canOpenBrowserTabs: true },
       dispatch: (action) => dispatched.push(action),
       runGitAction: (action) => runGitActions.push(action),
     },
@@ -79,7 +76,7 @@ describe("workspace command center contributions", () => {
     expect(contributions.filter((item) => item.id === "git:pull")).toHaveLength(1);
   });
 
-  it("orders New agent before Git and keeps terminal, browser, and splits search-only", () => {
+  it("orders New agent before Git and keeps terminal and browser search-only", () => {
     const fixture = source({
       primary: gitAction("commit", "Commit"),
       secondary: [],
@@ -89,22 +86,19 @@ describe("workspace command center contributions", () => {
     const contributions = buildWorkspaceCommandCenterContributions(fixture.value);
 
     expect(contributions.map(({ id, rank, visibility }) => ({ id, rank, visibility }))).toEqual([
-      { id: "tab:new-agent", rank: 0, visibility: "always" },
-      { id: "git:commit", rank: 1, visibility: "always" },
-      { id: "tab:new-terminal", rank: 2, visibility: "query" },
-      { id: "tab:new-browser", rank: 3, visibility: "query" },
-      { id: "pane:split-right", rank: 4, visibility: "query" },
-      { id: "pane:split-down", rank: 5, visibility: "query" },
+      { id: "git:commit", rank: 0, visibility: "always" },
+      { id: "tab:new-terminal", rank: 1, visibility: "query" },
+      { id: "tab:new-browser", rank: 2, visibility: "query" },
     ]);
   });
 
-  it("omits browser and split actions when their existing capabilities are unavailable", () => {
+  it("omits the browser action when the capability is unavailable", () => {
     const fixture = source({ primary: null, secondary: [], menu: [] });
-    fixture.value.capabilities = { canSplitPanes: false, canOpenBrowserTabs: false };
+    fixture.value.capabilities = { canOpenBrowserTabs: false };
 
     const contributions = buildWorkspaceCommandCenterContributions(fixture.value);
 
-    expect(contributions.map((item) => item.id)).toEqual(["tab:new-agent", "tab:new-terminal"]);
+    expect(contributions.map((item) => item.id)).toEqual(["tab:new-terminal"]);
   });
 
   it("dispatches every tab and pane command to the workspace scope", () => {
@@ -114,11 +108,8 @@ describe("workspace command center contributions", () => {
     for (const contribution of contributions) contribution.run();
 
     expect(fixture.dispatched).toEqual([
-      { id: "workspace.tab.new", scope: "workspace" },
       { id: "workspace.terminal.new", scope: "workspace" },
       { id: "workspace.browser.new", scope: "workspace" },
-      { id: "workspace.pane.split.right", scope: "workspace" },
-      { id: "workspace.pane.split.down", scope: "workspace" },
     ]);
   });
 
@@ -127,13 +118,24 @@ describe("workspace command center contributions", () => {
 
     const contributions = buildWorkspaceCommandCenterContributions(fixture.value);
 
+    expect(contributions.map((item) => item.id)).toEqual(["tab:new-terminal", "tab:new-browser"]);
+    expect(contributions.some((item) => item.id.startsWith("git:"))).toBe(false);
+  });
+
+  it("offers the overflow menu's actions when no Git action can be promoted", () => {
+    const fixture = source({
+      primary: null,
+      secondary: [],
+      menu: [gitAction("create-branch", "Create branch"), gitAction("pull", "Pull")],
+    });
+
+    const contributions = buildWorkspaceCommandCenterContributions(fixture.value);
+
     expect(contributions.map((item) => item.id)).toEqual([
-      "tab:new-agent",
       "tab:new-terminal",
       "tab:new-browser",
-      "pane:split-right",
-      "pane:split-down",
+      "git:create-branch",
+      "git:pull",
     ]);
-    expect(contributions.some((item) => item.id.startsWith("git:"))).toBe(false);
   });
 });

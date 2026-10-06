@@ -5,27 +5,18 @@ import type { CommandCenterContribution, CommandCenterIcon } from "./contributio
 
 export interface WorkspaceCommandCenterLabels {
   section: string;
-  newAgent: string;
   newTerminal: string;
   newBrowser: string;
-  splitRight: string;
-  splitDown: string;
 }
 
 export interface WorkspaceCommandCenterIcons {
-  newAgent?: CommandCenterIcon;
   newTerminal?: CommandCenterIcon;
   newBrowser?: CommandCenterIcon;
-  splitRight?: CommandCenterIcon;
-  splitDown?: CommandCenterIcon;
   git?(action: GitAction): CommandCenterIcon | undefined;
 }
 
 export interface WorkspaceCommandCenterShortcuts {
-  newAgent?: ShortcutKey[][];
   newTerminal?: ShortcutKey[][];
-  splitRight?: ShortcutKey[][];
-  splitDown?: ShortcutKey[][];
   archiveWorkspace?: ShortcutKey[][];
 }
 
@@ -35,7 +26,6 @@ export interface WorkspaceCommandCenterSource {
   icons: WorkspaceCommandCenterIcons;
   shortcuts: WorkspaceCommandCenterShortcuts;
   capabilities: {
-    canSplitPanes: boolean;
     canOpenBrowserTabs: boolean;
   };
   dispatch(action: KeyboardActionDefinition): void;
@@ -99,26 +89,14 @@ function buildWorkspaceAction(input: {
 export function buildWorkspaceCommandCenterContributions(
   source: WorkspaceCommandCenterSource,
 ): CommandCenterContribution[] {
-  const contributions: CommandCenterContribution[] = [
-    buildWorkspaceAction({
-      source,
-      id: "tab:new-agent",
-      rank: 0,
-      title: source.labels.newAgent,
-      keywords: ["tab", "new", "agent", "chat"],
-      icon: source.icons.newAgent,
-      shortcutKeys: source.shortcuts.newAgent,
-      action: { id: "workspace.tab.new", scope: "workspace" },
-      visibility: "always",
-    }),
-  ];
+  const contributions: CommandCenterContribution[] = [];
   const primary = source.gitActions.primary;
-  if (primary) contributions.push(buildGitContribution(source, primary, 1, "always"));
+  if (primary) contributions.push(buildGitContribution(source, primary, 0, "always"));
   contributions.push(
     buildWorkspaceAction({
       source,
       id: "tab:new-terminal",
-      rank: 2,
+      rank: 1,
       title: source.labels.newTerminal,
       keywords: ["terminal", "shell", "console"],
       icon: source.icons.newTerminal,
@@ -132,7 +110,7 @@ export function buildWorkspaceCommandCenterContributions(
       buildWorkspaceAction({
         source,
         id: "tab:new-browser",
-        rank: 3,
+        rank: 2,
         title: source.labels.newBrowser,
         keywords: ["browser", "web", "preview"],
         icon: source.icons.newBrowser,
@@ -141,33 +119,10 @@ export function buildWorkspaceCommandCenterContributions(
       }),
     );
   }
-  if (source.capabilities.canSplitPanes) {
-    contributions.push(
-      buildWorkspaceAction({
-        source,
-        id: "pane:split-right",
-        rank: 4,
-        title: source.labels.splitRight,
-        keywords: ["split", "pane", "vertical"],
-        icon: source.icons.splitRight,
-        shortcutKeys: source.shortcuts.splitRight,
-        action: { id: "workspace.pane.split.right", scope: "workspace" },
-        visibility: "query",
-      }),
-      buildWorkspaceAction({
-        source,
-        id: "pane:split-down",
-        rank: 5,
-        title: source.labels.splitDown,
-        keywords: ["split", "pane", "horizontal"],
-        icon: source.icons.splitDown,
-        shortcutKeys: source.shortcuts.splitDown,
-        action: { id: "workspace.pane.split.down", scope: "workspace" },
-        visibility: "query",
-      }),
-    );
-  }
-  for (const [index, action] of source.gitActions.secondary.entries()) {
+  // Both lists: with a primary action the rest hang off its caret, and with none they are in the
+  // overflow menu instead. The command center offers the same actions either way.
+  const listed = [...source.gitActions.secondary, ...source.gitActions.menu];
+  for (const [index, action] of listed.entries()) {
     if (action.id === primary?.id) continue;
     contributions.push(buildGitContribution(source, action, 10 + index, "query"));
   }

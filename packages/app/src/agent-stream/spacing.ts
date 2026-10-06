@@ -1,6 +1,27 @@
 import type { StreamItem } from "@/types/stream";
 import { SPACING } from "@/styles/theme";
 
+/**
+ * The height kept for the older-history spinner at the top of the scroll.
+ *
+ * The slot is there whether or not a spinner is in it, so reaching the start of the loaded
+ * history does not shove the conversation down when one appears.
+ */
+export const STREAM_HISTORY_START_SLOT_HEIGHT = SPACING[8];
+
+/** The scroll's own padding above that slot. */
+export const STREAM_CONTENT_PADDING_TOP = SPACING[4];
+
+/**
+ * How far the first message sits below the top of the scroll.
+ *
+ * Anything drawn in the stream's place before the stream exists — the draft's battle, waiting
+ * for the chat that will own it — starts here too. Otherwise the conversation drops by this
+ * much when the real stream takes over, which reads as the whole screen jumping.
+ */
+export const STREAM_CONTENT_TOP_INSET =
+  STREAM_HISTORY_START_SLOT_HEIGHT + STREAM_CONTENT_PADDING_TOP;
+
 export function isSameAssistantBlockGroup(params: {
   item: StreamItem | null | undefined;
   other: StreamItem | null | undefined;

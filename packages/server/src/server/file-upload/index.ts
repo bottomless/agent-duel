@@ -8,6 +8,23 @@ import type { FileUploadRequest, FileUploadResponse } from "../messages.js";
 interface FileUploadStoreOptions {
   paseoHome: string;
   staleUploadTimeoutMs?: number;
+  earlyFrameTimeoutMs?: number;
+}
+
+/**
+ * A frame that arrived before its upload's request. The WebSocket server emits every frame of one
+ * network read synchronously, and the request's handler awaits before it registers the upload, so
+ * a request and its bytes sent together reach this store bytes first.
+ */
+interface EarlyFrame {
+  frame: FileTransferFrame;
+  settle: (response: FileUploadResponse | null) => void;
+}
+
+interface EarlyFrames {
+  frames: EarlyFrame[];
+  bytes: number;
+  timeout: ReturnType<typeof setTimeout>;
 }
 
 interface PendingUpload {
@@ -26,15 +43,23 @@ interface PendingUpload {
 
 export class FileUploadStore {
   private static readonly defaultStaleUploadTimeoutMs = 10 * 60 * 1000;
+  private static readonly defaultEarlyFrameTimeoutMs = 30 * 1000;
+  /** Above the app's 50 MB upload limit, so one whole file can wait for its request. */
+  private static readonly maxEarlyFrameBytes = 64 * 1024 * 1024;
 
   private readonly paseoHome: string;
   private readonly staleUploadTimeoutMs: number;
+  private readonly earlyFrameTimeoutMs: number;
   private readonly pending = new Map<string, PendingUpload>();
+  private readonly early = new Map<string, EarlyFrames>();
+  private earlyBytes = 0;
 
   constructor(options: FileUploadStoreOptions) {
     this.paseoHome = options.paseoHome;
     this.staleUploadTimeoutMs =
       options.staleUploadTimeoutMs ?? FileUploadStore.defaultStaleUploadTimeoutMs;
+    this.earlyFrameTimeoutMs =
+      options.earlyFrameTimeoutMs ?? FileUploadStore.defaultEarlyFrameTimeoutMs;
   }
 
   beginUpload(request: FileUploadRequest): void {
@@ -62,21 +87,81 @@ export class FileUploadStore {
       queue: Promise.resolve(),
     };
     this.pending.set(request.requestId, upload);
+    this.replayEarlyFrames(upload);
   }
 
   async receiveFrame(frame: FileTransferFrame): Promise<FileUploadResponse | null> {
     const upload = this.pending.get(frame.requestId);
     if (!upload) {
-      return null;
+      return this.holdEarlyFrame(frame);
     }
-    this.refreshStaleUploadTimeout(upload);
+    return this.enqueueFrame(upload, frame);
+  }
 
+  private enqueueFrame(
+    upload: PendingUpload,
+    frame: FileTransferFrame,
+  ): Promise<FileUploadResponse | null> {
+    this.refreshStaleUploadTimeout(upload);
     const operation = upload.queue.then(() => this.applyFrame(upload, frame));
     upload.queue = operation.then(
       () => undefined,
       () => undefined,
     );
     return operation;
+  }
+
+  /**
+   * Keep a frame until its request registers the upload, and answer the frame's caller with what
+   * applying it produced then. Frames whose request never comes are dropped after a while.
+   */
+  private holdEarlyFrame(frame: FileTransferFrame): Promise<FileUploadResponse | null> {
+    const bytes = frame.payload.byteLength;
+    if (this.earlyBytes + bytes > FileUploadStore.maxEarlyFrameBytes) {
+      return Promise.resolve(null);
+    }
+    return new Promise((settle) => {
+      let held = this.early.get(frame.requestId);
+      if (!held) {
+        held = {
+          frames: [],
+          bytes: 0,
+          timeout: setTimeout(
+            () => this.dropEarlyFrames(frame.requestId),
+            this.earlyFrameTimeoutMs,
+          ),
+        };
+        held.timeout.unref?.();
+        this.early.set(frame.requestId, held);
+      }
+      // A copy, so the bytes do not depend on the socket's buffer once the event is over.
+      held.frames.push({ frame: { ...frame, payload: new Uint8Array(frame.payload) }, settle });
+      held.bytes += bytes;
+      this.earlyBytes += bytes;
+    });
+  }
+
+  private takeEarlyFrames(requestId: string): EarlyFrame[] {
+    const held = this.early.get(requestId);
+    if (!held) {
+      return [];
+    }
+    this.early.delete(requestId);
+    clearTimeout(held.timeout);
+    this.earlyBytes -= held.bytes;
+    return held.frames;
+  }
+
+  private replayEarlyFrames(upload: PendingUpload): void {
+    for (const { frame, settle } of this.takeEarlyFrames(upload.requestId)) {
+      void this.enqueueFrame(upload, frame).then(settle, () => settle(null));
+    }
+  }
+
+  private dropEarlyFrames(requestId: string): void {
+    for (const { settle } of this.takeEarlyFrames(requestId)) {
+      settle(null);
+    }
   }
 
   private async applyFrame(

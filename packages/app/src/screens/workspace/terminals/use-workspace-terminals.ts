@@ -4,6 +4,7 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
 import { useTranslation } from "react-i18next";
 import { useReplicaQuery } from "@/data/query";
+import { isArenaOwnedTerminalName } from "@/arena/owned-terminals";
 import { workspaceTerminalsPushRoute } from "@/data/push-router";
 import {
   buildTerminalsQueryKey,
@@ -125,10 +126,16 @@ export function useWorkspaceTerminals(input: UseWorkspaceTerminalsInput) {
     () => collectScriptTerminalIds({ pendingScriptTerminalIds, scripts: workspaceScripts }),
     [pendingScriptTerminalIds, workspaceScripts],
   );
-  const standaloneTerminalIds = useMemo(
-    () => collectStandaloneTerminalIds({ terminals, scriptTerminalIds }),
-    [scriptTerminalIds, terminals],
-  );
+  // A contestant seat owns its shell and is the only tab for it, so the reconciler must not
+  // open a second one — otherwise every turn leaves a dead terminal tab behind.
+  const standaloneTerminalIds = useMemo(() => {
+    const seatOwned = new Set(
+      terminals.filter((entry) => isArenaOwnedTerminalName(entry.name)).map((entry) => entry.id),
+    );
+    return collectStandaloneTerminalIds({ terminals, scriptTerminalIds }).filter(
+      (terminalId) => !seatOwned.has(terminalId),
+    );
+  }, [scriptTerminalIds, terminals]);
 
   const createMutation = useMutation({
     mutationFn: async (_input?: PendingTerminalCreateInput) => {

@@ -11,6 +11,7 @@ import { writePrivateFileAtomicSync } from "../server/private-files.js";
 import { findExecutable } from "../executable-resolution/executable-resolution.js";
 import type { TerminalCell, TerminalState } from "@getpaseo/protocol/messages";
 import { TerminalInputModeTracker } from "@getpaseo/protocol/terminal-input-mode";
+import { buildTerminalDivider } from "@getpaseo/protocol/terminal-divider";
 import { TerminalActivityTracker } from "./activity/terminal-activity-tracker.js";
 import type { TerminalActivity, TerminalActivityState } from "@getpaseo/protocol/terminal-activity";
 
@@ -96,6 +97,8 @@ export interface TerminalSession {
   getExitInfo(): TerminalExitInfo | null;
   kill(): void;
   killAndWait(options?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number }): Promise<void>;
+  /** Swap the shell to another directory, keeping this terminal's screen and listeners. */
+  rehome(input: { cwd: string; bannerLabel?: string }): Promise<void>;
 }
 
 function parseCommandFinishedOsc(data: string): TerminalCommandFinishedInfo | null {
@@ -941,20 +944,37 @@ export async function createTerminal(options: CreateTerminalOptions): Promise<Te
   const { command: spawnCommand, args: spawnArgs } = command
     ? await resolveTerminalSpawnCommand(command, args)
     : { command: resolvedShell, args: [] as string[] };
-  const ptyProcess = pty.spawn(spawnCommand, spawnArgs, {
-    name: "xterm-256color",
-    cols,
-    rows,
-    cwd,
-    env: buildTerminalEnvironment({
-      shell: spawnCommand,
-      env: {
-        ...env,
-        ...activityEnv,
-        PASEO_WORKSPACE_ID: workspaceId,
-      },
-    }),
-  });
+
+  // The shell is replaceable; the screen is not. `rehome` swaps the process underneath a
+  // terminal whose directory has been deleted — an Arena contestant moving to the next
+  // turn's worktree — while the headless terminal, and so every client's scrollback,
+  // carries on untouched. `rehoming` suppresses the exit bookkeeping for the old process,
+  // because that death is deliberate and must not tear the session down.
+  let currentCwd = cwd;
+  let rehoming = false;
+  let ptyProcess = spawnPty(currentCwd);
+
+  function spawnPty(spawnCwd: string): pty.IPty {
+    // The live size, not the construction-time one: a rehome happens long after the pane
+    // has been resized, and a shell started at the wrong width prints a mangled prompt.
+    const size = getSize();
+    const spawned = pty.spawn(spawnCommand, spawnArgs, {
+      name: "xterm-256color",
+      cols: size.cols,
+      rows: size.rows,
+      cwd: spawnCwd,
+      env: buildTerminalEnvironment({
+        shell: spawnCommand,
+        env: {
+          ...env,
+          ...activityEnv,
+          PASEO_WORKSPACE_ID: workspaceId,
+        },
+      }),
+    });
+    attachPtyHandlers(spawned);
+    return spawned;
+  }
 
   function emitTitleChange(nextTitle: string | undefined): void {
     if (title === nextTitle) {
@@ -1161,65 +1181,86 @@ export async function createTerminal(options: CreateTerminalOptions): Promise<Te
     activityChangeListeners.clear();
   }
 
-  function writeOutputToHeadless(data: string): void {
-    terminal.write(data, () => {
-      if (disposed || killed) {
-        return;
-      }
-      stateRevision += 1;
-      for (const listener of listeners) {
-        listener({ type: "output", data, revision: stateRevision });
-      }
+  /** Resolves once xterm has parsed the write, so a caller can order what follows it. */
+  function writeOutputToHeadless(data: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      terminal.write(data, () => {
+        if (disposed || killed) {
+          resolve();
+          return;
+        }
+        stateRevision += 1;
+        for (const listener of listeners) {
+          listener({ type: "output", data, revision: stateRevision });
+        }
+        resolve();
+      });
     });
   }
 
   // Pipe PTY output to terminal emulator
-  ptyProcess.onData((data) => {
-    if (killed) return;
-    const inputModeUpdate = inputModeTracker.feed(data);
-    for (const response of inputModeUpdate.responses) {
-      ptyProcess.write(response);
-    }
-    recentOutputChunks.push(data);
-    recentOutputLength += data.length;
-    // Drop whole leading chunks while the rest still covers the char limit, so
-    // the retained join always contains at least the last limit chars.
-    while (
-      recentOutputChunks.length > 1 &&
-      recentOutputLength - recentOutputChunks[0].length >= TERMINAL_EXIT_OUTPUT_CHAR_LIMIT
-    ) {
-      recentOutputLength -= recentOutputChunks[0].length;
-      recentOutputChunks.shift();
-    }
-    // We never drop the last chunk, so a single chunk larger than the cap would
-    // grow the buffer unbounded; slice its tail to keep the cap hard.
-    if (recentOutputChunks.length === 1 && recentOutputLength > TERMINAL_EXIT_OUTPUT_CHAR_LIMIT) {
-      const tail = recentOutputChunks[0].slice(-TERMINAL_EXIT_OUTPUT_CHAR_LIMIT);
-      recentOutputChunks[0] = tail;
-      recentOutputLength = tail.length;
-    }
-    writeOutputToHeadless(data);
-  });
-
-  ptyProcess.onExit((event) => {
-    killed = true;
-    processExited = true;
-    for (const waiter of Array.from(processExitWaiters)) {
-      try {
-        waiter();
-      } catch {
-        // no-op
+  function attachPtyHandlers(target: pty.IPty): void {
+    target.onData((data) => {
+      if (killed) return;
+      const inputModeUpdate = inputModeTracker.feed(data);
+      for (const response of inputModeUpdate.responses) {
+        target.write(response);
       }
-    }
-    processExitWaiters.clear();
-    emitExit(
-      buildExitInfo({
-        exitCode: event.exitCode,
-        signal: event.signal,
-      }),
-    );
-    disposeResources();
-  });
+      recentOutputChunks.push(data);
+      recentOutputLength += data.length;
+      // Drop whole leading chunks while the rest still covers the char limit, so
+      // the retained join always contains at least the last limit chars.
+      while (
+        recentOutputChunks.length > 1 &&
+        recentOutputLength - recentOutputChunks[0].length >= TERMINAL_EXIT_OUTPUT_CHAR_LIMIT
+      ) {
+        recentOutputLength -= recentOutputChunks[0].length;
+        recentOutputChunks.shift();
+      }
+      // We never drop the last chunk, so a single chunk larger than the cap would
+      // grow the buffer unbounded; slice its tail to keep the cap hard.
+      if (recentOutputChunks.length === 1 && recentOutputLength > TERMINAL_EXIT_OUTPUT_CHAR_LIMIT) {
+        const tail = recentOutputChunks[0].slice(-TERMINAL_EXIT_OUTPUT_CHAR_LIMIT);
+        recentOutputChunks[0] = tail;
+        recentOutputLength = tail.length;
+      }
+      void writeOutputToHeadless(data);
+    });
+
+    target.onExit((event) => {
+      // A rehome kills the old process on purpose. Wake anyone waiting on it, but leave the
+      // session, its listeners and its screen alone — the replacement is already coming.
+      if (rehoming) {
+        processExited = true;
+        for (const waiter of Array.from(processExitWaiters)) {
+          try {
+            waiter();
+          } catch {
+            // no-op
+          }
+        }
+        processExitWaiters.clear();
+        return;
+      }
+      killed = true;
+      processExited = true;
+      for (const waiter of Array.from(processExitWaiters)) {
+        try {
+          waiter();
+        } catch {
+          // no-op
+        }
+      }
+      processExitWaiters.clear();
+      emitExit(
+        buildExitInfo({
+          exitCode: event.exitCode,
+          signal: event.signal,
+        }),
+      );
+      disposeResources();
+    });
+  }
 
   async function waitForPtyProcessStart(): Promise<void> {
     if (process.platform !== "win32") {
@@ -1263,6 +1304,56 @@ export async function createTerminal(options: CreateTerminalOptions): Promise<Te
       state: getState(snapshotOptions),
       revision: stateRevision,
     };
+  }
+
+  /**
+   * Replace the shell with one standing in `nextCwd`, keeping this terminal's screen.
+   *
+   * For an Arena contestant whose worktree is deleted at the end of a turn: the directory
+   * is gone, so the shell cannot survive, but the output it wrote is what the developer is
+   * still reading. `bannerLabel` names a rule drawn between the two, rendered here because
+   * this is the side that knows the terminal's width, and written through the same path as
+   * program output — so it lands in the scrollback and in every attached client without any
+   * of them having to know a swap happened.
+   */
+  async function rehome(input: { cwd: string; bannerLabel?: string }): Promise<void> {
+    if (killed || disposed) {
+      return;
+    }
+    rehoming = true;
+    try {
+      if (!processExited) {
+        try {
+          killPtyProcess();
+        } catch {
+          // already gone
+        }
+        if (!(await waitForProcessExit(2000))) {
+          try {
+            killPtyProcess("SIGKILL");
+          } catch {
+            // already gone
+          }
+          await waitForProcessExit(1000);
+        }
+      }
+      if (input.bannerLabel) {
+        // Awaited: the replacement shell starts printing immediately, and an unparsed rule
+        // would land under its first prompt instead of above it.
+        await writeOutputToHeadless(
+          buildTerminalDivider({ label: input.bannerLabel, cols: getSize().cols }),
+        );
+      }
+      currentCwd = input.cwd;
+      // The modes belonged to the dead process; a new shell starts from the defaults.
+      inputModeTracker.reset();
+      recentOutputChunks.length = 0;
+      recentOutputLength = 0;
+      processExited = false;
+      ptyProcess = spawnPty(currentCwd);
+    } finally {
+      rehoming = false;
+    }
   }
 
   function getSize(): { rows: number; cols: number } {
@@ -1536,8 +1627,11 @@ export async function createTerminal(options: CreateTerminalOptions): Promise<Te
   return {
     id,
     name,
-    cwd,
+    get cwd() {
+      return currentCwd;
+    },
     workspaceId,
+    rehome,
     send,
     subscribe,
     onExit,

@@ -1,19 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { ScriptRouteStore } from "./script-proxy.js";
-import {
-  buildWorkspaceScriptPayloads,
-  createScriptStatusEmitter,
-} from "./script-status-projection.js";
+import { buildWorkspaceScriptPayloads } from "./script-status-projection.js";
 import { WorkspaceScriptPayloadSchema } from "@getpaseo/protocol/messages";
 import type { ScriptHealthState } from "./script-health-monitor.js";
 import { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
 import { readPaseoConfig } from "../utils/worktree.js";
 import type { PaseoConfig } from "@getpaseo/protocol/paseo-config-schema";
-import { createTestLogger } from "../test-utils/test-logger.js";
 
 function createWorkspaceRepo(options?: {
   branchName?: string;
@@ -91,156 +87,6 @@ describe("script-status-projection", () => {
         exitCode: 0,
       }).terminalId,
     ).toBeNull();
-  });
-
-  it("projects plain scripts and services differently", () => {
-    const workspaceId = "workspace-plain-and-service";
-    const workspace = createWorkspaceRepo({
-      paseoConfig: {
-        scripts: {
-          typecheck: { command: "npm run typecheck" },
-          web: { type: "service", command: "npm run web", port: 3000 },
-        },
-      },
-    });
-    const routeStore = new ScriptRouteStore();
-    const runtimeStore = new WorkspaceScriptRuntimeStore();
-    runtimeStore.set({
-      workspaceId,
-      scriptName: "typecheck",
-      type: "script",
-      lifecycle: "stopped",
-      terminalId: "term-script",
-      exitCode: 0,
-    });
-
-    try {
-      expect(
-        buildPayloads({
-          workspaceId,
-          workspaceDirectory: workspace.repoDir,
-          routeStore,
-          runtimeStore,
-          daemonPort: 6767,
-        }),
-      ).toEqual([
-        {
-          scriptName: "typecheck",
-          type: "script",
-          hostname: "typecheck",
-          port: null,
-          proxyUrl: null,
-          lifecycle: "stopped",
-          health: null,
-          exitCode: 0,
-          terminalId: "term-script",
-        },
-        {
-          scriptName: "web",
-          type: "service",
-          hostname: "web--repo.localhost",
-          port: 3000,
-          localProxyUrl: "http://web--repo.localhost:6767",
-          publicProxyUrl: null,
-          proxyUrl: "http://web--repo.localhost:6767",
-          lifecycle: "stopped",
-          health: null,
-          exitCode: null,
-          terminalId: null,
-        },
-      ]);
-    } finally {
-      workspace.cleanup();
-    }
-  });
-
-  it("builds service hostnames from service-provided git metadata", () => {
-    const workspaceId = "workspace-service-metadata";
-    const workspace = createWorkspaceRepo({
-      branchName: "local-branch-that-should-not-be-read",
-      paseoConfig: {
-        scripts: {
-          web: { type: "service", command: "npm run web", port: 3000 },
-        },
-      },
-    });
-    const routeStore = new ScriptRouteStore();
-    const runtimeStore = new WorkspaceScriptRuntimeStore();
-
-    try {
-      const payloads = buildPayloads({
-        workspaceId,
-        workspaceDirectory: workspace.repoDir,
-        serviceProxy: routeStore,
-        runtimeStore,
-        daemonPort: 6767,
-        gitMetadata: {
-          projectSlug: "service-provided",
-          currentBranch: "feature/from-service",
-        },
-      });
-
-      expect(payloads).toEqual([
-        {
-          scriptName: "web",
-          type: "service",
-          hostname: "web--feature-from-service--service-provided.localhost",
-          port: 3000,
-          localProxyUrl: "http://web--feature-from-service--service-provided.localhost:6767",
-          publicProxyUrl: null,
-          proxyUrl: "http://web--feature-from-service--service-provided.localhost:6767",
-          lifecycle: "stopped",
-          health: null,
-          exitCode: null,
-          terminalId: null,
-        },
-      ]);
-    } finally {
-      workspace.cleanup();
-    }
-  });
-
-  it("projects local and public service URLs while keeping proxyUrl public-first", () => {
-    const workspaceId = "workspace-public-service";
-    const workspace = createWorkspaceRepo({
-      paseoConfig: {
-        scripts: {
-          web: { type: "service", command: "npm run web", port: 3000 },
-        },
-      },
-    });
-    const routeStore = new ScriptRouteStore();
-    const runtimeStore = new WorkspaceScriptRuntimeStore();
-
-    try {
-      expect(
-        buildPayloads({
-          workspaceId,
-          workspaceDirectory: workspace.repoDir,
-          routeStore,
-          runtimeStore,
-          daemonPort: 6767,
-          serviceProxyPublicBaseUrl: "https://services.example.com",
-          gitMetadata: { projectSlug: "repo", currentBranch: "feature/card" },
-        }),
-      ).toEqual([
-        {
-          scriptName: "web",
-          type: "service",
-          hostname: "web--feature-card--repo.localhost",
-          port: 3000,
-          localProxyUrl: "http://web--feature-card--repo.localhost:6767",
-          publicProxyUrl: "https://web--feature-card--repo.services.example.com",
-          proxyUrl: "https://web--feature-card--repo.services.example.com",
-          lifecycle: "stopped",
-          health: null,
-          exitCode: null,
-          terminalId: null,
-        },
-      ]);
-    } finally {
-      workspace.cleanup();
-    }
   });
 
   it("overlays runtime, route, and health state for running services", () => {
@@ -505,93 +351,6 @@ describe("script-status-projection", () => {
           terminalId: "term-typecheck",
         },
       ]);
-    } finally {
-      workspace.cleanup();
-    }
-  });
-
-  it("createScriptStatusEmitter overlays health onto the projected workspace script list", async () => {
-    const workspaceId = "workspace-emitter";
-    const workspace = createWorkspaceRepo({
-      paseoConfig: {
-        scripts: {
-          api: { type: "service", command: "npm run api" },
-          typecheck: { command: "npm run typecheck" },
-        },
-      },
-    });
-    const routeStore = new ScriptRouteStore();
-    routeStore.registerRoute({
-      hostname: "api--repo.localhost",
-      port: 3001,
-      workspaceId,
-      projectSlug: "repo",
-      scriptName: "api",
-    });
-    const runtimeStore = new WorkspaceScriptRuntimeStore();
-    runtimeStore.set({
-      workspaceId,
-      scriptName: "api",
-      type: "service",
-      lifecycle: "running",
-      terminalId: "term-api",
-      exitCode: null,
-    });
-
-    const session = { emit: vi.fn() };
-    const emitUpdate = createScriptStatusEmitter({
-      sessions: () => [session],
-      serviceProxy: routeStore,
-      runtimeStore,
-      daemonPort: 6767,
-      resolveWorkspaceDirectory: async (requestedWorkspaceId) =>
-        requestedWorkspaceId === "workspace-emitter" ? workspace.repoDir : null,
-      logger: createTestLogger(),
-    });
-
-    try {
-      emitUpdate(workspaceId, [
-        {
-          scriptName: "api",
-          hostname: "api--repo.localhost",
-          port: 3001,
-          health: "healthy",
-        },
-      ]);
-      await Promise.resolve();
-
-      expect(session.emit).toHaveBeenCalledWith({
-        type: "script_status_update",
-        payload: {
-          workspaceId,
-          scripts: [
-            {
-              scriptName: "api",
-              type: "service",
-              hostname: "api--repo.localhost",
-              port: 3001,
-              localProxyUrl: "http://api--repo.localhost:6767",
-              publicProxyUrl: null,
-              proxyUrl: "http://api--repo.localhost:6767",
-              lifecycle: "running",
-              health: "healthy",
-              exitCode: null,
-              terminalId: "term-api",
-            },
-            {
-              scriptName: "typecheck",
-              type: "script",
-              hostname: "typecheck",
-              port: null,
-              proxyUrl: null,
-              lifecycle: "stopped",
-              health: null,
-              exitCode: null,
-              terminalId: null,
-            },
-          ],
-        },
-      });
     } finally {
       workspace.cleanup();
     }

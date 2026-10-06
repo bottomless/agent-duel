@@ -103,7 +103,10 @@ export async function encodeAttachmentsForSend(
   const encoded = await Promise.all(
     attachments.map(async (attachment) => {
       try {
-        const data = await store.encodeBase64({ attachment });
+        const data =
+          attachment.storageType === "inline"
+            ? attachment.storageKey.slice(attachment.storageKey.indexOf(",") + 1)
+            : await store.encodeBase64({ attachment });
         return {
           data,
           mimeType: attachment.mimeType,
@@ -125,6 +128,7 @@ export async function encodeAttachmentsForSend(
 }
 
 export async function resolveAttachmentPreviewUrl(attachment: AttachmentMetadata): Promise<string> {
+  if (attachment.storageType === "inline") return attachment.storageKey;
   const store = await getAttachmentStore();
   return await store.resolvePreviewUrl({ attachment });
 }
@@ -133,6 +137,7 @@ export async function releaseAttachmentPreviewUrl(input: {
   attachment: AttachmentMetadata;
   url: string;
 }): Promise<void> {
+  if (input.attachment.storageType === "inline") return;
   const store = await getAttachmentStore();
   if (!store.releasePreviewUrl) {
     return;
@@ -149,6 +154,7 @@ export async function deleteAttachments(
   const store = await getAttachmentStore();
   await Promise.all(
     attachments.map(async (attachment) => {
+      if (attachment.storageType === "inline") return;
       try {
         await store.delete({ attachment });
       } catch (error) {

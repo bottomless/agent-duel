@@ -4,6 +4,24 @@ default_dev_paseo_root() {
   git rev-parse --show-toplevel 2>/dev/null || pwd
 }
 
+configure_dev_arena_backend() {
+  if [ -n "${PASEO_ARENA_BACKEND_ROOT:-}" ]; then
+    export PASEO_ARENA_BACKEND_ROOT
+    return
+  fi
+
+  local frontend_root
+  local candidate
+  frontend_root="${PASEO_DEV_ROOT:-$(default_dev_paseo_root)}"
+  candidate="$frontend_root/arena-backend"
+  if [ ! -f "$candidate/packages/opencode/src/index.ts" ]; then
+    return
+  fi
+
+  PASEO_ARENA_BACKEND_ROOT="$(cd "$candidate" && pwd)"
+  export PASEO_ARENA_BACKEND_ROOT
+}
+
 copy_json_tree() {
   local source_dir="$1"
   local target_dir="$2"
@@ -96,6 +114,8 @@ resolve_dev_daemon_endpoint() {
 }
 
 configure_dev_paseo_home() {
+  configure_dev_arena_backend
+
   if [ -n "${PASEO_HOME:-}" ]; then
     export PASEO_HOME
     if [ -n "${PASEO_DEV_SEED_HOME:-}" ]; then

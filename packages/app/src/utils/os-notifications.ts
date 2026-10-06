@@ -94,6 +94,15 @@ export async function ensureOsNotificationPermission(): Promise<boolean> {
   if (isNative) {
     return false;
   }
+  const desktopHost = getDesktopHost();
+  if (desktopHost) {
+    if (desktopHost.platform === "darwin") {
+      // Chromium permission does not authorize the native macOS delivery bridge.
+      const permission = await desktopHost.notification?.requestPermission?.();
+      return permission === "authorized" || permission === "provisional";
+    }
+    return (await desktopHost.notification?.isSupported?.()) ?? false;
+  }
   return await ensureNotificationPermission();
 }
 

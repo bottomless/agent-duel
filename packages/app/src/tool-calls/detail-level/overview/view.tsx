@@ -3,7 +3,7 @@ import { ScrollView } from "react-native";
 import { useTranslation } from "react-i18next";
 import { Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { ExpandableBadge } from "@/components/message";
+import { EXPANDABLE_BADGE_DETAIL_INSET, ExpandableBadge } from "@/components/message";
 import { type OverviewSummary, type OverviewToolCallGroup } from "./model";
 
 interface OverviewGroupProps {
@@ -103,6 +103,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   content: {
     paddingTop: theme.spacing[1],
-    paddingHorizontal: 13,
+    paddingHorizontal: EXPANDABLE_BADGE_DETAIL_INSET,
   },
 }));

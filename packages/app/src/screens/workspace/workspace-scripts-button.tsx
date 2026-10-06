@@ -39,7 +39,7 @@ import { useWorkspaceServiceRoutePreferencesStore } from "@/workspace-service-ro
 
 type RowActionIcon = "copy" | "open" | "restart" | "start" | "stop" | "terminal";
 
-interface WorkspaceScriptsButtonProps {
+export interface WorkspaceScriptsMenuItemsProps {
   serverId: string;
   workspaceId: string;
   scripts: WorkspaceDescriptor["scripts"];
@@ -47,6 +47,9 @@ interface WorkspaceScriptsButtonProps {
   onScriptTerminalStarted?: (terminalId: string) => void;
   onViewTerminal?: (terminalId: string) => void;
   onOpenUrlInBrowserTab?: (url: string) => void;
+}
+
+interface WorkspaceScriptsButtonProps extends WorkspaceScriptsMenuItemsProps {
   hideLabels?: boolean;
   presentation?: "split" | "ghost";
 }
@@ -533,7 +536,7 @@ function ScriptRow({
   );
 }
 
-export function WorkspaceScriptsButton({
+export function WorkspaceScriptsMenuItems({
   serverId,
   workspaceId,
   scripts,
@@ -541,9 +544,7 @@ export function WorkspaceScriptsButton({
   onScriptTerminalStarted,
   onViewTerminal,
   onOpenUrlInBrowserTab,
-  hideLabels,
-  presentation = "split",
-}: WorkspaceScriptsButtonProps): ReactElement | null {
+}: WorkspaceScriptsMenuItemsProps): ReactElement | null {
   const { t } = useTranslation();
   const toast = useToast();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
@@ -625,15 +626,6 @@ export function WorkspaceScriptsButton({
     }
   }, [scripts, startScript]);
 
-  const triggerStyle = useCallback(
-    ({ hovered, pressed, open }: { hovered: boolean; pressed: boolean; open: boolean }) => [
-      presentation === "ghost" ? styles.ghostButton : styles.splitButtonPrimary,
-      (hovered || pressed || open) &&
-        (presentation === "ghost" ? styles.ghostButtonHovered : styles.splitButtonPrimaryHovered),
-    ],
-    [presentation],
-  );
-
   const handleStartScript = useCallback(
     (scriptName: string) => startScriptMutation.mutate(scriptName),
     [startScriptMutation],
@@ -663,6 +655,57 @@ export function WorkspaceScriptsButton({
   const handleSelectRouteKind = useCallback(
     (kind: WorkspaceScriptLinkKind) => setPreferredRoute(serverId, kind),
     [serverId, setPreferredRoute],
+  );
+
+  if (scripts.length === 0) {
+    return null;
+  }
+
+  return (
+    <View style={styles.scriptList}>
+      {scripts.map((script, index) => (
+        <Fragment key={script.scriptName}>
+          {index > 0 ? <DropdownMenuSeparator /> : null}
+          <ScriptRow
+            script={script}
+            liveTerminalIdSet={liveTerminalIdSet}
+            activeConnection={activeConnection}
+            isStartPending={startScriptMutation.isPending}
+            isStopPending={stopScriptMutation.isPending}
+            onStartScript={handleStartScript}
+            onStopScript={handleStopScript}
+            onRestartScript={handleRestartScript}
+            onCopyUrl={handleCopyUrl}
+            preferredRouteKind={preferredRouteKind}
+            onSelectRouteKind={handleSelectRouteKind}
+            onViewTerminal={onViewTerminal}
+            onOpenUrlInBrowserTab={onOpenUrlInBrowserTab}
+          />
+        </Fragment>
+      ))}
+    </View>
+  );
+}
+
+export function WorkspaceScriptsButton({
+  serverId,
+  workspaceId,
+  scripts,
+  liveTerminalIds = [],
+  onScriptTerminalStarted,
+  onViewTerminal,
+  onOpenUrlInBrowserTab,
+  hideLabels,
+  presentation = "split",
+}: WorkspaceScriptsButtonProps): ReactElement | null {
+  const { t } = useTranslation();
+  const triggerStyle = useCallback(
+    ({ hovered, pressed, open }: { hovered: boolean; pressed: boolean; open: boolean }) => [
+      presentation === "ghost" ? styles.ghostButton : styles.splitButtonPrimary,
+      (hovered || pressed || open) &&
+        (presentation === "ghost" ? styles.ghostButtonHovered : styles.splitButtonPrimaryHovered),
+    ],
+    [presentation],
   );
 
   if (scripts.length === 0) {
@@ -705,28 +748,15 @@ export function WorkspaceScriptsButton({
             maxWidth={280}
             testID="workspace-scripts-menu"
           >
-            <View style={styles.scriptList}>
-              {scripts.map((script, index) => (
-                <Fragment key={script.scriptName}>
-                  {index > 0 ? <DropdownMenuSeparator /> : null}
-                  <ScriptRow
-                    script={script}
-                    liveTerminalIdSet={liveTerminalIdSet}
-                    activeConnection={activeConnection}
-                    isStartPending={startScriptMutation.isPending}
-                    isStopPending={stopScriptMutation.isPending}
-                    onStartScript={handleStartScript}
-                    onStopScript={handleStopScript}
-                    onRestartScript={handleRestartScript}
-                    onCopyUrl={handleCopyUrl}
-                    preferredRouteKind={preferredRouteKind}
-                    onSelectRouteKind={handleSelectRouteKind}
-                    onViewTerminal={onViewTerminal}
-                    onOpenUrlInBrowserTab={onOpenUrlInBrowserTab}
-                  />
-                </Fragment>
-              ))}
-            </View>
+            <WorkspaceScriptsMenuItems
+              serverId={serverId}
+              workspaceId={workspaceId}
+              scripts={scripts}
+              liveTerminalIds={liveTerminalIds}
+              onScriptTerminalStarted={onScriptTerminalStarted}
+              onViewTerminal={onViewTerminal}
+              onOpenUrlInBrowserTab={onOpenUrlInBrowserTab}
+            />
           </DropdownMenuContent>
         </DropdownMenu>
       </View>

@@ -49,6 +49,64 @@ describe("paseo config schema", () => {
     });
   });
 
+  it("parses Arena ignored-copy policy including zero limits", () => {
+    const arenaCopy = {
+      ignoredFileMaxBytes: 0,
+      ignoredTotalMaxBytes: 0,
+      exclude: ["node_modules", "dist/**"],
+    };
+
+    expect(
+      PaseoConfigSchema.parse({
+        worktree: { arenaCopy },
+      }),
+    ).toEqual({
+      worktree: {
+        setup: [],
+        teardown: [],
+        arenaCopy,
+      },
+    });
+  });
+
+  it("preserves unknown Arena copy fields for forward compatibility", () => {
+    expect(
+      PaseoConfigRawSchema.parse({
+        worktree: {
+          arenaCopy: {
+            exclude: [],
+            futurePolicy: "copy-on-write",
+          },
+        },
+      }),
+    ).toEqual({
+      worktree: {
+        arenaCopy: {
+          exclude: [],
+          futurePolicy: "copy-on-write",
+        },
+      },
+    });
+  });
+
+  it("rejects invalid Arena ignored-copy settings", () => {
+    expect(() =>
+      PaseoConfigRawSchema.parse({
+        worktree: { arenaCopy: { ignoredFileMaxBytes: -1 } },
+      }),
+    ).toThrow();
+    expect(() =>
+      PaseoConfigRawSchema.parse({
+        worktree: { arenaCopy: { ignoredTotalMaxBytes: 1.5 } },
+      }),
+    ).toThrow();
+    expect(() =>
+      PaseoConfigRawSchema.parse({
+        worktree: { arenaCopy: { exclude: ["dist", 42] } },
+      }),
+    ).toThrow();
+  });
+
   it("rejects invalid service port ranges", () => {
     expect(() =>
       PaseoConfigRawSchema.parse({ worktree: { servicePorts: { range: "4000-3000" } } }),

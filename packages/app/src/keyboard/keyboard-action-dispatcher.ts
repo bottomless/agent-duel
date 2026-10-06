@@ -7,23 +7,14 @@ export type KeyboardActionId =
   | "message-input.dictation-toggle"
   | "message-input.dictation-cancel"
   | "message-input.dictation-confirm"
-  | "message-input.voice-toggle"
-  | "message-input.voice-mute-toggle"
   | "message-input.mode-cycle"
-  | "workspace.tab.new"
   | "workspace.tab.close-current"
   | "workspace.tab.navigate-index"
   | "workspace.tab.navigate-relative"
-  | "workspace.pane.split.right"
-  | "workspace.pane.split.down"
   | "workspace.pane.focus.left"
   | "workspace.pane.focus.right"
-  | "workspace.pane.focus.up"
-  | "workspace.pane.focus.down"
   | "workspace.pane.move-tab.left"
   | "workspace.pane.move-tab.right"
-  | "workspace.pane.move-tab.up"
-  | "workspace.pane.move-tab.down"
   | "workspace.pane.close"
   | "workspace.focus.toggle"
   | "workspace.terminal.new"
@@ -42,23 +33,14 @@ export type KeyboardActionDefinition =
   | { id: "message-input.dictation-toggle"; scope: KeyboardActionScope }
   | { id: "message-input.dictation-cancel"; scope: KeyboardActionScope }
   | { id: "message-input.dictation-confirm"; scope: KeyboardActionScope }
-  | { id: "message-input.voice-toggle"; scope: KeyboardActionScope }
-  | { id: "message-input.voice-mute-toggle"; scope: KeyboardActionScope }
   | { id: "message-input.mode-cycle"; scope: KeyboardActionScope }
-  | { id: "workspace.tab.new"; scope: KeyboardActionScope }
   | { id: "workspace.tab.close-current"; scope: KeyboardActionScope }
   | { id: "workspace.tab.navigate-index"; scope: KeyboardActionScope; index: number }
   | { id: "workspace.tab.navigate-relative"; scope: KeyboardActionScope; delta: 1 | -1 }
-  | { id: "workspace.pane.split.right"; scope: KeyboardActionScope }
-  | { id: "workspace.pane.split.down"; scope: KeyboardActionScope }
   | { id: "workspace.pane.focus.left"; scope: KeyboardActionScope }
   | { id: "workspace.pane.focus.right"; scope: KeyboardActionScope }
-  | { id: "workspace.pane.focus.up"; scope: KeyboardActionScope }
-  | { id: "workspace.pane.focus.down"; scope: KeyboardActionScope }
   | { id: "workspace.pane.move-tab.left"; scope: KeyboardActionScope }
   | { id: "workspace.pane.move-tab.right"; scope: KeyboardActionScope }
-  | { id: "workspace.pane.move-tab.up"; scope: KeyboardActionScope }
-  | { id: "workspace.pane.move-tab.down"; scope: KeyboardActionScope }
   | { id: "workspace.pane.close"; scope: KeyboardActionScope }
   | { id: "workspace.focus.toggle"; scope: KeyboardActionScope }
   | { id: "workspace.terminal.new"; scope: KeyboardActionScope }

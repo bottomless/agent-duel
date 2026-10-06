@@ -64,3 +64,39 @@ test("applies the interface font size to settings text", async ({ page }) => {
   await expect(fontSizeInput).toHaveValue("12");
   await expect(sectionTitle).toHaveCSS("font-size", "9px");
 });
+
+test("keeps an invalid font size for correction and preserves focus after saving", async ({
+  page,
+}) => {
+  await page.goto("/settings");
+  await openSettingsSection(page, "appearance");
+  const input = page.getByLabel("Interface font size", { exact: true });
+  await input.fill("99");
+  await input.press("Tab");
+  await expect(input).toHaveValue("99");
+  await expect(input).toHaveAttribute("aria-invalid", "true");
+  await expect(
+    page.getByText("Enter a whole number from 11 to 24 px", { exact: true }),
+  ).toBeVisible();
+  await input.fill("18");
+  await input.press("Enter");
+  await expect(input).toHaveValue("18");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveAttribute("aria-invalid", "false");
+});
+
+test("searches setting names and filters the actual controls", async ({ page }) => {
+  await page.goto("/settings");
+  await openSettingsSection(page, "general");
+  const search = page.getByRole("textbox", { name: "Search settings", exact: true });
+  await search.fill("code font");
+  const results = page.getByTestId("settings-search-results");
+  await expect(results.getByLabel("Code font family", { exact: true })).toBeVisible();
+  await expect(results.getByLabel("Interface font family", { exact: true })).toHaveCount(0);
+  await expect(results.getByText("Theme", { exact: true })).toHaveCount(0);
+  await search.fill("no-such-setting-xyz");
+  await expect(results.getByText("No matching settings", { exact: true })).toBeVisible();
+  await search.clear();
+  await expect(page.getByTestId("settings-search-results")).toHaveCount(0);
+  await expect(page.getByText("Default send", { exact: true })).toBeVisible();
+});

@@ -1,0 +1,2 @@
+# Preserve the pinned external fixture without applying repository whitespace rules.
+weatherfork/** -whitespace

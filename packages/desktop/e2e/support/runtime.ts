@@ -1,57 +1,5 @@
-import { readFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { expect, type Page } from "@playwright/test";
-import { openSettings } from "../../../app/e2e/support/helpers/app";
-import { getE2EDaemonPort } from "../../../app/e2e/support/helpers/daemon-port";
-import { escapeRegex } from "../../../app/e2e/support/helpers/regex";
-import {
-  openSettingsHost,
-  openSettingsHostSection,
-  openSettingsSection,
-} from "../../../app/e2e/support/helpers/settings";
-
-interface DaemonApiStatus {
-  version: string;
-  serverId: string;
-  hostname: string;
-}
-
-interface PidFileContent {
-  pid: number;
-  desktopManaged: boolean;
-}
-
-export interface RealDaemonState {
-  version: string;
-  pid: number | null;
-  logPath: string;
-}
-
-/**
- * Reads live state from the running E2E test daemon: version from the HTTP
- * status endpoint, PID from the paseo.pid lock file, log path from the
- * E2E_PASEO_HOME directory. Call this in Node test code (not in the browser).
- */
-export async function loadRealDaemonState(): Promise<RealDaemonState> {
-  const port = getE2EDaemonPort();
-  const paseoHome = process.env.E2E_PASEO_HOME;
-  if (!paseoHome) throw new Error("E2E_PASEO_HOME not set — the worker fixture must run first");
-
-  const resp = await fetch(`http://127.0.0.1:${port}/api/status`);
-  const data: DaemonApiStatus = await resp.json();
-
-  let pid: number | null = null;
-  try {
-    const raw = readFileSync(`${paseoHome}/paseo.pid`, "utf8");
-    const pidContent: PidFileContent = JSON.parse(raw);
-    pid = pidContent.pid ?? null;
-  } catch (err) {
-    // PID file may not be present yet on a very fresh daemon start
-    console.warn("[desktop-updates] paseo.pid not found:", err);
-  }
-
-  return { version: data.version, pid, logPath: `${paseoHome}/daemon.log` };
-}
 
 export interface DesktopRuntimeConfig {
   serverId: string;
@@ -315,42 +263,10 @@ export async function waitForDirectoryDialog(
   return page.evaluate(() => window.__capturedDialogOpenCalls[0]);
 }
 
-export async function openDesktopSettings(page: Page, serverId: string): Promise<void> {
-  await openSettings(page);
-  await openSettingsHost(page, serverId);
-  // The daemon-lifecycle card moved to the Host section in the flat-settings
-  // layout; navigate there before asserting it.
-  await openSettingsHostSection(page, serverId, "host");
-  await expect(page.getByTestId("host-page-daemon-lifecycle-card")).toBeVisible({
-    timeout: 15_000,
-  });
-}
-
-export async function openDesktopAboutSettings(page: Page): Promise<void> {
-  await openSettings(page);
-  await openSettingsSection(page, "about");
-  await expect(page.getByText("App updates", { exact: true })).toBeVisible();
-}
-
 export async function expectUpdateBanner(page: Page, version: string): Promise<void> {
   const callout = page.getByTestId("update-callout");
   await expect(callout).toBeVisible({ timeout: 15_000 });
   await expect(callout).toContainText(`v${version.replace(/^v/i, "")}`);
-}
-
-export async function clickCheckForUpdates(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Check" }).click();
-}
-
-export async function expectPendingUpdateCheckResult(page: Page, version: string): Promise<void> {
-  const normalizedVersion = `v${version.replace(/^v/i, "")}`;
-  await expect(
-    page.getByText(
-      new RegExp(`Update found: ${escapeRegex(normalizedVersion)}\\. Downloading\\.\\.\\.`),
-    ),
-  ).toBeVisible();
-  await expect(page.getByText(`Ready to install: ${normalizedVersion}`)).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Update" })).toBeDisabled();
 }
 
 export async function clickInstallUpdate(page: Page): Promise<void> {
@@ -359,65 +275,4 @@ export async function clickInstallUpdate(page: Page): Promise<void> {
 
 export async function expectInstallInProgress(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Installing..." })).toBeVisible();
-}
-
-/**
- * Clicks the daemon management switch and waits for dialog.ask to fire in the
- * mock, then returns the captured call args (message + title). The mock auto-
- * dismisses via confirmShouldAccept=false so callers can assert copy without
- * worrying about state changes.
- */
-export async function interceptDaemonManagementConfirmDialog(
-  page: Page,
-): Promise<ConfirmDialogCall> {
-  await page.getByRole("switch", { name: "Manage built-in daemon" }).click();
-  await page.waitForFunction(() => !!window.__capturedDialogCall, { timeout: 5_000 });
-  return page.evaluate(() => window.__capturedDialogCall!);
-}
-
-export async function toggleDaemonManagement(
-  page: Page,
-  _action: "enable" | "disable",
-): Promise<void> {
-  await page.getByRole("switch", { name: "Manage built-in daemon" }).click();
-}
-
-export function expectDaemonManagementConfirmDialog(args: ConfirmDialogCall): void {
-  expect(args.title).toBe("Pause built-in daemon");
-  expect(args.message).toContain("stop the built-in daemon immediately");
-}
-
-export async function expectDaemonManagementEnabled(page: Page): Promise<void> {
-  await expect(page.getByRole("switch", { name: "Manage built-in daemon" })).toBeChecked();
-}
-
-export async function expectDaemonManagementDisabled(page: Page): Promise<void> {
-  await expect(page.getByRole("switch", { name: "Manage built-in daemon" })).not.toBeChecked();
-}
-
-/**
- * Asserts the daemon status card shows the given PID. Pass null to assert
- * the cleared state (shown as "PID —" when the daemon is stopped).
- */
-export async function expectDaemonStatusPid(page: Page, pid: number | null): Promise<void> {
-  const expected = pid !== null ? `PID ${pid}` : "PID —";
-  await expect(
-    page.getByTestId("host-page-daemon-lifecycle-card").getByText(expected),
-  ).toBeVisible();
-}
-
-export async function expectDaemonStatusLogPath(page: Page, logPath: string): Promise<void> {
-  await expect(
-    page.getByTestId("host-page-daemon-lifecycle-card").getByText(logPath),
-  ).toBeVisible();
-}
-
-/**
- * Asserts the host page identity badge shows the given version string.
- * The badge is populated from the live WebSocket session's serverInfo.version.
- */
-export async function expectDaemonStatusVersion(page: Page, version: string): Promise<void> {
-  await expect(
-    page.getByTestId("host-page-identity").getByText(version, { exact: false }),
-  ).toBeVisible({ timeout: 15_000 });
 }

@@ -283,6 +283,446 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     rmSync(cwd, { recursive: true, force: true });
   }, 60_000);
 
+  test("forks native history through the selected message and moves it to the target cwd", async () => {
+    const sourceCwd = "/workspace/source";
+    const targetCwd = "/workspace/target";
+    const runtime = new TestOpenCodeHarness();
+    const sourceClient = new TestOpenCodeClient();
+    const targetClient = new TestOpenCodeClient();
+    sourceClient.sessionForkResponse = { data: { id: "session-fork" } };
+    sourceClient.sessionMessagesImplementation = async (parameters) => {
+      const sessionID = (parameters as { sessionID: string }).sessionID;
+      const ids =
+        sessionID === "session-source"
+          ? ["msg-user-1", "msg-assistant-1", "msg-user-2"]
+          : ["msg-fork-user-1", "msg-fork-assistant-1", "msg-fork-user-2"];
+      return {
+        data: ids.map((id) => ({ info: { id, sessionID, role: "user" }, parts: [] })),
+      };
+    };
+    runtime.enqueueClient(sourceClient);
+    runtime.enqueueClient(targetClient);
+    const moves: Array<{
+      serverUrl: string;
+      sessionId: string;
+      sourceCwd: string;
+      targetCwd: string;
+      copyChanges: boolean;
+    }> = [];
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      moveSession: async (input) => moves.push(input),
+    });
+
+    const session = await client.forkSession({
+      source: {
+        provider: "opencode",
+        sessionId: "session-source",
+        metadata: { cwd: sourceCwd },
+      },
+      sourceCwd,
+      throughMessageId: "msg-assistant-1",
+      config: buildConfig(targetCwd),
+    });
+
+    expect(sourceClient.calls.sessionFork).toEqual([
+      {
+        sessionID: "session-source",
+        messageID: "msg-user-2",
+        directory: sourceCwd,
+      },
+    ]);
+    expect(moves).toEqual([
+      {
+        serverUrl: "http://127.0.0.1:1234",
+        controlToken: "test-opencode-control-token",
+        sessionId: "session-fork",
+        sourceCwd,
+        targetCwd,
+        copyChanges: false,
+      },
+    ]);
+    expect(session.describePersistence()).toEqual({
+      provider: "opencode",
+      sessionId: "session-fork",
+      nativeHandle: "session-fork",
+      metadata: { cwd: targetCwd, model: TEST_MODEL },
+    });
+
+    await session.close();
+    expect(runtime.acquisitions[0]?.releaseCount).toBe(1);
+  });
+
+  test("refreshes the shared backend and retries a fork move when the route is missing", async () => {
+    const sourceCwd = "/workspace/source";
+    const targetCwd = "/workspace/target";
+    const runtime = new TestOpenCodeHarness();
+    const sourceClient = new TestOpenCodeClient();
+    const targetClient = new TestOpenCodeClient();
+    sourceClient.sessionMessagesResponse = {
+      data: [
+        {
+          info: { id: "msg-assistant-1", sessionID: "session-source", role: "assistant" },
+          parts: [],
+        },
+      ],
+    };
+    runtime.enqueueClient(sourceClient);
+    runtime.enqueueClient(targetClient);
+    const moves: Array<{
+      serverUrl: string;
+      sessionId: string;
+      sourceCwd: string;
+      targetCwd: string;
+      copyChanges: boolean;
+    }> = [];
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      moveSession: async (input) => {
+        moves.push(input);
+        if (moves.length === 1) {
+          throw Object.assign(new Error("missing move-session route"), { status: 404 });
+        }
+      },
+    });
+
+    const session = await client.forkSession({
+      source: {
+        provider: "opencode",
+        sessionId: "session-source",
+        metadata: { cwd: sourceCwd },
+      },
+      sourceCwd,
+      throughMessageId: "msg-assistant-1",
+      config: buildConfig(targetCwd),
+    });
+
+    expect(sourceClient.calls.sessionFork).toEqual([
+      { sessionID: "session-source", directory: sourceCwd },
+    ]);
+    expect(moves).toHaveLength(2);
+    expect(moves).toEqual([
+      expect.objectContaining({ copyChanges: true }),
+      expect.objectContaining({ copyChanges: true }),
+    ]);
+    expect(runtime.acquisitions).toEqual([
+      expect.objectContaining({ kind: "current", releaseCount: 1 }),
+      expect.objectContaining({ kind: "new", releaseCount: 0 }),
+    ]);
+    expect(session.describePersistence()).toMatchObject({
+      sessionId: "session-fork",
+      metadata: { cwd: targetCwd },
+    });
+
+    await session.close();
+    expect(runtime.acquisitions[1]?.releaseCount).toBe(1);
+  });
+
+  test("forks through the Arena fork route in arena mode", async () => {
+    const sourceCwd = "/workspace/source";
+    const targetCwd = "/workspace/target";
+    const runtime = new TestOpenCodeHarness();
+    const sourceClient = new TestOpenCodeClient();
+    const targetClient = new TestOpenCodeClient();
+    sourceClient.sessionMessagesResponse = {
+      data: ["msg-user-1", "msg-assistant-1", "msg-user-2"].map((id) => ({
+        info: { id, sessionID: "session-source", role: "user" },
+        parts: [],
+      })),
+    };
+    runtime.enqueueClient(sourceClient);
+    runtime.enqueueClient(targetClient);
+    const moves: unknown[] = [];
+    const forks: Array<{
+      serverUrl: string;
+      controlToken: string;
+      sessionId: string;
+      sourceCwd: string;
+      targetCwd: string;
+      messageId?: string;
+    }> = [];
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+      moveSession: async (input) => {
+        moves.push(input);
+      },
+      forkArenaSession: async (input) => {
+        forks.push(input);
+        return "session-fork";
+      },
+    });
+
+    const session = await client.forkSession({
+      source: {
+        provider: "opencode",
+        sessionId: "session-source",
+        metadata: { cwd: sourceCwd },
+      },
+      sourceCwd,
+      throughMessageId: "msg-assistant-1",
+      config: buildConfig(targetCwd),
+    });
+
+    // The Arena backend forks, moves, and rewrites the copy in one call.
+    expect(forks).toEqual([
+      {
+        serverUrl: "http://127.0.0.1:1234",
+        controlToken: runtime.server.controlToken,
+        sessionId: "session-source",
+        sourceCwd,
+        targetCwd,
+        messageId: "msg-user-2",
+      },
+    ]);
+    expect(sourceClient.calls.sessionFork).toEqual([]);
+    expect(moves).toEqual([]);
+    expect(session.describePersistence()).toMatchObject({
+      sessionId: "session-fork",
+      metadata: { cwd: targetCwd },
+    });
+
+    await session.close();
+    expect(runtime.acquisitions[0]?.releaseCount).toBe(1);
+  });
+
+  test("attaches the daemon-held token to the Arena fork route", async () => {
+    const sourceCwd = "/workspace/source";
+    const targetCwd = "/workspace/target";
+    const runtime = new TestOpenCodeHarness();
+    runtime.enqueueClient(new TestOpenCodeClient());
+    runtime.enqueueClient(new TestOpenCodeClient());
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const requests: Array<{ path: string; token: string | null }> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      requests.push({
+        path: url.pathname,
+        token: new Headers(init?.headers).get("x-paseo-control-token"),
+      });
+      return Response.json({ sessionID: "session-fork" });
+    });
+
+    try {
+      const session = await client.forkSession({
+        source: {
+          provider: "opencode",
+          sessionId: "session-source",
+          metadata: { cwd: sourceCwd },
+        },
+        sourceCwd,
+        config: buildConfig(targetCwd),
+      });
+      await session.close();
+    } finally {
+      fetchMock.mockRestore();
+    }
+
+    // The backend answers 404 to requests without the token.
+    expect(requests).toEqual([
+      { path: "/arena/sessions/session-source/fork", token: runtime.server.controlToken },
+    ]);
+  });
+
+  test("shares the ref-counted backend for Arena sessions with launch environments", async () => {
+    const cwd = tmpCwd();
+    const runtime = new TestOpenCodeHarness();
+    runtime.enqueueClient(new TestOpenCodeClient());
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+
+    const session = await client.createSession(buildConfig(cwd), {
+      agentId: "arena-agent",
+      env: { PASEO_AGENT_ID: "arena-agent" },
+    });
+
+    expect(runtime.acquisitions).toEqual([
+      expect.objectContaining({ kind: "current", releaseCount: 0 }),
+    ]);
+    expect(runtime.clientCreations).toEqual([
+      {
+        baseUrl: runtime.server.url,
+        directory: cwd,
+        controlToken: runtime.server.controlToken,
+      },
+    ]);
+    expect(JSON.stringify(session.describePersistence())).not.toContain(
+      runtime.server.controlToken,
+    );
+    await session.close();
+    expect(runtime.acquisitions[0]?.releaseCount).toBe(1);
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("attaches the daemon-held token to raw Arena server requests", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const requests: Array<{ path: string; token: string | null }> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      requests.push({
+        path: url.pathname,
+        token: new Headers(init?.headers).get("x-paseo-control-token"),
+      });
+      if (url.pathname === "/arena/activity") return Response.json([]);
+      return new Response(null, { status: 204 });
+    });
+
+    try {
+      const activity = await client.openArenaActivitySource("/workspace/repo");
+      expect(activity).not.toBeNull();
+      expect(await activity!.read(["session-1"])).toEqual([]);
+      await activity!.close();
+      await client.seedWorktreeIgnoredContent({
+        sourceCwd: "/workspace/repo",
+        worktreePath: "/workspace/repo/.agent-duel/worktrees/a",
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+
+    expect(requests).toEqual([
+      { path: "/arena/activity", token: runtime.server.controlToken },
+      { path: "/arena/worktrees/seed", token: runtime.server.controlToken },
+    ]);
+  });
+
+  test("disposes the directory's OpenCode instance after Git is set up under it", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const requests: Array<{ method: string; path: string; directory: string | null }> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const headers = new Headers(init?.headers);
+      requests.push({
+        method: init?.method ?? "GET",
+        path: new URL(String(input)).pathname,
+        directory: headers.get("x-opencode-directory"),
+      });
+      return Response.json(true);
+    });
+
+    try {
+      await client.refreshProjectDirectory("/workspace/folder");
+    } finally {
+      fetchMock.mockRestore();
+    }
+
+    expect(requests).toEqual([
+      { method: "POST", path: "/instance/dispose", directory: "/workspace/folder" },
+    ]);
+    expect(runtime.acquisitions[0]?.releaseCount).toBe(1);
+  });
+
+  test("recovers Arena streams and canonical reads after the managed backend changes ports", async () => {
+    const cwd = tmpCwd();
+    const runtime = new TestOpenCodeHarness();
+    const original = new TestOpenCodeClient();
+    const replacement = new TestOpenCodeClient();
+    runtime.enqueueClient(original);
+    runtime.enqueueClient(replacement);
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const session = await client.createSession(buildConfig(cwd));
+    const arena = session.arena!;
+    const namespace = arena.streamKey;
+    const urls: string[] = [];
+    const requestTokens: Array<string | null> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      urls.push(String(input));
+      requestTokens.push(new Headers(init?.headers).get("x-paseo-control-token"));
+      return new Response("{}", { status: 503 });
+    });
+    try {
+      await expect(arena.resolve()).rejects.toThrow();
+      expect(urls.at(-1)).toContain(":1234/");
+      runtime.server = {
+        port: 5678,
+        url: "http://127.0.0.1:5678",
+        controlToken: "rotated-opencode-control-token",
+      };
+      const stream = arena.stream({ kind: "current" }, new AbortController().signal, "owner / 1");
+      const results = await Promise.allSettled([
+        arena.resolve("owner / 1"),
+        stream[Symbol.asyncIterator]().next(),
+      ]);
+      expect(results.every((result) => result.status === "rejected")).toBe(true);
+      expect(urls.slice(-2).every((url) => url.includes(":5678/"))).toBe(true);
+      expect(
+        urls.slice(-2).every((url) => new URL(url).searchParams.get("userID") === "owner / 1"),
+      ).toBe(true);
+      expect(requestTokens[0]).toBe("test-opencode-control-token");
+      expect(requestTokens.slice(-2)).toEqual([
+        "rotated-opencode-control-token",
+        "rotated-opencode-control-token",
+      ]);
+      expect(runtime.clientCreations).toHaveLength(2);
+      expect(runtime.clientCreations[1]?.controlToken).toBe("rotated-opencode-control-token");
+      expect(runtime.acquisitions.filter((item) => item.kind === "current")).toHaveLength(2);
+      expect(session.arena!.streamKey).toBe(namespace);
+      for await (const _event of session.streamHistory()) {
+        // The empty fixture only verifies which backend supplies canonical history.
+      }
+      expect(replacement.calls.sessionMessages).toHaveLength(1);
+      expect(original.calls.sessionMessages).toHaveLength(0);
+    } finally {
+      fetchMock.mockRestore();
+      await session.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+    expect(runtime.acquisitions.every((item) => item.releaseCount === 1)).toBe(true);
+  });
+
+  test("treats a missing Arena archive endpoint as an optional compatibility fallback", async () => {
+    const cwd = tmpCwd();
+    const runtime = new TestOpenCodeHarness();
+    runtime.enqueueClient(new TestOpenCodeClient());
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const session = await client.createSession(buildConfig(cwd));
+    let requestCount = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      requestCount += 1;
+      if (requestCount === 1) return new Response(null, { status: 404 });
+      return new Response(JSON.stringify({ data: { message: "archive failed" } }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    try {
+      await expect(session.arena?.archive()).resolves.toBeNull();
+      await expect(session.arena?.archive()).rejects.toThrow("archive failed");
+    } finally {
+      fetchMock.mockRestore();
+      await session.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test("archives and unarchives the durable native session through client hooks", async () => {
     const cwd = tmpCwd();
     const runtime = new TestOpenCodeHarness();
@@ -1069,6 +1509,47 @@ describe("OpenCode adapter normalization", () => {
     expect(onAssistantModelContextWindowResolved).toHaveBeenCalledWith(400_000);
   });
 
+  test("keeps a synthetic user part out of the live timeline", () => {
+    const state = {
+      sessionId: "session-1",
+      messageRoles: new Map([["msg-user", "user" as const]]),
+      accumulatedUsage: {},
+      streamedPartKeys: new Set<string>(),
+      emittedStructuredMessageIds: new Set<string>(),
+      emittedUserMessageIds: new Set<string>(),
+      compactionSummaryMessageIds: new Set<string>(),
+      emittedCompactionPartIds: new Set<string>(),
+      partTypes: new Map(),
+      modelContextWindowsByModelKey: new Map(),
+    };
+    const part = (id: string, text: string, synthetic?: boolean) =>
+      ({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id,
+            sessionID: "session-1",
+            messageID: "msg-user",
+            type: "text",
+            text,
+            time: { start: 1, end: 2 },
+            ...(synthetic ? { synthetic } : {}),
+          },
+        },
+      }) as OpenCodeEvent;
+
+    expect(
+      translateOpenCodeEvent(part("prt-note", "<arena-note>x</arena-note>", true), state),
+    ).toEqual([]);
+    expect(translateOpenCodeEvent(part("prt-user", "hello"), state)).toEqual([
+      {
+        type: "timeline",
+        provider: "opencode",
+        item: { type: "user_message", text: "hello", messageId: "msg-user" },
+      },
+    ]);
+  });
+
   test("renders github issue attachments as text prompt parts", () => {
     const parts = __openCodeInternals.buildOpenCodePromptParts([
       {
@@ -1619,6 +2100,15 @@ describe("OpenCode adapter startTurn error handling", () => {
                 time: { created: 1778762475873 },
               },
               parts: [
+                // Context the engine added for the model; the chat never shows it.
+                {
+                  id: "prt_note",
+                  sessionID: "ses_unit_test",
+                  messageID: "msg_user",
+                  type: "text",
+                  text: "<arena-note>not applied</arena-note>",
+                  synthetic: true,
+                },
                 {
                   id: "prt_user",
                   sessionID: "ses_unit_test",
@@ -1831,9 +2321,20 @@ describe("OpenCode adapter startTurn error handling", () => {
                       todos: [
                         {
                           content: "Inspect current directory and existing files",
+                          status: "high",
+                          priority: "completed",
+                        },
+                      ],
+                    },
+                    metadata: {
+                      todos: [
+                        {
+                          content: "  Inspect current directory and existing files  ",
                           status: "completed",
                           priority: "high",
                         },
+                        { content: "Cancelled", status: "cancelled", priority: "low" },
+                        { content: "Invalid", status: "done", priority: "low" },
                       ],
                     },
                   },
@@ -1919,10 +2420,11 @@ describe("OpenCode adapter startTurn error handling", () => {
           type: "todo",
           items: [
             {
-              text: "Inspect current directory and existing files",
+              text: "  Inspect current directory and existing files  ",
               status: "completed",
               completed: true,
             },
+            { text: "Cancelled", status: "cancelled", completed: false },
           ],
         },
       },
@@ -2024,6 +2526,108 @@ describe("OpenCode adapter startTurn error handling", () => {
     expect(promptAsync.mock.calls[0]?.[0].permission).not.toContainEqual(
       expect.objectContaining({ permission: "bash", action: "allow" }),
     );
+    await session.close();
+  });
+
+  test("opens each uploaded file's own directory to the session before sending the prompt", async () => {
+    const calls: string[] = [];
+    const promptAsync = vi.fn(async () => {
+      calls.push("prompt");
+      return { data: {}, error: undefined };
+    });
+    const update = vi.fn(async () => {
+      calls.push("update");
+      return { data: {}, error: undefined };
+    });
+    const fakeClient = {
+      global: {
+        event: vi.fn().mockImplementation(async ({ signal }: { signal: AbortSignal }) => ({
+          stream: {
+            async *[Symbol.asyncIterator](): AsyncGenerator<OpenCodeEvent> {
+              yield { type: "server.connected", properties: {} } as OpenCodeEvent;
+              await waitForAbort(signal);
+            },
+          },
+        })),
+      },
+      session: { promptAsync, update },
+    } as never;
+    const session = new __openCodeInternals.OpenCodeAgentSession(
+      {
+        provider: "opencode",
+        cwd: "/tmp/test",
+        providerOptions: {},
+        uploadsRoot: "/home/paseo/uploads",
+      },
+      fakeClient,
+      "ses_unit_test",
+      createTestLogger(),
+    );
+    const upload = (id: string) => ({
+      type: "uploaded_file" as const,
+      id,
+      fileName: "secret.txt",
+      mimeType: "text/plain",
+      size: 31,
+      // The client sends the path; only the id under the daemon's uploads is trusted.
+      path: "/etc/secret.txt",
+    });
+
+    await session.startTurn([
+      { type: "text", text: "Read these" },
+      upload("upload_1"),
+      upload("upload_1"),
+      upload("../../etc"),
+    ]);
+
+    await vi.waitFor(() => expect(promptAsync).toHaveBeenCalled());
+    expect(update).toHaveBeenCalledWith({
+      sessionID: "ses_unit_test",
+      directory: "/tmp/test",
+      permission: [
+        {
+          permission: "external_directory",
+          pattern: "/home/paseo/uploads/upload_1/*",
+          action: "allow",
+        },
+      ],
+    });
+    expect(calls).toEqual(["update", "prompt"]);
+    await session.close();
+  });
+
+  test("sends a prompt without uploads without touching the session's permissions", async () => {
+    const promptAsync = vi.fn(async () => ({ data: {}, error: undefined }));
+    const update = vi.fn(async () => ({ data: {}, error: undefined }));
+    const fakeClient = {
+      global: {
+        event: vi.fn().mockImplementation(async ({ signal }: { signal: AbortSignal }) => ({
+          stream: {
+            async *[Symbol.asyncIterator](): AsyncGenerator<OpenCodeEvent> {
+              yield { type: "server.connected", properties: {} } as OpenCodeEvent;
+              await waitForAbort(signal);
+            },
+          },
+        })),
+      },
+      session: { promptAsync, update },
+    } as never;
+    const session = new __openCodeInternals.OpenCodeAgentSession(
+      {
+        provider: "opencode",
+        cwd: "/tmp/test",
+        providerOptions: {},
+        uploadsRoot: "/home/paseo/uploads",
+      },
+      fakeClient,
+      "ses_unit_test",
+      createTestLogger(),
+    );
+
+    await session.startTurn("hello");
+
+    await vi.waitFor(() => expect(promptAsync).toHaveBeenCalled());
+    expect(update).not.toHaveBeenCalled();
     await session.close();
   });
 
@@ -5394,5 +5998,79 @@ describe("OpenCode snapshot summary false-idle regression", () => {
 
     expect(events.some((event) => event.type === "turn_started")).toBe(false);
     await session.close();
+  });
+});
+
+describe("buildOpenCodeReplayUserMessage", () => {
+  const base = { id: "prt", sessionID: "ses", messageID: "msg_user" };
+
+  test("carries a message's images and a battle's attachment labels beside its own text", () => {
+    const item = __openCodeInternals.buildOpenCodeReplayUserMessage("msg_user", [
+      { ...base, id: "prt_1", type: "text", text: "Match this design" },
+      {
+        ...base,
+        id: "prt_2",
+        type: "file",
+        mime: "image/png",
+        filename: "attachment-1.png",
+        url: "data:image/png;base64,iVBORw0KGgo=",
+      },
+      {
+        ...base,
+        id: "prt_3",
+        type: "text",
+        text: "<div class='hero'>Hi</div>",
+        metadata: { arenaAttachment: { label: "Review comment", kind: "text" } },
+      },
+      {
+        ...base,
+        id: "prt_4",
+        type: "text",
+        text: "Uploaded file: secret.txt",
+        metadata: { arenaAttachment: { label: "secret.txt", kind: "file" } },
+      },
+      {
+        ...base,
+        id: "prt_5",
+        type: "text",
+        text: "Uploaded file: notes.md",
+        // Tagged before the engine kept each attachment's kind.
+        metadata: { arenaAttachment: { label: "notes.md" } },
+      },
+    ]);
+
+    expect(item).toEqual({
+      type: "user_message",
+      text: "Match this design",
+      messageId: "msg_user",
+      images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }],
+      labeledAttachments: [
+        { label: "Review comment", kind: "text" },
+        { label: "secret.txt", kind: "file" },
+        { label: "notes.md" },
+      ],
+    });
+  });
+
+  test("leaves OpenCode's synthetic text out of what the user wrote", () => {
+    const item = __openCodeInternals.buildOpenCodeReplayUserMessage("msg_user", [
+      { ...base, id: "prt_1", type: "text", text: "Read this" },
+      { ...base, id: "prt_2", type: "text", text: "Called the Read tool", synthetic: true },
+    ]);
+
+    expect(item).toEqual({ type: "user_message", text: "Read this", messageId: "msg_user" });
+  });
+
+  test("keeps a message that is only an image", () => {
+    const item = __openCodeInternals.buildOpenCodeReplayUserMessage("msg_user", [
+      { ...base, type: "file", mime: "image/jpeg", url: "data:image/jpeg;base64,/9j/" },
+    ]);
+
+    expect(item).toEqual({
+      type: "user_message",
+      text: "",
+      messageId: "msg_user",
+      images: [{ mimeType: "image/jpeg", data: "/9j/" }],
+    });
   });
 });

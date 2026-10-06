@@ -82,7 +82,9 @@ export const useWorkspaceDraftSubmissionStore = create<WorkspaceDraftSubmissionS
       const normalizedDraftId = normalizeDraftId(draftId);
       if (!normalizedDraftId) return;
       set((state) => {
-        if (!state.setupByDraftId[normalizedDraftId]) return state;
+        if (!state.setupByDraftId[normalizedDraftId]) {
+          return state;
+        }
         const { [normalizedDraftId]: _removed, ...setupByDraftId } = state.setupByDraftId;
         return { setupByDraftId };
       });

@@ -404,6 +404,30 @@ describe("WorkspaceGitServiceImpl", () => {
     service.dispose();
   });
 
+  test("local-only refresh rereads Git without repeating remote PR queries", async () => {
+    const getCheckoutStatus = vi.fn(async (cwd: string) => createCheckoutStatus(cwd));
+    const getPullRequestStatus = vi.fn(async () => createPullRequestStatusResult());
+    const service = createService({ getCheckoutStatus, getPullRequestStatus });
+    try {
+      const initial = await service.getSnapshot(REPO_CWD);
+      await service.getSnapshot(REPO_CWD);
+      expect(getCheckoutStatus).toHaveBeenCalledTimes(1);
+      expect(getPullRequestStatus).toHaveBeenCalledTimes(1);
+      for (let i = 0; i < 5; i++) {
+        const fresh = await service.getSnapshot(REPO_CWD, {
+          force: true,
+          includeForge: false,
+          reason: "checkout-status-request",
+        });
+        expect(fresh.forge).toEqual(initial.forge);
+      }
+      expect(getCheckoutStatus).toHaveBeenCalledTimes(6);
+      expect(getPullRequestStatus).toHaveBeenCalledTimes(1);
+    } finally {
+      service.dispose();
+    }
+  });
+
   test("getSnapshot does not probe isAuthenticated for a forge adapter that never throws from it", async () => {
     const gitlabIsAuthenticated = vi.fn(async () => false);
     const gitlabStub: ForgeService = {

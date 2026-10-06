@@ -68,6 +68,7 @@ function reducer(
 interface CreateRequestResult<TCreateResult> {
   agentId: string | null;
   result: TCreateResult;
+  handoffMessage?: boolean;
 }
 
 interface SubmitContext {
@@ -198,18 +199,24 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
 
         if (createResult.agentId) {
           updatePendingAgentId({ draftId, agentId: createResult.agentId });
-          handoffCreatedAgentMessageSubmission(
-            pendingServerId,
-            createResult.agentId,
-            createUserMessage({
-              clientMessageId: attempt.clientMessageId,
-              text: attempt.text,
-              timestamp: attempt.timestamp,
-              images: attempt.images,
-              attachments: attempt.attachments,
-            }),
-          );
-          markPendingCreateLifecycle({ draftId, lifecycle: "sent" });
+          if (createResult.handoffMessage !== false) {
+            handoffCreatedAgentMessageSubmission(
+              pendingServerId,
+              createResult.agentId,
+              createUserMessage({
+                clientMessageId: attempt.clientMessageId,
+                text: attempt.text,
+                timestamp: attempt.timestamp,
+                images: attempt.images,
+                attachments: attempt.attachments,
+              }),
+            );
+            markPendingCreateLifecycle({ draftId, lifecycle: "sent" });
+          } else {
+            // Arena owns its own timeline and never produces the canonical history event that
+            // normally clears this create handoff. The accepted Arena start is the handoff.
+            clearPendingCreateAttempt({ draftId });
+          }
         }
 
         await onCreateSuccess({ result: createResult.result, attempt });

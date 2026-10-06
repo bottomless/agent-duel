@@ -34,18 +34,9 @@ import {
 import { createAgentCommand, type CreateAgentFromMcpInput } from "../create-agent/create.js";
 import type { VoiceCallerContext, VoiceSpeakHandler } from "../../voice-types.js";
 import type { FirstAgentContext } from "../../messages.js";
-import { everyMsToFiveFieldCron } from "@getpaseo/protocol/schedule/cadence";
 import { expandUserPath, isSameOrDescendantPath, resolvePathFromBase } from "../../path-utils.js";
 import type { TerminalManager } from "../../../terminal/terminal-manager.js";
 import type { CreatePaseoWorktreeWorkflowFn } from "../../worktree-session.js";
-import type { ScheduleService } from "../../schedule/service.js";
-import {
-  ScheduleRunSchema,
-  ScheduleSummarySchema,
-  StoredScheduleSchema,
-  type ScheduleCadence,
-  type UpdateScheduleInput,
-} from "@getpaseo/protocol/schedule/types";
 import type { ProviderSnapshotManager } from "../provider-snapshot-manager.js";
 import {
   AgentModelSchema,
@@ -53,11 +44,9 @@ import {
   AgentStatusEnum,
   ProviderModeSchema,
   ProviderSummarySchema,
-  parseDurationString,
   resolveRequiredProviderModel,
   sanitizePermissionRequest,
   serializeSnapshotWithMetadata,
-  toScheduleSummary,
   waitForAgentWithTimeout,
 } from "../mcp-shared.js";
 import { sendPromptToAgent, setupFinishNotification } from "../agent-prompt.js";
@@ -98,7 +87,6 @@ export interface PaseoToolHostDependencies {
   agentStorage: AgentStorage;
   terminalManager?: TerminalManager | null;
   getDaemonTcpPort?: () => number | null;
-  scheduleService?: ScheduleService | null;
   providerSnapshotManager: ProviderSnapshotManager;
   daemonConfigStore?: Pick<DaemonConfigStore, "get">;
   github?: ForgeService;
@@ -315,10 +303,10 @@ function compareAgentListItems(a: AgentListItemPayload, b: AgentListItemPayload)
   return resolveAgentListActivityTime(b) - resolveAgentListActivityTime(a);
 }
 
-function resolveScheduleProviderAndModel(params: {
-  provider?: string;
-  defaultProvider: AgentProvider;
-}): { provider: AgentProvider; model?: string } {
+function resolveProviderAndModel(params: { provider?: string; defaultProvider: AgentProvider }): {
+  provider: AgentProvider;
+  model?: string;
+} {
   const providerInput = params.provider?.trim() || params.defaultProvider;
   const slashIndex = providerInput.indexOf("/");
   if (slashIndex === -1) {
@@ -334,149 +322,6 @@ function resolveScheduleProviderAndModel(params: {
   return {
     provider: provider,
     model,
-  };
-}
-
-function resolveScheduleUpdateProviderAndModel(params: {
-  provider?: string;
-  model?: string | null;
-}): { provider?: string; model?: string | null } {
-  const providerInput = params.provider?.trim();
-  const modelInput = typeof params.model === "string" ? params.model.trim() : params.model;
-
-  if (params.model !== undefined && modelInput === "") {
-    throw new Error("model cannot be empty");
-  }
-
-  if (!providerInput) {
-    return params.model !== undefined ? { model: modelInput } : {};
-  }
-
-  const slashIndex = providerInput.indexOf("/");
-  if (slashIndex === -1) {
-    return {
-      provider: providerInput,
-      ...(params.model !== undefined ? { model: modelInput } : {}),
-    };
-  }
-
-  const provider = providerInput.slice(0, slashIndex).trim();
-  const modelFromProvider = providerInput.slice(slashIndex + 1).trim();
-  if (!provider || !modelFromProvider) {
-    throw new Error("provider must be <provider> or <provider>/<model>");
-  }
-  if (params.model === null) {
-    throw new Error("provider specifies a model but model is null");
-  }
-  if (typeof modelInput === "string" && modelInput !== modelFromProvider) {
-    throw new Error("Conflicting model values provided");
-  }
-
-  return {
-    provider,
-    model: modelInput ?? modelFromProvider,
-  };
-}
-
-interface ScheduleUpdateToolInput {
-  id: string;
-  every?: string;
-  cron?: string;
-  timezone?: string;
-  name?: string | null;
-  prompt?: string;
-  maxRuns?: number | null;
-  provider?: string;
-  model?: string | null;
-  mode?: string | null;
-  cwd?: string;
-  expiresIn?: string;
-  clearExpires?: boolean;
-}
-
-function normalizeScheduleCadenceArg(value: string | undefined): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  return trimmed;
-}
-
-function normalizeScheduleTimeZoneArg(value: string | undefined): string | undefined {
-  return normalizeScheduleCadenceArg(value);
-}
-
-function resolveScheduleUpdateCadence(input: ScheduleUpdateToolInput): ScheduleCadence | undefined {
-  const every = normalizeScheduleCadenceArg(input.every);
-  const cron = normalizeScheduleCadenceArg(input.cron);
-  const timeZone = normalizeScheduleTimeZoneArg(input.timezone);
-
-  if (every !== undefined && cron !== undefined) {
-    throw new Error("Specify at most one of every or cron");
-  }
-  if (timeZone !== undefined && cron === undefined) {
-    throw new Error("timezone can only be used with cron");
-  }
-  if (every !== undefined) {
-    // COMPAT(scheduleEveryInput): accept the old hidden field and canonicalize it before write.
-    // Added in v0.2.0; remove after 2027-01-17.
-    const everyMs = parseDurationString(every);
-    const expression = everyMsToFiveFieldCron(everyMs);
-    if (expression) {
-      return { type: "cron", expression };
-    }
-    throw new Error(`${every} cannot be represented faithfully by five-field cron`);
-  }
-  if (cron !== undefined) {
-    return {
-      type: "cron",
-      expression: cron,
-      ...(timeZone !== undefined ? { timezone: timeZone } : {}),
-    };
-  }
-  return undefined;
-}
-
-function resolveScheduleUpdateExpiresAt(input: ScheduleUpdateToolInput): string | null | undefined {
-  if (input.expiresIn !== undefined && input.clearExpires) {
-    throw new Error("Specify at most one of expiresIn or clearExpires");
-  }
-  if (input.expiresIn !== undefined) {
-    return new Date(Date.now() + parseDurationString(input.expiresIn)).toISOString();
-  }
-  if (input.clearExpires) {
-    return null;
-  }
-  return undefined;
-}
-
-function buildScheduleUpdateInput(input: ScheduleUpdateToolInput): UpdateScheduleInput {
-  const cadence = resolveScheduleUpdateCadence(input);
-  const expiresAt = resolveScheduleUpdateExpiresAt(input);
-  const providerModelPatch = resolveScheduleUpdateProviderAndModel({
-    provider: input.provider,
-    model: input.model,
-  });
-  const newAgentConfig = {
-    ...(providerModelPatch.provider !== undefined ? { provider: providerModelPatch.provider } : {}),
-    ...(providerModelPatch.model !== undefined ? { model: providerModelPatch.model } : {}),
-    ...(input.mode !== undefined ? { modeId: input.mode } : {}),
-    ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-  };
-
-  return {
-    id: input.id,
-    ...(input.name !== undefined ? { name: input.name } : {}),
-    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
-    ...(cadence !== undefined ? { cadence } : {}),
-    ...(input.maxRuns !== undefined ? { maxRuns: input.maxRuns } : {}),
-    ...(expiresAt !== undefined ? { expiresAt } : {}),
-    ...(Object.keys(newAgentConfig).length > 0 ? { newAgentConfig } : {}),
   };
 }
 
@@ -544,7 +389,6 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     agentStorage,
     terminalManager,
     workspaceScripts,
-    scheduleService,
     providerSnapshotManager,
     daemonConfigStore,
     callerAgentId,
@@ -602,28 +446,6 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       return tool.handler(await parseToolInput(tool, input), context);
     },
   });
-
-  const buildCronScheduleCadence = (input: {
-    cron: string | undefined;
-    timezone?: string;
-  }): ScheduleCadence => {
-    const expression = input.cron?.trim() ?? "";
-    if (!expression) {
-      throw new Error("cron is required");
-    }
-    const timezone = normalizeScheduleTimeZoneArg(input.timezone);
-    return {
-      type: "cron",
-      expression,
-      ...(timezone !== undefined ? { timezone } : {}),
-    };
-  };
-
-  const buildScheduleExpiry = (expiresIn: string | undefined): string | undefined => {
-    return expiresIn === undefined
-      ? undefined
-      : new Date(Date.now() + parseDurationString(expiresIn)).toISOString();
-  };
 
   const resolveCallerAgent = () => {
     if (!callerAgentId) {
@@ -703,114 +525,6 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     throw new Error("workspaceId is required outside an agent-scoped session");
   }
 
-  const buildCallerAgentScheduleConfigExtras = (
-    callerAgent: NonNullable<ReturnType<typeof resolveCallerAgent>>,
-    resolvedProvider: string,
-  ): Record<string, unknown> => {
-    return {
-      ...(callerAgent.config.thinkingOptionId
-        ? { thinkingOptionId: callerAgent.config.thinkingOptionId }
-        : {}),
-      ...(callerAgent.provider === resolvedProvider && callerAgent.config.providerOptions
-        ? { providerOptions: callerAgent.config.providerOptions }
-        : {}),
-      ...(callerAgent.config.featureValues
-        ? { featureValues: callerAgent.config.featureValues }
-        : {}),
-      ...(callerAgent.config.systemPrompt ? { systemPrompt: callerAgent.config.systemPrompt } : {}),
-      ...(callerAgent.config.mcpServers ? { mcpServers: callerAgent.config.mcpServers } : {}),
-    };
-  };
-
-  const buildCallerAgentScheduleConfig = (
-    callerAgent: NonNullable<ReturnType<typeof resolveCallerAgent>>,
-    params?: { provider?: string; cwd?: string },
-  ) => {
-    const hasProviderOverride = params?.provider !== undefined;
-    const resolvedProviderModel = hasProviderOverride
-      ? resolveScheduleProviderAndModel({
-          provider: params?.provider,
-          defaultProvider: callerAgent.provider,
-        })
-      : null;
-    const resolvedProvider = resolvedProviderModel?.provider ?? callerAgent.provider;
-    let resolvedModel: string | undefined;
-    if (resolvedProviderModel?.model) {
-      resolvedModel = resolvedProviderModel.model;
-    } else if (!hasProviderOverride && callerAgent.config.model) {
-      resolvedModel = callerAgent.config.model;
-    }
-    return {
-      provider: resolvedProvider,
-      cwd: params?.cwd?.trim() ? expandUserPath(params.cwd) : callerAgent.cwd,
-      ...(callerAgent.currentModeId && callerAgent.provider === resolvedProvider
-        ? {
-            modeId: callerAgent.currentModeId,
-          }
-        : {}),
-      ...(resolvedModel ? { model: resolvedModel } : {}),
-      ...buildCallerAgentScheduleConfigExtras(callerAgent, resolvedProvider),
-    };
-  };
-
-  const resolveNewAgentScheduleTarget = (params?: {
-    provider?: string;
-    cwd?: string;
-    isolation?: "local" | "worktree";
-  }) => {
-    const callerAgent = resolveCallerAgent();
-    if (callerAgent) {
-      return {
-        type: "new-agent" as const,
-        config: {
-          ...buildCallerAgentScheduleConfig(callerAgent, params),
-          ...(params?.isolation ? { isolation: params.isolation } : {}),
-        },
-      };
-    }
-
-    if (!params?.provider?.trim()) {
-      throw new Error("provider is required when target is new-agent");
-    }
-
-    const resolvedProviderModel = resolveScheduleProviderAndModel({
-      provider: params?.provider,
-      defaultProvider: params.provider,
-    });
-    return {
-      type: "new-agent" as const,
-      config: {
-        provider: resolvedProviderModel.provider,
-        cwd: params?.cwd?.trim() ? expandUserPath(params.cwd) : process.cwd(),
-        ...(resolvedProviderModel.model ? { model: resolvedProviderModel.model } : {}),
-        ...(params?.isolation ? { isolation: params.isolation } : {}),
-      },
-    };
-  };
-
-  async function requireScheduleTarget(id: string, type: "agent" | "new-agent") {
-    if (!scheduleService) {
-      throw new Error("Schedule service is not configured");
-    }
-    const schedule = await scheduleService.inspect(id);
-    if (schedule.target.type !== type) {
-      throw new Error(
-        type === "agent" ? `Heartbeat not found: ${id}` : `Schedule not found: ${id}`,
-      );
-    }
-    return schedule;
-  }
-
-  async function requireCallerHeartbeat(id: string) {
-    if (!callerAgentId) {
-      throw new Error("Heartbeat operations require an agent-scoped session");
-    }
-    const schedule = await requireScheduleTarget(id, "agent");
-    if (schedule.target.type !== "agent" || schedule.target.agentId !== callerAgentId) {
-      throw new Error(`Heartbeat ${id} does not belong to caller ${callerAgentId}`);
-    }
-    return schedule;
-  }
   const ProviderModelInputSchema = AgentProviderEnum.trim()
     .refine((value) => value.includes("/"), {
       message: "provider must be provider/model, for example codex/gpt-5.4",
@@ -2510,371 +2224,6 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
   );
 
   registerTool(
-    "create_schedule",
-    {
-      title: "Create schedule",
-      description: "Create a recurring schedule that starts a new agent on a cron cadence.",
-      inputSchema: {
-        prompt: z.string().trim().min(1, "prompt is required"),
-        cron: z.string().trim().min(1, "cron is required"),
-        timezone: z
-          .string()
-          .trim()
-          .min(1)
-          .optional()
-          .describe("IANA time zone for the cron cadence. For example: America/New_York."),
-        name: z.string().optional(),
-        provider: (callerAgentId ? AgentProviderEnum.optional() : AgentProviderEnum).describe(
-          "Provider, or provider/model (for example: codex or codex/gpt-5.4). Defaults to the caller's provider in an agent-scoped session.",
-        ),
-        cwd: z.string().optional(),
-        isolation: z.enum(["local", "worktree"]).optional(),
-        maxRuns: z.number().int().positive().optional(),
-        expiresIn: z.string().optional(),
-      },
-      outputSchema: ScheduleSummarySchema.shape,
-    },
-    async ({ prompt, cron, timezone, name, provider, cwd, isolation, maxRuns, expiresIn }) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-
-      const expiresAt = buildScheduleExpiry(expiresIn);
-      const schedule = await scheduleService.createOrReplace({
-        prompt: prompt.trim(),
-        cadence: buildCronScheduleCadence({
-          cron,
-          ...(timezone !== undefined ? { timezone } : {}),
-        }),
-        target: resolveNewAgentScheduleTarget({ provider, cwd, isolation }),
-        ...(name?.trim() ? { name: name.trim() } : {}),
-        ...(maxRuns === undefined ? {} : { maxRuns }),
-        ...(expiresAt === undefined ? {} : { expiresAt }),
-      });
-
-      return {
-        content: [],
-        structuredContent: ensureValidJson(toScheduleSummary(schedule)),
-      };
-    },
-  );
-
-  registerTool(
-    "create_heartbeat",
-    {
-      title: "Create heartbeat",
-      description: "Create a recurring heartbeat that sends you a prompt on a cron cadence.",
-      inputSchema: {
-        prompt: z.string().trim().min(1, "prompt is required"),
-        cron: z.string().trim().min(1, "cron is required"),
-        timezone: z
-          .string()
-          .trim()
-          .min(1)
-          .optional()
-          .describe("IANA time zone for the cron cadence. For example: America/New_York."),
-        name: z.string().optional(),
-        maxRuns: z.number().int().positive().optional(),
-        expiresIn: z.string().optional(),
-      },
-      outputSchema: ScheduleSummarySchema.shape,
-    },
-    async ({ prompt, cron, timezone, name, maxRuns, expiresIn }) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-      if (!callerAgentId) {
-        throw new Error("create_heartbeat requires an agent-scoped session");
-      }
-      resolveCallerAgent();
-
-      const expiresAt = buildScheduleExpiry(expiresIn);
-      const schedule = await scheduleService.createOrReplace({
-        prompt: prompt.trim(),
-        cadence: buildCronScheduleCadence({
-          cron,
-          ...(timezone !== undefined ? { timezone } : {}),
-        }),
-        target: { type: "agent", agentId: callerAgentId },
-        ...(name?.trim() ? { name: name.trim() } : {}),
-        ...(maxRuns === undefined ? {} : { maxRuns }),
-        ...(expiresAt === undefined ? {} : { expiresAt }),
-      });
-
-      return {
-        content: [],
-        structuredContent: ensureValidJson(toScheduleSummary(schedule)),
-      };
-    },
-  );
-
-  registerTool(
-    "delete_heartbeat",
-    {
-      title: "Delete heartbeat",
-      description: "Delete one of your heartbeats.",
-      inputSchema: { id: z.string().min(1) },
-      outputSchema: { success: z.boolean() },
-    },
-    async ({ id }) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-      await requireCallerHeartbeat(id);
-      await scheduleService.delete(id);
-      return {
-        content: [],
-        structuredContent: ensureValidJson({ success: true }),
-      };
-    },
-  );
-
-  registerTool(
-    "list_schedules",
-    {
-      title: "List schedules",
-      description: "List all schedules managed by the daemon.",
-      inputSchema: {},
-      outputSchema: {
-        schedules: z.array(ScheduleSummarySchema),
-      },
-    },
-    async () => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-
-      const schedules = (await scheduleService.list())
-        .filter((schedule) => schedule.target.type === "new-agent")
-        .map((schedule) => toScheduleSummary(schedule));
-      return {
-        content: [],
-        structuredContent: ensureValidJson({ schedules }),
-      };
-    },
-  );
-
-  registerTool(
-    "inspect_schedule",
-    {
-      title: "Inspect schedule",
-      description: "Inspect a schedule and its run history.",
-      inputSchema: {
-        id: z.string(),
-      },
-      outputSchema: StoredScheduleSchema.shape,
-    },
-    async ({ id }) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-
-      const schedule = await requireScheduleTarget(id, "new-agent");
-      return {
-        content: [],
-        structuredContent: ensureValidJson(schedule),
-      };
-    },
-  );
-
-  registerTool(
-    "pause_schedule",
-    {
-      title: "Pause schedule",
-      description: "Pause an active schedule.",
-      inputSchema: {
-        id: z.string(),
-      },
-      outputSchema: {
-        success: z.boolean(),
-      },
-    },
-    async ({ id }) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-
-      await requireScheduleTarget(id, "new-agent");
-      await scheduleService.pause(id);
-      return {
-        content: [],
-        structuredContent: ensureValidJson({ success: true }),
-      };
-    },
-  );
-
-  registerTool(
-    "resume_schedule",
-    {
-      title: "Resume schedule",
-      description: "Resume a paused schedule.",
-      inputSchema: {
-        id: z.string(),
-      },
-      outputSchema: {
-        success: z.boolean(),
-      },
-    },
-    async ({ id }) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-
-      await requireScheduleTarget(id, "new-agent");
-      await scheduleService.resume(id);
-      return {
-        content: [],
-        structuredContent: ensureValidJson({ success: true }),
-      };
-    },
-  );
-
-  registerTool(
-    "delete_schedule",
-    {
-      title: "Delete schedule",
-      description: "Delete a schedule permanently.",
-      inputSchema: {
-        id: z.string(),
-      },
-      outputSchema: {
-        success: z.boolean(),
-      },
-    },
-    async ({ id }) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-
-      await requireScheduleTarget(id, "new-agent");
-      await scheduleService.delete(id);
-      return {
-        content: [],
-        structuredContent: ensureValidJson({ success: true }),
-      };
-    },
-  );
-
-  registerTool(
-    "update_schedule",
-    {
-      title: "Update schedule",
-      description:
-        "Update an existing schedule. Only provided fields are changed; omitted fields remain unchanged.",
-      inputSchema: z
-        .object({
-          id: z.string(),
-          cron: z.string().optional().describe("New cron expression."),
-          timezone: z
-            .string()
-            .trim()
-            .min(1)
-            .optional()
-            .describe(
-              "IANA time zone for cron cadence; requires cron. For example: America/New_York.",
-            ),
-          name: z.string().nullable().optional().describe("New name (null to clear)."),
-          prompt: z.string().trim().min(1).optional().describe("New prompt text."),
-          maxRuns: z
-            .number()
-            .int()
-            .positive()
-            .nullable()
-            .optional()
-            .describe("New max runs limit (null to clear)."),
-          provider: z
-            .string()
-            .trim()
-            .min(1)
-            .optional()
-            .describe("New provider for new-agent target."),
-          model: z
-            .string()
-            .trim()
-            .min(1)
-            .nullable()
-            .optional()
-            .describe("New model for new-agent target (null to clear)."),
-          mode: z
-            .string()
-            .trim()
-            .min(1)
-            .nullable()
-            .optional()
-            .describe("New mode for new-agent target (null to clear)."),
-          cwd: z.string().trim().min(1).optional().describe("New cwd for new-agent target."),
-          expiresIn: z
-            .string()
-            .optional()
-            .describe("New relative expiry duration (for example: 1h, 2d)."),
-          clearExpires: z.boolean().optional().describe("Clear any schedule expiry."),
-        })
-        .passthrough(),
-      outputSchema: StoredScheduleSchema.shape,
-    },
-    async (input) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-
-      await requireScheduleTarget(input.id, "new-agent");
-      const schedule = await scheduleService.update(buildScheduleUpdateInput(input));
-
-      return {
-        content: [],
-        structuredContent: ensureValidJson(schedule),
-      };
-    },
-  );
-
-  registerTool(
-    "schedule_logs",
-    {
-      title: "Schedule logs",
-      description: "Get the run history (logs) for a schedule.",
-      inputSchema: {
-        id: z.string(),
-      },
-      outputSchema: {
-        runs: z.array(ScheduleRunSchema),
-      },
-    },
-    async ({ id }) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-
-      await requireScheduleTarget(id, "new-agent");
-      const runs = await scheduleService.logs(id);
-      return {
-        content: [],
-        structuredContent: ensureValidJson({ runs }),
-      };
-    },
-  );
-
-  registerTool(
-    "run_schedule_once",
-    {
-      title: "Run schedule once",
-      description: "Run a schedule immediately without changing its cron cadence.",
-      inputSchema: { id: z.string().min(1) },
-      outputSchema: StoredScheduleSchema.shape,
-    },
-    async ({ id }) => {
-      if (!scheduleService) {
-        throw new Error("Schedule service is not configured");
-      }
-      await requireScheduleTarget(id, "new-agent");
-      const schedule = await scheduleService.runOnce(id);
-      return {
-        content: [],
-        structuredContent: ensureValidJson(schedule),
-      };
-    },
-  );
-
-  registerTool(
     "list_providers",
     {
       title: "List providers",
@@ -2966,7 +2315,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async ({ provider, cwd, settings }) => {
-      const resolvedProviderModel = resolveScheduleProviderAndModel({
+      const resolvedProviderModel = resolveProviderAndModel({
         provider,
         defaultProvider: provider,
       });

@@ -3,6 +3,7 @@ import {
   Archive,
   ArrowDownUp,
   Download,
+  GitBranchPlus,
   GitCommitHorizontal,
   GitMerge,
   RefreshCcw,
@@ -15,6 +16,7 @@ const ThemedDownload = withUnistyles(Download);
 const ThemedUpload = withUnistyles(Upload);
 const ThemedArrowDownUp = withUnistyles(ArrowDownUp);
 const ThemedGitMerge = withUnistyles(GitMerge);
+const ThemedGitBranchPlus = withUnistyles(GitBranchPlus);
 const ThemedRefreshCcw = withUnistyles(RefreshCcw);
 const ThemedArchive = withUnistyles(Archive);
 
@@ -27,5 +29,6 @@ export const GIT_ACTION_ICONS = {
   pullAndPush: <ThemedArrowDownUp size={16} uniProps={mutedColorMapping} />,
   merge: <ThemedGitMerge size={16} uniProps={mutedColorMapping} />,
   mergeFromBase: <ThemedRefreshCcw size={16} uniProps={mutedColorMapping} />,
+  createBranch: <ThemedGitBranchPlus size={16} uniProps={mutedColorMapping} />,
   archive: <ThemedArchive size={16} uniProps={mutedColorMapping} />,
 };

@@ -64,4 +64,65 @@ describe("computeResizeHandleSizes", () => {
       }),
     ).toEqual([0.25, 0, 0, 0.75]);
   });
+
+  it("holds the leading pane at its floor", () => {
+    const sizes = computeResizeHandleSizes({
+      sizes: [0.6, 0.4],
+      index: 0,
+      deltaRatio: -0.5,
+      leadingMinSize: 0.3,
+    });
+
+    expect(sizes[0]).toBe(0.3);
+    expect(sizes[1]).toBeCloseTo(0.7, 10);
+  });
+
+  it("drags a split stored below the floor from where the floor draws it", () => {
+    const sizes = computeResizeHandleSizes({
+      sizes: [0.1, 0.9],
+      index: 0,
+      deltaRatio: 0.05,
+      leadingMinSize: 0.3,
+    });
+
+    expect(sizes[0]).toBeCloseTo(0.35, 10);
+    expect(sizes[1]).toBeCloseTo(0.65, 10);
+  });
+
+  it("keeps the trailing pane's minimum when the floor cannot fit", () => {
+    const sizes = computeResizeHandleSizes({
+      sizes: [0.5, 0.5],
+      index: 0,
+      deltaRatio: -0.2,
+      leadingMinSize: 0.95,
+    });
+
+    expect(sizes[0]).toBe(0.9);
+    expect(sizes[1]).toBeCloseTo(0.1, 10);
+  });
+
+  it("holds the trailing pane at its floor", () => {
+    const sizes = computeResizeHandleSizes({
+      sizes: [0.5, 0.5],
+      index: 0,
+      deltaRatio: 0.5,
+      trailingMinSize: 0.25,
+    });
+
+    expect(sizes[0]).toBe(0.75);
+    expect(sizes[1]).toBeCloseTo(0.25, 10);
+  });
+
+  it("keeps the leading floor when both floors cannot fit", () => {
+    const sizes = computeResizeHandleSizes({
+      sizes: [0.5, 0.5],
+      index: 0,
+      deltaRatio: -0.4,
+      leadingMinSize: 0.6,
+      trailingMinSize: 0.6,
+    });
+
+    expect(sizes[0]).toBe(0.6);
+    expect(sizes[1]).toBeCloseTo(0.4, 10);
+  });
 });

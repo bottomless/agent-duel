@@ -18,6 +18,44 @@ class ProviderSnapshots {
 }
 
 describe("resolveStructuredGenerationProviders", () => {
+  test("tries a preferred selection before configured metadata providers", async () => {
+    const snapshots = new ProviderSnapshots([
+      {
+        provider: "opencode",
+        status: READY,
+        enabled: true,
+        models: [
+          {
+            provider: "opencode",
+            id: "openrouter/solo-model",
+            label: "Solo model",
+            isDefault: true,
+          },
+        ],
+      },
+    ]);
+
+    const providers = await resolveStructuredGenerationProviders({
+      cwd: "/tmp/repo",
+      providerSnapshotManager: snapshots,
+      daemonConfig: {
+        metadataGeneration: {
+          providers: [{ provider: "mock", model: "metadata-model" }],
+        },
+      },
+      preferredSelection: {
+        provider: "opencode",
+        model: "openrouter/solo-model",
+        thinkingOptionId: "high",
+      },
+    });
+
+    expect(providers).toEqual([
+      { provider: "opencode", model: "openrouter/solo-model", thinkingOptionId: "high" },
+      { provider: "mock", model: "metadata-model" },
+    ]);
+  });
+
   test("tries the configured model before dynamically discovered fallbacks", async () => {
     const snapshots = new ProviderSnapshots([
       {

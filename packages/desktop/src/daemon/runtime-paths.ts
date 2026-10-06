@@ -75,6 +75,10 @@ export function resolveDaemonRunnerEntrypoint(): NodeEntrypointSpec {
 }
 
 export function resolveNodeExecPath(): string {
+  if (!app.isPackaged) {
+    return process.env.npm_node_execpath?.trim() || "node";
+  }
+
   if (app.isPackaged && process.platform === "darwin") {
     const marker = ".app/Contents/MacOS/";
     const markerIndex = process.execPath.indexOf(marker);

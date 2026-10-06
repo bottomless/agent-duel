@@ -263,6 +263,12 @@ function resolveModelProfile(modelId: string | null | undefined): {
   };
 }
 
+function resolveStreamingInterval(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 1
+    ? Math.min(value, 1_000)
+    : MOCK_LOAD_TEST_INTERVAL_MS;
+}
+
 function promptToText(prompt: AgentPromptInput): string {
   if (typeof prompt === "string") {
     return prompt;
@@ -644,6 +650,8 @@ export class MockLoadTestAgentSession implements AgentSession {
   private modeId: string | null;
   private modelId: string | null;
   private readonly assistantResponse: string | null;
+  private readonly streamingReasoningResponse: string | null;
+  private readonly streamingReasoningIntervalMs: number;
   private readonly streamingAssistantResponse: string | null;
   private readonly streamingAssistantIntervalMs: number;
   private readonly rewindError: string | null;
@@ -658,18 +666,20 @@ export class MockLoadTestAgentSession implements AgentSession {
       typeof options.config.featureValues?.mockAssistantResponse === "string"
         ? options.config.featureValues.mockAssistantResponse
         : null;
+    this.streamingReasoningResponse =
+      typeof options.config.featureValues?.mockStreamingReasoningResponse === "string"
+        ? options.config.featureValues.mockStreamingReasoningResponse
+        : null;
+    this.streamingReasoningIntervalMs = resolveStreamingInterval(
+      options.config.featureValues?.mockStreamingReasoningIntervalMs,
+    );
     this.streamingAssistantResponse =
       typeof options.config.featureValues?.mockStreamingAssistantResponse === "string"
         ? options.config.featureValues.mockStreamingAssistantResponse
         : null;
-    const requestedStreamingInterval =
-      options.config.featureValues?.mockStreamingAssistantIntervalMs;
-    this.streamingAssistantIntervalMs =
-      typeof requestedStreamingInterval === "number" &&
-      Number.isFinite(requestedStreamingInterval) &&
-      requestedStreamingInterval >= 1
-        ? Math.min(requestedStreamingInterval, 1_000)
-        : MOCK_LOAD_TEST_INTERVAL_MS;
+    this.streamingAssistantIntervalMs = resolveStreamingInterval(
+      options.config.featureValues?.mockStreamingAssistantIntervalMs,
+    );
     this.rewindError =
       typeof options.config.featureValues?.mockRewindError === "string"
         ? options.config.featureValues.mockRewindError
@@ -735,6 +745,8 @@ export class MockLoadTestAgentSession implements AgentSession {
     const scheduleTurn = () => {
       if (shouldEmitTurnFailure(prompt)) {
         this.scheduleFailedTurn(turn);
+      } else if (this.streamingReasoningResponse !== null) {
+        this.scheduleStreamingReasoningTurn(turn, this.streamingReasoningResponse);
       } else if (this.streamingAssistantResponse !== null) {
         this.scheduleStreamingAssistantTurn(turn, this.streamingAssistantResponse);
       } else if (this.assistantResponse !== null) {
@@ -1076,6 +1088,34 @@ export class MockLoadTestAgentSession implements AgentSession {
         messageId: turn.assistantMessageId,
       });
       turn.timer = setTimeout(emitNext, this.streamingAssistantIntervalMs);
+      turn.timer.unref?.();
+    };
+    turn.timer = setTimeout(emitNext, 0);
+    turn.timer.unref?.();
+  }
+
+  private scheduleStreamingReasoningTurn(turn: ActiveTurn, reasoningText: string): void {
+    const tokens = tokenize(reasoningText);
+    const finalText = "Reasoning stream complete.";
+    const emitNext = () => {
+      if (this.activeTurn !== turn) {
+        return;
+      }
+      this.clearTurnTimer(turn);
+      this.emitTurnStarted(turn);
+      const token = tokens.shift();
+      if (token === undefined) {
+        this.emitTimeline(turn.turnId, {
+          type: "assistant_message",
+          text: finalText,
+          messageId: turn.assistantMessageId,
+        });
+        this.finishTurnWithText(turn, finalText);
+        return;
+      }
+      turn.emittedTokens += 1;
+      this.emitTimeline(turn.turnId, { type: "reasoning", text: token });
+      turn.timer = setTimeout(emitNext, this.streamingReasoningIntervalMs);
       turn.timer.unref?.();
     };
     turn.timer = setTimeout(emitNext, 0);

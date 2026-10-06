@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readFileSync } from "node:fs";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { TerminalActivity } from "@getpaseo/protocol/terminal-activity";
 import { connectDaemonClient } from "./daemon-client-loader";
 import { withProjectOwnership } from "./project-ownership";
@@ -26,6 +27,7 @@ interface SeedProjectDescriptor {
  * prefer those wrappers over reaching for this client directly.
  */
 export interface SeedDaemonClient {
+  getDirectorySuggestions: DaemonClient["getDirectorySuggestions"];
   connect(): Promise<void>;
   close(): Promise<void>;
   addProject(cwd: string): Promise<{
@@ -115,18 +117,6 @@ export interface SeedDaemonClient {
         status: string;
         title?: string | null;
       };
-    }>;
-  }>;
-  fetchRecentProviderSessions(options: {
-    cwd: string;
-    providers: string[];
-    limit: number;
-  }): Promise<{
-    entries: Array<{
-      providerId: string;
-      providerHandleId: string;
-      cwd: string;
-      firstPromptPreview?: string | null;
     }>;
   }>;
   updateAgent(agentId: string, updates: { name?: string }): Promise<void>;

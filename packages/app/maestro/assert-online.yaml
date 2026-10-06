@@ -2,7 +2,7 @@ appId: sh.paseo
 ---
 - runFlow:
     when:
-      visible: "Open in.*Paseo.*\\?"
+      visible: "Open in.*Agent Duel.*\\?"
     commands:
       - tapOn: "Open"
 

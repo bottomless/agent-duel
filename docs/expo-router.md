@@ -1,8 +1,8 @@
 # Expo Router
 
-Paseo's mobile route tree is fragile because Expo Router and React Navigation do
-not fail loudly when a nested native route is mounted under the wrong layout. The
-usual symptom is a white or blank native screen with no JavaScript crash.
+Agent Duel uses Expo Router in browser and Electron. Layout ownership and
+startup restore must agree so a workspace route mounts with its host context.
+Native failure notes below are retained upstream history.
 
 Read this before changing `packages/app/src/app`, startup routing, remembered
 workspace restore, or active workspace selection.
@@ -110,6 +110,9 @@ non-route directory.
 
 ## Native Stack
 
+Retained upstream reference for existing adapters; this is not an Agent Duel
+platform or test requirement. The shared `ThemedStack` convention still applies.
+
 Keep workspace identity and retention outside native-stack `getId` and
 `dangerouslySingular`. Expo Router maps `dangerouslySingular` to React
 Navigation `getId`, and `getId` has broken Android native-stack/Fabric by
@@ -129,13 +132,12 @@ every Unistyles runtime update.
 
 ## Regression Shape
 
-Pure helper tests are useful but not enough. The failure mode here is native
-route-tree state, so a real regression should launch native with seeded persisted
-state:
+Pure helper tests do not prove route mounting. Exercise startup restore in a
+real browser and Electron renderer with seeded persisted state:
 
 1. Seed `paseo:last-workspace-route-selection` with a valid
    `{ serverId, workspaceId }`.
-2. Launch the native app cold.
+2. Launch the browser or Electron renderer cold.
 3. Assert a real screen is visible, not the blank tree.
 4. Assert no `[Layout children]` warning appears.
 
@@ -156,5 +158,5 @@ Before landing route changes:
       `target` when the action names a specific tab.
 - [ ] Did you add a route? Register it in the layout that directly owns it.
 - [ ] Did `useLocalSearchParams()` lose a required param? Fix the route tree.
-- [ ] Did native show a blank screen without a crash? Suspect route ownership
+- [ ] Did the renderer show a blank screen without a crash? Suspect route ownership
       before stores, themes, or rendering.

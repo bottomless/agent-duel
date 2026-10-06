@@ -13,6 +13,7 @@ import { markdownCopyDataSet } from "@/assistant-selection-copy/markup";
 import { useAssistantFileLinkResolverContext } from "./provider";
 import type { AssistantFileLinkSource } from "./resolver";
 import { useFileLink } from "./use-file-link";
+import { MarkdownLinkContextMenu } from "@/components/markdown/link-context-menu";
 
 interface AssistantMarkdownLinkProps {
   source: AssistantFileLinkSource;
@@ -89,23 +90,28 @@ export function AssistantMarkdownLink({
   }
 
   const anchor = (
-    <a
-      {...(unwrapForMarkdownCopy ? { "data-paseo-markdown-unwrap": "true" } : {})}
-      href={source.href}
-      title={source.title}
-      onClickCapture={handleAnchorClickCapture}
-      onAuxClickCapture={preventAnchorNavigation}
-      style={LINK_ANCHOR_STYLE}
-    >
-      <MarkdownLinkText
-        dataSet={monoSurface ? MARKDOWN_CODE_LINK_DATASET : undefined}
-        style={style}
-        onPress={onPress}
-        onHoverIn={onHoverIn}
-      >
-        {children}
-      </MarkdownLinkText>
-    </a>
+    <MarkdownLinkContextMenu url={source.href}>
+      {(onContextMenu) => (
+        <a
+          {...(unwrapForMarkdownCopy ? { "data-paseo-markdown-unwrap": "true" } : {})}
+          href={source.href}
+          title={source.title}
+          onClickCapture={handleAnchorClickCapture}
+          onAuxClickCapture={preventAnchorNavigation}
+          onContextMenu={onContextMenu}
+          style={LINK_ANCHOR_STYLE}
+        >
+          <MarkdownLinkText
+            dataSet={monoSurface ? MARKDOWN_CODE_LINK_DATASET : undefined}
+            style={style}
+            onPress={onPress}
+            onHoverIn={onHoverIn}
+          >
+            {children}
+          </MarkdownLinkText>
+        </a>
+      )}
+    </MarkdownLinkContextMenu>
   );
 
   return <FileLinkHoverTooltip filePath={tooltipPath}>{anchor}</FileLinkHoverTooltip>;

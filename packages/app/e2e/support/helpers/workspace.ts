@@ -205,6 +205,20 @@ export async function trackForkUpstream(repoPath: string): Promise<string> {
     .trim();
 }
 
+/**
+ * Git run against the checkout the way a developer runs it in their own terminal, behind the
+ * app's back. The daemon pushes checkout status only for a cwd some workspace registered with
+ * its git observer, so a project with no chats in it never hears about this: the app keeps
+ * showing the branch it read when the screen opened, which is the point of these helpers.
+ */
+export function switchRepoBranchOutsideApp(repoPath: string, branch: string): void {
+  execSync(`git checkout ${JSON.stringify(branch)}`, { cwd: repoPath, stdio: "ignore" });
+}
+
+export function deleteRepoBranchOutsideApp(repoPath: string, branch: string): void {
+  execSync(`git branch -D ${JSON.stringify(branch)}`, { cwd: repoPath, stdio: "ignore" });
+}
+
 export function readRepoRef(repoPath: string, ref: string): string {
   return execSync(`git rev-parse ${JSON.stringify(ref)}`, { cwd: repoPath, stdio: "pipe" })
     .toString()

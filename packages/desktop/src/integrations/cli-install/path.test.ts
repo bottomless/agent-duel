@@ -7,10 +7,10 @@ describe("cli-install-path", () => {
       resolveCliInstallSourcePath({
         platform: "darwin",
         isPackaged: true,
-        executablePath: "/Applications/Paseo.app/Contents/MacOS/Paseo",
-        shimPath: "/Applications/Paseo.app/Contents/Resources/bin/paseo",
+        executablePath: "/Applications/Agent Duel.app/Contents/MacOS/Agent Duel",
+        shimPath: "/Applications/Agent Duel.app/Contents/Resources/bin/paseo",
       }),
-    ).toBe("/Applications/Paseo.app/Contents/Resources/bin/paseo");
+    ).toBe("/Applications/Agent Duel.app/Contents/Resources/bin/paseo");
   });
 
   it("prefers the original AppImage path on linux", () => {
@@ -20,9 +20,9 @@ describe("cli-install-path", () => {
         isPackaged: true,
         executablePath: "/tmp/.mount_paseo123/paseo",
         shimPath: "/tmp/.mount_paseo123/resources/bin/paseo",
-        appImagePath: "/home/user/Applications/Paseo.AppImage",
+        appImagePath: "/home/user/Applications/Agent Duel.AppImage",
       }),
-    ).toBe("/home/user/Applications/Paseo.AppImage");
+    ).toBe("/home/user/Applications/Agent Duel.AppImage");
   });
 
   it("falls back to the shim on windows and in development", () => {
@@ -30,18 +30,19 @@ describe("cli-install-path", () => {
       resolveCliInstallSourcePath({
         platform: "win32",
         isPackaged: true,
-        executablePath: "C:\\Users\\user\\AppData\\Local\\Programs\\Paseo\\Paseo.exe",
-        shimPath: "C:\\Users\\user\\AppData\\Local\\Programs\\Paseo\\resources\\bin\\paseo.cmd",
+        executablePath: "C:\\Users\\user\\AppData\\Local\\Programs\\Agent Duel\\Agent Duel.exe",
+        shimPath:
+          "C:\\Users\\user\\AppData\\Local\\Programs\\Agent Duel\\resources\\bin\\paseo.cmd",
       }),
-    ).toBe("C:\\Users\\user\\AppData\\Local\\Programs\\Paseo\\resources\\bin\\paseo.cmd");
+    ).toBe("C:\\Users\\user\\AppData\\Local\\Programs\\Agent Duel\\resources\\bin\\paseo.cmd");
 
     expect(
       resolveCliInstallSourcePath({
         platform: "linux",
         isPackaged: false,
-        executablePath: "/opt/Paseo/paseo",
-        shimPath: "/opt/Paseo/resources/bin/paseo",
+        executablePath: "/opt/Agent Duel/paseo",
+        shimPath: "/opt/Agent Duel/resources/bin/paseo",
       }),
-    ).toBe("/opt/Paseo/resources/bin/paseo");
+    ).toBe("/opt/Agent Duel/resources/bin/paseo");
   });
 });

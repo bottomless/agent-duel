@@ -4,23 +4,18 @@ import { test, expect, type Page } from "../support/fixtures";
 import { gotoWorkspace, clickNewTerminal } from "../support/helpers/launcher";
 import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-client";
 import { expectExplorerEntryVisible } from "../support/helpers/file-explorer";
+import { openSidePanelTab } from "../support/helpers/side-panel";
 import { expectNoTerminalTabs, clickFirstTerminalTab } from "../support/helpers/workspace-tabs";
 
 // Model B: two workspaces can back the SAME directory. What follows from that
 // split is the contract these specs pin:
-//   - The right sidebar (file browser / git changes) reads the directory, so it
-//     is IDENTICAL across same-directory workspaces.
+//   - The side panel's Files and Changes tabs read the directory, so they are
+//     IDENTICAL across same-directory workspaces.
 //   - Tabs (agents, terminals) are owned by the workspace, so they are
 //     INDEPENDENT across same-directory workspaces.
 
-// On desktop the explorer is pinned open; on narrow layouts it must be toggled.
-// Open it either way, then select the requested tab.
 async function openExplorerTab(page: Page, tab: "files" | "changes"): Promise<void> {
-  const openButton = page.getByRole("button", { name: "Open explorer" }).first();
-  if (await openButton.isVisible().catch(() => false)) {
-    await openButton.click();
-  }
-  await page.getByTestId(`explorer-tab-${tab}`).click();
+  await openSidePanelTab(page, tab);
 }
 
 async function createSecondWorkspaceOnSameDir(

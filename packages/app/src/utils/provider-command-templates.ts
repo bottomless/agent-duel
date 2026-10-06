@@ -3,7 +3,7 @@ export type ProviderCommandId = "resume";
 /**
  * Declarative command templates for provider-native CLIs.
  *
- * Note: these are NOT Paseo agent IDs. They take provider-native session IDs.
+ * Note: these are NOT Agent Duel agent IDs. They take provider-native session IDs.
  * Example placeholders:
  * - {sessionId}
  */

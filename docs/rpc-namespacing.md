@@ -64,23 +64,17 @@ Forge-neutral behavior currently uses `checkout.forge.*` for checkout-scoped ope
 
 - `checkout.forge.*` for operations whose request/response shape is genuinely
   forge-neutral and whose implementation dispatches through the forge resolver.
-- `checkout.github.*` for existing GitHub-specific compatibility RPCs while
-  callers migrate to the neutral `checkout.forge.*` shape
+- `checkout.github.*` for existing GitHub-specific compatibility RPCs retained from upstream; migrate their callers and handlers together
+  when replacing them with the neutral `checkout.forge.*` shape
 
 Do not put GitHub-specific enums or semantics into `checkout.forge.*` RPC names. A generic forge RPC should only exist when the behavior is genuinely forge-neutral.
 
 ## Compatibility
 
-The existing flat RPC names remain part of the protocol until they are intentionally migrated:
+Agent Duel ships the app, daemon, and desktop together. Update schemas and both
+ends of an RPC in the same commit. Do not add old-client capability gates,
+`COMPAT` shims, or deprecation windows.
 
-```ts
-checkout_pr_merge_request;
-checkout_pr_merge_response;
-```
-
-Do not add new flat names. When migrating old RPCs, keep protocol compatibility rules in mind:
-
-- Add the new names first.
-- Gate new feature behavior through `server_info.features.*` when an old host cannot support it.
-- Keep old names accepted until the compatibility window expires.
-- Mark shims with `COMPAT(...)` and a removal date.
+Existing flat RPC names and inherited capability machinery remain until the
+relevant behavior is intentionally migrated. New RPCs use the dotted convention
+above. Migrate callers and handlers together when replacing an existing RPC.

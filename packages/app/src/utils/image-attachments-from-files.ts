@@ -1,6 +1,6 @@
 import type { AttachmentMetadata } from "@/attachments/types";
-import { persistAttachmentFromBlob } from "@/attachments/service";
 import { resolveRasterImageMimeType } from "@/attachments/file-types";
+import { type ImageCodec, persistSendableImages } from "@/attachments/sendable-image";
 
 export interface ClipboardItemLike {
   kind?: string;
@@ -19,27 +19,37 @@ export interface ClipboardImageFile {
   mimeType: string;
 }
 
-export function collectImageFilesFromClipboardData(
+/**
+ * The files a paste carries, split the way a drop splits them: raster images attach as images,
+ * and every other file (an SVG included) attaches as a file.
+ */
+export interface ClipboardFiles {
+  images: ClipboardImageFile[];
+  others: File[];
+}
+
+export function collectFilesFromClipboardData(
   clipboardData?: ClipboardDataLike | null,
-): ClipboardImageFile[] {
+): ClipboardFiles {
+  const files: ClipboardFiles = { images: [], others: [] };
   if (!clipboardData?.items) {
-    return [];
+    return files;
   }
 
-  const files: ClipboardImageFile[] = [];
   for (const item of Array.from(clipboardData.items)) {
     if (item?.kind !== "file") {
-      continue;
-    }
-    const mimeType = resolveRasterImageMimeType({ mimeType: item.type });
-    if (!mimeType) {
       continue;
     }
     const file = item.getAsFile?.();
     if (!file) {
       continue;
     }
-    files.push({ file, mimeType });
+    const mimeType = resolveRasterImageMimeType({ mimeType: item.type });
+    if (mimeType) {
+      files.images.push({ file, mimeType });
+    } else {
+      files.others.push(file);
+    }
   }
 
   return files;
@@ -47,24 +57,14 @@ export function collectImageFilesFromClipboardData(
 
 export async function filesToImageAttachments(
   files: readonly ClipboardImageFile[],
-): Promise<ImageAttachmentFromFile[]> {
-  const attachments = await Promise.all(
-    files.map(async ({ file, mimeType }) => {
-      try {
-        return await persistAttachmentFromBlob({
-          blob: file,
-          mimeType,
-          fileName: file.name,
-        });
-      } catch (error) {
-        console.error("[attachments] Failed to persist file attachment", {
-          fileName: file.name,
-          error,
-        });
-        return null;
-      }
-    }),
+  codec?: ImageCodec,
+): Promise<{ attachments: ImageAttachmentFromFile[]; errors: unknown[] }> {
+  return await persistSendableImages(
+    files.map(({ file, mimeType }) => ({
+      source: { kind: "blob", blob: file },
+      mimeType,
+      fileName: file.name,
+    })),
+    codec,
   );
-
-  return attachments.filter((entry): entry is ImageAttachmentFromFile => entry !== null);
 }

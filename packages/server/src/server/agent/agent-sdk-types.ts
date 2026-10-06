@@ -1,3 +1,5 @@
+import type { ArenaSessionActivity } from "@getpaseo/protocol/arena/activity";
+import type { ArenaStreamFrame, ArenaStreamTarget } from "@getpaseo/protocol/arena/stream";
 import type {
   AgentProviderNotice,
   AgentTaskItem,
@@ -5,6 +7,16 @@ import type {
   ToolPolicy,
 } from "@getpaseo/protocol/agent-types";
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
+import type {
+  ArenaRetryMode,
+  ArenaReviewAnswer,
+  ArenaComparisonDiff,
+  ArenaReviewEvent,
+  ArenaReviewIngestResult,
+  ArenaSnapshot,
+  ArenaVote,
+} from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaPromptAttachment } from "../arena/prompt-attachments.js";
 import type { PaseoToolCatalog } from "./tools/types.js";
 
 export type { AgentProviderNotice, AgentTaskItem };
@@ -380,7 +392,14 @@ export interface CompactionTimelineItem {
 }
 
 export type AgentTimelineItem =
-  | { type: "user_message"; text: string; messageId?: string; clientMessageId?: string }
+  | {
+      type: "user_message";
+      text: string;
+      messageId?: string;
+      clientMessageId?: string;
+      images?: Array<{ mimeType: string; data: string }>;
+      labeledAttachments?: Array<{ label: string; kind?: "file" | "text" }>;
+    }
   | { type: "assistant_message"; text: string; messageId?: string }
   | { type: "reasoning"; text: string }
   | ToolCallTimelineItem
@@ -391,15 +410,29 @@ export type AgentTimelineItem =
 export type AgentStreamEvent =
   | { type: "thread_started"; sessionId: string; provider: AgentProvider }
   | { type: "turn_started"; provider: AgentProvider; turnId?: string }
-  | { type: "turn_completed"; provider: AgentProvider; usage?: AgentUsage; turnId?: string }
-  | { type: "usage_updated"; provider: AgentProvider; usage: AgentUsage; turnId?: string }
+  | {
+      type: "turn_completed";
+      provider: AgentProvider;
+      usage?: AgentUsage;
+      turnId?: string;
+    }
+  | {
+      type: "usage_updated";
+      provider: AgentProvider;
+      usage: AgentUsage;
+      turnId?: string;
+    }
   | {
       type: "mode_changed";
       provider: AgentProvider;
       currentModeId: string | null;
       availableModes: AgentMode[];
     }
-  | { type: "model_changed"; provider: AgentProvider; runtimeInfo: AgentRuntimeInfo }
+  | {
+      type: "model_changed";
+      provider: AgentProvider;
+      runtimeInfo: AgentRuntimeInfo;
+    }
   | {
       type: "thinking_option_changed";
       provider: AgentProvider;
@@ -413,7 +446,12 @@ export type AgentStreamEvent =
       diagnostic?: string;
       turnId?: string;
     }
-  | { type: "turn_canceled"; provider: AgentProvider; reason: string; turnId?: string }
+  | {
+      type: "turn_canceled";
+      provider: AgentProvider;
+      reason: string;
+      turnId?: string;
+    }
   | {
       type: "timeline";
       item: AgentTimelineItem;
@@ -608,6 +646,15 @@ export interface AgentCreateSessionOptions {
   persistSession?: boolean;
 }
 
+export interface AgentForkSessionInput {
+  source: AgentPersistenceHandle;
+  sourceCwd: string;
+  throughMessageId?: string;
+  config: AgentSessionConfig;
+  launchContext?: AgentLaunchContext;
+  options?: AgentCreateSessionOptions;
+}
+
 /** Runtime-only intent for a persisted-session resume. Never persist this option. */
 export interface AgentResumeSessionOptions {
   /** Defaults to interactive. History loading may be read-only for archived native sessions. */
@@ -651,6 +698,73 @@ export interface AgentSession {
   revertConversation?(input: { messageId: string }): Promise<void>;
   revertFiles?(input: { messageId: string }): Promise<void>;
   revertBoth?(input: { messageId: string }): Promise<void>;
+  /** Optional blind-battle control plane exposed by Arena-capable OpenCode runtimes. */
+  readonly arena?: {
+    readonly streamKey: string;
+    stream(
+      target: ArenaStreamTarget,
+      signal: AbortSignal,
+      userId?: string,
+    ): AsyncIterable<ArenaStreamFrame>;
+    /**
+     * Resolving creates the Arena chat, so `userId` is where a battle tree gets
+     * its owner. It is the signed-in account the daemon resolved for the
+     * connection; a client never supplies it.
+     */
+    resolve(userId?: string): Promise<ArenaSnapshot>;
+    singleAgentVote(
+      ratingId: string,
+      vote: "up" | "down",
+      participantId: string,
+    ): Promise<ArenaSnapshot>;
+    archive(): Promise<ArenaSnapshot | null>;
+    snapshot(chatId: string): Promise<ArenaSnapshot>;
+    turn(turnId: string): Promise<ArenaSnapshot>;
+    start(
+      chatId: string,
+      prompt: string,
+      participantId: string,
+      autoAccept: boolean,
+      attachments?: readonly ArenaPromptAttachment[],
+    ): Promise<ArenaSnapshot>;
+    reply(
+      turnId: string,
+      prompt: string,
+      target: "a" | "b" | "both",
+      attachments?: readonly ArenaPromptAttachment[],
+    ): Promise<ArenaSnapshot>;
+    vote(turnId: string, vote: ArenaVote, participantId: string): Promise<ArenaSnapshot>;
+    /**
+     * Append what a voter did while reviewing. Idempotent on event id, so the
+     * app may replay a flush it could not confirm.
+     */
+    recordReview(
+      turnId: string,
+      events: readonly ArenaReviewEvent[],
+      participantId: string,
+      /** The socket's peer, resolved by the daemon. A client never supplies it. */
+      ipAddress?: string,
+    ): Promise<ArenaReviewIngestResult>;
+    stop(turnId: string): Promise<ArenaSnapshot>;
+    resolveStop(
+      turnId: string,
+      resolution: "discard" | "apply_a" | "apply_b",
+    ): Promise<ArenaSnapshot>;
+    retryComparison(turnId: string): Promise<ArenaSnapshot>;
+    retryResolution(
+      turnId: string,
+      mode?: ArenaRetryMode,
+      answers?: readonly ArenaReviewAnswer[],
+    ): Promise<ArenaSnapshot>;
+    diff(turnId: string): Promise<ArenaComparisonDiff>;
+    replyQuestion(runId: string, requestId: string, answers: string[][]): Promise<ArenaSnapshot>;
+    rejectQuestion(runId: string, requestId: string): Promise<ArenaSnapshot>;
+    replyPermission(
+      runId: string,
+      requestId: string,
+      response: "once" | "always" | "reject",
+    ): Promise<ArenaSnapshot>;
+  };
   /**
    * Out-of-band prompt handler. When non-null, the manager runs the returned
    * handler instead of allocating a turn. The handler emits stream events
@@ -688,7 +802,27 @@ export interface ResolveAgentDefaultModeInput {
   env?: Record<string, string>;
 }
 
+export interface ArenaActivitySource {
+  read(sessionIDs: string[]): Promise<ArenaSessionActivity[]>;
+  close(): Promise<void>;
+}
+
+export interface ArenaCheckoutCleanupSource {
+  inspect(worktreeRoot: string): Promise<{
+    eligible: boolean;
+    lastActivityAt: string | null;
+    reason?: string;
+  }>;
+  prepare(worktreeRoot: string): Promise<void>;
+  release(worktreeRoot: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface AgentClient {
+  openArenaActivitySource?(cwd: string): Promise<ArenaActivitySource | null>;
+  openArenaCheckoutCleanupSource?(
+    sourceRepoRoot: string,
+  ): Promise<ArenaCheckoutCleanupSource | null>;
   readonly provider: AgentProvider;
   readonly capabilities: AgentCapabilityFlags;
   createSession(
@@ -696,6 +830,7 @@ export interface AgentClient {
     launchContext?: AgentLaunchContext,
     options?: AgentCreateSessionOptions,
   ): Promise<AgentSession>;
+  forkSession?(input: AgentForkSessionInput): Promise<AgentSession>;
   resumeSession(
     handle: AgentPersistenceHandle,
     overrides?: Partial<AgentSessionConfig>,
@@ -719,6 +854,13 @@ export interface AgentClient {
   listImportableSessions?(
     options?: ListImportableSessionsOptions,
   ): Promise<ImportableProviderSession[]>;
+  /**
+   * Fill a freshly created worktree with its source checkout's ignored content, the way a
+   * battle contestant is seeded. Only a provider that owns that clone machinery implements it.
+   */
+  seedWorktreeIgnoredContent?(input: { sourceCwd: string; worktreePath: string }): Promise<void>;
+  /** Drop what the provider cached about a directory's repository after Git changed under it. */
+  refreshProjectDirectory?(cwd: string): Promise<void>;
   importSession?(
     input: ImportProviderSessionInput,
     context: ImportProviderSessionContext,

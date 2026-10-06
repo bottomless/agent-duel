@@ -24,15 +24,23 @@ export type PickerItem =
   | {
       kind: "github-pr";
       item: ForgeSearchItem;
+    }
+  | {
+      /** A branch that does not exist yet, named in the picker and cut at create time. */
+      kind: "new-branch";
+      name: string;
+      /** The exact ref the branch is cut from; the row and the request read the same value. */
+      baseRefName: string;
     };
 
 export type PickerCheckoutRequest = Pick<
   CreatePaseoWorktreeInput,
-  "action" | "refName" | "checkoutSource" | "githubPrNumber"
+  "action" | "refName" | "branchName" | "checkoutSource" | "githubPrNumber"
 >;
 
 const BRANCH_OPTION_PREFIX = "branch:";
 const PR_OPTION_PREFIX = "github-pr:";
+const NEW_BRANCH_OPTION_PREFIX = "new-branch:";
 const REMOTE_TRACKING_PREFIX = "refs/remotes/";
 
 export function branchPickerOptionId(refName: string): string {
@@ -132,7 +140,7 @@ export interface BaseRefCheckoutStatus {
 
 // Display only. The exact ref is what every request carries; this is just how a ref reads in
 // a row label, so "refs/remotes/origin/other-name" shows as "other-name".
-function branchNameFromRef(refName: string): string {
+export function branchNameFromRef(refName: string): string {
   if (refName.startsWith("refs/heads/")) return refName.slice("refs/heads/".length);
   if (refName.startsWith(REMOTE_TRACKING_PREFIX)) {
     const remainder = refName.slice(REMOTE_TRACKING_PREFIX.length);
@@ -178,13 +186,55 @@ export function defaultBasePickerItem(status: BaseRefCheckoutStatus): PickerItem
   };
 }
 
+/**
+ * The ref the source checkout has to be sitting on for this row. A branch row is its own
+ * ref; a new-branch row is its base, because the branch it names does not exist yet and is
+ * cut where the checkout stands. A pull request never runs in the checkout, so it has none.
+ */
+export function pickerItemBaseRef(item: PickerItem | null): string | null {
+  if (!item) return null;
+  switch (item.kind) {
+    case "branch":
+      return item.refName;
+    case "new-branch":
+      return item.baseRefName;
+    case "github-pr":
+      return null;
+  }
+}
+
+/**
+ * Whether the source checkout is already sitting where the picked row starts from.
+ *
+ * In Local mode this decides whether the checkout has to switch branches before the
+ * workspace is created. Only the branch name is compared: the row usually carries the
+ * upstream ref, and `origin/master` and `master` are the same branch as far as the person
+ * choosing is concerned.
+ */
+export function startsFromCurrentBranch(
+  item: PickerItem | null,
+  currentBranch: string | null | undefined,
+): boolean {
+  const refName = pickerItemBaseRef(item);
+  if (!refName || !currentBranch) return false;
+  return branchNameFromRef(refName) === currentBranch;
+}
+
 export function pickerItemToCheckoutRequest(
   item: PickerItem | null,
 ): PickerCheckoutRequest | undefined {
   if (!item) return undefined;
   switch (item.kind) {
+    // Cut the worktree at the picked ref with a detached HEAD. No branch is invented and
+    // none is checked out, so the ref can already be checked out elsewhere, the main
+    // checkout included. A branch is created in place later, if the work earns one — or
+    // up front, through the picker's "New branch" row.
     case "branch":
-      return { action: "branch-off", refName: item.refName };
+      return { action: "detach", refName: item.refName };
+    // The one case that names a branch at creation: cut the worktree off the base ref and
+    // put the typed branch on it. The worktree path still gets its own generated slug.
+    case "new-branch":
+      return { action: "branch-off", refName: item.baseRefName, branchName: item.name };
     case "github-pr": {
       const headRefName = item.item.headRefName?.trim();
       const forge = item.item.forge ?? "github";
@@ -213,10 +263,19 @@ export function prPickerOptionId(number: number): string {
   return `${PR_OPTION_PREFIX}${number}`;
 }
 
+export function newBranchPickerOptionId(name: string): string {
+  return `${NEW_BRANCH_OPTION_PREFIX}${name}`;
+}
+
 export function pickerOptionId(item: PickerItem): string {
-  return item.kind === "branch"
-    ? branchPickerOptionId(item.refName)
-    : prPickerOptionId(item.item.number);
+  switch (item.kind) {
+    case "branch":
+      return branchPickerOptionId(item.refName);
+    case "github-pr":
+      return prPickerOptionId(item.item.number);
+    case "new-branch":
+      return newBranchPickerOptionId(item.name);
+  }
 }
 
 function formatPrLabel(item: Pick<ForgeSearchItem, "forge" | "number" | "title">): string {
@@ -225,7 +284,7 @@ function formatPrLabel(item: Pick<ForgeSearchItem, "forge" | "number" | "title">
 }
 
 export function pickerItemLabel(item: PickerItem): string {
-  return item.kind === "branch" ? item.name : formatPrLabel(item.item);
+  return item.kind === "github-pr" ? formatPrLabel(item.item) : item.name;
 }
 
 export interface PickerOptionData {

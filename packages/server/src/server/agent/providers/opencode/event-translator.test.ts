@@ -390,7 +390,40 @@ describe("translateOpenCodeEvent", () => {
     ]);
   });
 
-  it("falls back to unknown permission detail when command metadata is absent", () => {
+  it("names the file an external directory request is for instead of showing the raw request", () => {
+    const state = createState();
+
+    const result = translateOpenCodeEvent(
+      {
+        type: "permission.asked",
+        properties: {
+          id: "perm-file",
+          sessionID: "session-1",
+          permission: "external_directory",
+          patterns: ["/tmp/uploads/upload_1/*"],
+          metadata: {
+            filepath: "/tmp/uploads/upload_1/secret.txt",
+            parentDir: "/tmp/uploads/upload_1",
+          },
+          tool: { messageID: "message-1", callID: "call-1" },
+        },
+      },
+      state,
+    );
+
+    expect(result).toMatchObject([
+      {
+        type: "permission_requested",
+        request: {
+          title: "Access external directory",
+          description: "Scope: /tmp/uploads/upload_1/*",
+          detail: { type: "plain_text", text: "/tmp/uploads/upload_1/secret.txt", icon: "eye" },
+        },
+      },
+    ]);
+  });
+
+  it("shows no raw request for an external directory request without a command or file", () => {
     const state = createState();
 
     const result = translateOpenCodeEvent(
@@ -426,17 +459,7 @@ describe("translateOpenCodeEvent", () => {
               reason: "Need to access temporary checkout",
             },
           },
-          detail: {
-            type: "unknown",
-            input: {
-              permission: "external_directory",
-              patterns: ["/tmp/outside/*"],
-              metadata: {
-                reason: "Need to access temporary checkout",
-              },
-            },
-            output: null,
-          },
+          detail: { type: "plain_text", icon: "eye" },
           actions: openCodePermissionActions,
         },
       },
@@ -517,17 +540,7 @@ describe("translateOpenCodeEvent", () => {
               reason: "Need to inspect the requested config directory",
             },
           },
-          detail: {
-            type: "unknown",
-            input: {
-              permission: "external_directory",
-              patterns: ["/Users/example/.config/nvim"],
-              metadata: {
-                reason: "Need to inspect the requested config directory",
-              },
-            },
-            output: null,
-          },
+          detail: { type: "plain_text", icon: "eye" },
           actions: openCodePermissionActions,
         },
       },
@@ -667,6 +680,9 @@ describe("translateOpenCodeEvent", () => {
             { content: "Outline", status: "pending", priority: "high" },
             { content: "Ship", status: "completed", priority: "medium" },
             { content: "   ", status: "completed", priority: "low" },
+            { content: "Recovered", status: "high", priority: "in_progress" },
+            { content: "Invalid", status: "done", priority: "low" },
+            { content: "Cancelled", status: "cancelled", priority: "low" },
           ],
         },
       },
@@ -682,6 +698,9 @@ describe("translateOpenCodeEvent", () => {
           items: [
             { text: "Outline", status: "pending", completed: false },
             { text: "Ship", status: "completed", completed: true },
+            { text: "   ", status: "completed", completed: true },
+            { text: "Recovered", status: "in_progress", completed: false },
+            { text: "Cancelled", status: "cancelled", completed: false },
           ],
         },
       },

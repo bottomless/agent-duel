@@ -15,7 +15,7 @@ export interface DiffLine {
   tokens?: HighlightToken[];
 }
 
-function splitIntoLines(text: string): string[] {
+export function splitIntoLines(text: string): string[] {
   if (!text) {
     return [];
   }
@@ -52,6 +52,11 @@ function splitIntoWords(text: string): string[] {
   return result;
 }
 
+// The word aligner below costs one LCS cell per pair of words, so a pair of minified
+// or generated lines -- thousands of words each -- costs millions of cells to segment
+// a line nobody reads word by word. Past this the line is left unsegmented.
+const MAX_WORD_LEVEL_CELLS = 40_000;
+
 function computeWordLevelDiff(
   oldLine: string,
   newLine: string,
@@ -61,6 +66,10 @@ function computeWordLevelDiff(
 
   const m = oldWords.length;
   const n = newWords.length;
+
+  if (m * n > MAX_WORD_LEVEL_CELLS) {
+    return { oldSegments: [], newSegments: [] };
+  }
 
   // LCS to find common words
   const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
@@ -135,9 +144,17 @@ function computeWordLevelDiff(
 }
 
 export function buildLineDiff(originalText: string, updatedText: string): DiffLine[] {
-  const originalLines = splitIntoLines(originalText);
-  const updatedLines = splitIntoLines(updatedText);
+  return buildLineDiffFromLines(splitIntoLines(originalText), splitIntoLines(updatedText));
+}
 
+// The same diff over lines that have already been split, for callers that need to
+// slice the input first -- trimming a common prefix and suffix, for instance, which
+// no round trip through joined text can express: a lone empty line and empty text
+// both join to "" but mean different things.
+export function buildLineDiffFromLines(
+  originalLines: readonly string[],
+  updatedLines: readonly string[],
+): DiffLine[] {
   const hasAnyContent = originalLines.length > 0 || updatedLines.length > 0;
   if (!hasAnyContent) {
     return [];

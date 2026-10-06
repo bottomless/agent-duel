@@ -28,7 +28,7 @@ import { MarkdownParagraphView, MarkdownTextSpan } from "@/components/markdown-t
 import { MarkdownTableCellText } from "@/components/markdown-text-selection";
 import { getMarkdownListMarker, getMarkdownListSpacing } from "@/utils/markdown-list";
 import { markdownNodeContainsType } from "@/utils/markdown-ast";
-import { createCompactMarkdownStyles, createMarkdownStyles } from "@/styles/markdown-styles";
+import { createMarkdownStylesFor, type MarkdownStyleOptions } from "@/styles/markdown-styles";
 import type { Theme } from "@/styles/theme";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { isNative } from "@/constants/platform";
@@ -41,12 +41,14 @@ import { resolveInlineImageSize, type InlineImageDimensions } from "./inline-ima
 import { groupMarkdownParts, type MarkdownPartGroup } from "./part-groups";
 import { colorMarkdownLinkChildren } from "./link-children";
 import { MarkdownLinkText } from "./link-text";
+import { MarkdownLinkContextMenu } from "./link-context-menu";
+import { useWorkspaceBrowserLinkOpener } from "@/workspace/browser-link-opener";
 
 export type MarkdownStyles = Record<string, TextStyle & ViewStyle & { [key: string]: unknown }>;
 
 interface MarkdownWithStableRendererProps {
   children: ReactNode;
-  style: ReturnType<typeof createMarkdownStyles> | ReturnType<typeof createCompactMarkdownStyles>;
+  style: ReturnType<typeof createMarkdownStylesFor>;
   rules?: RenderRules;
   markdownit?: ReturnType<typeof MarkdownIt>;
   onLinkPress?: (url: string) => boolean;
@@ -57,12 +59,20 @@ interface MarkdownWithStableRendererProps {
 const MarkdownWithStableRenderer = Markdown as ComponentType<MarkdownWithStableRendererProps>;
 const ThemedMarkdown = withUnistyles(MarkdownWithStableRenderer);
 
-function markdownStyleMapping(theme: Theme): Partial<MarkdownWithStableRendererProps> {
-  return { style: createMarkdownStyles(theme) };
-}
+type MarkdownStyleMapping = (theme: Theme) => Partial<MarkdownWithStableRendererProps>;
 
-function compactMarkdownStyleMapping(theme: Theme): Partial<MarkdownWithStableRendererProps> {
-  return { style: createCompactMarkdownStyles(theme) };
+// One mapping per option set, kept for the life of the app: `uniProps` re-resolves on every
+// render whose function identity changes, so the mapping for a given set has to be stable.
+const markdownStyleMappings = new Map<string, MarkdownStyleMapping>();
+
+function resolveMarkdownStyleMapping(options: MarkdownStyleOptions): MarkdownStyleMapping {
+  const key = `${options.compact}|${options.subdued}|${options.flatHeadings}|${options.proseMeasure}`;
+  let mapping = markdownStyleMappings.get(key);
+  if (!mapping) {
+    mapping = (theme: Theme) => ({ style: createMarkdownStylesFor(theme, options) });
+    markdownStyleMappings.set(key, mapping);
+  }
+  return mapping;
 }
 
 const defaultMarkdownParser = MarkdownIt({ typographer: true, linkify: true });
@@ -71,25 +81,46 @@ const MARKDOWN_LIST_ITEM_CONTENT_FLEX: ViewStyle = { flex: 1, flexShrink: 1, min
 export interface MarkdownRendererProps {
   text: string;
   compact?: boolean;
+  subdued?: boolean;
+  /** Headings one step above the body in the regular text colour, without rules. */
+  flatHeadings?: boolean;
+  /** Prose blocks capped at the reading measure; tables and code keep the surface's width. */
+  proseMeasure?: boolean;
   rules?: RenderRules;
   markdownit?: ReturnType<typeof MarkdownIt>;
   onLinkPress?: (url: string) => boolean;
   allowedImageHandlers?: readonly string[];
   topLevelMaxExceededItem?: ReactNode;
   enableHtmlish?: boolean;
+  enableDiagrams?: boolean;
+  horizontalScrollCodeBlocks?: boolean;
 }
 
 export function MarkdownRenderer({
   text,
   compact = false,
+  subdued = false,
+  flatHeadings = false,
+  proseMeasure = false,
   rules,
   markdownit = defaultMarkdownParser,
   onLinkPress,
   allowedImageHandlers,
   topLevelMaxExceededItem,
   enableHtmlish = true,
+  enableDiagrams = true,
+  horizontalScrollCodeBlocks = false,
 }: MarkdownRendererProps) {
-  const markdownRules = useMemo(() => rules ?? createSharedMarkdownRules(), [rules]);
+  const workspaceBrowserLinkOpener = useWorkspaceBrowserLinkOpener();
+  const handleWorkspaceBrowserLinkPress = useCallback(
+    (url: string) => !workspaceBrowserLinkOpener?.(url),
+    [workspaceBrowserLinkOpener],
+  );
+  const resolvedOnLinkPress = onLinkPress ?? handleWorkspaceBrowserLinkPress;
+  const markdownRules = useMemo(
+    () => rules ?? createSharedMarkdownRules({ enableDiagrams, horizontalScrollCodeBlocks }),
+    [enableDiagrams, horizontalScrollCodeBlocks, rules],
+  );
   const parts = useMemo(
     () => (enableHtmlish ? splitHtmlishMarkdown(text) : [{ kind: "markdown" as const, text }]),
     [enableHtmlish, text],
@@ -97,18 +128,24 @@ export function MarkdownRenderer({
   const rendererProps = useMemo(
     () => ({
       compact,
+      subdued,
+      flatHeadings,
+      proseMeasure,
       rules: markdownRules,
       markdownit,
-      onLinkPress,
+      onLinkPress: resolvedOnLinkPress,
       allowedImageHandlers,
       topLevelMaxExceededItem,
     }),
     [
       allowedImageHandlers,
       compact,
+      subdued,
+      flatHeadings,
+      proseMeasure,
       markdownRules,
       markdownit,
-      onLinkPress,
+      resolvedOnLinkPress,
       topLevelMaxExceededItem,
     ],
   );
@@ -191,13 +228,21 @@ function MarkdownPart({
 function MarkdownFragment({
   text,
   compact,
+  subdued,
+  flatHeadings,
+  proseMeasure,
   rules,
   markdownit,
   onLinkPress,
   allowedImageHandlers,
   topLevelMaxExceededItem,
 }: MarkdownRendererProps & { rules: RenderRules }) {
-  const uniProps = compact ? compactMarkdownStyleMapping : markdownStyleMapping;
+  const uniProps = resolveMarkdownStyleMapping({
+    compact: Boolean(compact),
+    subdued: Boolean(subdued),
+    flatHeadings: Boolean(flatHeadings),
+    proseMeasure: Boolean(proseMeasure),
+  });
   return (
     <ThemedMarkdown
       uniProps={uniProps}
@@ -485,9 +530,13 @@ function SharedMarkdownLink({
 
   if (!isNative) {
     return (
-      <MarkdownLinkText style={style} onPress={handlePress}>
-        {children}
-      </MarkdownLinkText>
+      <MarkdownLinkContextMenu url={href}>
+        {(onContextMenu) => (
+          <MarkdownLinkText style={style} onPress={handlePress} onContextMenu={onContextMenu}>
+            {children}
+          </MarkdownLinkText>
+        )}
+      </MarkdownLinkContextMenu>
     );
   }
 
@@ -508,7 +557,10 @@ function getMarkdownLinkHref(node: ASTNode): string {
   return typeof href === "string" ? href : "";
 }
 
-export function createSharedMarkdownRules(): RenderRules {
+export function createSharedMarkdownRules({
+  enableDiagrams = true,
+  horizontalScrollCodeBlocks = false,
+}: { enableDiagrams?: boolean; horizontalScrollCodeBlocks?: boolean } = {}): RenderRules {
   return {
     text: (
       node: ASTNode,
@@ -610,6 +662,7 @@ export function createSharedMarkdownRules(): RenderRules {
         language={null}
         inheritedStyles={inheritedStyles}
         textStyle={styles.code_block}
+        horizontalScroll={horizontalScrollCodeBlocks}
       />
     ),
     fence: (
@@ -626,6 +679,8 @@ export function createSharedMarkdownRules(): RenderRules {
         phase="complete"
         inheritedStyles={inheritedStyles}
         textStyle={styles.fence}
+        enableDiagrams={enableDiagrams}
+        horizontalScroll={horizontalScrollCodeBlocks}
       />
     ),
     code_inline: (

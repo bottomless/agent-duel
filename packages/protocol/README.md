@@ -1,12 +1,10 @@
 # @getpaseo/protocol
 
-Shared Paseo protocol schemas, codecs, and wire types.
+Shared protocol schemas, codecs, and wire types for Agent Duel, inherited from Paseo.
 
 ## Stability
 
-This package is public so Paseo's published packages can depend on it cleanly.
-It is not a stable public API yet.
-
-Schemas, exports, wire helpers, and types may change or disappear in any release
-without advance notice. Use it outside Paseo at your own risk until the package
-is explicitly documented as stable.
+This fork changes protocol producers and consumers together. Follow
+[RPC namespacing and compatibility](../../docs/rpc-namespacing.md) and rebuild
+[workspace declarations](../../docs/development.md#built-workspace-packages)
+before checking dependent packages. The package name remains `@getpaseo/protocol`.

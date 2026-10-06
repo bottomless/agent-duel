@@ -114,7 +114,8 @@ The harness launches the unpacked packaged app with isolated user data and daemo
 - the renderer starts a fresh desktop-managed daemon through the normal startup bootstrap;
 - the bundled CLI can query that daemon and run a terminal command.
 
-Pull-request CI runs the Linux x64 smoke under Xvfb when the cumulative PR diff changes `packages/desktop/**`. The desktop release matrix runs the harness against each host-native packaged app before publishing. All smoke jobs upload renderer, desktop, and daemon diagnostics on failure.
+CI does not run these packaged smoke checks; see [Pull-request checks](#pull-request-checks).
+Packaging is not maintained by this fork.
 
 To exercise the smoke locally on Linux:
 
@@ -128,7 +129,7 @@ npm run build:desktop -- --publish never --linux --x64 --dir
 
 The desktop browser E2E launches an isolated real daemon, Metro, and Electron app. It forces workspace LRU eviction to reparent the original tab and replace its guest `WebContents`, then makes one MCP call each for tab listing, snapshot, and click against that original browser id. A final MCP wait proves the real target page received the click.
 
-Run it locally with the same command owned by the Ubuntu `desktop-tests` required check:
+For this browser-tab behavior, run the dedicated regression locally:
 
 ```bash
 npm run test:e2e:browser-tabs --workspace=@getpaseo/desktop
@@ -158,6 +159,14 @@ Browser Playwright specs live in `packages/app/e2e/browser/`. Desktop Playwright
 
 Live provider smoke tests belong in `*.real.e2e.test.ts`, not `*.test.ts`, even when guarded by environment variables. Default unit suites must use deterministic provider adapters/fakes so missing credits, auth outages, and upstream model drift do not block normal CI.
 
+Arena local-HTTP changes need both sides of the boundary: focused Bun tests in
+`arena-backend/packages/opencode/test/arena/` must enumerate denied session methods, persistence
+side effects, orchestration guards, and ordinary non-Arena behavior; focused daemon tests must prove
+that SDK and raw HTTP calls carry the daemon-held token without putting it in the launched process
+environment, arguments, or stdin. Browser QA should continue through the daemon protocol and must
+not receive an OpenCode token or call the OpenCode server directly. Finish with one normal desktop
+battle happy path because authenticated unit requests do not prove the renderer-to-daemon flow.
+
 Codex MultiAgentV2 real tests use local Codex authentication rather than the OpenRouter-compatible test provider. OpenRouter does not accept Codex collaboration-history items on the parent follow-up request, so it cannot verify a complete native sub-agent turn.
 
 ### Test setup
@@ -169,24 +178,47 @@ Codex MultiAgentV2 real tests use local Codex authentication rather than the Ope
 
 Test suites in this repo are heavy. Running them in bulk freezes the machine, especially with multiple agents in parallel.
 
-- Run only the file you changed: `npx vitest run <path> --bail=1`
+Choose the runner for the workspace you changed. The root npm workspace and the
+vendored Bun backend have separate dependencies, configuration, and checks.
+Root `npm run typecheck`, `npm run lint`, and formatting do not cover the backend.
+
+| Changed code       | Working directory                                                       | Targeted test                                     | Typecheck                                    |
+| ------------------ | ----------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------- |
+| Root npm workspace | Repository root, or the owning package when its test config is required | `npx vitest run <test-file> --bail=1`             | `npm run typecheck` from the repository root |
+| Arena engine       | `arena-backend/packages/opencode`                                       | `bun run test ./test/arena/<file>.test.ts --bail` | `bun run typecheck` in that package          |
+
+Replace placeholders with the single test file for the changed behavior. The
+backend package's test script supplies its timeout and loads its Bun preload;
+do not run tests or typecheck from the backend workspace root. For other backend
+packages, follow their own scripts and nearest agent guide. See the
+[backend agent guide](../arena-backend/AGENTS.md). Root npm lint/format policy does
+not replace the backend's local tooling.
+
+Playwright flows use their owning app/desktop scripts with an explicit spec path,
+not the Vitest command above. A passing unit test does not prove the browser,
+daemon, and backend integration; [QA](qa.md) defines the evidence for that claim.
+
+- Run only the relevant test file with its workspace runner above.
 - Never run `npm run test` for a whole workspace unless asked.
-- For a broad sweep, redirect to a file and read it after: `npx vitest run <path> --bail=1 > /tmp/test-output.txt 2>&1`
+- Redirect verbose output to a file and read it afterward; this does not authorize a broader suite.
 - Never re-run a suite another agent already reported green.
-- For full-suite confidence, push to CI and check GitHub Actions.
-- Never run the full Playwright E2E suite locally — defer whole-suite verification to CI. Targeted Playwright specs are allowed when you changed or need to prove that specific flow.
+- CI checks format, lint and types, not behaviour. Do not push merely to obtain test results; use targeted local evidence and report remaining gaps. See [Pull-request checks](#pull-request-checks).
+- Never run the full Playwright E2E suite locally. Targeted Playwright specs are allowed when you changed or need to prove that specific flow; report untested coverage explicitly.
 - App Playwright shares one warmed Metro server per run and gives every Playwright worker its own isolated daemon and `PASEO_HOME`. Spec files run concurrently without exposing one file's projects, agents, terminals, history, or provider configuration to another worker; tests within a file remain together so file-level setup is not repeated.
 - Helpers that create projects or workspaces own those records until cleanup. Their clients remove the daemon project on close, and an automatic fixture fails any test that still leaks a project record. Deleting only the temporary directory is not cleanup. Agent helpers pass the intended `workspaceId` through to agent creation; they never infer ownership from `cwd`.
 - Tests whose subject is daemon-global state, such as an empty history or daemon restart, start a dedicated host explicitly. Filenames and directories describe product behavior, never execution order or isolation mechanics.
 - Global setup accepts Metro as ready only when `/status` returns `packager-status:running`, then fetches the document's scripts so the cold bundle compilation finishes before Playwright's per-test timeout starts. A generic TCP listener is not sufficient readiness evidence. The browser suite uses direct local daemon connections and does not start a relay.
 
-## Pull-request test routing
+## Pull-request checks
 
-PR checks are routed by the behavior each suite proves, using `.github/ci-paths.yml`. A package does not inherit every test suite of its runtime consumers: app changes do not run CLI or Electron-wrapper tests, and protocol changes do not run every package that imports the protocol. Cross-package static compatibility belongs to `typecheck`; full integration coverage runs after merge on main and in manual CI runs.
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It needs no
+secrets, so it also runs for pull requests from forks. It has two jobs:
 
-Required matrix legs are declared as statically named jobs. Their shared steps use YAML anchors, while job-level `if` conditions let GitHub report an unaffected leg as genuinely skipped without allocating a runner or losing the exact required-check name.
+- `checks`: format, lint, the server-stack build, and typecheck for the npm workspaces.
+- `arena-backend`: typecheck for the engine (`opencode`) and `arena-service`.
 
-The smallest meaningful contract wins over package ownership. Tiny structural invariants such as daemon launch supervision run unconditionally in the always-running routing job instead of maintaining a transitive file list; this check reads source entrypoints and builds no product. Routed integration contracts use stable domain directories. Browser changes select the required Playwright shards; desktop changes select the existing required desktop jobs, with renderer, real-Electron, and packaged-app coverage together in the Ubuntu leg. CLI-side Hub changes select one focused test inside the existing required server jobs. Repository scripts and the shared Vitest configuration run every PR contract because they are cross-cutting toolchain inputs.
+It does not run the server, app, desktop, CLI, or browser suites. Run the targeted tests for the
+files you changed, attach [QA evidence](qa.md), and state gaps without running full local suites.
 
 ## Agent authentication in tests
 

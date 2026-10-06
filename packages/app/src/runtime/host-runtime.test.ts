@@ -8,12 +8,13 @@ import type {
 import type { ConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
+import type { ArenaByokStatus } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { HostConnection, HostProfile } from "@/types/host-connection";
-import { defaultHostAppearance } from "@/hosts/appearance";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { isAgentArchiving, setAgentArchiving } from "@/hooks/use-archive-agent";
 import { queryClient } from "@/data/query-client";
+import { arenaByokKey } from "@/byok/key";
 import {
   HostRuntimeController,
   HostRuntimeStore,
@@ -44,6 +45,9 @@ class FakeDaemonClient {
   private fetchWaiters = new Set<() => void>();
   private agentListenerWaiters = new Set<() => void>();
   private sentMessageWaiters = new Set<() => void>();
+  public runsArenaOnOwnKey = false;
+  public receivedArenaByokKeys: Array<string | null> = [];
+  private arenaByokKeyWaiters = new Set<() => void>();
 
   on(
     type: "agent_update",
@@ -155,6 +159,29 @@ class FakeDaemonClient {
 
   async ping(): Promise<{ rttMs: number }> {
     return { rttMs: 0 };
+  }
+
+  async arenaByokStatus(): Promise<ArenaByokStatus> {
+    const held = this.receivedArenaByokKeys.at(-1) ?? null;
+    return { available: this.runsArenaOnOwnKey, configured: held !== null };
+  }
+
+  async setArenaByokKey(key: string | null): Promise<{ configured: boolean }> {
+    this.receivedArenaByokKeys.push(key);
+    for (const waiter of this.arenaByokKeyWaiters) waiter();
+    return { configured: key !== null };
+  }
+
+  async waitForArenaByokKeys(count: number): Promise<void> {
+    if (this.receivedArenaByokKeys.length >= count) return;
+    await new Promise<void>((resolve) => {
+      const waiter = () => {
+        if (this.receivedArenaByokKeys.length < count) return;
+        this.arenaByokKeyWaiters.delete(waiter);
+        resolve();
+      };
+      this.arenaByokKeyWaiters.add(waiter);
+    });
   }
 
   async measureLatency(params?: { timeoutMs?: number }): Promise<number> {
@@ -349,7 +376,6 @@ function makeHost(input?: Partial<HostProfile>): HostProfile {
   return {
     serverId: input?.serverId ?? "srv_test",
     label: input?.label ?? "test host",
-    appearance: input?.appearance ?? defaultHostAppearance(),
     lifecycle: input?.lifecycle ?? {},
     connections: input?.connections ?? [direct, relay],
     preferredConnectionId: input?.preferredConnectionId ?? direct.id,
@@ -446,21 +472,6 @@ function createMemoryHostRuntimeStorage(entries: Record<string, string> = {}): H
       values.set(key, value);
     },
   };
-}
-
-function createAppearanceStore(storage: HostRuntimeStorage): HostRuntimeStore {
-  return new HostRuntimeStore({
-    storage,
-    deps: {
-      createClient: () => {
-        throw new Error("createClient should not be called");
-      },
-      connectToDaemon: async () => {
-        throw new Error("connectToDaemon should not be called");
-      },
-      getClientId: async () => "cid_test_appearance",
-    },
-  });
 }
 
 function onceHostListMatches(store: HostRuntimeStore, predicate: () => boolean): Promise<void> {
@@ -638,6 +649,54 @@ describe("HostRuntimeController", () => {
     await controller.stop();
 
     expect(lifecycle.active).toEqual([]);
+  });
+
+  it("probes past a settled cooldown when sign-in forces a cycle", async () => {
+    useHostRuntimeClock();
+    const host = makeHost({
+      connections: [{ id: "direct:lan:6767", type: "directTcp", endpoint: "lan:6767" }],
+      preferredConnectionId: "direct:lan:6767",
+    });
+    const attempts: number[] = [];
+    let signedIn = false;
+    const controller = new HostRuntimeController({
+      host,
+      deps: {
+        createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+        // The daemon refuses every connection until an account exists, and the probe closes the
+        // client it opened, so nothing comes online and no client survives to be reconnected.
+        connectToDaemon: async ({ host: hostProfile }) => {
+          attempts.push(Date.now());
+          if (!signedIn) throw new Error("Sign in to use Agent Duel");
+          return {
+            client: makeConnectedProbeClient(11) as unknown as DaemonClient,
+            serverId: hostProfile.serverId,
+            hostname: hostProfile.label ?? null,
+          };
+        },
+        getClientId: async () => "cid_test_signin",
+      },
+    });
+
+    await controller.start({ autoProbe: false });
+    expect(controller.getSnapshot().connectionStatus).not.toBe("online");
+    expect(controller.getSnapshot().client).toBeNull();
+
+    // Long enough refused for the interval to settle at its 30s ceiling.
+    for (let elapsed = 0; elapsed < 120_000; elapsed += 30_000) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await controller.runProbeCycleNow();
+    }
+    const refusedAttempts = attempts.length;
+
+    signedIn = true;
+    await controller.runProbeCycleNow();
+    expect(attempts.length).toBe(refusedAttempts);
+
+    await controller.runProbeCycleNow({ force: true });
+    expect(attempts.length).toBe(refusedAttempts + 1);
+    expect(controller.getSnapshot().connectionStatus).toBe("online");
+    expect(controller.getSnapshot().activeConnectionId).toBe("direct:lan:6767");
   });
 
   it("adopts the first successful probe on startup", async () => {
@@ -1542,151 +1601,6 @@ describe("HostRuntimeStore", () => {
     }
   });
 
-  it("exposes the default appearance for a host stored before the field existed", async () => {
-    const storage = createMemoryHostRuntimeStorage();
-    await storage.setItem(
-      "@paseo:daemon-registry",
-      JSON.stringify([
-        {
-          serverId: "srv_legacy",
-          label: "Legacy",
-          connections: [
-            { id: "socket:/tmp/legacy.sock", type: "directSocket", path: "/tmp/legacy.sock" },
-          ],
-          preferredConnectionId: "socket:/tmp/legacy.sock",
-        },
-      ]),
-    );
-    await storage.setItem("@paseo:e2e", "1");
-    const store = createAppearanceStore(storage);
-
-    const registryLoaded = onceHostListMatches(store, () => store.isHostRegistryLoaded());
-    store.boot();
-    await registryLoaded;
-
-    expect(store.getHosts()[0]?.appearance).toEqual({ color: "none", badgeDisplay: null });
-
-    store.syncHosts([]);
-  });
-
-  it("records a chosen host color and writes it through to storage", async () => {
-    const host = makeHost({ serverId: "srv_appearance", updatedAt: new Date(0).toISOString() });
-    const storage = createMemoryHostRuntimeStorage();
-    await storage.setItem("@paseo:daemon-registry", JSON.stringify([host]));
-    await storage.setItem("@paseo:e2e", "1");
-    const store = createAppearanceStore(storage);
-
-    const registryLoaded = onceHostListMatches(store, () => store.isHostRegistryLoaded());
-    store.boot();
-    await registryLoaded;
-
-    const hostListChanged = onceHostListMatches(
-      store,
-      () => store.getHosts()[0]?.appearance.color === "teal",
-    );
-    await store.setHostColor("srv_appearance", "teal");
-    await hostListChanged;
-
-    const updated = store.getHosts()[0];
-    expect(updated?.appearance).toEqual({ color: "teal", badgeDisplay: null });
-    expect(updated?.updatedAt).not.toBe(host.updatedAt);
-
-    const persisted = await storage.getItem("@paseo:daemon-registry");
-    expect(JSON.parse(persisted ?? "[]")[0].appearance).toEqual({
-      color: "teal",
-      badgeDisplay: null,
-    });
-
-    store.syncHosts([]);
-  });
-
-  it("records a chosen badge display without disturbing the color", async () => {
-    const host = makeHost({
-      serverId: "srv_appearance",
-      appearance: { color: "amber", badgeDisplay: null },
-    });
-    const storage = createMemoryHostRuntimeStorage();
-    await storage.setItem("@paseo:daemon-registry", JSON.stringify([host]));
-    await storage.setItem("@paseo:e2e", "1");
-    const store = createAppearanceStore(storage);
-
-    const registryLoaded = onceHostListMatches(store, () => store.isHostRegistryLoaded());
-    store.boot();
-    await registryLoaded;
-
-    const hostListChanged = onceHostListMatches(
-      store,
-      () => store.getHosts()[0]?.appearance.badgeDisplay === "icon",
-    );
-    await store.setHostBadgeDisplay("srv_appearance", "icon");
-    await hostListChanged;
-
-    expect(store.getHosts()[0]?.appearance).toEqual({ color: "amber", badgeDisplay: "icon" });
-
-    const persisted = await storage.getItem("@paseo:daemon-registry");
-    expect(JSON.parse(persisted ?? "[]")[0].appearance).toEqual({
-      color: "amber",
-      badgeDisplay: "icon",
-    });
-
-    store.syncHosts([]);
-  });
-
-  it("keeps host appearance unchanged when persistence fails", async () => {
-    const host = makeHost({ serverId: "srv_appearance" });
-    const storage = createMemoryHostRuntimeStorage();
-    await storage.setItem("@paseo:daemon-registry", JSON.stringify([host]));
-    await storage.setItem("@paseo:e2e", "1");
-    const store = createAppearanceStore(storage);
-
-    const registryLoaded = onceHostListMatches(store, () => store.isHostRegistryLoaded());
-    store.boot();
-    await registryLoaded;
-
-    storage.setItem = async () => {
-      throw new Error("disk full");
-    };
-
-    await expect(store.setHostColor("srv_appearance", "teal")).rejects.toThrow("disk full");
-    expect(store.getHosts()[0]?.appearance).toEqual(defaultHostAppearance());
-
-    store.syncHosts([]);
-  });
-
-  it("serializes overlapping host appearance writes", async () => {
-    const host = makeHost({ serverId: "srv_appearance" });
-    const storage = createMemoryHostRuntimeStorage();
-    await storage.setItem("@paseo:daemon-registry", JSON.stringify([host]));
-    await storage.setItem("@paseo:e2e", "1");
-    const store = createAppearanceStore(storage);
-
-    const registryLoaded = onceHostListMatches(store, () => store.isHostRegistryLoaded());
-    store.boot();
-    await registryLoaded;
-
-    const firstWrite = createDeferred<void>();
-    let writeCount = 0;
-    const setItem = storage.setItem.bind(storage);
-    storage.setItem = async (key, value) => {
-      writeCount += 1;
-      if (writeCount === 1) await firstWrite.promise;
-      await setItem(key, value);
-    };
-
-    const color = store.setHostColor("srv_appearance", "teal");
-    const display = store.setHostBadgeDisplay("srv_appearance", "icon");
-    await Promise.resolve();
-    expect(writeCount).toBe(1);
-
-    firstWrite.resolve();
-    await Promise.all([color, display]);
-
-    expect(store.getHosts()[0]?.appearance).toEqual({ color: "teal", badgeDisplay: "icon" });
-    const persistedHosts = JSON.parse((await storage.getItem("@paseo:daemon-registry")) ?? "[]");
-    expect(persistedHosts[0]?.appearance).toEqual({ color: "teal", badgeDisplay: "icon" });
-    store.syncHosts([]);
-  });
-
   it("tracks connection status transitions independently of agent panels", async () => {
     useHostRuntimeClock();
     const host = makeHost({
@@ -1728,6 +1642,44 @@ describe("HostRuntimeStore", () => {
     fakeClient.setConnectionState({ status: "connected" });
     expect(store.getConnectionStatusSince(host.serverId)).toBe(reconnectStartedAt);
 
+    store.syncHosts([]);
+  });
+
+  it("hands the stored OpenRouter key to the daemon every time the host comes online", async () => {
+    const browserStorage = new Map<string, string>();
+    (globalThis as { window?: unknown }).window = {
+      localStorage: {
+        getItem: (name: string) => browserStorage.get(name) ?? null,
+        setItem: (name: string, value: string) => browserStorage.set(name, value),
+        removeItem: (name: string) => browserStorage.delete(name),
+      },
+    };
+    await arenaByokKey.set("sk-or-test", []);
+    const host = makeHost({
+      connections: [{ id: "direct:lan:6767", type: "directTcp", endpoint: "lan:6767" }],
+    });
+    const fakeClient = new FakeDaemonClient();
+    fakeClient.runsArenaOnOwnKey = true;
+    fakeClient.setConnectionState({ status: "connected" });
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: () => fakeClient as unknown as DaemonClient,
+        connectToDaemon: async ({ host: hostProfile }) => ({
+          client: fakeClient as unknown as DaemonClient,
+          serverId: hostProfile.serverId,
+          hostname: hostProfile.label ?? null,
+        }),
+        getClientId: async () => "cid_test_runtime",
+      },
+    });
+
+    store.syncHosts([host]);
+    await fakeClient.waitForArenaByokKeys(1);
+    fakeClient.setConnectionState({ status: "disconnected", reason: "daemon restarted" });
+    fakeClient.setConnectionState({ status: "connected" });
+    await fakeClient.waitForArenaByokKeys(2);
+
+    expect(fakeClient.receivedArenaByokKeys).toEqual(["sk-or-test", "sk-or-test"]);
     store.syncHosts([]);
   });
 
@@ -2622,6 +2574,55 @@ describe("HostRuntimeStore", () => {
         { id: "second", text: "keep me behind", attachments: [] },
       ]);
     });
+
+    useSessionStore.getState().clearSession(host.serverId);
+  });
+
+  it("leaves Arena follow-ups queued until the Arena readiness gate releases them", async () => {
+    const host = makeHost({ serverId: "srv_arena_queue_drain" });
+    const fakeClient = new FakeDaemonClient();
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: () => fakeClient as unknown as DaemonClient,
+        connectToDaemon: async () => ({
+          client: fakeClient as unknown as DaemonClient,
+          serverId: host.serverId,
+          hostname: null,
+        }),
+        getClientId: async () => "cid_arena_queue_drain",
+      },
+    });
+    const sessionStore = useSessionStore.getState();
+    sessionStore.initializeSession(host.serverId, fakeClient as unknown as DaemonClient, 1);
+    sessionStore.setQueuedMessages(
+      host.serverId,
+      new Map([
+        [
+          "agent",
+          [
+            {
+              id: "arena-follow-up",
+              text: "continue after the vote",
+              attachments: [],
+              arenaFollowUp: "single_agent",
+            },
+          ],
+        ],
+      ]),
+    );
+
+    store.drainQueuedAgentMessage(host.serverId, "agent");
+    expect(fakeClient.sentAgentMessages).toEqual([]);
+    expect(
+      useSessionStore.getState().sessions[host.serverId]?.queuedMessages.get("agent"),
+    ).toHaveLength(1);
+
+    store.drainQueuedAgentMessage(host.serverId, "agent", { allowArenaFollowUp: true });
+    await fakeClient.waitForSentMessages(1);
+    expect(fakeClient.sentAgentMessages[0]?.slice(0, 2)).toEqual([
+      "agent",
+      "continue after the vote",
+    ]);
 
     useSessionStore.getState().clearSession(host.serverId);
   });

@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { useRouter } from "expo-router";
 import { ChevronDown, MessageCircle, SquareTerminal } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import {
@@ -9,10 +8,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ProfileIcon } from "@/workspace-pins/launch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ICON_SIZE } from "@/styles/theme";
 import {
@@ -21,7 +18,7 @@ import {
   substitutePrompt,
 } from "@getpaseo/protocol/terminal-profiles";
 import type { TerminalProfile } from "@getpaseo/protocol/messages";
-import { buildSettingsHostSectionRoute } from "@/utils/host-routes";
+import { getProviderIcon } from "@/components/provider-icons";
 import type { Theme } from "@/styles/theme";
 import {
   BLANK_TERMINAL_PROFILE_ID,
@@ -41,6 +38,29 @@ const extraMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregrou
 
 const chatIcon = <ThemedMessageCircle size={ICON_SIZE.sm} uniProps={mutedColorMapping} />;
 const blankTerminalIcon = <ThemedSquareTerminal size={ICON_SIZE.sm} uniProps={mutedColorMapping} />;
+
+function ProviderProfileIcon({
+  iconKey,
+  size,
+  color = "",
+}: {
+  iconKey: string;
+  size: number;
+  color?: string;
+}) {
+  const Icon = getProviderIcon(iconKey);
+  return <Icon size={size} color={color} />;
+}
+
+const ThemedProviderProfileIcon = withUnistyles(ProviderProfileIcon);
+
+/** A profile's own logo where it has one, the generic terminal glyph otherwise. */
+function ProfileIcon({ iconKey }: { iconKey: string | undefined }): ReactElement {
+  if (!iconKey) {
+    return <ThemedSquareTerminal size={14} uniProps={mutedColorMapping} />;
+  }
+  return <ThemedProviderProfileIcon iconKey={iconKey} size={14} uniProps={mutedColorMapping} />;
+}
 
 /** Owns its own leading icon and select callback so neither is rebuilt per render of the menu. */
 function LaunchProfileMenuItem({
@@ -78,7 +98,6 @@ function LaunchProfileMenuItem({
 }
 
 export interface LaunchControlProps {
-  serverId: string;
   target: LaunchTarget;
   onChange: (target: LaunchTarget) => void;
   profiles: readonly TerminalProfile[];
@@ -114,7 +133,6 @@ function TriggerIcon({
  * "Codex" from reading as a chat Codex agent.
  */
 export function LaunchControl({
-  serverId,
   target,
   onChange,
   profiles,
@@ -122,7 +140,6 @@ export function LaunchControl({
   badgePressableStyle,
 }: LaunchControlProps) {
   const { t } = useTranslation();
-  const router = useRouter();
   const [open, setOpen] = useState(false);
 
   const selectedProfile = useMemo(() => resolveLaunchProfile(target, profiles), [target, profiles]);
@@ -143,10 +160,6 @@ export function LaunchControl({
     (profileId: string) => onChange(terminalLaunchTarget(profileId)),
     [onChange],
   );
-  const openProfileSettings = useCallback(() => {
-    router.push(buildSettingsHostSectionRoute(serverId, "terminals"));
-  }, [router, serverId]);
-
   return (
     <DropdownMenu open={open} onOpenChange={setOpen} compactMode="sheet">
       {/* The trigger is the Pressable itself, styled by the meta row's shared
@@ -218,14 +231,6 @@ export function LaunchControl({
             onSelect={selectTerminalProfile}
           />
         ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          testID="new-workspace-launch-manage-profiles"
-          onSelect={openProfileSettings}
-          muted
-        >
-          {t("newWorkspace.launch.manageProfiles")}
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

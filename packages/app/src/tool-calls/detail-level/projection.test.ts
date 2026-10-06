@@ -36,6 +36,16 @@ function toolCall(
   };
 }
 
+function thought(id: string): Extract<StreamItem, { kind: "thought" }> {
+  return {
+    kind: "thought",
+    id,
+    text: id,
+    status: "ready",
+    timestamp: new Date("2026-01-01T00:00:30.000Z"),
+  };
+}
+
 function assistant(id: string): AssistantMessageItem {
   return {
     kind: "assistant_message",
@@ -63,6 +73,102 @@ function project(input: {
 }
 
 describe("tool call detail-level projection", () => {
+  it("keeps an applied Arena question between separate tool groups", () => {
+    const before = toolCall("1", { type: "shell", command: "git remote -v" });
+    const question: ToolCallItem = {
+      kind: "tool_call",
+      id: "question",
+      timestamp: new Date(0),
+      payload: {
+        source: "agent",
+        data: {
+          provider: "opencode",
+          callId: "question",
+          name: "question",
+          status: "completed",
+          error: null,
+          detail: {
+            type: "unknown",
+            input: { questions: [{ question: "Create the repo?" }] },
+            output: "Answered",
+          },
+          metadata: { answers: [["Yes"]] },
+        },
+      },
+    };
+    const after = toolCall("3", { type: "shell", command: "gh repo create" });
+    const result = project({ level: "overview", tail: [before, question, after] });
+    expect(result.tail).toEqual([before, question, after]);
+    expect(result.groupsByHostId.has(question.id)).toBe(false);
+    expect(result.groupsByHostId.get(before.id)?.run.calls).toEqual([before]);
+    expect(result.groupsByHostId.get(after.id)?.run.calls).toEqual([after]);
+  });
+  it("keeps a run together across the thinking between its calls", () => {
+    const first = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
+    const thinking = thought("t1");
+    const second = toolCall("2", { type: "read", filePath: "/repo/b.ts" });
+    const tail = [first, thinking, second];
+
+    const result = project({ level: "overview", tail });
+
+    expect(result.tail).toEqual([expect.objectContaining({ id: first.id })]);
+    expect(result.groupsByHostId.get(first.id)?.run).toMatchObject({
+      calls: [first, second],
+      items: [first, thinking, second],
+    });
+    expect(result.groupsByHostId.get(first.id)?.summary.readFileCount).toBe(2);
+  });
+
+  it("leaves thinking that stands on its own where it is", () => {
+    const thinking = thought("t1");
+    const call = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
+    const tail = [thinking, call, assistant("a1"), thought("t2")];
+
+    const result = project({ level: "overview", tail });
+
+    expect(result.tail).toEqual([
+      thinking,
+      expect.objectContaining({ id: call.id }),
+      expect.objectContaining({ kind: "assistant_message" }),
+      expect.objectContaining({ id: "t2" }),
+    ]);
+  });
+
+  it("ends a run at what the agent says, not at what it thinks", () => {
+    const first = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
+    const message = assistant("a1");
+    const second = toolCall("2", { type: "read", filePath: "/repo/b.ts" });
+
+    const result = project({ level: "overview", tail: [first, thought("t1"), message, second] });
+
+    expect(result.tail).toEqual([
+      expect.objectContaining({ id: first.id }),
+      message,
+      expect.objectContaining({ id: second.id }),
+    ]);
+    expect(result.groupsByHostId.get(first.id)?.run.items).toEqual([
+      first,
+      expect.objectContaining({ id: "t1" }),
+    ]);
+  });
+
+  it("carries thinking into a live run as it arrives", () => {
+    const first = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
+    const thinking = thought("t1");
+    const prepared = prepareToolCallHistory("overview", [first]);
+
+    const result = project({
+      level: "overview",
+      tail: [first],
+      head: [thinking],
+      isTurnActive: true,
+      preparedHistory: prepared,
+    });
+
+    expect(result.head).toEqual([]);
+    expect(result.groupsByHostId.get(first.id)?.run.items).toEqual([first, thinking]);
+  });
+
   it("passes detailed timelines through without grouping work", () => {
     const tail = [toolCall("1", { type: "shell", command: "one" })];
     const head = [toolCall("2", { type: "shell", command: "two" })];

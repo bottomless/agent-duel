@@ -4,17 +4,22 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import React, { useCallback, useMemo, useState, type ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToastApi } from "@/components/toast-host";
 import type { InlinePathTarget } from "./parse";
 import { AssistantFileLinkResolverProvider } from "./provider";
 import type { DirectorySuggestionResult } from "./resolver";
 import { useFileLink } from "./use-file-link";
 import type { OpenFileDisposition } from "@/workspace/file-open";
+import { openExternalUrl } from "@/utils/open-external-url";
 
 vi.mock("@/utils/open-external-url", () => ({
   openExternalUrl: vi.fn(async () => {}),
 }));
+
+beforeEach(() => {
+  vi.mocked(openExternalUrl).mockClear();
+});
 
 const SOURCE = {
   href: "http://dumm.md",
@@ -72,7 +77,12 @@ function createToast(): ToastApi {
   };
 }
 
-function createWrapper(input: { client: TestClient; openedFiles: OpenedFile[]; toast?: ToastApi }) {
+function createWrapper(input: {
+  client: TestClient;
+  openedFiles: OpenedFile[];
+  toast?: ToastApi;
+  onOpenExternalUrl?: (url: string) => boolean;
+}) {
   const queryClient = createQueryClient();
   return function Wrapper({ children }: { children: ReactNode }) {
     const openWorkspaceFile = useCallback(
@@ -89,6 +99,7 @@ function createWrapper(input: { client: TestClient; openedFiles: OpenedFile[]; t
           serverId="server-1"
           workspaceRoot="/Users/test/project"
           onOpenWorkspaceFile={openWorkspaceFile}
+          onOpenExternalUrl={input.onOpenExternalUrl}
           toast={input.toast}
         >
           {children}
@@ -99,6 +110,45 @@ function createWrapper(input: { client: TestClient; openedFiles: OpenedFile[]; t
 }
 
 describe("useFileLink", () => {
+  it("opens external URLs in the workspace browser when handled", async () => {
+    const onOpenExternalUrl = vi.fn(() => true);
+    const { result } = renderHook(() => useFileLink({ href: "https://example.com" }), {
+      wrapper: createWrapper({
+        client: { getDirectorySuggestions: vi.fn(async () => resolvedSuggestions([])) },
+        openedFiles: [],
+        onOpenExternalUrl,
+      }),
+    });
+
+    act(() => {
+      result.current.onPress();
+    });
+
+    await waitFor(() => {
+      expect(onOpenExternalUrl).toHaveBeenCalledWith("https://example.com");
+    });
+    expect(openExternalUrl).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the platform opener when the workspace browser declines the URL", async () => {
+    const onOpenExternalUrl = vi.fn(() => false);
+    const { result } = renderHook(() => useFileLink({ href: "https://example.com" }), {
+      wrapper: createWrapper({
+        client: { getDirectorySuggestions: vi.fn(async () => resolvedSuggestions([])) },
+        openedFiles: [],
+        onOpenExternalUrl,
+      }),
+    });
+
+    act(() => {
+      result.current.onPress();
+    });
+
+    await waitFor(() => {
+      expect(openExternalUrl).toHaveBeenCalledWith("https://example.com");
+    });
+  });
+
   it("returns the same object across no-op parent rerenders", () => {
     const getDirectorySuggestions = vi.fn(async () => resolvedSuggestions([]));
     const queryClient = createQueryClient();

@@ -86,7 +86,7 @@ import { buildAbsoluteExplorerPath } from "@/utils/explorer-paths";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { lineNumberGutterWidth } from "@/components/code-insets";
 import { GitActionsSplitButton } from "@/git/actions-split-button";
-import { BranchSwitcher } from "@/components/branch-switcher";
+import { BranchSwitcher, type BranchSwitcherPinnedOption } from "@/components/branch-switcher";
 import { useGitActions } from "@/git/use-actions";
 import { GIT_ACTION_ICONS } from "@/git/action-icons";
 import { buildForgeSignInCommand, getForgePresentation, type Forge } from "@/git/forge";
@@ -243,10 +243,12 @@ function useDiscardChangesAction({
   serverId,
   cwd,
   diffMode,
+  readOnly,
 }: {
   serverId: string;
   cwd: string;
   diffMode: "uncommitted" | "base";
+  readOnly: boolean;
 }): ((path: string, oldPath?: string) => void) | undefined {
   const { t } = useTranslation();
   const toast = useToast();
@@ -287,7 +289,9 @@ function useDiscardChangesAction({
     },
     [discardPath],
   );
-  return discardSupported && diffMode === "uncommitted" ? handleDiscardPath : undefined;
+  return discardSupported && diffMode === "uncommitted" && !readOnly
+    ? handleDiscardPath
+    : undefined;
 }
 
 const DIFF_LINE_HOVER_STYLE = isWeb ? ({ cursor: "auto" } as const) : null;
@@ -1441,6 +1445,19 @@ export function DiffFileBody({
   );
 }
 
+/**
+ * Non-branch destinations for the header's branch switcher, plus the directory a
+ * real branch switch has to act on. The explorer points `cwd` at an Arena
+ * contestant worktree while one is selected, and those are detached: the branch
+ * list and any switch still belong to the workspace checkout.
+ */
+export interface GitDiffPaneBranchTargets {
+  options: BranchSwitcherPinnedOption[];
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  directory: string;
+}
+
 interface GitDiffPaneProps {
   serverId: string;
   workspaceId?: string | null;
@@ -1448,6 +1465,11 @@ interface GitDiffPaneProps {
   enabled?: boolean;
   onOpenFile?: (path: string) => void;
   onAddToChat?: (path: string) => void;
+  branchTargets?: GitDiffPaneBranchTargets;
+  /** Browsing someone else's worktree: offer nothing that writes to it. */
+  readOnly?: boolean;
+  /** Which view a checkout with nothing uncommitted opens on. */
+  cleanFallbackMode?: "uncommitted" | "base";
 }
 
 type PressableStyleFn = (
@@ -1529,6 +1551,8 @@ interface ChangesTabToggleProps {
   isMobile: boolean;
   selected: boolean;
   onPress: () => void;
+  /** A tab can only ever show the workspace's own diff. */
+  hidden?: boolean;
 }
 
 interface DiffModeMenuProps {
@@ -1585,7 +1609,7 @@ export function DiffModeMenu({
   );
 }
 
-function ChangesTabToggle({ isMobile, selected, onPress }: ChangesTabToggleProps) {
+function ChangesTabToggle({ isMobile, selected, onPress, hidden }: ChangesTabToggleProps) {
   const { t } = useTranslation();
   const buttonStyle = useMemo(
     () => buildToggleButtonStyle(selected, styles.expandAllButton),
@@ -1594,7 +1618,7 @@ function ChangesTabToggle({ isMobile, selected, onPress }: ChangesTabToggleProps
   const label = t(
     selected ? "workspace.git.diff.closeChangesTab" : "workspace.git.diff.openChangesTab",
   );
-  if (isMobile) {
+  if (isMobile || hidden) {
     return null;
   }
   return (
@@ -2840,6 +2864,50 @@ function useDiffTabNavigation({
   };
 }
 
+interface ChangesHeaderProps {
+  currentBranchName: string | null;
+  serverId: string;
+  workspaceId?: string | null;
+  cwd: string;
+  isGit: boolean;
+  isMobile: boolean;
+  gitActions: ReturnType<typeof useGitActions>["gitActions"];
+  branchTargets?: GitDiffPaneBranchTargets;
+  readOnly?: boolean;
+}
+
+function ChangesHeader({
+  currentBranchName,
+  serverId,
+  workspaceId,
+  cwd,
+  isGit,
+  isMobile,
+  gitActions,
+  branchTargets,
+  readOnly,
+}: ChangesHeaderProps) {
+  if (!isGit || !(currentBranchName || isMobile || branchTargets)) {
+    return null;
+  }
+  return (
+    <View style={styles.header} testID="changes-header">
+      <BranchSwitcher
+        currentBranchName={currentBranchName}
+        serverId={serverId}
+        workspaceId={workspaceId ?? cwd}
+        workspaceDirectory={branchTargets?.directory ?? cwd}
+        isGitCheckout={isGit}
+        testID="changes-branch-switcher"
+        pinnedOptions={branchTargets?.options}
+        pinnedSelectedId={branchTargets?.selectedId ?? null}
+        onPinnedSelect={branchTargets?.onSelect}
+      />
+      {isMobile && !readOnly ? <GitActionsSplitButton gitActions={gitActions} /> : null}
+    </View>
+  );
+}
+
 export function GitDiffPane({
   serverId,
   workspaceId,
@@ -2847,6 +2915,9 @@ export function GitDiffPane({
   enabled,
   onOpenFile,
   onAddToChat,
+  branchTargets,
+  readOnly,
+  cleanFallbackMode,
 }: GitDiffPaneProps) {
   const { settings: appSettings } = useAppSettings();
   const { t } = useTranslation();
@@ -2942,6 +3013,7 @@ export function GitDiffPane({
     serverId,
     workspaceId: workspaceId ?? undefined,
     cwd,
+    cleanFallbackMode,
     ignoreWhitespace: changesPreferences.hideWhitespace,
     enabled: enabled !== false,
   });
@@ -3056,7 +3128,12 @@ export function GitDiffPane({
     },
     [client, cwd, t, toast],
   );
-  const onRevertPath = useDiscardChangesAction({ serverId, cwd, diffMode });
+  const onRevertPath = useDiscardChangesAction({
+    serverId,
+    cwd,
+    diffMode,
+    readOnly: readOnly === true,
+  });
   const workingTreeMode = useMemo(
     () => ({
       kind: "working_tree" as const,
@@ -3156,19 +3233,17 @@ export function GitDiffPane({
       }}
       style={styles.container}
     >
-      {isGit && (currentBranchName || isMobile) ? (
-        <View style={styles.header} testID="changes-header">
-          <BranchSwitcher
-            currentBranchName={currentBranchName}
-            serverId={serverId}
-            workspaceId={workspaceId ?? cwd}
-            workspaceDirectory={cwd}
-            isGitCheckout={isGit}
-            testID="changes-branch-switcher"
-          />
-          {isMobile ? <GitActionsSplitButton gitActions={gitActions} /> : null}
-        </View>
-      ) : null}
+      <ChangesHeader
+        currentBranchName={currentBranchName}
+        serverId={serverId}
+        workspaceId={workspaceId}
+        cwd={cwd}
+        isGit={isGit}
+        isMobile={isMobile}
+        gitActions={gitActions}
+        branchTargets={branchTargets}
+        readOnly={readOnly}
+      />
 
       {isGit ? (
         <View style={styles.diffStatusContainer}>
@@ -3184,6 +3259,7 @@ export function GitDiffPane({
                 isMobile={isMobile}
                 selected={changesTabOpen}
                 onPress={handleToggleChangesTab}
+                hidden={readOnly}
               />
               {canUseSplitLayout && !changesTabOpen ? (
                 <DiffLayoutToggle

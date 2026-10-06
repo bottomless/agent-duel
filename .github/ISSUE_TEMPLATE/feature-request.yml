@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a new feature or a change to how Agent Duel works.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      description: The workflow you have in mind, and how you do it today.
+    validations:
+      required: true
+  - type: textarea
+    id: gap
+    attributes:
+      label: What's missing or hard today?
+      description: What stops you from doing this in Agent Duel now, or makes it slow or awkward?
+    validations:
+      required: true
+  - type: textarea
+    id: flow
+    attributes:
+      label: What would a good flow look like?
+      description: Describe the steps you'd expect. Sketches or screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Other ways to solve this, including workarounds you use now. Optional.

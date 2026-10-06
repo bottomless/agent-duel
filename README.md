@@ -1,196 +1,130 @@
 <p align="center">
-  <img src="packages/website/public/logo.svg" width="64" height="64" alt="Paseo logo">
+  <img src="docs/images/logo.png" width="64" height="64" alt="Agent Duel logo">
 </p>
 
-<h1 align="center">Paseo</h1>
+<h1 align="center">Agent Duel</h1>
+
+<p align="center">A desktop coding-agent battle interface built on Paseo.</p>
+
+Agent Duel runs two blinded coding agents against one prompt in isolated local
+worktrees. You compare their results, choose A, B, or Tie, and continue from the
+selected result as ordinary chat history.
+
+Each contestant is a model drawn at random from a pool and run through the
+bundled engine. You only see which models they were after you vote.
 
 <p align="center">
-  <a href="README.md">English</a> ·
-  <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="README.ja.md">日本語</a> ·
-  <a href="README.ko.md">한국어</a>
+  <img src="docs/images/battle.png" alt="A battle: both agents' changes side by side, with Choose A, Tie and Choose B below">
 </p>
 
-<p align="center">
-  <a href="https://github.com/getpaseo/paseo/stargazers">
-    <img src="https://img.shields.io/github/stars/getpaseo/paseo?style=flat&logo=github" alt="GitHub stars">
-  </a>
-  <a href="https://github.com/getpaseo/paseo/releases">
-    <img src="https://img.shields.io/github/v/release/getpaseo/paseo?style=flat&logo=github" alt="GitHub release">
-  </a>
-  <a href="https://x.com/moboudra">
-    <img src="https://img.shields.io/badge/%40moboudra-555?logo=x" alt="X">
-  </a>
-  <a href="https://discord.gg/jz8T2uahpH">
-    <img src="https://img.shields.io/badge/Discord-555?logo=discord" alt="Discord">
-  </a>
-  <a href="https://www.reddit.com/r/PaseoAI/">
-    <img src="https://img.shields.io/badge/Reddit-555?logo=reddit" alt="Reddit">
-  </a>
-</p>
+The shipped product is the Electron desktop app. `packages/app` can run in a
+browser during development and automated QA, but there is no hosted browser
+product.
 
-<p align="center">One interface for Claude Code, Codex, Copilot, OpenCode, and Pi agents.</p>
+## Architecture
 
-<p align="center">
-  <img src="https://paseo.sh/hero-mockup.png" alt="Paseo app screenshot" width="100%">
-</p>
+Execution stays on your machine:
 
-<p align="center">
-  <img src="https://paseo.sh/mobile-mockup.png" alt="Paseo mobile app" width="100%">
-</p>
-
-Run agents in parallel on your own machines. Ship from your phone or your desk.
-
-- **Self-hosted:** Agents run on your machine with your full dev environment. Use your tools, your configs, and your skills.
-- **Multi-provider:** Claude Code, Codex, Copilot, OpenCode, and Pi through the same interface. Pick the right model for each job.
-- **Voice control:** Dictate tasks or talk through problems in voice mode. Hands-free when you need it.
-- **Cross-device:** iOS, Android, desktop, web, and CLI. Start work at your desk, check in from your phone, script it from the terminal.
-- **Privacy-first:** Paseo doesn't have any telemetry, tracking, or forced log-ins.
-
-## Getting Started
-
-Paseo runs a local server called the daemon that manages your coding agents. Clients like the desktop app, mobile app, web app, and CLI connect to it.
-
-### Prerequisites
-
-You need at least one agent CLI installed and configured with your credentials:
-
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-- [Codex](https://github.com/openai/codex)
-- [GitHub Copilot](https://github.com/features/copilot/cli/)
-- [OpenCode](https://github.com/anomalyco/opencode)
-- [Pi](https://pi.dev)
-
-### Desktop app (recommended)
-
-Download it from [paseo.sh/download](https://paseo.sh/download) or the [GitHub releases page](https://github.com/getpaseo/paseo/releases). Open the app and the daemon starts automatically. Nothing else to install.
-
-To connect from your phone, open **Settings → your host → Pair Device**.
-
-### CLI / headless
-
-Install the CLI and start Paseo:
-
-```bash
-npm install -g @getpaseo/cli
-paseo
+```text
+Electron UI -> local daemon -> local Arena runtime -> local repositories and agents
+                                       |
+                                       `-> OpenRouter (your key in a source build)
 ```
 
-Paseo starts locally, then asks whether to enable the end-to-end encrypted relay for device pairing. If you decline, connect directly over TCP, Tailscale, or another VPN. This path is useful for servers and remote machines.
+The UI WebSocket terminates at the local daemon. The packaged desktop
+application contains the daemon, renderer, and compiled Arena runtime.
 
-For full setup and configuration, see:
+Arena history is canonical on the desktop: SQLite records live under
+`$PASEO_HOME/arena/arena.sqlite` and artifact bytes under
+`$PASEO_HOME/arena/artifacts/sha256/`.
 
-- [Docs](https://paseo.sh/docs)
-- [Connectivity guide](https://paseo.sh/docs/connectivity)
-- [Configuration reference](https://paseo.sh/docs/configuration)
+Read [docs/architecture.md](docs/architecture.md) for the complete system design
+and [docs/arena.md](docs/arena.md) for the battle.
 
-### Docker
+## Hosted version
 
-Run the Paseo daemon and self-hosted web UI in Docker:
+The [official macOS download](https://github.com/bottomless/agent-duel/releases)
+signs in to a hosted Agent Duel control plane that assigns the models and
+proxies model calls. That control plane is not open source and is not part of
+this repository. A build from this source has no sign-in: it runs battles on
+your own OpenRouter key, and its votes are not uploaded.
 
-```bash
-docker run -d --name paseo \
-  -p 6767:6767 \
-  -e PASEO_PASSWORD=change-me \
-  -v "$PWD/paseo-home:/home/paseo" \
-  -v "$PWD:/workspace" \
-  ghcr.io/getpaseo/paseo:latest
-```
+The first release target is macOS. Windows and Linux code remains in the inherited
+desktop package but is not a release commitment for this version.
 
-Open `http://localhost:6767` after it starts. Extend the base image with the agent CLIs you use, then provide credentials through environment variables or the persistent `/home/paseo` volume. See the [Docker documentation](docs/docker.md) for full setup details.
+## Develop locally
 
-## CLI
+### Requirements
 
-Everything you can do in the app, you can do from the terminal.
+- macOS or Linux
+- Node.js 22 with npm
+- Bun 1.3.14
+- An OpenRouter API key
 
-```bash
-paseo run --provider claude/opus-4.6 "implement user authentication"
-paseo run --provider codex/gpt-5.5 --worktree feature-x "implement feature X"
-
-paseo ls                           # list running agents
-paseo attach abc123                # stream live output
-paseo send abc123 "also add tests" # follow-up task
-
-# run on a remote daemon
-paseo --host workstation.local:6767 run "run the full test suite"
-```
-
-See the [full CLI reference](https://paseo.sh/docs/cli) for more.
-
-## TypeScript SDK
-
-Build issue integrations, dashboards, and orchestration services with `@getpaseo/client`:
-
-```ts
-import { createPaseoClient } from "@getpaseo/client";
-
-const client = createPaseoClient({ url: "ws://127.0.0.1:6767/ws" });
-await client.connect();
-
-const agent = await client.agents.create({
-  config: { provider: "codex/gpt-5.5" },
-  cwd: "/Users/me/dev/storefront",
-  prompt: "Review the current diff and name the riskiest change.",
-});
-
-const result = await agent.waitForFinish();
-console.log(result.lastMessage);
-
-await client.close();
-```
-
-See the [SDK quickstart](https://paseo.sh/docs/sdk/quickstart), [recipes](https://paseo.sh/docs/sdk/recipes), and [API reference](https://paseo.sh/docs/sdk/reference).
-
-## Skills
-
-Skills teach your agent to use Paseo to orchestrate other agents.
+Install both package graphs, then start the desktop stack in bring-your-own-key
+mode from the repository root:
 
 ```bash
-npx skills add getpaseo/paseo
+npm install
+cd arena-backend && bun install && cd ..
+npm run dev:desktop -- --byok
 ```
 
-Then use them in any agent conversation:
+The launcher prepares an isolated checkout-local environment and starts the
+local daemon, the Electron-flavoured Expo server, and Electron. It reports
+`[dev] healthy:` when the stack is ready. Paste your OpenRouter key in Settings;
+battles run on that key.
 
-- `/paseo-handoff` — hand off work between agents. I use this to plan with Claude and then handoff to Codex to implement.
-- `/paseo-advisor` — spin up a single agent as an advisor for a second opinion, without delegating the work itself.
-- `/paseo-committee` — form a committee of two contrasting agents to step back, do root cause analysis, and produce a plan.
+### Troubleshooting
 
-## Development
+- If a dependency is missing, run `npm install` at the root and `bun install` in
+  `arena-backend`.
+- If a port is busy, leave the daemon, Expo, and debugger ports unset where
+  supported so the launcher can choose free ports.
+- Inspect `.dev/paseo-home/daemon.log` for daemon failures.
 
-Quick monorepo package map:
+See [docs/development.md](docs/development.md) for worktrees, multiple instances,
+Playwright/Chrome testing, logs, and focused validation commands.
 
-- `packages/server`: Paseo daemon (agent process orchestration, WebSocket API, MCP server)
-- `packages/app`: Expo client (iOS, Android, web)
-- `packages/cli`: `paseo` CLI for daemon and agent workflows
-- `packages/desktop`: Electron desktop app
-- `packages/relay`: Relay transport and encryption used by the daemon and clients
-- `packages/website`: Marketing site and documentation (`paseo.sh`)
+## Repository map
 
-Common commands:
+- `arena-backend/packages/opencode` — local Arena engine compiled into desktop.
+- `arena-backend/packages/arena-service` — battle routes (model draw, model proxy,
+  comparison) shared with the hosted service.
+- `packages/desktop` — Electron shell, daemon supervision, and packaging.
+- `packages/app` — shared renderer; browser execution is a development/QA surface.
+- `packages/server` — local daemon, WebSocket API, and agent lifecycle.
+- `packages/protocol` and `packages/client` — local wire protocol and client SDK.
+- `packages/cli` — local daemon CLI bundled with desktop.
+- `packages/relay` — inherited optional remote-access transport.
+
+## Common commands
 
 ```bash
-# run all local dev services
-npm run dev
-
-# run individual surfaces
-npm run dev:server
-npm run dev:app
-npm run dev:desktop
-npm run dev:website
-
-# build the server stack
-npm run build:server
-
-# repo-wide checks
+npm run dev:desktop -- --byok        # Complete local desktop stack on your OpenRouter key
+npm run dev                          # Local daemon only
+npm run dev:app                      # Browser-based development/QA renderer
+npm run build:server                 # Build daemon and shared packages
 npm run typecheck
+npm run lint
+npm run format
 ```
 
-## Related projects
+## Contributing
 
-- [getpaseo/paseo-relay](https://github.com/getpaseo/paseo-relay) — official distributed relay, written in Elixir
-- [paseo-skins](https://github.com/huangguang1999/paseo-skins) — community themes and a zero-patch desktop theme loader with an Agent Skill
-- [paseo-vscode](https://marketplace.visualstudio.com/items?itemName=hinnes.paseo-vscode) — VS Code extension
+See [CONTRIBUTING.md](CONTRIBUTING.md). Questions and help: [SUPPORT.md](SUPPORT.md).
+Security: [SECURITY.md](SECURITY.md). Everyone taking part follows the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-AGPL-3.0
+- Everything outside `arena-backend/` is AGPL-3.0-or-later. Agent Duel is a fork
+  of [Paseo](https://github.com/getpaseo/paseo), copyright Mohamed Boudra, with
+  modifications by Bottomless. See [LICENSE](LICENSE).
+- `arena-backend/` is MIT. It is a fork of
+  [OpenCode](https://github.com/anomalyco/opencode), copyright opencode, with
+  modifications by Bottomless. See [arena-backend/LICENSE](arena-backend/LICENSE).
+- Third-party components keep their own licences.
+
+[NOTICE](NOTICE) has the full mapping. The hosted Agent Duel service is not part
+of this repository.

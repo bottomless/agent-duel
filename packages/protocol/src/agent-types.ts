@@ -343,12 +343,25 @@ export interface AgentTaskItem {
   text: string;
   completed: boolean;
   id?: string;
-  status?: "pending" | "in_progress" | "completed";
+  status?: "pending" | "in_progress" | "completed" | "cancelled";
   activeForm?: string;
 }
 
 export type AgentTimelineItem =
-  | { type: "user_message"; text: string; messageId?: string; clientMessageId?: string }
+  | {
+      type: "user_message";
+      text: string;
+      messageId?: string;
+      clientMessageId?: string;
+      /** Images the message carried, as base64, so a replayed message shows what was sent. */
+      images?: Array<{ mimeType: string; data: string }>;
+      /**
+       * Attachments sent as text beside the message, shown as chips rather than prompt text: an
+       * uploaded file or a text attachment, by its label. A message recorded before the kind was
+       * kept has none.
+       */
+      labeledAttachments?: Array<{ label: string; kind?: "file" | "text" }>;
+    }
   | { type: "assistant_message"; text: string; messageId?: string }
   | { type: "reasoning"; text: string }
   | ToolCallTimelineItem

@@ -3,17 +3,6 @@ import { useWorkspaceAttachmentsStore } from "@/attachments/workspace-attachment
 import { isPullRequestContextAttachment } from "@/attachments/workspace-attachment-utils";
 
 export function getAttachmentKey(attachment: WorkspaceComposerAttachment): string {
-  if (attachment.kind === "browser_element") {
-    return JSON.stringify({
-      type: "browser_element",
-      url: attachment.attachment.url,
-      selector: attachment.attachment.selector,
-      tag: attachment.attachment.tag,
-      text: attachment.attachment.text,
-      html: attachment.attachment.outerHTML,
-      comment: attachment.attachment.comment ?? null,
-    });
-  }
   if (isPullRequestContextAttachment(attachment)) {
     return JSON.stringify({
       kind: attachment.kind,
@@ -56,11 +45,7 @@ export function removeWorkspaceAttachmentsMatching(selectedKey: string): void {
 function isSentContextAttachment(
   attachment: ComposerAttachment,
 ): attachment is WorkspaceComposerAttachment {
-  return (
-    attachment.kind === "browser_element" ||
-    attachment.kind === "chat_history" ||
-    isPullRequestContextAttachment(attachment)
-  );
+  return attachment.kind === "chat_history" || isPullRequestContextAttachment(attachment);
 }
 
 export function removeSentContextAttachments(attachments: readonly ComposerAttachment[]): void {

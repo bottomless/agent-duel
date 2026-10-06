@@ -34,7 +34,7 @@ globalThis.__PASEO_NODE_ENTRYPOINT_RUNNER_FIXTURE__ = {
 `,
     );
 
-    process.argv = ["Paseo", "runner", "node-script", fixturePath, "daemon", "start"];
+    process.argv = ["Agent Duel", "runner", "node-script", fixturePath, "daemon", "start"];
     process.env.ELECTRON_RUN_AS_NODE = "1";
     process.env.ELECTRON_NO_ATTACH_CONSOLE = "1";
     delete globalThis.__PASEO_NODE_ENTRYPOINT_RUNNER_FIXTURE__;
@@ -43,7 +43,7 @@ globalThis.__PASEO_NODE_ENTRYPOINT_RUNNER_FIXTURE__ = {
       await main();
 
       expect(globalThis.__PASEO_NODE_ENTRYPOINT_RUNNER_FIXTURE__).toEqual({
-        argv: ["Paseo", fixturePath, "daemon", "start"],
+        argv: ["Agent Duel", fixturePath, "daemon", "start"],
         electronRunAsNode: "1",
         electronNoAttachConsole: "1",
       });

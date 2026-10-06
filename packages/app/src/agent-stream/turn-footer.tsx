@@ -10,12 +10,7 @@ import {
   type StreamStrategy,
 } from "./strategy";
 import { resolveAssistantTurnForkBoundary, type AssistantTurnForkBoundary } from "./turn-boundary";
-import {
-  AssistantTurnFooter,
-  LiveElapsed,
-  STREAM_METADATA_FONT_SIZE,
-  type AssistantForkTarget,
-} from "@/components/message";
+import { AssistantTurnFooter, LiveElapsed, type AssistantForkTarget } from "@/components/message";
 import type { TurnFooterHost } from "./layout";
 import { AssistantForkMenu } from "@/components/assistant-fork-menu";
 import { SyncedLoader } from "@/components/synced-loader";
@@ -112,7 +107,7 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   );
 });
 
-const WorkingIndicator = memo(function WorkingIndicator({
+export const RunningTurnIndicator = memo(function RunningTurnIndicator({
   inFlightTurnStartedAt = null,
   onForkInFlightTurn,
 }: {
@@ -139,7 +134,7 @@ const WorkingIndicator = memo(function WorkingIndicator({
   );
 });
 
-function RunningTurnFooter({
+export function RunningTurnFooter({
   inFlightTurnStartedAt,
   onForkInFlightTurn,
 }: {
@@ -148,7 +143,7 @@ function RunningTurnFooter({
 }) {
   return (
     <View style={stylesheet.turnFooterSlot} testID="turn-working-indicator">
-      <WorkingIndicator
+      <RunningTurnIndicator
         inFlightTurnStartedAt={inFlightTurnStartedAt}
         onForkInFlightTurn={onForkInFlightTurn}
       />
@@ -237,7 +232,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   workingElapsed: {
     color: theme.colors.foregroundMuted,
-    fontSize: STREAM_METADATA_FONT_SIZE,
+    fontSize: Math.round((theme.fontSize.sm * 13) / 14),
     fontVariant: ["tabular-nums"],
   },
   workingLoader: {

@@ -34,7 +34,7 @@ if (-not $env:PASEO_LOCAL_MODELS_DIR) {
 
 Write-Host @"
 ======================================================
-  Paseo Dev (Windows)
+  Agent Duel Dev (Windows)
 ======================================================
   Home:    $($env:PASEO_HOME)
   Models:  $($env:PASEO_LOCAL_MODELS_DIR)

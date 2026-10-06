@@ -6,7 +6,9 @@ import {
   buildBranchPickerItems,
   buildPickerOptionData,
   defaultBasePickerItem,
+  newBranchPickerOptionId,
   pickerItemToCheckoutRequest,
+  startsFromCurrentBranch,
   type PickerItem,
 } from "./new-workspace-picker-item";
 
@@ -35,7 +37,7 @@ describe("pickerItemToCheckoutRequest", () => {
     expect(pickerItemToCheckoutRequest(null)).toBeUndefined();
   });
 
-  it("maps a branch row to branch-off with its exact ref", () => {
+  it("maps a branch row to a detached worktree at its exact ref", () => {
     const item: PickerItem = {
       kind: "branch",
       name: "dev",
@@ -43,7 +45,7 @@ describe("pickerItemToCheckoutRequest", () => {
       accessibilityLabel: "dev, local branch",
     };
     expect(pickerItemToCheckoutRequest(item)).toEqual({
-      action: "branch-off",
+      action: "detach",
       refName: "refs/heads/dev",
     });
   });
@@ -77,6 +79,19 @@ describe("pickerItemToCheckoutRequest", () => {
       refName: "orphan",
       checkoutSource: { kind: "change_request", forge: "github", number: 7 },
       githubPrNumber: 7,
+    });
+  });
+
+  it("branches a new-branch row off its base ref instead of detaching there", () => {
+    const item: PickerItem = {
+      kind: "new-branch",
+      name: "feature/auth",
+      baseRefName: "refs/remotes/origin/main",
+    };
+    expect(pickerItemToCheckoutRequest(item)).toEqual({
+      action: "branch-off",
+      refName: "refs/remotes/origin/main",
+      branchName: "feature/auth",
     });
   });
 
@@ -290,6 +305,19 @@ describe("buildPickerOptionData", () => {
     expect(data.selectedOptionId).toBe(branchPickerOptionId("refs/heads/main"));
   });
 
+  it("heads the list with a new-branch selection that no suggestion can supply", () => {
+    const baseItem: PickerItem = {
+      kind: "new-branch",
+      name: "feature/auth",
+      baseRefName: "refs/remotes/origin/main",
+    };
+    const data = buildPickerOptionData({ branchDetails: [mainRow], prItems: [], baseItem });
+
+    expect(data.options[0]?.label).toBe("feature/auth");
+    expect(data.selectedOptionId).toBe(newBranchPickerOptionId("feature/auth"));
+    expect(data.itemById.get(data.selectedOptionId)).toEqual(baseItem);
+  });
+
   it("keeps an explicit local selection marked", () => {
     const baseItem: PickerItem = {
       kind: "branch",
@@ -304,9 +332,45 @@ describe("buildPickerOptionData", () => {
     });
     const selected = data.itemById.get(data.selectedOptionId) ?? null;
     expect(pickerItemToCheckoutRequest(selected)).toEqual({
-      action: "branch-off",
+      action: "detach",
       refName: "refs/heads/main",
     });
+  });
+});
+
+describe("startsFromCurrentBranch", () => {
+  const branchItem = (refName: string): PickerItem => ({
+    kind: "branch",
+    name: refName,
+    refName,
+    accessibilityLabel: refName,
+  });
+
+  it("matches the branch the checkout is already on", () => {
+    expect(startsFromCurrentBranch(branchItem("refs/heads/master"), "master")).toBe(true);
+  });
+
+  it("matches through the upstream ref the row usually carries", () => {
+    expect(startsFromCurrentBranch(branchItem("refs/remotes/origin/master"), "master")).toBe(true);
+  });
+
+  it("does not match a different branch", () => {
+    expect(startsFromCurrentBranch(branchItem("refs/heads/dev"), "master")).toBe(false);
+  });
+
+  it("does not match when the checkout is detached or the row is not a branch", () => {
+    expect(startsFromCurrentBranch(branchItem("refs/heads/master"), null)).toBe(false);
+    expect(startsFromCurrentBranch(null, "master")).toBe(false);
+  });
+
+  it("compares a new-branch row against its base, which is where it gets cut", () => {
+    const item: PickerItem = {
+      kind: "new-branch",
+      name: "feature/auth",
+      baseRefName: "refs/remotes/origin/master",
+    };
+    expect(startsFromCurrentBranch(item, "master")).toBe(true);
+    expect(startsFromCurrentBranch(item, "dev")).toBe(false);
   });
 });
 

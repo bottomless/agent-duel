@@ -1,3 +1,7 @@
+import { hydrateArenaWinner, isArenaTimelinePrefix } from "../arena/winner-hydration.js";
+import { workspaceAccess } from "../workspace-cleanup/workspace-access.js";
+import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaActivitySource, ArenaCheckoutCleanupSource } from "./agent-sdk-types.js";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { stat } from "node:fs/promises";
@@ -102,6 +106,21 @@ function submittedPromptText(prompt: AgentPromptInput): string {
     .trim();
 }
 
+/**
+ * The images a submitted prompt carried. A reload reads the message back from this timeline, so a
+ * row without them shows the message without its images until the provider history is replayed.
+ */
+function submittedPromptImages(
+  prompt: AgentPromptInput,
+): Array<{ mimeType: string; data: string }> {
+  if (typeof prompt === "string") {
+    return [];
+  }
+  return prompt.flatMap((block) =>
+    block.type === "image" ? [{ mimeType: block.mimeType, data: block.data }] : [],
+  );
+}
+
 export class AgentManagerShuttingDownError extends Error {
   constructor() {
     super("Agent manager is shutting down");
@@ -129,6 +148,7 @@ interface PreparedSessionConfig {
 }
 
 interface NormalizeConfigOptions {
+  allowMissingCwd?: boolean;
   resolveDefaultModel?: boolean;
   env?: Record<string, string>;
 }
@@ -260,6 +280,11 @@ export interface CreateAgentOptions {
   // undefined is an explicit decision: the agent never appears in the sidebar.
   workspaceId: string | undefined;
   owner?: AgentOwner;
+  forkFrom?: {
+    source: AgentPersistenceHandle;
+    sourceCwd: string;
+    throughMessageId?: string;
+  };
 }
 
 export interface AgentManagerOptions {
@@ -678,7 +703,10 @@ export class AgentManager {
     this.mcpAuthToken = options?.mcpAuthToken ?? null;
     this.configurePaseoTools(options);
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
-    this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
+    this.logger = options.logger.child({
+      module: "agent",
+      component: "agent-manager",
+    });
     this.rescueTimeouts = {
       reloadSessionCloseMs:
         options.rescueTimeouts?.reloadSessionCloseMs ?? RELOAD_SESSION_CLOSE_TIMEOUT_MS,
@@ -877,10 +905,62 @@ export class AgentManager {
     return this.subscribers.size;
   }
 
+  async openArenaActivitySource(cwd: string): Promise<ArenaActivitySource | null> {
+    const client = this.clients.get("opencode");
+    if (!client?.openArenaActivitySource) return null;
+    return client.openArenaActivitySource(cwd);
+  }
+
+  async openArenaCheckoutCleanupSource(
+    sourceRepoRoot: string,
+  ): Promise<ArenaCheckoutCleanupSource | null> {
+    const client = this.clients.get("opencode");
+    if (!client?.openArenaCheckoutCleanupSource) return null;
+    return client.openArenaCheckoutCleanupSource(sourceRepoRoot);
+  }
+
   listAgents(): ManagedAgent[] {
     return Array.from(this.agents.values())
       .filter((agent) => !agent.internal)
       .map((agent) => Object.assign({}, agent));
+  }
+
+  /**
+   * Seed a new worktree from its source checkout through the first provider that can.
+   * Best effort: the setup command that runs next repairs whatever the seed did not fill,
+   * so a failure here costs time, never a workspace.
+   */
+  async seedWorktreeIgnoredContent(input: {
+    sourceCwd: string;
+    worktreePath: string;
+  }): Promise<void> {
+    for (const [provider, client] of this.clients.entries()) {
+      if (!client.seedWorktreeIgnoredContent) continue;
+      try {
+        await client.seedWorktreeIgnoredContent(input);
+      } catch (error) {
+        this.logger.warn(
+          { err: error, provider, ...input },
+          "Failed to seed worktree with ignored content",
+        );
+      }
+      return;
+    }
+  }
+
+  /**
+   * Tell every provider that caches a directory's repository to read it again. Best effort:
+   * a provider that keeps a stale answer refuses the next battle with its own error.
+   */
+  async refreshProjectDirectory(cwd: string): Promise<void> {
+    for (const [provider, client] of this.clients.entries()) {
+      if (!client.refreshProjectDirectory) continue;
+      try {
+        await client.refreshProjectDirectory(cwd);
+      } catch (error) {
+        this.logger.warn({ err: error, provider, cwd }, "Failed to refresh project directory");
+      }
+    }
   }
 
   async listImportableSessions(
@@ -966,7 +1046,9 @@ export class AgentManager {
   }
 
   async listDraftCommands(config: AgentSessionConfig): Promise<AgentSlashCommand[]> {
-    const normalizedConfig = await this.normalizeConfig(config, { resolveDefaultModel: false });
+    const normalizedConfig = await this.normalizeConfig(config, {
+      resolveDefaultModel: false,
+    });
     const client = this.requireClient(normalizedConfig.provider);
     if (!normalizedConfig.model) {
       return [];
@@ -1003,7 +1085,9 @@ export class AgentManager {
   }
 
   async listDraftFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
-    const normalizedConfig = await this.normalizeConfig(config, { resolveDefaultModel: false });
+    const normalizedConfig = await this.normalizeConfig(config, {
+      resolveDefaultModel: false,
+    });
     const client = this.requireClient(normalizedConfig.provider);
     if (!normalizedConfig.model && !client.listFeatures) {
       return [];
@@ -1099,7 +1183,9 @@ export class AgentManager {
     agentId: string | undefined,
     options: CreateAgentOptions,
   ): Promise<ManagedAgent> {
-    return this.trackAgentRegistrationOperation(this.createAgentInternal(config, agentId, options));
+    return this.trackAgentRegistrationOperation(
+      workspaceAccess.use(config.cwd, () => this.createAgentInternal(config, agentId, options)),
+    );
   }
 
   private async createAgentInternal(
@@ -1127,14 +1213,41 @@ export class AgentManager {
     );
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options);
-    const session = await client.createSession(providerLaunchConfig, launchContext, createOptions);
+    if (options.forkFrom && options.forkFrom.source.provider !== storedConfig.provider) {
+      throw new Error(
+        `Cannot fork ${options.forkFrom.source.provider} history into ${storedConfig.provider}`,
+      );
+    }
+    let session: AgentSession;
+    if (options.forkFrom) {
+      if (!client.forkSession) {
+        throw new Error(`${storedConfig.provider} does not support native session forks`);
+      }
+      session = await client.forkSession({
+        source: options.forkFrom.source,
+        sourceCwd: options.forkFrom.sourceCwd,
+        ...(options.forkFrom.throughMessageId
+          ? { throughMessageId: options.forkFrom.throughMessageId }
+          : {}),
+        config: providerLaunchConfig,
+        launchContext,
+        options: createOptions,
+      });
+    } else {
+      session = await client.createSession(providerLaunchConfig, launchContext, createOptions);
+    }
     await this.requireExternalMcpSupport(session, storedConfig);
-    return this.registerSession(session, storedConfig, resolvedAgentId, {
+    const registered = await this.registerSession(session, storedConfig, resolvedAgentId, {
       labels: options.labels,
       initialTitle: options.initialTitle,
       workspaceId: options.workspaceId,
       owner: options.owner,
     });
+    if (!options.forkFrom) {
+      return registered;
+    }
+    await this.hydrateTimelineFromProvider(resolvedAgentId);
+    return this.getAgent(resolvedAgentId) ?? registered;
   }
 
   private buildCreateSessionOptions(options?: {
@@ -1194,6 +1307,8 @@ export class AgentManager {
     const { storedConfig, launchConfig } = await this.prepareSessionConfig(
       mergedConfig,
       resolvedAgentId,
+      undefined,
+      resumeOptions?.purpose,
     );
 
     const client = this.requireClient(handle.provider);
@@ -1239,7 +1354,9 @@ export class AgentManager {
     const resolvedAgentId = validateAgentId(this.idFactory(), "importProviderSession");
     this.requireEnabledProvider(input.provider);
 
-    const client = await this.requireAvailableClient({ provider: input.provider });
+    const client = await this.requireAvailableClient({
+      provider: input.provider,
+    });
     if (!client.importSession) {
       throw new Error(`Provider '${input.provider}' does not support importing sessions`);
     }
@@ -1593,7 +1710,10 @@ export class AgentManager {
   private async markRecordArchived(record: StoredAgentRecord): Promise<ArchivedStoredAgentRecord> {
     const registry = this.requireRegistry();
     const archivedAt = new Date().toISOString();
-    const archivedRecord = buildArchivedAgentRecord(record, { archivedAt, updatedAt: archivedAt });
+    const archivedRecord = buildArchivedAgentRecord(record, {
+      archivedAt,
+      updatedAt: archivedAt,
+    });
 
     await registry.upsert(archivedRecord);
 
@@ -1735,7 +1855,10 @@ export class AgentManager {
 
     await agent.session.setFeature(featureId, value);
     await this.drainSessionEvents(agentId);
-    agent.config.featureValues = { ...agent.config.featureValues, [featureId]: value };
+    agent.config.featureValues = {
+      ...agent.config.featureValues,
+      [featureId]: value,
+    };
     this.touchUpdatedAt(agent);
     this.emitState(agent);
   }
@@ -1776,7 +1899,9 @@ export class AgentManager {
       return { record, live: true };
     }
 
-    const nextRecord = await this.writeStoredMetadata(agentId, { labels: patch });
+    const nextRecord = await this.writeStoredMetadata(agentId, {
+      labels: patch,
+    });
     return { record: nextRecord, live: false };
   }
 
@@ -2041,6 +2166,7 @@ export class AgentManager {
    */
   tryRunOutOfBand(agentId: string, prompt: AgentPromptInput, options?: AgentRunOptions): boolean {
     const agent = this.requireSessionAgent(agentId);
+    workspaceAccess.assertAvailable(agent.cwd);
     const handler = agent.session.tryHandleOutOfBand?.(prompt);
     if (!handler) {
       return false;
@@ -2062,7 +2188,9 @@ export class AgentManager {
         });
         return;
       }
-      this.dispatchStream(agent.id, event, { timestamp: new Date().toISOString() });
+      this.dispatchStream(agent.id, event, {
+        timestamp: new Date().toISOString(),
+      });
     };
     void (async () => {
       try {
@@ -2116,6 +2244,7 @@ export class AgentManager {
     options?: AgentRunOptions,
   ): AsyncGenerator<AgentStreamEvent> {
     const existingAgent = this.requireSessionAgent(agentId);
+    workspaceAccess.assertAvailable(existingAgent.cwd);
     this.logger.trace(
       {
         agentId,
@@ -2274,7 +2403,10 @@ export class AgentManager {
     const persistenceHandle =
       mutableAgent.session.describePersistence() ??
       (mutableAgent.runtimeInfo?.sessionId
-        ? { provider: mutableAgent.provider, sessionId: mutableAgent.runtimeInfo.sessionId }
+        ? {
+            provider: mutableAgent.provider,
+            sessionId: mutableAgent.runtimeInfo.sessionId,
+          }
         : null);
     if (persistenceHandle) {
       mutableAgent.persistence = attachPersistenceCwd(persistenceHandle, mutableAgent.cwd);
@@ -2478,7 +2610,9 @@ export class AgentManager {
       const bufferedResolution = agent.bufferedPermissionResolutions.get(requestId);
       if (bufferedResolution) {
         agent.bufferedPermissionResolutions.delete(requestId);
-        this.dispatchStream(agent.id, bufferedResolution, { timestamp: new Date().toISOString() });
+        this.dispatchStream(agent.id, bufferedResolution, {
+          timestamp: new Date().toISOString(),
+        });
       }
 
       return result;
@@ -2588,6 +2722,13 @@ export class AgentManager {
     return iterator.done ? null : iterator.value;
   }
 
+  async hydrateArenaWinner(agentId: string, snapshot: ArenaSnapshot): Promise<void> {
+    const agent = this.requireSessionAgent(agentId);
+    await hydrateArenaWinner(agent, snapshot, () =>
+      this.forceHydrateTimelineFromLegacyProviderHistory(agent, true, true),
+    );
+  }
+
   /**
    * Hydrates the timeline from provider history if the agent's durable
    * timeline is empty (e.g., imported agents that have provider history
@@ -2626,9 +2767,15 @@ export class AgentManager {
         { agentId, provider: agent.provider, messageId, mode },
         "agent.rewind.start",
       );
-      await invokeRewindCapability(agent.session, { messageId: providerMessageId, mode });
+      await invokeRewindCapability(agent.session, {
+        messageId: providerMessageId,
+        mode,
+      });
       if (mode !== "files") {
-        await this.hydrateTimelineFromProvider(agentId, { force: true, broadcast: true });
+        await this.hydrateTimelineFromProvider(agentId, {
+          force: true,
+          broadcast: true,
+        });
       }
       await this.refreshRuntimeInfo(agent);
       await this.persistSnapshot(agent);
@@ -3421,6 +3568,7 @@ export class AgentManager {
   private async forceHydrateTimelineFromLegacyProviderHistory(
     agent: ActiveManagedAgent,
     broadcast: boolean,
+    preserveArenaPrefix = false,
   ): Promise<void> {
     const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
     const providerSubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[] = [];
@@ -3436,9 +3584,20 @@ export class AgentManager {
     }
 
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
-    await this.deleteCommittedTimeline(agent.id);
-    this.timelineStore.delete(agent.id);
-    this.timelineStore.initialize(agent.id, { timestamp: new Date().toISOString() });
+    // Read after the provider has finished and live buffers have flushed. Arena grafts
+    // normally append; edits, rewinds and differently coalesced history still need a reset.
+    const rows = preserveArenaPrefix ? this.timelineStore.getRows(agent.id) : [];
+    const appendOnly =
+      preserveArenaPrefix &&
+      !this.hasInFlightRun(agent.id) &&
+      isArenaTimelinePrefix(rows, historyEvents);
+    if (!appendOnly) {
+      await this.deleteCommittedTimeline(agent.id);
+      this.timelineStore.delete(agent.id);
+      this.timelineStore.initialize(agent.id, {
+        timestamp: new Date().toISOString(),
+      });
+    }
     agent.historyPrimed = true;
 
     for (const event of this.providerSubagents.deleteParent(agent.id)) {
@@ -3452,7 +3611,7 @@ export class AgentManager {
         this.dispatch({ type: "provider_subagent", event: update });
       }
     }
-    for (const event of historyEvents) {
+    for (const event of historyEvents.slice(appendOnly ? rows.length : 0)) {
       const row = this.recordTimeline(
         agent.id,
         event.item,
@@ -3485,7 +3644,10 @@ export class AgentManager {
       for await (const event of agent.session.streamHistory()) {
         if (event.type === "provider_subagent") {
           const update = this.providerSubagents.apply(agent.id, event.provider, event.event);
-          const managerEvent: AgentManagerEvent = { type: "provider_subagent", event: update };
+          const managerEvent: AgentManagerEvent = {
+            type: "provider_subagent",
+            event: update,
+          };
           if (deferredBroadcast) {
             providerSubagentEvents.push(managerEvent);
           } else if (broadcast) {
@@ -3595,7 +3757,10 @@ export class AgentManager {
       );
     }
 
-    const flags: StreamEventFlags = { shouldDispatchEvent: true, shouldNotifyWaiters: true };
+    const flags: StreamEventFlags = {
+      shouldDispatchEvent: true,
+      shouldNotifyWaiters: true,
+    };
 
     const dispatchPromise = this.dispatchStreamEventByType({
       agent,
@@ -3619,7 +3784,9 @@ export class AgentManager {
       }
 
       if (flags.shouldDispatchEvent) {
-        this.dispatchStream(agent.id, event, { timestamp: new Date().toISOString() });
+        this.dispatchStream(agent.id, event, {
+          timestamp: new Date().toISOString(),
+        });
       }
     }
 
@@ -3711,7 +3878,10 @@ export class AgentManager {
         agent.currentModeId = event.currentModeId;
         agent.availableModes = event.availableModes;
         if (agent.runtimeInfo) {
-          agent.runtimeInfo = { ...agent.runtimeInfo, modeId: event.currentModeId };
+          agent.runtimeInfo = {
+            ...agent.runtimeInfo,
+            modeId: event.currentModeId,
+          };
         }
         flags.shouldDispatchEvent = false;
         this.emitState(agent);
@@ -3720,7 +3890,10 @@ export class AgentManager {
         agent.runtimeInfo = event.runtimeInfo;
         if (!agent.persistence && event.runtimeInfo.sessionId) {
           agent.persistence = attachPersistenceCwd(
-            { provider: agent.provider, sessionId: event.runtimeInfo.sessionId },
+            {
+              provider: agent.provider,
+              sessionId: event.runtimeInfo.sessionId,
+            },
             agent.cwd,
           );
         }
@@ -3770,7 +3943,12 @@ export class AgentManager {
         });
         return undefined;
       case "turn_started":
-        this.onStreamTurnStarted({ agent, eventTurnId, isForegroundEvent, flags });
+        this.onStreamTurnStarted({
+          agent,
+          eventTurnId,
+          isForegroundEvent,
+          flags,
+        });
         return undefined;
       case "permission_requested":
         this.onStreamPermissionRequested(agent, event);
@@ -4084,9 +4262,11 @@ export class AgentManager {
     }
     this.touchUpdatedAt(agent);
     agent.lastUserMessageAt = new Date();
+    const images = submittedPromptImages(prompt);
     const item: AgentTimelineItem = {
       type: "user_message",
       text: submittedPromptText(prompt),
+      ...(images.length > 0 ? { images } : {}),
       clientMessageId,
       ...(options?.messageId ? { messageId: options.messageId } : {}),
     };
@@ -4451,23 +4631,37 @@ export class AgentManager {
     // Always resolve cwd to absolute path for consistent history file lookup
     if (normalized.cwd) {
       normalized.cwd = resolve(normalized.cwd);
-      try {
-        const cwdStats = await stat(normalized.cwd);
-        if (!cwdStats.isDirectory()) {
-          throw new Error(`Working directory is not a directory: ${normalized.cwd}`);
+      // Workspace cleanup removes the directory while keeping the conversation
+      // readable, so a cleaned checkout resolves without existing. Prompts and
+      // other file-backed work are refused earlier by the workspace claim.
+      if (!workspaceAccess.isClaimed(normalized.cwd)) {
+        try {
+          const cwdStats = await stat(normalized.cwd).catch((error: NodeJS.ErrnoException) => {
+            // History lives in the provider store after an archived checkout is removed.
+            // Keep its original path as the history key, without recreating a directory.
+            if (options.allowMissingCwd && error.code === "ENOENT") return null;
+            throw error;
+          });
+          if (cwdStats && !cwdStats.isDirectory()) {
+            throw new Error(`Working directory is not a directory: ${normalized.cwd}`);
+          }
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            (error as NodeJS.ErrnoException).code === "ENOENT"
+          ) {
+            throw new Error(`Working directory does not exist: ${normalized.cwd}`, {
+              cause: error,
+            });
+          }
+          if (error instanceof Error) {
+            throw error;
+          }
+          throw new Error(`Failed to access working directory: ${normalized.cwd}`, {
+            cause: error,
+          });
         }
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          "code" in error &&
-          (error as NodeJS.ErrnoException).code === "ENOENT"
-        ) {
-          throw new Error(`Working directory does not exist: ${normalized.cwd}`, { cause: error });
-        }
-        if (error instanceof Error) {
-          throw error;
-        }
-        throw new Error(`Failed to access working directory: ${normalized.cwd}`, { cause: error });
       }
     }
 
@@ -4541,8 +4735,12 @@ export class AgentManager {
     config: AgentSessionConfig,
     agentId: string,
     env?: Record<string, string>,
+    purpose?: AgentResumeSessionOptions["purpose"],
   ): Promise<PreparedSessionConfig> {
-    const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), { env });
+    const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), {
+      env,
+      allowMissingCwd: purpose === "history",
+    });
     const launchConfig = this.applyDaemonAppendSystemPrompt(
       withRuntimePaseoMcpServer({
         config: storedConfig,
@@ -4586,7 +4784,9 @@ export class AgentManager {
       client.capabilities.supportsNativePaseoTools &&
       this.paseoToolCatalogFactory
     ) {
-      context.paseoTools = await this.paseoToolCatalogFactory({ callerAgentId: agentId });
+      context.paseoTools = await this.paseoToolCatalogFactory({
+        callerAgentId: agentId,
+      });
     }
     return context;
   }
@@ -4603,9 +4803,9 @@ export class AgentManager {
     if (!client) {
       const configuredProviders = this.getConfiguredProviderIds();
       throw new Error(
-        `Unknown provider '${options.provider}'. Configured providers: ${formatProviderList(
-          configuredProviders,
-        )}.`,
+        `Unknown provider '${
+          options.provider
+        }'. Configured providers: ${formatProviderList(configuredProviders)}.`,
       );
     }
 

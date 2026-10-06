@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "worktree": {
+    "setup": "npm install"
+  },
+  "scripts": {
+    "web": {
+      "type": "service",
+      "command": "npm run dev -- --host $HOST --port $PASEO_PORT"
+    },
+    "api": {
+      "type": "service",
+      "command": "node scripts/duel-test-service.mjs api"
+    },
+    "events": {
+      "type": "service",
+      "command": "node scripts/duel-test-service.mjs events"
+    },
+    "worker": {
+      "type": "script",
+      "command": "node scripts/duel-test-worker.mjs"
+    }
+  },
+  "arena": {
+    "environment": {
+      "scripts": ["web", "api", "events", "worker"],
+      "primaryService": "web"
+    }
+  }
+}

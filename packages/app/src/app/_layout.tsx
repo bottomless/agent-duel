@@ -16,7 +16,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { AppState, useWindowDimensions, View } from "react-native";
+import { AppState, View } from "react-native";
 import { GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -25,36 +25,34 @@ import { CommandCenter } from "@/command-center/command-center";
 import { CommandCenterRootActions } from "@/command-center/root-registration";
 import { CommandCenterProvider } from "@/command-center/provider";
 import { CommandCenterWorkspaceActions } from "@/command-center/workspace-registration";
+import { GitCreateBranchDialogHost } from "@/git/create-branch-dialog";
+import { AccountGate } from "@/accounts/account-gate";
 import { AddProjectFlowHost } from "@/components/add-project-flow-host";
 import { AppearanceStyleBoundary } from "@/components/appearance-style-boundary";
-import { WorktreeSetupCalloutSource } from "@/components/worktree-setup-callout-source";
 import { DownloadToast } from "@/components/download-toast";
 import { QuittingOverlay } from "@/components/quitting-overlay";
 import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
-import { AppDiagnosticHost } from "@/components/app-diagnostic-host";
 import { LeftSidebar } from "@/components/left-sidebar";
 import { WindowSidebarMenuToggle } from "@/components/headers/menu-header";
 import { SidebarModelProvider } from "@/components/sidebar/sidebar-model";
 import { WorkspacePinShortcutHandler } from "@/components/workspace-pin-shortcut-handler";
-import { CompactExplorerSidebarHost } from "@/components/compact-explorer-sidebar-host";
 import { ProviderSettingsHost } from "@/components/provider-settings-host";
 import { RootErrorBoundary } from "@/components/root-error-boundary";
 import { WorkspaceSetupDialog } from "@/components/workspace-setup-dialog";
 import { WorkspaceShortcutTargetsSubscriber } from "@/components/workspace-shortcut-targets-subscriber";
 import { FloatingPanelPortalHost } from "@/components/ui/floating-panel-portal";
-import { HostChooserModal, useHostChooser } from "@/hosts/host-chooser";
 import {
   getIsElectronRuntime,
   getIsElectronRuntimeMac,
   HEADER_INNER_HEIGHT,
   useIsCompactFormFactor,
 } from "@/constants/layout";
+import { DesktopPanelOverlay } from "@/components/desktop-panel-overlay";
 import {
-  canDesktopAppSidebarShare,
   resolveDesktopAppChromeLayout,
-  resolveDesktopAppContentMinimum,
   resolveDesktopSidebarVisibility,
 } from "@/components/desktop-sidebar-layout";
+import { useDesktopPanelPresentation } from "@/components/use-desktop-panel-presentation";
 import { isNative, isWeb } from "@/constants/platform";
 import { HorizontalScrollProvider } from "@/contexts/horizontal-scroll-context";
 import { SessionProvider } from "@/contexts/session-context";
@@ -98,7 +96,6 @@ import { polyfillNavigator } from "@/polyfills/navigator";
 import { queryClient } from "@/data/query-client";
 import {
   getHostRuntimeStore,
-  hasConfiguredLocalDaemonOverride,
   useHostRegistryLoaded,
   useHostMutations,
   useHostRuntimeClient,
@@ -113,7 +110,6 @@ import { getNextThemePreference, THEME_TO_UNISTYLES } from "@/styles/theme";
 import { useSessionStore } from "@/stores/session-store";
 import { installWebScrollbarStyles } from "@/styles/install-web-scrollbar-styles";
 import type { HostProfile } from "@/types/host-connection";
-import { toggleDesktopSidebarsWithCheckoutIntent } from "@/utils/desktop-sidebar-toggle";
 import {
   useHasWindowChromeObstruction,
   WindowChromeProvider,
@@ -174,7 +170,9 @@ function PushNotificationRouter() {
       let cancelled = false;
 
       if (getIsElectronRuntime()) {
-        void ensureOsNotificationPermission();
+        void ensureOsNotificationPermission().catch((error) => {
+          console.warn("Failed to request desktop notification permission", error);
+        });
 
         const unlistenResult = getDesktopHost()?.events?.on?.(
           "notification-click",
@@ -356,9 +354,6 @@ async function shouldStartBuiltInDaemon(): Promise<boolean> {
   if (!shouldUseDesktopDaemon()) {
     return false;
   }
-  if (hasConfiguredLocalDaemonOverride()) {
-    return false;
-  }
   const settings = await loadDesktopSettings();
   return settings.daemon.manageBuiltInDaemon;
 }
@@ -458,14 +453,8 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   const toggleDesktopAgentList = usePanelStore((state) => state.toggleDesktopAgentList);
   const openDesktopAgentList = usePanelStore((state) => state.openDesktopAgentList);
   const closeDesktopAgentList = usePanelStore((state) => state.closeDesktopAgentList);
-  const closeDesktopFileExplorer = usePanelStore((state) => state.closeDesktopFileExplorer);
   const exitFocusMode = usePanelStore((state) => state.exitFocusMode);
   const isFocusModeEnabled = usePanelStore((state) => state.desktop.focusModeEnabled);
-  const isDesktopAgentListOpen = usePanelStore((state) => state.desktop.agentListOpen);
-  const isDesktopFileExplorerOpen = usePanelStore((state) => state.desktop.fileExplorerOpen);
-  const sidebarWidth = usePanelStore((state) => state.sidebarWidth);
-  const explorerWidth = usePanelStore((state) => state.explorerWidth);
-  const { width: viewportWidth } = useWindowDimensions();
 
   const cycleTheme = useCallback(() => {
     void updateSettings({ theme: getNextThemePreference(settings.theme) });
@@ -478,22 +467,32 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   const isWorkspaceFocusModeEnabled = isWorkspaceRoute && isFocusModeEnabled;
   const chromeEnabled = chromeEnabledOverride ?? daemons.length > 0;
   const hasMountedDesktopSidebar = useLatchedBoolean(chromeEnabled);
-  const toggleAgentList = isCompactLayout ? toggleMobileAgentList : toggleDesktopAgentList;
+  const panelPresentation = useDesktopPanelPresentation();
+  const agentListFloats = panelPresentation.agentList === "overlay";
+  const isAgentListOpen = usePanelStore((state) =>
+    selectIsAgentListOpen(state, { isCompact: agentListFloats }),
+  );
+  const toggleAgentList = agentListFloats ? toggleMobileAgentList : toggleDesktopAgentList;
   const toggleDesktopSidebars = useCallback(() => {
+    // A floating app navigation panel has no side panel to pair with, so the
+    // shortcut falls back to the one panel it can show.
+    if (agentListFloats) {
+      toggleMobileAgentList();
+      return;
+    }
+    // App navigation and the focused workspace's side panel move together:
+    // hide both while either shows, otherwise show both.
     const { desktop } = usePanelStore.getState();
-    toggleDesktopSidebarsWithCheckoutIntent({
-      isAgentListOpen: desktop.agentListOpen,
-      isFileExplorerOpen: desktop.fileExplorerOpen,
-      openAgentList: openDesktopAgentList,
-      closeAgentList: closeDesktopAgentList,
-      closeFileExplorer: closeDesktopFileExplorer,
-      toggleFocusedFileExplorer: () =>
-        keyboardActionDispatcher.dispatch({
-          id: "sidebar.toggle.right",
-          scope: "sidebar",
-        }),
+    if (desktop.agentListOpen) {
+      closeDesktopAgentList();
+    } else {
+      openDesktopAgentList();
+    }
+    keyboardActionDispatcher.dispatch({
+      id: "sidebar.toggle.right",
+      scope: "sidebar",
     });
-  }, [closeDesktopAgentList, closeDesktopFileExplorer, openDesktopAgentList]);
+  }, [agentListFloats, closeDesktopAgentList, openDesktopAgentList, toggleMobileAgentList]);
   // TODO: stop matching pathname here as a branch. `chromeEnabled` should not
   // conflate workspace/project-specific chrome (sidebar, mobile gesture) with
   // global concerns like keyboard shortcuts. Split those out so settings (and
@@ -513,32 +512,22 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   useActiveWorktreeNewAction();
   useGlobalNewWorkspaceAction();
 
-  const appContentMinimumWidth = resolveDesktopAppContentMinimum({
-    isSettingsRoute: pathname.includes("/settings"),
-    isWorkspaceExplorerOpen: isWorkspaceRoute && isDesktopFileExplorerOpen,
-    requestedExplorerWidth: explorerWidth,
-    viewportWidth,
-  });
   const desktopSidebarMounted = hasMountedDesktopSidebar && !isWorkspaceFocusModeEnabled;
   const desktopSidebarVisible = resolveDesktopSidebarVisibility({
     chromeEnabled,
     isCompactLayout,
     isMounted: desktopSidebarMounted,
-    isOpen: isDesktopAgentListOpen,
-    canShare: canDesktopAppSidebarShare({
-      contentMinimumWidth: appContentMinimumWidth,
-      requestedSidebarWidth: sidebarWidth,
-      viewportWidth,
-    }),
+    isOpen: isAgentListOpen,
   });
   const hasTopLeftWindowControls = useHasWindowChromeObstruction("top-left");
   const appChromeLayout = resolveDesktopAppChromeLayout({
-    desktopSidebarRendered: desktopSidebarVisible,
+    desktopSidebarRendered: desktopSidebarVisible && !agentListFloats,
     hasTopLeftWindowControls,
     sidebarControlsEnabled: chromeEnabled && !isWorkspaceFocusModeEnabled,
   });
   const sidebarChrome = (
     <SidebarChrome
+      floats={agentListFloats}
       mounted={isCompactLayout ? chromeEnabled : desktopSidebarMounted}
       visible={isCompactLayout ? chromeEnabled : desktopSidebarVisible}
       keyboardShortcutsEnabled={keyboardShortcutsEnabled}
@@ -546,22 +535,16 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   );
   const workspaceChrome = (
     <View style={rowStyle}>
-      {!isCompactLayout ? (
+      {!isCompactLayout && !agentListFloats ? (
         <WindowChromeRegion corners={appChromeLayout.sidebarCorners}>
           {sidebarChrome}
         </WindowChromeRegion>
       ) : null}
-      {isCompactLayout ? (
-        <CompactExplorerSidebarHost enabled={chromeEnabled}>
-          <WindowChromeRegion corners={chromeEnabled ? "both" : appChromeLayout.contentCorners}>
-            <View style={flexStyle}>{children}</View>
-          </WindowChromeRegion>
-        </CompactExplorerSidebarHost>
-      ) : (
-        <WindowChromeRegion corners={appChromeLayout.contentCorners}>
-          <View style={flexStyle}>{children}</View>
-        </WindowChromeRegion>
-      )}
+      <WindowChromeRegion
+        corners={isCompactLayout && chromeEnabled ? "both" : appChromeLayout.contentCorners}
+      >
+        <View style={flexStyle}>{children}</View>
+      </WindowChromeRegion>
     </View>
   );
 
@@ -580,22 +563,25 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
           </WindowChromeSafeArea>
         </WindowChromeRegion>
       ) : null}
+      {/* Above the content, below the portal host: a menu opened inside the
+          floating panel portals to that host and has to paint over the panel. */}
+      <FloatingAgentListChrome enabled={!isCompactLayout && agentListFloats}>
+        {sidebarChrome}
+      </FloatingAgentListChrome>
       <FloatingPanelPortalHost />
       {isCompactLayout ? sidebarChrome : null}
       <DownloadToast />
       <RosettaCalloutSource />
       <UpdateCalloutSource />
-      <WorktreeSetupCalloutSource />
       <CommandCenterRootActions />
       <CommandCenterWorkspaceActions />
       <WorkspacePinShortcutHandler />
       <CommandCenter />
       <AddProjectFlowHost />
-      <HostChooserModal />
       <ProviderSettingsHost />
       <WorkspaceSetupDialog />
+      <GitCreateBranchDialogHost />
       <KeyboardShortcutsDialog />
-      <AppDiagnosticHost />
       <QuittingOverlay />
     </View>
   );
@@ -609,19 +595,41 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   return <CommandCenterProvider>{content}</CommandCenterProvider>;
 }
 
+/**
+ * The agent list at the widths where it floats over the center instead of
+ * sitting beside it. Compact keeps its own drawer; this is the desktop shell
+ * running out of room, so the panel is the desktop one, just unpinned.
+ */
+function FloatingAgentListChrome({ children, enabled }: { children: ReactNode; enabled: boolean }) {
+  const isOpen = usePanelStore((state) => selectIsAgentListOpen(state, { isCompact: true }));
+  const showMobileAgent = usePanelStore((state) => state.showMobileAgent);
+  if (!enabled) {
+    return null;
+  }
+  return (
+    <DesktopPanelOverlay
+      edge="left"
+      onDismiss={showMobileAgent}
+      open={isOpen}
+      testID="floating-agent-list"
+    >
+      {children}
+    </DesktopPanelOverlay>
+  );
+}
+
 function SidebarChrome({
+  floats,
   mounted,
   visible,
   keyboardShortcutsEnabled,
 }: {
+  floats: boolean;
   mounted: boolean;
   visible: boolean;
   keyboardShortcutsEnabled: boolean;
 }) {
-  const isCompactLayout = useIsCompactFormFactor();
-  const isOpen = usePanelStore((state) =>
-    selectIsAgentListOpen(state, { isCompact: isCompactLayout }),
-  );
+  const isOpen = usePanelStore((state) => selectIsAgentListOpen(state, { isCompact: floats }));
   const active = visible && isOpen;
   return (
     <SidebarModelProvider active={active}>
@@ -712,7 +720,10 @@ function DesktopWindowControlsSync({ enabled }: { enabled: boolean }) {
     void updateDesktopWindowControls({
       backgroundColor: surface0,
       foregroundColor: foreground,
-      trafficLightOffsetY: liftTrafficLights ? -5 : 0.5,
+      // The workspace header centres its controls 23.5px down; the lights'
+      // default position centres them at 20. Measured, not styled: the header
+      // is a 47px row and the lights are 12px circles.
+      trafficLightOffsetY: liftTrafficLights ? -5 : 3.5,
     }).catch((error) => {
       console.warn("[DesktopWindow] Failed to update window controls overlay", error);
     });
@@ -777,7 +788,7 @@ interface PendingOpenProjectRequest {
 let nextOpenProjectRequestId = 1;
 
 function OpenProjectListener() {
-  const chooseHost = useHostChooser();
+  const hosts = useHosts();
   const hostRegistryLoaded = useHostRegistryLoaded();
   const [request, setRequest] = useState<PendingOpenProjectRequest | null>(null);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
@@ -795,18 +806,17 @@ function OpenProjectListener() {
         return;
       }
 
-      chooseHost({
-        title: "Choose host",
-        onChooseHost: (serverId) => {
-          setRequest({
-            id: nextOpenProjectRequestId++,
-            serverId,
-            path: nextPath,
-          });
-        },
+      const serverId = hosts[0]?.serverId;
+      if (!serverId) {
+        return;
+      }
+      setRequest({
+        id: nextOpenProjectRequestId++,
+        serverId,
+        path: nextPath,
       });
     },
-    [chooseHost, hostRegistryLoaded],
+    [hosts, hostRegistryLoaded],
   );
 
   useEffect(() => {
@@ -893,7 +903,6 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
     (pathname === "/open-project" ||
       pathname === "/new" ||
       pathname === "/sessions" ||
-      pathname === "/schedules" ||
       routeHasKnownHost);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
@@ -921,8 +930,6 @@ function RootStack() {
         <Stack.Screen name="new" />
         <Stack.Screen name="open-project" />
         <Stack.Screen name="sessions" />
-        <Stack.Screen name="schedules" />
-        <Stack.Screen name="pair-scan" />
       </Stack.Protected>
       <Stack.Screen name="h/[serverId]" />
       <Stack.Screen name="settings/hosts/[serverId]/index" />
@@ -997,7 +1004,9 @@ function RootAppTree() {
       <View style={layoutStyles.surfaceFill}>
         <RootProviders>
           <RuntimeProviders>
-            <AppShell />
+            <AccountGate>
+              <AppShell />
+            </AccountGate>
           </RuntimeProviders>
         </RootProviders>
       </View>

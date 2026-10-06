@@ -32,6 +32,10 @@ function toolPermissionEvent(): unknown {
   };
 }
 
+function globalEvent(directory: string, payload: unknown): unknown {
+  return { directory, payload };
+}
+
 describe("OpenCode permission actions", () => {
   test("allow always sends OpenCode's always reply", async () => {
     const { openCodeClient, runtime } = mockOpenCodeClient([toolPermissionEvent(), idleEvent()]);
@@ -86,6 +90,38 @@ describe("OpenCode permission actions", () => {
       {
         requestID: "permission-1",
         directory: "/tmp/project",
+        reply: "once",
+      },
+    ]);
+    expect(session.getPendingPermissions()).toEqual([]);
+
+    await session.close();
+  });
+
+  test("replies in the global event directory when Arena moves the main session", async () => {
+    const arenaDirectory = "/tmp/arena-chat";
+    const { openCodeClient, runtime } = mockOpenCodeClient([
+      globalEvent(arenaDirectory, toolPermissionEvent()),
+      globalEvent(arenaDirectory, idleEvent()),
+    ]);
+    const client = new OpenCodeAgentClient(createTestLogger(), undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+    });
+    const session = await client.createSession({
+      provider: "opencode",
+      cwd: "/tmp/project",
+      modeId: "build",
+    });
+
+    await session.run("Inspect outside files");
+    const permission = session.getPendingPermissions()[0]!;
+    await session.respondToPermission(permission.id, { behavior: "allow" });
+
+    expect(openCodeClient.calls.permissionReply).toEqual([
+      {
+        requestID: "permission-1",
+        directory: arenaDirectory,
         reply: "once",
       },
     ]);

@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect } from "../../app/e2e/support/fixtures";
 import { gotoAppShell, openSettings } from "../../app/e2e/support/helpers/app";
+import { openCommandCenter } from "../../app/e2e/support/helpers/command-center";
 import { openSettingsSection } from "../../app/e2e/support/helpers/settings";
 
 // Settings > Keyboard Shortcuts is desktop-only (`desktopOnly` in
@@ -51,12 +52,11 @@ async function openRowMenu(page: Page) {
   await expect(page.getByTestId(`shortcut-bind-${SHORTCUTS_ROW}`)).toBeVisible();
 }
 
-/** Reachable from the sidebar even when the cheat sheet's own shortcut is gone. */
+/** Reachable from the command center even when the cheat sheet's own shortcut is gone. */
 async function openCheatSheet(page: Page) {
   await gotoAppShell(page);
-  await page.getByTestId("sidebar-help").click();
-  await expect(page.getByTestId("sidebar-help-menu")).toBeVisible();
-  await page.getByTestId("sidebar-help-shortcuts").click();
+  const commandCenter = await openCommandCenter(page);
+  await commandCenter.getByText("Keyboard shortcuts", { exact: true }).click();
   const dialog = page.getByTestId("keyboard-shortcuts-dialog");
   await expect(dialog).toBeVisible({ timeout: 10_000 });
   return dialog;

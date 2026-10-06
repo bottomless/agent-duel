@@ -37,7 +37,11 @@ export function resolveWorkspaceRouteState(input: {
 }): WorkspaceRouteState {
   if (input.workspace) {
     if (input.connectionStatus === "online") {
-      if (input.recovery.kind === "recoverable" && input.recovery.phase === "restoring") {
+      if (
+        (input.workspace.filesState === undefined || input.workspace.filesState === "available") &&
+        input.recovery.kind === "recoverable" &&
+        input.recovery.phase === "restoring"
+      ) {
         return { kind: "archived", hostName: input.hostName, recovery: input.recovery };
       }
       return { kind: "ready" };
@@ -84,7 +88,7 @@ export function resolveWorkspaceRouteState(input: {
       return {
         kind: "recoveryUnavailable",
         hostName: input.hostName,
-        message: "Update Paseo to recover this workspace.",
+        message: "Update Agent Duel to recover this workspace.",
       };
     case "inspectionFailed":
       return {

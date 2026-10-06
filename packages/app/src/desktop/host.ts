@@ -12,8 +12,6 @@ type BrowserAutomationExecuteResponse = Extract<
   { type: "browser.automation.execute.response" }
 >;
 
-export type DesktopNotificationPermission = "granted" | "denied" | "default";
-
 export interface DesktopDialogAskOptions {
   title?: string;
   okLabel?: string;
@@ -52,11 +50,39 @@ export interface DesktopDialogBridge {
   open?: (options?: DesktopDialogOpenOptions) => Promise<string | string[] | null>;
 }
 
+export type DesktopNotificationPermission =
+  | "authorized"
+  | "denied"
+  | "not-determined"
+  | "provisional"
+  | "unknown";
+
 export interface DesktopNotificationBridge {
+  getPermission?: () => Promise<DesktopNotificationPermission>;
+  requestPermission?: () => Promise<DesktopNotificationPermission>;
+  openSettings?: () => Promise<void>;
   isSupported?: () => Promise<boolean>;
   sendNotification?: (
     payload: string | { title: string; body?: string; data?: Record<string, unknown> },
   ) => Promise<boolean>;
+}
+
+export interface DesktopAccountsBridge {
+  createReturnUrl?: () => Promise<string>;
+  session?: {
+    load?: () => Promise<string | null>;
+    save?: (value: string) => Promise<void>;
+    clear?: () => Promise<void>;
+  };
+}
+
+/** The OpenRouter key of a build without a control plane, encrypted with `safeStorage`. */
+export interface DesktopByokBridge {
+  key?: {
+    load(): Promise<string | null>;
+    save(value: string): Promise<void>;
+    clear(): Promise<void>;
+  };
 }
 
 export interface DesktopOpenerBridge {
@@ -66,7 +92,7 @@ export interface DesktopOpenerBridge {
 export interface DesktopEditorTargetDescriptor {
   id: string;
   label: string;
-  kind: "editor" | "file-manager";
+  kind: "editor" | "file-manager" | "terminal";
   icon: { kind: "image"; dataUrl: string } | { kind: "symbol"; name: "folder" | "terminal" };
 }
 
@@ -108,7 +134,7 @@ export interface DesktopWindowBridge {
   onResized?: <TEvent = unknown>(
     handler: (event: TEvent) => void,
   ) => Promise<() => void> | (() => void);
-  setBadgeCount?: (count?: number) => Promise<void>;
+  setBadgeEntries?: (entries: Record<string, string>) => Promise<void>;
   onDragDropEvent?: <TEvent = unknown>(
     handler: (event: TEvent) => void,
   ) => Promise<() => void> | (() => void);
@@ -157,13 +183,6 @@ export interface DesktopBrowserBridge {
   executeAutomationCommand?: (
     request: BrowserAutomationExecuteRequest,
   ) => Promise<BrowserAutomationExecuteResponse["payload"]>;
-  /** Capture a PNG screenshot of the guest viewport cropped to `rect`. */
-  captureElement?: (
-    browserId: string,
-    rect: { x: number; y: number; width: number; height: number },
-  ) => Promise<string | null>;
-  /** Copy element text and/or an image to the system clipboard from main. */
-  copyElement?: (payload: { text?: string; imageDataUrl?: string }) => Promise<boolean>;
 }
 
 export interface DesktopInvokeBridge {
@@ -179,6 +198,8 @@ export interface DesktopHostBridge {
   window?: DesktopWindowModuleBridge;
   dialog?: DesktopDialogBridge;
   notification?: DesktopNotificationBridge;
+  accounts?: DesktopAccountsBridge;
+  byok?: DesktopByokBridge;
   opener?: DesktopOpenerBridge;
   editor?: DesktopEditorBridge;
   webUtils?: DesktopWebUtilsBridge;

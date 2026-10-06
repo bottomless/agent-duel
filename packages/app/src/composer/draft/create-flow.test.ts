@@ -146,4 +146,30 @@ describe("useDraftAgentCreateFlow", () => {
     });
     expect(onCreateSuccess).toHaveBeenCalledTimes(1);
   });
+
+  it("settles a create flow that does not hand its message to the canonical timeline", async () => {
+    const { result } = renderHook(() =>
+      useDraftAgentCreateFlow({
+        draftId: "draft-arena",
+        getPendingServerId: () => "server-1",
+        buildDraftAgent: (attempt) => ({ attempt }),
+        createRequest: async () => ({
+          agentId: "agent-arena",
+          result: { id: "agent-arena" },
+          handoffMessage: false,
+        }),
+        onCreateSuccess: vi.fn(),
+      }),
+    );
+
+    await act(async () => {
+      await result.current.handleCreateFromInput({
+        text: "Build it",
+        attachments: [],
+        cwd: "/repo",
+      });
+    });
+
+    expect(useCreateFlowStore.getState().pendingByDraftId["draft-arena"]).toBeUndefined();
+  });
 });

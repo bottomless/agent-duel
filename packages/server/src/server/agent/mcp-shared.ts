@@ -7,7 +7,6 @@ import { curateAgentActivity } from "./activity-curator.js";
 import { selectItemsByProjectedLimit } from "./timeline-projection.js";
 import type { AgentStorage } from "./agent-storage.js";
 import { serializeAgentSnapshot } from "../messages.js";
-import { StoredScheduleSchema } from "@getpaseo/protocol/schedule/types";
 import type { AgentProvider } from "./agent-sdk-types.js";
 
 export const AgentProviderEnum = z.string();
@@ -217,43 +216,4 @@ export async function serializeSnapshotWithMetadata(
 ) {
   const title = await resolveAgentTitle(agentStorage, snapshot.id, logger);
   return serializeAgentSnapshot(snapshot, { title });
-}
-
-export function parseDurationString(input: string): number {
-  const trimmed = input.trim();
-  if (/^\d+$/.test(trimmed)) {
-    return Number.parseInt(trimmed, 10) * 1000;
-  }
-
-  let totalMs = 0;
-  let hasMatch = false;
-  const regex = /(\d+)([smh])/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(trimmed)) !== null) {
-    hasMatch = true;
-    const value = Number.parseInt(match[1], 10);
-    switch (match[2]) {
-      case "s":
-        totalMs += value * 1000;
-        break;
-      case "m":
-        totalMs += value * 60 * 1000;
-        break;
-      case "h":
-        totalMs += value * 60 * 60 * 1000;
-        break;
-    }
-  }
-
-  if (!hasMatch) {
-    throw new Error(`Invalid duration format: ${input}. Use formats like: 5m, 30s, 1h, 2h30m`);
-  }
-
-  return totalMs;
-}
-
-export function toScheduleSummary(schedule: z.infer<typeof StoredScheduleSchema>) {
-  const { runs: _runs, ...summary } = schedule;
-  return summary;
 }

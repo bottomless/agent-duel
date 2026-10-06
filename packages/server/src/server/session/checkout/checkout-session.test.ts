@@ -85,6 +85,7 @@ interface RecordedHostCalls {
   emitWorkspaceUpdateForCwd: string[];
   handleWorkspaceGitBranchSnapshot: Array<{ cwd: string; branchName: string | null }>;
   renameCurrentBranch: Array<{ cwd: string; branch: string }>;
+  createBranch: Array<{ cwd: string; branch: string; options?: { baseRef?: string } }>;
 }
 
 type GitMutationFake = Pick<GitMutationService, "checkoutExistingBranch" | "notifyGitMutation">;
@@ -116,6 +117,7 @@ function makeCheckoutSession(options?: {
     emitWorkspaceUpdateForCwd: [],
     handleWorkspaceGitBranchSnapshot: [],
     renameCurrentBranch: [],
+    createBranch: [],
   };
   const gitMutationCalls: RecordedGitMutationCalls = {
     notifyGitMutation: [],
@@ -136,6 +138,10 @@ function makeCheckoutSession(options?: {
     renameCurrentBranch: async (cwd, branch) => {
       hostCalls.renameCurrentBranch.push({ cwd, branch });
       return { previousBranch: null, currentBranch: branch };
+    },
+    createBranch: async (cwd, branch, createOptions) => {
+      hostCalls.createBranch.push({ cwd, branch, options: createOptions });
+      return { currentBranch: branch };
     },
     ...options?.host,
   };
@@ -225,6 +231,37 @@ describe("CheckoutSession", () => {
             currentBranch: "main",
           }),
         },
+      ]);
+    });
+
+    it("refreshes only local Git when requested and preserves ordinary cache reads", async () => {
+      const calls: unknown[] = [];
+      const { checkout, emitted } = makeCheckoutSession({
+        git: {
+          getSnapshot: async (cwd, options) => {
+            calls.push(options);
+            return createGitSnapshot(cwd, options?.force ? "other" : "main");
+          },
+        },
+      });
+      await checkout.handleStatusRequest({
+        type: "checkout_status_request",
+        cwd: "/repo",
+        requestId: "cached",
+      });
+      await checkout.handleStatusRequest({
+        type: "checkout_status_request",
+        cwd: "/repo",
+        requestId: "fresh",
+        refreshGit: true,
+      });
+      expect(calls).toEqual([
+        undefined,
+        { force: true, includeForge: false, reason: "checkout-status-request" },
+      ]);
+      expect(emitted).toMatchObject([
+        { payload: { requestId: "cached", currentBranch: "main" } },
+        { payload: { requestId: "fresh", currentBranch: "other" } },
       ]);
     });
 
@@ -770,6 +807,86 @@ describe("CheckoutSession", () => {
             currentBranch: "feature-renamed",
             error: null,
             requestId: "rn2",
+          },
+        },
+      ]);
+    });
+  });
+
+  describe("create branch", () => {
+    it("cuts the branch at the requested base ref", async () => {
+      const { checkout, emitted, hostCalls, gitMutationCalls } = makeCheckoutSession();
+
+      await checkout.handleCheckoutCreateBranchRequest({
+        type: "checkout.create_branch.request",
+        cwd: "/repo",
+        branch: "feature/x",
+        baseRef: "refs/heads/main",
+        requestId: "cb1",
+      });
+
+      expect(hostCalls.createBranch).toEqual([
+        { cwd: "/repo", branch: "feature/x", options: { baseRef: "refs/heads/main" } },
+      ]);
+      expect(gitMutationCalls.notifyGitMutation).toEqual([
+        { cwd: "/repo", reason: "create-branch", options: { invalidateForge: true } },
+      ]);
+      expect(emitted).toEqual([
+        {
+          type: "checkout.create_branch.response",
+          payload: {
+            cwd: "/repo",
+            success: true,
+            currentBranch: "feature/x",
+            error: null,
+            requestId: "cb1",
+          },
+        },
+      ]);
+    });
+
+    // No base ref is how a worktree cut detached gets a branch: at HEAD, wherever that is.
+    it("leaves the base unstated when none was requested", async () => {
+      const { checkout, hostCalls } = makeCheckoutSession();
+
+      await checkout.handleCheckoutCreateBranchRequest({
+        type: "checkout.create_branch.request",
+        cwd: "/repo",
+        branch: "feature/y",
+        requestId: "cb2",
+      });
+
+      expect(hostCalls.createBranch).toEqual([
+        { cwd: "/repo", branch: "feature/y", options: undefined },
+      ]);
+    });
+
+    it("reports a base that git cannot resolve rather than cutting from somewhere else", async () => {
+      const { checkout, emitted } = makeCheckoutSession({
+        host: {
+          createBranch: async () => {
+            throw new Error("Base branch not found: main");
+          },
+        },
+      });
+
+      await checkout.handleCheckoutCreateBranchRequest({
+        type: "checkout.create_branch.request",
+        cwd: "/repo",
+        branch: "feature/z",
+        baseRef: "refs/heads/main",
+        requestId: "cb3",
+      });
+
+      expect(emitted).toEqual([
+        {
+          type: "checkout.create_branch.response",
+          payload: {
+            cwd: "/repo",
+            success: false,
+            currentBranch: null,
+            error: { code: "UNKNOWN", message: "Base branch not found: main" },
+            requestId: "cb3",
           },
         },
       ]);

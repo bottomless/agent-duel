@@ -15,6 +15,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { z } from "zod";
 
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
+import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import { Session } from "./session.js";
 import type { SessionOptions } from "./session.js";
@@ -54,7 +55,6 @@ import {
   asAgentStorage,
   asDownloadTokenStore,
   asPushNotifications,
-  asScheduleService,
   asCheckoutDiffManager,
   asDaemonConfigStore,
   asTerminalManager,
@@ -690,7 +690,6 @@ function createSessionForWorkspaceTests(
       },
       workspaceRegistry,
       filesystem: { isDirectory: async () => true },
-      scheduleService: asScheduleService(),
       checkoutDiffManager: asCheckoutDiffManager({
         subscribe: async () => ({
           initial: { cwd: "/tmp", files: [], error: null },
@@ -952,7 +951,6 @@ test("create_agent_request keeps requested child cwd when grouped under an exist
         agentStorage,
         projectRegistry,
         workspaceRegistry,
-        scheduleService: asScheduleService(),
         checkoutDiffManager: asCheckoutDiffManager({
           subscribe: async () => ({
             initial: { cwd: child, files: [], error: null },
@@ -1104,7 +1102,6 @@ test("create_agent_request launches from an exact subdirectory in a created work
       agentStorage,
       projectRegistry,
       workspaceRegistry,
-      scheduleService: asScheduleService(),
       checkoutDiffManager: asCheckoutDiffManager({
         subscribe: async () => ({
           initial: { cwd: child, files: [], error: null },
@@ -1148,7 +1145,11 @@ test("create_agent_request launches from an exact subdirectory in a created work
       requestId: "req-create-worktree-child",
       config: { provider: "codex", cwd: child },
       attachments: [],
-      worktree: { mode: "branch-off", newBranch: "feature/created-worktree" },
+      worktree: {
+        mode: "branch-off",
+        newBranch: "feature/created-worktree",
+        workspaceTitle: "Forked session (2)",
+      },
     });
 
     const [createdAgent] = agentManager.listAgents();
@@ -1163,6 +1164,19 @@ test("create_agent_request launches from an exact subdirectory in a created work
         createdAgent?.cwd ?? "",
       ),
     ).toBe(true);
+    expect(path.basename(createdWorktreeRoot)).toMatch(/^[0-9a-f]{8}$/);
+    expect(
+      execFileSync("git", ["branch", "--show-current"], {
+        cwd: createdAgent!.cwd,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim(),
+    ).toBe("feature/created-worktree");
+    const createdWorkspace = (await workspaceRegistry.list()).find(
+      (workspace) => workspace.workspaceId === createdAgent?.workspaceId,
+    );
+    expect(createdWorkspace?.title).toBe("Forked session (2)");
     expect(findByType(emitted, "status")?.payload).toMatchObject({
       status: "agent_created",
       agent: { cwd: createdAgent?.cwd },
@@ -1241,7 +1255,6 @@ test("create_agent_request does not title an existing workspace from the agent p
         agentStorage,
         projectRegistry,
         workspaceRegistry,
-        scheduleService: asScheduleService(),
         checkoutDiffManager: asCheckoutDiffManager({
           subscribe: async () => ({
             initial: { cwd, files: [], error: null },
@@ -1570,7 +1583,6 @@ test("archive emits an authoritative agent_update upsert for subscribed clients"
           remove: async () => {},
         };
       })(),
-      scheduleService: asScheduleService(),
       checkoutDiffManager: asCheckoutDiffManager({
         subscribe: async () => ({
           initial: { cwd: REPO_CWD, files: [], error: null },
@@ -1930,7 +1942,6 @@ test("close_items_request archives agents and kills terminals in one batch", asy
           remove: async () => {},
         };
       })(),
-      scheduleService: asScheduleService(),
       checkoutDiffManager: asCheckoutDiffManager({
         subscribe: async () => ({
           initial: { cwd: "/tmp", files: [], error: null },
@@ -2115,7 +2126,6 @@ test("close_items_request archives stored agents that are not currently loaded",
           remove: async () => {},
         };
       })(),
-      scheduleService: asScheduleService(),
       checkoutDiffManager: asCheckoutDiffManager({
         subscribe: async () => ({
           initial: { cwd: "/tmp", files: [], error: null },
@@ -2262,7 +2272,6 @@ test("close_items_request continues after an archive failure", async () => {
           remove: async () => {},
         };
       })(),
-      scheduleService: asScheduleService(),
       checkoutDiffManager: asCheckoutDiffManager({
         subscribe: async () => ({
           initial: { cwd: "/tmp", files: [], error: null },
@@ -3506,7 +3515,6 @@ test("workspace update stream keeps persisted workspace visible after agents sto
         archive: async () => {},
         remove: async () => {},
       },
-      scheduleService: asScheduleService(),
       checkoutDiffManager: asCheckoutDiffManager({
         subscribe: async () => ({
           initial: { cwd: "/tmp", files: [], error: null },
@@ -5762,6 +5770,123 @@ test("archive_workspace_request hides non-destructive workspace records", async 
     | { payload: Record<string, unknown> }
     | undefined;
   expect(response?.payload.error).toBeNull();
+});
+
+test("archive_workspace_request releases Arena resources before archiving its source agent", async () => {
+  const order: string[] = [];
+  const arenaArchive = vi.fn(async () => {
+    order.push("arena");
+    return null;
+  });
+  const workspace = createPersistedWorkspaceRecord({
+    workspaceId: "ws-arena-archive",
+    projectId: "proj-arena-archive",
+    cwd: REPO_CWD,
+    kind: "directory",
+    displayName: "arena",
+    createdAt: "2026-03-01T12:00:00.000Z",
+    updatedAt: "2026-03-01T12:00:00.000Z",
+  });
+  const managed = {
+    ...makeManagedAgent({
+      id: "agent-arena-archive",
+      cwd: REPO_CWD,
+      workspaceId: workspace.workspaceId,
+      lifecycle: "idle",
+      updatedAt: "2026-03-01T12:00:00.000Z",
+    }),
+    session: { arena: { archive: arenaArchive } },
+  } as unknown as ManagedAgent;
+  const session = createSessionForWorkspaceTests({
+    agentManager: {
+      listAgents: () => [managed],
+      getAgent: (id: string) => (id === managed.id ? managed : null),
+      archiveAgent: async () => {
+        order.push("agent");
+        return { archivedAt: new Date().toISOString() };
+      },
+    },
+  });
+  session.workspaceRegistry.get = async () => workspace;
+  session.workspaceRegistry.list = async () => [workspace];
+  session.workspaceRegistry.archive = async (_workspaceId: string, archivedAt: string) => {
+    workspace.archivedAt = archivedAt;
+  };
+  session.projectRegistry.archive = async () => {};
+
+  await session.handleMessage({
+    type: "archive_workspace_request",
+    workspaceId: workspace.workspaceId,
+    requestId: "req-arena-archive",
+  });
+
+  expect(arenaArchive).toHaveBeenCalledOnce();
+  expect(order).toEqual(["arena", "agent"]);
+  expect(workspace.archivedAt).toBeTruthy();
+});
+
+test("arena vote responds before winner timeline hydration finishes", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const hydration = Promise.withResolvers<void>();
+  let hydrationFinished = false;
+  const result = {
+    chat: {
+      id: "chat-arena-vote",
+      status: "ready",
+      canonicalSessionID: "session-arena-vote",
+      canonicalSHA: "abc123",
+    },
+    history: [
+      {
+        id: "turn-arena-vote",
+        index: 0,
+        state: "complete",
+        resolution: { kind: "vote", vote: "b", appliedSide: "b" },
+        vote: "b",
+        appliedSide: "b",
+        createdAt: "2026-03-01T00:00:00.000Z",
+        updatedAt: "2026-03-01T00:00:01.000Z",
+      },
+    ],
+    runs: [],
+    events: [],
+  } as ArenaSnapshot;
+  const managed = {
+    ...makeManagedAgent({
+      id: "agent-arena-vote",
+      cwd: REPO_CWD,
+      lifecycle: "idle",
+      updatedAt: "2026-03-01T00:00:00.000Z",
+    }),
+    session: { arena: { vote: vi.fn(async () => result) } },
+  } as unknown as ManagedAgent;
+  const session = createSessionForWorkspaceTests({
+    onMessage: (message) => emitted.push(message),
+    agentManager: {
+      getAgent: (id: string) => (id === managed.id ? managed : null),
+      waitForAgentClose: async () => {},
+      hydrateTimelineFromProvider: async () => {
+        await hydration.promise;
+        hydrationFinished = true;
+      },
+    },
+  });
+
+  await session.handleMessage({
+    type: "arena.turn.vote.request",
+    requestId: "req-arena-vote",
+    agentId: managed.id,
+    turnId: "turn-arena-vote",
+    vote: "b",
+  });
+
+  expect(findByType(emitted, "rpc_error")).toBeUndefined();
+  const response = findByType(emitted, "arena.turn.vote.response");
+  expect(response).toBeDefined();
+  expect(response?.payload.snapshot).toBe(result);
+  expect(hydrationFinished).toBe(false);
+  hydration.resolve();
+  await vi.waitFor(() => expect(hydrationFinished).toBe(true));
 });
 
 test("archive_workspace_request archives a worktree-kind workspace and removes the directory on last reference", async () => {

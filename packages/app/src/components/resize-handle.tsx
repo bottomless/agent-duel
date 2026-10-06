@@ -1,7 +1,10 @@
+import type { KeyboardEvent } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { View, type PointerEvent as RNPointerEvent } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { MIN_SPLIT_SIZE } from "@/stores/workspace-layout-constants";
 import { computeResizeHandleSizes } from "@/components/resize-handle-sizes";
+import type { ResizeHandleFloors } from "@/components/split-container-floors";
 
 export interface ResizeHandleProps {
   direction: "horizontal" | "vertical";
@@ -9,11 +12,32 @@ export interface ResizeHandleProps {
   index: number;
   sizes: number[];
   onResizeSplit: (groupId: string, sizes: number[]) => void;
+  /** Floors each pane keeps however far the handle is dragged. */
+  floors?: ResizeHandleFloors;
+  testID?: string;
 }
 
 interface PointerState {
   containerSize: number;
   pointerStart: number;
+}
+
+function measureContainerSize(
+  hitAreaElement: HTMLElement | null,
+  direction: ResizeHandleProps["direction"],
+): number {
+  const containerElement = hitAreaElement?.parentElement?.parentElement ?? null;
+  if (!containerElement) return 0;
+  const rect = containerElement.getBoundingClientRect();
+  return direction === "horizontal" ? rect.width : rect.height;
+}
+
+function floorSizes(floors: ResizeHandleFloors | undefined, containerSize: number) {
+  if (!floors || containerSize <= 0) return {};
+  return {
+    leadingMinSize: Math.max((floors.leadingPx ?? 0) / containerSize, floors.leadingShare ?? 0),
+    trailingMinSize: (floors.trailingPx ?? 0) / containerSize,
+  };
 }
 
 function resetWindowHorizontalScroll() {
@@ -30,6 +54,8 @@ export function ResizeHandle({
   index,
   sizes,
   onResizeSplit,
+  floors,
+  testID,
 }: ResizeHandleProps) {
   const { theme } = useUnistyles();
   const pointerStatesRef = useRef(new Map<number, PointerState>());
@@ -38,6 +64,8 @@ export function ResizeHandle({
   const [active, setActive] = useState(false);
   const [dragging, setDragging] = useState(false);
   const highlighted = active || dragging;
+  const pairSize = (sizes[index] ?? 0) + (sizes[index + 1] ?? 0);
+  const adjacentMin = Math.min(MIN_SPLIT_SIZE, pairSize / 2);
 
   const handlePointerDown = useCallback(
     (event: RNPointerEvent) => {
@@ -46,13 +74,7 @@ export function ResizeHandle({
         return;
       }
 
-      const containerElement = hitAreaElement.parentElement?.parentElement ?? null;
-      if (!containerElement) {
-        return;
-      }
-
-      const rect = containerElement.getBoundingClientRect();
-      const containerSize = direction === "horizontal" ? rect.width : rect.height;
+      const containerSize = measureContainerSize(hitAreaElement, direction);
       if (containerSize <= 0) {
         return;
       }
@@ -119,6 +141,7 @@ export function ResizeHandle({
             sizes,
             index,
             deltaRatio,
+            ...floorSizes(floors, pointerState.containerSize),
           }),
         );
       }
@@ -135,7 +158,31 @@ export function ResizeHandle({
       window.addEventListener("pointerup", handlePointerUp);
       window.addEventListener("pointercancel", handlePointerUp);
     },
-    [direction, groupId, index, onResizeSplit, sizes],
+    [direction, floors, groupId, index, onResizeSplit, sizes],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>) => {
+      const decrease = direction === "horizontal" ? "ArrowLeft" : "ArrowUp";
+      const increase = direction === "horizontal" ? "ArrowRight" : "ArrowDown";
+      if (![decrease, increase, "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const step = event.shiftKey ? 0.1 : 0.02;
+      let deltaRatio = event.key === decrease ? -step : step;
+      if (event.key === "Home") deltaRatio = -1;
+      if (event.key === "End") deltaRatio = 1;
+      const containerSize = measureContainerSize(event.currentTarget, direction);
+      onResizeSplit(
+        groupId,
+        computeResizeHandleSizes({
+          sizes,
+          index,
+          deltaRatio,
+          ...floorSizes(floors, containerSize),
+        }),
+      );
+    },
+    [direction, floors, groupId, index, onResizeSplit, sizes],
   );
 
   const handlePointerEnter = useCallback(() => {
@@ -182,9 +229,22 @@ export function ResizeHandle({
 
   return (
     <View style={handleStyle}>
-      {highlighted && <View pointerEvents="none" style={highlightStyle} />}
+      {highlighted && (
+        <View
+          pointerEvents="none"
+          style={highlightStyle}
+          testID={testID ? `${testID}-highlight` : undefined}
+        />
+      )}
       <View
+        testID={testID}
         role="separator"
+        tabIndex={0}
+        aria-label="Resize panes"
+        aria-valuenow={Math.round((sizes[index] ?? 0) * 100)}
+        aria-valuemin={Math.round(adjacentMin * 100)}
+        aria-valuemax={Math.round((pairSize - adjacentMin) * 100)}
+        {...{ onKeyDown: handleKeyDown }}
         aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
         style={hitAreaStyle}
         onPointerDown={handlePointerDown}

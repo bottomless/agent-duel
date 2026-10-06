@@ -39,6 +39,7 @@ function createWorkspace(
     projectDisplayName: input.projectDisplayName ?? "Project 1",
     projectRootPath: input.projectRootPath ?? "/repo",
     workspaceDirectory: input.workspaceDirectory ?? "/repo",
+    filesState: input.filesState,
     projectKind: input.projectKind ?? "git",
     workspaceKind: input.workspaceKind ?? "local_checkout",
     name: input.name ?? "main",
@@ -293,6 +294,19 @@ describe("selectWorkspaceDirectory", () => {
 
     expect(
       selectWorkspaceDirectory(useSessionStore.getState(), SERVER_ID, "missing-id"),
+    ).toBeNull();
+  });
+
+  it("hides files while cleanup or restore is in progress", () => {
+    const workspace = createWorkspace({
+      id: "workspace-cleaned",
+      workspaceDirectory: "/Users/dev/project",
+      filesState: "cleaned",
+    });
+    initializeWorkspaces([workspace]);
+
+    expect(
+      selectWorkspaceDirectory(useSessionStore.getState(), SERVER_ID, workspace.id),
     ).toBeNull();
   });
 });

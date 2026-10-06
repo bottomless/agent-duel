@@ -28,6 +28,7 @@ vi.mock("@getpaseo/server", () => ({
 const originalPlatform = process.platform;
 const originalExecPath = process.execPath;
 const originalResourcesPath = process.resourcesPath;
+const originalNpmNodeExecPath = process.env.npm_node_execpath;
 
 function setProcessRuntime(input: {
   platform: NodeJS.Platform;
@@ -54,8 +55,8 @@ describe("runtime-paths", () => {
     mocks.existsSync.mockReturnValue(true);
     setProcessRuntime({
       platform: "darwin",
-      execPath: "/Applications/Paseo.app/Contents/MacOS/Paseo",
-      resourcesPath: "/Applications/Paseo.app/Contents/Resources",
+      execPath: "/Applications/Agent Duel.app/Contents/MacOS/Agent Duel",
+      resourcesPath: "/Applications/Agent Duel.app/Contents/Resources",
     });
   });
 
@@ -66,11 +67,30 @@ describe("runtime-paths", () => {
       execPath: originalExecPath,
       resourcesPath: originalResourcesPath,
     });
+    if (originalNpmNodeExecPath === undefined) {
+      delete process.env.npm_node_execpath;
+    } else {
+      process.env.npm_node_execpath = originalNpmNodeExecPath;
+    }
+  });
+
+  it("uses Node instead of Electron for development daemon launches", () => {
+    mocks.app.isPackaged = false;
+    process.env.npm_node_execpath = "/opt/homebrew/bin/node";
+
+    expect(resolveNodeExecPath()).toBe("/opt/homebrew/bin/node");
+  });
+
+  it("falls back to Node on PATH for development daemon launches", () => {
+    mocks.app.isPackaged = false;
+    delete process.env.npm_node_execpath;
+
+    expect(resolveNodeExecPath()).toBe("node");
   });
 
   it("uses the macOS Helper executable for packaged daemon node launches", () => {
     expect(resolveNodeExecPath()).toBe(
-      "/Applications/Paseo.app/Contents/Frameworks/Paseo Helper.app/Contents/MacOS/Paseo Helper",
+      "/Applications/Agent Duel.app/Contents/Frameworks/Agent Duel Helper.app/Contents/MacOS/Agent Duel Helper",
     );
   });
 });

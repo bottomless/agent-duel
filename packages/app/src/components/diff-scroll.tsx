@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useId, useRef } from "react";
+import { useCallback, useEffect, useId, useRef } from "react";
 import {
   type LayoutChangeEvent,
   type NativeSyntheticEvent,
@@ -8,7 +8,6 @@ import {
 } from "react-native";
 import { ScrollView, type ScrollView as ScrollViewType } from "react-native-gesture-handler";
 import { useHorizontalScrollOptional } from "@/contexts/horizontal-scroll-context";
-import { useFileExplorerCloseGestureRef } from "@/mobile-panels/gestures";
 
 interface DiffScrollProps {
   children: React.ReactNode;
@@ -25,12 +24,9 @@ export function DiffScroll({
   style,
   contentContainerStyle,
 }: DiffScrollProps) {
-  const [isAtLeftEdge, setIsAtLeftEdge] = useState(true);
   const horizontalScroll = useHorizontalScrollOptional();
   const scrollId = useId();
   const scrollViewRef = useRef<ScrollViewType>(null);
-
-  const closeGestureRef = useFileExplorerCloseGestureRef();
 
   // Register/unregister scroll offset tracking
   useEffect(() => {
@@ -45,8 +41,6 @@ export function DiffScroll({
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const offsetX = event.nativeEvent.contentOffset.x;
-      // Track if we're at the left edge (with small threshold for float precision)
-      setIsAtLeftEdge(offsetX <= 1);
       if (horizontalScroll) {
         horizontalScroll.registerScrollOffset(scrollId, offsetX);
       }
@@ -71,11 +65,6 @@ export function DiffScroll({
       onScroll={handleScroll}
       scrollEventThrottle={16}
       onLayout={handleLayout}
-      // When at left edge, wait for close gesture to fail before scrolling.
-      // The close gesture fails quickly on leftward swipes (failOffsetX=-10),
-      // so scrolling left works normally. On rightward swipes, close gesture
-      // activates and closes the sidebar.
-      waitFor={isAtLeftEdge && closeGestureRef?.current ? closeGestureRef : undefined}
     >
       {children}
     </ScrollView>

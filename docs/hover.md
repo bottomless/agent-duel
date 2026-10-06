@@ -111,17 +111,16 @@ rendered while the menu is up. `useOpenKebabMenuVisibility`
 sidebar rows: it owns `open`, hands the menu its controlled props, and ORs `open` into the
 row's own `showKebab`.
 
-## Native fallback
+## Controls without hover
 
-Hover doesn't exist on touch devices. Anything you hide behind hover must have a non-hover path on native and compact layouts:
+Controls must remain reachable in compact browser layouts. Use
+`useIsCompactFormFactor()` from `@/constants/layout` and show controls when the
+row is hovered or the layout is compact. Keep any existing touch-access path.
+Do not use `Platform.OS` as a layout proxy.
 
-```tsx
-const showControls = isHovered || isNative || isCompact;
-```
-
-`isNative` and `isCompact` come from `@/constants/platform` and `@/constants/layout`. Don't use `Platform.OS === "ios"` as a proxy.
-
-`onPointerEnter` / `onPointerLeave` are DOM events. They do not fire on native. You do not need to gate them — on native, hover is unreachable anyway and visibility is driven by `isNative` / `isCompact` in your show-the-controls expression above. This is why the workspace row's pointer events are not wrapped in `if (isWeb)`.
+Inherited native adapters also use `isNative` to reveal controls. That is
+historical fallback behavior, not a reason to add native branches to new code.
+The canonical pointer handlers above serve both browser and Electron.
 
 ## What about `Pressable.onHoverIn` / `onHoverOut`?
 
@@ -139,16 +138,16 @@ For this case, use `useHoverSafeZone` (`packages/app/src/hooks/use-hover-safe-zo
 
 Don't roll your own. The math is annoying, the edge cases (pointer leaves window, drag in progress, content unmounts) are subtle, and we already paid for the hook.
 
-## Pre-PR checklist
+## Verification
 
-Before opening a PR that touches hover:
+When changing hover behavior:
 
 - [ ] Hover-tracking is on a plain `View` with `onPointerEnter` / `onPointerLeave`, **not** on a `Pressable` that wraps anything pressable.
 - [ ] Any press behavior lives on a separate inner `Pressable` that does not have `onHoverIn` / `onHoverOut`.
 - [ ] The hover trigger's bounding box contains every element the user might mouse into while interacting with the feature.
 - [ ] Hovered state does **not** change the trigger's outer geometry (`width`, `height`, `padding`, `borderWidth`, mount/unmount of siblings that shift it). Internal swaps fit inside a fixed `minHeight` / `minWidth`.
 - [ ] Revealed content inside the trigger uses `opacity` + `pointerEvents`, not conditional rendering, if mounting it would reflow the trigger.
-- [ ] Visibility on native and compact layouts works without hover (`isHovered || isNative || isCompact`).
+- [ ] Controls remain accessible without hover in compact browser layouts.
 - [ ] A menu opened from the revealed trigger keeps the trigger rendered while it is open, so losing hover can't strand it.
 - [ ] If the revealed content sits in a separate layer (portal, floating panel), `useHoverSafeZone` is wired up.
 - [ ] You opened the dev server, hovered the trigger, and slowly moved the mouse along **every** revealed element — including any visible gaps — without losing hover state.

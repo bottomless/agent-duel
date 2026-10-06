@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { shouldAllowEmptyDraftText, validateDraftSubmission } from "./workspace-tab-core";
+import {
+  isStartingArenaBattle,
+  shouldAllowEmptyDraftText,
+  validateDraftSubmission,
+} from "./workspace-tab-core";
 
 const baseComposerState = {
   providerDefinitions: [{ id: "codewhale" }],
@@ -67,5 +71,19 @@ describe("workspace draft empty text readiness", () => {
         attachments: [],
       }),
     ).toBe(false);
+  });
+});
+
+describe("workspace draft input slot", () => {
+  test("a sent battle takes the slot", () => {
+    expect(isStartingArenaBattle({ battleMode: true, isCreating: true })).toBe(true);
+  });
+
+  test("an unsent battle leaves the composer alone", () => {
+    expect(isStartingArenaBattle({ battleMode: true, isCreating: false })).toBe(false);
+  });
+
+  test("an ordinary chat keeps its composer through the send", () => {
+    expect(isStartingArenaBattle({ battleMode: false, isCreating: true })).toBe(false);
   });
 });

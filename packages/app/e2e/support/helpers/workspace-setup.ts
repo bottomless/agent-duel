@@ -81,7 +81,7 @@ export async function openHomeWithProject(page: Page, repoPath: string): Promise
 
 function createWorkspaceButton(page: Page, repoPath: string) {
   return page.getByRole("button", {
-    name: `Create a new workspace for ${projectNameFromPath(repoPath)}`,
+    name: `Start a new chat in ${projectNameFromPath(repoPath)}`,
   });
 }
 

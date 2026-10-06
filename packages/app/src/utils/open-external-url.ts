@@ -4,7 +4,7 @@ import { isWeb } from "@/constants/platform";
 
 const ALLOWED_EXTERNAL_URL_PROTOCOLS = new Set(["http:", "https:"]);
 
-function isAllowedExternalUrl(url: string): boolean {
+export function canOpenExternalUrl(url: string): boolean {
   try {
     return ALLOWED_EXTERNAL_URL_PROTOCOLS.has(new URL(url).protocol);
   } catch {
@@ -23,7 +23,7 @@ export async function openExternalUrl(url: string): Promise<void> {
     // Mirror the Electron opener's scheme allowlist: forge-supplied URLs
     // (check target_url, job links) reach this sink, so refuse anything that
     // is not plain http(s) instead of handing it to window.open.
-    if (!isAllowedExternalUrl(url)) {
+    if (!canOpenExternalUrl(url)) {
       return;
     }
 
@@ -31,7 +31,7 @@ export async function openExternalUrl(url: string): Promise<void> {
     return;
   }
 
-  if (!isAllowedExternalUrl(url)) {
+  if (!canOpenExternalUrl(url)) {
     return;
   }
 

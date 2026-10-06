@@ -93,6 +93,7 @@ export function createTerminalResizeEvent(input: {
 
 interface TerminalEmulatorRuntimeDisposables {
   disposeInput: () => void;
+  disposeCursorAnchor: () => void;
   disconnectResizeObserver: () => void;
   removeWindowResize: () => void;
   removeWindowFocus: () => void;
@@ -164,6 +165,10 @@ function withOverviewRulerBorderHidden(theme: ITheme): ITheme {
   };
 }
 
+/** DECTCEM. Every write can put the cursor back, so a paused pane re-hides it after each one. */
+const HIDE_CURSOR = "\x1b[?25l";
+const SHOW_CURSOR = "\x1b[?25h";
+
 export class TerminalEmulatorRuntime {
   private callbacks: TerminalEmulatorRuntimeCallbacks = {};
   private pendingModifiers: PendingTerminalModifiers = {
@@ -190,6 +195,10 @@ export class TerminalEmulatorRuntime {
   private hasUngatedWrites = false;
   private readonly inputModeDecoder = new TextDecoder();
   private suppressInput = false;
+  private inputEnabled = true;
+  private rootElement: HTMLDivElement | null = null;
+  private cursorAnchorListeners = new Set<(top: number | null) => void>();
+  private lastCursorAnchor: number | null = null;
   private readonly inputModeTracker = new TerminalInputModeTracker();
   private lastInputModeState: TerminalInputModeState = this.inputModeTracker.getState();
   private themeBackgroundElements: HTMLElement[] = [];
@@ -275,6 +284,7 @@ export class TerminalEmulatorRuntime {
       // Ligatures require Font Access API or compatible environment
     }
     terminal.open(input.host);
+    this.rootElement = input.root;
     this.themeBackgroundElements = this.collectThemeBackgroundElements(input);
     this.applyThemeBackground(input.theme);
     try {
@@ -483,6 +493,25 @@ export class TerminalEmulatorRuntime {
       return false;
     });
 
+    const emitCursorAnchor = () => {
+      if (this.cursorAnchorListeners.size === 0) {
+        return;
+      }
+      const top = this.cursorAnchor();
+      if (top === this.lastCursorAnchor) {
+        return;
+      }
+      this.lastCursorAnchor = top;
+      for (const listener of this.cursorAnchorListeners) {
+        listener(top);
+      }
+    };
+    const cursorAnchorDisposables = [
+      terminal.onRender(emitCursorAnchor),
+      terminal.onScroll(emitCursorAnchor),
+      terminal.onResize(emitCursorAnchor),
+    ];
+
     const removeTouchListeners = this.setupTouchScrollHandlers({
       root: input.root,
       host: input.host,
@@ -548,6 +577,13 @@ export class TerminalEmulatorRuntime {
       disposeInput: () => {
         inputDisposable.dispose();
       },
+      disposeCursorAnchor: () => {
+        for (const disposable of cursorAnchorDisposables) {
+          disposable.dispose();
+        }
+        this.rootElement = null;
+        this.lastCursorAnchor = null;
+      },
       disconnectResizeObserver: () => {
         resizeObserver.disconnect();
       },
@@ -593,6 +629,7 @@ export class TerminalEmulatorRuntime {
 
     this.cleanup = () => {
       disposables.disposeInput();
+      disposables.disposeCursorAnchor();
       disposables.disconnectResizeObserver();
       disposables.removeWindowResize();
       disposables.removeWindowFocus();
@@ -724,6 +761,63 @@ export class TerminalEmulatorRuntime {
 
     this.fitAndEmitResize?.({ forceRefresh: true, shouldClaim: false });
     this.refreshVisibleRows();
+  }
+
+  /**
+   * Take input, or only show output.
+   *
+   * A terminal that cannot be typed into should not sit there with a blinking bar: that is the
+   * one thing on screen that says "type here". Blinking stops and the cursor goes away whenever
+   * the pane is not focused, so a paused shell reads as a transcript rather than a prompt.
+   */
+  setInputEnabled(input: { enabled: boolean }): void {
+    this.inputEnabled = input.enabled;
+    const terminal = this.terminal;
+    if (!terminal) {
+      return;
+    }
+    terminal.options.disableStdin = !input.enabled;
+    terminal.options.cursorBlink = input.enabled;
+    terminal.options.cursorInactiveStyle = input.enabled ? "outline" : "none";
+    // Focus is what xterm draws a cursor for, and clicking the pane to select text focuses it, so
+    // the options above are not enough on their own: hide the cursor the way a program would.
+    // Turning input back on shows it again — a full-screen program that wants it hidden re-hides
+    // it with its next frame.
+    terminal.write(input.enabled ? SHOW_CURSOR : HIDE_CURSOR);
+  }
+
+  /**
+   * Follow the top of the row after the cursor, in pixels down the emulator, so a caller can hang
+   * a note off the end of the output instead of pinning it to the pane. Null while nothing is
+   * mounted, or once the cursor scrolls out of the viewport.
+   */
+  subscribeCursorAnchor(listener: (top: number | null) => void): () => void {
+    this.cursorAnchorListeners.add(listener);
+    this.lastCursorAnchor = this.cursorAnchor();
+    listener(this.lastCursorAnchor);
+    return () => {
+      this.cursorAnchorListeners.delete(listener);
+    };
+  }
+
+  private cursorAnchor(): number | null {
+    const terminal = this.terminal;
+    const root = this.rootElement;
+    const screen = root?.querySelector<HTMLElement>(".xterm-screen");
+    if (!terminal || !root || !screen || terminal.rows <= 0) {
+      return null;
+    }
+    const screenRect = screen.getBoundingClientRect();
+    if (screenRect.height <= 0) {
+      return null;
+    }
+    const rowHeight = screenRect.height / terminal.rows;
+    const buffer = terminal.buffer.active;
+    const row = buffer.baseY + buffer.cursorY - buffer.viewportY;
+    if (row < 0 || row >= terminal.rows) {
+      return null;
+    }
+    return screenRect.top - root.getBoundingClientRect().top + (row + 1) * rowHeight;
   }
 
   focus(input?: { forceRefocus?: boolean }): void {
@@ -885,6 +979,7 @@ export class TerminalEmulatorRuntime {
       } catch {
         // Match existing behavior: a failed write still proceeds with no commit callback.
       }
+      this.hideCursorWhileInputDisabled(terminal);
       return;
     }
     const commit = () => {
@@ -899,6 +994,7 @@ export class TerminalEmulatorRuntime {
     } catch {
       commit();
     }
+    this.hideCursorWhileInputDisabled(terminal);
   }
 
   private startBarrierOperation(terminal: Terminal, operation: TerminalOutputOperation): void {
@@ -918,6 +1014,7 @@ export class TerminalEmulatorRuntime {
       this.inFlightOutputOperation = null;
       this.clearInFlightOutputTimeout();
       this.suppressInput = previousSuppressInput;
+      this.hideCursorWhileInputDisabled(terminal);
       expectedOperation.onCommitted?.();
       this.processOutputQueue();
     };
@@ -967,6 +1064,18 @@ export class TerminalEmulatorRuntime {
       });
     } catch {
       finalizeOperation(operation);
+    }
+  }
+
+  /** A reset or a snapshot restores the cursor; a pane that takes no input takes it away again. */
+  private hideCursorWhileInputDisabled(terminal: Terminal): void {
+    if (this.inputEnabled) {
+      return;
+    }
+    try {
+      terminal.write(HIDE_CURSOR);
+    } catch {
+      // A disposed terminal has no cursor to hide.
     }
   }
 

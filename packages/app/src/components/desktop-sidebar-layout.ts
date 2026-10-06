@@ -1,10 +1,8 @@
-import { SETTINGS_DESKTOP_SPLIT_MIN_WIDTH } from "@/constants/layout";
 import {
-  MAX_EXPLORER_SIDEBAR_WIDTH,
-  MAX_SIDEBAR_WIDTH,
-  MIN_EXPLORER_SIDEBAR_WIDTH,
-  MIN_SIDEBAR_WIDTH,
-} from "@/stores/panel-store";
+  ARENA_TWO_PANE_MIN_CONTENT_WIDTH,
+  SETTINGS_DESKTOP_SPLIT_MIN_WIDTH,
+} from "@/constants/layout";
+import { MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "@/stores/panel-store";
 
 export const MIN_DESKTOP_CENTER_WIDTH = 400;
 
@@ -13,15 +11,8 @@ export function resolveDesktopSidebarVisibility(input: {
   isCompactLayout: boolean;
   isMounted: boolean;
   isOpen: boolean;
-  canShare: boolean;
 }): boolean {
-  return (
-    input.chromeEnabled &&
-    !input.isCompactLayout &&
-    input.isMounted &&
-    input.isOpen &&
-    input.canShare
-  );
+  return input.chromeEnabled && !input.isCompactLayout && input.isMounted && input.isOpen;
 }
 
 export function resolveDesktopAppChromeLayout(input: {
@@ -41,71 +32,59 @@ export function resolveDesktopAppChromeLayout(input: {
   };
 }
 
-function resolveDesktopPanelWidth(input: {
-  requestedWidth: number;
-  viewportWidth: number;
-  minimumWidth: number;
-  maximumWidth: number;
-}): number {
-  "worklet";
-  const maximumVisibleWidth = Math.max(
-    input.minimumWidth,
-    Math.min(input.maximumWidth, input.viewportWidth - MIN_DESKTOP_CENTER_WIDTH),
-  );
-  return Math.max(input.minimumWidth, Math.min(maximumVisibleWidth, input.requestedWidth));
-}
-
 export function resolveDesktopSidebarWidth(input: {
   requestedWidth: number;
   viewportWidth: number;
 }): number {
   "worklet";
-  return resolveDesktopPanelWidth({
-    ...input,
-    minimumWidth: MIN_SIDEBAR_WIDTH,
-    maximumWidth: MAX_SIDEBAR_WIDTH,
-  });
+  const maximumVisibleWidth = Math.max(
+    MIN_SIDEBAR_WIDTH,
+    Math.min(MAX_SIDEBAR_WIDTH, input.viewportWidth - MIN_DESKTOP_CENTER_WIDTH),
+  );
+  return Math.max(MIN_SIDEBAR_WIDTH, Math.min(maximumVisibleWidth, input.requestedWidth));
 }
 
-export function resolveDesktopExplorerWidth(input: {
-  requestedWidth: number;
-  viewportWidth: number;
-}): number {
-  "worklet";
-  return resolveDesktopPanelWidth({
-    ...input,
-    minimumWidth: MIN_EXPLORER_SIDEBAR_WIDTH,
-    maximumWidth: MAX_EXPLORER_SIDEBAR_WIDTH,
-  });
-}
-
-export function resolveDesktopAppContentMinimum(input: {
+/**
+ * Width the center must keep before app navigation stops taking layout width.
+ * A workspace protects a battle's two side-by-side panes; settings protects its
+ * own list + detail split. Everywhere else nothing outranks the panel, and it
+ * stays pinned until the width resolver above runs out of room.
+ */
+export function resolveDesktopCenterMinimumWidth(input: {
   isSettingsRoute: boolean;
-  isWorkspaceExplorerOpen: boolean;
-  requestedExplorerWidth: number;
-  viewportWidth: number;
+  isWorkspaceRoute: boolean;
 }): number {
-  const workspaceMinimum = input.isWorkspaceExplorerOpen
-    ? MIN_DESKTOP_CENTER_WIDTH +
-      resolveDesktopExplorerWidth({
-        requestedWidth: input.requestedExplorerWidth,
-        viewportWidth: input.viewportWidth,
-      })
-    : 0;
-  return Math.max(input.isSettingsRoute ? SETTINGS_DESKTOP_SPLIT_MIN_WIDTH : 0, workspaceMinimum);
+  return Math.max(
+    input.isSettingsRoute ? SETTINGS_DESKTOP_SPLIT_MIN_WIDTH : 0,
+    input.isWorkspaceRoute ? ARENA_TWO_PANE_MIN_CONTENT_WIDTH : 0,
+  );
 }
 
-export function canDesktopAppSidebarShare(input: {
-  contentMinimumWidth: number;
+export type DesktopPanelPresentation = "inline" | "overlay";
+
+export interface DesktopPanelPresentations {
+  agentList: DesktopPanelPresentation;
+}
+
+/**
+ * Whether app navigation is pinned beside the center or floats over it. It
+ * yields as soon as keeping it pinned would drop the center below its minimum.
+ * The workspace side panel is not part of this decision: it splits the center
+ * itself, the way a battle's panes do.
+ */
+export function resolveDesktopPanelPresentation(input: {
+  isSettingsRoute: boolean;
+  isWorkspaceRoute: boolean;
   requestedSidebarWidth: number;
   viewportWidth: number;
-}): boolean {
-  return (
-    input.viewportWidth -
-      resolveDesktopSidebarWidth({
-        requestedWidth: input.requestedSidebarWidth,
-        viewportWidth: input.viewportWidth,
-      }) >=
-    input.contentMinimumWidth
-  );
+}): DesktopPanelPresentations {
+  const centerMinimumWidth = resolveDesktopCenterMinimumWidth(input);
+  const sidebarWidth = resolveDesktopSidebarWidth({
+    requestedWidth: input.requestedSidebarWidth,
+    viewportWidth: input.viewportWidth,
+  });
+  const sidebarFits = input.viewportWidth - sidebarWidth >= centerMinimumWidth;
+  return {
+    agentList: sidebarFits ? "inline" : "overlay",
+  };
 }

@@ -23,6 +23,7 @@ export interface TerminalListItem {
 
 export interface TerminalsChangedEvent {
   cwd: string;
+  workspaceId: string;
   terminals: TerminalListItem[];
 }
 
@@ -75,6 +76,8 @@ export interface TerminalManager {
   setTerminalTitle(id: string, title: string): boolean;
   setTerminalActivity(id: string, state: TerminalActivityState): Promise<boolean>;
   clearTerminalAttention(id: string): Promise<boolean>;
+  /** Move a terminal's shell to another directory, keeping its screen. */
+  rehomeTerminal(input: { id: string; cwd: string; bannerLabel?: string }): Promise<void>;
   killTerminal(id: string): void;
   killTerminalAndWait(
     id: string,
@@ -166,7 +169,7 @@ export function createTerminalManager(
       });
     }
 
-    emitTerminalsChanged({ cwd: session.cwd });
+    emitTerminalsChanged({ cwd: session.cwd, workspaceId: session.workspaceId });
   }
 
   function resolveDefaultEnvForCwd(cwd: string): Record<string, string> | undefined {
@@ -192,11 +195,11 @@ export function createTerminalManager(
       removeSessionById(session.id, { kill: false });
     });
     const unsubscribeTitle = session.onTitleChange(() => {
-      emitTerminalsChanged({ cwd: session.cwd });
+      emitTerminalsChanged({ cwd: session.cwd, workspaceId: session.workspaceId });
     });
     const unsubscribeActivity = session.onActivityChange((transition) => {
       emitTerminalActivityTransition({ session, transition });
-      emitTerminalsChanged({ cwd: session.cwd });
+      emitTerminalsChanged({ cwd: session.cwd, workspaceId: session.workspaceId });
       const previousBucket = deriveTerminalActivityStatusBucket(transition.previous);
       const nextBucket = deriveTerminalActivityStatusBucket(transition.activity);
       if (previousBucket !== nextBucket) {
@@ -224,7 +227,7 @@ export function createTerminalManager(
     };
   }
 
-  function emitTerminalsChanged(input: { cwd: string }): void {
+  function emitTerminalsChanged(input: { cwd: string; workspaceId: string }): void {
     if (terminalsChangedListeners.size === 0) {
       return;
     }
@@ -234,6 +237,7 @@ export function createTerminalManager(
     );
     const event: TerminalsChangedEvent = {
       cwd: input.cwd,
+      workspaceId: input.workspaceId,
       terminals,
     };
 
@@ -289,6 +293,14 @@ export function createTerminalManager(
     ): Promise<TerminalSession[]> {
       assertAbsolutePath(cwd);
 
+      // Workspace ownership is authoritative when present. A workspace can own
+      // terminals in Arena worktrees outside its primary directory.
+      if (options?.workspaceId !== undefined) {
+        return Array.from(terminalsById.values()).filter(
+          (session) => session.workspaceId === options.workspaceId,
+        );
+      }
+
       // Terminals are bucketed by exact cwd, but an agent can open a terminal in
       // a subdirectory of the workspace. A query for the workspace root must
       // surface those too, so aggregate every bucket at or below `cwd`.
@@ -299,12 +311,6 @@ export function createTerminalManager(
         }
       }
 
-      // When the query carries a workspaceId, two workspaces sharing a cwd must
-      // not see each other's terminals. A missing owner is not workspace
-      // membership; unscoped callers can still list those legacy terminals.
-      if (options?.workspaceId !== undefined) {
-        return sessions.filter((session) => session.workspaceId === options.workspaceId);
-      }
       return sessions;
     },
 
@@ -365,7 +371,7 @@ export function createTerminalManager(
 
       terminals.push(session);
       terminalsByCwd.set(options.cwd, terminals);
-      emitTerminalsChanged({ cwd: options.cwd });
+      emitTerminalsChanged({ cwd: options.cwd, workspaceId: options.workspaceId });
 
       return session;
     },
@@ -424,6 +430,39 @@ export function createTerminalManager(
       }
 
       return session.clearActivityAttention();
+    },
+
+    async rehomeTerminal(input: { id: string; cwd: string; bannerLabel?: string }): Promise<void> {
+      const session = terminalsById.get(input.id);
+      if (!session) {
+        return;
+      }
+      assertAbsolutePath(input.cwd);
+      const previousCwd = session.cwd;
+      await session.rehome({
+        cwd: input.cwd,
+        ...(input.bannerLabel === undefined ? {} : { bannerLabel: input.bannerLabel }),
+      });
+      // Terminals are filed by the directory they stand in, so a moved one has to be
+      // re-filed or the manager keeps answering for a path it no longer occupies.
+      const previous = terminalsByCwd.get(previousCwd);
+      if (previous) {
+        const remaining = previous.filter((candidate) => candidate.id !== session.id);
+        if (remaining.length > 0) {
+          terminalsByCwd.set(previousCwd, remaining);
+        } else {
+          terminalsByCwd.delete(previousCwd);
+        }
+      }
+      const next = terminalsByCwd.get(input.cwd) ?? [];
+      if (!next.some((candidate) => candidate.id === session.id)) {
+        next.push(session);
+      }
+      terminalsByCwd.set(input.cwd, next);
+      emitTerminalsChanged({ cwd: previousCwd, workspaceId: session.workspaceId });
+      if (input.cwd !== previousCwd) {
+        emitTerminalsChanged({ cwd: input.cwd, workspaceId: session.workspaceId });
+      }
     },
 
     killTerminal(id: string): void {

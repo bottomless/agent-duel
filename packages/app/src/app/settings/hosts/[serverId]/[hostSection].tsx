@@ -8,7 +8,7 @@ export default function SettingsHostSectionRoute() {
   const params = useLocalSearchParams<{ serverId?: string; hostSection?: string }>();
   const serverId = typeof params.serverId === "string" ? params.serverId.trim() : "";
   const rawSection = typeof params.hostSection === "string" ? params.hostSection : "";
-  const section = normalizeHostSectionSlug(rawSection) ?? "connections";
+  const section = normalizeHostSectionSlug(rawSection) ?? "projects";
   const view = useMemo(() => ({ kind: "host" as const, serverId, section }), [serverId, section]);
 
   return (

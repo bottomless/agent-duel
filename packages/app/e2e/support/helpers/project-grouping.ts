@@ -71,7 +71,7 @@ export async function beginWorkspaceFromProject(page: Page, projectName: string)
   const group = projectGroup(page, projectName);
   await expect(group).toBeVisible({ timeout: PROJECT_VISIBILITY_TIMEOUT });
   await group.hover();
-  await group.getByLabel(`Create a new workspace for ${projectName}`).click();
+  await group.getByLabel(`Start a new chat in ${projectName}`).click();
   await expect(page.getByRole("button", { name: "Workspace project", exact: true })).toContainText(
     projectName,
     { timeout: PROJECT_VISIBILITY_TIMEOUT },

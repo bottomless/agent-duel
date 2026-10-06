@@ -21,6 +21,47 @@ import { useGitActionRunner } from "@/git/use-actions";
 interface GitActionsSplitButtonProps {
   gitActions: GitActions;
   hideLabels?: boolean;
+  hideOverflow?: boolean;
+}
+
+interface GitActionMenuItemsProps {
+  actions: GitAction[];
+}
+
+/**
+ * The menu stays open for actions that report progress in place, so the row can go pending
+ * then success under the cursor. It closes for the ones that hand off somewhere else: View PR
+ * opens a browser tab, Create branch opens a modal that needs the focus.
+ */
+function closesMenuOnSelect(action: GitAction): boolean {
+  if (action.id === "create-branch") return true;
+  return (
+    action.status === "idle" &&
+    action.id === "pr" &&
+    action.label === action.pendingLabel &&
+    action.label === action.successLabel
+  );
+}
+
+export function GitActionMenuItems({ actions }: GitActionMenuItemsProps) {
+  const runGitAction = useGitActionRunner();
+  const archiveShortcutKeys = useShortcutKeys("archive-workspace");
+
+  return (
+    <>
+      {actions.map((action, index) => (
+        <GitActionMenuItem
+          key={action.id}
+          action={action}
+          onSelect={runGitAction}
+          archiveShortcutKeys={archiveShortcutKeys}
+          needsSeparator={action.startsGroup}
+          showSeparator={index > 0}
+          closeOnSelect={closesMenuOnSelect(action)}
+        />
+      ))}
+    </>
+  );
 }
 
 interface GitActionMenuItemProps {
@@ -73,11 +114,14 @@ function GitActionMenuItem({
   );
 }
 
-export function GitActionsSplitButton({ gitActions, hideLabels }: GitActionsSplitButtonProps) {
+export function GitActionsSplitButton({
+  gitActions,
+  hideLabels,
+  hideOverflow = false,
+}: GitActionsSplitButtonProps) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const runGitAction = useGitActionRunner();
-  const archiveShortcutKeys = useShortcutKeys("archive-workspace");
 
   const getActionDisplayLabel = useCallback((action: GitAction): string => {
     if (action.status === "pending") return action.pendingLabel;
@@ -154,28 +198,13 @@ export function GitActionsSplitButton({ gitActions, hideLabels }: GitActionsSpli
                 <ChevronDown size={16} color={theme.colors.foregroundMuted} />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" testID="changes-primary-cta-menu">
-                {gitActions.secondary.map((action, index) => (
-                  <GitActionMenuItem
-                    key={action.id}
-                    action={action}
-                    onSelect={runGitAction}
-                    archiveShortcutKeys={archiveShortcutKeys}
-                    needsSeparator={action.startsGroup}
-                    showSeparator={index > 0}
-                    closeOnSelect={
-                      action.status === "idle" &&
-                      action.id === "pr" &&
-                      action.label === action.pendingLabel &&
-                      action.label === action.successLabel
-                    }
-                  />
-                ))}
+                <GitActionMenuItems actions={gitActions.secondary} />
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
         </View>
       ) : null}
-      {gitActions.menu.length > 0 ? (
+      {!hideOverflow && gitActions.menu.length > 0 ? (
         <DropdownMenu>
           <DropdownMenuTrigger
             testID="changes-overflow-menu"
@@ -187,14 +216,9 @@ export function GitActionsSplitButton({ gitActions, hideLabels }: GitActionsSpli
             <MoreVertical size={16} color={theme.colors.foregroundMuted} />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" width={220} testID="changes-overflow-content">
-            {gitActions.menu.map((action) => (
-              <GitActionMenuItem
-                key={action.id}
-                action={action}
-                onSelect={runGitAction}
-                closeOnSelect={false}
-              />
-            ))}
+            {/* The same rows as the caret menu, because that is what they are when no action can
+                be promoted: same groups, same archive shortcut, same close behaviour. */}
+            <GitActionMenuItems actions={gitActions.menu} />
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}

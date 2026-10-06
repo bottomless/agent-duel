@@ -1,5 +1,6 @@
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
-import type { StreamItem, ToolCallItem } from "@/types/stream";
+import type { StreamItem, ThoughtItem, ToolCallItem } from "@/types/stream";
+import { arenaTimelineQuestionResult } from "@/arena/question";
 
 export interface ToolCallDescriptor {
   detail: ToolCallDetail;
@@ -9,9 +10,14 @@ export interface ToolCallDescriptor {
   metadata?: Record<string, unknown>;
 }
 
+/** What a group holds: the calls it summarizes, and the thinking between them. */
+export type ToolCallRunItem = ToolCallItem | ThoughtItem;
+
 export interface ToolCallRun {
   id: string;
   calls: readonly ToolCallItem[];
+  /** `calls` and the reasoning they were interleaved with, in stream order. */
+  items: readonly ToolCallRunItem[];
   latest: ToolCallItem;
   isSealed: boolean;
 }
@@ -20,6 +26,7 @@ export interface GroupedHistory<TGroup> {
   tail: StreamItem[];
   groupsByHostId: Map<string, TGroup>;
   pendingCalls: readonly ToolCallItem[];
+  pendingItems: readonly ToolCallRunItem[];
 }
 
 export interface GroupedToolCalls<TGroup> {
@@ -62,21 +69,38 @@ export function describeToolCall(item: ToolCallItem): ToolCallDescriptor {
   };
 }
 
+/**
+ * Reasoning between two tool calls belongs to the same stretch of work, so it
+ * rides along inside the run instead of ending it. This is the rule a battle
+ * pane already reads by (`projectArenaActivitySegments`): a group runs until
+ * the agent says something, not until it thinks. A model asked for high
+ * reasoning thinks between every call, and a group that broke there would be
+ * one call long.
+ */
+export function isGroupableReasoning(item: StreamItem): item is ThoughtItem {
+  return item.kind === "thought";
+}
+
 export function isGroupableToolCall(item: StreamItem): item is ToolCallItem {
   if (item.kind !== "tool_call") {
     return false;
   }
+  if (arenaTimelineQuestionResult(item)) return false;
   const descriptor = describeToolCall(item);
   return descriptor.detail.type !== "plan" && descriptor.name.trim().toLowerCase() !== "speak";
 }
 
-function createRun(calls: readonly ToolCallItem[], isSealed: boolean): ToolCallRun {
+function createRun(
+  calls: readonly ToolCallItem[],
+  items: readonly ToolCallRunItem[],
+  isSealed: boolean,
+): ToolCallRun {
   const first = calls[0];
   const latest = calls.at(-1);
   if (!first || !latest) {
     throw new Error("Cannot group an empty tool call run");
   }
-  return { id: first.id, calls, latest, isSealed };
+  return { id: first.id, calls, items, latest, isSealed };
 }
 
 function createHost(run: ToolCallRun): ToolCallItem {
@@ -93,6 +117,7 @@ function isRunning(call: ToolCallItem): boolean {
 
 function appendRun<TGroup>(input: {
   calls: readonly ToolCallItem[];
+  items: readonly ToolCallRunItem[];
   isSealed: boolean;
   output: StreamItem[];
   groups: Map<string, TGroup>;
@@ -101,7 +126,7 @@ function appendRun<TGroup>(input: {
   if (input.calls.length === 0) {
     return;
   }
-  const run = createRun(input.calls, input.isSealed);
+  const run = createRun(input.calls, input.items, input.isSealed);
   const host = createHost(run);
   input.output.push(host);
   input.groups.set(host.id, input.buildGroup(run));
@@ -114,25 +139,36 @@ export function prepareGroupedHistory<TGroup>(input: {
   const output: StreamItem[] = [];
   const groups = new Map<string, TGroup>();
   let pending: ToolCallItem[] = [];
+  let pendingItems: ToolCallRunItem[] = [];
 
   for (const item of input.tail) {
     if (isGroupableToolCall(item)) {
       pending.push(item);
+      pendingItems.push(item);
+      continue;
+    }
+    // Reasoning joins a run that is already open; on its own it is a row of its
+    // own, as it is anywhere else in the stream.
+    if (isGroupableReasoning(item) && pending.length > 0) {
+      pendingItems.push(item);
       continue;
     }
     appendRun({
       calls: pending,
+      items: pendingItems,
       isSealed: true,
       output,
       groups,
       buildGroup: input.buildGroup,
     });
     pending = [];
+    pendingItems = [];
     output.push(item);
   }
 
   appendRun({
     calls: pending,
+    items: pendingItems,
     isSealed: true,
     output,
     groups,
@@ -143,6 +179,7 @@ export function prepareGroupedHistory<TGroup>(input: {
     tail: groups.size > 0 ? output : input.tail,
     groupsByHostId: groups,
     pendingCalls: pending,
+    pendingItems,
   };
 }
 
@@ -155,6 +192,7 @@ export function groupLiveToolCalls<TGroup>(input: {
   const head: StreamItem[] = [];
   const liveGroups = new Map<string, TGroup>();
   let pending = [...input.history.pendingCalls];
+  let pendingItems: ToolCallRunItem[] = [...input.history.pendingItems];
   let hostPlacement: "history" | "head" | null = pending.length > 0 ? "history" : null;
   let pendingIncludesHead = false;
 
@@ -162,7 +200,7 @@ export function groupLiveToolCalls<TGroup>(input: {
     if (pending.length === 0) {
       return;
     }
-    const run = createRun(pending, isSealed);
+    const run = createRun(pending, pendingItems, isSealed);
     if (hostPlacement === "head") {
       head.push(createHost(run));
     }
@@ -170,6 +208,7 @@ export function groupLiveToolCalls<TGroup>(input: {
       liveGroups.set(run.id, input.buildGroup(run));
     }
     pending = [];
+    pendingItems = [];
     hostPlacement = null;
     pendingIncludesHead = false;
   };
@@ -180,6 +219,14 @@ export function groupLiveToolCalls<TGroup>(input: {
         hostPlacement = "head";
       }
       pending.push(item);
+      pendingItems.push(item);
+      pendingIncludesHead = true;
+      continue;
+    }
+    // Thinking while the run is open is part of it, and the group it belongs to
+    // has to be rebuilt to hold it.
+    if (isGroupableReasoning(item) && pending.length > 0) {
+      pendingItems.push(item);
       pendingIncludesHead = true;
       continue;
     }

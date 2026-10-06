@@ -306,6 +306,72 @@ describe("ReplicaCache", () => {
     ]);
   });
 
+  it("leaves a sent message's stored images out of the cache", async () => {
+    const storage = new MemoryStorage();
+    const cache = new ReplicaCache(storage);
+    cache.setHosts([SERVER_ID]);
+    seedSession();
+    const sent = createUserMessage({
+      clientMessageId: "client-image",
+      messageId: "client-image",
+      timelineCursor: { epoch: "epoch-1", seq: 13 },
+      text: "What color is this?",
+      timestamp: new Date("2026-07-18T08:03:00.000Z"),
+      images: [
+        {
+          id: "att_client_image",
+          mimeType: "image/png",
+          storageType: "desktop-file",
+          storageKey: "/home/user/.paseo/desktop-attachments/att_client_image.png",
+          createdAt: 1,
+        },
+      ],
+    });
+    useSessionStore.getState().setAgentStreamTail(SERVER_ID, new Map([["agent-1", [sent]]]));
+
+    await cache.flush();
+    useSessionStore.getState().clearSession(SERVER_ID);
+    await cache.restore();
+
+    // The stored file may be garbage collected before the chat loads again; the daemon's copy wins.
+    const [restored] =
+      useSessionStore.getState().sessions[SERVER_ID]?.agentStreamTail.get("agent-1") ?? [];
+    expect(restored).toMatchObject({ kind: "user_message", text: "What color is this?" });
+    expect(restored?.kind === "user_message" ? restored.images : "missing").toBeUndefined();
+  });
+
+  it("leaves a replayed message's inline images out of the cache", async () => {
+    const storage = new MemoryStorage();
+    const cache = new ReplicaCache(storage);
+    cache.setHosts([SERVER_ID]);
+    seedSession();
+    const replayed = createUserMessage({
+      messageId: "provider-image",
+      timelineCursor: { epoch: "epoch-1", seq: 12 },
+      text: "Match this design",
+      timestamp: new Date("2026-07-18T08:02:00.000Z"),
+      images: [
+        {
+          id: "provider-image:image:0",
+          mimeType: "image/png",
+          storageType: "inline",
+          storageKey: "data:image/png;base64,iVBORw0KGgo=",
+          createdAt: 0,
+        },
+      ],
+    });
+    useSessionStore.getState().setAgentStreamTail(SERVER_ID, new Map([["agent-1", [replayed]]]));
+
+    await cache.flush();
+    useSessionStore.getState().clearSession(SERVER_ID);
+    await cache.restore();
+
+    const [restored] =
+      useSessionStore.getState().sessions[SERVER_ID]?.agentStreamTail.get("agent-1") ?? [];
+    expect(restored).toMatchObject({ kind: "user_message", text: "Match this design" });
+    expect(restored?.kind === "user_message" ? restored.images : "missing").toBeUndefined();
+  });
+
   it("evicts the least recently written host when the cache exceeds its byte budget", async () => {
     const storage = new MemoryStorage();
     const cache = new ReplicaCache(storage, { maxBytes: 7_000 });

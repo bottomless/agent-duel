@@ -223,12 +223,6 @@ describe("keyboard-shortcuts", () => {
       payload: { delta: 1 },
     },
     {
-      name: "matches Mod+T to open new tab",
-      event: { key: "t", code: "KeyT", metaKey: true },
-      context: { isMac: true },
-      action: "workspace.tab.new",
-    },
-    {
       name: "matches Alt+Shift+W to close current tab on web",
       event: { key: "W", code: "KeyW", altKey: true, shiftKey: true },
       context: { isDesktop: false },
@@ -259,34 +253,22 @@ describe("keyboard-shortcuts", () => {
       action: "command-center.toggle",
     },
     {
-      name: "matches Cmd+Backslash to split pane right on macOS",
-      event: { key: "\\", code: "Backslash", metaKey: true },
-      context: { isMac: true },
-      action: "workspace.pane.split.right",
-    },
-    {
-      name: "matches Cmd+Shift+Backslash to split pane down on macOS",
-      event: { key: "|", code: "Backslash", metaKey: true, shiftKey: true },
-      context: { isMac: true },
-      action: "workspace.pane.split.down",
-    },
-    {
       name: "matches Cmd+Shift+ArrowRight to focus pane right on macOS",
       event: { key: "ArrowRight", code: "ArrowRight", metaKey: true, shiftKey: true },
       context: { isMac: true },
       action: "workspace.pane.focus.right",
     },
     {
-      name: "matches Cmd+Shift+Alt+ArrowDown to move tab down on macOS",
+      name: "matches Cmd+Shift+Alt+ArrowRight to move tab to the other pane on macOS",
       event: {
-        key: "ArrowDown",
-        code: "ArrowDown",
+        key: "ArrowRight",
+        code: "ArrowRight",
         metaKey: true,
         shiftKey: true,
         altKey: true,
       },
       context: { isMac: true },
-      action: "workspace.pane.move-tab.down",
+      action: "workspace.pane.move-tab.right",
     },
     {
       name: "matches Cmd+Shift+W to close pane on macOS",
@@ -325,13 +307,6 @@ describe("keyboard-shortcuts", () => {
       context: { focusScope: "message-input" },
       action: "message-input.action",
       payload: { kind: "mode-cycle" },
-    },
-    {
-      name: "routes space to voice mute toggle outside editable scopes",
-      event: { key: " ", code: "Space" },
-      context: { focusScope: "other" },
-      action: "message-input.action",
-      payload: { kind: "voice-mute-toggle" },
     },
     {
       name: "routes Escape to agent interrupt outside terminal focus",
@@ -587,9 +562,9 @@ describe("keyboard-shortcuts", () => {
 
   it("resolves a browser-origin shortcut with browser focus instead of host focus", () => {
     expectShortcutResolution({
-      event: { key: "t", code: "KeyT", ctrlKey: true },
+      event: { key: "T", code: "KeyT", ctrlKey: true, shiftKey: true },
       context: { isDesktop: true, focusScope: "browser" },
-      action: "workspace.tab.new",
+      action: "workspace.terminal.new",
     });
   });
 
@@ -636,11 +611,9 @@ describe("keyboard-shortcut help sections", () => {
       context: { isMac: true, isDesktop: false },
       expectedKeys: {
         "new-agent": ["mod", "O"],
-        "workspace-tab-new": ["mod", "T"],
         "workspace-jump-index": ["alt", "1-9"],
         "workspace-tab-jump-index": ["alt", "shift", "1-9"],
         "workspace-tab-close-current": ["alt", "shift", "W"],
-        "workspace-pane-split-right": ["mod", "\\"],
         "workspace-pane-close": ["mod", "shift", "W"],
         "cycle-agent-mode": ["shift", "Tab"],
       },
@@ -651,7 +624,6 @@ describe("keyboard-shortcut help sections", () => {
       expectedKeys: {
         "new-agent": ["mod", "O"],
         "new-workspace": ["mod", "N"],
-        "workspace-tab-new": ["mod", "T"],
         "workspace-jump-index": ["mod", "1-9"],
         "workspace-tab-jump-index": ["mod", "alt", "1-9"],
         // Derived from `combo: "Cmd+W"`, so the token is `mod` where the row
@@ -659,7 +631,6 @@ describe("keyboard-shortcut help sections", () => {
         // `formatShortcut` renders both as ⌘, so the badge is unchanged — see
         // the render assertion below.
         "workspace-tab-close-current": ["mod", "W"],
-        "workspace-pane-split-right": ["mod", "\\"],
         "workspace-pane-close": ["mod", "shift", "W"],
       },
     },
@@ -928,7 +899,7 @@ function withoutDefaultCombo(helpId: string): ParsedShortcutBinding[] {
 }
 
 describe("unassigned shortcuts", () => {
-  const TAB_NEW_BINDING = "workspace-tab-new-ctrl-t-non-mac";
+  const TERMINAL_NEW_BINDING = "workspace-terminal-new-ctrl-shift-t-non-mac";
   const desktopNonMac = { isMac: false, isDesktop: true };
 
   function findRow(sections: ReturnType<typeof buildKeyboardShortcutHelpSections>, id: string) {
@@ -961,10 +932,10 @@ describe("unassigned shortcuts", () => {
 
   describe("matching", () => {
     it("stops matching a shortcut the user unassigned", () => {
-      const bindings = buildEffectiveBindings({ [TAB_NEW_BINDING]: UNASSIGNED_COMBO });
+      const bindings = buildEffectiveBindings({ [TERMINAL_NEW_BINDING]: UNASSIGNED_COMBO });
 
       const result = resolveShortcut({
-        event: { key: "t", code: "KeyT", ctrlKey: true },
+        event: { key: "T", code: "KeyT", ctrlKey: true, shiftKey: true },
         context: desktopNonMac,
         bindings,
       });
@@ -973,10 +944,22 @@ describe("unassigned shortcuts", () => {
     });
 
     it("leaves other shortcuts firing when one is unassigned", () => {
-      const bindings = buildEffectiveBindings({ [TAB_NEW_BINDING]: UNASSIGNED_COMBO });
+      const bindings = buildEffectiveBindings({ [TERMINAL_NEW_BINDING]: UNASSIGNED_COMBO });
 
       const result = resolveShortcut({
-        event: { key: "t", code: "KeyT", ctrlKey: true, shiftKey: true },
+        event: { key: "w", code: "KeyW", ctrlKey: true },
+        context: desktopNonMac,
+        bindings,
+      });
+
+      expect(result.match?.action).toBe("workspace.tab.close.current");
+    });
+
+    it("restores the default when the override is removed", () => {
+      const bindings = buildEffectiveBindings({});
+
+      const result = resolveShortcut({
+        event: { key: "T", code: "KeyT", ctrlKey: true, shiftKey: true },
         context: desktopNonMac,
         bindings,
       });
@@ -984,23 +967,11 @@ describe("unassigned shortcuts", () => {
       expect(result.match?.action).toBe("workspace.terminal.new");
     });
 
-    it("restores the default when the override is removed", () => {
-      const bindings = buildEffectiveBindings({});
-
-      const result = resolveShortcut({
-        event: { key: "t", code: "KeyT", ctrlKey: true },
-        context: desktopNonMac,
-        bindings,
-      });
-
-      expect(result.match?.action).toBe("workspace.tab.new");
-    });
-
     it("treats a stored empty combo as unassigned too", () => {
-      const bindings = buildEffectiveBindings({ [TAB_NEW_BINDING]: "" });
+      const bindings = buildEffectiveBindings({ [TERMINAL_NEW_BINDING]: "" });
 
       const result = resolveShortcut({
-        event: { key: "t", code: "KeyT", ctrlKey: true },
+        event: { key: "T", code: "KeyT", ctrlKey: true, shiftKey: true },
         context: desktopNonMac,
         bindings,
       });
@@ -1009,7 +980,7 @@ describe("unassigned shortcuts", () => {
     });
 
     it("keeps rebinding to a real combo working", () => {
-      const bindings = buildEffectiveBindings({ [TAB_NEW_BINDING]: "Ctrl+Y" });
+      const bindings = buildEffectiveBindings({ [TERMINAL_NEW_BINDING]: "Ctrl+Y" });
 
       expect(
         resolveShortcut({
@@ -1017,10 +988,10 @@ describe("unassigned shortcuts", () => {
           context: desktopNonMac,
           bindings,
         }).match?.action,
-      ).toBe("workspace.tab.new");
+      ).toBe("workspace.terminal.new");
       expect(
         resolveShortcut({
-          event: { key: "t", code: "KeyT", ctrlKey: true },
+          event: { key: "T", code: "KeyT", ctrlKey: true, shiftKey: true },
           context: desktopNonMac,
           bindings,
         }).match,
@@ -1029,34 +1000,34 @@ describe("unassigned shortcuts", () => {
 
     it("falls back to the default for a non-string stored value", () => {
       // Storage is unvalidated JSON, so a corrupt value must not throw.
-      const overrides = { [TAB_NEW_BINDING]: 42 } as unknown as ShortcutOverrides;
+      const overrides = { [TERMINAL_NEW_BINDING]: 42 } as unknown as ShortcutOverrides;
       const bindings = buildEffectiveBindings(overrides);
 
       const result = resolveShortcut({
-        event: { key: "t", code: "KeyT", ctrlKey: true },
+        event: { key: "T", code: "KeyT", ctrlKey: true, shiftKey: true },
         context: desktopNonMac,
         bindings,
       });
 
-      expect(result.match?.action).toBe("workspace.tab.new");
+      expect(result.match?.action).toBe("workspace.terminal.new");
     });
   });
 
   describe("resolveShortcutKeysForAction", () => {
     // `ctrl`, not `mod`: these keys are derived from the non-mac binding's
-    // `combo: "Ctrl+T"` rather than hand-authored. `formatShortcut` labels both
+    // `combo: "Ctrl+Shift+T"` rather than hand-authored. `formatShortcut` labels both
     // tokens "Ctrl" off mac, and this binding is non-mac only.
     it("returns the default keys when there is no override", () => {
-      expect(resolveShortcutKeysForAction("workspace-tab-new", {}, desktopNonMac)).toEqual([
-        ["ctrl", "T"],
+      expect(resolveShortcutKeysForAction("workspace-terminal-new", {}, desktopNonMac)).toEqual([
+        ["ctrl", "shift", "T"],
       ]);
     });
 
     it("returns null when the user unassigned the shortcut", () => {
       expect(
         resolveShortcutKeysForAction(
-          "workspace-tab-new",
-          { [TAB_NEW_BINDING]: UNASSIGNED_COMBO },
+          "workspace-terminal-new",
+          { [TERMINAL_NEW_BINDING]: UNASSIGNED_COMBO },
           desktopNonMac,
         ),
       ).toBeNull();
@@ -1065,8 +1036,8 @@ describe("unassigned shortcuts", () => {
     it("returns the override keys when the shortcut is rebound", () => {
       expect(
         resolveShortcutKeysForAction(
-          "workspace-tab-new",
-          { [TAB_NEW_BINDING]: "Ctrl+Y" },
+          "workspace-terminal-new",
+          { [TERMINAL_NEW_BINDING]: "Ctrl+Y" },
           desktopNonMac,
         ),
       ).toEqual([["ctrl", "Y"]]);
@@ -1077,18 +1048,18 @@ describe("unassigned shortcuts", () => {
       // or it would advertise keys that do nothing.
       expect(
         resolveShortcutKeysForAction(
-          "workspace-tab-new",
-          { [TAB_NEW_BINDING]: "Ctrl+Nonsense" },
+          "workspace-terminal-new",
+          { [TERMINAL_NEW_BINDING]: "Ctrl+Nonsense" },
           desktopNonMac,
         ),
-      ).toEqual([["ctrl", "T"]]);
+      ).toEqual([["ctrl", "shift", "T"]]);
     });
 
     it("falls back to the default keys for a non-string stored value", () => {
-      const overrides = { [TAB_NEW_BINDING]: 42 } as unknown as ShortcutOverrides;
-      expect(resolveShortcutKeysForAction("workspace-tab-new", overrides, desktopNonMac)).toEqual([
-        ["ctrl", "T"],
-      ]);
+      const overrides = { [TERMINAL_NEW_BINDING]: 42 } as unknown as ShortcutOverrides;
+      expect(
+        resolveShortcutKeysForAction("workspace-terminal-new", overrides, desktopNonMac),
+      ).toEqual([["ctrl", "shift", "T"]]);
     });
 
     it("returns null for an action with no binding on this platform", () => {
@@ -1098,25 +1069,29 @@ describe("unassigned shortcuts", () => {
 
   describe("help rows", () => {
     it("lists no keys for an unassigned shortcut", () => {
-      const bindings = buildEffectiveBindings({ [TAB_NEW_BINDING]: UNASSIGNED_COMBO });
+      const bindings = buildEffectiveBindings({ [TERMINAL_NEW_BINDING]: UNASSIGNED_COMBO });
       const sections = buildKeyboardShortcutHelpSections(desktopNonMac, bindings);
 
-      expect(findRow(sections, "workspace-tab-new")?.chord).toBeNull();
+      expect(findRow(sections, "workspace-terminal-new")?.chord).toBeNull();
     });
 
     it("keeps the row so the shortcut stays rebindable", () => {
-      const bindings = buildEffectiveBindings({ [TAB_NEW_BINDING]: UNASSIGNED_COMBO });
+      const bindings = buildEffectiveBindings({ [TERMINAL_NEW_BINDING]: UNASSIGNED_COMBO });
       const sections = buildKeyboardShortcutHelpSections(desktopNonMac, bindings);
 
-      expect(findRow(sections, "workspace-tab-new")).not.toBeNull();
-      expect(getBindingIdForAction("workspace-tab-new", desktopNonMac)).toBe(TAB_NEW_BINDING);
+      expect(findRow(sections, "workspace-terminal-new")).not.toBeNull();
+      expect(getBindingIdForAction("workspace-terminal-new", desktopNonMac)).toBe(
+        TERMINAL_NEW_BINDING,
+      );
     });
 
     it("still lists the default keys when nothing is overridden", () => {
       const sections = buildKeyboardShortcutHelpSections(desktopNonMac);
 
-      expect(findRow(sections, "workspace-tab-new")?.chord).toEqual([["ctrl", "T"]]);
-      expect(getDefaultKeysForAction("workspace-tab-new", desktopNonMac)).toEqual([["ctrl", "T"]]);
+      expect(findRow(sections, "workspace-terminal-new")?.chord).toEqual([["ctrl", "shift", "T"]]);
+      expect(getDefaultKeysForAction("workspace-terminal-new", desktopNonMac)).toEqual([
+        ["ctrl", "shift", "T"],
+      ]);
     });
 
     // A binding authored with `combo: ""` has no default. The settings row uses
@@ -1124,16 +1099,16 @@ describe("unassigned shortcuts", () => {
     // same "Not set" state Clear already produced. The empty parsed chord is what
     // marks the binding default-less.
     it("reports no default keys for a binding that ships without a combo", () => {
-      const bindings = withoutDefaultCombo("workspace-tab-new");
+      const bindings = withoutDefaultCombo("workspace-terminal-new");
 
-      expect(getDefaultKeysForAction("workspace-tab-new", desktopNonMac, bindings)).toBeNull();
+      expect(getDefaultKeysForAction("workspace-terminal-new", desktopNonMac, bindings)).toBeNull();
     });
 
     it("lists no help keys for a binding that ships without a combo", () => {
-      const bindings = withoutDefaultCombo("workspace-tab-new");
+      const bindings = withoutDefaultCombo("workspace-terminal-new");
       const sections = buildKeyboardShortcutHelpSections(desktopNonMac, bindings);
 
-      expect(findRow(sections, "workspace-tab-new")?.chord).toBeNull();
+      expect(findRow(sections, "workspace-terminal-new")?.chord).toBeNull();
     });
   });
 });

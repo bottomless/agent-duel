@@ -7,6 +7,7 @@ interface ShowContextMenuInput {
 }
 
 interface ApplicationMenuOptions {
+  appName: string;
   onNewWindow: () => void;
 }
 
@@ -75,7 +76,7 @@ function buildApplicationMenuTemplate(
     ...(isMac
       ? [
           {
-            label: app.name,
+            label: options.appName,
             submenu: [
               { role: "about" as const },
               { type: "separator" as const },

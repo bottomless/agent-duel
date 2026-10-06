@@ -150,7 +150,7 @@ describe("resolveWorkspaceRouteState", () => {
     ).toEqual({
       kind: "recoveryUnavailable",
       hostName: "Laptop",
-      message: "Update Paseo to recover this workspace.",
+      message: "Update Agent Duel to recover this workspace.",
     });
   });
 
@@ -169,5 +169,14 @@ describe("resolveWorkspaceRouteState", () => {
         recovery: recoverable,
       }),
     ).toEqual({ kind: "ready" });
+  });
+
+  it("keeps a cleaned workspace route visible while its files are restored", () => {
+    const cleanedWorkspace = { ...createWorkspaceDescriptor(), filesState: "cleaned" as const };
+    const restoring = { ...recoverable, phase: "restoring" as const };
+
+    expect(resolve({ workspace: cleanedWorkspace, recovery: restoring })).toEqual({
+      kind: "ready",
+    });
   });
 });

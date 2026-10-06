@@ -19,12 +19,14 @@ vi.mock("react-native", () => ({
     onHoverIn,
     onHoverOut,
     onPress,
+    onContextMenu,
   }: {
     accessibilityRole?: string;
     children?: ReactNode;
     onHoverIn?(): void;
     onHoverOut?(): void;
     onPress?(): void;
+    onContextMenu?(event: unknown): void;
   }) =>
     createElement(
       "div",
@@ -33,6 +35,7 @@ vi.mock("react-native", () => ({
         onClick: onPress,
         onMouseEnter: onHoverIn,
         onMouseLeave: onHoverOut,
+        onContextMenu,
       },
       children,
     ),
@@ -95,5 +98,27 @@ describe("shared Markdown links", () => {
 
     fireEvent.click(link);
     expect(onPress).toHaveBeenCalledOnce();
+  });
+
+  it("forwards right clicks without firing the primary action", () => {
+    const onPress = vi.fn();
+    const onContextMenu = vi.fn((event: unknown) => {
+      if (event instanceof Event) event.preventDefault();
+    });
+    const view = render(
+      createElement(
+        MarkdownLinkText,
+        { style: { color: "rgb(0, 122, 255)" }, onPress, onContextMenu },
+        "Paseo",
+      ),
+    );
+
+    const link = view.container.querySelector('[role="link"]');
+    expect(link).not.toBeNull();
+    if (!link) throw new Error("Expected Markdown link");
+    fireEvent.contextMenu(link);
+
+    expect(onContextMenu).toHaveBeenCalledOnce();
+    expect(onPress).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,9 @@
 # Maestro Flows
 
+> Retained upstream Paseo reference. Native, packaging, and contribution details
+> here do not define Agent Duel requirements. See the
+> [Agent Duel documentation index](../../../docs/README.md).
+
 This directory contains local mobile UI flows. Keep flows small enough that a
 failure screenshot proves the intended behavior, not just that the app launched.
 
@@ -67,14 +71,12 @@ The flow is intentionally strict. It must:
 3. Select an actual provider/model before tapping `Create`.
 4. Tap `Create`.
 5. Assert the app lands on a workspace header and the draft composer.
-6. Assert `New workspace`, `Select a model`, and the Android redbox text are not
-   visible.
+6. Assert `Select a model` and the Android redbox text are not visible.
 7. For the shell harness, grep logcat for `failed to insert view` and
    `specified child already has a parent`.
 
-Do not weaken this flow to only wait for `message-input-root`. That can pass on
-the wrong route. The header assertion and the `New workspace` negative assertion
-are what prove the redirect actually completed.
+Do not weaken the submit flow to only wait for `message-input-root`. That can pass
+on the wrong route. The workspace header assertion proves the redirect completed.
 
 The scripts assume a development build with package id `sh.paseo.debug`, an
 already-running local daemon on `127.0.0.1:6767`, and a connected Android device

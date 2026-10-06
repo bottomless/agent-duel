@@ -175,8 +175,10 @@ export function createEditorTargetRuntime(
       if (platform !== "darwin") return false;
       return [
         `/Applications/${applicationName}.app`,
+        `/Applications/Utilities/${applicationName}.app`,
         `${homeDirectory}/Applications/${applicationName}.app`,
         `/System/Applications/${applicationName}.app`,
+        `/System/Applications/Utilities/${applicationName}.app`,
       ].some(pathExists);
     },
     async openMacApplication({ applicationName, paths }) {

@@ -8,6 +8,7 @@ import type {
 export interface AgentScreenAgent {
   serverId: string;
   id: string;
+  title?: string | null;
   provider?: AgentProvider;
   status: "initializing" | "idle" | "running" | "error" | "closed";
   cwd: string;
@@ -29,6 +30,7 @@ export interface AgentScreenAgent {
     checkout?: {
       cwd?: string;
       isGit?: boolean;
+      currentBranch?: string | null;
     };
   } | null;
 }
@@ -52,18 +54,31 @@ export interface AgentScreenMachineInput {
   hasHydratedHistoryBefore: boolean;
 }
 
+/**
+ * What the screen carries across a handoff, so the first frame is not a spinner.
+ *
+ * `optimistic-create` also lends its agent: the draft's own message is on screen before the
+ * daemon has an agent to attach it to. `seeded-battle` lends nothing but the fact that the
+ * panes are already in hand ([battle handoff](../arena/battle-handoff.ts)) — the agent is
+ * real by then, and only the sync gates below need to know.
+ */
 export type AgentScreenContinuity =
   | { kind: "none" }
-  | { kind: "optimistic-create"; agent: AgentScreenAgent };
+  | { kind: "optimistic-create"; agent: AgentScreenAgent }
+  | { kind: "seeded-battle" };
 
 function hasOptimisticCreateContinuity(input: AgentScreenMachineInput): boolean {
   return input.continuity.kind === "optimistic-create";
 }
 
+function hasSeededFirstPaint(input: AgentScreenMachineInput): boolean {
+  return input.continuity.kind !== "none";
+}
+
 function shouldBlockInitialAuthoritativeReadyState(input: AgentScreenMachineInput): boolean {
   return (
     !input.isArchived &&
-    !hasOptimisticCreateContinuity(input) &&
+    !hasSeededFirstPaint(input) &&
     !input.hasHydratedHistoryBefore &&
     (input.needsAuthoritativeSync || input.isHistorySyncing)
   );
@@ -149,12 +164,12 @@ function resolveAgentScreenSource(args: {
 }
 
 function resolveCatchingUpUi(args: {
-  hasOptimisticCreateContinuity: boolean;
+  hasSeededFirstPaint: boolean;
   isVisibilityCatchUpPending: boolean;
   hasHydratedHistoryBefore: boolean;
   hadInitialSyncFailure: boolean;
 }): "overlay" | "silent" {
-  if (args.hasOptimisticCreateContinuity) return "silent";
+  if (args.hasSeededFirstPaint) return "silent";
   if (args.hasHydratedHistoryBefore) return "silent";
   if (args.isVisibilityCatchUpPending) return "overlay";
   if (args.hadInitialSyncFailure) return "silent";
@@ -186,7 +201,7 @@ function resolveAgentScreenSync(args: {
     return {
       status: "catching_up",
       ui: resolveCatchingUpUi({
-        hasOptimisticCreateContinuity: hasOptimisticCreateContinuity(input),
+        hasSeededFirstPaint: hasSeededFirstPaint(input),
         isVisibilityCatchUpPending: input.visibilityCatchUpStatus === "pending",
         hasHydratedHistoryBefore: input.hasHydratedHistoryBefore,
         hadInitialSyncFailure,

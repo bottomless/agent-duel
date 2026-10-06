@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { DaemonStartService, upsertDesktopDaemonConnection } from "./daemon-start-service";
 import type { HostRuntimeStore } from "./host-runtime";
 import type { DesktopDaemonStatus } from "@/desktop/daemon/desktop-daemon";
-import { defaultHostAppearance } from "@/hosts/appearance";
 import type { HostProfile } from "@/types/host-connection";
 
 interface RecordedUpsert {
@@ -45,7 +44,6 @@ function makeRelayOnlyHost(serverId: string): HostProfile {
   return {
     serverId,
     label: "Relay host",
-    appearance: defaultHostAppearance(),
     lifecycle: {},
     connections: [
       {
@@ -314,13 +312,15 @@ describe("upsertDesktopDaemonConnection", () => {
     ]);
   });
 
-  it("does not add localhost when desktop bootstrap finds its server id already registered", async () => {
+  it("refreshes the desktop connection when its server id is already registered", async () => {
     const fake = createFakeStore([makeRelayOnlyHost("srv_desktop")]);
 
     const result = await upsertDesktopDaemonConnection(fake.store, makeStatus());
 
     expect(result).toEqual({ ok: true });
-    expect(fake.upserts).toEqual([]);
+    expect(fake.upserts).toEqual([
+      { listenAddress: "127.0.0.1:6767", serverId: "srv_desktop", hostname: "desktop" },
+    ]);
   });
 
   it("rejects a missing listen address without upserting", async () => {

@@ -34,16 +34,6 @@ describe("resolveSidebarWorkspacePrimaryLabel", () => {
 });
 
 describe("resolveSidebarWorkspaceAccessibilityLabel", () => {
-  it("includes the visible host badge with the workspace title", () => {
-    const label = resolveSidebarWorkspaceAccessibilityLabel({
-      workspace: { name: "Investigate search", currentBranch: "fix/search", statusBucket: "done" },
-      workspaceTitleSource: "title",
-      hostBadgeLabel: "Build host",
-    });
-
-    expect(label).toBe("Investigate search, Build host");
-  });
-
   it("owns every visual row contributor in one accessible label", () => {
     const label = resolveSidebarWorkspaceAccessibilityLabel({
       workspace: {
@@ -53,14 +43,11 @@ describe("resolveSidebarWorkspaceAccessibilityLabel", () => {
       },
       workspaceTitleSource: "branch",
       leadingProjectName: "Search project",
-      hostBadgeLabel: "Build host",
       pullRequestLabel: "Pull request 42",
       serviceLabel: "Service web running",
     });
 
-    expect(label).toBe(
-      "Search project, fix/search, Build host, Pull request 42, Service web running, Working",
-    );
+    expect(label).toBe("Search project, fix/search, Pull request 42, Service web running, Working");
   });
 
   it("omits the idle status from the workspace label", () => {
@@ -68,9 +55,18 @@ describe("resolveSidebarWorkspaceAccessibilityLabel", () => {
       workspace: { name: "Investigate search", currentBranch: "fix/search", statusBucket: "done" },
       workspaceTitleSource: "title",
       leadingProjectName: "Search project",
-      hostBadgeLabel: "Build host",
     });
 
-    expect(label).toBe("Search project, Investigate search, Build host");
+    expect(label).toBe("Search project, Investigate search");
+  });
+
+  it("uses provisional Arena titles as the accessible primary label", () => {
+    const label = resolveSidebarWorkspaceAccessibilityLabel({
+      workspace: { name: "main", currentBranch: "main", statusBucket: "done" },
+      workspaceTitleSource: "title",
+      primaryLabel: "A: Add charts, B: Refine charts",
+    });
+
+    expect(label).toBe("A: Add charts, B: Refine charts");
   });
 });

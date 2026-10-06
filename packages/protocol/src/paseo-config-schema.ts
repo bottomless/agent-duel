@@ -21,17 +21,13 @@ export const PaseoServicePortAllocationSchema = z
     return start >= 1 && end <= 65_535 && start <= end;
   }, "Expected an inclusive TCP port range from 1-65535");
 
-export function normalizeLifecycleCommands(commands: unknown): string[] {
-  if (typeof commands === "string") {
-    return commands.trim().length > 0 ? [commands] : [];
-  }
-  if (!Array.isArray(commands)) {
-    return [];
-  }
-  return commands.filter((command): command is string => {
-    return typeof command === "string" && command.trim().length > 0;
-  });
-}
+export const PaseoArenaCopyConfigSchema = z
+  .object({
+    ignoredFileMaxBytes: z.number().int().nonnegative().optional(),
+    ignoredTotalMaxBytes: z.number().int().nonnegative().optional(),
+    exclude: z.array(z.string()).optional(),
+  })
+  .passthrough();
 
 export const PaseoLifecycleCommandRawSchema = z.union([z.string(), z.array(z.string())]);
 
@@ -49,6 +45,7 @@ export const PaseoWorktreeConfigRawSchema = z
     teardown: PaseoLifecycleCommandRawSchema.optional(),
     terminals: z.unknown().optional(),
     servicePorts: PaseoServicePortAllocationSchema.optional(),
+    arenaCopy: PaseoArenaCopyConfigSchema.optional(),
   })
   .passthrough();
 
@@ -79,20 +76,30 @@ export const PaseoConfigRawSchema = z
   })
   .passthrough();
 
-export const WorktreeConfigSchema = PaseoWorktreeConfigRawSchema.extend({
-  setup: z.unknown().optional().transform(normalizeLifecycleCommands),
-  teardown: z.unknown().optional().transform(normalizeLifecycleCommands),
-})
+/**
+ * The read side of paseo.json. It deliberately omits `worktree.setup`,
+ * `worktree.teardown`, `worktree.terminals` and `scripts`: Agent Duel does not
+ * honour them, so nothing should be able to read them back out of a parsed
+ * config. They stay in `PaseoConfigRawSchema` above, which is what the project
+ * settings editor round-trips, so a file that still carries them keeps them —
+ * they simply have no effect. `worktree.servicePorts` goes with `scripts`; it
+ * only ever allocated ports for service scripts.
+ */
+export const WorktreeConfigSchema = z
+  .object({
+    arenaCopy: PaseoArenaCopyConfigSchema.optional(),
+  })
   .passthrough()
-  .catch({ setup: [], teardown: [] });
+  .catch({});
 
-export const ScriptEntrySchema = PaseoScriptEntryRawSchema.catch({});
-
-export const PaseoConfigSchema = PaseoConfigRawSchema.extend({
-  worktree: WorktreeConfigSchema.optional(),
-  scripts: z.record(z.string(), ScriptEntrySchema).optional().catch({}),
-  metadataGeneration: PaseoMetadataGenerationSchema.optional(),
+export const PaseoConfigSchema = PaseoConfigRawSchema.omit({
+  worktree: true,
+  scripts: true,
 })
+  .extend({
+    worktree: WorktreeConfigSchema.optional(),
+    metadataGeneration: PaseoMetadataGenerationSchema.optional(),
+  })
   .passthrough()
   .catch({});
 
@@ -115,6 +122,7 @@ export type PaseoScriptEntryRaw = z.infer<typeof PaseoScriptEntryRawSchema>;
 export type PaseoMetadataGenerationEntry = z.infer<typeof PaseoMetadataGenerationEntrySchema>;
 export type PaseoMetadataGeneration = z.infer<typeof PaseoMetadataGenerationSchema>;
 export type PaseoServicePortAllocation = z.infer<typeof PaseoServicePortAllocationSchema>;
+export type PaseoArenaCopyConfig = z.infer<typeof PaseoArenaCopyConfigSchema>;
 export type PaseoConfigRaw = z.infer<typeof PaseoConfigRawSchema>;
 export type PaseoConfig = z.infer<typeof PaseoConfigSchema>;
 export type PaseoConfigRevision = z.infer<typeof PaseoConfigRevisionSchema>;

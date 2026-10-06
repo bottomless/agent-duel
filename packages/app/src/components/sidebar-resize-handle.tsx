@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { GestureDetector, type GestureType } from "react-native-gesture-handler";
@@ -6,6 +7,7 @@ import {
   resolveSidebarResizeHandleGeometry,
   type SidebarResizeEdge,
 } from "@/components/sidebar-resize-handle-layout";
+import { MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH } from "@/stores/panel-store";
 import { isWeb } from "@/constants/platform";
 import { useHasFinePointer } from "@/hooks/use-fine-pointer";
 
@@ -14,6 +16,8 @@ interface SidebarResizeHandleProps {
   gesture: GestureType;
   pressed: boolean;
   testID: string;
+  width: number;
+  onResize: (width: number) => void;
 }
 
 const HIGHLIGHT_DELAY_MS = 100;
@@ -28,17 +32,53 @@ function edgeOffsetStyle(edge: SidebarResizeEdge, edgeOffset: number) {
   return edge === "left" ? { left: edgeOffset } : { right: edgeOffset };
 }
 
-export function SidebarResizeHandle({ edge, gesture, pressed, testID }: SidebarResizeHandleProps) {
+export function SidebarResizeHandle({
+  edge,
+  gesture,
+  pressed,
+  testID,
+  width,
+  onResize,
+}: SidebarResizeHandleProps) {
   const finePointer = useHasFinePointer();
 
   if (finePointer) {
-    return <PointerResizeHandle edge={edge} gesture={gesture} pressed={pressed} testID={testID} />;
+    return (
+      <PointerResizeHandle
+        edge={edge}
+        gesture={gesture}
+        pressed={pressed}
+        testID={testID}
+        width={width}
+        onResize={onResize}
+      />
+    );
   }
-  return <TouchResizeHandle edge={edge} gesture={gesture} pressed={pressed} testID={testID} />;
+  return (
+    <TouchResizeHandle
+      edge={edge}
+      gesture={gesture}
+      pressed={pressed}
+      testID={testID}
+      width={width}
+      onResize={onResize}
+    />
+  );
 }
 
-function PointerResizeHandle({ edge, gesture, testID }: SidebarResizeHandleProps) {
+function PointerResizeHandle({ edge, gesture, testID, width, onResize }: SidebarResizeHandleProps) {
   const [highlighted, setHighlighted] = useState(false);
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const direction = event.key === "ArrowRight" ? 1 : -1;
+      onResize(width + direction * (edge === "right" ? 1 : -1) * (event.shiftKey ? 40 : 10));
+    },
+    [edge, onResize, width],
+  );
+  const showFocus = useCallback(() => setHighlighted(true), []);
+  const hideFocus = useCallback(() => setHighlighted(false), []);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const geometry = resolveSidebarResizeHandleGeometry(true);
   const hitAreaStyle = [
@@ -74,6 +114,17 @@ function PointerResizeHandle({ edge, gesture, testID }: SidebarResizeHandleProps
       <Pressable
         testID={testID}
         style={hitAreaStyle}
+        accessibilityRole="adjustable"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        aria-valuenow={Math.round(width)}
+        aria-valuemin={MIN_SIDEBAR_WIDTH}
+        aria-valuemax={MAX_SIDEBAR_WIDTH}
+        tabIndex={0}
+        {...{ onKeyDown: handleKeyDown }}
+        onFocus={showFocus}
+        onBlur={hideFocus}
         onHoverIn={handleHoverIn}
         onHoverOut={handleHoverOut}
       >

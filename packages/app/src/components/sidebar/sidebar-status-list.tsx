@@ -6,7 +6,6 @@ import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store"
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 import { type SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
 import type { StatusGroup } from "@/hooks/sidebar-status-view-model";
-import type { HostBadgeModel } from "@/hosts/appearance";
 import { isWeb as platformIsWeb, isNative as platformIsNative } from "@/constants/platform";
 import { StyleSheet } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
@@ -92,7 +91,6 @@ interface StatusWorkspaceListProps {
   shortcutIndexByWorkspaceKey: Map<string, number>;
   showShortcutBadges: boolean;
   onWorkspacePress?: () => void;
-  hostBadgeByServerId: ReadonlyMap<string, HostBadgeModel>;
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
   listHeaderComponent?: ReactNode;
@@ -105,7 +103,6 @@ export function SidebarStatusWorkspaceList({
   shortcutIndexByWorkspaceKey,
   showShortcutBadges,
   onWorkspacePress,
-  hostBadgeByServerId,
   supportsPinningByServerId,
   onToggleWorkspacePin,
   listHeaderComponent,
@@ -139,7 +136,6 @@ export function SidebarStatusWorkspaceList({
                   {...buildStatusRowProjectPresentation({
                     workspace,
                     projectIconByProjectViewKey,
-                    hostBadgeByServerId,
                   })}
                   inStatusGroup={false}
                   shortcutNumber={statusShortcutIndex.get(workspace.workspaceKey) ?? null}
@@ -168,7 +164,6 @@ export function SidebarStatusWorkspaceList({
         shortcutIndex={statusShortcutIndex}
         showShortcutBadges={showShortcutBadges}
         onWorkspacePress={onWorkspacePress}
-        hostBadgeByServerId={hostBadgeByServerId}
         supportsPinningByServerId={supportsPinningByServerId}
         onToggleWorkspacePin={onToggleWorkspacePin}
       />
@@ -207,7 +202,6 @@ function StatusGroupList({
   shortcutIndex,
   showShortcutBadges,
   onWorkspacePress,
-  hostBadgeByServerId,
   supportsPinningByServerId,
   onToggleWorkspacePin,
 }: {
@@ -217,7 +211,6 @@ function StatusGroupList({
   shortcutIndex: Map<string, number>;
   showShortcutBadges: boolean;
   onWorkspacePress?: () => void;
-  hostBadgeByServerId: ReadonlyMap<string, HostBadgeModel>;
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
 }) {
@@ -232,7 +225,6 @@ function StatusGroupList({
           shortcutIndex={shortcutIndex}
           showShortcutBadges={showShortcutBadges}
           onWorkspacePress={onWorkspacePress}
-          hostBadgeByServerId={hostBadgeByServerId}
           supportsPinningByServerId={supportsPinningByServerId}
           onToggleWorkspacePin={onToggleWorkspacePin}
         />
@@ -248,7 +240,6 @@ function StatusGroupRows({
   shortcutIndex,
   showShortcutBadges,
   onWorkspacePress,
-  hostBadgeByServerId,
   supportsPinningByServerId,
   onToggleWorkspacePin,
 }: {
@@ -258,7 +249,6 @@ function StatusGroupRows({
   shortcutIndex: Map<string, number>;
   showShortcutBadges: boolean;
   onWorkspacePress?: () => void;
-  hostBadgeByServerId: ReadonlyMap<string, HostBadgeModel>;
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
 }) {
@@ -284,7 +274,6 @@ function StatusGroupRows({
               {...buildStatusRowProjectPresentation({
                 workspace,
                 projectIconByProjectViewKey,
-                hostBadgeByServerId,
               })}
               shortcutNumber={shortcutIndex.get(workspace.workspaceKey) ?? null}
               showShortcutBadge={showShortcutBadges}
@@ -308,7 +297,6 @@ function StatusGroupRows({
 }
 
 interface StatusRowProjectPresentation {
-  hostBadge: HostBadgeModel | null;
   projectName: string;
   projectIconDataUri: string | null;
 }
@@ -316,14 +304,11 @@ interface StatusRowProjectPresentation {
 function buildStatusRowProjectPresentation({
   workspace,
   projectIconByProjectViewKey,
-  hostBadgeByServerId,
 }: {
   workspace: SidebarWorkspaceEntry;
   projectIconByProjectViewKey: ReadonlyMap<string, string | null>;
-  hostBadgeByServerId: ReadonlyMap<string, HostBadgeModel>;
 }): StatusRowProjectPresentation {
   return {
-    hostBadge: hostBadgeByServerId.get(workspace.serverId) ?? null,
     projectName: workspace.projectName,
     projectIconDataUri: projectIconByProjectViewKey.get(workspace.projectViewKey) ?? null,
   };
@@ -413,7 +398,6 @@ function StatusGroupIcon({ bucket }: { bucket: StatusGroup["bucket"] }) {
 
 const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
   workspace,
-  hostBadge,
   projectName,
   projectIconDataUri,
   shortcutNumber,
@@ -425,7 +409,6 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
   onWorkspacePress,
 }: {
   workspace: SidebarWorkspaceEntry;
-  hostBadge: HostBadgeModel | null;
   projectName: string;
   projectIconDataUri: string | null;
   shortcutNumber: number | null;
@@ -454,7 +437,6 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
   return (
     <StatusWorkspaceRowWithMenu
       workspace={workspace}
-      hostBadge={hostBadge}
       projectName={projectName}
       projectIconDataUri={projectIconDataUri}
       selected={selected}
@@ -471,7 +453,6 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
 
 function StatusWorkspaceRowWithMenu({
   workspace,
-  hostBadge,
   projectName,
   projectIconDataUri,
   selected,
@@ -484,7 +465,6 @@ function StatusWorkspaceRowWithMenu({
   onPress,
 }: {
   workspace: SidebarWorkspaceEntry;
-  hostBadge: HostBadgeModel | null;
   projectName: string;
   projectIconDataUri: string | null;
   selected: boolean;
@@ -504,6 +484,7 @@ function StatusWorkspaceRowWithMenu({
   const toast = useToast();
   const [isHidingWorkspace, setIsHidingWorkspace] = useState(false);
   const [isRenameOpen, setIsRenameOpen] = useState(false);
+  const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
   const isArchiving = workspace.archivingAt !== null || isHidingWorkspace;
 
   const redirectAfterArchive = useCallback(() => {
@@ -559,6 +540,27 @@ function StatusWorkspaceRowWithMenu({
     },
   });
 
+  // A detached checkout has no branch to rename; it gets one here instead.
+  const isDetached = workspace.projectKind === "git" && workspace.currentBranch === null;
+  const createBranchMutation = useMutation({
+    mutationFn: async (branch: string) => {
+      const client = getHostRuntimeStore().getClient(workspace.serverId);
+      if (!client) throw new Error(t("workspace.terminal.hostDisconnected"));
+      const result = await client.createBranch({ cwd: workspace.workspaceDirectory, branch });
+      if (!result.success) {
+        throw new Error(result.error?.message ?? t("sidebar.workspace.toasts.createBranchFailed"));
+      }
+    },
+  });
+  const handleOpenCreateBranch = useCallback(() => setIsCreateBranchOpen(true), []);
+  const handleCloseCreateBranch = useCallback(() => setIsCreateBranchOpen(false), []);
+  const handleSubmitCreateBranch = useCallback(
+    async (value: string) => {
+      await createBranchMutation.mutateAsync(value.trim());
+    },
+    [createBranchMutation],
+  );
+
   const handleOpenRename = useCallback(() => setIsRenameOpen(true), []);
   const handleCloseRename = useCallback(() => setIsRenameOpen(false), []);
   const handleSubmitRename = useCallback(
@@ -599,7 +601,6 @@ function StatusWorkspaceRowWithMenu({
     <>
       <StatusWorkspaceRowInner
         workspace={workspace}
-        hostBadge={hostBadge}
         projectName={projectName}
         projectIconDataUri={projectIconDataUri}
         selected={selected}
@@ -614,6 +615,7 @@ function StatusWorkspaceRowWithMenu({
         onCopyBranchName={workspace.projectKind === "git" ? handleCopyBranchName : undefined}
         onCopyPath={handleCopyPath}
         onRename={handleOpenRename}
+        onCreateBranch={isDetached ? handleOpenCreateBranch : undefined}
         onMarkAsRead={hasClearableAttention ? handleMarkAsRead : undefined}
         archiveShortcutKeys={selected ? archiveShortcutKeys : null}
         isPinned={isPinned}
@@ -631,13 +633,22 @@ function StatusWorkspaceRowWithMenu({
         onSubmit={handleSubmitRename}
         testID={`sidebar-workspace-rename-modal-${workspace.workspaceKey}`}
       />
+      <AdaptiveRenameModal
+        visible={isCreateBranchOpen}
+        title={t("sidebar.workspace.createBranch.title")}
+        initialValue=""
+        placeholder={t("sidebar.workspace.createBranch.placeholder")}
+        submitLabel={t("sidebar.workspace.createBranch.submit")}
+        onClose={handleCloseCreateBranch}
+        onSubmit={handleSubmitCreateBranch}
+        testID={`sidebar-workspace-create-branch-modal-${workspace.workspaceKey}`}
+      />
     </>
   );
 }
 
 function StatusWorkspaceRowInner({
   workspace,
-  hostBadge,
   projectName,
   projectIconDataUri,
   selected,
@@ -652,6 +663,7 @@ function StatusWorkspaceRowInner({
   onCopyBranchName,
   onCopyPath,
   onRename,
+  onCreateBranch,
   onMarkAsRead,
   archiveShortcutKeys,
   isPinned,
@@ -660,7 +672,6 @@ function StatusWorkspaceRowInner({
   inStatusGroup = true,
 }: {
   workspace: SidebarWorkspaceEntry;
-  hostBadge: HostBadgeModel | null;
   projectName: string;
   projectIconDataUri: string | null;
   selected: boolean;
@@ -675,6 +686,7 @@ function StatusWorkspaceRowInner({
   onCopyBranchName?: () => void;
   onCopyPath?: () => void;
   onRename?: () => void;
+  onCreateBranch?: () => void;
   onMarkAsRead?: () => void;
   archiveShortcutKeys?: ShortcutKey[][] | null;
   isPinned?: boolean;
@@ -728,12 +740,12 @@ function StatusWorkspaceRowInner({
               onContextMenuOpenChange={onContextMenuOpenChange}
               workspace={workspace}
               leadingProjectName={projectName}
-              hostBadgeLabel={hostBadge?.label}
               serviceSummary={serviceSummary}
               workspaceKey={workspace.workspaceKey}
               onCopyPath={onCopyPath}
               onCopyBranchName={onCopyBranchName}
               onRename={onRename}
+              onCreateBranch={onCreateBranch}
               onMarkAsRead={onMarkAsRead}
               onArchive={onArchive}
               archiveLabel={archiveLabel}
@@ -755,7 +767,6 @@ function StatusWorkspaceRowInner({
             >
               <SidebarWorkspaceRowContent
                 workspace={workspace}
-                hostBadge={hostBadge}
                 leadingProjectName={projectName}
                 leadingProjectIconDataUri={projectIconDataUri}
                 serviceSummary={serviceSummary}
@@ -779,6 +790,7 @@ function StatusWorkspaceRowInner({
                     onCopyPath={onCopyPath}
                     onCopyBranchName={onCopyBranchName}
                     onRename={onRename}
+                    onCreateBranch={onCreateBranch}
                     onMarkAsRead={onMarkAsRead}
                     onArchive={onArchive}
                     archiveLabel={archiveLabel}
@@ -808,6 +820,7 @@ function StatusWorkspaceActionSlot({
   onCopyPath,
   onCopyBranchName,
   onRename,
+  onCreateBranch,
   onMarkAsRead,
   onArchive,
   archiveLabel,
@@ -826,6 +839,7 @@ function StatusWorkspaceActionSlot({
   onCopyPath?: () => void;
   onCopyBranchName?: () => void;
   onRename?: () => void;
+  onCreateBranch?: () => void;
   onMarkAsRead?: () => void;
   onArchive?: () => void;
   archiveLabel?: string;
@@ -847,6 +861,7 @@ function StatusWorkspaceActionSlot({
             onCopyPath={onCopyPath}
             onCopyBranchName={onCopyBranchName}
             onRename={onRename}
+            onCreateBranch={onCreateBranch}
             onMarkAsRead={onMarkAsRead}
             onArchive={onArchive}
             archiveLabel={archiveLabel}

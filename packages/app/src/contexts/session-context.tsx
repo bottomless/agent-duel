@@ -1,3 +1,4 @@
+import { useArenaActivity } from "@/arena/use-activity";
 import { useRef, ReactNode, useCallback, useEffect } from "react";
 import { Buffer } from "buffer";
 import { AppState } from "react-native";
@@ -347,6 +348,9 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   const focusedTerminalId = useSessionStore(
     (state) => state.sessions[serverId]?.focusedTerminalId ?? null,
   );
+  const focusedWorkspaceId = useSessionStore(
+    (state) => state.sessions[serverId]?.activeWorkspaceId ?? null,
+  );
   const _sessionStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attentionNotifiedRef = useRef<Map<string, number>>(new Map());
   const appStateRef = useRef(AppState.currentState);
@@ -389,7 +393,14 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   );
 
   // Client activity tracking (heartbeat, push token registration)
-  useClientActivity({ client, focusedAgentId, focusedTerminalId, onAppResumed: handleAppResumed });
+  useClientActivity({
+    client,
+    focusedAgentId,
+    focusedTerminalId,
+    focusedWorkspaceId,
+    onAppResumed: handleAppResumed,
+  });
+  useArenaActivity(client, serverId);
   useEffect(() => startPushNotifications({ client, serverId }), [client, serverId]);
 
   const notifyAgentAttention = useCallback(

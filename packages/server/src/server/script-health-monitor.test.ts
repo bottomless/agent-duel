@@ -1,102 +1,12 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { findFreePort, ScriptRouteStore } from "./script-proxy.js";
 import { ScriptHealthMonitor, type ScriptHealthEntry } from "./script-health-monitor.js";
-import { spawnWorkspaceScript } from "./worktree-bootstrap.js";
-import { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
-import type { TerminalManager } from "./terminal/terminal-manager.js";
 
 interface TcpServerHandle {
   port: number;
   server: net.Server;
-}
-
-function createWorkspaceRepo(options?: {
-  branchName?: string;
-  paseoConfig?: Record<string, unknown>;
-}): { tempDir: string; repoDir: string; cleanup: () => void } {
-  const tempDir = realpathSync(mkdtempSync(path.join(tmpdir(), "script-health-monitor-")));
-  const repoDir = path.join(tempDir, "repo");
-  mkdirSync(repoDir, { recursive: true });
-  execFileSync("git", ["init", "-b", options?.branchName ?? "main"], {
-    cwd: repoDir,
-    stdio: "pipe",
-  });
-  execFileSync("git", ["config", "user.email", "test@test.com"], {
-    cwd: repoDir,
-    stdio: "pipe",
-  });
-  execFileSync("git", ["config", "user.name", "Test"], { cwd: repoDir, stdio: "pipe" });
-  writeFileSync(path.join(repoDir, "README.md"), "hello\n");
-  if (options?.paseoConfig) {
-    writeFileSync(path.join(repoDir, "paseo.json"), JSON.stringify(options.paseoConfig, null, 2));
-  }
-  execFileSync("git", ["add", "."], { cwd: repoDir, stdio: "pipe" });
-  execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "initial"], {
-    cwd: repoDir,
-    stdio: "pipe",
-  });
-
-  return {
-    tempDir,
-    repoDir,
-    cleanup: () => {
-      rmSync(tempDir, { recursive: true, force: true });
-    },
-  };
-}
-
-function createStubTerminalManager(
-  createTerminalCalls: Array<{ cwd: string; name?: string; env?: Record<string, string> }>,
-) {
-  return {
-    async getTerminals() {
-      return [];
-    },
-    async createTerminal(options: { cwd: string; name?: string; env?: Record<string, string> }) {
-      createTerminalCalls.push(options);
-      return {
-        id: `term-${options.name ?? "terminal"}`,
-        name: options.name ?? "Terminal",
-        cwd: options.cwd,
-        send: () => {},
-        subscribe: () => () => {},
-        onExit: () => () => {},
-        onCommandFinished: () => () => {},
-        getState: () => ({
-          rows: 1,
-          cols: 1,
-          grid: [[{ char: "$" }]],
-          scrollback: [],
-          cursor: { row: 0, col: 0 },
-        }),
-        kill: () => {},
-        onTitleChange: () => () => {},
-        getSize: () => ({ rows: 1, cols: 1 }),
-        getTitle: () => undefined,
-        getExitInfo: () => null,
-        killAndWait: async () => {},
-      };
-    },
-    registerCwdEnv() {},
-    getTerminal() {
-      return undefined;
-    },
-    killTerminal() {},
-    async killTerminalAndWait() {},
-    listDirectories() {
-      return [];
-    },
-    killAll() {},
-    subscribeTerminalsChanged() {
-      return () => {};
-    },
-  };
 }
 
 async function startTcpServer(): Promise<TcpServerHandle> {
@@ -421,81 +331,46 @@ describe("ScriptHealthMonitor", () => {
     ]);
   });
 
-  it("only probes service routes because plain scripts never register routes", async () => {
+  // Plain scripts never register a route, so the monitor has nothing to probe for
+  // them. Routes are registered directly here: nothing spawns scripts any more.
+  it("only probes registered service routes", async () => {
     vi.useFakeTimers();
 
     const service = await startTcpServer();
     servers.add(service.server);
 
-    const workspace = createWorkspaceRepo({
-      paseoConfig: {
-        scripts: {
-          typecheck: { command: "npm run typecheck" },
-          api: { type: "service", command: "npm run api", port: service.port },
-        },
-      },
-    });
     const routeStore = new ScriptRouteStore();
-    const runtimeStore = new WorkspaceScriptRuntimeStore();
-    const createTerminalCalls: Array<{ cwd: string; name?: string; env?: Record<string, string> }> =
-      [];
+    routeStore.registerWorkspaceService({
+      workspaceId: "workspace-health",
+      projectSlug: "repo",
+      scriptName: "api",
+      branchName: null,
+      port: service.port,
+    });
 
-    try {
-      await Promise.all(
-        ["typecheck", "api"].map((scriptName) =>
-          spawnWorkspaceScript({
-            repoRoot: workspace.repoDir,
-            workspaceId: workspace.repoDir,
-            projectSlug: "repo",
-            branchName: null,
-            scriptName,
-            daemonPort: null,
-            serviceProxy: routeStore,
-            runtimeStore,
-            terminalManager: createStubTerminalManager(
-              createTerminalCalls,
-            ) as unknown as TerminalManager,
-          }),
-        ),
-      );
+    const onChange = vi.fn<(workspaceId: string, services: ScriptHealthEntry[]) => void>();
+    const monitor = new ScriptHealthMonitor({
+      serviceProxy: routeStore,
+      onChange,
+      pollIntervalMs: 1_000,
+      probeTimeoutMs: 100,
+      graceMs: 0,
+    });
 
-      expect(createTerminalCalls).toHaveLength(2);
-      expect(routeStore.listRoutes()).toEqual([
-        {
-          hostname: "api--repo.localhost",
-          port: service.port,
-          workspaceId: workspace.repoDir,
-          projectSlug: "repo",
-          scriptName: "api",
-        },
-      ]);
+    monitor.start();
+    await advancePoll(1_000);
+    monitor.stop();
 
-      const onChange = vi.fn<(workspaceId: string, services: ScriptHealthEntry[]) => void>();
-      const monitor = new ScriptHealthMonitor({
-        serviceProxy: routeStore,
-        onChange,
-        pollIntervalMs: 1_000,
-        probeTimeoutMs: 100,
-        graceMs: 0,
-      });
-
-      monitor.start();
-      await advancePoll(1_000);
-      monitor.stop();
-
-      expect(onChange).toHaveBeenCalledTimes(1);
-      expect(onChange).toHaveBeenCalledWith(workspace.repoDir, [
-        {
-          scriptName: "api",
-          hostname: "api--repo.localhost",
-          port: service.port,
-          health: "healthy",
-        },
-      ]);
-      expect(monitor.getHealthForHostname("typecheck")).toBeNull();
-    } finally {
-      workspace.cleanup();
-    }
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith("workspace-health", [
+      {
+        scriptName: "api",
+        hostname: "api--repo.localhost",
+        port: service.port,
+        health: "healthy",
+      },
+    ]);
+    expect(monitor.getHealthForHostname("typecheck")).toBeNull();
   });
 
   it("coalesces multiple service changes in the same workspace into one onChange call per poll cycle", async () => {

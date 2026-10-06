@@ -53,6 +53,39 @@ describe("project icon message security", () => {
   });
 });
 
+describe("Arena resolution retry messages", () => {
+  test("parses the namespaced request and response", () => {
+    const request = SessionInboundMessageSchema.parse({
+      type: "arena.turn.retry_resolution.request",
+      requestId: "request-1",
+      agentId: "agent-1",
+      turnId: "turn-1",
+    });
+    const response = SessionOutboundMessageSchema.parse({
+      type: "arena.turn.retry_resolution.response",
+      payload: {
+        requestId: "request-1",
+        snapshot: {
+          chat: {
+            id: "chat-1",
+            status: "ready",
+            canonicalSessionID: "session-1",
+            canonicalSHA: "abc123",
+            trunk: { worktreeName: "project" },
+          },
+          environment: {},
+          history: [],
+          runs: [],
+          events: [],
+        },
+      },
+    });
+
+    expect(request.type).toBe("arena.turn.retry_resolution.request");
+    expect(response.type).toBe("arena.turn.retry_resolution.response");
+  });
+});
+
 describe("workspace descriptor message compatibility", () => {
   test("old-shaped fetch_workspaces_response without project still parses", () => {
     const parsed = SessionOutboundMessageSchema.parse(

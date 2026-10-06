@@ -1,6 +1,12 @@
 import { ActivityIndicator, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { ChevronDown, ChevronRight, CircleAlert } from "lucide-react-native";
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  CircleHelp,
+} from "lucide-react-native";
 import { ProjectIconView } from "@/components/project-icon-view";
 import { STATUS_BUCKET_LABELS } from "@/hooks/sidebar-status-view-model";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
@@ -39,6 +45,8 @@ const STATUS_BADGE_OFFSET = -4;
 const LEADING_SLOT_HEIGHT = 20;
 
 const ThemedActivityIndicator = withUnistyles(ActivityIndicator);
+const ThemedCircleCheck = withUnistyles(CircleCheck);
+const ThemedCircleHelp = withUnistyles(CircleHelp);
 const ThemedCircleAlert = withUnistyles(CircleAlert);
 
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -113,6 +121,8 @@ export function ProjectStatusIndicator({
   statusBucket,
   backdrop,
   loading = false,
+  statusIcon,
+  statusLabel,
   testID,
 }: {
   iconDataUri: string | null;
@@ -122,6 +132,8 @@ export function ProjectStatusIndicator({
   /** The row's current background, so the status badge can knock out of it. */
   backdrop: SidebarSurfaceBackdrop;
   loading?: boolean;
+  statusIcon?: "ready" | "unknown";
+  statusLabel?: string;
   testID?: string;
 }) {
   const placeholderInitial = projectIconPlaceholderLabelFromDisplayName(displayName)
@@ -149,13 +161,31 @@ export function ProjectStatusIndicator({
           placeholderInitial={placeholderInitial}
           projectViewKey={projectViewKey}
         />
-        {badgeContent === null || badgeBucket === null ? null : (
+        {statusIcon ? (
+          <View
+            style={[styles.statusBadge, getStatusBadgeBackdropStyle(backdrop)]}
+            accessibilityLabel={statusLabel}
+          >
+            {statusIcon === "ready" ? (
+              <ThemedCircleCheck
+                size={STATUS_INDICATOR_ALERT_SIZE}
+                uniProps={foregroundMutedColorMapping}
+              />
+            ) : (
+              <ThemedCircleHelp
+                size={STATUS_INDICATOR_ALERT_SIZE}
+                uniProps={foregroundMutedColorMapping}
+              />
+            )}
+          </View>
+        ) : null}
+        {!statusIcon && badgeContent !== null && badgeBucket !== null ? (
           <ProjectStatusBadge
             content={badgeContent}
             statusBucket={badgeBucket}
             backdrop={backdrop}
           />
-        )}
+        ) : null}
       </View>
     </View>
   );

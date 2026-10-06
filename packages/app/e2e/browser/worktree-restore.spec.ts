@@ -188,15 +188,66 @@ test.describe("Worktree restore", () => {
     expect(await fetchAgentArchivedAt(client, agent.id)).toBeNull();
   });
 
-  test("opening a recoverable archived workspace shows an explicit Restore action without mutating it", async ({
+  test("reads an archived local workspace without unarchiving it", async ({ page }) => {
+    const workspace = await openProjectViaDaemon(worktreeClient, tempRepo.path);
+    createdProjectIds.add(workspace.projectKey);
+    const agent = await createIdleAgent(client, {
+      cwd: tempRepo.path,
+      workspaceId: workspace.workspaceId,
+      title: "Read-only archive",
+    });
+    await archiveLocalWorkspaceFromDaemon(worktreeClient, workspace.workspaceId);
+    const archivedAt = await fetchAgentArchivedAt(client, agent.id);
+    expect(archivedAt).not.toBeNull();
+    await gotoAppShell(page);
+    await waitForSidebarHydration(page);
+    await openSessions(page);
+    await page.getByTestId(`agent-row-${getServerId()}-${agent.id}`).click();
+    await page.getByRole("button", { name: "Read transcript", exact: true }).click();
+    await expect(page.getByTestId("archived-transcript")).toBeVisible();
+    await expect(page.getByText("Loading transcript…", { exact: true })).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await expect(page.getByRole("button", { name: "Retry transcript", exact: true })).toHaveCount(
+      0,
+    );
+    expect(await fetchAgentArchivedAt(client, agent.id)).toBe(archivedAt);
+    await expect(
+      worktreeClient.inspectWorkspaceRecovery(workspace.workspaceId),
+    ).resolves.toMatchObject({ kind: "recoverable", action: "unarchive" });
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await expect(page.getByTestId("workspace-recovery-action")).toHaveText("Unarchive");
+  });
+
+  test("reads a recoverable archived workspace without restoring or unarchiving it", async ({
     page,
   }) => {
-    const { agent, worktree } = await openArchivedWorkspaceFromHistory(page, "restore-ready");
-    expect(await fetchAgentArchivedAt(client, agent.id)).toBeNull();
+    const { agent, worktree } = await createArchivedMissingWorktree("restore-ready", {
+      keepAgentsArchived: true,
+    });
+    const archivedAt = await fetchAgentArchivedAt(client, agent.id);
+    expect(archivedAt).not.toBeNull();
+    await gotoAppShell(page);
+    await waitForSidebarHydration(page);
+    await openSessions(page);
+    await page.getByTestId(`agent-row-${getServerId()}-${agent.id}`).click();
+    await expect(page.getByTestId("workspace-recovery-action")).toHaveText("Restore");
     expect(existsSync(worktree.workspaceDirectory)).toBe(false);
     await expect(
       worktreeClient.inspectWorkspaceRecovery(worktree.workspaceId),
     ).resolves.toMatchObject({ kind: "recoverable", action: "restore" });
+    await page.getByRole("button", { name: "Read transcript", exact: true }).click();
+    await expect(page.getByTestId("archived-transcript")).toBeVisible();
+    await expect(page.getByText("Loading transcript…", { exact: true })).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await expect(page.getByRole("button", { name: "Retry transcript", exact: true })).toHaveCount(
+      0,
+    );
+    expect(existsSync(worktree.workspaceDirectory)).toBe(false);
+    expect(await fetchAgentArchivedAt(client, agent.id)).toBe(archivedAt);
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await expect(page.getByTestId("workspace-recovery-action")).toHaveText("Restore");
   });
 
   test("explicit Restore shows loading and opens the recreated workspace", async ({ page }) => {

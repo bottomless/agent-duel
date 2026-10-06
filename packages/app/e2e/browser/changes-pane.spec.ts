@@ -7,6 +7,7 @@ import { test, expect } from "../support/fixtures";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { getServerId } from "../support/helpers/server-id";
 import { connectSeedClient } from "../support/helpers/seed-client";
+import { openSidePanelTab } from "../support/helpers/side-panel";
 import { createTempGitRepo } from "../support/helpers/workspace";
 import { waitForWorkspaceTabsVisible } from "../support/helpers/workspace-tabs";
 
@@ -630,8 +631,6 @@ async function useCodeFont(page: Page, codeFontSize: number): Promise<void> {
         settingsKey,
         JSON.stringify({
           theme: "dark",
-          sendBehavior: "interrupt",
-          serviceUrlBehavior: "ask",
           terminalScrollbackLines: 10_000,
           uiFontFamily: "",
           monoFontFamily: "",
@@ -799,15 +798,10 @@ async function openWorkspaceChanges(page: Page, workspace: DirtyWorkspace): Prom
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.goto(buildHostWorkspaceRoute(getServerId(), workspace.id));
   await waitForWorkspaceTabsVisible(page);
-  await page.getByRole("button", { name: "Open explorer" }).click();
-  await openChangesInVisibleExplorer(page);
+  await openSidePanelTab(page, "changes");
+  await expect(page.getByText("use-mounted-tab-set.ts")).toBeVisible({ timeout: 30_000 });
   await page.getByTestId("diff-file-0").click();
   await expectExpandedMountedTabDiff(page);
-}
-
-async function openChangesInVisibleExplorer(page: Page): Promise<void> {
-  await expect(page.getByTestId("explorer-tab-changes")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("use-mounted-tab-set.ts")).toBeVisible({ timeout: 30_000 });
 }
 
 async function expectExpandedMountedTabDiff(page: Page): Promise<void> {
@@ -845,7 +839,8 @@ async function expectStoredCodeFontSize(page: Page, codeFontSize: number): Promi
 async function returnToWorkspaceChanges(page: Page): Promise<void> {
   await page.getByTestId("settings-back-to-workspace").click();
   await waitForWorkspaceTabsVisible(page);
-  await openChangesInVisibleExplorer(page);
+  await openSidePanelTab(page, "changes");
+  await expect(page.getByText("use-mounted-tab-set.ts")).toBeVisible({ timeout: 30_000 });
   await expectExpandedMountedTabDiff(page);
 }
 

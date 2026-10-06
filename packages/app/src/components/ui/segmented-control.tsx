@@ -14,14 +14,19 @@ type SegmentedControlIconRenderer = (props: { color: string; size: number }) => 
 export interface SegmentedControlOption<T extends string> {
   value: T;
   label: string;
+  accessibilityLabel?: string;
   icon?: SegmentedControlIconRenderer;
   disabled?: boolean;
+  /** Overrides the selected fill, for a segment that stands for something with a colour. */
+  selectedStyle?: StyleProp<ViewStyle>;
+  selectedLabelStyle?: StyleProp<TextStyle>;
   testID?: string;
 }
 
 interface SegmentedControlProps<T extends string> {
   options: SegmentedControlOption<T>[];
-  value: T;
+  /** `null` selects nothing, for a choice the caller has cleared and wants made again. */
+  value: T | null;
   onValueChange: (value: T) => void;
   size?: SegmentedControlSize;
   hideLabels?: boolean;
@@ -107,12 +112,17 @@ function SegmentItem<T extends string>({
   hideLabels: boolean;
   segmentSizeStyle: StyleProp<ViewStyle>;
   labelSizeStyle: StyleProp<TextStyle>;
-  currentValue: T;
+  currentValue: T | null;
   onValueChange: (value: T) => void;
 }) {
   const labelStyle = useMemo(
-    () => [styles.label, labelSizeStyle, isSelected && styles.labelSelected],
-    [labelSizeStyle, isSelected],
+    () => [
+      styles.label,
+      labelSizeStyle,
+      isSelected && styles.labelSelected,
+      isSelected && option.selectedLabelStyle,
+    ],
+    [labelSizeStyle, isSelected, option.selectedLabelStyle],
   );
   const handlePress = useCallback(() => {
     if (!option.disabled && option.value !== currentValue) {
@@ -124,21 +134,20 @@ function SegmentItem<T extends string>({
       styles.segment,
       segmentSizeStyle,
       isSelected && styles.segmentSelected,
+      isSelected && option.selectedStyle,
       Boolean(hovered) && !isSelected && styles.segmentHover,
       pressed && !isSelected && styles.segmentPressed,
       option.disabled && styles.segmentDisabled,
     ],
-    [isSelected, option.disabled, segmentSizeStyle],
+    [isSelected, option.disabled, option.selectedStyle, segmentSizeStyle],
   );
-  const accessibilityState = useMemo(
-    () => ({ selected: isSelected, disabled: option.disabled }),
-    [isSelected, option.disabled],
-  );
+  const accessibilityState = useMemo(() => ({ disabled: option.disabled }), [option.disabled]);
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={option.accessibilityLabel ?? option.label}
       accessibilityState={accessibilityState}
-      aria-selected={isSelected}
+      aria-pressed={isSelected}
       disabled={option.disabled}
       testID={option.testID}
       onPress={handlePress}

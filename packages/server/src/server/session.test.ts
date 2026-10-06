@@ -27,14 +27,15 @@ import type { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.
 import { createPersistedProjectRecord } from "./workspace-registry.js";
 import { deriveProjectKey } from "./project-key.js";
 import type { SessionOptions } from "./session.js";
-import type { SessionInboundMessage, SessionOutboundMessage } from "./messages.js";
+import type { SessionOutboundMessage } from "./messages.js";
+import { createArenaByokService } from "./accounts/byok.js";
+import { clearArenaCredentials, readArenaCredentials } from "./accounts/credentials.js";
 import {
   asSessionInternals as asSessionInternalsHelper,
   asAgentManager,
   asAgentStorage,
   asDownloadTokenStore,
   asPushNotifications,
-  asScheduleService,
   asCheckoutDiffManager,
   asGitHubService,
   asWorkspaceGitService,
@@ -281,6 +282,8 @@ vi.mock("./worktree-bootstrap.js", async (importOriginal) => {
 
 interface SessionForTestOptions {
   scopes?: readonly string[];
+  accountUserId?: string;
+  arenaByok?: SessionOptions["arenaByok"];
   agentManager?: { [K in keyof SessionOptions["agentManager"]]?: unknown };
   agentStorage?: { [K in keyof SessionOptions["agentStorage"]]?: unknown };
   github?: Partial<ForgeService & GitHubService>;
@@ -308,7 +311,6 @@ interface SessionForTestOptions {
   getDaemonTcpPort?: () => number | null;
   getDaemonTcpHost?: () => string | null;
   providerSnapshotManager?: ProviderSnapshotManager;
-  hubExecutionAgents?: SessionOptions["hubExecutionAgents"];
   stt?: SessionOptions["stt"];
   voice?: SessionOptions["voice"];
   paseoHome?: string;
@@ -356,6 +358,8 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
 
   const sessionOptions: SessionOptions = {
     clientId: "test-client",
+    accountUserId: options.accountUserId,
+    arenaByok: options.arenaByok,
     onMessage: (message) => messages.push(message),
     ...(options.targetedMessages
       ? {
@@ -394,7 +398,6 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
       get: vi.fn(),
       list: vi.fn().mockResolvedValue([]),
     },
-    scheduleService: asScheduleService(),
     checkoutDiffManager: asCheckoutDiffManager(checkoutDiffManager),
     github: asGitHubService(github),
     workspaceGitService: asWorkspaceGitService(workspaceGitService),
@@ -410,7 +413,6 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
     terminalManager: options.terminalManager ?? null,
     providerSnapshotManager:
       options.providerSnapshotManager ?? createProviderSnapshotManagerStub().manager,
-    hubExecutionAgents: options.hubExecutionAgents,
     serviceProxy: options.serviceProxy,
     scriptRuntimeStore: options.scriptRuntimeStore,
     getDaemonTcpPort: options.getDaemonTcpPort,
@@ -424,49 +426,227 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
   return new Session(sessionOptions);
 }
 
-describe("session authorization scopes", () => {
-  test("routes named-agent validation through the session source", async () => {
+describe("Arena BYOK RPCs", () => {
+  afterEach(() => {
+    clearArenaCredentials();
+  });
+
+  function createByokSession(options: { byok: boolean }) {
     const messages: SessionOutboundMessage[] = [];
-    const providers = createProviderSnapshotManagerStub();
-    providers.validateAgentConfiguration.mockResolvedValue([
-      { path: ["model"], message: "Model is unavailable" },
-    ]);
-    const session = createSessionForTest({
-      messages,
-      providerSnapshotManager: providers.manager,
-      hubExecutionAgents: {
-        create: vi.fn(),
-        control: vi.fn(),
-        subscribe: vi.fn(() => () => undefined),
-        invalidateAuthority: vi.fn(),
+    let restarts = 0;
+    const arenaByok = options.byok
+      ? createArenaByokService({
+          restartArena: async () => {
+            restarts += 1;
+          },
+        })
+      : null;
+    const session = createSessionForTest({ arenaByok, messages });
+    return { session, messages, restarts: () => restarts };
+  }
+
+  test("reports that a signed-in build does not take a key", async () => {
+    const { session, messages } = createByokSession({ byok: false });
+
+    await session.handleMessage({ type: "arena.byok.status.get.request", requestId: "status" });
+
+    expect(messages).toEqual([
+      {
+        type: "arena.byok.status.get.response",
+        payload: { requestId: "status", available: false, configured: false },
       },
+    ]);
+  });
+
+  test("trims a key, holds it in memory, and restarts Arena to hand it over", async () => {
+    const { session, messages, restarts } = createByokSession({ byok: true });
+
+    await session.handleMessage({ type: "arena.byok.status.get.request", requestId: "before" });
+    await session.handleMessage({
+      type: "arena.byok.key.set.request",
+      requestId: "set",
+      key: "  sk-or-v1-private\n",
+    });
+    await session.handleMessage({ type: "arena.byok.status.get.request", requestId: "after" });
+
+    expect(messages).toEqual([
+      {
+        type: "arena.byok.status.get.response",
+        payload: { requestId: "before", available: true, configured: false },
+      },
+      { type: "arena.byok.key.set.response", payload: { requestId: "set", configured: true } },
+      {
+        type: "arena.byok.status.get.response",
+        payload: { requestId: "after", available: true, configured: true },
+      },
+    ]);
+    expect(restarts()).toBe(1);
+    expect(readArenaCredentials()?.credentials).toEqual({
+      mode: "byok",
+      openRouterApiKey: "sk-or-v1-private",
+    });
+  });
+
+  test("clears the key and restarts Arena", async () => {
+    const { session, messages, restarts } = createByokSession({ byok: true });
+    await session.handleMessage({
+      type: "arena.byok.key.set.request",
+      requestId: "set",
+      key: "sk-or-v1-private",
     });
 
     await session.handleMessage({
-      type: "hub.execution.agent.validate.request",
-      requestId: "validate-agent",
-      provider: "codex",
-      model: "missing",
+      type: "arena.byok.key.set.request",
+      requestId: "clear",
+      key: null,
     });
 
-    expect(providers.validateAgentConfiguration).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "codex", model: "missing" }),
-    );
-    expect(messages).toContainEqual({
-      type: "hub.execution.agent.validate.response",
-      payload: {
-        requestId: "validate-agent",
-        valid: false,
-        issues: [{ path: ["model"], message: "Model is unavailable" }],
-        error: null,
+    expect(messages.at(-1)).toEqual({
+      type: "arena.byok.key.set.response",
+      payload: { requestId: "clear", configured: false },
+    });
+    expect(restarts()).toBe(2);
+    expect(readArenaCredentials()).toBeNull();
+  });
+
+  test("refuses a blank key without touching Arena", async () => {
+    const { session, messages, restarts } = createByokSession({ byok: true });
+
+    await session.handleMessage({
+      type: "arena.byok.key.set.request",
+      requestId: "blank",
+      key: "  ",
+    });
+
+    expect(messages).toEqual([
+      {
+        type: "rpc_error",
+        payload: {
+          requestId: "blank",
+          requestType: "arena.byok.key.set.request",
+          error: "Enter an OpenRouter API key",
+          code: "arena_byok_invalid_key",
+        },
+      },
+    ]);
+    expect(restarts()).toBe(0);
+  });
+
+  test("refuses a key on a build that signs in", async () => {
+    const { session, messages } = createByokSession({ byok: false });
+
+    await session.handleMessage({
+      type: "arena.byok.key.set.request",
+      requestId: "set",
+      key: "sk-or-v1-private",
+    });
+
+    expect(messages).toEqual([
+      {
+        type: "rpc_error",
+        payload: {
+          requestId: "set",
+          requestType: "arena.byok.key.set.request",
+          error: "This build signs in to Agent Duel and does not take an OpenRouter key",
+          code: "arena_byok_unavailable",
+        },
+      },
+    ]);
+    expect(readArenaCredentials()).toBeNull();
+  });
+});
+
+describe("session authorization scopes", () => {
+  test("passes the connection's account to an Arena stream", async () => {
+    const stream = vi.fn(async function* () {});
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({
+      accountUserId: "signed-in-owner",
+      messages,
+      agentManager: {
+        waitForAgentClose: vi.fn(async () => {}),
+        getAgent: vi.fn(() => ({
+          id: "agent",
+          session: { arena: { streamKey: "backend-session", stream } },
+        })),
       },
     });
+    try {
+      await session.handleMessage(
+        {
+          type: "arena.stream.subscribe.request",
+          requestId: "subscribe",
+          subscriptionId: "sub",
+          agentId: "agent",
+          target: { kind: "current" },
+        },
+        {},
+      );
+      expect(messages.filter((message) => message.type === "rpc_error")).toEqual([]);
+      expect(stream).toHaveBeenCalledWith(
+        { kind: "current" },
+        expect.any(AbortSignal),
+        "signed-in-owner",
+      );
+    } finally {
+      await session.cleanup();
+    }
+  });
+
+  test("scopes Arena stream access errors and acknowledgements to the requesting socket", async () => {
+    const messages: SessionOutboundMessage[] = [];
+    const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+    const source = {};
+    const session = createSessionForTest({
+      scopes: ["arena.stream.ack.request", "arena.stream.unsubscribe.request"],
+      messages,
+      targetedMessages,
+    });
+    await session.handleMessage(
+      {
+        type: "arena.stream.subscribe.request",
+        requestId: "denied",
+        subscriptionId: "sub",
+        agentId: "agent",
+        target: { kind: "current" },
+      },
+      source,
+    );
+    await session.handleMessage(
+      {
+        type: "arena.stream.ack.request",
+        requestId: "ack",
+        subscriptionId: "sub",
+        generation: "generation",
+        sequence: 1,
+      },
+      source,
+    );
+    await session.handleMessage(
+      {
+        type: "arena.stream.unsubscribe.request",
+        requestId: "unsubscribe",
+        subscriptionId: "sub",
+      },
+      source,
+    );
+    expect(messages).toEqual([]);
+    expect(targetedMessages.map(({ message }) => message.type)).toEqual([
+      "rpc_error",
+      "arena.stream.ack.response",
+      "arena.stream.unsubscribe.response",
+    ]);
+    expect(targetedMessages.every((delivery) => delivery.source === source)).toBe(true);
+    expect(targetedMessages[0].message).toMatchObject({
+      payload: { code: "access_denied", requestId: "denied" },
+    });
+    await session.cleanup();
   });
 
   test("rejects an RPC outside an exact grant with the generic RPC error", async () => {
     const messages: SessionOutboundMessage[] = [];
     const session = createSessionForTest({
-      scopes: ["hub.execution.agent.create.request"],
+      scopes: ["arena.stream.subscribe.request"],
       messages,
     });
 
@@ -487,23 +667,23 @@ describe("session authorization scopes", () => {
 
   test.each([
     ["*", "ping"],
-    ["hub.execution.*", "hub.execution.agent.create.request"],
-    ["hub.execution.agent.create.request", "hub.execution.agent.create.request"],
+    ["arena.stream.*", "arena.stream.subscribe.request"],
+    ["arena.stream.subscribe.request", "arena.stream.subscribe.request"],
   ])("scope %s authorizes %s", (scope, requestType) => {
     expect(isSessionRpcAllowed([scope], requestType)).toBe(true);
   });
 
   test.each([
-    ["hub.execution.*", "hub.management.daemon.get_status.request"],
-    ["hub.execution.agent.create.request", "hub.execution.agent.update"],
-    ["hub.execution.*", "hub.executions.agent.create.request"],
+    ["arena.stream.*", "daemon.get_status.request"],
+    ["arena.stream.subscribe.request", "arena.stream.update"],
+    ["arena.stream.*", "arena.streams.subscribe.request"],
   ])("scope %s rejects %s", (scope, requestType) => {
     expect(isSessionRpcAllowed([scope], requestType)).toBe(false);
   });
 
   test("replaces a session's scopes without reconstructing the session", async () => {
     const messages: SessionOutboundMessage[] = [];
-    const session = createSessionForTest({ scopes: ["hub.execution.*"], messages });
+    const session = createSessionForTest({ scopes: ["arena.stream.*"], messages });
 
     await session.handleMessage({
       type: "ping",
@@ -537,6 +717,18 @@ describe("session authorization scopes", () => {
 });
 
 describe("project command-center RPCs", () => {
+  // New projects and the battle Git bootstrap run real git in a temporary folder.
+  async function useRealGit() {
+    const actual = await vi.importActual<typeof import("../utils/run-git-command.js")>(
+      "../utils/run-git-command.js",
+    );
+    gitCommandMocks.runGitCommand.mockImplementation(actual.runGitCommand);
+  }
+
+  afterEach(() => {
+    gitCommandMocks.runGitCommand.mockReset();
+  });
+
   test("returns normalized repositories from the host GitHub service", async () => {
     const messages: SessionOutboundMessage[] = [];
     const searchRepositories = vi.fn().mockResolvedValue([
@@ -647,6 +839,7 @@ describe("project command-center RPCs", () => {
   });
 
   test("creates a directory and returns its normalized Project descriptor", async () => {
+    await useRealGit();
     const parentDirectory = realpathSync(mkdtempSync(join(tmpdir(), "paseo-project-session-")));
     const directoryPath = join(parentDirectory, "new-project");
     const messages: SessionOutboundMessage[] = [];
@@ -724,6 +917,7 @@ describe("project command-center RPCs", () => {
   });
 
   test("rolls back the directory when Project registration fails", async () => {
+    await useRealGit();
     const parentDirectory = realpathSync(mkdtempSync(join(tmpdir(), "paseo-project-session-")));
     const directoryPath = join(parentDirectory, "unregistered");
     const messages: SessionOutboundMessage[] = [];
@@ -768,6 +962,90 @@ describe("project command-center RPCs", () => {
       ]);
     } finally {
       rmSync(parentDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("inspects and initializes Git for a folder that has no commit", async () => {
+    await useRealGit();
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "paseo-project-git-session-")));
+    writeFileSync(join(directory, "notes.txt"), "keep\n");
+    const messages: SessionOutboundMessage[] = [];
+    const refreshProjectDirectory = vi.fn(async () => {});
+    const session = createSessionForTest({ messages, agentManager: { refreshProjectDirectory } });
+
+    try {
+      await session.handleMessage({
+        type: "project.git.inspect.request",
+        cwd: directory,
+        requestId: "req-inspect-before",
+      });
+      await session.handleMessage({
+        type: "project.git.initialize.request",
+        cwd: directory,
+        requestId: "req-initialize",
+      });
+      await session.handleMessage({
+        type: "project.git.inspect.request",
+        cwd: directory,
+        requestId: "req-inspect-after",
+      });
+
+      expect(messages).toEqual([
+        {
+          type: "project.git.inspect.response",
+          payload: {
+            requestId: "req-inspect-before",
+            cwd: directory,
+            state: "not_git",
+            error: null,
+          },
+        },
+        {
+          type: "project.git.initialize.response",
+          payload: { requestId: "req-initialize", cwd: directory, error: null },
+        },
+        {
+          type: "project.git.inspect.response",
+          payload: { requestId: "req-inspect-after", cwd: directory, state: "ready", error: null },
+        },
+      ]);
+      expect(execSync("git status --porcelain", { cwd: directory, encoding: "utf8" })).toBe(
+        "?? notes.txt\n",
+      );
+      // The provider forgets the non-Git project it may have cached for this folder.
+      expect(refreshProjectDirectory).toHaveBeenCalledWith(directory);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("reports a Git inspection error for a missing folder", async () => {
+    await useRealGit();
+    const parent = realpathSync(mkdtempSync(join(tmpdir(), "paseo-project-git-session-")));
+    const missing = join(parent, "missing");
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({ messages });
+
+    try {
+      await session.handleMessage({
+        type: "project.git.inspect.request",
+        cwd: missing,
+        requestId: "req-inspect-missing",
+      });
+
+      expect(messages).toEqual([
+        {
+          type: "project.git.inspect.response",
+          payload: {
+            requestId: "req-inspect-missing",
+            cwd: missing,
+            state: null,
+            error: expect.any(String),
+          },
+        },
+      ]);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
     }
   });
 });
@@ -1009,6 +1287,59 @@ describe("workspace file access (behavior preservation)", () => {
     }
     expect(message.payload.cwd).toBe(cwd);
     expect(message.payload.error).toBeNull();
+  });
+
+  test("file upload keeps frames that arrive in the same read as the request", async () => {
+    const paseoHome = makeDir("file-access-upload-same-read-");
+    const messages: SessionOutboundMessage[] = [];
+    const session = createSessionForTest({ messages, paseoHome });
+
+    // The WebSocket server emits every frame of one network read synchronously, so the binary
+    // frames reach the session before the request's handler resumes from its first await.
+    const request = session.handleMessage({
+      type: "file.upload.request",
+      fileName: "notes.txt",
+      mimeType: "text/plain",
+      size: 11,
+      modifiedAt: "2026-05-02T00:00:00.000Z",
+      requestId: "req-same-read",
+    });
+    const frames = [
+      session.handleBinaryFrame({
+        kind: "file_transfer",
+        frame: uploadFrame({
+          opcode: FileTransferOpcode.FileBegin,
+          requestId: "req-same-read",
+          metadata: {
+            mime: "text/plain",
+            size: 11,
+            encoding: "binary",
+            modifiedAt: "2026-05-02T00:00:00.000Z",
+            fileName: "notes.txt",
+          },
+        }),
+      }),
+      session.handleBinaryFrame({
+        kind: "file_transfer",
+        frame: uploadFrame({
+          opcode: FileTransferOpcode.FileChunk,
+          requestId: "req-same-read",
+          payload: new TextEncoder().encode("hello world"),
+        }),
+      }),
+      session.handleBinaryFrame({
+        kind: "file_transfer",
+        frame: uploadFrame({ opcode: FileTransferOpcode.FileEnd, requestId: "req-same-read" }),
+      }),
+    ];
+    await Promise.all([request, ...frames]);
+
+    const response = messages.find((message) => message.type === "file.upload.response");
+    if (response?.type !== "file.upload.response") {
+      throw new Error("expected a file.upload.response message");
+    }
+    expect(response.payload.error).toBeNull();
+    expect(response.payload.file?.size).toBe(11);
   });
 
   test("file upload round-trips bytes through binary frames", async () => {
@@ -1687,11 +2018,14 @@ function createWorkspaceGitSnapshot(
 }
 
 function createTerminalManagerStub(options?: { setTerminalTitle?: ReturnType<typeof vi.fn> }): {
+  getTerminal: ReturnType<typeof vi.fn>;
   setTerminalTitle: ReturnType<typeof vi.fn>;
   subscribeTerminalsChanged: ReturnType<typeof vi.fn>;
   subscribeTerminalWorkspaceContributionChanged: ReturnType<typeof vi.fn>;
 } {
   return {
+    // Terminal requests look up the terminal's cwd for the workspace cleanup gate first.
+    getTerminal: vi.fn(() => undefined),
     setTerminalTitle: options?.setTerminalTitle ?? vi.fn(),
     subscribeTerminalsChanged: vi.fn(() => () => {}),
     subscribeTerminalWorkspaceContributionChanged: vi.fn(() => () => {}),
@@ -3477,7 +3811,10 @@ describe("session checkout status handling", () => {
     });
 
     expect(workspaceGitService.getSnapshot).toHaveBeenCalledTimes(1);
-    expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith("/tmp/service-worktree");
+    expect(workspaceGitService.getSnapshot).toHaveBeenCalledWith(
+      "/tmp/service-worktree",
+      undefined,
+    );
     expect(checkoutGitMocks.getCheckoutStatus).not.toHaveBeenCalled();
     expect(messages).toContainEqual({
       type: "checkout_status_response",
@@ -3781,7 +4118,11 @@ describe("session branch validation", () => {
     });
 
     expect(workspaceGitService.validateBranchRef).toHaveBeenCalledTimes(1);
-    expect(workspaceGitService.validateBranchRef).toHaveBeenCalledWith("/tmp/repo", "feature");
+    expect(workspaceGitService.validateBranchRef).toHaveBeenCalledWith(
+      "/tmp/repo",
+      "feature",
+      undefined,
+    );
     expect(checkoutGitMocks.resolveBranchCheckout).not.toHaveBeenCalled();
     expect(messages).toContainEqual({
       type: "validate_branch_response",
@@ -4110,10 +4451,11 @@ describe("session branch suggestions handling", () => {
     });
 
     expect(workspaceGitService.suggestBranchesForCwd).toHaveBeenCalledTimes(1);
-    expect(workspaceGitService.suggestBranchesForCwd).toHaveBeenCalledWith("/tmp/repo", {
-      query: "service",
-      limit: 5,
-    });
+    expect(workspaceGitService.suggestBranchesForCwd).toHaveBeenCalledWith(
+      "/tmp/repo",
+      { query: "service", limit: 5 },
+      undefined,
+    );
     expect(checkoutGitMocks.listBranchSuggestions).not.toHaveBeenCalled();
     expect(messages).toContainEqual({
       type: "branch_suggestions_response",
@@ -4691,69 +5033,6 @@ describe("session pull request timeline handling", () => {
         requestId: "request-check-details",
       },
     });
-  });
-});
-
-describe("schedule dispatch routing", () => {
-  // Each schedule/* type must reach its domain handler. The injected service stub
-  // is unstubbed, so every handler's own try/catch emits its domain rpc_error code.
-  // handleMessage receives already-parsed messages, so these fixtures only need to
-  // satisfy the TS union here — zod parsing happens upstream at the transport.
-  const routingCases: Array<{ msg: SessionInboundMessage; code: string }> = [
-    {
-      msg: {
-        type: "schedule/create",
-        requestId: "rt-sched-create",
-        prompt: "p",
-        cadence: { type: "every", everyMs: 1000 },
-        target: { type: "agent", agentId: "00000000-0000-0000-0000-000000000000" },
-      },
-      code: "schedule_request_failed",
-    },
-    { msg: { type: "schedule/list", requestId: "rt-sched-list" }, code: "schedule_request_failed" },
-    {
-      msg: { type: "schedule/inspect", requestId: "rt-sched-inspect", scheduleId: "s1" },
-      code: "schedule_request_failed",
-    },
-    {
-      msg: { type: "schedule/logs", requestId: "rt-sched-logs", scheduleId: "s1" },
-      code: "schedule_request_failed",
-    },
-    {
-      msg: { type: "schedule/pause", requestId: "rt-sched-pause", scheduleId: "s1" },
-      code: "schedule_request_failed",
-    },
-    {
-      msg: { type: "schedule/resume", requestId: "rt-sched-resume", scheduleId: "s1" },
-      code: "schedule_request_failed",
-    },
-    {
-      msg: { type: "schedule/delete", requestId: "rt-sched-delete", scheduleId: "s1" },
-      code: "schedule_request_failed",
-    },
-    {
-      msg: { type: "schedule/run-once", requestId: "rt-sched-run-once", scheduleId: "s1" },
-      code: "schedule_request_failed",
-    },
-    {
-      msg: { type: "schedule/update", requestId: "rt-sched-update", scheduleId: "s1", name: "new" },
-      code: "schedule_request_failed",
-    },
-  ];
-
-  test.each(routingCases)("routes $msg.type to its domain handler", async ({ msg, code }) => {
-    const messages: SessionOutboundMessage[] = [];
-    const session = createSessionForTest({ messages });
-
-    await session.handleMessage(msg);
-
-    const routed = messages
-      .filter(
-        (m): m is Extract<SessionOutboundMessage, { type: "rpc_error" }> => m.type === "rpc_error",
-      )
-      .find((m) => m.payload.requestId === msg.requestId);
-    expect(routed, `${msg.type} did not route to a handler (silent no-op)`).toBeDefined();
-    expect(routed?.payload.code).toBe(code);
   });
 });
 

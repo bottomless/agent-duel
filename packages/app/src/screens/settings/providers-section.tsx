@@ -9,7 +9,7 @@ import {
   type GestureResponderEvent,
   type PressableStateCallbackType,
 } from "react-native";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { settingsStyles } from "@/styles/settings";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
@@ -36,6 +36,11 @@ import { useProviderSettingsStore } from "@/stores/provider-settings-store";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { filterSelectableModels } from "@/provider-selection/model-catalog";
 import { ChevronRight, MoreHorizontal, Trash2 } from "lucide-react-native";
+import type { Theme } from "@/styles/theme";
+
+const ThemedChevronRight = withUnistyles(ChevronRight);
+const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
+const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
 type ProviderDefinition = ReturnType<typeof buildProviderDefinitions>[number];
 type ProviderEntry = NonNullable<ReturnType<typeof useProvidersSnapshot>["entries"]>[number];
@@ -222,9 +227,9 @@ function ProviderRow({
       {({ hovered }: PressableStateCallbackType & { hovered?: boolean }) => (
         <>
           <View style={styles.rowContent}>
-            <ChevronRight
+            <ThemedChevronRight
               size={theme.iconSize.sm}
-              color={hovered ? theme.colors.foreground : theme.colors.foregroundMuted}
+              uniProps={hovered ? foregroundColorMapping : foregroundMutedColorMapping}
             />
             <ProviderIcon size={theme.iconSize.md} color={theme.colors.foreground} />
             <View style={styles.textColumn}>

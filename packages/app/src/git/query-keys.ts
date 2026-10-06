@@ -21,6 +21,10 @@ export function checkoutStatusQueryKey(serverId: string, cwd: string) {
   return ["checkoutStatus", serverId, cwd] as const;
 }
 
+export function checkoutStatusRefreshQueryKey(serverId: string, cwd: string) {
+  return ["checkoutStatusRefresh", serverId, cwd] as const;
+}
+
 export function checkoutDiffQueryKey(
   serverId: string,
   cwd: string,

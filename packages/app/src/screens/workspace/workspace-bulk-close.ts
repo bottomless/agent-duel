@@ -52,6 +52,9 @@ interface CloseBulkWorkspaceTabsInput {
 export function classifyBulkClosableTabs(
   tabs: WorkspaceTabDescriptor[],
   resolveAgentCloseKind: (agentId: string) => "archive" | "layout-only" = () => "archive",
+  // A contestant's shell counts as a terminal here, so a bulk close says how many terminals
+  // it is about to stop and then stops them. The shell it opened is not in the tab.
+  resolveSeatTerminalId: (instanceId: string) => string | null = () => null,
 ): BulkClosableTabGroups {
   const groups: BulkClosableTabGroups = {
     archiveAgentTabs: [],
@@ -73,6 +76,13 @@ export function classifyBulkClosableTabs(
     if (tab.target.kind === "terminal") {
       groups.terminalTabs.push({ tabId: tab.tabId, terminalId: tab.target.terminalId });
       continue;
+    }
+    if (tab.target.kind === "arena_terminal") {
+      const terminalId = resolveSeatTerminalId(tab.target.instanceId);
+      if (terminalId) {
+        groups.terminalTabs.push({ tabId: tab.tabId, terminalId });
+        continue;
+      }
     }
     groups.otherTabs.push({ tabId: tab.tabId, target: tab.target });
   }

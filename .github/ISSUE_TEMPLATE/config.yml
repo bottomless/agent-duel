@@ -1,8 +1,5 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: Product discussion on Discord
-    url: https://discord.gg/jz8T2uahpH
-    about: Product discussion, including feature requests
-  - name: Product discussion on GitHub
-    url: https://github.com/getpaseo/paseo/discussions
-    about: Product discussion, including feature requests
+  - name: Report a security vulnerability
+    url: https://github.com/bottomless/agent-duel/security/advisories/new
+    about: Report it privately. Please don't open a public issue.

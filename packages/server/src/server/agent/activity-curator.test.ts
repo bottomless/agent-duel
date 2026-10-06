@@ -309,6 +309,7 @@ second line'`,
     });
 
     expect(result.boundaryMessageId).toBe("assistant-1");
+    expect(result.throughMessageId).toBe("assistant-1");
     expect(result.attachment).toMatchObject({
       type: "text",
       mimeType: "text/plain",
@@ -415,6 +416,7 @@ second line'`,
 
     expect(result.boundaryCursor).toEqual({ epoch: "timeline-1", seq: 2 });
     expect(result.boundaryMessageId).toBeNull();
+    expect(result.throughMessageId).toBe("user-1");
     expect(result.attachment.text).toContain("[System Error] provider failed");
     expect(result.attachment.text).not.toContain("This belongs to a later turn.");
   });

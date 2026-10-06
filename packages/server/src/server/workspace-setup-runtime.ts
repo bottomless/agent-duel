@@ -8,6 +8,10 @@ interface WorkspaceSetupRun {
 export class WorkspaceSetupRuntime {
   private readonly runs = new Map<string, WorkspaceSetupRun>();
 
+  isRunning(workspaceId: string): boolean {
+    return this.runs.has(workspaceId);
+  }
+
   start(workspaceId: string, operation: WorkspaceSetupOperation): void {
     const controller = new AbortController();
     const run: WorkspaceSetupRun = {

@@ -6,6 +6,8 @@ import type { MarkdownFenceRendererProps } from "./types";
 
 export interface MarkdownFenceBlockProps extends MarkdownFenceRendererProps {
   info: string | null | undefined;
+  enableDiagrams?: boolean;
+  horizontalScroll?: boolean;
 }
 
 const diagramFences: Partial<Record<string, ComponentType<MarkdownFenceRendererProps>>> = {
@@ -18,9 +20,11 @@ export function MarkdownFenceBlock({
   phase,
   inheritedStyles,
   textStyle,
+  enableDiagrams = true,
+  horizontalScroll = false,
 }: MarkdownFenceBlockProps) {
   const language = getMarkdownFenceLanguage(info);
-  const DiagramFence = language ? diagramFences[language] : undefined;
+  const DiagramFence = enableDiagrams && language ? diagramFences[language] : undefined;
   if (DiagramFence) {
     return (
       <DiagramFence
@@ -37,6 +41,7 @@ export function MarkdownFenceBlock({
       language={language}
       inheritedStyles={inheritedStyles}
       textStyle={textStyle}
+      horizontalScroll={horizontalScroll}
     />
   );
 }

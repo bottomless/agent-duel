@@ -65,6 +65,32 @@ describe("workspace registries", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test("a delayed workspace refresh cannot rearm a completed fork after reload", async () => {
+    const pending = createPersistedWorkspaceRecord({
+      workspaceId: "fork-workspace",
+      projectId: "project",
+      cwd: tmpDir,
+      kind: "directory",
+      displayName: "Fork",
+      pendingFork: true,
+      createdAt: "2026-03-01T00:00:00.000Z",
+      updatedAt: "2026-03-01T00:00:00.000Z",
+    });
+    await workspaceRegistry.upsert(pending);
+    await workspaceRegistry.update(pending.workspaceId, (record) => ({
+      ...record,
+      pendingFork: undefined,
+    }));
+    await workspaceRegistry.upsert({ ...pending, displayName: "Refreshed checkout" });
+    const reloaded = new FileBackedWorkspaceRegistry(
+      path.join(tmpDir, "projects", "workspaces.json"),
+      logger,
+    );
+    const restored = await reloaded.get(pending.workspaceId);
+    expect(restored?.displayName).toBe("Refreshed checkout");
+    expect(restored?.pendingFork).toBeUndefined();
+  });
+
   test("creates, updates, archives, deletes, and lists project records", async () => {
     await projectRegistry.initialize();
     await projectRegistry.upsert(

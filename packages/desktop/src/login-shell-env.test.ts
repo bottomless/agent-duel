@@ -112,6 +112,54 @@ async function createShellHome(): Promise<string> {
 }
 
 describe("login shell env retry behavior", () => {
+  it("preserves explicit Paseo launch overrides from the parent process", () => {
+    const env = {
+      ...createEnv(fakeHome),
+      PASEO_LISTEN: "127.0.0.1:16775",
+      PASEO_HOME: "/tmp/explicit-paseo-home",
+    };
+    const shellEnv = {
+      ...env,
+      PASEO_LISTEN: "127.0.0.1:6768",
+      PASEO_HOME: "/tmp/shell-paseo-home",
+      PATH: "/login/bin:/usr/bin:/bin",
+    };
+    const spawnSync: LoginShellSpawnSync = (_shell, args) =>
+      successResult(String(Array.isArray(args) ? args.at(-1) : ""), shellEnv);
+
+    inheritLoginShellEnv({
+      env,
+      logger: new RecordingLoginShellLogger(),
+      platform: "darwin",
+      spawnSync,
+    });
+
+    expect(env.PASEO_LISTEN).toBe("127.0.0.1:16775");
+    expect(env.PASEO_HOME).toBe("/tmp/explicit-paseo-home");
+    expect(env.PATH).toBe("/login/bin:/usr/bin:/bin");
+  });
+
+  it("does not import stale Paseo settings from the login shell", () => {
+    const env = createEnv(fakeHome);
+    const shellEnv = {
+      ...env,
+      PASEO_LISTEN: "127.0.0.1:6768",
+      PASEO_HOME: "/tmp/shell-paseo-home",
+    };
+    const spawnSync: LoginShellSpawnSync = (_shell, args) =>
+      successResult(String(Array.isArray(args) ? args.at(-1) : ""), shellEnv);
+
+    inheritLoginShellEnv({
+      env,
+      logger: new RecordingLoginShellLogger(),
+      platform: "darwin",
+      spawnSync,
+    });
+
+    expect(env.PASEO_LISTEN).toBeUndefined();
+    expect(env.PASEO_HOME).toBeUndefined();
+  });
+
   it("applies the interactive env without retrying", () => {
     const env = createEnv(fakeHome);
     const logger = new RecordingLoginShellLogger();

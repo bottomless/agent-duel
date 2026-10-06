@@ -33,6 +33,11 @@ export interface ResolveStructuredGenerationProvidersOptions {
   cwd: string;
   providerSnapshotManager: Pick<ProviderSnapshotManager, "listProviders">;
   daemonConfig?: StructuredGenerationDaemonConfig | null;
+  preferredSelection?: {
+    provider?: AgentProvider | null;
+    model?: string | null;
+    thinkingOptionId?: string | null;
+  };
   currentSelection?: {
     provider?: AgentProvider | null;
     model?: string | null;
@@ -52,6 +57,15 @@ export async function resolveStructuredGenerationProviders(
   const modelEntries = enabledEntries.filter((entry) => (entry.models?.length ?? 0) > 0);
   const entriesByProvider = new Map(enabledEntries.map((entry) => [entry.provider, entry]));
   const providers: StructuredGenerationProvider[] = [];
+
+  const preferredSelection = resolveCurrentSelection(
+    options.preferredSelection,
+    modelEntries,
+    entriesByProvider,
+  );
+  if (preferredSelection) {
+    providers.push(preferredSelection);
+  }
 
   for (const configured of configuredProviders) {
     const resolvedConfigured = resolveConfiguredCandidate(

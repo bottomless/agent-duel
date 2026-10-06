@@ -27,6 +27,6 @@ appId: sh.paseo
 
 - runFlow:
     when:
-      visible: "Welcome to Paseo"
+      visible: "Welcome to Agent Duel"
     commands:
-      - assertVisible: "Welcome to Paseo"
+      - assertVisible: "Welcome to Agent Duel"

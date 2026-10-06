@@ -127,6 +127,29 @@ describe("resolveWorktreeCreationIntent", () => {
     expect(deps.headRefLookups).toEqual([]);
   });
 
+  test("detaches at the explicit refName when action is detach", async () => {
+    const deps = createResolverHarness();
+
+    await expect(
+      resolveWorktreeCreationIntent({ action: "detach", refName: "dev" }, repoRoot, deps),
+    ).resolves.toEqual({
+      kind: "detached",
+      baseRef: "dev",
+    });
+    expect(deps.headRefLookups).toEqual([]);
+  });
+
+  test("detaches at the repo default branch when detach names no ref", async () => {
+    const deps = createResolverHarness();
+
+    await expect(
+      resolveWorktreeCreationIntent({ action: "detach" }, repoRoot, deps),
+    ).resolves.toEqual({
+      kind: "detached",
+      baseRef: "main",
+    });
+  });
+
   test("checks out an explicit branch target", async () => {
     const deps = createResolverHarness();
 

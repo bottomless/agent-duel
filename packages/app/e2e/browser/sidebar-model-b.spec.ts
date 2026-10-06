@@ -40,7 +40,7 @@ async function seedSecondWorkspace(seeded: SeededWorkspace, title: string): Prom
 test.describe("Model B sidebar shape", () => {
   test.describe.configure({ timeout: 180_000 });
 
-  test("git and non-git projects both render as expandable parents, both show a per-row New workspace icon, and the global button covers both", async ({
+  test("git and non-git projects render as expandable parents with per-project New chat actions", async ({
     page,
   }) => {
     const gitProject = await seedWorkspace({ repoPrefix: "model-b-git-" });
@@ -64,7 +64,7 @@ test.describe("Model B sidebar shape", () => {
       await expect(workspaceRow(page, nonGitProject.workspaceId)).toBeVisible({ timeout: 30_000 });
       await expect(workspaceRow(page, nonGitSecondId)).toBeVisible({ timeout: 30_000 });
 
-      // Both projects show a per-row New workspace icon (revealed on hover): the
+      // Both projects show a per-row New chat icon (revealed on hover): the
       // git project can branch off a worktree, and the non-git project can add
       // another workspace because the host supports workspaceMultiplicity.
       await projectRow(page, gitProject.projectKey).hover();
@@ -73,12 +73,6 @@ test.describe("Model B sidebar shape", () => {
       });
       await projectRow(page, nonGitProject.projectKey).hover();
       await expect(projectNewWorktreeIcon(page, nonGitProject.projectKey)).toBeVisible({
-        timeout: 30_000,
-      });
-
-      // The global new-workspace button is the universal entry — present for both
-      // kinds regardless of their per-row affordance.
-      await expect(page.getByTestId("sidebar-global-new-workspace")).toBeVisible({
         timeout: 30_000,
       });
     } finally {

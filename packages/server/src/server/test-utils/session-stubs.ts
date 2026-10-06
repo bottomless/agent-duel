@@ -15,10 +15,7 @@ import type {
 } from "../agent/provider-snapshot-manager.js";
 import { ProviderSnapshotManager } from "../agent/provider-snapshot-manager.js";
 import type { SessionOptions } from "../session.js";
-import type {
-  HubExecutionAgentValidationIssue,
-  SessionOutboundMessage,
-} from "@getpaseo/protocol/messages";
+import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import { asInternals, createStub } from "./class-mocks.js";
 
 // ---------------------------------------------------------------------------
@@ -59,10 +56,6 @@ export function asPushNotifications(
   } = {},
 ): SessionOptions["pushNotifications"] {
   return createStub<SessionOptions["pushNotifications"]>(stub);
-}
-
-export function asScheduleService(): SessionOptions["scheduleService"] {
-  return createStub<SessionOptions["scheduleService"]>({});
 }
 
 export function asCheckoutDiffManager(stub: {
@@ -153,14 +146,10 @@ export interface ProviderSnapshotManagerSpies {
   refreshSettingsSnapshot: ReturnType<typeof vi.fn<[unknown], Promise<void>>>;
   warmUpSnapshotForCwd: ReturnType<typeof vi.fn<[unknown], Promise<void>>>;
   listRegisteredProviderIds: ReturnType<typeof vi.fn<[], AgentProvider[]>>;
-  hasProvider: ReturnType<typeof vi.fn<[AgentProvider], boolean>>;
   getProviderLabel: ReturnType<typeof vi.fn<[AgentProvider], string>>;
   getAgentManagerProviderState: ReturnType<typeof vi.fn<[], AgentManagerProviderState>>;
   listProviders: ReturnType<typeof vi.fn<[unknown], Promise<ProviderSnapshotEntry[]>>>;
   getProvider: ReturnType<typeof vi.fn<[unknown], Promise<ProviderSnapshotEntry>>>;
-  validateAgentConfiguration: ReturnType<
-    typeof vi.fn<[unknown], Promise<HubExecutionAgentValidationIssue[]>>
-  >;
   listModels: ReturnType<typeof vi.fn<[unknown], Promise<AgentModelDefinition[]>>>;
   listModes: ReturnType<typeof vi.fn<[unknown], Promise<AgentMode[]>>>;
   resolveCreateConfig: ReturnType<typeof vi.fn<[unknown], Promise<ResolvedProviderCreateConfig>>>;
@@ -180,7 +169,6 @@ export function createProviderSnapshotManagerStub(): {
   const refreshSettingsSnapshot = vi.fn<[unknown], Promise<void>>(async () => {});
   const warmUpSnapshotForCwd = vi.fn<[unknown], Promise<void>>(async () => {});
   const listRegisteredProviderIds = vi.fn<[], AgentProvider[]>(() => []);
-  const hasProvider = vi.fn<[AgentProvider], boolean>(() => false);
   const getProviderLabel = vi.fn<[AgentProvider], string>((provider) => {
     try {
       return getAgentProviderDefinition(provider).label;
@@ -196,9 +184,6 @@ export function createProviderSnapshotManagerStub(): {
   const getProvider = vi.fn<[unknown], Promise<ProviderSnapshotEntry>>(async () => {
     throw new Error("createProviderSnapshotManagerStub: getProvider not stubbed");
   });
-  const validateAgentConfiguration = vi.fn<[unknown], Promise<HubExecutionAgentValidationIssue[]>>(
-    async () => [],
-  );
   const listModels = vi.fn<[unknown], Promise<AgentModelDefinition[]>>(async () => []);
   const listModes = vi.fn<[unknown], Promise<AgentMode[]>>(async () => []);
   const resolveCreateConfig = vi.fn<[unknown], Promise<ResolvedProviderCreateConfig>>(async () => ({
@@ -222,12 +207,10 @@ export function createProviderSnapshotManagerStub(): {
     refreshSettingsSnapshot,
     warmUpSnapshotForCwd,
     listRegisteredProviderIds,
-    hasProvider,
     getProviderLabel,
     getAgentManagerProviderState,
     listProviders,
     getProvider,
-    validateAgentConfiguration,
     listModels,
     listModes,
     resolveCreateConfig,
@@ -248,12 +231,10 @@ export function createProviderSnapshotManagerStub(): {
     refreshSettingsSnapshot,
     warmUpSnapshotForCwd,
     listRegisteredProviderIds,
-    hasProvider,
     getProviderLabel,
     getAgentManagerProviderState,
     listProviders,
     getProvider,
-    validateAgentConfiguration,
     listModels,
     listModes,
     resolveCreateConfig,

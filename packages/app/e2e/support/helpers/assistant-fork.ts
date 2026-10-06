@@ -23,7 +23,7 @@ function readSessionMessage(message: WebSocketMessage): SessionMessage | null {
   }
 }
 
-export function observeForkAttachment(page: Page): {
+export function observeForkContext(page: Page): {
   waitForText: () => Promise<string>;
 } {
   const attachmentTexts: string[] = [];
@@ -45,7 +45,7 @@ export function observeForkAttachment(page: Page): {
       await expect.poll(() => attachmentTexts.length, { timeout: 30_000 }).toBeGreaterThan(0);
       const text = attachmentTexts.at(-1);
       if (text === undefined) {
-        throw new Error("Expected a chat history attachment from the fork");
+        throw new Error("Expected context from the fork response");
       }
       return text;
     },
@@ -58,9 +58,21 @@ function inFlightTurn(page: Page) {
 
 async function openForkMenu(page: Page, trigger: ReturnType<Page["getByRole"]>): Promise<void> {
   await trigger.click();
-  await expect(page.getByRole("button", { name: "Fork in a new tab" })).toBeVisible({
+  await expect(page.getByRole("button", { name: "Fork in this worktree" })).toBeVisible({
     timeout: 10_000,
   });
+  await expect(page.getByRole("button", { name: "Fork in a new worktree" })).toBeVisible({
+    timeout: 10_000,
+  });
+}
+
+async function selectForkTarget(page: Page, name: string): Promise<void> {
+  const sourcePath = new URL(page.url()).pathname;
+  await page.getByRole("button", { name }).click();
+  await page.waitForURL(
+    (url) => url.pathname.includes("/workspace/") && url.pathname !== sourcePath,
+    { timeout: 60_000 },
+  );
 }
 
 export async function openMostRecentAssistantForkMenu(page: Page): Promise<void> {
@@ -78,32 +90,30 @@ export async function openMostRecentAssistantForkMenu(page: Page): Promise<void>
   await openForkMenu(page, trigger);
 }
 
-export async function forkMostRecentAssistantTurnToNewTab(page: Page): Promise<void> {
-  await openMostRecentAssistantForkMenu(page);
-  await page.getByRole("button", { name: "Fork in a new tab" }).click();
-}
-
 export async function expectInFlightForkAvailable(page: Page): Promise<void> {
   const trigger = inFlightTurn(page).getByRole("button", { name: "Fork chat" });
   await expect(trigger).toHaveCount(1, { timeout: 30_000 });
   await expect(trigger).toBeVisible();
 }
 
-export async function forkInFlightTurnToNewTab(page: Page): Promise<void> {
+export async function forkMostRecentAssistantTurnInThisWorktree(page: Page): Promise<void> {
+  await openMostRecentAssistantForkMenu(page);
+  await selectForkTarget(page, "Fork in this worktree");
+}
+
+export async function forkInFlightTurnToNewWorktree(page: Page): Promise<void> {
   const trigger = inFlightTurn(page).getByRole("button", { name: "Fork chat" });
   await openForkMenu(page, trigger);
-  await page.getByRole("button", { name: "Fork in a new tab" }).click();
+  await selectForkTarget(page, "Fork in a new worktree");
 }
 
-export async function forkMostRecentAssistantTurnToNewWorkspace(page: Page): Promise<void> {
+export async function forkMostRecentAssistantTurnToNewWorktree(page: Page): Promise<void> {
   await openMostRecentAssistantForkMenu(page);
-  await page.getByRole("button", { name: "Fork in a new workspace" }).click();
+  await selectForkTarget(page, "Fork in a new worktree");
 }
 
-export async function expectChatHistoryAttachment(page: Page): Promise<void> {
-  const attachment = page.getByRole("button", { name: "Open chat history attachment" }).first();
-  await expect(attachment).toBeVisible({ timeout: 30_000 });
-  await expect(attachment).toContainText("Chat history");
+export async function expectNoChatHistoryAttachment(page: Page): Promise<void> {
+  await expect(page.getByRole("button", { name: "Open chat history attachment" })).toHaveCount(0);
 }
 
 export async function expectLiveAssistantText(page: Page, text: string): Promise<void> {

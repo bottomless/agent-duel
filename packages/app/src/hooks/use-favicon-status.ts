@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { getIsElectronRuntimeMac } from "@/constants/layout";
 import { useAggregatedAgents } from "./use-aggregated-agents";
 import { getDesktopHost } from "@/desktop/host";
-import { useWorkspaceStatusesForBadges } from "@/stores/session-store-hooks";
-import { deriveMacDockBadgeCountFromWorkspaceStatuses } from "@/utils/desktop-badge-state";
+import { useSessionStore } from "@/stores/session-store";
+import { useArenaActivityStore, createArenaDockBadgeSelector } from "@/arena/activity-store";
+import { arenaActivityStatus } from "@getpaseo/protocol/arena/activity";
 import { isNative } from "@/constants/platform";
 
 type FaviconStatus = "none" | "running" | "attention";
@@ -78,16 +80,16 @@ function getSystemColorScheme(): ColorScheme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-async function updateMacDockBadge(count?: number) {
+async function updateMacDockBadge(entries: Record<string, string>) {
   if (isNative || !getIsElectronRuntimeMac()) return;
 
   const desktopWindow = getDesktopHost()?.window?.getCurrentWindow?.();
-  if (!desktopWindow || typeof desktopWindow.setBadgeCount !== "function") {
+  if (!desktopWindow || typeof desktopWindow.setBadgeEntries !== "function") {
     return;
   }
 
   try {
-    await desktopWindow.setBadgeCount(count);
+    await desktopWindow.setBadgeEntries(entries);
   } catch (error) {
     console.warn("[useFaviconStatus] Failed to update macOS dock badge", error);
   }
@@ -95,9 +97,12 @@ async function updateMacDockBadge(count?: number) {
 
 export function useFaviconStatus() {
   const { agents } = useAggregatedAgents();
-  const workspaceStatuses = useWorkspaceStatusesForBadges();
+  const arenaHosts = useArenaActivityStore((state) => state.hosts);
+  const selectBadgeEntries = useMemo(() => createArenaDockBadgeSelector(arenaHosts), [arenaHosts]);
+  const dockBadgeEntries = useSessionStore(
+    useShallow((state) => selectBadgeEntries(state.sessions)),
+  );
   const [colorScheme, setColorScheme] = useState<ColorScheme>(getSystemColorScheme);
-  const lastDockBadgeCountRef = useRef<number | undefined>(undefined);
 
   // Listen for system color scheme changes
   useEffect(() => {
@@ -116,13 +121,15 @@ export function useFaviconStatus() {
   useEffect(() => {
     if (isNative) return;
 
-    const status = deriveFaviconStatus(agents);
+    let status = deriveFaviconStatus(agents);
+    const activities = Object.values(arenaHosts).flatMap((host) => Array.from(host.values()));
+    if (activities.some((activity) => arenaActivityStatus(activity).bucket === "running"))
+      status = "running";
+    else if (activities.some((activity) => activity.requiresDecision)) status = "attention";
     updateFavicon(status, colorScheme);
+  }, [agents, colorScheme, arenaHosts]);
 
-    const dockBadgeCount = deriveMacDockBadgeCountFromWorkspaceStatuses(workspaceStatuses);
-    if (dockBadgeCount !== lastDockBadgeCountRef.current) {
-      lastDockBadgeCountRef.current = dockBadgeCount;
-      void updateMacDockBadge(dockBadgeCount);
-    }
-  }, [agents, colorScheme, workspaceStatuses]);
+  useEffect(() => {
+    void updateMacDockBadge(dockBadgeEntries);
+  }, [dockBadgeEntries]);
 }

@@ -11,7 +11,6 @@ import {
   connectNewWorkspaceDaemonClient,
   expectNewWorkspaceProjectSelected,
   openGlobalNewWorkspaceComposer,
-  selectWorkspaceIsolation,
   submitNewWorkspaceEmpty,
   submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
@@ -251,9 +250,7 @@ test.describe("Workspace model regressions", () => {
     }
   });
 
-  test("local same-directory workspace with an initial prompt shows a generated title", async ({
-    page,
-  }) => {
+  test("new worktree with an initial prompt shows a generated title", async ({ page }) => {
     const serverId = getServerId();
     const seeded: SeededWorkspace = await seedWorkspace({
       repoPrefix: "workspace-generated-local-title-",
@@ -271,7 +268,6 @@ test.describe("Workspace model regressions", () => {
       await waitForSidebarHydration(page);
       await openGlobalNewWorkspaceComposer(page);
       await expectNewWorkspaceProjectSelected(page, seeded.projectDisplayName);
-      await selectWorkspaceIsolation(page, "local");
       await submitNewWorkspacePrompt(page, "Fix login bug");
 
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
@@ -294,7 +290,6 @@ test.describe("Workspace model regressions", () => {
         subtitle: seeded.projectDisplayName,
       });
       await expect(createdRow).toContainText("Fix login bug", { timeout: 30_000 });
-      expect(createdWorkspace.workspaceDirectory).toBe(seeded.workspaceDirectory);
     } finally {
       await client
         .patchDaemonConfig({
@@ -307,7 +302,7 @@ test.describe("Workspace model regressions", () => {
     }
   });
 
-  test("running agent in one same-directory workspace only shows the loader on its owning row", async ({
+  test("running agent in one workspace only shows the loader on its owning row", async ({
     page,
   }) => {
     const serverId = getServerId();
@@ -356,7 +351,6 @@ test.describe("Workspace model regressions", () => {
 
       await openGlobalNewWorkspaceComposer(page);
       await expectNewWorkspaceProjectSelected(page, seeded.projectDisplayName);
-      await selectWorkspaceIsolation(page, "local");
       await submitNewWorkspaceEmpty(page);
 
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
@@ -426,7 +420,7 @@ test.describe("Workspace model regressions", () => {
     }
   });
 
-  test("pending permission in one same-directory workspace marks only its own row needing input", async ({
+  test("pending permission in one workspace marks only its own row needing input", async ({
     page,
   }) => {
     const serverId = getServerId();
@@ -472,7 +466,6 @@ test.describe("Workspace model regressions", () => {
 
       await openGlobalNewWorkspaceComposer(page);
       await expectNewWorkspaceProjectSelected(page, seeded.projectDisplayName);
-      await selectWorkspaceIsolation(page, "local");
       await submitNewWorkspaceEmpty(page);
 
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {

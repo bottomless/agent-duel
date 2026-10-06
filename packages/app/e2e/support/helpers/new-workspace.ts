@@ -9,6 +9,7 @@ import { withProjectOwnership } from "./project-ownership";
 
 type NewWorkspaceDaemonClient = Pick<
   InternalDaemonClient,
+  | "addProject"
   | "archivePaseoWorktree"
   | "archiveWorkspace"
   | "checkoutRefresh"
@@ -127,6 +128,29 @@ export async function openProjectViaDaemon(
   return openedProjectFromWorkspace(client, workspace);
 }
 
+/**
+ * A project with no chats in it, which `openProjectViaDaemon` cannot give you: it creates a
+ * workspace, and a workspace is what registers the cwd with the daemon's git observer. Reach for
+ * this when the absence of that observer — no checkout-status pushes — is the thing under test.
+ */
+export async function addProjectViaDaemon(
+  client: NewWorkspaceDaemonClient,
+  repoPath: string,
+): Promise<Pick<OpenedProject, "projectId" | "projectKey" | "projectDisplayName">> {
+  const payload = await client.addProject(repoPath);
+  if (payload.error) {
+    throw new Error(payload.error);
+  }
+  if (!payload.project?.projectKey) {
+    throw new Error(`project.add returned no project key for ${repoPath}`);
+  }
+  return {
+    projectId: payload.project.projectId,
+    projectKey: payload.project.projectKey,
+    projectDisplayName: payload.project.projectDisplayName,
+  };
+}
+
 export async function archiveWorkspaceFromDaemon(
   client: NewWorkspaceDaemonClient,
   workspaceDirectory: string,
@@ -188,7 +212,8 @@ export async function openNewWorkspaceComposer(
 }
 
 export async function openGlobalNewWorkspaceComposer(page: Page): Promise<void> {
-  await page.getByTestId("sidebar-global-new-workspace").click();
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${modifier}+n`);
 
   await expect(page).toHaveURL(/\/new(?:\?.*)?$/, {
     timeout: 30_000,
@@ -317,37 +342,6 @@ export async function selectNewWorkspaceProject(
   await expectNewWorkspaceProjectSelected(page, input.projectDisplayName);
 }
 
-// The isolation trigger renders the active isolation's label ("Local" / "New
-// worktree"), so asserting its text proves what the screen currently remembers.
-const ISOLATION_TRIGGER_LABEL: Record<"local" | "worktree", string> = {
-  local: "Local",
-  worktree: "New worktree",
-};
-
-export async function expectWorkspaceIsolationSelected(
-  page: Page,
-  isolation: "local" | "worktree",
-): Promise<void> {
-  const trigger = page.getByRole("button", { name: "Workspace isolation" });
-  await expect(trigger).toBeVisible({ timeout: 30_000 });
-  await expect(trigger).toContainText(ISOLATION_TRIGGER_LABEL[isolation]);
-}
-
-export async function selectWorkspaceIsolation(
-  page: Page,
-  isolation: "local" | "worktree",
-): Promise<void> {
-  const trigger = page.getByTestId("workspace-create-isolation-trigger");
-  await expect(trigger).toBeVisible({ timeout: 30_000 });
-  await trigger.click();
-
-  // Isolation options are derived from project capability. Wait for the option
-  // so this helper also covers route-to-project reconciliation.
-  const option = page.getByTestId(`workspace-create-isolation-${isolation}`);
-  await expect(option).toBeVisible({ timeout: 30_000 });
-  await option.click();
-}
-
 export async function submitNewWorkspaceEmpty(page: Page): Promise<void> {
   const createButton = page
     .getByTestId("message-input-root")
@@ -390,6 +384,58 @@ export async function expectStartingRefRows(page: Page, accessibleNames: string[
 export async function captureStartingRefPicker(page: Page, screenshotPath: string): Promise<void> {
   await expect(page.getByTestId("combobox-desktop-container")).toBeVisible({ timeout: 30_000 });
   await page.getByTestId("combobox-desktop-container").screenshot({ path: screenshotPath });
+}
+
+// Isolation defaults to Local, where the checkout is switched by branch name. Worktree mode is
+// the one that branches off a ref, so a test about which commit a branch is cut from has to say
+// so explicitly rather than inherit the default.
+export async function selectNewWorkspaceIsolation(
+  page: Page,
+  isolation: "local" | "worktree",
+): Promise<void> {
+  const trigger = page.getByTestId("workspace-create-isolation-trigger");
+  await expect(trigger).toBeVisible({ timeout: 30_000 });
+  await trigger.click();
+  const option = page.getByTestId(`workspace-create-isolation-${isolation}`);
+  await expect(option).toBeVisible({ timeout: 30_000 });
+  await option.click();
+  await expect(trigger).toContainText(isolation === "worktree" ? "New worktree" : "Local");
+}
+
+export async function openNewBranchDialog(page: Page, expectedBase: string): Promise<void> {
+  const action = page.getByTestId("new-workspace-ref-picker-create-branch");
+  await expect(action).toBeVisible({ timeout: 30_000 });
+  await action.click();
+
+  const modal = page.getByTestId("new-workspace-create-branch-modal");
+  await expect(modal).toBeVisible({ timeout: 30_000 });
+  // The base is stated in the title, so a branch is never cut from a ref the picker did not show.
+  await expect(modal).toContainText(`New branch from ${expectedBase}`);
+}
+
+export async function submitNewBranchName(page: Page, name: string): Promise<void> {
+  await page.getByTestId("new-workspace-create-branch-modal-input").fill(name);
+  await page.getByTestId("new-workspace-create-branch-modal-submit").click();
+  await expect(page.getByTestId("new-workspace-create-branch-modal")).toBeHidden({
+    timeout: 30_000,
+  });
+}
+
+// Rejection arrives two ways: the rule states itself as you type and disables submit, or the
+// checkout rejects the name on submit. Both land in the same error line.
+export async function expectNewBranchNameRejected(
+  page: Page,
+  input: { name: string; error: string },
+): Promise<void> {
+  await page.getByTestId("new-workspace-create-branch-modal-input").fill(input.name);
+  const submit = page.getByTestId("new-workspace-create-branch-modal-submit");
+  if (await submit.isEnabled()) {
+    await submit.click();
+  }
+  await expect(page.getByTestId("new-workspace-create-branch-modal-error")).toContainText(
+    input.error,
+    { timeout: 30_000 },
+  );
 }
 
 export async function selectGitHubPrInPicker(page: Page, number: number): Promise<void> {

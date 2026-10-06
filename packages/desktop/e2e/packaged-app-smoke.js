@@ -6,7 +6,7 @@ const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const { chromium } = require("playwright");
 
-const EXECUTABLE_NAME = "Paseo";
+const EXECUTABLE_NAME = "Agent Duel";
 const SMOKE_TIMEOUT_MS = 60_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const TERMINAL_CAPTURE_ATTEMPTS = 20;
@@ -653,7 +653,11 @@ async function smokeColdCliDaemonStart({ appPath }) {
   const pidPath = path.join(home, "paseo.pid");
   const port = await reserveLocalTcpPort();
   const listen = `127.0.0.1:${port}`;
-  const env = createDefaultDaemonEnv();
+  const env = {
+    ...createDefaultDaemonEnv(),
+    PASEO_HOME: home,
+    PASEO_LISTEN: listen,
+  };
 
   try {
     console.log("Packaged desktop smoke: cold-starting daemon through bundled CLI shim");
@@ -694,6 +698,7 @@ async function smokeColdCliDaemonStart({ appPath }) {
         });
       }
     }
+    await smokeCliTerminal({ appPath, env });
   } finally {
     if (fs.existsSync(pidPath)) {
       await runCliShimCommand({
@@ -880,7 +885,9 @@ async function smokePackagedDesktopApp({ appPath }) {
     });
     console.log("Packaged desktop smoke: renderer-started desktop daemon reported running");
     await smokeCliShim({ appPath, env });
-    await smokeCliTerminal({ appPath, env });
+    console.log(
+      "Packaged desktop smoke: account gate active; terminal RPC covered by cold CLI daemon",
+    );
     await stopDaemonForCleanup();
     console.log(
       `Packaged desktop smoke passed: real renderer and preload loaded; renderer-started desktop daemon pid ${status.pid}, listen ${status.listen}; CLI shim daemon status and terminal smoke succeeded`,
@@ -920,7 +927,7 @@ if (require.main === module) {
   const appIndex = process.argv.indexOf("--app");
   const appPath = appIndex >= 0 ? process.argv[appIndex + 1] : null;
   if (!appPath) {
-    process.stderr.write("Usage: node smoke-packaged-desktop-app.js --app <Paseo.app>\n");
+    process.stderr.write("Usage: node smoke-packaged-desktop-app.js --app <Agent Duel.app>\n");
     process.exit(2);
   }
 

@@ -4,9 +4,10 @@ import path from "node:path";
 import { UUID } from "builder-util-runtime";
 import { describe, expect, it, vi } from "vitest";
 
-const { autoUpdaterMock } = vi.hoisted(() => {
+const { autoUpdaterMock, deploymentConfigMock } = vi.hoisted(() => {
   const handlers = new Map<string, (value: unknown) => void>();
   return {
+    deploymentConfigMock: { updatesEnabled: true },
     autoUpdaterMock: {
       handlers,
       logger: {
@@ -24,6 +25,14 @@ const { autoUpdaterMock } = vi.hoisted(() => {
     },
   };
 });
+
+vi.mock("../deployment-config.js", () => ({
+  readPackagedDeploymentConfig: () => ({
+    controlPlane: { url: "https://agent-duel.test", sessionPublicKey: "public-key" },
+    updatesEnabled: deploymentConfigMock.updatesEnabled,
+    arenaBuildSha: "0123456789abcdef0123456789abcdef01234567",
+  }),
+}));
 
 vi.mock("electron", () => ({
   app: {
@@ -46,6 +55,21 @@ import {
 } from "./auto-updater";
 
 describe("checkForAppUpdate", () => {
+  it("does not contact the update provider when updates are disabled for the build", async () => {
+    const previousCallCount = autoUpdaterMock.checkForUpdates.mock.calls.length;
+    deploymentConfigMock.updatesEnabled = false;
+
+    const result = await checkForAppUpdate({
+      currentVersion: "1.2.3",
+      releaseChannel: "stable",
+      intent: "automatic",
+    });
+
+    deploymentConfigMock.updatesEnabled = true;
+    expect(result.hasUpdate).toBe(false);
+    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(previousCallCount);
+  });
+
   it("treats an unpublished channel manifest as an unavailable update", async () => {
     const error = Object.assign(new Error("Cannot find latest-mac.yml"), {
       code: "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND",

@@ -1,12 +1,16 @@
 # Mobile panels
 
-Compact layouts have three mutually exclusive destinations:
+> Retained native implementation reference. For the active workspace layout, read
+> [side panel](side-panel.md) and the [Agent Duel documentation index](README.md).
+
+Compact layouts have two mutually exclusive destinations:
 
 - `agent-list` on the left
 - `agent` in the center
-- `file-explorer` on the right
 
-They are one interaction, not two independent drawers. The implementation lives in
+There is no right drawer: the side panel opens full width in place of the chat (see
+[side-panel.md](side-panel.md)). The machinery still models a normalized position from `-1` to `1`
+so a right destination can return without reworking motion. The implementation lives in
 `packages/app/src/mobile-panels/`.
 
 ## Ownership
@@ -15,7 +19,7 @@ React/Zustand owns the durable intent:
 
 ```ts
 interface MobilePanelSelection {
-  target: "agent-list" | "agent" | "file-explorer";
+  target: "agent-list" | "agent";
   revision: number;
 }
 ```
@@ -82,6 +86,11 @@ definition, no longer eligible to begin.
 - The desktop left sidebar is retained too. App chrome owns separate mounted and visible decisions:
   closing it or yielding its width marks it inactive and applies `display: none` without conditionally
   removing the sidebar tree.
+- `MobilePanelSelection` is also the open state of a desktop panel that floats because the window is
+  too narrow to pin it (see design.md §9). Those panels keep the desktop presentation — same
+  component, same widths, no drawer motion or gestures — and use this state only so a narrowing
+  window opens onto content instead of a drawer. Nothing else about the compact machinery runs at
+  those widths.
 - Animated panel nodes use React Native static styles plus inline theme values. Do not attach
   Unistyles-generated styles to those nodes; Unistyles and Reanimated patching the same Fabric node
   has caused native crashes.

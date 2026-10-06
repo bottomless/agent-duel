@@ -64,7 +64,6 @@ function buildContent(tab: WorkspaceTabDescriptor = agentTab) {
     onCloseCurrentTab: vi.fn(),
     onRetargetCurrentTab: vi.fn(),
     onOpenWorkspaceFile: vi.fn(),
-    onOpenImportSheet: vi.fn(),
   });
 }
 

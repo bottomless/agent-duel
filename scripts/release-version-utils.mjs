@@ -1,7 +1,7 @@
 const versionPattern =
   /^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)(?:-(?<prerelease>[0-9A-Za-z.-]+))?$/;
 const sourceTagPattern =
-  /^(?:(?:desktop(?:-(?:windows|linux|macos))?|android)-)?v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
+  /^(?:desktop(?:-(?:windows|linux|macos))?-)?v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 
 function assertInteger(value, label) {
   if (!Number.isInteger(value) || value < 0) {
@@ -63,7 +63,7 @@ export function normalizeReleaseTag(rawTag) {
   const match = trimmed.match(sourceTagPattern);
   if (!match?.groups?.version) {
     throw new Error(
-      `Unsupported release tag "${rawTag}". Expected vX.Y.Z, vX.Y.Z-beta.N, desktop-v..., or android-v...`,
+      `Unsupported release tag "${rawTag}". Expected vX.Y.Z, vX.Y.Z-beta.N, or desktop-v...`,
     );
   }
   return `v${match.groups.version}`;

@@ -1,7 +1,9 @@
-import { mkdir, rmdir, stat } from "node:fs/promises";
+import { mkdir, rm, rmdir, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import type { ProjectCreateDirectoryErrorCode } from "@getpaseo/protocol/messages";
 import { expandTilde } from "../utils/path.js";
+import type { runGitCommand } from "../utils/run-git-command.js";
+import { initializeRepository } from "./project-git-service.js";
 import type { PersistedProjectRecord } from "./workspace-registry.js";
 
 export class ProjectDirectoryRequestError extends Error {
@@ -29,10 +31,12 @@ interface ProjectDirectoryFileSystem {
   stat(path: string): Promise<{ isDirectory(): boolean }>;
   mkdir(path: string): Promise<void>;
   rmdir(path: string): Promise<void>;
+  rm: typeof rm;
 }
 
 interface CreateProjectDirectoryDependencies {
   filesystem?: ProjectDirectoryFileSystem;
+  runGit?: typeof runGitCommand;
   registerProject(directoryPath: string): Promise<PersistedProjectRecord>;
 }
 
@@ -42,6 +46,7 @@ const nodeProjectDirectoryFileSystem: ProjectDirectoryFileSystem = {
     await mkdir(path);
   },
   rmdir,
+  rm,
 };
 
 export async function createProjectDirectory(
@@ -76,10 +81,13 @@ export async function createProjectDirectory(
   }
 
   try {
+    // Arena worktrees need a real HEAD, including for a project with no files yet.
+    await initializeRepository(directoryPath, dependencies.runGit);
     const project = await dependencies.registerProject(directoryPath);
     return { directoryPath, project };
   } catch (registrationError) {
     try {
+      await filesystem.rm(resolve(directoryPath, ".git"), { recursive: true, force: true });
       await filesystem.rmdir(directoryPath);
     } catch (rollbackError) {
       throw new ProjectDirectoryRequestError(

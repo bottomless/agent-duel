@@ -170,33 +170,19 @@ export const SHORTCUT_HELP_ROW_ORDER: Record<ShortcutSectionId, readonly string[
     "archive-workspace",
   ],
   "tabs-panes": [
-    "workspace-tab-new",
     "workspace-terminal-new",
     "workspace-tab-close-current",
     "workspace-tab-jump-index",
     "workspace-tab-prev",
     "workspace-tab-next",
-    "workspace-pane-split-right",
-    "workspace-pane-split-down",
     "workspace-pane-focus-left",
     "workspace-pane-focus-right",
-    "workspace-pane-focus-up",
-    "workspace-pane-focus-down",
     "workspace-pane-move-tab-left",
     "workspace-pane-move-tab-right",
-    "workspace-pane-move-tab-up",
-    "workspace-pane-move-tab-down",
     "workspace-pane-close",
   ],
   layout: ["toggle-left-sidebar", "toggle-right-sidebar", "toggle-both-sidebars", "toggle-focus"],
-  "agent-input": [
-    "focus-message-input",
-    "cycle-agent-mode",
-    "voice-toggle",
-    "dictation-toggle",
-    "agent-interrupt",
-    "voice-mute-toggle",
-  ],
+  "agent-input": ["focus-message-input", "cycle-agent-mode", "dictation-toggle", "agent-interrupt"],
 };
 
 const SHORTCUT_HELP_LABEL_KEYS: Record<string, string> = {
@@ -204,7 +190,6 @@ const SHORTCUT_HELP_LABEL_KEYS: Record<string, string> = {
   "new-workspace": "settings.shortcuts.help.newWorkspace",
   "switch-project": "settings.shortcuts.help.switchProject",
   "archive-workspace": "settings.shortcuts.help.archiveWorkspace",
-  "workspace-tab-new": "settings.shortcuts.help.newTab",
   "workspace-tab-close-current": "settings.shortcuts.help.closeCurrentTab",
   "workspace-jump-index": "settings.shortcuts.help.jumpToWorkspace",
   "workspace-tab-jump-index": "settings.shortcuts.help.jumpToTab",
@@ -212,16 +197,10 @@ const SHORTCUT_HELP_LABEL_KEYS: Record<string, string> = {
   "workspace-next": "settings.shortcuts.help.nextWorkspace",
   "workspace-tab-prev": "settings.shortcuts.help.previousTab",
   "workspace-tab-next": "settings.shortcuts.help.nextTab",
-  "workspace-pane-split-right": "settings.shortcuts.help.splitPaneRight",
-  "workspace-pane-split-down": "settings.shortcuts.help.splitPaneDown",
   "workspace-pane-focus-left": "settings.shortcuts.help.focusPaneLeft",
   "workspace-pane-focus-right": "settings.shortcuts.help.focusPaneRight",
-  "workspace-pane-focus-up": "settings.shortcuts.help.focusPaneUp",
-  "workspace-pane-focus-down": "settings.shortcuts.help.focusPaneDown",
   "workspace-pane-move-tab-left": "settings.shortcuts.help.moveTabLeft",
   "workspace-pane-move-tab-right": "settings.shortcuts.help.moveTabRight",
-  "workspace-pane-move-tab-up": "settings.shortcuts.help.moveTabUp",
-  "workspace-pane-move-tab-down": "settings.shortcuts.help.moveTabDown",
   "workspace-pane-close": "settings.shortcuts.help.closePane",
   "workspace-terminal-new": "settings.shortcuts.help.newTerminal",
   "search-files": "settings.shortcuts.help.searchFiles",
@@ -235,10 +214,8 @@ const SHORTCUT_HELP_LABEL_KEYS: Record<string, string> = {
   "cycle-theme": "settings.shortcuts.help.cycleTheme",
   "focus-message-input": "settings.shortcuts.help.focusMessageInput",
   "cycle-agent-mode": "settings.shortcuts.help.cycleAgentMode",
-  "voice-toggle": "settings.shortcuts.help.toggleVoiceMode",
   "dictation-toggle": "settings.shortcuts.help.startStopDictation",
   "agent-interrupt": "settings.shortcuts.help.interruptAgent",
-  "voice-mute-toggle": "settings.shortcuts.help.muteUnmuteVoiceMode",
 };
 
 const SHORTCUT_HELP_NOTE_KEYS: Record<string, string> = {
@@ -377,28 +354,6 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
   },
 
   // --- Tab management ---
-  {
-    id: "workspace-tab-new-cmd-t-mac",
-    action: "workspace.tab.new",
-    combo: "Cmd+T",
-    when: { mac: true, commandCenter: false },
-    help: {
-      id: "workspace-tab-new",
-      section: "tabs-panes",
-      label: "New tab",
-    },
-  },
-  {
-    id: "workspace-tab-new-ctrl-t-non-mac",
-    action: "workspace.tab.new",
-    combo: "Ctrl+T",
-    when: { mac: false, commandCenter: false, terminal: false },
-    help: {
-      id: "workspace-tab-new",
-      section: "tabs-panes",
-      label: "New tab",
-    },
-  },
   {
     id: "workspace-tab-close-current-cmd-w-mac",
     action: "workspace.tab.close.current",
@@ -615,29 +570,7 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
     },
   },
 
-  // --- Pane management (mac only) ---
-  {
-    id: "workspace-pane-split-right-cmd-backslash",
-    action: "workspace.pane.split.right",
-    combo: "Cmd+\\",
-    when: { mac: true, commandCenter: false },
-    help: {
-      id: "workspace-pane-split-right",
-      section: "tabs-panes",
-      label: "Split pane right",
-    },
-  },
-  {
-    id: "workspace-pane-split-down-cmd-shift-backslash",
-    action: "workspace.pane.split.down",
-    combo: "Cmd+Shift+\\",
-    when: { mac: true, commandCenter: false },
-    help: {
-      id: "workspace-pane-split-down",
-      section: "tabs-panes",
-      label: "Split pane down",
-    },
-  },
+  // --- Pane management (mac only): the main pane and the side panel ---
   {
     id: "workspace-pane-focus-left-cmd-shift-left",
     action: "workspace.pane.focus.left",
@@ -661,28 +594,6 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
     },
   },
   {
-    id: "workspace-pane-focus-up-cmd-shift-up",
-    action: "workspace.pane.focus.up",
-    combo: "Cmd+Shift+ArrowUp",
-    when: { mac: true, commandCenter: false, editable: false },
-    help: {
-      id: "workspace-pane-focus-up",
-      section: "tabs-panes",
-      label: "Focus pane up",
-    },
-  },
-  {
-    id: "workspace-pane-focus-down-cmd-shift-down",
-    action: "workspace.pane.focus.down",
-    combo: "Cmd+Shift+ArrowDown",
-    when: { mac: true, commandCenter: false, editable: false },
-    help: {
-      id: "workspace-pane-focus-down",
-      section: "tabs-panes",
-      label: "Focus pane down",
-    },
-  },
-  {
     id: "workspace-pane-move-tab-left-cmd-shift-alt-left",
     action: "workspace.pane.move-tab.left",
     combo: "Cmd+Alt+Shift+ArrowLeft",
@@ -702,28 +613,6 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
       id: "workspace-pane-move-tab-right",
       section: "tabs-panes",
       label: "Move tab right",
-    },
-  },
-  {
-    id: "workspace-pane-move-tab-up-cmd-shift-alt-up",
-    action: "workspace.pane.move-tab.up",
-    combo: "Cmd+Alt+Shift+ArrowUp",
-    when: { mac: true, commandCenter: false },
-    help: {
-      id: "workspace-pane-move-tab-up",
-      section: "tabs-panes",
-      label: "Move tab up",
-    },
-  },
-  {
-    id: "workspace-pane-move-tab-down-cmd-shift-alt-down",
-    action: "workspace.pane.move-tab.down",
-    combo: "Cmd+Alt+Shift+ArrowDown",
-    when: { mac: true, commandCenter: false },
-    help: {
-      id: "workspace-pane-move-tab-down",
-      section: "tabs-panes",
-      label: "Move tab down",
     },
   },
   {
@@ -833,7 +722,7 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
     help: {
       id: "toggle-right-sidebar",
       section: "layout",
-      label: "Toggle right sidebar",
+      label: "Toggle side panel",
     },
   },
   {
@@ -844,7 +733,7 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
     help: {
       id: "toggle-right-sidebar",
       section: "layout",
-      label: "Toggle right sidebar",
+      label: "Toggle side panel",
     },
   },
   {
@@ -989,32 +878,6 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
     },
   },
   {
-    id: "message-input-voice-toggle-cmd-shift-d-mac",
-    action: "message-input.action",
-    combo: "Cmd+Shift+D",
-    repeat: false,
-    when: { mac: true, commandCenter: false, terminal: false },
-    payload: { type: "message-input", kind: "voice-toggle" },
-    help: {
-      id: "voice-toggle",
-      section: "agent-input",
-      label: "Toggle voice mode",
-    },
-  },
-  {
-    id: "message-input-voice-toggle-ctrl-shift-d-non-mac",
-    action: "message-input.action",
-    combo: "Ctrl+Shift+D",
-    repeat: false,
-    when: { mac: false, commandCenter: false, terminal: false },
-    payload: { type: "message-input", kind: "voice-toggle" },
-    help: {
-      id: "voice-toggle",
-      section: "agent-input",
-      label: "Toggle voice mode",
-    },
-  },
-  {
     id: "message-input-dictation-toggle-cmd-d-mac",
     action: "message-input.action",
     combo: "Cmd+D",
@@ -1057,20 +920,6 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
     combo: "Enter",
     when: { commandCenter: false, terminal: false },
     payload: { type: "message-input", kind: "dictation-confirm" },
-  },
-
-  {
-    id: "message-input-voice-mute-toggle",
-    action: "message-input.action",
-    combo: "Space",
-    repeat: false,
-    when: { commandCenter: false, focusScope: "other" },
-    payload: { type: "message-input", kind: "voice-mute-toggle" },
-    help: {
-      id: "voice-mute-toggle",
-      section: "agent-input",
-      label: "Mute/unmute voice mode",
-    },
   },
 ];
 

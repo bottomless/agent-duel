@@ -152,6 +152,11 @@ function createInput(
         status: "idle",
         handler: () => undefined,
       },
+      "create-branch": {
+        disabled: false,
+        status: "idle",
+        handler: () => undefined,
+      },
       "archive-workspace": {
         disabled: false,
         status: "idle",
@@ -160,6 +165,15 @@ function createInput(
     },
     ...rest,
   };
+}
+
+/**
+ * Every action the menu offers, wherever the policy put it. With a primary action they hang off
+ * its caret; with none there is no split button, so they move to the overflow menu. Tests about
+ * which actions apply read through this; the one test about that placement reads the lists.
+ */
+function listedActions(actions: ReturnType<typeof buildGitActions>) {
+  return [...actions.secondary, ...actions.menu];
 }
 
 describe("git-actions-policy", () => {
@@ -171,12 +185,43 @@ describe("git-actions-policy", () => {
     const actions = buildGitActions(createInput({ hasRemote: true }));
 
     expect(actions.primary).toBeNull();
-    expect(actions.secondary.map((action) => action.id)).toEqual([
+    expect(listedActions(actions).map((action) => action.id)).toEqual([
       "pull",
       "push",
       "pull-and-push",
+      "create-branch",
       "archive-workspace",
     ]);
+  });
+
+  it("moves every action to the overflow menu when nothing can be promoted", () => {
+    // A clean checkout on its base branch with a remote: nothing to commit, pull, push or merge.
+    const actions = buildGitActions(createInput({ hasRemote: true, aheadOfOrigin: 0 }));
+
+    expect(actions.primary).toBeNull();
+    // The caret lives on the split button, and the split button needs a primary action, so an
+    // empty secondary list here would put Create branch and the rest out of reach.
+    expect(actions.secondary).toEqual([]);
+    expect(actions.menu.map((action) => action.id)).toEqual([
+      "pull",
+      "push",
+      "pull-and-push",
+      "create-branch",
+      "archive-workspace",
+    ]);
+  });
+
+  it("offers create branch on the base branch and off it, and never as the primary", () => {
+    const onBase = buildGitActions(createInput({ hasRemote: true }));
+    const offBase = buildGitActions(
+      createInput({ hasRemote: true, isOnBaseBranch: false, aheadCount: 2 }),
+    );
+
+    for (const actions of [onBase, offBase]) {
+      const createBranch = listedActions(actions).find((action) => action.id === "create-branch");
+      expect(createBranch).toMatchObject({ label: "Create branch", disabled: false });
+      expect(actions.primary?.id).not.toBe("create-branch");
+    }
   });
 
   it("prioritizes pull when the branch is behind origin", () => {
@@ -264,7 +309,7 @@ describe("git-actions-policy", () => {
 
   it("uses a clear sentence when pull is unavailable", () => {
     const actions = buildGitActions(createInput({ hasRemote: true }));
-    const pullAction = actions.secondary.find((action) => action.id === "pull");
+    const pullAction = listedActions(actions).find((action) => action.id === "pull");
 
     expect(pullAction).toMatchObject({
       disabled: false,
@@ -302,6 +347,7 @@ describe("git-actions-policy", () => {
       "pull",
       "push",
       "pull-and-push",
+      "create-branch",
       "merge-from-base",
       "merge-branch",
       "pr",
@@ -366,7 +412,7 @@ describe("git-actions-policy", () => {
 
   it("explains why pull-and-push is unavailable when the branch is in sync", () => {
     const actions = buildGitActions(createInput({ hasRemote: true }));
-    const action = actions.secondary.find((entry) => entry.id === "pull-and-push");
+    const action = listedActions(actions).find((entry) => entry.id === "pull-and-push");
 
     expect(action).toMatchObject({
       disabled: false,
@@ -431,7 +477,7 @@ describe("git-actions-policy", () => {
     const actions = buildGitActions(createInput());
 
     expect(actions.primary).toBeNull();
-    expect(actions.secondary.some((action) => action.id === "archive-workspace")).toBe(true);
+    expect(listedActions(actions).some((action) => action.id === "archive-workspace")).toBe(true);
   });
 
   it("still promotes archive as primary for an idle Paseo-owned worktree", () => {
@@ -653,6 +699,7 @@ describe("git-actions-policy", () => {
       "pull",
       "push",
       "pull-and-push",
+      "create-branch",
       "merge-from-base",
       "merge-branch",
       "pr",
@@ -830,6 +877,7 @@ describe("git-actions-policy", () => {
       "pull",
       "push",
       "pull-and-push",
+      "create-branch",
       "merge-from-base",
       "merge-branch",
       "pr",
@@ -873,6 +921,7 @@ describe("git-actions-policy", () => {
       "pull",
       "push",
       "pull-and-push",
+      "create-branch",
       "merge-from-base",
       "merge-branch",
       "pr",
@@ -1016,6 +1065,7 @@ describe("git-actions-policy", () => {
       "pull",
       "push",
       "pull-and-push",
+      "create-branch",
       "merge-from-base",
       "merge-branch",
       "pr",
@@ -1074,7 +1124,12 @@ describe("git-actions-policy", () => {
       .filter((action) => !action.startsGroup)
       .map((action) => action.id);
 
-    expect(groupStarters).toEqual(["merge-from-base", "merge-pr-squash", "archive-workspace"]);
+    expect(groupStarters).toEqual([
+      "create-branch",
+      "merge-from-base",
+      "merge-pr-squash",
+      "archive-workspace",
+    ]);
     expect(nonGroupStarters).toEqual([
       "pull",
       "push",

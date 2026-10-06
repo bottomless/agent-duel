@@ -424,10 +424,6 @@ export function buildSessionsRoute() {
   return "/sessions" as const;
 }
 
-export function buildSchedulesRoute() {
-  return "/schedules" as const;
-}
-
 export function buildOpenProjectRoute() {
   return "/open-project" as const;
 }
@@ -492,13 +488,8 @@ export function resolveKnownHostRoute(input: {
 export const SETTINGS_SECTION_SLUGS = [
   "general",
   "appearance",
-  "editor",
   "shortcuts",
-  "integrations",
   "notifications",
-  "permissions",
-  "diagnostics",
-  "about",
 ] as const;
 
 export type SettingsSectionSlug = (typeof SETTINGS_SECTION_SLUGS)[number];
@@ -507,25 +498,11 @@ export function isSettingsSectionSlug(value: string): value is SettingsSectionSl
   return (SETTINGS_SECTION_SLUGS as readonly string[]).includes(value);
 }
 
-export const HOST_SECTION_SLUGS = [
-  "projects",
-  "connections",
-  "pair-device",
-  "agents",
-  "metadata",
-  "workspaces",
-  "providers",
-  "usage",
-  "terminals",
-  "host",
-] as const;
+export const HOST_SECTION_SLUGS = ["projects"] as const;
 
 export type HostSectionSlug = (typeof HOST_SECTION_SLUGS)[number];
 
-const LEGACY_HOST_SECTION_SLUGS: Record<string, HostSectionSlug> = {
-  orchestration: "agents",
-  daemon: "host",
-};
+const LEGACY_HOST_SECTION_SLUGS: Record<string, HostSectionSlug> = {};
 
 export function isHostSectionSlug(value: string): value is HostSectionSlug {
   return (HOST_SECTION_SLUGS as readonly string[]).includes(value);
@@ -544,10 +521,6 @@ export function buildSettingsRoute() {
 
 export function buildSettingsSectionRoute(section: SettingsSectionSlug) {
   return `/settings/${section}` as const;
-}
-
-export function buildSettingsAddHostRoute(intentId: string | number = "1") {
-  return `/settings/general?addHost=${encodeURIComponent(String(intentId))}` as const;
 }
 
 export function buildSettingsHostRoute(serverId: string) {

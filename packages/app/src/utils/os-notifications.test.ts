@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DesktopHostBridge } from "@/desktop/host";
 
 interface MockNotificationOptions {
   body?: string;
@@ -33,15 +34,7 @@ const originalGlobals: GlobalSnapshot = {
 async function loadModuleForPlatform(
   platform: "web" | "ios" | "android",
   options?: {
-    desktopHost?: {
-      notification?: {
-        sendNotification?: (payload: {
-          title: string;
-          body?: string;
-          data?: Record<string, unknown>;
-        }) => Promise<boolean>;
-      };
-    } | null;
+    desktopHost?: DesktopHostBridge | null;
   },
 ) {
   vi.resetModules();
@@ -286,5 +279,93 @@ describe("sendOsNotification", () => {
       body: "If you can see this, desktop notifications work.",
       data: { serverId: "srv-1" },
     });
+  });
+
+  it("requests macOS authorization at startup even when Chromium permission is granted", async () => {
+    const requestPermission = vi.fn(async () => "authorized" as const);
+    const browserRequestPermission = vi.fn(async () => "granted");
+    (globalThis as { Notification?: unknown }).Notification = {
+      permission: "granted",
+      requestPermission: browserRequestPermission,
+    };
+    const { ensureOsNotificationPermission } = await loadModuleForPlatform("web", {
+      desktopHost: { platform: "darwin", notification: { requestPermission } },
+    });
+
+    expect(await ensureOsNotificationPermission()).toBe(true);
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(browserRequestPermission).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["authorized", true],
+    ["provisional", true],
+    ["denied", false],
+    ["not-determined", false],
+    ["unknown", false],
+  ] as const)(
+    "uses the macOS %s result instead of Chromium's permission",
+    async (permission, granted) => {
+      (globalThis as { Notification?: unknown }).Notification = { permission: "granted" };
+      const { ensureOsNotificationPermission } = await loadModuleForPlatform("web", {
+        desktopHost: {
+          platform: "darwin",
+          notification: { requestPermission: async () => permission },
+        },
+      });
+
+      expect(await ensureOsNotificationPermission()).toBe(granted);
+    },
+  );
+
+  it("does not fall back to Chromium when the macOS permission bridge is missing", async () => {
+    (globalThis as { Notification?: unknown }).Notification = { permission: "granted" };
+    const { ensureOsNotificationPermission } = await loadModuleForPlatform("web", {
+      desktopHost: { platform: "darwin" },
+    });
+
+    expect(await ensureOsNotificationPermission()).toBe(false);
+  });
+
+  it("reports a failed native permission request to the startup caller", async () => {
+    const failure = new Error("macOS permission request timed out");
+    const { ensureOsNotificationPermission } = await loadModuleForPlatform("web", {
+      desktopHost: {
+        platform: "darwin",
+        notification: {
+          requestPermission: async () => {
+            throw failure;
+          },
+        },
+      },
+    });
+
+    await expect(ensureOsNotificationPermission()).rejects.toBe(failure);
+  });
+
+  it.each(["win32", "linux"])("uses desktop notification support on %s", async (platform) => {
+    const browserRequestPermission = vi.fn(async () => "granted");
+    (globalThis as { Notification?: unknown }).Notification = {
+      permission: "default",
+      requestPermission: browserRequestPermission,
+    };
+    const { ensureOsNotificationPermission } = await loadModuleForPlatform("web", {
+      desktopHost: { platform, notification: { isSupported: async () => true } },
+    });
+
+    expect(await ensureOsNotificationPermission()).toBe(true);
+    expect(browserRequestPermission).not.toHaveBeenCalled();
+  });
+
+  it("still requests browser permission when there is no desktop host", async () => {
+    const requestPermission = vi.fn(async () => "granted");
+    (globalThis as { Notification?: unknown }).Notification = {
+      permission: "default",
+      requestPermission,
+    };
+    const { ensureOsNotificationPermission } = await loadModuleForPlatform("web");
+
+    expect(await ensureOsNotificationPermission()).toBe(true);
+    expect(requestPermission).toHaveBeenCalledTimes(1);
   });
 });

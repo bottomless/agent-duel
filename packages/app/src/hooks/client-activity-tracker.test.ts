@@ -66,14 +66,30 @@ function buildTracker(
     deviceType: overrides.deviceType ?? "web",
     initialFocusedAgentId: overrides.initialFocusedAgentId ?? "agent-1",
     initialFocusedTerminalId: overrides.initialFocusedTerminalId ?? null,
+    initialFocusedWorkspaceId: overrides.initialFocusedWorkspaceId ?? null,
     initialAppVisible: overrides.initialAppVisible ?? true,
     now: clock.now,
+    getAppFocused: overrides.getAppFocused,
     onAppResumed: overrides.onAppResumed,
   });
   return { tracker, client, clock };
 }
 
 describe("client activity tracker", () => {
+  it("reports window focus independently from document visibility and user idle time", () => {
+    let focused = true;
+    const { tracker, client, clock } = buildTracker({ getAppFocused: () => focused });
+    tracker.sendHeartbeat();
+    expect(client.latest()).toMatchObject({ appVisible: true, appFocused: true });
+    focused = false;
+    clock.advance(300_000);
+    tracker.sendHeartbeat();
+    expect(client.latest()).toMatchObject({
+      appVisible: true,
+      appFocused: false,
+      lastActivityAt: new Date(START_MS).toISOString(),
+    });
+  });
   it("includes the latest user-activity time in the next heartbeat", () => {
     const { tracker, client, clock } = buildTracker();
 
@@ -87,6 +103,14 @@ describe("client activity tracker", () => {
       appVisible: true,
       lastActivityAt: new Date(START_MS + 5_250).toISOString(),
     });
+  });
+
+  it("reports the focused workspace so cleanup can protect the visible checkout", () => {
+    const { tracker, client } = buildTracker();
+
+    tracker.setFocusedWorkspaceId("workspace-1");
+
+    expect(client.latest()).toMatchObject({ focusedWorkspaceId: "workspace-1" });
   });
 
   it("throttles repeated immediate heartbeats within the throttle window", () => {

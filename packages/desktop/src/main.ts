@@ -8,13 +8,11 @@ import { inheritLoginShellEnv } from "./login-shell-env.js";
 
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
   app,
   autoUpdater as electronAutoUpdater,
   BrowserWindow,
-  clipboard,
   Menu,
   ipcMain,
   nativeImage,
@@ -41,10 +39,7 @@ import {
 } from "./window/window-manager.js";
 import { setupDarwinCompositorWatchdog } from "./window/compositor-watchdog/index.js";
 import { registerDialogHandlers } from "./features/dialogs.js";
-import {
-  registerNotificationHandlers,
-  ensureNotificationCenterRegistration,
-} from "./features/notifications.js";
+import { registerNotificationHandlers } from "./features/notifications.js";
 import { registerOpenerHandlers } from "./features/opener.js";
 import { registerEditorTargetHandlers } from "./features/editor-targets/ipc.js";
 import { setupApplicationMenu } from "./features/menu.js";
@@ -97,15 +92,42 @@ import {
   type AgentDeepLinkTarget,
 } from "@getpaseo/protocol/agent-deep-link";
 import { AgentNavigationInbox, parseAgentDeepLinkFromArgv } from "./agent-navigation.js";
+import { createAccountsReturnServer } from "./features/accounts-return.js";
+import { registerEncryptedStorageHandlers } from "./features/encrypted-storage.js";
 
 const DEV_SERVER_URL = process.env.EXPO_DEV_URL ?? "http://localhost:8081";
 const APP_SCHEME = "paseo";
 const PASEO_DEBUG = process.env.PASEO_DEBUG === "1";
 const DISABLE_SINGLE_INSTANCE_LOCK = process.env.PASEO_DISABLE_SINGLE_INSTANCE_LOCK === "1";
-const APP_NAME = process.env.PASEO_TEST_APP_NAME?.trim() || "Paseo";
+const TEST_APP_NAME = process.env.PASEO_TEST_APP_NAME?.trim();
+const APP_NAME = TEST_APP_NAME || "Agent Duel";
 const UPDATE_QUIT_DEADLINE_MS = 5_000;
+let applicationIcon: Electron.NativeImage | undefined;
 const pendingBrowserWindowOpenRequests = new PendingBrowserWindowOpenRequests();
 const agentNavigationInbox = new AgentNavigationInbox();
+const accountsReturnServer = createAccountsReturnServer({
+  focusWindow: (window) => {
+    if (window.isDestroyed()) {
+      throw new Error("Accounts return window was destroyed");
+    }
+    if (window.isMinimized()) {
+      window.restore();
+    }
+    window.show();
+    window.focus();
+  },
+});
+
+function loadDevelopmentApplicationIcon(): Electron.NativeImage | undefined {
+  if (app.isPackaged) return undefined;
+
+  const icon = nativeImage.createFromPath(path.resolve(__dirname, "../assets/icon.png"));
+  if (icon.isEmpty()) {
+    log.warn("[app-icon] unable to load development application icon");
+    return undefined;
+  }
+  return icon;
+}
 
 // A second-instance launch can arrive before the packaged protocol handler,
 // IPC handlers, and first window exist. Wait for full bootstrap, not just
@@ -363,38 +385,13 @@ ipcMain.handle("paseo:agent-navigation:ready", (event) => {
   return agentNavigationInbox.windowReady(event.sender.id);
 });
 
-function normalizeBrowserCaptureRect(
-  rect: unknown,
-): { x: number; y: number; width: number; height: number } | null {
-  if (!rect || typeof rect !== "object") {
-    return null;
+ipcMain.handle("paseo:accounts:createReturnUrl", async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window || window.isDestroyed()) {
+    throw new Error("Cannot create an accounts return URL without a window");
   }
-  const candidate = rect as Record<string, unknown>;
-  const x = candidate.x;
-  const y = candidate.y;
-  const width = candidate.width;
-  const height = candidate.height;
-  if (
-    typeof x !== "number" ||
-    typeof y !== "number" ||
-    typeof width !== "number" ||
-    typeof height !== "number" ||
-    !Number.isFinite(x) ||
-    !Number.isFinite(y) ||
-    !Number.isFinite(width) ||
-    !Number.isFinite(height) ||
-    width <= 0 ||
-    height <= 0
-  ) {
-    return null;
-  }
-  return {
-    x: Math.max(0, Math.round(x)),
-    y: Math.max(0, Math.round(y)),
-    width: Math.round(width),
-    height: Math.round(height),
-  };
-}
+  return accountsReturnServer.createReturnUrl(window);
+});
 
 ipcMain.handle("paseo:browser:register-attached", (event, rawInput: unknown) => {
   const input = readAttachedBrowserInput(rawInput);
@@ -536,78 +533,6 @@ ipcMain.handle("paseo:browser:clear-profile", async (_event, rawLegacyBrowserIds
   });
 });
 
-ipcMain.handle(
-  "paseo:browser:capture-element",
-  async (event, browserId: unknown, rect: unknown) => {
-    if (typeof browserId !== "string" || browserId.trim().length === 0) {
-      return null;
-    }
-    const contents = getPaseoBrowserWebContentsForHostWindow(browserId, event.sender.id);
-    if (!contents || contents.isDestroyed()) {
-      return null;
-    }
-    const captureRect = normalizeBrowserCaptureRect(rect);
-    if (!captureRect) {
-      return null;
-    }
-    try {
-      // capturePage expects an integer rect in CSS pixels relative to the
-      // guest viewport, which matches getBoundingClientRect() on the page.
-      const image = await contents.capturePage(captureRect);
-      if (image.isEmpty()) {
-        return null;
-      }
-      return image.toDataURL();
-    } catch (error) {
-      log.warn("[browser-capture] capture-element.failed", {
-        browserId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
-  },
-);
-
-ipcMain.handle("paseo:browser:copy-element", (_event, payload: unknown): boolean => {
-  if (!payload || typeof payload !== "object") {
-    return false;
-  }
-  const { text, imageDataUrl } = payload as { text?: unknown; imageDataUrl?: unknown };
-  const copyText = typeof text === "string" && text.length > 0 ? text : null;
-
-  // Resolve the image first so we can write the clipboard exactly once and
-  // avoid flashing an intermediate text-only state.
-  let image: Electron.NativeImage | null = null;
-  if (typeof imageDataUrl === "string" && imageDataUrl.startsWith("data:image")) {
-    try {
-      const candidate = nativeImage.createFromDataURL(imageDataUrl);
-      if (!candidate.isEmpty()) {
-        image = candidate;
-      }
-    } catch (error) {
-      log.warn("[browser-capture] copy-element.image-failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  // Writing from the main process avoids the renderer's navigator.clipboard
-  // NotAllowedError, which fires when focus is inside the guest <webview>.
-  if (copyText && image) {
-    clipboard.write({ text: copyText, image });
-    return true;
-  }
-  if (image) {
-    clipboard.writeImage(image);
-    return true;
-  }
-  if (copyText) {
-    clipboard.writeText(copyText);
-    return true;
-  }
-  return false;
-});
-
 protocol.registerSchemesAsPrivileged([
   {
     scheme: APP_SCHEME,
@@ -635,48 +560,6 @@ function getAppDistDir(): string {
   return path.resolve(__dirname, "../../app/dist");
 }
 
-function getWindowIconCandidates(): string[] {
-  if (app.isPackaged) {
-    if (process.platform === "win32") {
-      return [
-        path.join(process.resourcesPath, "icon.ico"),
-        path.join(process.resourcesPath, "icon.png"),
-      ];
-    }
-    return [path.join(process.resourcesPath, "icon.png")];
-  }
-  if (process.platform === "win32") {
-    return [
-      path.resolve(__dirname, "../assets/icon.ico"),
-      path.resolve(__dirname, "../assets/icon.png"),
-    ];
-  }
-  return [path.resolve(__dirname, "../assets/icon.png")];
-}
-
-function getWindowIconPath(): string | null {
-  const candidates = getWindowIconCandidates();
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
-}
-
-function applyAppIcon(): void {
-  if (process.platform !== "darwin") {
-    return;
-  }
-
-  const iconPath = getWindowIconPath();
-  if (!iconPath) {
-    return;
-  }
-
-  const icon = nativeImage.createFromPath(iconPath);
-  if (icon.isEmpty()) {
-    return;
-  }
-
-  app.dock?.setIcon(icon);
-}
-
 // Work areas with the primary display first, so window-state clamping treats
 // it as the fallback. getAllDisplays() order is not guaranteed to lead with it.
 function getWorkAreasPrimaryFirst(): Electron.Rectangle[] {
@@ -692,7 +575,6 @@ async function createWindow(
     restoreWindowState?: boolean;
   } = {},
 ): Promise<BrowserWindow> {
-  const iconPath = getWindowIconPath();
   const systemTheme = resolveSystemWindowTheme();
 
   // Only the first window of a session restores and persists saved geometry.
@@ -708,13 +590,12 @@ async function createWindow(
     ? clampWindowStateToWorkAreas(savedWindowState, getWorkAreasPrimaryFirst())
     : null;
 
-  const title = devWorktreeName ? `${APP_NAME} (${devWorktreeName})` : APP_NAME;
   const mainWindow = new BrowserWindow({
-    title,
+    title: APP_NAME,
+    icon: applicationIcon,
     ...resolveWindowBounds(restoredWindowState),
     show: false,
     backgroundColor: getWindowBackgroundColor(systemTheme),
-    ...(iconPath ? { icon: iconPath } : {}),
     ...getMainWindowChromeOptions({
       platform: process.platform,
       theme: systemTheme,
@@ -726,6 +607,16 @@ async function createWindow(
       webviewTag: true,
     },
   });
+
+  if (TEST_APP_NAME) {
+    mainWindow.webContents.on("did-finish-load", () => {
+      mainWindow.setTitle(TEST_APP_NAME);
+    });
+    mainWindow.on("page-title-updated", (event) => {
+      event.preventDefault();
+      mainWindow.setTitle(TEST_APP_NAME);
+    });
+  }
 
   const webContentsId = mainWindow.webContents.id;
   pendingOpenProjectStore.set(webContentsId, options.pendingOpenProjectPath);
@@ -794,6 +685,9 @@ async function createWindow(
   });
 
   mainWindow.once("ready-to-show", () => {
+    if (TEST_APP_NAME) {
+      mainWindow.setTitle(TEST_APP_NAME);
+    }
     mainWindow.show();
   });
 
@@ -946,6 +840,11 @@ async function bootstrap(): Promise<void> {
 
   await app.whenReady();
 
+  applicationIcon = loadDevelopmentApplicationIcon();
+  if (applicationIcon) {
+    app.dock?.setIcon(applicationIcon);
+  }
+
   const appDistDir = getAppDistDir();
   protocol.handle(APP_SCHEME, (request) => {
     const { pathname, search, hash } = new URL(request.url);
@@ -973,15 +872,14 @@ async function bootstrap(): Promise<void> {
     return net.fetch(pathToFileURL(filePath).toString());
   });
 
-  applyAppIcon();
   setupApplicationMenu({
+    appName: APP_NAME,
     onNewWindow: () => {
       void createWindow().catch((error) => {
         log.error("[window] failed to create window from menu", error);
       });
     },
   });
-  ensureNotificationCenterRegistration();
   registerDaemonManager();
   registerWindowManager();
   registerDialogHandlers();
@@ -989,6 +887,7 @@ async function bootstrap(): Promise<void> {
   registerOpenerHandlers();
   registerEditorTargetHandlers();
   registerBrowserAutomationIpc();
+  registerEncryptedStorageHandlers();
 
   // In-app "Open in new window": opens a window that lands on the given project
   // via the same open-project flow as a CLI launch (no move, no ownership).
@@ -1077,6 +976,10 @@ const quitLifecycle = createQuitLifecycle({
   onUpdateError: (error) => {
     log.error("[auto-updater] failed to validate downloaded update on quit", error);
   },
+});
+
+app.on("before-quit", () => {
+  void accountsReturnServer.close();
 });
 
 // electron-updater forwards this event through Electron's built-in autoUpdater.

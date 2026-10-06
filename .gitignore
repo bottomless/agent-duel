@@ -6,6 +6,7 @@ build/
 dist/
 .next/
 out/
+.turbo/
 result
 
 # Environment variables

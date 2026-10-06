@@ -27,6 +27,11 @@ export interface GenerateBranchNameFromFirstAgentContextOptions {
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   providerSnapshotManager?: Pick<ProviderSnapshotManager, "listProviders">;
   daemonConfig?: StructuredGenerationDaemonConfig | null;
+  preferredSelection?: {
+    provider?: string | null;
+    model?: string | null;
+    thinkingOptionId?: string | null;
+  };
   currentSelection?: {
     provider?: string | null;
     model?: string | null;
@@ -107,6 +112,7 @@ export async function generateBranchNameFromFirstAgentContext(
           cwd: options.cwd,
           providerSnapshotManager: options.providerSnapshotManager,
           daemonConfig: options.daemonConfig,
+          preferredSelection: options.preferredSelection,
           currentSelection: options.currentSelection,
         })
       : [];

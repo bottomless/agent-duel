@@ -159,6 +159,37 @@ test("throws when no providers are accessible (neither connected nor api-source)
   ).rejects.toThrow("OpenCode has no connected providers");
 });
 
+test("provides the fixed single-agent model when the Arena backend hides its catalog", async () => {
+  const runtime = new TestOpenCodeHarness();
+  const openCodeClient = new TestOpenCodeClient();
+  openCodeClient.providerListResponse = {
+    data: {
+      connected: [],
+      all: [],
+    },
+  };
+  runtime.enqueueClient(openCodeClient);
+
+  const client = new OpenCodeAgentClient(createTestLogger(), undefined, {
+    serverManager: runtime,
+    createClient: runtime.createClient,
+    arenaMode: true,
+  });
+
+  await expect(
+    client.fetchCatalog({ scope: "workspace", cwd: "/tmp/opencode-models", force: false }),
+  ).resolves.toMatchObject({
+    models: [
+      {
+        provider: "opencode",
+        id: "openrouter/deepseek/deepseek-v4-flash",
+        label: "DeepSeek V4 Flash",
+        defaultThinkingOptionId: "high",
+      },
+    ],
+  });
+});
+
 test("does not throw when only api-source providers are present with no connected providers", async () => {
   const runtime = new TestOpenCodeHarness();
   const openCodeClient = new TestOpenCodeClient();

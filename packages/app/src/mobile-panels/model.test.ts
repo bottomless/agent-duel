@@ -77,7 +77,7 @@ class MobilePanelsScenario {
 }
 
 describe("mobile panel ownership", () => {
-  it("follows programmatic commands through left, center, and right", () => {
+  it("follows programmatic commands between the drawer and the content", () => {
     const panels = new MobilePanelsScenario();
 
     panels.command("agent-list").finishAnimation("agent-list");
@@ -88,11 +88,11 @@ describe("mobile panel ownership", () => {
       revision: 1,
     });
 
-    panels.command("agent").command("file-explorer").finishAnimation("file-explorer");
+    panels.command("agent").command("agent-list").finishAnimation("agent-list");
     expect(panels.snapshot()).toEqual({
-      target: "file-explorer",
-      motionTarget: "file-explorer",
-      settledTarget: "file-explorer",
+      target: "agent-list",
+      motionTarget: "agent-list",
+      settledTarget: "agent-list",
       revision: 3,
     });
   });
@@ -128,11 +128,11 @@ describe("mobile panel ownership", () => {
   it("makes a command during a drag invalidate the stale gesture finish", () => {
     const panels = new MobilePanelsScenario();
 
-    panels.beginGesture("agent").command("file-explorer").finishGesture("agent-list");
+    panels.beginGesture("agent").command("agent-list").finishGesture("agent-list");
 
     expect(panels.snapshot()).toEqual({
-      target: "file-explorer",
-      motionTarget: "file-explorer",
+      target: "agent-list",
+      motionTarget: "agent-list",
       settledTarget: "agent",
       revision: 1,
     });
@@ -144,12 +144,12 @@ describe("mobile panel ownership", () => {
 
     panels.command("agent-list");
     const staleRevision = panels.snapshot().revision;
-    panels.command("agent").command("file-explorer");
+    panels.command("agent").command("agent-list");
     panels.finishAnimation("agent-list", staleRevision);
 
     expect(panels.snapshot()).toEqual({
-      target: "file-explorer",
-      motionTarget: "file-explorer",
+      target: "agent-list",
+      motionTarget: "agent-list",
       settledTarget: "agent",
       revision: 3,
     });

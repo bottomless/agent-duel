@@ -2,6 +2,7 @@
   "name": "@getpaseo/server",
   "version": "0.4.0-beta.1",
   "description": "Paseo backend server",
+  "license": "AGPL-3.0-or-later",
   "files": [
     "dist/server",
     "dist/src",
@@ -54,7 +55,6 @@
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "vitest run --fileParallelism --exclude \"**/*.e2e.test.ts\"",
     "test:integration": "vitest run --maxWorkers=1 src/server/daemon-e2e/models.e2e.test.ts src/server/daemon-e2e/live-preferences.e2e.test.ts src/server/agent/model-catalog.e2e.test.ts && vitest run --maxWorkers=1 src/server/session.create-agent-worktree-autoarchive.e2e.test.ts -t \"creates a worktree and auto-archives both\"",
-    "test:hub-cli-contract": "vitest run --maxWorkers=1 src/server/hub/hub-cli-contract.test.ts",
     "test:integration:all": "npm run test:e2e",
     "test:integration:real": "vitest run real.e2e.test.ts",
     "test:integration:local": "vitest run local.e2e.test.ts",

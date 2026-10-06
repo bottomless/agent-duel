@@ -1,7 +1,15 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { app, BrowserWindow, Notification, ipcMain, nativeImage } from "electron";
+import { app, BrowserWindow, Notification, ipcMain, nativeImage, shell } from "electron";
 import { getDesktopSettingsStore } from "../settings/desktop-settings-electron.js";
+
+import { openNotificationSettings } from "./notification-settings.js";
+
+import { createMacNotificationDelivery } from "./mac-notification-delivery.js";
+import {
+  getNativeNotificationBridge,
+  notificationPermissions,
+} from "./notification-permissions.js";
 
 interface NotificationInput {
   title?: unknown;
@@ -62,23 +70,38 @@ function focusSenderWindow(sender: Electron.WebContents): BrowserWindow | null {
   return win;
 }
 
-/**
- * macOS requires a notification to have been shown at least once before
- * the app appears in System Preferences > Notifications. We fire a
- * silent no-op notification during startup to ensure registration.
- */
-export function ensureNotificationCenterRegistration(): void {
-  if (process.platform !== "darwin" || !Notification.isSupported()) {
-    return;
+export function registerNotificationHandlers(): void {
+  let sendMacNotification: ReturnType<typeof createMacNotificationDelivery> | null = null;
+  try {
+    if (process.platform === "darwin")
+      sendMacNotification = createMacNotificationDelivery(
+        getNativeNotificationBridge(),
+        ({ windowId, data }) => {
+          const win =
+            (windowId === undefined ? null : BrowserWindow.fromId(windowId)) ??
+            BrowserWindow.getAllWindows()[0];
+          if (!win || win.isDestroyed()) return;
+          focusSenderWindow(win.webContents);
+          if (data && Object.keys(data).length > 0) {
+            win.webContents.send("paseo:event:notification-click", { data });
+          }
+        },
+      );
+  } catch (error) {
+    console.error("[notifications] Native notification initialization failed", error);
   }
 
-  const probe = new Notification({ title: app.name, silent: true });
-  probe.on("show", () => probe.close());
-  setTimeout(() => probe.close(), 2_000);
-  probe.show();
-}
-
-export function registerNotificationHandlers(): void {
+  ipcMain.handle("paseo:notification:getPermission", () => notificationPermissions.getPermission());
+  ipcMain.handle("paseo:notification:requestPermission", () =>
+    notificationPermissions.requestPermission(),
+  );
+  ipcMain.handle("paseo:notification:openSettings", async () => {
+    if (process.platform !== "darwin") throw new Error("Notification settings require macOS");
+    await openNotificationSettings({
+      isPackaged: app.isPackaged,
+      openExternal: (url) => shell.openExternal(url),
+    });
+  });
   ipcMain.handle("paseo:notification:isSupported", () => {
     return Notification.isSupported();
   });
@@ -95,8 +118,18 @@ export function registerNotificationHandlers(): void {
 
     const body = toTrimmedString(rawInput?.body) ?? undefined;
     const data = toRecord(rawInput?.data);
-    const icon = getNotificationIcon();
     const settings = await getDesktopSettingsStore().get();
+    if (process.platform === "darwin" && !(await notificationPermissions.canSend())) return false;
+    if (process.platform === "darwin") {
+      if (!sendMacNotification) throw new Error("Native notification bridge unavailable");
+      return sendMacNotification({
+        title,
+        body,
+        silent: !settings.notifications.playSound,
+        route: { windowId: BrowserWindow.fromWebContents(event.sender)?.id, data },
+      });
+    }
+    const icon = getNotificationIcon();
     const notification = new Notification({
       title,
       ...(body ? { body } : {}),

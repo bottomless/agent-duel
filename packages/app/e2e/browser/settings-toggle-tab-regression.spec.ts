@@ -10,19 +10,21 @@ async function pressSettingsToggleShortcut(page: import("@playwright/test").Page
   await page.keyboard.press(`${modifier}+Comma`);
 }
 
-async function expectSendBehavior(
-  page: import("@playwright/test").Page,
-  expected: "interrupt" | "queue",
-) {
+async function setTerminalScrollback(page: import("@playwright/test").Page, lines: number) {
+  const input = page.getByLabel("Terminal scrollback lines", { exact: true });
+  await input.fill(String(lines));
+  await input.press("Enter");
   await expect
     .poll(async () => {
       const raw = await page.evaluate(() => localStorage.getItem("@paseo:app-settings"));
       if (!raw) {
         return null;
       }
-      return (JSON.parse(raw) as { sendBehavior?: string }).sendBehavior ?? null;
+      return (
+        (JSON.parse(raw) as { terminalScrollbackLines?: number }).terminalScrollbackLines ?? null
+      );
     })
-    .toBe(expected);
+    .toBe(lines);
 }
 
 async function openAgentRouteAndExpectFocused(input: {
@@ -70,10 +72,8 @@ test.describe("Settings toggle tab regression", () => {
       await pressSettingsToggleShortcut(page);
       await expect(page).toHaveURL(/\/settings\/general$/);
 
-      await page.getByRole("button", { name: "Queue", exact: true }).click();
-      await expectSendBehavior(page, "queue");
-      await page.getByRole("button", { name: "Interrupt", exact: true }).click();
-      await expectSendBehavior(page, "interrupt");
+      await setTerminalScrollback(page, 12_000);
+      await setTerminalScrollback(page, 10_000);
 
       await pressSettingsToggleShortcut(page);
       await expect(page).toHaveURL(buildHostWorkspaceRoute(serverId, workspace.workspaceId));

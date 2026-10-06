@@ -1,14 +1,11 @@
 import { test, expect } from "../support/fixtures";
 import {
-  buildHostWorkspaceRoute,
   buildOpenProjectRoute,
   buildSettingsRoute,
   buildSettingsSectionRoute,
 } from "@/utils/host-routes";
 import { gotoAppShell, openSettings } from "../support/helpers/app";
-import { getE2EDaemonPort } from "../support/helpers/daemon-port";
 import {
-  closeCompactSettings,
   openSettingsSection,
   expectSettingsHeader,
   openAddHostFlow,
@@ -30,39 +27,15 @@ import {
   expectDirectHostSslEnabled,
   expectDirectHostUriValue,
   expectDirectHostUriHidden,
-  expectDiagnosticsContent,
-  expectAboutContent,
   expectGeneralContent,
   expectAppearanceContent,
-  seedSavedSettingsHosts,
-  selectSettingsHost,
-  expectSettingsHostPickerLabel,
-  openSettingsHostSection,
-  removeCurrentHostFromSettings,
 } from "../support/helpers/settings";
-import { getServerId } from "../support/helpers/server-id";
 import { expectAppRoute } from "../support/helpers/route-assertions";
-
-async function openWorkspace(
-  page: import("@playwright/test").Page,
-  workspace: { workspaceId: string },
-) {
-  await page.goto(buildHostWorkspaceRoute(getServerId(), workspace.workspaceId));
-  await expect(page.getByTestId("menu-button")).toBeVisible();
-}
 
 test.describe("Settings sidebar navigation", () => {
   test("clicking a sidebar section updates the URL and renders the section", async ({ page }) => {
     await gotoAppShell(page);
     await openSettings(page);
-
-    await openSettingsSection(page, "diagnostics");
-    await expectSettingsHeader(page, "Diagnostics");
-    await expectDiagnosticsContent(page);
-
-    await openSettingsSection(page, "about");
-    await expectSettingsHeader(page, "About");
-    await expectAboutContent(page);
 
     await openSettingsSection(page, "general");
     await expectSettingsHeader(page, "General");
@@ -129,7 +102,7 @@ test.describe("Settings — compact master-detail", () => {
     await gotoAppShell(page);
     await openCompactSettings(page, buildOpenProjectRoute());
 
-    await expectSettingsSidebarSections(page, ["general", "diagnostics", "about"]);
+    await expectSettingsSidebarSections(page, ["general", "appearance"]);
     await expectCompactSettingsList(page);
 
     await expectSettingsBackButton(page);
@@ -141,9 +114,9 @@ test.describe("Settings — compact master-detail", () => {
     await gotoAppShell(page);
     await openCompactSettings(page, buildOpenProjectRoute());
 
-    await openSettingsSection(page, "diagnostics");
-    await expectAppRoute(page, buildSettingsSectionRoute("diagnostics"));
-    await expectDiagnosticsContent(page);
+    await openSettingsSection(page, "appearance");
+    await expectAppRoute(page, buildSettingsSectionRoute("appearance"));
+    await expectAppearanceContent(page);
     await expectSettingsSidebarHidden(page);
     await expectSettingsBackButton(page);
   });
@@ -152,17 +125,15 @@ test.describe("Settings — compact master-detail", () => {
     await gotoAppShell(page);
     await openCompactSettings(page, buildOpenProjectRoute());
 
-    await openSettingsSection(page, "about");
-    await expectAppRoute(page, buildSettingsSectionRoute("about"));
+    await openSettingsSection(page, "appearance");
+    await expectAppRoute(page, buildSettingsSectionRoute("appearance"));
 
     await goBackInSettings(page);
     await expectCompactSettingsList(page);
     await expectSettingsBackButton(page);
   });
 
-  test("tapping a host section row pushes /settings/hosts/[serverId]/connections", async ({
-    page,
-  }) => {
+  test("tapping a host section row opens the host detail", async ({ page }) => {
     await gotoAppShell(page);
     await openCompactSettings(page, buildOpenProjectRoute());
 
@@ -179,45 +150,5 @@ test.describe("Settings — compact master-detail", () => {
     await goBackInSettings(page);
     await expectAppRoute(page, buildSettingsRoute());
     await expectSettingsSidebarVisible(page);
-  });
-
-  test("switching the host picker on the settings list scopes host rows without navigating", async ({
-    page,
-  }) => {
-    const primaryServerId = getServerId();
-    const secondaryServerId = "srv_e2e_settings_secondary";
-    const secondaryHostLabel = "Stable horse";
-    const endpoint = `127.0.0.1:${getE2EDaemonPort()}`;
-
-    await seedSavedSettingsHosts(page, [
-      { serverId: primaryServerId, label: "First horse", endpoint },
-      { serverId: secondaryServerId, label: secondaryHostLabel, endpoint },
-    ]);
-    await gotoAppShell(page);
-    await openCompactSettings(page, buildOpenProjectRoute());
-
-    await selectSettingsHost(page, secondaryServerId);
-
-    await expectAppRoute(page, buildSettingsRoute());
-    await expectSettingsSidebarVisible(page);
-    await expectSettingsHostPickerLabel(page, secondaryHostLabel);
-
-    await openSettingsHostSection(page, secondaryServerId, "connections");
-  });
-
-  test("removing the last active host returns to welcome after settings closes", async ({
-    page,
-    withWorkspace,
-  }) => {
-    const workspace = await withWorkspace({ prefix: "remove-host-compact-" });
-
-    await openWorkspace(page, workspace);
-    await openCompactSettings(page, buildHostWorkspaceRoute(getServerId(), workspace.workspaceId));
-    await openSettingsHostSection(page, getServerId(), "host");
-    await removeCurrentHostFromSettings(page);
-    await closeCompactSettings(page);
-
-    await expect(page).toHaveURL(/\/welcome$/);
-    await expect(page.getByTestId("welcome-direct-connection")).toBeVisible();
   });
 });

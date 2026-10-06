@@ -77,12 +77,14 @@ export function expireStaleDiffModeOverridesInState(
 export function resolveDiffMode(input: {
   override: DiffModeOverride | undefined;
   hasUncommittedChanges: boolean;
+  /** Where a checkout with nothing uncommitted starts. Defaults to the base diff. */
+  cleanFallbackMode?: ReviewDraftMode;
 }): ReviewDraftMode {
   const { override, hasUncommittedChanges } = input;
   if (override && override.isDirtyAtSelection === hasUncommittedChanges) {
     return override.mode;
   }
-  return hasUncommittedChanges ? "uncommitted" : "base";
+  return hasUncommittedChanges ? "uncommitted" : (input.cleanFallbackMode ?? "base");
 }
 
 export function addCommentToState(

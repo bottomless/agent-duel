@@ -8,3 +8,11 @@ export interface MessagePayload {
   cwd: string;
   forceSend?: boolean;
 }
+
+export interface ComposerSubmitAction {
+  id: string;
+  label: string;
+  accessibilityLabel?: string;
+  testID?: string;
+  isDefault?: boolean;
+}

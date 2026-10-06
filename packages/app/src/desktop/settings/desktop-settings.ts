@@ -14,6 +14,8 @@ const DESKTOP_SETTINGS_QUERY_KEY = ["desktop-settings"] as const;
 export interface DesktopSettings {
   releaseChannel: ReleaseChannel;
   notifications: {
+    agentFinished: boolean;
+    battleReady: boolean;
     playSound: boolean;
   };
   daemon: {
@@ -31,6 +33,8 @@ export interface DesktopSettingsPatch {
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   releaseChannel: "stable",
   notifications: {
+    agentFinished: true,
+    battleReady: true,
     playSound: true,
   },
   daemon: {
@@ -157,6 +161,14 @@ function parseDesktopSettings(raw: unknown): DesktopSettings {
   return {
     releaseChannel: record.releaseChannel === "beta" ? "beta" : "stable",
     notifications: {
+      agentFinished:
+        typeof notifications.agentFinished === "boolean"
+          ? notifications.agentFinished
+          : DEFAULT_DESKTOP_SETTINGS.notifications.agentFinished,
+      battleReady:
+        typeof notifications.battleReady === "boolean"
+          ? notifications.battleReady
+          : DEFAULT_DESKTOP_SETTINGS.notifications.battleReady,
       playSound:
         typeof notifications.playSound === "boolean"
           ? notifications.playSound

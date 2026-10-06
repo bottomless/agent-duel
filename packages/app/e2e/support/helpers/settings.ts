@@ -21,27 +21,13 @@ interface SavedSettingsHostInput {
 const SECTION_LABELS = {
   general: "General",
   appearance: "Appearance",
-  editor: "Editor",
   shortcuts: "Shortcuts",
-  integrations: "Integrations",
-  permissions: "Permissions",
-  diagnostics: "Diagnostics",
-  about: "About",
+  notifications: "Notifications",
 } as const;
 
 export type SettingsSection = keyof typeof SECTION_LABELS;
 
-type HostSection =
-  | "projects"
-  | "connections"
-  | "pair-device"
-  | "agents"
-  | "metadata"
-  | "workspaces"
-  | "providers"
-  | "usage"
-  | "terminals"
-  | "host";
+type HostSection = "projects";
 
 export async function openSettingsSection(page: Page, section: SettingsSection): Promise<void> {
   const sidebar = page.getByTestId("settings-sidebar");
@@ -221,7 +207,7 @@ export async function clickSettingsBackToWorkspace(page: Page): Promise<void> {
 }
 
 export async function expectHostSettingsUrl(page: Page, serverId: string): Promise<void> {
-  await expectAppRoute(page, buildSettingsHostSectionRoute(serverId, "connections"));
+  await expectAppRoute(page, buildSettingsHostSectionRoute(serverId, "projects"));
 }
 
 export async function verifyLegacyHostSettingsRedirect(page: Page): Promise<void> {
@@ -264,15 +250,6 @@ export async function expectDirectHostUriValue(page: Page, uri: string): Promise
 
 export async function expectDirectHostUriHidden(page: Page): Promise<void> {
   await expect(page.getByTestId("direct-host-uri-input")).toHaveCount(0);
-}
-
-export async function expectDiagnosticsContent(page: Page): Promise<void> {
-  await expect(page.getByRole("button", { name: "Run" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Play test" })).toBeVisible();
-}
-
-export async function expectAboutContent(page: Page): Promise<void> {
-  await expect(page.getByText("App version", { exact: true }).first()).toBeVisible();
 }
 
 export async function expectGeneralContent(page: Page): Promise<void> {
@@ -323,21 +300,6 @@ export async function openHostSection(
   section: HostSection,
 ): Promise<void> {
   await openSettingsHostSection(page, serverId, section);
-}
-
-export async function expectHostActionCards(page: Page, serverId: string): Promise<void> {
-  // Restart + remove cards live on the Host section; providers moved to its
-  // own Providers section (asserted via expectHostProvidersCard).
-  await openSettingsHostSection(page, serverId, "host");
-  await expect(page.getByTestId("host-page-restart-card")).toBeVisible();
-  await expect(page.getByTestId("host-page-restart-button")).toBeVisible();
-  await expect(page.getByTestId("host-page-remove-host-card")).toBeVisible();
-  await expect(page.getByTestId("host-page-remove-host-button")).toBeVisible();
-}
-
-export async function expectHostProvidersCard(page: Page, serverId: string): Promise<void> {
-  await openSettingsHostSection(page, serverId, "providers");
-  await expect(page.getByTestId("host-page-providers-card")).toBeVisible();
 }
 
 export async function serveJson(page: Page, url: string, body: unknown): Promise<void> {

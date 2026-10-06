@@ -35,11 +35,6 @@ import {
   formatProviderDiagnosticError,
 } from "./providers/diagnostic-utils.js";
 import type { MutableDaemonConfig } from "../daemon-config-store.js";
-import type { HubExecutionAgentValidationIssue } from "@getpaseo/protocol/messages";
-import {
-  type AgentConfigurationValidationInput,
-  validateAgentConfigurationAgainstProvider,
-} from "./agent-configuration-validator.js";
 
 const DEFAULT_REFRESH_TIMEOUT_MS = 60_000;
 const DEFAULT_DIAGNOSTIC_TIMEOUT_MS = 120_000;
@@ -95,6 +90,8 @@ export interface ProviderSnapshotManagerOptions {
   providerOverrides?: Record<string, ProviderOverride>;
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   managedProcesses?: ManagedProcessRegistry;
+  getArenaPreviewBaseUrl?: () => string | null;
+  uploadsRoot?: string;
   isDev?: boolean;
   extraClients?: Partial<Record<AgentProvider, AgentClient>>;
   refreshTimeoutMs?: number;
@@ -192,6 +189,8 @@ export class ProviderSnapshotManager {
   private readonly logger: Logger;
   private readonly workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   private readonly managedProcesses?: ManagedProcessRegistry;
+  private readonly getArenaPreviewBaseUrl?: () => string | null;
+  private readonly uploadsRoot?: string;
   private readonly isDev: boolean;
   private readonly extraClients: Partial<Record<AgentProvider, AgentClient>>;
   private runtimeSettings: AgentProviderRuntimeSettingsMap | undefined;
@@ -204,6 +203,8 @@ export class ProviderSnapshotManager {
     this.logger = options.logger;
     this.workspaceGitService = options.workspaceGitService;
     this.managedProcesses = options.managedProcesses;
+    this.getArenaPreviewBaseUrl = options.getArenaPreviewBaseUrl;
+    this.uploadsRoot = options.uploadsRoot;
     this.isDev = options.isDev === true;
     this.extraClients = options.extraClients ?? {};
     this.runtimeSettings = options.runtimeSettings;
@@ -269,10 +270,6 @@ export class ProviderSnapshotManager {
     return this.getProviderIds();
   }
 
-  hasProvider(provider: AgentProvider): boolean {
-    return Object.prototype.hasOwnProperty.call(this.providerRegistry, provider);
-  }
-
   getProviderLabel(provider: AgentProvider): string {
     return this.providerRegistry[provider]?.label ?? provider;
   }
@@ -328,45 +325,6 @@ export class ProviderSnapshotManager {
       throw new Error(`Provider ${input.provider} is not configured`);
     }
     return entry;
-  }
-
-  async validateAgentConfiguration(
-    input: AgentConfigurationValidationInput,
-  ): Promise<HubExecutionAgentValidationIssue[]> {
-    if (!this.hasProvider(input.provider)) {
-      return [
-        {
-          path: ["provider"],
-          message: `Provider '${input.provider}' is not configured`,
-        },
-      ];
-    }
-
-    const provider = await this.getProvider({
-      provider: input.provider,
-      wait: true,
-    });
-    if (!provider.enabled) {
-      return [{ path: ["provider"], message: `Provider '${input.provider}' is disabled` }];
-    }
-    if (provider.status !== "ready") {
-      return [
-        {
-          path: ["provider"],
-          message:
-            provider.status === "error" && provider.error
-              ? provider.error
-              : `Provider '${input.provider}' is not available`,
-        },
-      ];
-    }
-
-    const definition = this.requireProvider(input.provider);
-    return validateAgentConfigurationAgainstProvider({
-      input,
-      provider,
-      validateOptions: definition.validateOptions,
-    });
   }
 
   async listModels(input: ProviderSnapshotProviderOptions): Promise<AgentModelDefinition[]> {
@@ -500,6 +458,8 @@ export class ProviderSnapshotManager {
       providerOverrides: this.providerOverrides,
       workspaceGitService: this.workspaceGitService,
       managedProcesses: this.managedProcesses,
+      getArenaPreviewBaseUrl: this.getArenaPreviewBaseUrl,
+      uploadsRoot: this.uploadsRoot,
       isDev: this.isDev,
     });
 

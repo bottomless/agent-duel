@@ -472,6 +472,7 @@ describe("terminal-session-controller subdirectory aggregation", () => {
 
     changedListener?.({
       cwd: subdirCwd,
+      workspaceId: "ws-test",
       terminals: [{ id: "subdir-term", name: "Mobile", cwd: subdirCwd, workspaceId: "ws-test" }],
     });
     await flushMicrotasks();
@@ -622,7 +623,11 @@ describe("terminal-session-controller workspace-scoped subscriptions", () => {
     // Tearing down workspace B must not drop workspace A's live subscription.
     controller.dispatch({ type: "unsubscribe_terminals_request", cwd, workspaceId: "ws-b" });
 
-    changedListener?.({ cwd, terminals: [{ id: "a", name: "A", cwd, workspaceId: "ws-a" }] });
+    changedListener?.({
+      cwd,
+      workspaceId: "ws-a",
+      terminals: [{ id: "a", name: "A", cwd, workspaceId: "ws-a" }],
+    });
     await flushMicrotasks();
 
     expect(outboundMessages).toEqual([
@@ -634,6 +639,69 @@ describe("terminal-session-controller workspace-scoped subscriptions", () => {
         },
       },
     ]);
+  });
+
+  test("keeps an owned external worktree terminal in the workspace-root subscription", async () => {
+    const rootCwd = "/work/repo";
+    const externalCwd = "/arena/worktrees/candidate-a";
+    const terminal = listSession({ id: "arena-a", name: "Arena A", cwd: externalCwd });
+    let currentTerminals = [terminal];
+    let changedListener: ((event: TerminalsChangedEvent) => void) | null = null;
+    const terminalManager: TerminalManager = {
+      getTerminals: vi.fn(async () => currentTerminals),
+      createTerminal: vi.fn(),
+      registerCwdEnv: vi.fn(),
+      validateTerminalActivityToken: vi.fn(() => "unknown"),
+      getTerminal: vi.fn(),
+      getTerminalState: vi.fn(),
+      setTerminalTitle: vi.fn(),
+      setTerminalActivity: vi.fn(),
+      killTerminal: vi.fn(),
+      killTerminalAndWait: vi.fn(),
+      captureTerminal: vi.fn(),
+      listDirectories: vi.fn(() => [externalCwd]),
+      killAll: vi.fn(),
+      subscribeTerminalsChanged: vi.fn((listener) => {
+        changedListener = listener;
+        return vi.fn();
+      }),
+      subscribeTerminalActivity: vi.fn(() => vi.fn()),
+      subscribeTerminalWorkspaceContributionChanged: vi.fn(() => vi.fn()),
+    };
+    const outboundMessages: SessionOutboundMessage[] = [];
+    const controller = new TerminalSessionController({
+      terminalManager,
+      emit: (message) => outboundMessages.push(message),
+      emitBinary: vi.fn(),
+      hasBinaryChannel: () => true,
+      isPathWithinRoot: isSameOrDescendantPath,
+      sessionLogger: createLogger(),
+    });
+    controller.start();
+
+    controller.dispatch({
+      type: "subscribe_terminals_request",
+      cwd: rootCwd,
+      workspaceId: "ws-test",
+    });
+    await flushMicrotasks();
+
+    expect(outboundMessages.at(-1)).toEqual({
+      type: "terminals_changed",
+      payload: {
+        cwd: rootCwd,
+        terminals: [{ id: "arena-a", name: "Arena A", workspaceId: "ws-test", activity: null }],
+      },
+    });
+
+    currentTerminals = [];
+    changedListener?.({ cwd: externalCwd, workspaceId: "ws-test", terminals: [] });
+    await flushMicrotasks();
+
+    expect(outboundMessages.at(-1)).toEqual({
+      type: "terminals_changed",
+      payload: { cwd: rootCwd, terminals: [] },
+    });
   });
 });
 

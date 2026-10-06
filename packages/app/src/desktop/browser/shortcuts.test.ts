@@ -9,7 +9,7 @@ import { buildEffectiveBindings, resolveKeyboardShortcut } from "../../keyboard/
 describe("buildBrowserKeyboardPolicy", () => {
   it("publishes only chord starts while no browser chord is pending", () => {
     const bindings = buildEffectiveBindings({
-      "workspace-tab-new-ctrl-t-non-mac": "Ctrl+Y",
+      "workspace-tab-close-current-ctrl-w-non-mac": "Ctrl+Y",
       "workspace-terminal-new-ctrl-shift-t-non-mac": "Ctrl+F12 Ctrl+F11",
     });
 
@@ -121,7 +121,7 @@ describe("buildBrowserKeyboardPolicy", () => {
 
   it("publishes Mod bindings for the current shortcut platform", () => {
     const bindings = buildEffectiveBindings({
-      "workspace-tab-new-cmd-t-mac": "Mod+Y",
+      "workspace-tab-close-current-cmd-w-mac": "Mod+Y",
     });
 
     expect(

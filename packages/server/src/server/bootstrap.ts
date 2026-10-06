@@ -137,6 +137,11 @@ import {
 } from "./agent/tools/paseo-tools.js";
 import type { PaseoToolRuntimeContext } from "./agent/tools/types.js";
 import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
+import { OpenCodeServerManager } from "./agent/providers/opencode/server-manager.js";
+import {
+  recoverInterruptedForkWorkspaces,
+  recoverUnrecordedForkWorktrees,
+} from "./fork-workspace-recovery.js";
 import { bootstrapWorkspaceRegistries } from "./workspace-registry-bootstrap.js";
 import { WorkspaceReconciliationService } from "./workspace-reconciliation-service.js";
 import {
@@ -145,16 +150,13 @@ import {
   type WorkspaceArchiveContext,
 } from "./workspace-registry.js";
 import { CheckoutDiffManager } from "./checkout-diff-manager.js";
-import { ScheduleService } from "./schedule/service.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
 import { BrowserToolsBroker } from "./browser-tools/broker.js";
 import { DaemonConfigBrowserToolsPolicy } from "./browser-tools/policy.js";
 import { WorkspaceGitServiceImpl } from "./workspace-git-service.js";
 import { resolveWorkspaceIdForPath } from "./resolve-workspace-id-for-path.js";
 import {
-  archiveByScope,
   archivePersistedWorkspaceRecord,
-  killTerminalsForWorkspace,
   type ActiveWorkspaceRef,
 } from "./workspace-archive-service.js";
 import { setupAutoArchiveOnMerge } from "./auto-archive-on-merge/index.js";
@@ -193,29 +195,24 @@ import {
   isAgentMcpRequestAuthorized,
   type DaemonAuthConfig,
 } from "./auth.js";
+import { SESSION_HEADER } from "@getpaseo/protocol/accounts/schemas";
 import { createWebUiMiddleware } from "./web-ui.js";
+import { resolveArenaAccessConfig } from "./accounts/config.js";
+import { createArenaByokService } from "./accounts/byok.js";
+import { createAccountsService, type AccountsService } from "./accounts/service.js";
+import { createAccountsRouter } from "./accounts/routes.js";
+import { createRequireSessionMiddleware } from "./accounts/middleware.js";
+import { createArenaRuntimeRouter } from "./accounts/arena-runtime-router.js";
+import { FeedbackBackend } from "./feedback/backend.js";
+import { createFeedbackContextCapture, type FeedbackContextCapture } from "./feedback/context.js";
+import { createFeedbackRouter } from "./feedback/routes.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { createGitMutationService } from "./session/git-mutation/git-mutation-service.js";
 import { workspaceIdsOnCheckout } from "./workspace-directory.js";
 import { configureGitProcessPolicy } from "../utils/run-git-command.js";
 import { resolveGitProcessPolicy } from "../utils/git-process-scheduler.js";
 import { resolveFirstAgentPromptTitle } from "./agent/create-agent-title.js";
-import {
-  createAgentCommand,
-  type CreateAgentCommandDependencies,
-} from "./agent/create-agent/create.js";
-import { archiveAgentCommand, cancelAgentRunCommand } from "./agent/lifecycle-command.js";
-import { CreateAgentLifecycleDispatch } from "./agent/create-agent-lifecycle-dispatch.js";
-import {
-  HubRelationshipController,
-  type HubRelationshipClock,
-  type HubRelationshipRetryPolicy,
-} from "./hub/relationship-controller.js";
-import {
-  DirectHubRelationshipRemote,
-  type HubRelationshipRemote,
-} from "./hub/relationship-remote.js";
-import { DaemonExecutions } from "./hub/daemon-executions.js";
+import type { CreateAgentCommandDependencies } from "./agent/create-agent/create.js";
 
 const MAX_MCP_DEBUG_BATCH_ITEMS = 10;
 const REDACTED_LOG_VALUE = "[redacted]";
@@ -455,10 +452,6 @@ export interface PaseoDaemon {
 }
 
 export interface PaseoDaemonDependencies {
-  hubRelationshipRemote?: HubRelationshipRemote;
-  hubRelationshipClock?: HubRelationshipClock;
-  hubRelationshipRetryPolicy?: HubRelationshipRetryPolicy;
-  createHubDaemonId?: () => string;
   serverFeatureOverrides?: {
     daemonStatusRpc?: boolean;
     relayConfig?: boolean;
@@ -596,6 +589,7 @@ export async function createPaseoDaemon(
   app.set("trust proxy", resolveExpressTrustProxySetting(config));
   let boundListenTarget: ListenTarget | null = null;
   let workspaceRegistry: FileBackedWorkspaceRegistry | null = null;
+  let feedbackContextCapture: FeedbackContextCapture | null = null;
   const terminalManager = createConfiguredTerminalManager({
     getTerminalActivityUrl: () => createTerminalActivityUrl(boundListenTarget),
   });
@@ -675,7 +669,10 @@ export async function createPaseoDaemon(
     if (origin && (allowedOrigins.has("*") || allowedOrigins.has(origin))) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        `Content-Type, Authorization, ${SESSION_HEADER}`,
+      );
       res.setHeader("Access-Control-Allow-Credentials", "true");
     }
     if (req.method === "OPTIONS") {
@@ -684,6 +681,13 @@ export async function createPaseoDaemon(
     }
     next();
   });
+
+  // Arena receives only this loopback capability. The account session stays in
+  // daemon memory, and this router can reach only the Arena control-plane APIs.
+  app.use(
+    "/api/arena-runtime",
+    createArenaRuntimeRouter({ logger: logger.child({ module: "arena-runtime-proxy" }) }),
+  );
 
   // Local, harmless, and token-gated; deliberately skips daemon auth.
   app.post(
@@ -705,6 +709,66 @@ export async function createPaseoDaemon(
   );
 
   app.use(express.json());
+
+  // Accounts sit behind the daemon password but in front of every other API, so
+  // a signed-out client can reach sign-in and nothing else. The browser-facing
+  // sign-in callbacks bypass the daemon password (see BEARER_AUTH_BYPASS_PATHS)
+  // because a redirect cannot carry an Authorization header.
+  const arenaAccess = resolveArenaAccessConfig(process.env);
+  const accountsConfig = arenaAccess.kind === "accounts" ? arenaAccess.accounts : null;
+  const arenaByok =
+    arenaAccess.kind === "byok"
+      ? createArenaByokService({
+          // Assigned further down; the key only arrives once a client connects.
+          providerSnapshots: {
+            refreshSettingsSnapshot: (options) =>
+              providerSnapshotManager.refreshSettingsSnapshot(options),
+          },
+        })
+      : null;
+  let accounts: AccountsService | null = null;
+  if (accountsConfig) {
+    accounts = createAccountsService({
+      config: accountsConfig,
+      logger,
+    });
+    app.use("/api/auth", createAccountsRouter(accounts));
+    app.use(createRequireSessionMiddleware(accounts));
+    app.use(
+      "/api/feedback",
+      createFeedbackRouter({
+        backend: new FeedbackBackend(accountsConfig.controlPlaneUrl, { logger }),
+        sessions: accounts.sessions,
+        context: {
+          capture: (feedback) => {
+            if (!feedbackContextCapture) {
+              throw new Error("Feedback context is not ready");
+            }
+            return feedbackContextCapture.capture(feedback);
+          },
+        },
+      }),
+    );
+    logger.info(
+      { controlPlaneUrl: accountsConfig.controlPlaneUrl },
+      "Accounts enabled through the control plane",
+    );
+  } else {
+    // The app asks before it renders anything, so the answer has to exist even
+    // when there is nothing to sign in to.
+    app.get("/api/auth/methods", (_req, res) => {
+      res.json({ enabled: false, methods: [] });
+    });
+    if (arenaByok) {
+      logger.info(
+        "No control plane configured (PASEO_CONTROL_PLANE_URL); Arena runs on the user's OpenRouter key",
+      );
+    } else {
+      logger.warn(
+        "No control plane configured (PASEO_CONTROL_PLANE_URL); the daemon is unauthenticated",
+      );
+    }
+  }
 
   // Serve static files from public directory
   app.use("/public", express.static(staticDir));
@@ -824,6 +888,9 @@ export async function createPaseoDaemon(
     providerOverrides: config.providerOverrides,
     workspaceGitService,
     managedProcesses,
+    getArenaPreviewBaseUrl: () =>
+      boundListenTarget?.type === "tcp" ? `http://localhost:${boundListenTarget.port}` : null,
+    uploadsRoot: path.join(config.paseoHome, "uploads"),
     isDev: config.isDev === true,
     extraClients: config.agentClients,
   });
@@ -838,6 +905,10 @@ export async function createPaseoDaemon(
     },
     mcpAuthToken: agentMcpAuthToken,
     logger,
+  });
+  feedbackContextCapture = createFeedbackContextCapture({
+    agents: agentManager,
+    git: workspaceGitService,
   });
 
   const detachAgentStoragePersistence = attachAgentStoragePersistence(
@@ -857,6 +928,14 @@ export async function createPaseoDaemon(
     logger,
   });
   logger.info({ elapsed: elapsed() }, "Workspace registries bootstrapped");
+  await recoverInterruptedForkWorkspaces({ agentStorage, workspaceRegistry, logger });
+  await recoverUnrecordedForkWorktrees({
+    agentStorage,
+    workspaceRegistry,
+    workspaceProvisioning,
+    paseoHome: config.paseoHome,
+    logger,
+  });
   const teardownArchivedWorkspaceRuntime = (workspaceId: string): void => {
     scriptRuntimeStore.removeForWorkspace(workspaceId);
     releaseWorkspaceServicePortPlan(workspaceId);
@@ -1067,159 +1146,6 @@ export async function createPaseoDaemon(
     createPaseoWorktree: createPaseoWorktreeForTools,
     ensureWorkspaceForCreate: ensureWorkspaceForCreateAndBroadcastExternal,
   };
-  const createAgent = (input: Parameters<typeof createAgentCommand>[1]) =>
-    createAgentCommand(createAgentCommandDependencies, input);
-  const archiveWorkspaceByIdExternal = (workspaceId: string, requestId: string) =>
-    archiveByScope(
-      {
-        paseoHome: config.paseoHome,
-        paseoWorktreesBaseRoot: config.worktreesRoot,
-        github,
-        workspaceGitService,
-        agentManager,
-        agentStorage,
-        findWorkspaceIdForCwd: findWorkspaceIdForCwdExternal,
-        listActiveWorkspaces: listActiveWorkspacesExternal,
-        getWorkspace: (workspaceIdToGet) => workspaceRegistry.get(workspaceIdToGet),
-        archiveWorkspaceRecord: archiveWorkspaceRecordExternal,
-        emitWorkspaceUpdatesForWorkspaceIds: emitWorkspaceUpdatesExternal,
-        markWorkspaceArchiving: markWorkspaceArchivingExternal,
-        clearWorkspaceArchiving: clearWorkspaceArchivingExternal,
-        killTerminalsForWorkspace: (workspaceIdToKill) =>
-          killTerminalsForWorkspace({ terminalManager, sessionLogger: logger }, workspaceIdToKill),
-        stopWorkspaceSetup: (workspaceIdToStop) => workspaceSetupRuntime.stop(workspaceIdToStop),
-        sessionLogger: logger,
-      },
-      { scope: { kind: "workspace", workspaceId }, requestId },
-    );
-  const hubAgentLifecycle = new CreateAgentLifecycleDispatch({
-    paseoHome: config.paseoHome,
-    worktreesRoot: config.worktreesRoot,
-    agentManager,
-    agentStorage,
-    github,
-    workspaceGitService,
-    createPaseoWorktreeWorkflow: createPaseoWorktreeForTools,
-    archiveAgentForClose: (agentId) =>
-      archiveAgentCommand({ agentManager, agentStorage, logger }, agentId),
-    findWorkspaceIdForCwd: findWorkspaceIdForCwdExternal,
-    listActiveWorkspaces: listActiveWorkspacesExternal,
-    archiveWorkspaceRecord: archiveWorkspaceRecordExternal,
-    emit: emitExternalSessionMessage,
-    emitAgentRemove: async () => undefined,
-    emitWorkspaceUpdatesForWorkspaceIds: emitWorkspaceUpdatesExternal,
-    markWorkspaceArchiving: markWorkspaceArchivingExternal,
-    clearWorkspaceArchiving: clearWorkspaceArchivingExternal,
-    killTerminalsForWorkspace: (workspaceId) =>
-      killTerminalsForWorkspace({ terminalManager, sessionLogger: logger }, workspaceId),
-    logger,
-  });
-  const hubRelationships = new HubRelationshipController({
-    paseoHome: config.paseoHome,
-    hostname: getHostname(),
-    serverId,
-    daemonPublicKey: daemonKeyPair.publicKeyB64,
-    logger,
-    remote: dependencies.hubRelationshipRemote ?? new DirectHubRelationshipRemote(),
-    clock: dependencies.hubRelationshipClock,
-    retryPolicy: dependencies.hubRelationshipRetryPolicy,
-    createDaemonId: dependencies.createHubDaemonId,
-    attachSocket: async (socket, options) => {
-      if (!wsServer) throw new Error("WebSocket server is not running");
-      await wsServer.attachHubSocket(socket, options);
-    },
-    createExecutionAgents: (daemonId) =>
-      new DaemonExecutions({
-        daemonId,
-        agentManager,
-        agentStorage,
-        createAgent,
-        interruptAgent: (agentId) => cancelAgentRunCommand({ agentManager, logger }, agentId),
-        archiveWorkspace: archiveWorkspaceByIdExternal,
-        cleanupFailedCreate: (input) =>
-          hubAgentLifecycle.cleanupCreatedWorktreeAfterFailedAgentCreate(input),
-      }),
-  });
-
-  const createScheduleLocalWorkspaceExternal = async (input: {
-    cwd: string;
-    firstAgentContext: FirstAgentContext;
-  }) => {
-    const workspace = await workspaceProvisioning.createWorkspaceForDirectory(
-      input.cwd,
-      resolveFirstAgentPromptTitle(input.firstAgentContext),
-    );
-    workspaceAutoName.scheduleForDirectory({
-      workspaceId: workspace.workspaceId,
-      cwd: workspace.cwd,
-      firstAgentContext: input.firstAgentContext,
-    });
-    await emitWorkspaceUpdatesExternal([workspace.workspaceId]);
-    return workspace;
-  };
-  const createSchedulePaseoWorktreeExternal = async (input: {
-    cwd: string;
-    firstAgentContext: FirstAgentContext;
-  }) => {
-    const result = await createPaseoWorktreeForTools({
-      cwd: input.cwd,
-      firstAgentContext: input.firstAgentContext,
-    });
-    await emitWorkspaceUpdatesExternal([result.workspace.workspaceId]);
-    return result;
-  };
-  const archiveScheduleWorkspaceExternal = async (workspaceId: string) => {
-    await archiveByScope(
-      {
-        paseoHome: config.paseoHome,
-        paseoWorktreesBaseRoot: config.worktreesRoot,
-        github,
-        workspaceGitService,
-        agentManager,
-        agentStorage,
-        findWorkspaceIdForCwd: findWorkspaceIdForCwdExternal,
-        listActiveWorkspaces: listActiveWorkspacesExternal,
-        getWorkspace: (workspaceIdToGet) => workspaceRegistry.get(workspaceIdToGet),
-        archiveWorkspaceRecord: archiveWorkspaceRecordExternal,
-        emitWorkspaceUpdatesForWorkspaceIds: emitWorkspaceUpdatesExternal,
-        markWorkspaceArchiving: markWorkspaceArchivingExternal,
-        clearWorkspaceArchiving: clearWorkspaceArchivingExternal,
-        killTerminalsForWorkspace: (workspaceIdToKill) =>
-          killTerminalsForWorkspace(
-            {
-              terminalManager,
-              sessionLogger: logger,
-            },
-            workspaceIdToKill,
-          ),
-        stopWorkspaceSetup: (workspaceIdToStop) => workspaceSetupRuntime.stop(workspaceIdToStop),
-        sessionLogger: logger,
-      },
-      {
-        scope: { kind: "workspace", workspaceId },
-        requestId: "schedule-run-finish",
-      },
-    );
-  };
-  const scheduleService = new ScheduleService({
-    paseoHome: config.paseoHome,
-    logger,
-    agentManager,
-    agentStorage,
-    createAgent,
-    createDirectoryWorkspace: createScheduleLocalWorkspaceExternal,
-    createPaseoWorktreeWorkspace: createSchedulePaseoWorktreeExternal,
-    archiveWorkspace: archiveScheduleWorkspaceExternal,
-  });
-  await scheduleService.start();
-  agentManager.setAgentArchivedCallback(async (agentId) => {
-    try {
-      await scheduleService.completeForAgent(agentId);
-    } catch (error) {
-      logger.warn({ err: error, agentId }, "Failed to complete schedules for archived agent");
-    }
-  });
-  logger.info({ elapsed: elapsed() }, "Schedule service initialized");
   logger.info({ elapsed: elapsed() }, "Loading persisted agent registry");
   const persistedRecords = await agentStorage.list();
   logger.info(
@@ -1238,7 +1164,6 @@ export async function createPaseoDaemon(
     agentStorage,
     terminalManager,
     getDaemonTcpPort: () => (boundListenTarget?.type === "tcp" ? boundListenTarget.port : null),
-    scheduleService,
     providerSnapshotManager,
     daemonConfigStore,
     github,
@@ -1510,6 +1435,8 @@ export async function createPaseoDaemon(
                 hostnames: configuredHostnames,
                 daemonStatusRpc: dependencies.serverFeatureOverrides?.daemonStatusRpc,
                 relayConfig: dependencies.serverFeatureOverrides?.relayConfig,
+                accounts,
+                arenaByok,
               },
               workspaceAutoName,
               config.auth,
@@ -1528,7 +1455,6 @@ export async function createPaseoDaemon(
               },
               projectRegistry,
               workspaceRegistry,
-              scheduleService,
               checkoutDiffManager,
               serviceProxy,
               scriptRuntimeStore,
@@ -1556,7 +1482,6 @@ export async function createPaseoDaemon(
               },
               serviceProxyPublicBaseUrl,
               browserToolsBroker,
-              hubRelationships,
               workspaceSetupRuntime,
             );
             relayRuntime = createRelayRuntime({
@@ -1578,7 +1503,6 @@ export async function createPaseoDaemon(
             daemonConfigStore.onFieldChange("relay.enabled", (value) => {
               relayRuntime?.setEnabled(value === true);
             });
-            await hubRelationships.start();
           };
 
           logAndResolve().then(resolve, reject);
@@ -1611,7 +1535,6 @@ export async function createPaseoDaemon(
   };
 
   const stop = async () => {
-    await hubRelationships.stop();
     workspaceReconciliation.dispose();
     scriptHealthMonitor.stop();
     // Freeze both ingress and registration before taking the agent closure snapshot.
@@ -1622,14 +1545,15 @@ export async function createPaseoDaemon(
     detachAgentStoragePersistence();
     await agentStorage.flush().catch(() => undefined);
     await providerSnapshotManager.shutdown();
+    await OpenCodeServerManager.shutdownInstance();
     terminalManager.killAll();
     speechService.stop();
-    await scheduleService.stop().catch(() => undefined);
     await relayRuntime?.stop().catch(() => undefined);
     if (wsServer) {
       await wsServer.close();
     }
     await serviceProxy.stopStandalone();
+    await accounts?.close().catch(() => undefined);
     // Force-drop remaining sockets so httpServer.close() resolves promptly.
     // We've already closed wsServer (which sent ws-layer close frames) and
     // stopped every other service, so anything still attached is a TCP

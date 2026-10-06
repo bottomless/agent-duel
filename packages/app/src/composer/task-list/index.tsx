@@ -1,11 +1,13 @@
-import { memo, useCallback, useMemo, useState } from "react";
-import { Text, View } from "react-native";
+import { useShallow } from "zustand/react/shallow";
+import { tasksAfterBattle } from "./tasks";
+import React, { memo, useCallback, useMemo, useState } from "react";
+import { ScrollView, Text, View } from "react-native";
 import { Check, ChevronDown, ChevronRight, Circle, CircleDot } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
 import { MAX_CONTENT_WIDTH } from "@/constants/layout";
-import { useSessionStore } from "@/stores/session-store";
+import { selectAgentTurnPresentation, useSessionStore } from "@/stores/session-store";
 import type { Theme } from "@/styles/theme";
 import type { TodoEntry } from "@/types/stream";
 
@@ -19,26 +21,48 @@ const completedIcon = (theme: Theme) => ({ color: theme.colors.statusSuccess });
 export const AgentTaskList = memo(function AgentTaskList({
   serverId,
   agentId,
+  battleEndedAt,
 }: {
   serverId: string;
   agentId: string;
+  battleEndedAt: string | null;
 }) {
-  const tasks = useSessionStore((state) => state.sessions[serverId]?.agentTasks.get(agentId));
-  if (!tasks?.length) return null;
-  return <TaskListCard tasks={tasks} />;
+  const tasks = useSessionStore(
+    useShallow((state) => {
+      const session = state.sessions[serverId];
+      return tasksAfterBattle(
+        [
+          ...(session?.agentStreamTail.get(agentId) ?? []),
+          ...(session?.agentStreamHead.get(agentId) ?? []),
+        ],
+        battleEndedAt,
+      );
+    }),
+  );
+  const isTurnActive = useSessionStore(
+    (state) => selectAgentTurnPresentation(state.sessions[serverId], agentId).isActive,
+  );
+  if (tasks.length === 0) return null;
+  return <TaskListCard tasks={tasks} isTurnActive={isTurnActive} />;
 });
 
-function TaskStatusIcon({ task }: { task: TodoEntry }) {
+function TaskStatusIcon({ task, active }: { task: TodoEntry; active: boolean }) {
   if (task.completed || task.status === "completed") {
     return <ThemedCheck size={15} uniProps={completedIcon} />;
   }
   if (task.status === "in_progress") {
-    return <ThemedCircleDot size={15} uniProps={activeIcon} />;
+    return <ThemedCircleDot size={15} uniProps={active ? activeIcon : mutedIcon} />;
   }
   return <ThemedCircle size={15} uniProps={mutedIcon} />;
 }
 
-const TaskListCard = memo(function TaskListCard({ tasks }: { tasks: TodoEntry[] }) {
+const TaskListCard = memo(function TaskListCard({
+  tasks,
+  isTurnActive,
+}: {
+  tasks: TodoEntry[];
+  isTurnActive: boolean;
+}) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const completed = useMemo(
@@ -51,10 +75,13 @@ const TaskListCard = memo(function TaskListCard({ tasks }: { tasks: TodoEntry[] 
       tasks.find((task) => !task.completed && task.status !== "completed"),
     [tasks],
   );
-  const currentTaskText =
-    currentTask?.status === "in_progress" && currentTask.activeForm
-      ? currentTask.activeForm
-      : currentTask?.text;
+  let currentTaskText: string | undefined;
+  if (isTurnActive) {
+    currentTaskText =
+      currentTask?.status === "in_progress" && currentTask.activeForm
+        ? currentTask.activeForm
+        : currentTask?.text;
+  }
   const label = currentTaskText
     ? t("message.todo.tasksProgressCurrent", {
         completed,
@@ -82,9 +109,9 @@ const TaskListCard = memo(function TaskListCard({ tasks }: { tasks: TodoEntry[] 
             {label}
           </Button>
           {expanded ? (
-            <View style={styles.list}>
+            <ScrollView style={styles.list} nestedScrollEnabled>
               {tasks.map((task, index) => {
-                const isActive = task.status === "in_progress";
+                const isActive = isTurnActive && task.status === "in_progress";
                 const text = isActive && task.activeForm ? task.activeForm : task.text;
                 return (
                   <View
@@ -92,7 +119,7 @@ const TaskListCard = memo(function TaskListCard({ tasks }: { tasks: TodoEntry[] 
                     style={styles.row}
                     accessibilityLabel={text}
                   >
-                    <TaskStatusIcon task={task} />
+                    <TaskStatusIcon task={task} active={isActive} />
                     <Text
                       numberOfLines={1}
                       style={[styles.taskText, task.completed && styles.completedText]}
@@ -102,7 +129,7 @@ const TaskListCard = memo(function TaskListCard({ tasks }: { tasks: TodoEntry[] 
                   </View>
                 );
               })}
-            </View>
+            </ScrollView>
           ) : null}
         </View>
       </View>
@@ -140,6 +167,7 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
   },
   list: {
+    maxHeight: 200,
     borderTopWidth: theme.borderWidth[1],
     borderTopColor: theme.colors.border,
     paddingTop: theme.spacing[1],

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  FORK_SOURCE_AGENT_ID_LABEL,
+  getForkSourceAgentIdFromLabels,
   getParentAgentIdFromLabels,
   getOpenAgentTabLabel,
   hasOpenAgentTab,
@@ -9,6 +11,13 @@ import {
 } from "./agent-labels.js";
 
 describe("agent label policy", () => {
+  test("reads a non-empty fork source agent label", () => {
+    expect(getForkSourceAgentIdFromLabels({ [FORK_SOURCE_AGENT_ID_LABEL]: " source-agent " })).toBe(
+      "source-agent",
+    );
+    expect(getForkSourceAgentIdFromLabels({ [FORK_SOURCE_AGENT_ID_LABEL]: "   " })).toBeNull();
+  });
+
   test("treats a non-empty parent agent label as delegation", () => {
     const labels = { [PARENT_AGENT_ID_LABEL]: " parent-agent \n" };
 

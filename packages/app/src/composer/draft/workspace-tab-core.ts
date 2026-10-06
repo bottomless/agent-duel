@@ -12,6 +12,14 @@ export function shouldAllowEmptyDraftText(input: {
   return input.allowsEmptyAutoSubmit || input.attachments.length > 0;
 }
 
+/** Whether the draft has sent a battle and is waiting for the chat that takes it over. */
+export function isStartingArenaBattle(input: {
+  battleMode: boolean;
+  isCreating: boolean;
+}): boolean {
+  return input.battleMode && input.isCreating;
+}
+
 export function validateDraftSubmission(input: {
   text: string;
   allowsEmptyAutoSubmit: boolean;

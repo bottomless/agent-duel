@@ -27,7 +27,15 @@ const mocks = vi.hoisted(() => ({
   logError: vi.fn(),
   appLogPath: "/tmp/paseo-desktop-daemon-manager-test-main.log",
   getElectronLogFile: vi.fn(),
+  deploymentConfig: {} as Record<string, unknown>,
 }));
+
+const HOSTED_DEPLOYMENT_CONFIG = {
+  controlPlaneUrl: "https://control.agentduel.test",
+  sessionPublicKey: "test-session-public-key",
+  updatesEnabled: false,
+  arenaBuildSha: "0123456789abcdef0123456789abcdef01234567",
+};
 
 vi.mock("electron", () => ({
   app: {
@@ -38,6 +46,19 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn() },
   powerMonitor: { getSystemIdleTime: vi.fn(() => 0) },
 }));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    readFileSync: vi.fn((file, options) => {
+      if (String(file).endsWith("deployment-config.json")) {
+        return JSON.stringify(mocks.deploymentConfig);
+      }
+      return actual.readFileSync(file, options);
+    }),
+  };
+});
 
 vi.mock("electron-log/main", () => ({
   default: {
@@ -111,7 +132,12 @@ function scheduleFailedStartup(child: MockChildProcess): void {
 
 describe("daemon-manager commands", () => {
   beforeEach(() => {
+    Object.defineProperty(process, "resourcesPath", {
+      configurable: true,
+      value: "/tmp/paseo-desktop-daemon-manager-test-resources",
+    });
     mocks.settings = DEFAULT_DESKTOP_SETTINGS;
+    mocks.deploymentConfig = HOSTED_DEPLOYMENT_CONFIG;
     mocks.runExternalCliJsonCommand.mockReset();
     mocks.runExternalCliTextCommand.mockReset();
     mocks.createNodeEntrypointInvocation.mockReset();
@@ -126,6 +152,7 @@ describe("daemon-manager commands", () => {
   });
 
   afterEach(() => {
+    delete process.resourcesPath;
     rmSync(mocks.paseoHome, { recursive: true, force: true });
     rmSync(mocks.appLogPath, { force: true });
   });
@@ -142,6 +169,29 @@ describe("daemon-manager commands", () => {
     );
 
     expect(mocks.runExternalCliJsonCommand).not.toHaveBeenCalled();
+    expect(mocks.spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it("reuses a daemon that refuses the probe for want of a signed-in account", async () => {
+    // The daemon is up and answering; it is refusing the probe. Reading that as
+    // "not running" makes the shell spawn a second daemon onto the same port,
+    // which dies with EADDRINUSE.
+    mocks.runExternalCliJsonCommand.mockResolvedValue({
+      localDaemon: "running",
+      connectedDaemon: "sign_in_required",
+      serverId: "srv_signed_out",
+      listen: "127.0.0.1:6769",
+      hostname: "macbookpro.home",
+      pid: 20886,
+      desktopManaged: true,
+    });
+    const handlers = createDaemonCommandHandlers();
+
+    const status = await handlers.start_desktop_daemon();
+
+    expect(status.status).toBe("running");
+    expect(status.serverId).toBe("srv_signed_out");
+    expect(status.listen).toBe("127.0.0.1:6769");
     expect(mocks.spawnProcess).not.toHaveBeenCalled();
   });
 
@@ -453,11 +503,53 @@ describe("daemon-manager commands", () => {
         detached: true,
         stdio: ["ignore", "ignore", "ignore"],
         envOverlay: expect.objectContaining({
+          PASEO_ARENA_BACKEND_EXECUTABLE: expect.stringContaining("agent-duel-arena"),
           PASEO_CLI: getBundledCliShimPath(),
+          PASEO_CONTROL_PLANE_URL: "https://control.agentduel.test",
+          PASEO_SESSION_PUBLIC_KEY: "test-session-public-key",
+          OPENCODE_ARENA_BUILD_SHA: "0123456789abcdef0123456789abcdef01234567",
           PASEO_WEB_UI_ENABLED: "false",
         }),
       }),
     );
+    const envOverlay = mocks.spawnProcess.mock.calls.at(-1)?.[2]?.envOverlay;
+    expect(envOverlay).not.toHaveProperty("PASEO_ARENA_STORE_URL");
+  });
+
+  it("starts the daemon of a bring-your-own-key build without a control plane", async () => {
+    mocks.deploymentConfig = {
+      ...HOSTED_DEPLOYMENT_CONFIG,
+      controlPlaneUrl: null,
+      sessionPublicKey: null,
+    };
+    mocks.createNodeEntrypointInvocation.mockReturnValue({
+      command: "node",
+      args: [],
+      env: {
+        PASEO_CONTROL_PLANE_URL: "https://inherited-from-login-shell.test",
+        PASEO_SESSION_PUBLIC_KEY: "inherited-public-key",
+      },
+    });
+    mocks.runExternalCliJsonCommand.mockResolvedValue({
+      localDaemon: "stopped",
+      connectedDaemon: "unreachable",
+      serverId: "",
+    });
+    mocks.spawnProcess.mockImplementation(() => {
+      const child = createMockChildProcess();
+      scheduleFailedStartup(child);
+      return child;
+    });
+
+    await expect(createDaemonCommandHandlers().start_desktop_daemon()).rejects.toThrow(
+      "Daemon failed to start: exit code 1",
+    );
+
+    const options = mocks.spawnProcess.mock.calls.at(-1)?.[2];
+    const daemonEnv = { ...options?.env, ...options?.envOverlay };
+    expect(daemonEnv.PASEO_ARENA_BACKEND_EXECUTABLE).toContain("agent-duel-arena");
+    expect(daemonEnv.PASEO_CONTROL_PLANE_URL).toBeUndefined();
+    expect(daemonEnv.PASEO_SESSION_PUBLIC_KEY).toBeUndefined();
   });
 
   it("passes stale lock reclaim only after a live desktop daemon is confirmed unresponsive", async () => {

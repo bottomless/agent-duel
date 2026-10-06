@@ -196,6 +196,39 @@ describe("diff mode override", () => {
     expect(resolveDiffMode({ override: undefined, hasUncommittedChanges: false })).toBe("base");
   });
 
+  it("lets a caller choose where a clean checkout starts", () => {
+    expect(
+      resolveDiffMode({
+        override: undefined,
+        hasUncommittedChanges: false,
+        cleanFallbackMode: "uncommitted",
+      }),
+    ).toBe("uncommitted");
+    expect(
+      resolveDiffMode({
+        override: undefined,
+        hasUncommittedChanges: true,
+        cleanFallbackMode: "uncommitted",
+      }),
+    ).toBe("uncommitted");
+  });
+
+  it("still lets an override win over the caller's clean fallback", () => {
+    const state = setDiffModeOverrideInState(emptyState(), {
+      scopeKey: "review:scope",
+      override: makeOverride({ mode: "base", isDirtyAtSelection: false }),
+    });
+
+    const override = state.diffModeOverrides["review:scope"];
+    expect(
+      resolveDiffMode({
+        override,
+        hasUncommittedChanges: false,
+        cleanFallbackMode: "uncommitted",
+      }),
+    ).toBe("base");
+  });
+
   it("honors the override while isDirty matches the value at selection, across remounts", () => {
     const state = setDiffModeOverrideInState(emptyState(), {
       scopeKey: "review:scope",

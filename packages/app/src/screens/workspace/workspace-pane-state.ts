@@ -10,7 +10,6 @@ import {
   normalizeWorkspaceTabTarget,
   workspaceTabTargetsEqual,
 } from "@/workspace-tabs/identity";
-import { findAdjacentPane } from "@/utils/split-navigation";
 
 export interface WorkspaceDerivedTab {
   descriptor: WorkspaceTabDescriptor;
@@ -23,11 +22,6 @@ export interface WorkspacePaneState {
   activeTabId: string | null;
   activeTab: WorkspaceDerivedTab | null;
 }
-
-export type WorkspaceSideFileOpenPlacement =
-  | { kind: "open-in-source" }
-  | { kind: "focus-side-pane"; paneId: string }
-  | { kind: "split-side-pane"; paneId: string };
 
 interface NormalizeWorkspacePaneTabsResult {
   tabs: WorkspaceDerivedTab[];
@@ -201,32 +195,4 @@ export function getWorkspacePaneDescriptors(input: {
   tabs: WorkspaceTab[];
 }): WorkspaceTabDescriptor[] {
   return deriveWorkspacePaneState(input).tabs.map((tab) => tab.descriptor);
-}
-
-export function resolveSideFileOpenPlacement(input: {
-  layout?: WorkspaceLayout | null;
-  sourcePaneId?: string | null;
-  tabs: WorkspaceTab[];
-  target: WorkspaceTabTarget;
-}): WorkspaceSideFileOpenPlacement {
-  const targetTabId = buildDeterministicWorkspaceTabId(input.target);
-  const existingTab = input.tabs.find(
-    (tab) => tab.tabId === targetTabId || workspaceTabTargetsEqual(tab.target, input.target),
-  );
-  if (existingTab) {
-    return { kind: "open-in-source" };
-  }
-
-  const layout = input.layout ?? null;
-  const sourcePaneId = trimNonEmpty(input.sourcePaneId);
-  if (!layout || !sourcePaneId) {
-    return { kind: "open-in-source" };
-  }
-
-  const sidePaneId = findAdjacentPane(layout.root, sourcePaneId, "right");
-  if (sidePaneId) {
-    return { kind: "focus-side-pane", paneId: sidePaneId };
-  }
-
-  return { kind: "split-side-pane", paneId: sourcePaneId };
 }

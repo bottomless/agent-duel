@@ -1,0 +1,122 @@
+:root {
+  --text: #5b5563;
+  --text-h: #16141c;
+  --bg: #faf9f7;
+  --border: #e4e1db;
+  --accent: #2f6fed;
+  --accent-bg: rgba(47, 111, 237, 0.1);
+  --accent-border: rgba(47, 111, 237, 0.45);
+  --sun: #d98e04;
+  --hot: #e0533a;
+  --cold: #2f7fd6;
+  --hot-band: rgba(224, 83, 58, 0.15);
+  --cold-band: rgba(47, 127, 214, 0.15);
+  --cc-clear: #f2c14e;
+  --cc-mostly-clear: #f6d98a;
+  --cc-partly: #c9d3da;
+  --cc-mostly-cloudy: #97a8b5;
+  --cc-overcast: #6b7d8c;
+  --precip-rain: #2a9d8f;
+  --precip-mixed: #9b6b9e;
+  --precip-snow: #6eb5d0;
+  --precip-rain-fill: rgba(42, 157, 143, 0.16);
+  --precip-snow-fill: rgba(110, 181, 208, 0.16);
+  --wind: #4a90a6;
+  --wind-fill: rgba(74, 144, 166, 0.16);
+  --dl-daylight: #f3c84a;
+  --dl-civil: #d49a52;
+  --dl-nautical: #456fa3;
+  --dl-astro: #2c3754;
+  --dl-night: #1b2236;
+  --hc-dry: #e6d5a8;
+  --hc-comfortable: #b8cc8c;
+  --hc-humid: #c9c45c;
+  --hc-muggy: #e0a83a;
+  --hc-oppressive: #d46b3c;
+  --hc-miserable: #b83d38;
+  --aqi-good: #4db847;
+  --aqi-moderate: #e8d23a;
+  --aqi-usg: #e89a3a;
+  --aqi-unhealthy: #d63a3a;
+  --aqi-very: #9148a0;
+  --aqi-hazardous: #8b1a3a;
+  --shadow:
+    rgba(22, 20, 28, 0.06) 0 10px 24px -8px,
+    rgba(22, 20, 28, 0.04) 0 2px 6px -2px;
+
+  font: 17px/150% system-ui, 'Segoe UI', Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  color-scheme: light dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #b5b2bc;
+    --text-h: #f4f2ee;
+    --bg: #121318;
+    --border: #2a2c34;
+    --accent: #7aa2ff;
+    --accent-bg: rgba(122, 162, 255, 0.14);
+    --accent-border: rgba(122, 162, 255, 0.45);
+    --sun: #f0b45c;
+    --hot: #f06a52;
+    --cold: #6fa8ff;
+    --hot-band: rgba(240, 106, 82, 0.2);
+    --cold-band: rgba(111, 168, 255, 0.2);
+    --cc-clear: #f0b94c;
+    --cc-mostly-clear: #c9a45c;
+    --cc-partly: #4a5563;
+    --cc-mostly-cloudy: #3a4554;
+    --cc-overcast: #2a3340;
+    --precip-rain: #3dbeb0;
+    --precip-mixed: #c48bc7;
+    --precip-snow: #8ecce4;
+    --precip-rain-fill: rgba(61, 190, 176, 0.18);
+    --precip-snow-fill: rgba(142, 204, 228, 0.18);
+    --wind: #7cc0d4;
+    --wind-fill: rgba(124, 192, 212, 0.18);
+    --dl-daylight: #f6d65c;
+    --dl-civil: #d9a85e;
+    --dl-nautical: #3a6188;
+    --dl-astro: #1c2436;
+    --dl-night: #0b0f18;
+  --hc-dry: #7a6d4e;
+  --hc-comfortable: #6a7a4e;
+  --hc-humid: #8a8440;
+  --hc-muggy: #b08630;
+  --hc-oppressive: #b05832;
+  --hc-miserable: #9a3834;
+  --aqi-good: #5bc85b;
+  --aqi-moderate: #f0d84a;
+  --aqi-usg: #ee9a3a;
+  --aqi-unhealthy: #e04a4a;
+  --aqi-very: #a85ab8;
+  --aqi-hazardous: #b03040;
+    --shadow:
+      rgba(0, 0, 0, 0.35) 0 12px 28px -10px,
+      rgba(0, 0, 0, 0.2) 0 2px 8px -2px;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+h1 {
+  font-weight: 560;
+  color: var(--text-h);
+  letter-spacing: -0.03em;
+}

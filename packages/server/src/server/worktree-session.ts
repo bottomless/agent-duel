@@ -15,7 +15,6 @@ import type { PersistedWorkspaceRecord } from "./workspace-registry.js";
 import type { WorkspaceGitService } from "./workspace-git-service.js";
 import {
   runAsyncWorktreeBootstrap,
-  applyWorktreeSetupProgressEvent,
   buildWorktreeSetupDetail,
   createWorktreeSetupProgressAccumulator,
   getWorktreeSetupProgressResults,
@@ -26,9 +25,6 @@ import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-sto
 import type { CheckoutExistingBranchResult } from "../utils/checkout-git.js";
 import { expandTilde } from "../utils/path.js";
 import {
-  getWorktreeSetupCommands,
-  resolveWorktreeRuntimeEnv,
-  runWorktreeSetupCommands,
   slugify,
   validateBranchSlug,
   type WorktreeConfig,
@@ -59,7 +55,7 @@ export interface NormalizedGitOptions {
   worktreeSlug?: string;
   requestedWorktreeSlug?: string;
   refName?: string;
-  action?: "branch-off" | "checkout";
+  action?: "branch-off" | "checkout" | "detach";
   checkoutSource?: ChangeRequestCheckoutSource;
   githubPrNumber?: number;
 }
@@ -524,6 +520,7 @@ export async function handleCreatePaseoWorktreeRequest(
         firstAgentContext: normalizeFirstAgentContext(request),
         refName: request.refName,
         action: request.action,
+        branchName: request.branchName,
         checkoutSource: request.checkoutSource,
         githubPrNumber: request.githubPrNumber,
       },
@@ -699,7 +696,7 @@ export async function runWorktreeSetupInBackground(
     worktreePath: string;
     workspaceCwd?: string;
   },
-  signal?: AbortSignal,
+  _signal?: AbortSignal,
 ): Promise<void> {
   let worktree: WorktreeConfig = options.worktree;
   let setupResults: WorktreeSetupCommandResult[] = [];
@@ -734,39 +731,16 @@ export async function runWorktreeSetupInBackground(
     try {
       emitSetupProgress("running", null);
 
+      // There is no source of setup commands any more, so this is the path an
+      // unconfigured project has always taken: nothing to run, straight to
+      // completed, and no terminal cwd env registered. `setupStarted` still
+      // tracks whether the worktree got as far as its setup step, because a
+      // failure before that archives the workspace record.
       if (!options.shouldBootstrap) {
         emitSetupProgress("completed", null);
       } else {
-        const workspaceCwd = options.workspaceCwd ?? worktree.worktreePath;
-        const setupCommands = getWorktreeSetupCommands(workspaceCwd);
-        if (setupCommands.length === 0) {
-          setupStarted = true;
-          emitSetupProgress("completed", null);
-        } else {
-          const runtimeEnv = await resolveWorktreeRuntimeEnv({
-            worktreePath: worktree.worktreePath,
-            branchName: worktree.branchName,
-            repoRootPath: options.repoRoot,
-          });
-          dependencies.terminalManager?.registerCwdEnv({
-            cwd: workspaceCwd,
-            env: runtimeEnv,
-          });
-          setupStarted = true;
-          setupResults = await runWorktreeSetupCommands({
-            worktreePath: workspaceCwd,
-            branchName: worktree.branchName,
-            cleanupOnFailure: false,
-            repoRootPath: options.repoRoot,
-            runtimeEnv,
-            signal,
-            onEvent: (event) => {
-              applyWorktreeSetupProgressEvent(progressAccumulator, event);
-              emitSetupProgress("running", null);
-            },
-          });
-          emitSetupProgress("completed", null);
-        }
+        setupStarted = true;
+        emitSetupProgress("completed", null);
       }
     } catch (error) {
       if (error instanceof WorktreeSetupError) {

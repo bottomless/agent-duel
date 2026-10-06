@@ -5,6 +5,7 @@ import {
   ScrollView as RNScrollView,
   type StyleProp,
   type ViewStyle,
+  type TextStyle,
 } from "react-native";
 import { ScrollView as GHScrollView } from "react-native-gesture-handler";
 import { StyleSheet } from "react-native-unistyles";
@@ -32,6 +33,7 @@ interface ToolCallDetailsContentProps {
   maxHeight?: number;
   fillAvailableHeight?: boolean;
   showLoadingSkeleton?: boolean;
+  compact?: boolean;
 }
 
 interface DetailStyles {
@@ -47,6 +49,9 @@ interface DetailStyles {
   resolvedMaxHeight: number | undefined;
   shouldFill: boolean;
   isFullBleed: boolean;
+  compact: boolean;
+  scrollTextStyle: StyleProp<TextStyle>;
+  plainTextStyle: StyleProp<TextStyle>;
 }
 
 function resolveIsFullBleed(detail: ToolCallDetail | undefined): boolean {
@@ -66,6 +71,7 @@ function useDetailStyles(
   detail: ToolCallDetail | undefined,
   resolvedMaxHeight: number | undefined,
   fillAvailableHeight: boolean,
+  compact: boolean,
 ): DetailStyles {
   const isFullBleed = resolveIsFullBleed(detail);
   const shouldFill = resolveShouldFill(detail, fillAvailableHeight);
@@ -115,6 +121,14 @@ function useDetailStyles(
     () => [styles.loadingContainer, fillAvailableHeight && styles.fillHeight],
     [fillAvailableHeight],
   );
+  const scrollTextStyle = useMemo(
+    () => [styles.scrollText, compact && styles.scrollTextCompact],
+    [compact],
+  );
+  const plainTextStyle = useMemo(
+    () => [styles.plainText, compact && styles.plainTextCompact],
+    [compact],
+  );
 
   return {
     sectionFillStyle,
@@ -129,6 +143,9 @@ function useDetailStyles(
     resolvedMaxHeight,
     shouldFill,
     isFullBleed,
+    compact,
+    scrollTextStyle,
+    plainTextStyle,
   };
 }
 
@@ -168,7 +185,7 @@ function ShellDetailSection({ command, output, ds }: ShellDetailProps) {
             contentContainerStyle={styles.codeHorizontalContent}
           >
             <View style={styles.codeLine} dataSet={CODE_SURFACE_DATASET}>
-              <Text selectable style={styles.scrollText}>
+              <Text selectable style={ds.scrollTextStyle}>
                 <Text style={styles.shellPrompt}>$ </Text>
                 {normalizedCommand}
                 {hasOutput ? `\n\n${commandOutput}` : ""}
@@ -415,6 +432,7 @@ function EditDetailSection({ diffLines, ds }: EditDetailProps) {
             diffLines={diffLines}
             maxHeight={ds.resolvedMaxHeight}
             fillAvailableHeight={ds.shouldFill}
+            compact={ds.compact}
           />
         </View>
       ) : null}
@@ -451,9 +469,9 @@ function ScrollableTextSection({
     >
       <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator={true}>
         {keyedLines ? (
-          <HighlightedLines lines={keyedLines} startLine={startLine} />
+          <HighlightedLines lines={keyedLines} startLine={startLine} compact={ds.compact} />
         ) : (
-          <Text selectable style={styles.scrollText} dataSet={CODE_SURFACE_DATASET}>
+          <Text selectable style={ds.scrollTextStyle} dataSet={CODE_SURFACE_DATASET}>
             {content}
           </Text>
         )}
@@ -498,7 +516,7 @@ function ScrollablePlainTextSection({ text, ds }: { text: string; ds: DetailStyl
         nestedScrollEnabled
         showsVerticalScrollIndicator
       >
-        <Text selectable style={styles.plainText}>
+        <Text selectable style={ds.plainTextStyle}>
           {text}
         </Text>
       </ScrollView>
@@ -616,7 +634,7 @@ function buildUnknownSections(detail: UnknownDetail, ds: DetailStyles, t: TFunct
           contentContainerStyle={styles.jsonContent}
           showsHorizontalScrollIndicator={true}
         >
-          <Text selectable style={styles.scrollText} dataSet={CODE_SURFACE_DATASET}>
+          <Text selectable style={ds.scrollTextStyle} dataSet={CODE_SURFACE_DATASET}>
             {value}
           </Text>
         </ScrollView>
@@ -720,7 +738,7 @@ function ErrorSection({ errorText, ds }: { errorText: string; ds: DetailStyles }
       >
         <Text
           selectable
-          style={[styles.scrollText, styles.errorText]}
+          style={[ds.scrollTextStyle, styles.errorText]}
           dataSet={CODE_SURFACE_DATASET}
         >
           {errorText}
@@ -746,10 +764,11 @@ export function ToolCallDetailsContent({
   maxHeight,
   fillAvailableHeight = false,
   showLoadingSkeleton = false,
+  compact = false,
 }: ToolCallDetailsContentProps) {
   const { t } = useTranslation();
   const resolvedMaxHeight = fillAvailableHeight ? undefined : (maxHeight ?? 300);
-  const ds = useDetailStyles(detail, resolvedMaxHeight, fillAvailableHeight);
+  const ds = useDetailStyles(detail, resolvedMaxHeight, fillAvailableHeight, compact);
   const diffLines = useDiffLines(detail);
 
   const sections: ReactNode[] = buildDetailSections(detail, diffLines, ds, t);
@@ -810,6 +829,12 @@ const styles = StyleSheet.create((theme) => {
       lineHeight: 22,
       overflowWrap: "anywhere",
     },
+    // A hair below the base sizes, for callers that want a denser detail
+    // view (e.g. Agent Arena's side-by-side contestant threads).
+    plainTextCompact: {
+      fontSize: theme.fontSize.base - 1,
+      lineHeight: 21,
+    },
     sectionTitle: {
       color: theme.colors.foregroundMuted,
       fontSize: theme.fontSize.xs,
@@ -867,6 +892,9 @@ const styles = StyleSheet.create((theme) => {
             overflowWrap: "normal",
           }
         : null),
+    },
+    scrollTextCompact: {
+      fontSize: theme.fontSize.code - 1,
     },
     shellPrompt: {
       color: theme.colors.foregroundMuted,

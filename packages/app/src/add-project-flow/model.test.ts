@@ -111,6 +111,34 @@ describe("Add Project navigation", () => {
 });
 
 describe("Add Project options", () => {
+  it("shows all four project sources for the local Electron host", () => {
+    expect(buildAddProjectMethods(HOST)).toEqual([
+      {
+        id: "directory-search",
+        label: "Search for directory",
+        description: "Find a directory on Local",
+      },
+      {
+        id: "browse",
+        label: "Browse",
+        description: "Choose or create a directory in Finder",
+        disabled: false,
+      },
+      {
+        id: "github",
+        label: "Clone from GitHub",
+        description: "Search projects available to your GitHub account",
+        disabled: false,
+      },
+      {
+        id: "new-directory",
+        label: "New directory",
+        description: "Create an empty directory on Local",
+        disabled: false,
+      },
+    ]);
+  });
+
   it("hides every mutating method when the host lacks stable project identity", () => {
     const outdatedHost = { ...HOST, canAddProject: false };
 
@@ -118,7 +146,7 @@ describe("Add Project options", () => {
     expect(addProjectMethodEmptyText(outdatedHost)).toBe("Update the host to use Add Project.");
   });
 
-  it("keeps host-upgrade methods discoverable while hiding local-only Browse", () => {
+  it("keeps every method discoverable when some are unavailable", () => {
     expect(
       buildAddProjectMethods({
         ...HOST,
@@ -132,6 +160,12 @@ describe("Add Project options", () => {
         id: "directory-search",
         label: "Search for directory",
         description: "Find a directory on Local",
+      },
+      {
+        id: "browse",
+        label: "Browse",
+        description: "Open Agent Arena in Electron to browse with Finder",
+        disabled: true,
       },
       {
         id: "github",

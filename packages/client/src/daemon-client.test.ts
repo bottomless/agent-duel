@@ -156,25 +156,6 @@ function parseSentFrame(
     .parse(JSON.parse(assertStr(data))).message;
 }
 
-function respondToScheduleRequest(
-  mock: ReturnType<typeof createMockTransport>,
-  request: Record<string, unknown>,
-): void {
-  const responseType =
-    request.type === "schedule/create" ? "schedule/create/response" : "schedule/update/response";
-
-  mock.triggerMessage(
-    wrapSessionMessage({
-      type: responseType,
-      payload: {
-        requestId: request.requestId,
-        schedule: null,
-        error: null,
-      },
-    }),
-  );
-}
-
 const clients: DaemonClient[] = [];
 
 afterEach(async () => {
@@ -292,25 +273,6 @@ test("advertises consumer-provided browser automation capabilities", async () =>
     supportedCommands: [...BROWSER_AUTOMATION_COMMAND_NAMES],
     hostKind: "desktop app",
   });
-});
-
-test("Hub management requires daemon support before dispatching requests", async () => {
-  const mock = createMockTransport();
-  const client = new DaemonClient({
-    url: "ws://test",
-    clientId: "hub_feature_gate_unit_test",
-    transportFactory: () => mock.transport,
-    reconnect: { enabled: false },
-  });
-  clients.push(client);
-  const connecting = client.connect();
-  mock.triggerOpen();
-  await connecting;
-
-  await expect(client.getHubStatus()).rejects.toThrow(
-    "Update the host to use Hub relationship management.",
-  );
-  expect(mock.sent).toEqual([]);
 });
 
 test("sets the complete viewed timeline subscription only when the daemon supports it", async () => {
@@ -681,6 +643,58 @@ test("dedupes in-flight checkout status requests per agentId", async () => {
   });
 });
 
+test("keeps fresh Git requests separate from in-flight cached status reads", async () => {
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_refresh_test",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  mock.triggerOpen();
+  await connected;
+
+  const cached = client.getCheckoutStatus("/tmp/project");
+  const fresh = client.getCheckoutStatus("/tmp/project", { refreshGit: true });
+  const duplicate = client.getCheckoutStatus("/tmp/project", { refreshGit: true });
+  expect(mock.sent).toHaveLength(2);
+  const requests = mock.sent.map(parseSentFrame);
+  expect(requests[0].refreshGit).toBeUndefined();
+  expect(requests[1].refreshGit).toBe(true);
+  for (const request of requests) {
+    mock.triggerMessage(
+      JSON.stringify({
+        type: "session",
+        message: {
+          type: "checkout_status_response",
+          payload: {
+            cwd: "/tmp/project",
+            requestId: request.requestId,
+            error: null,
+            isGit: true,
+            currentBranch: request.refreshGit ? "other" : "main",
+            isPaseoOwnedWorktree: false,
+            repoRoot: "/tmp/project",
+            isDirty: false,
+            baseRef: null,
+            aheadBehind: null,
+            aheadOfOrigin: null,
+            behindOfOrigin: null,
+            hasRemote: false,
+            remoteUrl: null,
+          },
+        },
+      }),
+    );
+  }
+  await expect(cached).resolves.toMatchObject({ currentBranch: "main" });
+  await expect(fresh).resolves.toMatchObject({ currentBranch: "other" });
+  await expect(duplicate).resolves.toMatchObject({ currentBranch: "other" });
+});
+
 test("passes password as HTTP bearer header and WebSocket subprotocol", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();
@@ -775,112 +789,6 @@ test("allows callers to disable default client capabilities", async () => {
     })
     .parse(JSON.parse(assertStr(mock.sent[0])));
   expect(hello.capabilities[CLIENT_CAPS.projectUpdates]).toBe(false);
-});
-
-test("sends new-agent run options when creating schedules", async () => {
-  const logger = createMockLogger();
-  const mock = createMockTransport();
-
-  const client = new DaemonClient({
-    url: "ws://test",
-    clientId: "clsk_unit_test",
-    logger,
-    reconnect: { enabled: false },
-    transportFactory: () => mock.transport,
-  });
-  clients.push(client);
-
-  const connectPromise = client.connect();
-  mock.triggerOpen();
-  await connectPromise;
-
-  const createPromise = client.scheduleCreate({
-    requestId: "request-1",
-    prompt: "Run the task",
-    cadence: { type: "cron", expression: "* * * * *" },
-    target: {
-      type: "new-agent",
-      config: {
-        provider: "claude",
-        cwd: "/tmp/project",
-        thinkingOptionId: "think-hard",
-        archiveOnFinish: false,
-        isolation: "worktree",
-      },
-    },
-  });
-
-  const request = parseSentFrame(mock.sent[0]);
-  expect(request).toEqual({
-    type: "schedule/create",
-    requestId: "request-1",
-    prompt: "Run the task",
-    cadence: { type: "cron", expression: "* * * * *" },
-    target: {
-      type: "new-agent",
-      config: {
-        provider: "claude",
-        cwd: "/tmp/project",
-        thinkingOptionId: "think-hard",
-        archiveOnFinish: false,
-        isolation: "worktree",
-      },
-    },
-  });
-
-  respondToScheduleRequest(mock, request);
-  await expect(createPromise).resolves.toEqual({
-    requestId: "request-1",
-    schedule: null,
-    error: null,
-  });
-});
-
-test("sends new-agent run options when updating schedules", async () => {
-  const logger = createMockLogger();
-  const mock = createMockTransport();
-
-  const client = new DaemonClient({
-    url: "ws://test",
-    clientId: "clsk_unit_test",
-    logger,
-    reconnect: { enabled: false },
-    transportFactory: () => mock.transport,
-  });
-  clients.push(client);
-
-  const connectPromise = client.connect();
-  mock.triggerOpen();
-  await connectPromise;
-
-  const updatePromise = client.scheduleUpdate({
-    id: "schedule-1",
-    requestId: "request-1",
-    newAgentConfig: {
-      thinkingOptionId: "think-hard",
-      archiveOnFinish: false,
-      isolation: "worktree",
-    },
-  });
-
-  const request = parseSentFrame(mock.sent[0]);
-  expect(request).toEqual({
-    type: "schedule/update",
-    requestId: "request-1",
-    scheduleId: "schedule-1",
-    newAgentConfig: {
-      thinkingOptionId: "think-hard",
-      archiveOnFinish: false,
-      isolation: "worktree",
-    },
-  });
-
-  respondToScheduleRequest(mock, request);
-  await expect(updatePromise).resolves.toEqual({
-    requestId: "request-1",
-    schedule: null,
-    error: null,
-  });
 });
 
 test("sends typed browser automation execute responses", async () => {
@@ -2338,6 +2246,57 @@ test("sends create_agent_request with workspace and caller identity", async () =
   await expect(createPromise).rejects.toThrow("compat test sentinel");
 });
 
+test("sends the native fork source with create_agent_request", async () => {
+  const logger = createMockLogger();
+  const mock = createMockTransport();
+
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger,
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen();
+  await connectPromise;
+
+  const createPromise = client.createAgent({
+    provider: "opencode",
+    cwd: "/tmp/project",
+    forkFrom: {
+      sourceAgentId: "agent-source",
+      throughMessageId: "msg-assistant-1",
+    },
+  });
+
+  const request = parseSentFrame(mock.sent[0]);
+  expect(request).toEqual(
+    expect.objectContaining({
+      type: "create_agent_request",
+      forkFrom: {
+        sourceAgentId: "agent-source",
+        throughMessageId: "msg-assistant-1",
+      },
+    }),
+  );
+
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "status",
+      payload: {
+        status: "agent_create_failed",
+        requestId: request.requestId,
+        error: "native fork test sentinel",
+      },
+    }),
+  );
+
+  await expect(createPromise).rejects.toThrow("native fork test sentinel");
+});
+
 test("sends worktree target and autoArchive in create_agent_request", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();
@@ -2763,6 +2722,72 @@ test("searches GitHub repositories through the dotted RPC", async () => {
   });
 });
 
+test("reads BYOK status and sets or clears the key through the dotted RPCs", async () => {
+  const logger = createMockLogger();
+  const mock = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger,
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen();
+  await connectPromise;
+
+  const statusPromise = client.arenaByokStatus();
+  const statusRequest = parseSentFrame(mock.sent[0]);
+  expect(statusRequest).toEqual({
+    type: "arena.byok.status.get.request",
+    requestId: expect.any(String),
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "arena.byok.status.get.response",
+      payload: { requestId: statusRequest.requestId, available: true, configured: false },
+    }),
+  );
+  await expect(statusPromise).resolves.toEqual({ available: true, configured: false });
+
+  const setPromise = client.setArenaByokKey("sk-or-v1-test");
+  const setRequest = parseSentFrame(mock.sent[1]);
+  expect(setRequest).toEqual({
+    type: "arena.byok.key.set.request",
+    requestId: expect.any(String),
+    key: "sk-or-v1-test",
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "arena.byok.key.set.response",
+      payload: { requestId: setRequest.requestId, configured: true },
+    }),
+  );
+  await expect(setPromise).resolves.toEqual({ configured: true });
+
+  const clearPromise = client.setArenaByokKey(null);
+  const clearRequest = parseSentFrame(mock.sent[2]);
+  expect(clearRequest).toEqual({
+    type: "arena.byok.key.set.request",
+    requestId: expect.any(String),
+    key: null,
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "rpc_error",
+      payload: {
+        requestId: clearRequest.requestId,
+        requestType: "arena.byok.key.set.request",
+        error: "This build signs in instead of using an OpenRouter key",
+        code: "arena_byok_unavailable",
+      },
+    }),
+  );
+  await expect(clearPromise).rejects.toMatchObject({ code: "arena_byok_unavailable" });
+});
+
 test("creates and registers a project directory through the dotted RPC", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();
@@ -2847,6 +2872,7 @@ test("sends first-agent prompt context with workspace.create.request", async () 
         kind: "directory",
         path: "/tmp/project",
         projectId: "local:/tmp/project",
+        expectedBranch: "main",
       },
       firstAgentContext: {
         prompt: "Fix login bug",
@@ -2864,6 +2890,7 @@ test("sends first-agent prompt context with workspace.create.request", async () 
       kind: "directory",
       path: "/tmp/project",
       projectId: "local:/tmp/project",
+      expectedBranch: "main",
     },
     firstAgentContext: {
       prompt: "Fix login bug",
@@ -5858,6 +5885,45 @@ test("waitForFinish with timeout=0 omits timeoutMs and has no client deadline", 
       error: null,
       lastMessage: null,
     });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("ensureConnected drops a scheduled reconnect and attempts immediately", async () => {
+  vi.useFakeTimers();
+  try {
+    const transports = [createMockTransport(), createMockTransport(), createMockTransport()];
+    let created = 0;
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "ensure_connected_unit_test",
+      transportFactory: () => transports[Math.min(created++, transports.length - 1)].transport,
+      reconnect: { baseDelayMs: 1_000, maxDelayMs: 30_000 },
+    });
+    clients.push(client);
+
+    // Refused before it ever opens, the way the daemon refuses a client with no account. The
+    // connect promise stays pending across every retry, which is what used to make the forced
+    // attempt below a no-op.
+    const connectPromise = client.connect();
+    connectPromise.catch(() => undefined);
+    expect(created).toBe(1);
+    transports[0].triggerClose({ code: 4402, reason: "Sign in to use Agent Duel" });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(created).toBe(1);
+
+    // Signing in does not wait the timer out.
+    client.ensureConnected();
+    expect(created).toBe(2);
+
+    // A forced attempt that fails again starts from the base delay, not from wherever the
+    // refusals had pushed it.
+    transports[1].triggerClose({ code: 4402, reason: "Sign in to use Agent Duel" });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(created).toBe(2);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(created).toBe(3);
   } finally {
     vi.useRealTimers();
   }

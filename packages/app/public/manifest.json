@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Paseo",
-  "short_name": "Paseo",
+  "name": "Agent Duel",
+  "short_name": "Agent Duel",
   "description": "Monitor and control local AI coding agents from anywhere.",
   "start_url": "/",
   "scope": "/",

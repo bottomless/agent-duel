@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, expect, test } from "vitest";
-import { type CheckoutSnapshotFacts, getCheckoutRefDerivedState } from "./checkout-git.js";
+import {
+  type CheckoutSnapshotFacts,
+  getCheckoutRefDerivedState,
+  getCurrentHeadSha,
+} from "./checkout-git.js";
 import {
   startGitCommandMetrics,
   stopGitCommandMetrics,
@@ -182,4 +186,14 @@ test("an origin move refreshes an untracked main checkout shortstat", async () =
       new Set(["origin/main"]),
     ),
   ).toEqual({ aheadBehind: null, diffStat: null, upstreamStatus: null });
+});
+
+test("reads the exact commit from a detached checkout", async () => {
+  const { cwd } = seedMainCheckout();
+  const mainHead = git(cwd, ["rev-parse", "HEAD"]);
+  git(cwd, ["checkout", "--detach", "HEAD~1"]);
+  const detachedHead = git(cwd, ["rev-parse", "HEAD"]);
+
+  expect(detachedHead).not.toBe(mainHead);
+  await expect(getCurrentHeadSha(cwd)).resolves.toBe(detachedHead);
 });

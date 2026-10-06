@@ -14,31 +14,23 @@ import {
 } from "@/composer/attachments/submit";
 import { createUserMessage, generateMessageId, type UserMessageItem } from "@/types/stream";
 import type { MessageSubmissionRejectionOutcome } from "@/composer/submission/model";
-import type { PickedImageAttachmentInput } from "@/hooks/image-attachment-picker";
 import { i18n } from "@/i18n/i18next";
 
 export interface QueuedComposerMessage {
   id: string;
   text: string;
   attachments: ComposerAttachment[];
+  arenaFollowUp?: "battle" | "single_agent";
+  arenaFollowUpQueuedAt?: number;
+}
+
+export function visibleComposerQueuedMessages(
+  messages: readonly QueuedComposerMessage[],
+): QueuedComposerMessage[] {
+  return messages.filter((message) => message.arenaFollowUp !== "battle");
 }
 
 export interface AttachmentPersister {
-  persistFromBlob: (input: {
-    blob: Blob;
-    mimeType: string;
-    fileName: string | null;
-  }) => Promise<AttachmentMetadata>;
-  persistFromFileUri: (input: {
-    uri: string;
-    mimeType: string;
-    fileName: string | null;
-  }) => Promise<AttachmentMetadata>;
-  persistFromDataUrl: (input: {
-    dataUrl: string;
-    mimeType: string;
-    fileName: string | null;
-  }) => Promise<AttachmentMetadata>;
   deleteAttachments: (metadata: AttachmentMetadata[]) => Promise<void> | void;
 }
 
@@ -81,42 +73,6 @@ export interface QueueWriter {
   write: (
     updater: (prev: Map<string, QueuedComposerMessage[]>) => Map<string, QueuedComposerMessage[]>,
   ) => void;
-}
-
-export async function pickAndPersistImages(input: {
-  pickImages: () => Promise<PickedImageAttachmentInput[] | null>;
-  persister: Pick<
-    AttachmentPersister,
-    "persistFromBlob" | "persistFromFileUri" | "persistFromDataUrl"
-  >;
-}): Promise<AttachmentMetadata[]> {
-  const result = await input.pickImages();
-  if (!result?.length) return [];
-  return await Promise.all(
-    result.map(async (picked) => {
-      const fileName = picked.fileName ?? null;
-      const mimeType = picked.mimeType;
-      if (picked.source.kind === "blob") {
-        return await input.persister.persistFromBlob({
-          blob: picked.source.blob,
-          mimeType,
-          fileName,
-        });
-      }
-      if (picked.source.kind === "data_url") {
-        return await input.persister.persistFromDataUrl({
-          dataUrl: picked.source.dataUrl,
-          mimeType,
-          fileName,
-        });
-      }
-      return await input.persister.persistFromFileUri({
-        uri: picked.source.uri,
-        mimeType,
-        fileName,
-      });
-    }),
-  );
 }
 
 export async function uploadFileAttachments(input: {
@@ -212,6 +168,7 @@ export interface QueueComposerMessageInput {
   agentId: string;
   text: string;
   attachments: ComposerAttachment[];
+  arenaFollowUp?: QueuedComposerMessage["arenaFollowUp"];
   queue: QueueWriter;
 }
 
@@ -228,6 +185,9 @@ export function queueComposerMessage(input: QueueComposerMessageInput): QueueCom
     id: generateMessageId(),
     text: trimmed,
     attachments: input.attachments,
+    ...(input.arenaFollowUp
+      ? { arenaFollowUp: input.arenaFollowUp, arenaFollowUpQueuedAt: Date.now() }
+      : {}),
   };
   input.queue.write((prev) => {
     const next = new Map(prev);
@@ -273,6 +233,7 @@ export interface SendQueuedComposerMessageNowInput {
   queue: QueueWriter;
   submitMessage: (input: { text: string; attachments: ComposerAttachment[] }) => Promise<void>;
   failedToSendMessage?: string;
+  retainWhileSubmitting?: boolean;
 }
 
 export type SendQueuedComposerMessageNowResult =
@@ -285,23 +246,38 @@ export async function sendQueuedComposerMessageNow(
 ): Promise<SendQueuedComposerMessageNowResult> {
   const item = input.queue.read(input.agentId).find((q) => q.id === input.messageId);
   if (!item) return { status: "missing" };
-  input.queue.write((prev) => {
-    const next = new Map(prev);
-    next.set(
-      input.agentId,
-      (prev.get(input.agentId) ?? []).filter((q) => q.id !== input.messageId),
-    );
-    return next;
-  });
-  try {
-    await input.submitMessage({ text: item.text, attachments: item.attachments });
-    return { status: "submitted" };
-  } catch (error) {
+  if (!input.retainWhileSubmitting) {
     input.queue.write((prev) => {
       const next = new Map(prev);
-      next.set(input.agentId, [item, ...(prev.get(input.agentId) ?? [])]);
+      next.set(
+        input.agentId,
+        (prev.get(input.agentId) ?? []).filter((queued) => queued.id !== input.messageId),
+      );
       return next;
     });
+  }
+  try {
+    await input.submitMessage({ text: item.text, attachments: item.attachments });
+    if (input.retainWhileSubmitting) {
+      input.queue.write((prev) => {
+        const next = new Map(prev);
+        next.set(
+          input.agentId,
+          (prev.get(input.agentId) ?? []).filter((queued) => queued.id !== input.messageId),
+        );
+        return next;
+      });
+    }
+    return { status: "submitted" };
+  } catch (error) {
+    if (!input.retainWhileSubmitting) {
+      input.queue.write((prev) => {
+        const next = new Map(prev);
+        const current = prev.get(input.agentId) ?? [];
+        next.set(input.agentId, [item, ...current]);
+        return next;
+      });
+    }
     return {
       status: "failed",
       errorMessage:

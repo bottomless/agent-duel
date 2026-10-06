@@ -103,6 +103,10 @@ interface TerminalEmulatorProps {
   testId?: string;
   xtermTheme?: ITheme;
   scrollbackLines: number;
+  /** Show output but take no input, and stop the cursor looking like a prompt. */
+  inputEnabled?: boolean;
+  /** Follow the top of the row after the cursor, so a caller can hang a note there. */
+  onCursorAnchorChange?: (top: number | null) => void;
   fontFamily?: string;
   fontSize?: number;
   keyboardInset?: number;
@@ -166,6 +170,8 @@ export default function TerminalEmulator({
     cursor: "#e6e6e6",
   },
   scrollbackLines,
+  inputEnabled = true,
+  onCursorAnchorChange,
   fontFamily,
   fontSize,
   swipeGesturesEnabled = false,
@@ -191,6 +197,11 @@ export default function TerminalEmulator({
   const mountedThemeRef = useRef<ITheme>(xtermTheme);
   const fontFamilyRef = useRef(fontFamily);
   const fontSizeRef = useRef(fontSize);
+  const inputEnabledRef = useRef(inputEnabled);
+  inputEnabledRef.current = inputEnabled;
+  const cursorAnchorListener = useRef(onCursorAnchorChange);
+  cursorAnchorListener.current = onCursorAnchorChange;
+  const wantsCursorAnchor = onCursorAnchorChange !== undefined;
   const scrollbackLinesRef = useRef(scrollbackLines);
   scrollbackLinesRef.current = scrollbackLines;
   fontFamilyRef.current = fontFamily;
@@ -322,6 +333,10 @@ export default function TerminalEmulator({
   useEffect(() => {
     runtimeRef.current?.setScrollback({ lines: scrollbackLines });
   }, [scrollbackLines]);
+
+  useEffect(() => {
+    runtimeRef.current?.setInputEnabled({ enabled: inputEnabled });
+  }, [inputEnabled]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -464,6 +479,9 @@ export default function TerminalEmulator({
       fontFamily: fontFamilyRef.current,
       fontSize: fontSizeRef.current,
     });
+    // The reactive effect above declares earlier, so it runs against the previous runtime on a
+    // stream swap; a fresh emulator has to be told what it is allowed to take.
+    runtime.setInputEnabled({ enabled: inputEnabledRef.current });
     onRendererReadyChangeRef.current?.({ streamKey, isReady: true });
 
     return () => {
@@ -474,6 +492,17 @@ export default function TerminalEmulator({
       }
     };
   }, [streamKey]);
+
+  useEffect(() => {
+    // Declared after the mount effect so the subscription lands on the runtime this stream just
+    // mounted rather than the one it replaced.
+    if (!wantsCursorAnchor) {
+      return () => {};
+    }
+    return runtimeRef.current?.subscribeCursorAnchor((top) => {
+      cursorAnchorListener.current?.(top);
+    });
+  }, [streamKey, wantsCursorAnchor]);
 
   useEffect(() => {
     runtimeRef.current?.setCallbacks({
@@ -507,7 +536,9 @@ export default function TerminalEmulator({
   }, [fontFamily, fontSize]);
 
   useEffect(() => {
-    if (focusRequestToken <= 0) {
+    // A pane that takes no input does not take focus either: the cursor is drawn for whoever
+    // is focused, and a cursor sitting in a paused shell is the one thing that says "type here".
+    if (focusRequestToken <= 0 || !inputEnabledRef.current) {
       return () => {};
     }
     runtimeRef.current?.resize({ forceClaim: true, shouldClaim: true });
@@ -548,6 +579,9 @@ export default function TerminalEmulator({
 
   const handleRootPointerDown = useCallback(() => {
     onFocus?.();
+    if (!inputEnabledRef.current) {
+      return;
+    }
     runtimeRef.current?.focus();
   }, [onFocus]);
 

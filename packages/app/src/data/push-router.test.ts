@@ -510,6 +510,8 @@ describe("server data push router", () => {
     const pairingOfferKey = daemonPairingOfferQueryKey(serverId);
     const diffKey = checkoutDiffQueryKey(serverId, "/repo", "uncommitted", undefined, false);
     const terminalKey = buildTerminalsQueryKey(serverId, "/repo", "workspace-a");
+    const arenaKey = ["arena", "session", serverId, "agent-a"] as const;
+    const otherArenaKey = ["arena", "session", otherServerId, "agent-b"] as const;
     const otherProviderKey = providersSnapshotQueryKey(otherServerId);
 
     queryClient.setQueryData(providerKey, { entries: [], generatedAt: "now", requestId: "p" });
@@ -517,6 +519,8 @@ describe("server data push router", () => {
     queryClient.setQueryData(pairingOfferKey, { relayEnabled: false, url: "" });
     queryClient.setQueryData(diffKey, { cwd: "/repo", files: [], error: null, requestId: "d" });
     queryClient.setQueryData(terminalKey, { cwd: "/repo", terminals: [], requestId: "t" });
+    queryClient.setQueryData(arenaKey, { chat: { id: "stale" } });
+    queryClient.setQueryData(otherArenaKey, { chat: { id: "other" } });
     queryClient.setQueryData(otherProviderKey, {
       entries: [],
       generatedAt: "now",
@@ -530,6 +534,8 @@ describe("server data push router", () => {
     expect(queryClient.getQueryState(pairingOfferKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(diffKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(terminalKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(arenaKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherArenaKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(otherProviderKey)?.isInvalidated).toBe(false);
   });
 });

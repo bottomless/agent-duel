@@ -184,7 +184,7 @@ test.describe("Sidebar workspace list", () => {
     }
   });
 
-  test("workspace hover card shows host as metadata", async ({ page }) => {
+  test("workspace hover card does not show the host", async ({ page }) => {
     const workspace = await seedWorkspace({ repoPrefix: "sidebar-hover-host-" });
 
     try {
@@ -192,7 +192,7 @@ test.describe("Sidebar workspace list", () => {
       await waitForSidebarProject(page, path.basename(workspace.repoPath));
 
       const hoverCard = await openWorkspaceHoverCard(page, workspace.workspaceId);
-      await expect(page.getByTestId("hover-card-workspace-host")).toHaveText("localhost");
+      await expect(page.getByTestId("hover-card-workspace-host")).toHaveCount(0);
       await expect(hoverCard).not.toContainText(/\b(Online|Connecting|Offline|Error|Idle)\b/);
     } finally {
       await workspace.cleanup();
@@ -284,10 +284,10 @@ test.describe("Half-screen desktop layout", () => {
       expect(scrollTop).toBe(160);
 
       await page.getByTestId("menu-button").click();
-      await expect(page.getByTestId("sidebar-global-new-workspace")).not.toBeVisible();
+      await expect(page.getByTestId("sidebar-add-project")).not.toBeVisible();
 
       await page.getByTestId("menu-button").click();
-      await expect(page.getByTestId("sidebar-global-new-workspace")).toBeVisible();
+      await expect(page.getByTestId("sidebar-add-project")).toBeVisible();
       await expect(sidebarScroll).toHaveJSProperty("scrollTop", scrollTop);
     } finally {
       await workspace.cleanup();
@@ -296,7 +296,7 @@ test.describe("Half-screen desktop layout", () => {
 
   test("keeps the pinned sidebar at half of a 14-inch Mac display", async ({ page }) => {
     await gotoAppShell(page);
-    await expect(page.getByTestId("sidebar-global-new-workspace")).toBeVisible();
+    await expect(page.getByTestId("sidebar-add-project")).toBeVisible();
     await expect(page.getByTestId("agent-list-backdrop")).not.toBeVisible();
   });
 
@@ -311,7 +311,7 @@ test.describe("Half-screen desktop layout", () => {
     expect(openBounds?.x).toBeGreaterThan(12);
 
     await openToggle.click();
-    await expect(page.getByTestId("sidebar-global-new-workspace")).not.toBeVisible();
+    await expect(page.getByTestId("sidebar-add-project")).not.toBeVisible();
 
     const closedToggle = page.getByTestId("menu-button");
     const closedIcon = closedToggle.locator("svg").first();
@@ -331,7 +331,7 @@ test.describe("Half-screen desktop layout", () => {
     await expect(page.getByTestId("sidebar-settings")).not.toBeVisible();
   });
 
-  test("yields app navigation to the Explorer", async ({ page }) => {
+  test("keeps app navigation pinned beside an open side panel", async ({ page }) => {
     const workspace = await seedWorkspace({ repoPrefix: "sidebar-half-screen-explorer-" });
 
     try {
@@ -339,13 +339,18 @@ test.describe("Half-screen desktop layout", () => {
       await waitForSidebarProject(page, path.basename(workspace.repoPath));
       await openWorkspaceFromSidebar(page, workspace.workspaceId);
 
-      await page.getByTestId("workspace-explorer-toggle").first().click();
-      await expect(
-        page.getByTestId("explorer-tab-files").filter({ visible: true }).first(),
-      ).toBeVisible();
-      await expect(page.getByTestId("workspace-explorer-toggle").first()).toBeVisible();
-      await expect(page.getByTestId("explorer-close")).toBeVisible();
-      await expect(page.getByTestId("sidebar-global-new-workspace")).not.toBeVisible();
+      await page.getByTestId("workspace-side-panel-toggle").first().click();
+      await expect(page.getByTestId("workspace-side-panel-launcher")).toBeVisible();
+      await expect(page.getByTestId("workspace-side-panel-toggle").first()).toBeVisible();
+      // The side panel splits the workspace itself; app navigation stays pinned.
+      await expect(page.getByTestId("sidebar-add-project")).toBeVisible();
+
+      // The alignment rail and the panel's width are read off the tab row, which
+      // an empty side pane does not draw — open a tab so there is one.
+      await page.getByTestId("workspace-side-panel-launcher-files").click();
+      await expect(page.getByTestId("workspace-tabs-row").first()).toBeVisible({
+        timeout: 10_000,
+      });
 
       const centerBounds = await page.getByTestId("workspace-tabs-row").first().boundingBox();
       const headerGlyphBounds = await page
@@ -374,9 +379,9 @@ test.describe("Half-screen desktop layout", () => {
         )
         .toBeGreaterThanOrEqual(400);
 
-      await page.getByTestId("explorer-close").click();
-      await expect(page.getByTestId("explorer-tab-files")).not.toBeVisible();
-      await expect(page.getByTestId("workspace-explorer-toggle").first()).toBeVisible();
+      await page.getByTestId("workspace-side-panel-toggle").first().click();
+      await expect(page.getByTestId("workspace-tabs-row")).toHaveCount(0);
+      await expect(page.getByTestId("workspace-side-panel-toggle").first()).toBeVisible();
     } finally {
       await workspace.cleanup();
     }

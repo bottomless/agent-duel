@@ -117,9 +117,6 @@ export function getMobilePanelAnchor(panel: MobilePanelView): number {
   if (panel === "agent-list") {
     return -1;
   }
-  if (panel === "file-explorer") {
-    return 1;
-  }
   return 0;
 }
 

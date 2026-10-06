@@ -55,9 +55,6 @@ function getOpenAccessibilityLabel(
   attachment: WorkspaceComposerAttachment,
   t: ReturnType<typeof useTranslation>["t"],
 ): string {
-  if (attachment.kind === "browser_element") {
-    return t("composer.attachments.openBrowserElement");
-  }
   if (isPullRequestContextAttachment(attachment)) {
     return "Open context attachment";
   }
@@ -71,9 +68,6 @@ function getRemoveAccessibilityLabel(
   attachment: WorkspaceComposerAttachment,
   t: ReturnType<typeof useTranslation>["t"],
 ): string {
-  if (attachment.kind === "browser_element") {
-    return t("composer.attachments.removeBrowserElement");
-  }
   if (isPullRequestContextAttachment(attachment)) {
     return "Remove context attachment";
   }
@@ -165,11 +159,7 @@ function useWorkspaceAttachmentBinding({
     ({ selectedAttachments: current, index }: RemoveWorkspaceAttachmentInput) => {
       const selected = current[index];
       if (isWorkspaceAttachment(selected)) {
-        if (
-          selected.kind === "browser_element" ||
-          selected.kind === "chat_history" ||
-          isPullRequestContextAttachment(selected)
-        ) {
+        if (selected.kind === "chat_history" || isPullRequestContextAttachment(selected)) {
           const selectedKey = getAttachmentKey(selected);
           removeWorkspaceAttachmentsMatching(selectedKey);
           return true;

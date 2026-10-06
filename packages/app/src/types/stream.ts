@@ -1,6 +1,7 @@
 import type { AgentProvider, ToolCallDetail } from "@getpaseo/protocol/agent-types";
 import type { AgentAttachment, AgentStreamEventPayload } from "@getpaseo/protocol/messages";
 import type { AttachmentMetadata } from "@/attachments/types";
+import { labeledAttachmentKind } from "@/attachments/labeled-attachment";
 import { extractTaskEntriesFromToolCall } from "../utils/tool-call-parsers";
 import { splitMarkdownBlocks } from "@/utils/split-markdown-blocks";
 
@@ -219,6 +220,18 @@ interface UserMessageProductionResult {
   matched: boolean;
 }
 
+/** A local send keeps its own images, and a replay fills in the ones a local copy never had. */
+function mergedUserMessageContent(
+  presentation: UserMessageItem,
+  incoming: UserMessageItem,
+  existing: UserMessageItem,
+): Pick<UserMessageInput, "images" | "attachments"> {
+  return {
+    images: presentation.images ?? incoming.images ?? existing.images,
+    attachments: presentation.attachments ?? incoming.attachments ?? existing.attachments,
+  };
+}
+
 function produceUserMessage(
   items: StreamItem[],
   incoming: UserMessageItem,
@@ -248,6 +261,7 @@ function produceUserMessage(
   const presentation = presentationPolicy === "incoming" ? incoming : existing;
   const merged = createUserMessage({
     ...presentation,
+    ...mergedUserMessageContent(presentation, incoming, existing),
     clientMessageId: incoming.clientMessageId ?? existing.clientMessageId,
     messageId: incoming.messageId ?? existing.messageId,
     timelineCursor: incoming.timelineCursor ?? existing.timelineCursor,
@@ -767,13 +781,13 @@ export interface TodoEntry {
   text: string;
   completed: boolean;
   id?: string;
-  status?: "pending" | "in_progress" | "completed";
+  status?: "pending" | "in_progress" | "completed" | "cancelled";
   activeForm?: string;
 }
 
 export type TaskActivity =
   | { type: "created"; count: number }
-  | { type: "added" | "started" | "completed" | "reopened"; task: string };
+  | { type: "added" | "started" | "completed" | "reopened" | "cancelled"; task: string };
 
 export interface TodoListItem {
   kind: "todo_list";
@@ -831,6 +845,47 @@ export function handoffCreatedAgentUserMessageToStream(params: {
   });
 }
 
+type ReplayedUserMessageContent = Pick<UserMessageInput, "images" | "attachments">;
+
+/**
+ * What a replayed message carried besides its text, in the shapes `UserMessage` renders: its images
+ * held inline, since this device may never have stored them, and a battle's attachments as chips.
+ */
+function replayedUserMessageContent(
+  item: Extract<
+    Extract<AgentStreamEventPayload, { type: "timeline" }>["item"],
+    { type: "user_message" }
+  >,
+): ReplayedUserMessageContent {
+  const images = item.images?.map(
+    (image, index): UserMessageImageAttachment => ({
+      id: `${item.messageId ?? item.clientMessageId ?? "message"}:image:${index}`,
+      mimeType: image.mimeType,
+      storageType: "inline",
+      storageKey: `data:${image.mimeType};base64,${image.data}`,
+      createdAt: 0,
+    }),
+  );
+  // Shown, never sent again: history keeps an attachment's label and kind, not its bytes or path.
+  const attachments = item.labeledAttachments?.map(
+    (attachment, index): AgentAttachment =>
+      labeledAttachmentKind(attachment) === "file"
+        ? {
+            type: "uploaded_file",
+            id: `${item.messageId ?? item.clientMessageId ?? "message"}:attachment:${index}`,
+            fileName: attachment.label,
+            mimeType: "application/octet-stream",
+            size: 0,
+            path: "",
+          }
+        : { type: "text", mimeType: "text/plain", title: attachment.label, text: "" },
+  );
+  return {
+    ...(images?.length ? { images } : {}),
+    ...(attachments?.length ? { attachments } : {}),
+  };
+}
+
 function appendUserMessage(
   state: StreamItem[],
   text: string,
@@ -839,9 +894,10 @@ function appendUserMessage(
   messageId?: string,
   clientMessageId?: string,
   timelineCursor?: TimelinePosition,
+  content: ReplayedUserMessageContent = {},
 ): StreamItem[] {
   const { chunk, hasContent } = normalizeChunk(text);
-  if (!hasContent) {
+  if (!hasContent && !content.images && !content.attachments) {
     return state;
   }
 
@@ -853,6 +909,7 @@ function appendUserMessage(
     timelineCursor,
     text: chunk,
     timestamp,
+    ...content,
   });
   return upsertUserMessage(state, nextItem);
 }
@@ -1248,7 +1305,8 @@ function appendTodoList(
 
 function taskStatus(task: TodoEntry): NonNullable<TodoEntry["status"]> {
   if (task.completed || task.status === "completed") return "completed";
-  return task.status === "in_progress" ? "in_progress" : "pending";
+  if (task.status === "in_progress") return "in_progress";
+  return task.status === "cancelled" ? "cancelled" : "pending";
 }
 
 function taskKey(task: TodoEntry, index: number): string {
@@ -1276,6 +1334,8 @@ function deriveTaskActivities(
     if (before === after) continue;
     if (after === "completed") {
       activities.push({ type: "completed", task: task.text });
+    } else if (after === "cancelled") {
+      activities.push({ type: "cancelled", task: task.text });
     } else if (before === "completed") {
       activities.push({ type: "reopened", task: task.text });
     } else if (after === "in_progress") {
@@ -1414,6 +1474,7 @@ function reduceTimelineEvent(
           item.messageId,
           item.clientMessageId,
           timelineCursor,
+          replayedUserMessageContent(item),
         ),
       );
     case "assistant_message":
@@ -1781,6 +1842,8 @@ function applyCanonicalUserMessageEvent(params: {
   const { tail, head, event, timestamp, timelineCursor, unmatchedInsert = "tail" } = params;
   if (event.type !== "timeline" || event.item.type !== "user_message") return null;
   const normalized = normalizeChunk(event.item.text);
+  const content = replayedUserMessageContent(event.item);
+  const hasContent = normalized.hasContent || Boolean(content.images ?? content.attachments);
 
   const flushedTail = head.length > 0 ? flushHeadToTail(tail, head) : tail;
   const flushedHead = head.length > 0 ? [] : head;
@@ -1793,13 +1856,14 @@ function applyCanonicalUserMessageEvent(params: {
     timelineCursor,
     text: normalized.chunk,
     timestamp,
+    ...content,
   });
   if (unmatchedInsert === "head") {
     const reconciled = upsertUserMessageAcrossStream({
       tail,
       head,
       message: canonical,
-      insert: normalized.hasContent ? "head" : "none",
+      insert: hasContent ? "head" : "none",
       presentation: "existing",
     });
     return {
@@ -1813,7 +1877,7 @@ function applyCanonicalUserMessageEvent(params: {
           : [],
     };
   }
-  const reconciled = placeCanonicalUserMessageAtTail(flushedTail, canonical, normalized.hasContent);
+  const reconciled = placeCanonicalUserMessageAtTail(flushedTail, canonical, hasContent);
   return {
     tail: reconciled.items,
     head: flushedHead,

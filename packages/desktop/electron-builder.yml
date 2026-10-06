@@ -1,9 +1,9 @@
 npmRebuild: false
 appId: sh.paseo.desktop
-productName: Paseo
-executableName: Paseo
+productName: Agent Duel
+executableName: Agent Duel
 protocols:
-  - name: Paseo agent link
+  - name: Agent Duel agent link
     schemes:
       - paseo
 afterPack: ./scripts/after-pack.js
@@ -12,6 +12,7 @@ directories:
   output: release
 files:
   - dist/**/*
+  - "!dist/arena/**"
   - "!**/*.map"
   - "!node_modules/@getpaseo/*/src/**"
   - "!node_modules/@getpaseo/**/*.test.*"
@@ -24,9 +25,12 @@ files:
   - "!node_modules/@getpaseo/*/conversations/**"
   - "!node_modules/@getpaseo/*/test-results/**"
 asarUnpack:
+  - dist/native/*.node
   - dist/daemon/node-entrypoint-runner.js
   - node_modules/@getpaseo/server/dist/server/terminal/shell-integration/**/*
 extraResources:
+  - from: dist/arena
+    to: arena
   - from: ../app/dist
     to: app-dist
   - from: ../../skills
@@ -35,12 +39,12 @@ extraResources:
     to: editor-target-icons
 publish:
   provider: github
-  owner: getpaseo
-  repo: paseo
+  owner: bottomless
+  repo: agent-arena2
 mac:
-  artifactName: "Paseo-${version}-${arch}.${ext}"
-  category: public.app-category.developer-tools
   icon: assets/icon.icns
+  artifactName: "Agent-Duel-${version}-${arch}.${ext}"
+  category: public.app-category.developer-tools
   hardenedRuntime: true
   notarize: true
   entitlements: build/entitlements.mac.plist
@@ -48,17 +52,14 @@ mac:
   extraResources:
     - from: bin/paseo
       to: bin/paseo
-    - from: assets/icon.png
-      to: icon.png
   target:
     - dmg
     - zip
 linux:
   category: Development
-  icon: assets
-  artifactName: "Paseo-${version}-${arch}.${ext}"
+  artifactName: "Agent-Duel-${version}-${arch}.${ext}"
   maintainer: "Mohamed Boudra <hello@moboudra.com>"
-  vendor: "Paseo"
+  vendor: "Agent Duel"
   extraResources:
     - from: bin/paseo
       to: bin/paseo
@@ -73,10 +74,9 @@ appImage:
   # versioned path. A rename orphans the old binary, breaks desktop shortcuts, and
   # dangles the ~/.local/bin/paseo CLI symlink, which points at $APPIMAGE. The
   # version stays discoverable via the release tag and the in-app version.
-  artifactName: "Paseo-${arch}.${ext}"
+  artifactName: "Agent-Duel-${arch}.${ext}"
 win:
-  artifactName: "Paseo-Setup-${version}-${arch}.${ext}"
-  icon: assets/icon.ico
+  artifactName: "Agent-Duel-Setup-${version}-${arch}.${ext}"
   extraResources:
     - from: bin/paseo.cmd
       to: bin/paseo.cmd

@@ -14,10 +14,18 @@ export async function gotoWorkspace(page: Page, workspaceId: string): Promise<vo
 
 // ─── Tab bar queries ───────────────────────────────────────────────────────
 
-/** Wait for the workspace tab bar to be visible. */
+/**
+ * Wait for the side panel to have rendered: its tab row, or the launcher an
+ * empty side pane shows in place of one. An empty pane draws no tab row, so
+ * waiting on the row alone would hang on a freshly opened workspace.
+ */
 export async function waitForTabBar(page: Page): Promise<void> {
   await expect(
-    page.getByTestId("workspace-tabs-row").filter({ visible: true }).first(),
+    page
+      .getByTestId("workspace-tabs-row")
+      .or(page.getByTestId("workspace-side-panel-launcher"))
+      .filter({ visible: true })
+      .first(),
   ).toBeVisible({
     timeout: 30_000,
   });
@@ -59,52 +67,56 @@ export async function getActiveTabTestId(page: Page): Promise<string | null> {
   return null;
 }
 
-// ─── Tab actions ───────────────────────────────────────────────────────────
+// ─── Chat and side panel actions ──────────────────────────────────────────
 
-/** Press Cmd+T (macOS) or Ctrl+T (Linux/Windows) to open a new tab. */
-export async function pressNewTabShortcut(page: Page): Promise<void> {
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
-  await page.keyboard.press(`${modifier}+t`);
-}
-
-// ─── Tab bar assertions ───────────────────────────────────────────────────
-
-/** Assert the inline new-agent plus button is visible in the tab bar. */
-export async function assertNewChatTileVisible(page: Page): Promise<void> {
-  await expect(
-    page.getByTestId("workspace-new-agent-tab-inline").filter({ visible: true }).first(),
-  ).toBeVisible();
-}
-
-/** Assert the new-tab dropdown trigger is visible in the tab bar. */
-export async function assertNewTabMenuTriggerVisible(page: Page): Promise<void> {
-  await expect(
-    page.getByTestId("workspace-new-tab-menu-trigger").filter({ visible: true }).first(),
-  ).toBeVisible();
-}
-
-// ─── Tab creation actions ─────────────────────────────────────────────────
-
-/** Click the inline plus button to create a draft/chat tab. */
+/**
+ * Wait for the workspace's chat composer. A workspace holds one chat: an empty
+ * workspace seeds a draft on open, so there is nothing to click to get one.
+ */
 export async function clickNewChat(page: Page): Promise<void> {
-  const button = page
-    .getByTestId("workspace-new-agent-tab-inline")
-    .filter({ visible: true })
-    .first();
-  await expect(button).toBeVisible({ timeout: 10_000 });
-  await button.click();
+  const composer = page.getByRole("textbox", { name: "Message agent..." }).first();
+  await expect(composer).toBeVisible({ timeout: 10_000 });
 }
 
-/** Open the new-tab menu and click "New terminal". */
-export async function clickNewTerminal(page: Page): Promise<void> {
+/** Reveal the side panel if it is hidden. */
+export async function revealSidePanel(page: Page): Promise<void> {
+  const toggle = page.getByTestId("workspace-side-panel-toggle").filter({ visible: true }).first();
+  await expect(toggle).toBeVisible({ timeout: 30_000 });
+  if ((await toggle.getAttribute("aria-expanded")) === "false") {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 10_000 });
+  }
+}
+
+/**
+ * Open the side panel's "+" menu, revealing the panel first if it is hidden.
+ * Only an occupied side pane has one: an empty pane draws the launcher instead,
+ * so prefer `clickNewTerminal`, which takes whichever surface is present.
+ */
+export async function openSidePanelNewTabMenu(page: Page): Promise<void> {
+  await revealSidePanel(page);
   const trigger = page
-    .getByTestId("workspace-new-tab-menu-trigger")
+    .getByTestId("workspace-side-panel-new-tab-menu-trigger")
     .filter({ visible: true })
     .first();
   await expect(trigger).toBeVisible({ timeout: 10_000 });
   await trigger.click();
+}
+
+/** Start a terminal in the side panel, through the launcher or the "+" menu. */
+export async function clickNewTerminal(page: Page): Promise<void> {
+  await revealSidePanel(page);
+  const launcherEntry = page
+    .getByTestId("workspace-side-panel-launcher-terminal")
+    .filter({ visible: true })
+    .first();
+  if (await launcherEntry.isVisible().catch(() => false)) {
+    await launcherEntry.click();
+    return;
+  }
+  await openSidePanelNewTabMenu(page);
   const item = page
-    .getByTestId("workspace-new-tab-menu-terminal")
+    .getByTestId("workspace-side-panel-menu-terminal")
     .filter({ visible: true })
     .first();
   await expect(item).toBeVisible({ timeout: 10_000 });
@@ -127,13 +139,6 @@ export async function waitForTabWithTitle(
       .filter({ visible: true })
       .first(),
   ).toBeVisible({ timeout });
-}
-
-/** Assert the inline new-agent plus button is visible in the tab bar. */
-export async function assertSingleNewTabButton(page: Page): Promise<void> {
-  const buttons = page.getByTestId("workspace-new-agent-tab-inline").filter({ visible: true });
-  const count = await buttons.count();
-  expect(count).toBeGreaterThanOrEqual(1);
 }
 
 // ─── No-flash measurement ──────────────────────────────────────────────────

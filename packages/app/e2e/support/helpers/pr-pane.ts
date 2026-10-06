@@ -1,9 +1,9 @@
 import { expect, type Page } from "@playwright/test";
 import { getStateLabel } from "@/git/pull-request-panel/data";
+import { openSidePanelTab } from "./side-panel";
 
 export async function openPrPane(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Open explorer" }).click();
-  await page.getByTestId("explorer-tab-pr").click();
+  await openSidePanelTab(page, "pull-request");
   await expect(page.getByTestId("pr-pane")).toBeVisible({ timeout: 15_000 });
 }
 

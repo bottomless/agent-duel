@@ -26,6 +26,16 @@ export function normalizeWorkspaceTabTarget(
       ? { kind: "provider_subagent", parentAgentId, subagentId }
       : null;
   }
+  if (value.kind === "arena_terminal") {
+    const agentId = trimNonEmpty(value.agentId);
+    const side = value.side === "a" || value.side === "b" ? value.side : null;
+    // A tab persisted before shells were per-instance names no instance, and there is no
+    // shell to reattach it to. Dropping it is what the reader sees as the tab not coming back.
+    const instanceId = trimNonEmpty(value.instanceId);
+    return agentId && side && instanceId
+      ? { kind: "arena_terminal", agentId, side, instanceId }
+      : null;
+  }
   if (value.kind === "file") {
     return normalizeFileTabTarget(value);
   }
@@ -57,6 +67,12 @@ function normalizeSimpleWorkspaceTabTarget(value: WorkspaceTabTarget): Workspace
       const sha = trimNonEmpty(value.sha);
       return sha ? { kind: "commit_diff", sha } : null;
     }
+    case "changes":
+      return { kind: "changes" };
+    case "files":
+      return { kind: "files" };
+    case "pull_request":
+      return { kind: "pull_request" };
     default:
       return null;
   }
@@ -105,6 +121,9 @@ export function workspaceTabTargetsEqual(
   if (left.kind === "terminal" && right.kind === "terminal") {
     return left.terminalId === right.terminalId;
   }
+  if (left.kind === "arena_terminal" && right.kind === "arena_terminal") {
+    return left.instanceId === right.instanceId;
+  }
   return secondaryWorkspaceTabTargetsEqual(left, right);
 }
 
@@ -126,6 +145,9 @@ function secondaryWorkspaceTabTargetsEqual(
   }
   if (left.kind === "commit_diff" && right.kind === "commit_diff") {
     return left.sha === right.sha;
+  }
+  if (left.kind === "changes" || left.kind === "files" || left.kind === "pull_request") {
+    return true;
   }
   return false;
 }
@@ -176,6 +198,9 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
   if (target.kind === "terminal") {
     return `terminal_${target.terminalId}`;
   }
+  if (target.kind === "arena_terminal") {
+    return `arena_terminal_${target.instanceId}`;
+  }
   if (target.kind === "browser") {
     return `browser_${target.browserId}`;
   }
@@ -187,6 +212,9 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
   }
   if (target.kind === "working_diff") {
     return "working_diff";
+  }
+  if (target.kind === "changes" || target.kind === "files" || target.kind === "pull_request") {
+    return target.kind;
   }
   return `file_${target.path}`;
 }

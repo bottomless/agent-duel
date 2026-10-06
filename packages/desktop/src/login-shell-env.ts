@@ -506,12 +506,27 @@ export function inheritLoginShellEnv(input: LoginShellEnvDependencies = {}): voi
     userInfo: input.userInfo ?? defaultUserInfo,
   };
   const beforePath = pathEnv(deps.env);
+  const isPaseoLaunchOverride = (key: string) =>
+    key === "PASEO_HOME" ||
+    key === "PASEO_LISTEN" ||
+    key === "PASEO_ARENA_BACKEND_ROOT" ||
+    key === "PASEO_DAEMON_ENDPOINT" ||
+    key === "PASEO_CORS_ORIGINS" ||
+    key.startsWith("PASEO_DEV_") ||
+    key.startsWith("PASEO_ELECTRON_");
+  const explicitPaseoEnv = Object.fromEntries(
+    Object.entries(deps.env).filter(([key]) => isPaseoLaunchOverride(key)),
+  );
   const startedAt = deps.now();
   const timeoutMs = timeoutMsFromEnv(deps.env);
 
   try {
     const { env, attemptKind } = resolveShellEnv({ deps, timeoutMs });
+    for (const key of Object.keys(env)) {
+      if (isPaseoLaunchOverride(key)) delete env[key];
+    }
     Object.assign(deps.env, env);
+    Object.assign(deps.env, explicitPaseoEnv);
     deps.logger.info("[login-shell-env] applied", {
       attemptKind,
       durationMs: deps.now() - startedAt,

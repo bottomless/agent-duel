@@ -30,7 +30,62 @@ Workspace archive runs lifecycle teardown from the exact `cwd` but removes only 
 `worktreeRoot` after its last active reference disappears. Worktree recovery recreates that backing
 checkout from `mainRepoRoot`, then restores the relative path from `worktreeRoot` to `cwd`.
 
-Paseo uses **file-based JSON persistence** instead of a traditional database. All data is validated at runtime with Zod schemas. Most stores write atomically (write to temp file, then rename); a few still use plain `writeFile` — see each section. There is no schema-versioning/migration framework — schemas rely on optional fields with defaults for forward compatibility, with a small amount of inline normalization in `persisted-config.ts` for legacy provider/speech entries.
+## Arena battle records
+
+The Arena backend stores canonical battle state in local SQLite. `chats` binds a conversation to one exact canonical
+checkout and records its common Git directory, current branch or detached
+state, persistent A/B branches, retained winner, and warm generation. `turns`
+is the recovery spine for the frozen base, copy policy and manifest identity,
+permanent result refs, promotion, cleanup, warm preparation, and the durable
+environment transition. `runs` owns each contestant's historical worktree and
+branch labels, copy omissions, port bank, captured services, and retention
+state.
+
+Each ready warm-worktree record stores the content fingerprint computed from
+the copied manifest paths after setup. Restart recovery checks that fingerprint
+and Git's worktree registration before treating either side as reusable.
+
+Exact file bytes do not live in those rows. Tracked and nonignored states are
+retained under local `refs/battles/`; ignored-content seeds are temporary
+filesystem artifacts, while bounded manifests and transcript or patch payloads
+are stored in the local artifact CAS.
+The base, A, B, and selected refs have no automatic expiry. Old documents stay
+readable through optional fields instead of a physical-worktree migration.
+
+### Who owns a battle record
+
+Two collections carry `userId`, the `_id` of a document in `users`
+([accounts.md](accounts.md)). Everything else reaches its owner by following
+its parent, so no other collection stores one: `turns` through `chatID`, `runs`
+through `turnID`, and `generations`, `events`, `rawEvents`, `sessionArchives`,
+`artifacts` and `comparisons` through the run or turn they name.
+
+- **`chats`** owns the whole tree beneath it. The owner is written when the
+  daemon resolves a session into a chat, from the account that connection
+  signed in as — never from anything a client sends.
+- **`singleAgentRatings`** owns itself, because it is keyed by an OpenCode
+  session and a chat's `canonicalSessionID` moves to the winning run's session
+  on every resolved battle. A rating takes the owner of the chat for its
+  session, and `adoptSessionRatings` claims the ones written before that chat
+  existed.
+
+Ownership is claimed once and never transferred. This beta keeps the existing
+`userId` on local records, with no account partitioning or migrations. Research
+snapshots use a server-authenticated account ID and a persistent local source ID;
+the local record's `userId` is omitted from the uploaded document. Local reads
+are served from the current signed-in daemon session.
+
+The runtime schedules selected snapshots after local writes. Research snapshots
+include chats, turns, runs, generation metadata, structured events,
+comparisons, single-agent ratings, session archives, and transcript or patch
+artifacts. Raw events and per-call full request, response, tool-output, and
+other artifacts are excluded. Each upload request is at most 3 MiB and each
+record is at most 2 MiB. A record over the limit is logged and dropped; its
+local copy remains available. The uploader keeps bounded memory, allows one
+request at a time, and drops failures without a persistent queue, retry, or
+backfill.
+
+The Paseo daemon otherwise uses **file-based JSON persistence** instead of a traditional database. All data is validated at runtime with Zod schemas. Most stores write atomically (write to temp file, then rename); a few still use plain `writeFile` — see each section. There is no schema-versioning/migration framework — schemas rely on optional fields with defaults for forward compatibility, with a small amount of inline normalization in `persisted-config.ts` for legacy provider/speech entries.
 
 All server-side stores live under `$PASEO_HOME` (defaults to `~/.paseo`).
 
@@ -52,8 +107,6 @@ $PASEO_HOME/
 ├── agents/
 │   └── {sanitized-cwd}/
 │       └── {agentId}.json               # One file per agent
-├── schedules/
-│   └── {scheduleId}.json                # One file per schedule
 ├── projects/
 │   ├── projects.json                    # Project registry
 │   ├── workspaces.json                  # Workspace registry
@@ -61,6 +114,10 @@ $PASEO_HOME/
 ├── runtime/
 │   └── managed-processes/
 │       └── {recordId}.json              # Helper processes owned by Paseo; reconciled on daemon bootstrap
+├── arena/
+│   ├── arena.sqlite                      # Canonical Arena records and recovery state
+│   └── artifacts/
+│       └── sha256/                       # Content-addressed transcript, patch, and manifest bytes
 └── push-tokens.json                     # Expo push notification tokens
 ```
 
@@ -241,7 +298,9 @@ and remove. List order is the display order.
 
 Absent and empty mean different things for terminal profiles — omitting the key falls back to
 `DEFAULT_TERMINAL_PROFILES`, while `[]` means the user removed them all. Agent profiles have no
-defaults, so both mean none.
+defaults, so both mean none. Nothing in the app writes `terminalProfiles` any more: the settings
+editor was removed, so the list is whatever the daemon config holds, and a fresh host gets the
+defaults.
 
 `PersistedConfigSchema` parses strictly, so a daemon that predates a field drops it on write
 rather than storing something it cannot describe. That is why the client gates the agent profiles
@@ -323,55 +382,7 @@ Paseo uses these paths under the configured OpenAI base URL:
 
 ---
 
-## 3. Schedule
-
-**Path:** `$PASEO_HOME/schedules/{id}.json`
-
-One file per schedule. ID is 8 hex characters.
-
-| Field       | Type                                  | Description                      |
-| ----------- | ------------------------------------- | -------------------------------- |
-| `id`        | `string`                              | 8-char hex ID                    |
-| `name`      | `string?`                             | Human-readable name              |
-| `prompt`    | `string`                              | The prompt to send               |
-| `cadence`   | `ScheduleCadence`                     | Timing (see below)               |
-| `target`    | `ScheduleTarget`                      | What to run (see below)          |
-| `status`    | `"active" \| "paused" \| "completed"` | Current state                    |
-| `createdAt` | `string` (ISO 8601)                   |                                  |
-| `updatedAt` | `string` (ISO 8601)                   |                                  |
-| `nextRunAt` | `string?` (ISO 8601)                  | Next scheduled execution         |
-| `lastRunAt` | `string?` (ISO 8601)                  | Last execution time              |
-| `pausedAt`  | `string?` (ISO 8601)                  | When paused                      |
-| `expiresAt` | `string?` (ISO 8601)                  | Auto-expire time                 |
-| `maxRuns`   | `number?`                             | Max executions before completing |
-| `runs`      | `ScheduleRun[]`                       | Execution history                |
-
-### Nested: ScheduleCadence (discriminated union on `type`)
-
-- `{ type: "cron", expression: string, timezone?: string }` — canonical cadence for new writes; absent `timezone` means UTC
-- `{ type: "every", everyMs: number }` — legacy rolling interval, still readable and executable during the compatibility window
-
-### Nested: ScheduleTarget (discriminated union on `type`)
-
-- `{ type: "agent", agentId: string }` — send to existing agent
-- `{ type: "new-agent", config: { provider, cwd, modeId?, model?, thinkingOptionId?, title?, providerOptions?, featureValues?, systemPrompt?, mcpServers? } }` — create a new agent
-
-### Nested: ScheduleRun
-
-| Field          | Type                                   | Description             |
-| -------------- | -------------------------------------- | ----------------------- |
-| `id`           | `string`                               | Run ID                  |
-| `scheduledFor` | `string` (ISO 8601)                    | Intended execution time |
-| `startedAt`    | `string` (ISO 8601)                    |                         |
-| `endedAt`      | `string?` (ISO 8601)                   |                         |
-| `status`       | `"running" \| "succeeded" \| "failed"` |                         |
-| `agentId`      | `string?` (UUID)                       | Agent used for this run |
-| `output`       | `string?`                              | Agent output text       |
-| `error`        | `string?`                              | Error message if failed |
-
----
-
-## 4. Project Registry
+## 3. Project Registry
 
 **Path:** `$PASEO_HOME/projects/projects.json`
 
@@ -406,7 +417,7 @@ workspace together with its owning project.
 
 ---
 
-## 5. Workspace Registry
+## 4. Workspace Registry
 
 **Path:** `$PASEO_HOME/projects/workspaces.json`
 
@@ -440,7 +451,7 @@ than treating it as valid.
 
 ---
 
-## 6. Push Token Store
+## 5. Push Token Store
 
 **Path:** `$PASEO_HOME/push-tokens.json`
 
@@ -454,7 +465,7 @@ Simple set of Expo push notification tokens. Loaded with permissive parsing (fil
 
 ---
 
-## 7. Daemon meta files
+## 6. Daemon meta files
 
 These small files are not validated as full Zod schemas but are persisted under `$PASEO_HOME` for daemon identity and runtime coordination.
 
@@ -470,13 +481,16 @@ These small files are not validated as full Zod schemas but are persisted under 
 ## Client-side stores (App)
 
 These live in React Native `AsyncStorage` or browser `IndexedDB`, not on the daemon filesystem.
+The production Electron account session is the deliberate exception: it is encrypted and persisted
+by the main process through Electron `safeStorage`; desktop hydration removes the legacy
+`agent-duel-account-session` value from renderer `AsyncStorage`.
 
 ### Keying convention: directory-backed vs workspace-owned
 
-Right-sidebar client state splits on whether it is determined by the directory or owned by the workspace (two workspaces can share one `cwd`). The split is enforced by the cache key, so changing a key changes the sharing semantics — see [architecture.md](architecture.md#right-sidebar-boundary-directory-backed-vs-workspace-owned) for the full table.
+Side panel client state splits on whether it is determined by the directory or owned by the workspace (two workspaces can share one `cwd`). The split is enforced by the cache key, so changing a key changes the sharing semantics — see [architecture.md](architecture.md#side-panel-boundary-directory-backed-vs-workspace-owned) for the full table.
 
 - **Directory-backed** (shared by same-`cwd` workspaces): keyed by `(serverId, cwd)`. Git status/diff, GitHub PR status, PR timeline, file preview content. These are TanStack Query caches, not persisted stores.
-- **Workspace-owned** (independent per workspace): keyed by `workspaceId`, with `cwd` used only as a fallback when no `workspaceId` is present. Review draft comments (`@paseo:review-draft-store`), diff-mode overrides (in-memory), workspace composer attachments, and file-explorer nav/expand state. The `workspaceId` part of these keys is **opaque** — never parse it back into a path.
+- **Workspace-owned** (independent per workspace): keyed by `workspaceId`, with `cwd` used only as a fallback when no `workspaceId` is present. Review draft comments (`@paseo:review-draft-store`), diff-mode overrides (in-memory), workspace composer attachments, and Files tab nav/expand state. The `workspaceId` part of these keys is **opaque** — never parse it back into a path.
 
 ### Draft Store
 

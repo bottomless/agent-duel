@@ -12,17 +12,11 @@ import {
 
 import type { WindowState, WindowStateStore } from "../settings/window-state.js";
 
+import { DockBadgeState, readBadgeEntries } from "./dock-badge.js";
+
 const WINDOW_STATE_SAVE_DEBOUNCE_MS = 400;
 const MAC_TRAFFIC_LIGHT_POSITION = { x: 16, y: 14 } as const;
 const MAX_TRAFFIC_LIGHT_OFFSET_Y = 10;
-
-export function readBadgeCount(input: unknown): number {
-  if (typeof input !== "number" || !Number.isSafeInteger(input) || input < 0) {
-    return 0;
-  }
-
-  return input;
-}
 
 export type WindowTheme = "light" | "dark";
 export interface WindowControlsOverlayUpdate {
@@ -231,19 +225,30 @@ export function registerWindowManager(): void {
     BrowserWindow.fromWebContents(event.sender)?.setFullScreen(fullscreen);
   });
 
-  ipcMain.handle("paseo:window:setBadgeCount", (_event, count?: unknown) => {
-    if (process.platform === "darwin" || process.platform === "linux") {
-      const badgeCount = readBadgeCount(count);
-      try {
-        app.setBadgeCount(badgeCount);
-      } catch (error) {
-        console.warn("[window-manager] Failed to update badge count", {
-          count,
-          badgeCount,
-          error,
-        });
-      }
+  const dockBadge = new DockBadgeState();
+  const badgeWindows = new WeakSet<BrowserWindow>();
+  let lastBadgeCount: number | undefined;
+  const setDockBadge = (count: number) => {
+    if (process.platform !== "darwin" && process.platform !== "linux") return;
+    if (count === lastBadgeCount) return;
+    try {
+      app.setBadgeCount(count);
+      lastBadgeCount = count;
+    } catch (error) {
+      console.warn("[window-manager] Failed to update badge count", { count, error });
     }
+  };
+  app.on("browser-window-focus", () => setDockBadge(dockBadge.focus()));
+  ipcMain.handle("paseo:window:setBadgeEntries", (event, input: unknown) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const entries = readBadgeEntries(input);
+    if (!win || !entries) return;
+    if (!badgeWindows.has(win)) {
+      badgeWindows.add(win);
+      const id = win.id;
+      win.once("closed", () => setDockBadge(dockBadge.remove(id)));
+    }
+    setDockBadge(dockBadge.update(win.id, entries, BrowserWindow.getFocusedWindow() !== null));
   });
 
   ipcMain.handle("paseo:window:updateWindowControls", (event, update?: unknown) => {

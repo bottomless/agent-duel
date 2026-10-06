@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  canDesktopAppSidebarShare,
   resolveDesktopAppChromeLayout,
-  resolveDesktopAppContentMinimum,
-  resolveDesktopExplorerWidth,
+  resolveDesktopPanelPresentation,
   resolveDesktopSidebarVisibility,
   resolveDesktopSidebarWidth,
 } from "@/components/desktop-sidebar-layout";
@@ -16,7 +14,6 @@ describe("desktop sidebar layout", () => {
         isCompactLayout: false,
         isMounted: true,
         isOpen: true,
-        canShare: true,
       }),
     ).toBe(false);
   });
@@ -79,52 +76,45 @@ describe("desktop sidebar layout", () => {
     expect(resolveDesktopSidebarWidth({ requestedWidth: 600, viewportWidth: 1440 })).toBe(600);
   });
 
-  it("keeps a temporarily narrow explorer render-only", () => {
-    expect(resolveDesktopExplorerWidth({ requestedWidth: 400, viewportWidth: 751 })).toBe(351);
-    expect(resolveDesktopExplorerWidth({ requestedWidth: 400, viewportWidth: 1440 })).toBe(400);
+  it("floats app navigation before a battle's panes stack", () => {
+    const workspace = {
+      isSettingsRoute: false,
+      isWorkspaceRoute: true,
+      requestedSidebarWidth: 320,
+    };
+
+    // 320 sidebar + 726 center is the last width that fits both.
+    expect(resolveDesktopPanelPresentation({ ...workspace, viewportWidth: 1046 }).agentList).toBe(
+      "inline",
+    );
+    expect(resolveDesktopPanelPresentation({ ...workspace, viewportWidth: 1045 }).agentList).toBe(
+      "overlay",
+    );
   });
 
-  it("yields app navigation when settings or Explorer need the shell width", () => {
-    const settingsMinimum = resolveDesktopAppContentMinimum({
+  it("yields app navigation to the settings split", () => {
+    const settings = {
       isSettingsRoute: true,
-      isWorkspaceExplorerOpen: false,
-      requestedExplorerWidth: 400,
-      viewportWidth: 751,
-    });
-    expect(settingsMinimum).toBe(720);
-    expect(
-      canDesktopAppSidebarShare({
-        contentMinimumWidth: settingsMinimum,
-        requestedSidebarWidth: 320,
-        viewportWidth: 751,
-      }),
-    ).toBe(false);
+      isWorkspaceRoute: false,
+      requestedSidebarWidth: 320,
+    };
 
-    const explorerMinimum = resolveDesktopAppContentMinimum({
-      isSettingsRoute: false,
-      isWorkspaceExplorerOpen: true,
-      requestedExplorerWidth: 400,
-      viewportWidth: 751,
-    });
-    expect(explorerMinimum).toBe(751);
+    expect(resolveDesktopPanelPresentation({ ...settings, viewportWidth: 751 }).agentList).toBe(
+      "overlay",
+    );
+    expect(resolveDesktopPanelPresentation({ ...settings, viewportWidth: 1040 }).agentList).toBe(
+      "inline",
+    );
+  });
+
+  it("pins app navigation on routes with no center minimum", () => {
     expect(
-      canDesktopAppSidebarShare({
-        contentMinimumWidth: explorerMinimum,
+      resolveDesktopPanelPresentation({
+        isSettingsRoute: false,
+        isWorkspaceRoute: false,
         requestedSidebarWidth: 320,
-        viewportWidth: 751,
-      }),
-    ).toBe(false);
-    expect(
-      canDesktopAppSidebarShare({
-        contentMinimumWidth: resolveDesktopAppContentMinimum({
-          isSettingsRoute: false,
-          isWorkspaceExplorerOpen: true,
-          requestedExplorerWidth: 400,
-          viewportWidth: 1120,
-        }),
-        requestedSidebarWidth: 320,
-        viewportWidth: 1120,
-      }),
-    ).toBe(true);
+        viewportWidth: 721,
+      }).agentList,
+    ).toBe("inline");
   });
 });

@@ -40,9 +40,27 @@ import { getDesktopSettingsStore } from "../settings/desktop-settings-electron.j
 import { isRunningUnderARM64Translation } from "../system/arm64-translation.js";
 import { getDesktopAppLogs } from "../diagnostics/app-logs.js";
 import { tailFile } from "../diagnostics/tail-file.js";
+import { readPackagedDeploymentConfig } from "../deployment-config.js";
 
 const DAEMON_LOG_FILENAME = "daemon.log";
 const STARTUP_POLL_INTERVAL_MS = 200;
+
+function packagedArenaEnvironment(): NodeJS.ProcessEnv {
+  if (!app.isPackaged) return {};
+  const { controlPlane, arenaBuildSha } = readPackagedDeploymentConfig();
+  return {
+    PASEO_ARENA_BACKEND_EXECUTABLE: path.join(
+      process.resourcesPath,
+      "arena",
+      process.platform === "win32" ? "agent-duel-arena.exe" : "agent-duel-arena",
+    ),
+    // A bring-your-own-key build overrides values inherited from the login shell with undefined,
+    // which spawn drops, so its daemon never requires sign-in.
+    PASEO_CONTROL_PLANE_URL: controlPlane?.url,
+    PASEO_SESSION_PUBLIC_KEY: controlPlane?.sessionPublicKey,
+    OPENCODE_ARENA_BUILD_SHA: arenaBuildSha,
+  };
+}
 const STARTUP_POLL_MAX_ATTEMPTS = 150;
 const DETACHED_STARTUP_GRACE_MS = 1200;
 
@@ -251,7 +269,14 @@ export async function resolveDesktopDaemonStatus(): Promise<DesktopDaemonStatus>
     const hasRunningLocalProcess = localDaemon === "running";
     const hasLocalProcess = hasRunningLocalProcess || localDaemon === "unresponsive";
     const desktopManaged = payload.desktopManaged === true;
-    const apiReachable = connectedDaemon === "reachable";
+    // A daemon that refuses the probe for want of a password or an account is
+    // running; only a genuinely absent one is not.
+    const apiReachable =
+      connectedDaemon === "reachable" ||
+      connectedDaemon === "auth_required" ||
+      connectedDaemon === "auth_failed" ||
+      connectedDaemon === "sign_in_required" ||
+      connectedDaemon === "accounts_unavailable";
     let status: DesktopDaemonState = "stopped";
     if (apiReachable || hasRunningLocalProcess) {
       status = "running";
@@ -398,6 +423,7 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
       PASEO_DESKTOP_MANAGED: "1",
       PASEO_CLI: getBundledCliShimPath(),
       PASEO_WEB_UI_ENABLED: "false",
+      ...packagedArenaEnvironment(),
     },
     stdio: ["ignore", "ignore", "ignore"],
   });

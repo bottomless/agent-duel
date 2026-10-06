@@ -332,11 +332,13 @@ export function useReviewCommentCount(key: string): number {
 export function useResolvedDiffMode(input: {
   scopeKey: string;
   hasUncommittedChanges: boolean;
+  cleanFallbackMode?: ReviewDraftMode;
 }): ReviewDraftMode {
   return useReviewDraftStore((state) =>
     resolveDiffMode({
       override: state.diffModeOverrides[input.scopeKey],
       hasUncommittedChanges: input.hasUncommittedChanges,
+      cleanFallbackMode: input.cleanFallbackMode,
     }),
   );
 }

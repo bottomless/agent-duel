@@ -5,12 +5,17 @@ import type { AgentManager } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import type { DownloadTokenStore } from "./file-download/token-store.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
-import type { ScheduleService } from "./schedule/service.js";
 import type { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import { asInternals, createStub } from "./test-utils/class-mocks.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
 import type { PushNotificationSender, PushPayload } from "./push/index.js";
 import type { WorkspaceAutoName } from "./workspace-auto-name.js";
+import type { ArenaActivityOwner } from "./arena/activity-service.js";
+import {
+  createPersistedWorkspaceRecord,
+  type ProjectRegistry,
+  type WorkspaceRegistry,
+} from "./workspace-registry.js";
 
 const WORKSPACE_ID = "workspace-1";
 
@@ -45,6 +50,10 @@ import { VoiceAssistantWebSocketServer } from "./websocket-server.js";
 
 interface WebSocketServerInternals {
   sessions: Map<unknown, unknown>;
+  agentStorage: AgentStorage;
+  workspaceRegistry: WorkspaceRegistry;
+  projectRegistry: ProjectRegistry;
+  listArenaActivityOwners(): Promise<ArenaActivityOwner[]>;
   broadcastAgentAttention(params: {
     agentId: string;
     reason: string;
@@ -123,7 +132,6 @@ function createServer(agentManagerOverrides?: Record<string, unknown>) {
     undefined,
     undefined,
     undefined,
-    createStub<ScheduleService>({}),
     createStub<CheckoutDiffManager>({
       subscribe: vi.fn(),
       scheduleRefreshForCwd: vi.fn(),
@@ -211,6 +219,52 @@ function readAttentionRequiredMessage(ws: ReturnType<typeof createOpenSocket>) {
 }
 
 describe("VoiceAssistantWebSocketServer notification payloads", () => {
+  it.each([null, "An old agent title"])(
+    "uses the workspace name for Arena notifications when the agent title is %s",
+    async (agentTitle) => {
+      const { server } = createServer({ listAgents: () => [] });
+      const internals = asInternals<WebSocketServerInternals>(server);
+      const workspace = createPersistedWorkspaceRecord({
+        workspaceId: WORKSPACE_ID,
+        projectId: "project-1",
+        cwd: "/tmp/notification-qa",
+        kind: "local_checkout",
+        displayName: "main",
+        title: "Notification QA",
+        createdAt: "2026-09-08T00:00:00.000Z",
+        updatedAt: "2026-09-08T00:00:00.000Z",
+      });
+      internals.workspaceRegistry = createStub<WorkspaceRegistry>({
+        list: async () => [workspace],
+      });
+      internals.projectRegistry = createStub<ProjectRegistry>({ list: async () => [] });
+      internals.agentStorage = createStub<AgentStorage>({
+        list: async () => [
+          {
+            id: "agent-1",
+            provider: "opencode",
+            workspaceId: WORKSPACE_ID,
+            cwd: workspace.cwd,
+            title: agentTitle,
+            persistence: { sessionId: "session-1" },
+          },
+        ],
+      });
+
+      expect((await internals.listArenaActivityOwners()).map((owner) => owner.title)).toEqual([
+        "Notification QA",
+      ]);
+      workspace.title = "Renamed QA";
+      expect((await internals.listArenaActivityOwners()).map((owner) => owner.title)).toEqual([
+        "Renamed QA",
+      ]);
+      workspace.title = null;
+      expect((await internals.listArenaActivityOwners()).map((owner) => owner.title)).toEqual([
+        "main",
+      ]);
+    },
+  );
+
   afterEach(() => {
     vi.clearAllMocks();
   });

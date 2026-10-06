@@ -113,7 +113,11 @@ export function selectWorkspaceDirectory(
   serverId: string | null,
   workspaceId: string | null,
 ): string | null {
-  return selectWorkspace(state, serverId, workspaceId)?.workspaceDirectory || null;
+  const workspace = selectWorkspace(state, serverId, workspaceId);
+  if (!workspace || (workspace.filesState && workspace.filesState !== "available")) {
+    return null;
+  }
+  return workspace.workspaceDirectory || null;
 }
 
 export function selectWorkspaceExists(

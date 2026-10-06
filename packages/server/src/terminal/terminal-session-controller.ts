@@ -1,10 +1,12 @@
 import type pino from "pino";
+import { workspaceAccess } from "../server/workspace-cleanup/workspace-access.js";
 import type {
   CaptureTerminalRequest,
   CreateTerminalRequest,
   KillTerminalRequest,
   ListTerminalsRequest,
   RenameTerminalRequest,
+  RehomeTerminalRequest,
   SessionInboundMessage,
   SessionOutboundMessage,
   SubscribeTerminalRequest,
@@ -105,7 +107,8 @@ type TerminalDispatchableMessage =
   | TerminalInput
   | KillTerminalRequest
   | CaptureTerminalRequest
-  | RenameTerminalRequest;
+  | RenameTerminalRequest
+  | RehomeTerminalRequest;
 
 const TERMINAL_MESSAGE_TYPES: ReadonlySet<TerminalDispatchableMessage["type"]> = new Set([
   "subscribe_terminals_request",
@@ -118,6 +121,7 @@ const TERMINAL_MESSAGE_TYPES: ReadonlySet<TerminalDispatchableMessage["type"]> =
   "kill_terminal_request",
   "capture_terminal_request",
   "terminal.rename.request",
+  "terminal.rehome.request",
 ]);
 
 export class TerminalSessionController {
@@ -207,6 +211,8 @@ export class TerminalSessionController {
         return this.handleCaptureTerminalRequest(msg);
       case "terminal.rename.request":
         return this.handleRenameTerminalRequest(msg);
+      case "terminal.rehome.request":
+        return this.handleRehomeTerminalRequest(msg);
       default:
         return undefined;
     }
@@ -225,6 +231,7 @@ export class TerminalSessionController {
 
     switch (frame.opcode) {
       case TerminalStreamOpcode.Input: {
+        workspaceAccess.assertAvailable(terminal.cwd);
         if (frame.payload.byteLength === 0) {
           return;
         }
@@ -241,7 +248,17 @@ export class TerminalSessionController {
         if (!resize) {
           return;
         }
+        const sizeBefore = terminal.getSize();
         applyTerminalSize(terminal, this.terminalSizeOwner, resize);
+        const sizeAfter = terminal.getSize();
+        if (sizeBefore.cols !== sizeAfter.cols || sizeBefore.rows !== sizeAfter.rows) {
+          // Both ends re-wrap the buffer for the new width, and they do not have to agree:
+          // the client's copy keeps whatever the shell drew for the old width, so a prompt
+          // ends up short a few characters with the shell's redraw beneath it. Repaint from
+          // the buffer the daemon just re-wrapped and both sides are looking at one thing.
+          activeStream.needsSnapshot = true;
+          void this.trySendSnapshot(activeStream);
+        }
         return;
       }
 
@@ -351,7 +368,9 @@ export class TerminalSessionController {
     // aggregated list — so the client's cache replacement doesn't drop the
     // terminals that live directly at the root.
     const matchingSubscriptions = Array.from(this.subscribedDirectories.values()).filter(
-      (subscription) => this.isPathWithinRoot(subscription.cwd, event.cwd),
+      (subscription) =>
+        subscription.workspaceId === event.workspaceId ||
+        this.isPathWithinRoot(subscription.cwd, event.cwd),
     );
     for (const subscription of matchingSubscriptions) {
       await this.emitTerminalsSnapshotForSubscription(subscription);
@@ -462,6 +481,9 @@ export class TerminalSessionController {
     }
 
     const terminals = await this.terminalManager.getTerminals(cwd, { workspaceId });
+    if (workspaceId !== undefined) {
+      return terminals;
+    }
     const workspaceRoots = await this.listTerminalWorkspaceRoots();
     if (workspaceRoots.length === 0) {
       return terminals;
@@ -606,6 +628,38 @@ export class TerminalSessionController {
       workspaceRefs.find((workspace) => this.isSamePath(workspace.cwd, ownerRoot))?.workspaceId ??
       null
     );
+  }
+
+  private async handleRehomeTerminalRequest(msg: RehomeTerminalRequest): Promise<void> {
+    const respond = (success: boolean, error: string | null): void => {
+      this.emit({
+        type: "terminal.rehome.response",
+        payload: { requestId: msg.requestId, success, error },
+      });
+    };
+
+    if (!this.terminalManager) {
+      respond(false, "Terminal manager not available");
+      return;
+    }
+    if (!this.terminalManager.getTerminal(msg.terminalId)) {
+      respond(false, "Terminal not found");
+      return;
+    }
+    try {
+      await this.terminalManager.rehomeTerminal({
+        id: msg.terminalId,
+        cwd: msg.cwd,
+        ...(msg.bannerLabel === undefined ? {} : { bannerLabel: msg.bannerLabel }),
+      });
+      respond(true, null);
+    } catch (error) {
+      this.sessionLogger.warn(
+        { err: error, terminalId: msg.terminalId, cwd: msg.cwd },
+        "Failed to rehome terminal",
+      );
+      respond(false, error instanceof Error ? error.message : "Failed to rehome terminal");
+    }
   }
 
   private async handleRenameTerminalRequest(msg: RenameTerminalRequest): Promise<void> {

@@ -7,6 +7,24 @@ import {
   syncPickerPrAttachment,
 } from "./new-workspace-picker-state";
 import type { ForgeSearchItem } from "@getpaseo/protocol/messages";
+import type { PickerItem } from "./new-workspace-picker-item";
+
+it("clears a missing branch without letting an older validation clear a newer selection", () => {
+  const item: PickerItem = {
+    kind: "branch",
+    name: "dev",
+    refName: "refs/heads/dev",
+    accessibilityLabel: "dev",
+  };
+  const state = reducePickerSelection(initialPickerSelectionState, {
+    type: "picker-selected",
+    item,
+  });
+  expect(reducePickerSelection(state, { type: "branch-missing", item })).toEqual(
+    initialPickerSelectionState,
+  );
+  expect(reducePickerSelection(state, { type: "branch-missing", item: { ...item } })).toBe(state);
+});
 
 function makePrItem(number: number, title: string, headRefName = "feature/x"): ForgeSearchItem {
   return {

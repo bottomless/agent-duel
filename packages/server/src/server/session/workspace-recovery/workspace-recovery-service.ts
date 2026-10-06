@@ -24,6 +24,7 @@ export type WorkspaceRecoveryState =
       workspaceName: string;
       action: WorkspaceRecoveryAction;
       branch: string | null;
+      source?: "cleanup" | "archive";
     }
   | {
       kind: "unavailable";
@@ -65,6 +66,7 @@ export function createWorkspaceRecoveryService(deps: {
   getProject: (projectId: string) => Promise<PersistedProjectRecord | null>;
   isDirectory: (path: string) => Promise<boolean>;
   unarchiveWorkspace: (workspace: PersistedWorkspaceRecord) => Promise<void>;
+  restoreCleanedWorkspace?: (workspaceId: string) => Promise<void>;
 }): WorkspaceRecoveryService {
   async function resolveRecovery(
     workspaceId: string,
@@ -76,6 +78,21 @@ export function createWorkspaceRecoveryService(deps: {
         workspaceId,
         reason: "workspace_not_found",
         message: "This workspace is no longer known to the host.",
+      };
+    }
+    if (workspace.cleanup) {
+      return {
+        kind: "restore",
+        workspace,
+        sourceRepoRoot: workspace.mainRepoRoot ?? "",
+        state: {
+          kind: "recoverable",
+          workspaceId,
+          workspaceName: resolveWorkspaceDisplayName(workspace),
+          action: "restore",
+          branch: workspace.branch,
+          source: "cleanup",
+        },
       };
     }
     if (!workspace.archivedAt) {
@@ -146,6 +163,17 @@ export function createWorkspaceRecoveryService(deps: {
       throw new Error(resolved.message);
     }
 
+    if (resolved.workspace.cleanup) {
+      if (!deps.restoreCleanedWorkspace)
+        throw new Error("Workspace cleanup recovery is unavailable");
+      await deps.restoreCleanedWorkspace(workspaceId);
+      if (resolved.workspace.archivedAt) {
+        const restored = await deps.getWorkspace(workspaceId);
+        if (!restored) throw new Error("The restored workspace is no longer registered");
+        await deps.unarchiveWorkspace(restored);
+      }
+      return { workspaceId, action: "restore" };
+    }
     if (resolved.kind === "restore") {
       await recreateArchivedWorktree(resolved.workspace, resolved.sourceRepoRoot);
     }

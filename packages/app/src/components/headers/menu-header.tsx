@@ -7,6 +7,7 @@ import { ScreenHeader } from "./screen-header";
 import { ScreenTitle } from "./screen-title";
 import { HeaderToggleButton, headerIconSlotStyle } from "./header-toggle-button";
 import { selectIsAgentListOpen, usePanelStore } from "@/stores/panel-store";
+import { useDesktopPanelPresentation } from "@/components/use-desktop-panel-presentation";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { getShortcutOs } from "@/utils/shortcut-platform";
 import { useHasWindowChromeObstruction, useOwnsWindowChromeCorner } from "@/utils/desktop-window";
@@ -57,7 +58,9 @@ function SidebarMenuToggleButton({
 }) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
-  const isOpen = usePanelStore((state) => selectIsAgentListOpen(state, { isCompact: isMobile }));
+  // The icon follows the form factor; the state follows where the panel is.
+  const floats = useDesktopPanelPresentation().agentList === "overlay";
+  const isOpen = usePanelStore((state) => selectIsAgentListOpen(state, { isCompact: floats }));
   const toggleAgentListForLayout = usePanelStore((state) => state.toggleAgentListForLayout);
   const toggleShortcutKeys = useMemo(
     () => (getShortcutOs() === "mac" ? ["mod", "B"] : ["mod", "."]),
@@ -65,8 +68,8 @@ function SidebarMenuToggleButton({
   );
 
   const handlePress = useCallback(() => {
-    toggleAgentListForLayout({ isCompact: isMobile });
-  }, [toggleAgentListForLayout, isMobile]);
+    toggleAgentListForLayout({ isCompact: floats });
+  }, [toggleAgentListForLayout, floats]);
 
   const accessibilityState = useMemo(() => ({ expanded: isOpen }), [isOpen]);
 

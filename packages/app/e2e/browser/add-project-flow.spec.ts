@@ -297,13 +297,56 @@ test.describe("Add Project command-center flow", () => {
     const title = addProjectFlow(page).getByTestId("add-project-flow-title");
     await expect(title.getByText("Choose destination", { exact: true })).toBeVisible();
     await expect(title.getByText("localhost", { exact: true })).toBeVisible();
-    await expect(title).not.toContainText("Where should Paseo create");
+    await expect(title).not.toContainText("Where should Agent Duel create");
     await addProjectFlowBack(page).click();
     await expect(addProjectFlowInput(page)).toHaveValue(remote);
   });
 
-  test("New directory validates the name, restores parent and name state, then creates a Project", async ({
+  test("New directory offers home and its folders before searching with no projects", async ({
     page,
+    e2eWorkerClient,
+  }) => {
+    const home = await e2eWorkerClient.getDirectorySuggestions({
+      query: "~/",
+      includeDirectories: true,
+      includeFiles: false,
+      limit: 30,
+    });
+    expect(home.error).toBeNull();
+
+    await gotoAppShell(page);
+    await expect(page.getByText("No projects yet", { exact: true })).toBeVisible();
+    await openAddProjectFlow(page);
+    await chooseAddProjectMethod(page, "new-directory");
+
+    const homeRow = page.getByTestId("add-project-flow-path-~%2F");
+    await expect(addProjectFlowInput(page)).toHaveValue("");
+    await expect(homeRow).toBeVisible();
+    const rows = addProjectFlow(page).locator('[data-testid^="add-project-flow-path-"]');
+    await expect(rows).toHaveCount(home.directories.length + 1);
+    for (const directory of home.directories) {
+      await expect(
+        page.getByTestId(`add-project-flow-path-${encodeURIComponent(directory)}`),
+      ).toBeVisible();
+    }
+
+    await homeRow.click();
+    await expectAddProjectPage(page, "new-directory-name");
+    await addProjectFlowInput(page).fill("new-project");
+    await expect(addProjectFlow(page)).toContainText("~/new-project");
+    await addProjectFlowBack(page).click();
+
+    await addProjectFlowInput(page).fill("/tmp");
+    await expect(page.getByTestId("add-project-flow-path-%2Ftmp")).toBeVisible();
+    await expect(homeRow).toHaveCount(0);
+    await addProjectFlowInput(page).clear();
+    await expect(homeRow).toBeVisible();
+    await expect(rows).toHaveCount(home.directories.length + 1);
+  });
+
+  test("New directory validates the name, restores state, then creates its first Git worktree", async ({
+    page,
+    e2eWorkerClient,
   }) => {
     const parentDirectory = await mkdtemp(path.join(tmpdir(), "paseo-e2e-new-project-"));
     const directoryName = `created-${randomUUID().slice(0, 8)}`;
@@ -344,6 +387,16 @@ test.describe("Add Project command-center flow", () => {
       });
       await expectProjectHasNoWorkspaces(projectId);
       await expectProjectDirectory(directoryPath);
+      await page.getByRole("button", { name: "Workspace isolation", exact: true }).click();
+      await page.getByTestId("workspace-create-isolation-worktree").click();
+      await page.getByRole("button", { name: "Create", exact: true }).click();
+      await expect(page).toHaveURL(/\/workspace\/wks_/u);
+      const workspaces = await e2eWorkerClient.fetchWorkspaces({ filter: { projectId } });
+      expect(workspaces.entries).toHaveLength(1);
+      const workspace = workspaces.entries[0];
+      expect(workspace.workspaceDirectory).not.toBe(directoryPath);
+      expect((await stat(path.join(workspace.workspaceDirectory, ".git"))).isFile()).toBe(true);
+      await expect(page.getByText(/not a git repository/u)).toHaveCount(0);
     } finally {
       await removeCreatedProject(directoryPath, projectId).catch(() => undefined);
       await rm(parentDirectory, { recursive: true, force: true });

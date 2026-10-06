@@ -100,6 +100,14 @@ interface ReconnectRepairPolicy {
 
 const RECONNECT_REPAIR_POLICIES: ReconnectRepairPolicy[] = [
   {
+    domain: "arena",
+    invalidate: ({ queryClient, serverId }) => {
+      void queryClient.invalidateQueries({
+        predicate: (query) => isArenaQueryForServer(query.queryKey, serverId),
+      });
+    },
+  },
+  {
     domain: "providersSnapshot",
     invalidate: ({ queryClient, serverId }) => {
       void queryClient.invalidateQueries({ queryKey: providersSnapshotQueryRoot(serverId) });
@@ -773,6 +781,10 @@ function unsubscribeCheckoutDiff(client: ServerDataPushClient, subscriptionId: s
 
 function isQueryForServer(queryKey: QueryKey, kind: string, serverId: string): boolean {
   return queryKey.length >= 2 && queryKey[0] === kind && queryKey[1] === serverId;
+}
+
+function isArenaQueryForServer(queryKey: QueryKey, serverId: string): boolean {
+  return queryKey.length >= 3 && queryKey[0] === "arena" && queryKey[2] === serverId;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

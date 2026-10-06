@@ -17,11 +17,12 @@ function visibleTestId(page: Page, testId: string) {
   return page.getByTestId(testId).filter({ visible: true });
 }
 
+/**
+ * Wait for the workspace screen's chrome. The main pane has no tab row, so the
+ * header's side panel toggle is the marker that the workspace has rendered.
+ */
 export async function waitForWorkspaceTabsVisible(page: Page): Promise<void> {
-  await expect(visibleTestId(page, "workspace-tabs-row").first()).toBeVisible({
-    timeout: 30_000,
-  });
-  await expect(visibleTestId(page, "workspace-new-agent-tab-inline").first()).toBeVisible({
+  await expect(visibleTestId(page, "workspace-side-panel-toggle").first()).toBeVisible({
     timeout: 30_000,
   });
 }
@@ -57,7 +58,7 @@ export async function expectOnlyWorkspaceAgentTabsVisible(
 }
 
 export async function ensureWorkspaceAgentPaneVisible(page: Page): Promise<void> {
-  const toggle = page.getByTestId("workspace-explorer-toggle").first();
+  const toggle = page.getByTestId("workspace-side-panel-toggle").first();
   if (!(await toggle.isVisible().catch(() => false))) {
     return;
   }

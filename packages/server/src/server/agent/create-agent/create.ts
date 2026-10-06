@@ -12,7 +12,12 @@ import type {
 } from "../../worktree-session.js";
 import type { AgentAttachment, FirstAgentContext, GitSetupOptions } from "../../messages.js";
 import type { AgentManager, CreateAgentOptions, ManagedAgent } from "../agent-manager.js";
-import type { AgentPromptInput, AgentRunOptions, AgentSessionConfig } from "../agent-sdk-types.js";
+import type {
+  AgentPersistenceHandle,
+  AgentPromptInput,
+  AgentRunOptions,
+  AgentSessionConfig,
+} from "../agent-sdk-types.js";
 import type { AgentStorage } from "../agent-storage.js";
 import type { AgentOwner } from "../agent-owner.js";
 import type { ProviderSnapshotManager } from "../provider-snapshot-manager.js";
@@ -66,6 +71,11 @@ export interface CreateAgentFromSessionInput {
   git?: GitSetupOptions;
   labels: Record<string, string>;
   env?: Record<string, string>;
+  forkFrom?: {
+    source: AgentPersistenceHandle;
+    sourceCwd: string;
+    throughMessageId?: string;
+  };
   provisionalTitle: string | null;
   firstAgentContext: FirstAgentContext;
   buildSessionConfig: (
@@ -246,11 +256,8 @@ async function resolveSessionCreateAgent(
   // This runs after buildSessionConfig, which may already have created a
   // worktree and/or workspace record — cwd (required to resolve modes) is
   // only known once that step completes. If validation throws, any
-  // worktree/workspace buildSessionConfig created is the caller's
-  // responsibility to clean up (session.ts's handleCreateAgentRequest does
-  // this for the worktree path via cleanupCreatedWorktreeAfterFailedAgentCreate;
-  // this is a pre-existing gap for directory-only workspace creates, not
-  // introduced by this validation).
+  // worktree/workspace created for the request is the caller's responsibility
+  // to clean up. The session handler preserves workspaces that own an agent.
   const resolvedCreateConfig = await dependencies.providerSnapshotManager.resolveCreateConfig({
     cwd: builtSessionConfig.cwd,
     provider: builtSessionConfig.provider,
@@ -287,6 +294,7 @@ async function resolveSessionCreateAgent(
       // agent belongs to that workspace, not the source one. createdWorkspaceId
       // is the freshly created worktree's workspace.
       workspaceId: requireResolvedWorkspaceId(workspaceId),
+      ...(input.forkFrom ? { forkFrom: input.forkFrom } : {}),
     },
     prompt: hasPromptContent ? prompt : undefined,
     runOptions,

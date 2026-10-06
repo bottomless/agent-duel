@@ -6,6 +6,7 @@ import type { ComboboxOption } from "@/components/ui/combobox";
 import type { ToastApi } from "@/components/toast-host";
 import { invalidateCheckoutGitQueriesForClient } from "@/git/query-keys";
 import { createBranchSwitcherOperations } from "@/git/branch-switcher-operations";
+import { isArenaInternalBranch } from "@/arena/internal-branches";
 import { confirmDialog } from "@/utils/confirm-dialog";
 
 interface UseBranchSwitcherInput {
@@ -71,7 +72,9 @@ export function useBranchSwitcher({
 
   const branchOptions = useMemo<ComboboxOption[]>(() => {
     const branches = branchSuggestionsQuery.data ?? [];
-    return branches.map((name) => ({ id: name, label: name }));
+    return branches
+      .filter((name) => !isArenaInternalBranch(name))
+      .map((name) => ({ id: name, label: name }));
   }, [branchSuggestionsQuery.data]);
 
   const stashListQueryKey = useMemo(

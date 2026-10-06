@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { ArenaSnapshotSchema } from "@getpaseo/protocol/arena/rpc-schemas";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import {
@@ -23,6 +24,7 @@ import type {
   AgentClient,
   AgentCreateSessionOptions,
   AgentFeature,
+  AgentForkSessionInput,
   AgentLaunchContext,
   AgentPromptInput,
   AgentProvider,
@@ -767,6 +769,72 @@ function fakeCodexEmitting(args: FakeCodexEmitterArgs): AgentClient {
 }
 
 const logger = createTestLogger();
+
+test("creates a provider-native fork instead of an empty session", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-native-fork-"));
+  const forkInputs: AgentForkSessionInput[] = [];
+  const client = new (class extends TestAgentClient {
+    override async createSession(): Promise<AgentSession> {
+      throw new Error("createSession should not be called for a native fork");
+    }
+
+    async forkSession(input: AgentForkSessionInput): Promise<AgentSession> {
+      forkInputs.push(input);
+      return new (class extends TestAgentSession {
+        override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+          yield {
+            type: "timeline",
+            provider: "codex",
+            item: {
+              type: "assistant_message",
+              text: "Inherited answer",
+              messageId: "message-assistant-1",
+            },
+          };
+        }
+      })(input.config);
+    }
+  })();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: new AgentStorage(join(workdir, "agents"), logger),
+    logger,
+    idFactory: () => "00000000-0000-4000-8000-000000000097",
+  });
+  const source = {
+    provider: "codex" as const,
+    sessionId: "session-source",
+    metadata: { cwd: workdir },
+  };
+
+  const created = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+    forkFrom: {
+      source,
+      sourceCwd: workdir,
+      throughMessageId: "message-assistant-1",
+    },
+  });
+
+  expect(forkInputs).toEqual([
+    expect.objectContaining({
+      source,
+      sourceCwd: workdir,
+      throughMessageId: "message-assistant-1",
+      config: expect.objectContaining({ provider: "codex", cwd: workdir }),
+    }),
+  ]);
+  expect(manager.getTimeline(created.id)).toEqual([
+    {
+      type: "assistant_message",
+      text: "Inherited answer",
+      messageId: "message-assistant-1",
+    },
+  ]);
+
+  await manager.closeAgent(created.id);
+  rmSync(workdir, { recursive: true, force: true });
+});
 
 test("does not register a session that finishes starting after shutdown begins", async () => {
   const client = new HeldAgentCreationClient();
@@ -8879,6 +8947,73 @@ test("authoritative timeline records a daemon-handled submitted prompt before it
   }
 });
 
+test("authoritative timeline keeps a submitted prompt's images", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-submitted-images-"));
+  const storagePath = join(workdir, "agents");
+  const storage = new AgentStorage(storagePath, logger);
+  const commandCompleted = deferred<void>();
+
+  class ImagePromptSession extends TestAgentSession {
+    override tryHandleOutOfBand(prompt: AgentPromptInput) {
+      if (!Array.isArray(prompt)) return null;
+      return {
+        run: async ({ emit }: { emit: (event: AgentStreamEvent) => void }) => {
+          emit({
+            type: "timeline",
+            provider: this.provider,
+            item: { type: "assistant_message", text: "Orange" },
+          });
+          commandCompleted.resolve();
+        },
+      };
+    }
+  }
+
+  class ImagePromptClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new ImagePromptSession(config);
+    }
+  }
+
+  const manager = new AgentManager({
+    clients: { codex: new ImagePromptClient() },
+    registry: storage,
+    logger,
+    idFactory: () => "00000000-0000-4000-8000-000000000404",
+  });
+
+  try {
+    const snapshot = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+      workspaceId: undefined,
+    });
+
+    await startAgentRun(
+      manager,
+      snapshot.id,
+      [
+        { type: "text", text: "What color is this?" },
+        { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+      ],
+      logger,
+      { runOptions: { clientMessageId: "msg-client-image" } },
+    );
+    await commandCompleted.promise;
+
+    // A reload reads the message back from here, so it must still carry the image.
+    const timeline = manager.fetchTimeline(snapshot.id, { direction: "tail", limit: 20 }).rows;
+    expect(timeline[0]?.item).toEqual({
+      type: "user_message",
+      text: "What color is this?",
+      images: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      clientMessageId: "msg-client-image",
+    });
+  } finally {
+    await manager.flush().catch(() => undefined);
+    await storage.flush().catch(() => undefined);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("replaceAgentRun succeeds when foreground turn terminal event is never delivered", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-stale-fg-"));
   const storagePath = join(workdir, "agents");
@@ -9315,4 +9450,181 @@ test("onWorkspaceStateMayHaveChanged is not called for running shell tool calls"
   await manager.runAgent(snapshot.id, { text: "merge it" });
 
   expect(onWorkspaceStateMayHaveChanged).not.toHaveBeenCalled();
+});
+
+test.each([
+  "append",
+  "same",
+  "bounded",
+  "children",
+  "changed",
+  "shorter",
+  "timestamp",
+  "concurrent",
+  "failed",
+] as const)("arena winner hydration preserves only an unchanged prefix: %s", async (mode) => {
+  const workdir = mkdtempSync(join(tmpdir(), "arena-winner-history-"));
+  const old: Extract<AgentStreamEvent, { type: "timeline" }>[] = Array.from(
+    { length: 40 },
+    (_, index) => ({
+      type: "timeline",
+      provider: "codex",
+      timestamp: new Date(1700000000000 + index).toISOString(),
+      item: { type: "assistant_message", messageId: `message-${index}`, text: `row ${index}` },
+    }),
+  );
+  if (mode === "bounded") {
+    old[0].item = {
+      type: "tool_call",
+      callId: "large-tool",
+      name: "bash",
+      status: "completed",
+      detail: { type: "shell", command: "cat output", output: "x".repeat(90_000) },
+      error: null,
+    };
+  }
+  let history: AgentStreamEvent[] =
+    mode === "children"
+      ? [
+          ...old,
+          {
+            type: "provider_subagent",
+            provider: "codex",
+            event: { type: "upsert", id: "old-child", status: "completed" },
+          },
+        ]
+      : old;
+  let beforeRead: (() => Promise<void>) | undefined;
+  class WinnerSession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      await beforeRead?.();
+      yield* history;
+    }
+  }
+  class WinnerClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new WinnerSession(config);
+    }
+  }
+  const manager = new AgentManager({ clients: { codex: new WinnerClient() }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const events: AgentManagerEvent[] = [];
+  const unsubscribe = manager.subscribe((event) => events.push(event), {
+    agentId: agent.id,
+    replayState: false,
+  });
+  try {
+    await manager.hydrateTimelineFromProvider(agent.id, { force: true, broadcast: true });
+    const before = manager.fetchTimeline(agent.id, { limit: 0 });
+    const extra: Extract<AgentStreamEvent, { type: "timeline" }> = {
+      type: "timeline",
+      provider: "codex",
+      timestamp: new Date(1700000000100).toISOString(),
+      item: { type: "assistant_message", messageId: "winner", text: "winner answer" },
+    };
+    const next = structuredClone(old);
+    if (mode !== "same") next.push(extra);
+    if (mode === "changed") next[0].item = { type: "assistant_message", text: "rewritten" };
+    if (mode === "shorter") next.splice(20);
+    if (mode === "timestamp") next[0].timestamp = new Date(1700000000200).toISOString();
+    if (mode === "concurrent") {
+      beforeRead = () =>
+        manager
+          .appendTimelineItem(agent.id, {
+            type: "assistant_message",
+            messageId: "concurrent",
+            text: "arrived while reading",
+          })
+          .then(() => undefined);
+    }
+    if (mode === "failed")
+      beforeRead = async () => {
+        throw new Error("history unavailable");
+      };
+    history =
+      mode === "children"
+        ? [
+            ...next,
+            {
+              type: "provider_subagent",
+              provider: "codex",
+              event: { type: "upsert", id: "new-child", status: "completed" },
+            },
+          ]
+        : next;
+    events.length = 0;
+    const snapshot = ArenaSnapshotSchema.parse({
+      chat: {
+        id: "chat",
+        status: "ready",
+        canonicalSessionID: "canonical",
+        canonicalSHA: "sha",
+        trunk: { worktreeName: "trunk" },
+      },
+      environment: {},
+      runs: [],
+      events: [],
+      history: [
+        {
+          id: "turn",
+          index: 1,
+          state: "complete",
+          appliedSide: "a",
+          createdAt: "date",
+          updatedAt: "date",
+        },
+      ],
+    });
+    if (mode === "failed") {
+      await expect(manager.hydrateArenaWinner(agent.id, snapshot)).rejects.toThrow(
+        "history unavailable",
+      );
+      expect(manager.fetchTimeline(agent.id, { limit: 0 })).toEqual(before);
+      expect(events).toEqual([]);
+      return;
+    }
+    await manager.hydrateArenaWinner(agent.id, snapshot);
+    const after = manager.fetchTimeline(agent.id, { limit: 0 });
+    const expected = next.map((event) => event.item);
+    if (mode === "bounded") {
+      expected[0] = {
+        type: "tool_call",
+        callId: "large-tool",
+        name: "bash",
+        status: "completed",
+        detail: { type: "shell", command: "cat output", output: "x".repeat(64 * 1024) },
+        error: null,
+      };
+    }
+    expect(after.rows.map((row) => row.item)).toEqual(expected);
+    if (mode === "children") {
+      expect(manager.listProviderSubagents(agent.id).map((child) => child.id)).toEqual([
+        "new-child",
+      ]);
+      expect(events).toContainEqual({
+        type: "provider_subagent",
+        event: { type: "remove", parentAgentId: agent.id, subagentId: "old-child" },
+      });
+    }
+    const streamed = events.filter((event) => event.type === "agent_stream");
+    if (mode === "append" || mode === "same" || mode === "bounded" || mode === "children") {
+      expect(after.epoch).toBe(before.epoch);
+      expect(after.rows.slice(0, old.length)).toEqual(before.rows);
+      expect(streamed).toHaveLength(mode === "same" ? 0 : 1);
+      if (mode === "append")
+        expect(streamed[0]).toMatchObject({ seq: 41, epoch: before.epoch, event: extra });
+    } else {
+      expect(after.epoch).not.toBe(before.epoch);
+      expect(streamed.filter((event) => event.epoch === after.epoch)).toHaveLength(next.length);
+    }
+    events.length = 0;
+    await manager.hydrateArenaWinner(agent.id, snapshot);
+    expect(events).toEqual([]);
+  } finally {
+    unsubscribe();
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });

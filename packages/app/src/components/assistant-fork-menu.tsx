@@ -10,9 +10,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { ForkWorkspaceTarget } from "@/hooks/fork-workspace";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 
-export type AssistantForkTarget = "tab" | "workspace";
+export type AssistantForkTarget = ForkWorkspaceTarget;
 
 interface AssistantForkMenuProps {
   onFork: (target: AssistantForkTarget) => Promise<void> | void;
@@ -35,10 +36,10 @@ export const AssistantForkMenu = memo(function AssistantForkMenu({
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
-      if (!next && pendingTarget !== null) return;
+      if (!next && isLocked) return;
       setIsOpen(next);
     },
-    [pendingTarget],
+    [isLocked],
   );
 
   const handleSelect = useCallback(
@@ -100,23 +101,23 @@ export const AssistantForkMenu = memo(function AssistantForkMenu({
       <DropdownMenuContent align="start" minWidth={220} side="bottom" testID={`${testID}-content`}>
         <DropdownMenuItem
           closeOnSelect={false}
-          disabled={isLocked && pendingTarget !== "tab"}
+          disabled={isLocked && pendingTarget !== "current_worktree"}
           leading={forkIcon}
-          onSelect={handleSelect("tab")}
-          status={pendingTarget === "tab" ? "pending" : undefined}
-          testID={`${testID}-new-tab`}
+          onSelect={handleSelect("current_worktree")}
+          status={pendingTarget === "current_worktree" ? "pending" : undefined}
+          testID={`${testID}-current-worktree`}
         >
-          {t("message.actions.forkInNewTab")}
+          {t("message.actions.forkInThisWorktree")}
         </DropdownMenuItem>
         <DropdownMenuItem
           closeOnSelect={false}
-          disabled={isLocked && pendingTarget !== "workspace"}
+          disabled={isLocked && pendingTarget !== "new_worktree"}
           leading={forkIcon}
-          onSelect={handleSelect("workspace")}
-          status={pendingTarget === "workspace" ? "pending" : undefined}
-          testID={`${testID}-new-workspace`}
+          onSelect={handleSelect("new_worktree")}
+          status={pendingTarget === "new_worktree" ? "pending" : undefined}
+          testID={`${testID}-new-worktree`}
         >
-          {t("message.actions.forkInNewWorkspace")}
+          {t("message.actions.forkInNewWorktree")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

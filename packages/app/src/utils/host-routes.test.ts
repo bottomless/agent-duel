@@ -8,7 +8,6 @@ import {
   buildOpenProjectRoute,
   resolveKnownHostRoute,
   buildSessionsRoute,
-  buildSettingsAddHostRoute,
   buildProjectSettingsRoute,
   buildProjectsSettingsRoute,
   decodeFilePathFromPathSegment,
@@ -185,14 +184,6 @@ describe("workspace route parsing", () => {
 });
 
 describe("projects settings routes", () => {
-  it("buildSettingsAddHostRoute opens settings with the add-host flag", () => {
-    expect(buildSettingsAddHostRoute()).toBe("/settings/general?addHost=1");
-  });
-
-  it("buildSettingsAddHostRoute accepts a repeatable intent id", () => {
-    expect(buildSettingsAddHostRoute("retry 1")).toBe("/settings/general?addHost=retry%201");
-  });
-
   it("buildProjectsSettingsRoute scopes the list to a host", () => {
     expect(buildProjectsSettingsRoute("host a")).toBe("/settings/hosts/host%20a/projects");
   });
@@ -245,26 +236,31 @@ describe("global routes", () => {
 
 describe("host settings section slugs", () => {
   it("keeps current host settings sections", () => {
-    expect(normalizeHostSectionSlug("connections")).toBe("connections");
-    expect(normalizeHostSectionSlug("pair-device")).toBe("pair-device");
-    expect(normalizeHostSectionSlug("agents")).toBe("agents");
-    expect(normalizeHostSectionSlug("metadata")).toBe("metadata");
-    expect(normalizeHostSectionSlug("workspaces")).toBe("workspaces");
     expect(normalizeHostSectionSlug("projects")).toBe("projects");
-    expect(normalizeHostSectionSlug("providers")).toBe("providers");
-    expect(normalizeHostSectionSlug("usage")).toBe("usage");
-    expect(normalizeHostSectionSlug("host")).toBe("host");
   });
 
-  it("maps old host settings sections to their new names", () => {
-    expect(normalizeHostSectionSlug("orchestration")).toBe("agents");
-    expect(normalizeHostSectionSlug("daemon")).toBe("host");
+  it("drops Paseo host sections that Agent Duel does not ship", () => {
+    expect(normalizeHostSectionSlug("agents")).toBeNull();
+    expect(normalizeHostSectionSlug("orchestration")).toBeNull();
+    expect(normalizeHostSectionSlug("usage")).toBeNull();
+    expect(normalizeHostSectionSlug("terminals")).toBeNull();
+    expect(normalizeHostSectionSlug("metadata")).toBeNull();
+    expect(normalizeHostSectionSlug("providers")).toBeNull();
+    expect(normalizeHostSectionSlug("workspaces")).toBeNull();
   });
 });
 
 describe("settings section slugs", () => {
   it("includes desktop notification settings", () => {
     expect(isSettingsSectionSlug("notifications")).toBe(true);
+  });
+
+  it("drops Paseo app sections that Agent Duel does not ship", () => {
+    expect(isSettingsSectionSlug("integrations")).toBe(false);
+    expect(isSettingsSectionSlug("permissions")).toBe(false);
+    expect(isSettingsSectionSlug("editor")).toBe(false);
+    expect(isSettingsSectionSlug("diagnostics")).toBe(false);
+    expect(isSettingsSectionSlug("about")).toBe(false);
   });
 
   it("no longer treats daemon as a valid app-level settings section", () => {

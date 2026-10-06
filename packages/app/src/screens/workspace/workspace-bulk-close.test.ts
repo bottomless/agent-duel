@@ -24,6 +24,15 @@ function makeTerminalTab(id: string): WorkspaceTabDescriptor {
   };
 }
 
+function makeArenaTerminalTab(instanceId: string): WorkspaceTabDescriptor {
+  return {
+    key: `arena_terminal_${instanceId}`,
+    tabId: `arena_terminal_${instanceId}`,
+    kind: "arena_terminal",
+    target: { kind: "arena_terminal", agentId: "agent-1", side: "a", instanceId },
+  };
+}
+
 function makeFileTab(path: string): WorkspaceTabDescriptor {
   return {
     key: `file_${path}`,
@@ -34,6 +43,26 @@ function makeFileTab(path: string): WorkspaceTabDescriptor {
 }
 
 describe("workspace bulk close helpers", () => {
+  it("counts a contestant's shell as a terminal so the bulk close stops it", () => {
+    const groups = classifyBulkClosableTabs(
+      [makeArenaTerminalTab("seat-1")],
+      () => "archive",
+      (instanceId) => (instanceId === "seat-1" ? "terminal-9" : null),
+    );
+
+    expect(groups.terminalTabs).toEqual([
+      { tabId: "arena_terminal_seat-1", terminalId: "terminal-9" },
+    ]);
+    expect(groups.otherTabs).toEqual([]);
+  });
+
+  it("closes a contestant tab whose shell is already gone as a plain tab", () => {
+    const groups = classifyBulkClosableTabs([makeArenaTerminalTab("seat-1")]);
+
+    expect(groups.terminalTabs).toEqual([]);
+    expect(groups.otherTabs.map((tab) => tab.tabId)).toEqual(["arena_terminal_seat-1"]);
+  });
+
   it("classifies agent, terminal, and passive tabs for shared bulk close handling", () => {
     const groups = classifyBulkClosableTabs([
       makeAgentTab("a1"),

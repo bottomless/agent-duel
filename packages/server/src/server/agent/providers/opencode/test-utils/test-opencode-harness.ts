@@ -14,10 +14,18 @@ export class TestOpenCodeHarness implements OpenCodeServerManagerLike {
     url?: string;
     releaseCount: number;
   }> = [];
-  readonly clientCreations: Array<{ baseUrl: string; directory: string }> = [];
+  readonly clientCreations: Array<{
+    baseUrl: string;
+    directory: string;
+    controlToken?: string;
+  }> = [];
   private readonly clients: TestOpenCodeClient[] = [];
 
-  server = { port: 1234, url: "http://127.0.0.1:1234" };
+  server = {
+    port: 1234,
+    url: "http://127.0.0.1:1234",
+    controlToken: "test-opencode-control-token",
+  };
 
   enqueueClient(client: TestOpenCodeClient): void {
     this.clients.push(client);
@@ -59,7 +67,11 @@ export class TestOpenCodeHarness implements OpenCodeServerManagerLike {
     };
   }
 
-  readonly createClient = (options: { baseUrl: string; directory: string }): OpencodeClient => {
+  readonly createClient = (options: {
+    baseUrl: string;
+    directory: string;
+    controlToken?: string;
+  }): OpencodeClient => {
     this.clientCreations.push(options);
     const client = this.clients.shift() ?? new TestOpenCodeClient();
     return client.asSdkClient();
@@ -85,6 +97,7 @@ export class TestOpenCodeClient {
     sessionCommand: [] as unknown[],
     sessionCreate: [] as unknown[],
     sessionDelete: [] as unknown[],
+    sessionFork: [] as unknown[],
     sessionChildren: [] as unknown[],
     sessionGet: [] as unknown[],
     sessionMessages: [] as unknown[],
@@ -115,12 +128,14 @@ export class TestOpenCodeClient {
   sessionCommandResponse: OpenCodeResponse = {};
   sessionCreateResponse: OpenCodeResponse = { data: { id: "session-1" } };
   sessionDeleteResponse: OpenCodeResponse = {};
+  sessionForkResponse: OpenCodeResponse = { data: { id: "session-fork" } };
   sessionChildrenResponses: OpenCodeResponse[] = [];
   sessionChildrenImplementation: ((parameters: unknown) => Promise<OpenCodeResponse>) | null = null;
   sessionGetResponse: OpenCodeResponse = {
     data: { id: "session-1", directory: "/workspace/repo", title: null },
   };
   sessionMessagesResponse: OpenCodeResponse = { data: [] };
+  sessionMessagesImplementation: ((parameters: unknown) => Promise<OpenCodeResponse>) | null = null;
   sessionPromptAsyncEvents: unknown[] = [idleEvent()];
   sessionPromptAsyncResponse: OpenCodeResponse = {};
   sessionStatusResponse: OpenCodeResponse = { data: {} };
@@ -237,6 +252,10 @@ export class TestOpenCodeClient {
           this.calls.sessionDelete.push(parameters);
           return this.sessionDeleteResponse;
         },
+        fork: async (parameters: unknown) => {
+          this.calls.sessionFork.push(parameters);
+          return this.sessionForkResponse;
+        },
         children: async (parameters: unknown) => {
           this.calls.sessionChildren.push(parameters);
           if (this.sessionChildrenImplementation) {
@@ -250,7 +269,9 @@ export class TestOpenCodeClient {
         },
         messages: async (parameters: unknown) => {
           this.calls.sessionMessages.push(parameters);
-          return this.sessionMessagesResponse;
+          return this.sessionMessagesImplementation
+            ? await this.sessionMessagesImplementation(parameters)
+            : this.sessionMessagesResponse;
         },
         promptAsync: async (parameters: unknown) => {
           this.calls.sessionPromptAsync.push(parameters);

@@ -38,7 +38,7 @@ export async function expectDefaultWorkspaceActions(panel: Locator): Promise<voi
   await expect(panel.getByText("Workspace actions", { exact: true })).toBeVisible({
     timeout: 30_000,
   });
-  await expect(action(panel, "New agent")).toBeVisible();
+  await expect(action(panel, "New agent")).toHaveCount(0);
   await expect(action(panel, "Commit")).toBeVisible();
   await expect(action(panel, "Push")).toHaveCount(0);
   await expect(action(panel, "New terminal")).toHaveCount(0);

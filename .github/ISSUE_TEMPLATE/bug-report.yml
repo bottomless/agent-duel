@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Issues are only for bugs. Product discussions go in [GitHub Discussions](https://github.com/getpaseo/paseo/discussions) or `#product` in [Discord](https://discord.gg/jz8T2uahpH) — feature requests opened as issues get closed automatically.
+        Use this form for bugs. For feature requests, use the Feature request form; for questions, open a blank issue.
 
         Before opening, please:
 
@@ -31,7 +31,7 @@ body:
       description: The shortest sequence that triggers the bug. If you can't reproduce on demand, say so.
       placeholder: |
         1. Open the desktop app
-        2. Pair a daemon
+        2. Open a local workspace
         3. Click X
         4. ...
     validations:
@@ -43,22 +43,32 @@ body:
       label: Where did this happen
       description: The surface you saw the bug on. Pick the closest match.
       options:
-        - iOS app
-        - Android app
-        - Web (browser)
-        - Desktop (Electron)
+        - Desktop macOS (Electron)
+        - Browser QA harness
         - CLI
-        - Daemon
+        - Local daemon or Arena runtime
+        - Sign-in (official download)
         - Other
     validations:
       required: true
 
   - type: input
-    id: paseo-version
+    id: agent-duel-version
     attributes:
-      label: Paseo version
-      description: Settings → About in the app, or `paseo --version` from the CLI.
-      placeholder: "0.1.71"
+      label: Agent Duel version
+      description: Settings → About in the app, or the release/build identifier used for testing.
+      placeholder: "from Settings → About"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: How you run Agent Duel
+      options:
+        - Official download (signed in)
+        - Source build with your own OpenRouter key (--byok)
+        - Other
     validations:
       required: true
 
@@ -66,8 +76,8 @@ body:
     id: os-version
     attributes:
       label: OS version
-      description: Only relevant for desktop, CLI, or daemon issues. Skip for mobile or web.
-      placeholder: "macOS 15.2, Windows 11, Ubuntu 24.04"
+      description: Include the macOS version for desktop issues and the host OS for daemon or CLI issues.
+      placeholder: "macOS 15.2"
 
   - type: dropdown
     id: provider
@@ -78,7 +88,9 @@ body:
         - Not relevant
         - Claude Code
         - Codex
+        - GitHub Copilot
         - OpenCode
+        - Pi
         - Custom provider
 
   - type: textarea
@@ -87,6 +99,8 @@ body:
       label: Provider configuration
       description: |
         If the bug involves an agent, what version are you on and what API are you using? Provider behavior changes a lot across versions and API backends.
+
+        Issues are public. Remove API keys, tokens and private code before pasting.
       placeholder: |
         Claude Code v1.2.3 with Anthropic API
         Codex CLI v0.5.0 with OpenAI API
@@ -100,12 +114,14 @@ body:
       description: |
         Paste relevant log output. Strongly preferred for crashes and daemon issues.
 
-        - **Daemon log:** `~/.paseo/daemon.log` (override with `$PASEO_HOME`)
-        - **Electron log (macOS):** `~/Library/Logs/Paseo/main.log`
-        - **Electron log (Windows):** `%APPDATA%\Paseo\logs\main.log`
-        - **Electron log (Linux):** `~/.config/Paseo/logs/main.log`
+        Issues are public. Remove API keys, tokens and private code before pasting.
 
-        Paste the **full log around the time of the bug**, not a summary. If you used an AI to investigate, paste the raw log it read, not the AI's interpretation. AI summaries skew the signal and waste my time.
+        - **Daemon log:** `~/.paseo/daemon.log` for the official download, `.dev/paseo-home/daemon.log` in your checkout for source builds (override with `$PASEO_HOME`)
+        - **Electron log (macOS):** `~/Library/Logs/Agent Duel/main.log`
+        - **Electron log (Windows):** `%APPDATA%\Agent Duel\logs\main.log`
+        - **Electron log (Linux):** `~/.config/Agent Duel/logs/main.log`
+
+        Paste the **full log around the time of the bug**, not a summary. If you used an AI to investigate, paste the raw log it read, not the AI's interpretation. AI summaries lose the detail needed to fix the bug.
       render: text
 
   - type: textarea
@@ -120,4 +136,4 @@ body:
       value: |
         ---
 
-        **A note on AI-assisted reports.** Using an agent to gather information (logs, repro steps, version checks) is fine and useful. Using an agent to *diagnose* the bug and then submitting only that diagnosis is not. Agents routinely correlate adjacent log lines as cause-and-effect when they aren't related, and once a report is filtered through an AI summary I lose the signal I need to actually fix the bug. Paste the raw inputs.
+        **A note on AI-assisted reports.** Using an agent to gather information (logs, repro steps, version checks) is fine and useful. Using an agent to *diagnose* the bug and then submitting only that diagnosis is not. Agents routinely correlate adjacent log lines as cause-and-effect when they aren't related, and a report filtered through an AI summary loses the detail needed to fix the bug. Paste the raw inputs.

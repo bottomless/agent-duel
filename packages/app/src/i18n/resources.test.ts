@@ -143,7 +143,6 @@ describe("translation resources", () => {
   it("keeps reported Spanish settings and scripts labels clean", () => {
     expect(es.workspace.scripts.title).toBe("Scripts");
     expect(es.settings.general.terminalScrollback.label).toBe("Historial de terminal");
-    expect(es.settings.project.scripts.title).toBe("Scripts");
   });
 
   it("keeps model count labels spaced around the count", () => {
@@ -239,10 +238,6 @@ describe("translation resources", () => {
   });
 
   it("includes Settings expansion keys for the Batch 3A migration", () => {
-    expect(en.settings.diagnostics.title).toBe("Diagnostics");
-    expect(en.settings.diagnostics.legacyTerminalRenderer.label).toBe(
-      "Use legacy terminal renderer",
-    );
     expect(en.settings.about.title).toBe("About");
     expect(en.settings.about.releaseChannel.label).toBe("Release channel");
     expect(en.settings.appearance.theme.title).toBe("Theme");
@@ -251,29 +246,25 @@ describe("translation resources", () => {
     expect(en.settings.integrations.commandLine.title).toBe("Command line");
     expect(en.settings.integrations.skills.updateAvailable).toBe("Update available");
     expect(en.settings.notifications.playSound).toBe("Play sound");
+    expect(en.settings.notifications.agentFinished).toBe("Agent finished");
+    expect(en.settings.notifications.battleReady).toBe("Battle ready");
     expect(en.settings.notifications.permission).toBe("Notification permission");
-    expect(en.settings.notifications.sentTitle).toBe("Test notification sent");
+    expect(en.settings.notifications.sentTitle).toBe("Test notification requested");
     expect(en.settings.permissions.actions.request).toBe("Request");
   });
 
   it("includes Settings expansion keys for the Batch 3B migration", () => {
     expect(en.settings.host.notFound).toBe("Host not found");
-    expect(en.settings.host.connections.title).toBe("Connections");
     expect(en.settings.host.daemon.restart.title).toBe("Restart daemon");
-    expect(en.settings.host.orchestration.enableTools.title).toBe("Enable Paseo tools");
+    expect(en.settings.host.orchestration.enableTools.title).toBe("Enable Agent Duel tools");
     expect(en.settings.providers.title).toBe("Providers");
     expect(en.settings.providers.models.addModel).toBe("Add model");
     expect(en.settings.providers.diagnostic.title).toBe("Diagnostic");
-    expect(en.settings.project.worktree.title).toBe("Worktree lifecycle hooks");
-    expect(en.settings.project.scripts.actions.add).toBe("Add script");
     expect(en.settings.project.metadata.title).toBe("Metadata generation");
     expect(en.settings.project.actions.save).toBe("Save");
   });
 
   it("includes workspace and panel keys for the Batch 4A migration", () => {
-    expect(en.importSession.title).toBe("Import session");
-    expect(en.importSession.status.connectHost).toBe("Connect to a host to import sessions");
-    expect(en.importSession.actions.refresh).toBe("Refresh sessions");
     expect(en.workspace.fileExplorer.sort.name).toBe("Name");
     expect(en.workspace.fileExplorer.actions.hideHiddenFiles).toBe("Hide hidden files");
     expect(en.workspace.fileExplorer.actions.showHiddenFiles).toBe("Show hidden files");
@@ -288,7 +279,6 @@ describe("translation resources", () => {
   });
 
   it("includes workspace Git and review keys for the Batch 4B migration", () => {
-    expect(en.workspace.tabs.actions.newAgent).toBe("New agent");
     expect(en.workspace.header.actions.copyPath).toBe("Copy workspace path");
     expect(en.workspace.scripts.actions.run).toBe("Run");
     expect(en.workspace.git.actions.commit.label).toBe("Commit");
@@ -311,35 +301,26 @@ describe("translation resources", () => {
     expect(en.sidebar.project.toasts.updateHostToRemove).toBe(
       "Update the host to remove projects.",
     );
-    expect(en.newWorkspace.title).toBe("New workspace");
     expect(en.newWorkspace.refPicker.searchPlaceholder).toBe("Search branches and PRs");
     expect(en.openProject.tiles.addProject.title).toBe("Add a project");
   });
 
-  it("includes provider selector and pairing keys for the Batch 4D migration", () => {
+  it("includes provider selector keys for the Batch 4D migration", () => {
     expect(en.modelSelector.title).toBe("Select provider");
     expect(en.modelSelector.profiles).toBe("Profiles");
     expect(en.providerCatalog.title).toBe("Add provider");
     expect(en.providerCatalog.actions.installInstructions).toBe("Install instructions");
-    expect(en.pairing.link.title).toBe("Paste pairing link");
-    expect(en.pairing.connectionMethods.direct.title).toBe("Direct connection");
   });
 
-  it("includes onboarding and direct connection keys for the Batch 4E migration", () => {
-    expect(en.onboarding.title).toBe("Welcome to Paseo");
+  it("includes onboarding keys for the Batch 4E migration", () => {
+    expect(en.onboarding.title).toBe("Welcome to Agent Duel");
     expect(en.onboarding.actions.settings).toBe("Settings");
-    expect(en.pairing.direct.title).toBe("Direct connection");
-    expect(en.pairing.direct.fields.host).toBe("Host");
-    expect(en.pairing.scan.title).toBe("Scan QR");
-    expect(en.pairing.device.copy).toBe("Copy");
   });
 
   it("includes shared utility chrome keys for the Batch 4F migration", () => {
-    expect(en.realtimeVoice.actions.mute).toBe("Mute realtime voice");
     expect(en.rewind.actions.conversation).toBe("Rewind conversation");
     expect(en.rewind.warning).toBe("This action cannot be undone");
     expect(en.diffViewer.empty).toBe("No changes to display");
-    expect(en.serviceUrl.title).toBe("Open service URL");
   });
 
   it("includes keyboard shortcut help keys for the Batch 4G migration", () => {
@@ -400,6 +381,7 @@ describe("translation resources", () => {
       started: "Started",
       completed: "Completed",
       reopened: "Reopened",
+      cancelled: "Cancelled",
     });
   });
 
@@ -418,19 +400,13 @@ describe("translation resources", () => {
   });
 
   it("includes sidebar project list keys for the Batch 4K migration", () => {
-    expect(en.sidebar.host.noHost).toBe("No host");
-    expect(en.sidebar.host.switchTitle).toBe("Switch host");
-    expect(en.sidebar.host.searchPlaceholder).toBe("Search hosts...");
     expect(en.sidebar.actions.addProject).toBe("Add project");
-    expect(en.sidebar.actions.hosts).toBe("Hosts");
     expect(en.sidebar.actions.home).toBe("Home");
     expect(en.sidebar.actions.settings).toBe("Settings");
     expect(en.sidebar.actions.closeSidebar).toBe("Close sidebar");
     expect(en.sidebar.sections.sessions).toBe("History");
-    expect(en.sidebar.workspace.actions.newWorkspace).toBe("New workspace");
-    expect(en.sidebar.workspace.actions.createWorkspaceFor).toBe(
-      "Create a new workspace for {{projectName}}",
-    );
+    expect(en.sidebar.workspace.actions.newChat).toBe("New chat");
+    expect(en.sidebar.workspace.actions.startChatFor).toBe("Start a new chat in {{projectName}}");
     expect(en.sidebar.project.empty.title).toBe("No projects yet");
     expect(en.sidebar.project.empty.description).toBe("Add a project to get started");
     expect(en.settings.projectList.hostLoadFailed).toBe(
@@ -486,8 +462,8 @@ describe("translation resources", () => {
     expect(en.agentList.dateSections.recent).toBe("Recent");
     expect(en.message.attachments.imagePreviewUnavailable).toBe("Image preview unavailable.");
     expect(en.message.attachments.imagePreviewLoadFailed).toBe("Unable to load image preview.");
-    expect(en.workspace.tabs.explorer.changes).toBe("Changes");
-    expect(en.workspace.tabs.explorer.files).toBe("Files");
+    expect(en.workspace.tabs.actions.openChanges).toBe("Changes");
+    expect(en.workspace.tabs.actions.openFiles).toBe("Files");
     expect(en.branchSwitcher.uncommittedTitle).toBe("Uncommitted changes");
     expect(en.branchSwitcher.uncommittedMessage).toBe(
       "You have uncommitted changes. Stash them before switching branches?",
@@ -519,21 +495,6 @@ describe("translation resources", () => {
     expect(en.contextWindow.used).toBe("{{percentage}}% used");
   });
 
-  it("includes view-model and policy utility keys for the Batch 4N migration", () => {
-    expect(en.importSession.preview.untitledSession).toBe("Untitled session");
-    expect(en.importSession.preview.noPrompt).toBe("No prompt preview");
-    expect(en.importSession.empty.noRecent).toBe("No recent sessions to import.");
-    expect(en.importSession.empty.alreadyImported).toBe(
-      "All recent sessions are already imported.",
-    );
-    expect(en.importSession.empty.noProviderSessions).toBe("No {{provider}} sessions found.");
-    expect(en.sidebar.worktreeSetup.title).toBe("Set up worktree scripts");
-    expect(en.sidebar.worktreeSetup.description).toBe(
-      "Add setup commands so new worktrees can install dependencies and prepare themselves automatically.",
-    );
-    expect(en.sidebar.worktreeSetup.openProjectSettings).toBe("Open project settings");
-  });
-
   it("includes remaining small utility chrome keys for the Batch 4O migration", () => {
     expect(en.workspace.route.loading).toBe("Loading workspace");
     expect(en.workspace.route.connecting).toBe("Connecting");
@@ -549,7 +510,7 @@ describe("translation resources", () => {
     expect(en.message.compaction.completed).toBe("Context compacted");
     expect(en.agentPanel.archived.callout).toBe("This agent is archived");
     expect(en.agentPanel.archived.unarchive).toBe("Unarchive");
-    expect(en.desktop.quitting.title).toBe("Quitting Paseo...");
+    expect(en.desktop.quitting.title).toBe("Quitting Agent Duel...");
     expect(en.desktop.quitting.detail).toBe("Stopping the local daemon.");
     expect(en.composer.attachments.dropImagesHere).toBe("Drop images here");
   });
@@ -610,7 +571,7 @@ describe("translation resources", () => {
     );
     expect(en.desktop.rosetta.title).toBe("Download the Apple Silicon build");
     expect(en.desktop.rosetta.runningIntel).toBe(
-      "You're running the Intel build of Paseo under Rosetta on Apple Silicon.",
+      "You're running the Intel build of Agent Duel under Rosetta on Apple Silicon.",
     );
     expect(en.desktop.rosetta.highCpu).toBe(
       "This causes high CPU usage. Download the Apple Silicon build to fix it.",
@@ -638,7 +599,7 @@ describe("translation resources", () => {
     expect(en.desktop.permissions.empty.notifications).toBe(
       "Notification status has not been checked yet.",
     );
-    expect(en.desktop.permissions.testNotification.title).toBe("Paseo notification test");
+    expect(en.desktop.permissions.testNotification.title).toBe("Agent Duel notification test");
     expect(en.desktop.permissions.testNotification.failed).toBe("Failed to send notification.");
   });
 
@@ -659,7 +620,7 @@ describe("translation resources", () => {
       "Failed to fetch daemon status: {{message}}",
     );
     expect(en.desktop.daemon.loadFailed).toBe("Unable to load desktop daemon status.");
-    expect(en.desktop.integrations.cli.installFailed).toBe("Unable to install the Paseo CLI.");
+    expect(en.desktop.integrations.cli.installFailed).toBe("Unable to install the Agent Duel CLI.");
     expect(en.desktop.integrations.skills.installFailed).toBe(
       "Unable to install orchestration skills.",
     );
@@ -670,7 +631,6 @@ describe("translation resources", () => {
     expect(en.message.attachments.commentsOne).toBe("1 comment");
     expect(en.message.attachments.commentsMany).toBe("{{count}} comments");
     expect(en.message.attachments.textAttachment).toBe("Text attachment");
-    expect(en.composer.attachments.element).toBe("Element");
     expect(en.workspace.hoverCard.scriptsAccessibility).toBe("Workspace scripts");
     expect(en.branchSwitcher.restoreStashTitle).toBe("Restore stashed changes?");
     expect(en.branchSwitcher.stashRestored).toBe("Stashed changes restored");

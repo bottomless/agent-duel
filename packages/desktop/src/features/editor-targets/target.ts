@@ -1,4 +1,4 @@
-export type EditorTargetKind = "editor" | "file-manager";
+export type EditorTargetKind = "editor" | "file-manager" | "terminal";
 
 export type EditorTargetIcon =
   | { kind: "image"; dataUrl: string }

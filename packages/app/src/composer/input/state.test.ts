@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   applyDictationTranscript,
   computeCanStartDictation,
@@ -6,7 +6,6 @@ import {
   runAlternateSendAction,
   runDefaultSendAction,
   runMessageInputKeyboardAction,
-  stopRealtimeVoice,
 } from "./state";
 
 const connected = { isConnected: true } as never;
@@ -32,22 +31,19 @@ function createDictationKeyboard({ startsRecording }: { startsRecording: boolean
           isRecording = false;
         },
         cancelDictation: () => undefined,
-        toggleRealtimeVoice: () => undefined,
-        isRealtimeVoiceActive: false,
-        toggleRealtimeVoiceMute: () => undefined,
       }),
   };
 }
 
 describe("composer surface presentation", () => {
-  it("shows only the input when no voice overlay is active", () => {
+  it("shows only the input when no overlay is active", () => {
     expect(resolveComposerSurfacePresentation(false)).toEqual({
       input: { opacity: 1, pointerEvents: "auto" },
       overlay: { opacity: 0, pointerEvents: "none" },
     });
   });
 
-  it("shows only the voice overlay while voice UI is active", () => {
+  it("shows only the overlay while the dictation overlay is up", () => {
     expect(resolveComposerSurfacePresentation(true)).toEqual({
       input: { opacity: 0, pointerEvents: "none" },
       overlay: { opacity: 1, pointerEvents: "auto" },
@@ -242,47 +238,5 @@ describe("composer send behavior", () => {
 
     expect(defaultAction.calls).toEqual(["queue"]);
     expect(alternateAction.calls).toEqual(["send"]);
-  });
-});
-
-describe("stopRealtimeVoice", () => {
-  it("keeps voice mode active when the running agent refuses cancellation", async () => {
-    const cancellationError = new Error("active run cancellation was not acknowledged");
-    const cancelAgent = vi.fn().mockRejectedValue(cancellationError);
-    const stopVoice = vi.fn().mockResolvedValue(undefined);
-
-    await expect(
-      stopRealtimeVoice({
-        voice: { stopVoice },
-        isRealtimeVoiceForCurrentAgent: true,
-        isAgentRunning: true,
-        client: { cancelAgent },
-        voiceAgentId: "agent-1",
-      }),
-    ).rejects.toBe(cancellationError);
-
-    expect(stopVoice).not.toHaveBeenCalled();
-  });
-
-  it("stops voice mode after the running agent acknowledges cancellation", async () => {
-    const calls: string[] = [];
-
-    await stopRealtimeVoice({
-      voice: {
-        stopVoice: async () => {
-          calls.push("stop voice");
-        },
-      },
-      isRealtimeVoiceForCurrentAgent: true,
-      isAgentRunning: true,
-      client: {
-        cancelAgent: async () => {
-          calls.push("cancel agent");
-        },
-      },
-      voiceAgentId: "agent-1",
-    });
-
-    expect(calls).toEqual(["cancel agent", "stop voice"]);
   });
 });

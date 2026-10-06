@@ -24,12 +24,12 @@ import {
   findGithubItemByOption,
   isAttachmentSelectedForGithubItem,
   openComposerAttachment,
-  pickAndPersistImages,
   queueComposerMessage,
   removeComposerAttachmentAtIndex,
   sendQueuedComposerMessageNow,
   toggleGithubAttachment,
   toggleGithubAttachmentFromPicker,
+  visibleComposerQueuedMessages,
   type MessageSubmissionWriter,
   type AttachmentPersister,
   type ComposerCancelClient,
@@ -119,55 +119,12 @@ function reviewWorkspaceAttachment(
   };
 }
 
-function browserElementWorkspaceAttachment(): Extract<
-  WorkspaceComposerAttachment,
-  { kind: "browser_element" }
-> {
-  return {
-    kind: "browser_element",
-    attachment: {
-      url: "https://example.com/page",
-      selector: "button.primary",
-      tag: "button",
-      text: "Save",
-      outerHTML: '<button class="primary">Save</button>',
-      computedStyles: { display: "flex" },
-      boundingRect: { x: 1, y: 2, width: 80, height: 32 },
-      reactSource: null,
-      parentChain: ["form.settings"],
-      children: [],
-      formatted: '<browser-element url="https://example.com/page">button.primary</browser-element>',
-    },
-  };
-}
-
 function createFakePersister(): AttachmentPersister & {
-  blobCalls: Array<{ blob: Blob; mimeType: string; fileName: string | null }>;
-  dataUrlCalls: Array<{ dataUrl: string; mimeType: string; fileName: string | null }>;
-  fileUriCalls: Array<{ uri: string; mimeType: string; fileName: string | null }>;
   deletedBatches: AttachmentMetadata[][];
 } {
-  const blobCalls: Array<{ blob: Blob; mimeType: string; fileName: string | null }> = [];
-  const dataUrlCalls: Array<{ dataUrl: string; mimeType: string; fileName: string | null }> = [];
-  const fileUriCalls: Array<{ uri: string; mimeType: string; fileName: string | null }> = [];
   const deletedBatches: AttachmentMetadata[][] = [];
   return {
-    blobCalls,
-    dataUrlCalls,
-    fileUriCalls,
     deletedBatches,
-    persistFromBlob: async ({ blob, mimeType, fileName }) => {
-      blobCalls.push({ blob, mimeType, fileName });
-      return { ...imageMetadata, id: `blob-${blobCalls.length}` };
-    },
-    persistFromDataUrl: async ({ dataUrl, mimeType, fileName }) => {
-      dataUrlCalls.push({ dataUrl, mimeType, fileName });
-      return { ...imageMetadata, id: `data-url-${dataUrlCalls.length}` };
-    },
-    persistFromFileUri: async ({ uri, mimeType, fileName }) => {
-      fileUriCalls.push({ uri, mimeType, fileName });
-      return { ...imageMetadata, id: `uri-${fileUriCalls.length}` };
-    },
     deleteAttachments: (metadata) => {
       deletedBatches.push(metadata);
     },
@@ -350,69 +307,6 @@ describe("cancelComposerAgent", () => {
     expect(cancelComposerAgent({ ...input, isConnected: false })).toBeNull();
     expect(cancelComposerAgent({ ...input, client: null })).toBeNull();
     expect(input.client.canceledIds).toEqual([]);
-  });
-});
-
-describe("pickAndPersistImages", () => {
-  it("returns [] when the picker yields nothing", async () => {
-    const persister = createFakePersister();
-    const result = await pickAndPersistImages({
-      pickImages: async () => null,
-      persister,
-    });
-    expect(result).toEqual([]);
-    expect(persister.blobCalls).toEqual([]);
-    expect(persister.fileUriCalls).toEqual([]);
-  });
-
-  it("persists blob sources via persistFromBlob with the picked mime type and file name", async () => {
-    const persister = createFakePersister();
-    const blob = new Blob(["image"]);
-    const result = await pickAndPersistImages({
-      pickImages: async () => [
-        { source: { kind: "blob", blob }, mimeType: "image/png", fileName: "img-1.png" },
-      ],
-      persister,
-    });
-    expect(persister.blobCalls).toEqual([{ blob, mimeType: "image/png", fileName: "img-1.png" }]);
-    expect(result.map((m) => m.id)).toEqual(["blob-1"]);
-  });
-
-  it("persists file_uri sources via persistFromFileUri", async () => {
-    const persister = createFakePersister();
-    const result = await pickAndPersistImages({
-      pickImages: async () => [
-        {
-          source: { kind: "file_uri", uri: "/tmp/x.jpg" },
-          mimeType: "image/jpeg",
-          fileName: null,
-        },
-      ],
-      persister,
-    });
-    expect(persister.fileUriCalls).toEqual([
-      { uri: "/tmp/x.jpg", mimeType: "image/jpeg", fileName: null },
-    ]);
-    expect(result).toHaveLength(1);
-  });
-
-  it("persists data_url sources via persistFromDataUrl", async () => {
-    const persister = createFakePersister();
-    const dataUrl = "data:image/png;base64,AAEC";
-    const result = await pickAndPersistImages({
-      pickImages: async () => [
-        {
-          source: { kind: "data_url", dataUrl },
-          mimeType: "image/png",
-          fileName: "clipboard.png",
-        },
-      ],
-      persister,
-    });
-    expect(persister.dataUrlCalls).toEqual([
-      { dataUrl, mimeType: "image/png", fileName: "clipboard.png" },
-    ]);
-    expect(result).toHaveLength(1);
   });
 });
 
@@ -613,30 +507,6 @@ describe("dispatchComposerAgentMessage", () => {
     expect(client.calls[0]?.options.attachments).toEqual([review.attachment]);
     expect(client.calls[0]?.options.images).toEqual([]);
   });
-
-  it("serializes browser_element workspace attachments as text attachments at the wire boundary", async () => {
-    const client = createFakeSendClient();
-    const stream = createFakeStream();
-    const browserElement = browserElementWorkspaceAttachment();
-
-    await dispatchComposerAgentMessage({
-      client,
-      agentId: "agent",
-      text: "inspect element",
-      attachments: [browserElement],
-      encodeImages: passthroughEncodeImages,
-      submission: stream,
-    });
-
-    expect(client.calls[0]?.options.attachments).toEqual([
-      {
-        type: "text",
-        mimeType: "text/plain",
-        title: "Browser element · button",
-        text: browserElement.attachment.formatted,
-      },
-    ]);
-  });
 });
 
 describe("queueComposerMessage", () => {
@@ -681,6 +551,49 @@ describe("queueComposerMessage", () => {
     expect(queue.state.get("agent")?.[0]?.attachments).toEqual([
       { kind: "image", metadata: image },
       review,
+    ]);
+  });
+
+  it("captures the Arena follow-up mode at queue time", () => {
+    const queue = createFakeQueue();
+    const result = queueComposerMessage({
+      agentId: "agent",
+      text: "start the next turn",
+      attachments: [],
+      arenaFollowUp: "single_agent",
+      queue,
+    });
+
+    expect(result.queued).toMatchObject({
+      arenaFollowUp: "single_agent",
+      arenaFollowUpQueuedAt: expect.any(Number),
+    });
+    expect(queue.state.get("agent")?.[0]).toMatchObject({
+      text: "start the next turn",
+      arenaFollowUp: "single_agent",
+    });
+  });
+});
+
+describe("visibleComposerQueuedMessages", () => {
+  it("moves queued battles into the feed while leaving ordinary and single-agent rows visible", () => {
+    const ordinary = { id: "ordinary", text: "ordinary", attachments: [] };
+    const battle = {
+      id: "battle",
+      text: "battle",
+      attachments: [],
+      arenaFollowUp: "battle" as const,
+    };
+    const singleAgent = {
+      id: "single",
+      text: "single",
+      attachments: [],
+      arenaFollowUp: "single_agent" as const,
+    };
+
+    expect(visibleComposerQueuedMessages([ordinary, battle, singleAgent])).toEqual([
+      ordinary,
+      singleAgent,
     ]);
   });
 });
@@ -780,6 +693,72 @@ describe("sendQueuedComposerMessageNow", () => {
     expect(result).toEqual({ status: "failed", errorMessage: "network down" });
     const state = queue.state.get("agent");
     expect(state?.map((m) => m.id)).toEqual(["msg-1", "msg-2"]);
+  });
+
+  it("keeps a queued battle visible while its start request is in flight", async () => {
+    let finishStart: (() => void) | undefined;
+    const start = new Promise<void>((resolve) => {
+      finishStart = resolve;
+    });
+    const queue = createFakeQueue(
+      new Map([
+        [
+          "agent",
+          [
+            {
+              id: "battle",
+              text: "next battle",
+              attachments: [],
+              arenaFollowUp: "battle",
+              arenaFollowUpQueuedAt: 123,
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const sending = sendQueuedComposerMessageNow({
+      agentId: "agent",
+      messageId: "battle",
+      queue,
+      retainWhileSubmitting: true,
+      submitMessage: async () => start,
+    });
+
+    expect(queue.state.get("agent")?.[0]).toEqual({
+      id: "battle",
+      text: "next battle",
+      attachments: [],
+      arenaFollowUp: "battle",
+      arenaFollowUpQueuedAt: 123,
+    });
+    finishStart?.();
+    await expect(sending).resolves.toEqual({ status: "submitted" });
+    expect(queue.state.get("agent")).toEqual([]);
+  });
+
+  it("restores a retained battle entry when start fails", async () => {
+    const item: QueuedComposerMessage = {
+      id: "battle",
+      text: "next battle",
+      attachments: [],
+      arenaFollowUp: "battle",
+      arenaFollowUpQueuedAt: 123,
+    };
+    const queue = createFakeQueue(new Map([["agent", [item]]]));
+
+    await expect(
+      sendQueuedComposerMessageNow({
+        agentId: "agent",
+        messageId: "battle",
+        queue,
+        retainWhileSubmitting: true,
+        submitMessage: async () => {
+          throw new Error("start failed");
+        },
+      }),
+    ).resolves.toEqual({ status: "failed", errorMessage: "start failed" });
+    expect(queue.state.get("agent")).toEqual([item]);
   });
 });
 

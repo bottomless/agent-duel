@@ -2,6 +2,7 @@
   "name": "@getpaseo/protocol",
   "version": "0.4.0-beta.1",
   "description": "Paseo shared protocol schemas and wire types",
+  "license": "AGPL-3.0-or-later",
   "files": [
     "dist",
     "!dist/**/*.map",

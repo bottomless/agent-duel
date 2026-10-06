@@ -9,7 +9,11 @@ export interface TestOpenCodeServerAcquisition {
 
 export class TestOpenCodeServerManager implements OpenCodeServerManagerLike {
   readonly acquisitions: TestOpenCodeServerAcquisition[] = [];
-  readonly server = { port: 1234, url: "http://127.0.0.1:1234" };
+  readonly server = {
+    port: 1234,
+    url: "http://127.0.0.1:1234",
+    controlToken: "test-opencode-control-token",
+  };
 
   async acquireCurrent(): Promise<OpenCodeServerAcquisition> {
     return this.recordAcquisition({ kind: "current" });

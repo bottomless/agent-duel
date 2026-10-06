@@ -22,6 +22,7 @@ export interface ResolveOrCreateWorkspaceIdInput {
   requestedWorkspaceId?: string;
   cwd: string;
   initialTitle: string | null;
+  pendingFork?: boolean;
 }
 
 export interface ImportWorkspaceInput {
@@ -44,6 +45,13 @@ export interface CreateWorktreeWorkspaceInput {
   baseBranch: string | null;
   title: string | null;
   expectsInitialAgent?: boolean;
+  pendingFork?: boolean;
+}
+
+interface CreateDirectoryWorkspaceContext {
+  expectsInitialAgent?: boolean;
+  pendingFork?: boolean;
+  expectedBranch?: string;
 }
 
 export interface WorkspaceProvisioningService {
@@ -57,11 +65,16 @@ export interface WorkspaceProvisioningService {
     cwd: string,
     title?: string | null,
     projectId?: string,
-    context?: { expectsInitialAgent?: boolean },
+    context?: CreateDirectoryWorkspaceContext,
   ): Promise<PersistedWorkspaceRecord>;
   createWorkspaceForWorktree(
     input: CreateWorktreeWorkspaceInput,
   ): Promise<PersistedWorkspaceRecord>;
+  resolveSourceProjectForWorktree(input: {
+    sourceCwd: string;
+    projectId?: string;
+    repoRoot: string;
+  }): Promise<PersistedProjectRecord>;
   findOrCreateProjectForDirectory(cwd: string): Promise<PersistedProjectRecord>;
   ensureWorkspaceRecordUnarchived(
     workspace: PersistedWorkspaceRecord,
@@ -81,6 +94,18 @@ export class WorkspaceProvisioningError extends Error {
         : `Archived project: ${projectId}`,
     );
     this.name = "WorkspaceProvisioningError";
+  }
+}
+
+export class WorkspaceBranchChangedError extends Error {
+  readonly code = "branch_changed";
+
+  constructor(expectedBranch: string, actualBranch: string | null) {
+    const actual = actualBranch ? `"${actualBranch}"` : "detached HEAD";
+    super(
+      `The branch changed before the local workspace was created. Expected "${expectedBranch}", but found ${actual}. Select the branch again and retry.`,
+    );
+    this.name = "WorkspaceBranchChangedError";
   }
 }
 
@@ -186,10 +211,13 @@ export function createWorkspaceProvisioningService(deps: {
     cwd: string,
     title?: string | null,
     projectId?: string,
-    context?: { expectsInitialAgent?: boolean },
+    context?: CreateDirectoryWorkspaceContext,
   ): Promise<PersistedWorkspaceRecord> {
     const normalizedCwd = resolve(cwd);
     const checkout = await workspaceGitService.getCheckout(normalizedCwd);
+    if (context?.expectedBranch && checkout.currentBranch !== context.expectedBranch) {
+      throw new WorkspaceBranchChangedError(context.expectedBranch, checkout.currentBranch);
+    }
     const project = projectId
       ? await refreshProjectKind(await requireActiveProject(projectId), normalizedCwd, checkout)
       : // COMPAT(workspaceCreateMissingProjectId): added in v0.1.107, remove after 2027-01-15.
@@ -200,10 +228,13 @@ export function createWorkspaceProvisioningService(deps: {
       projectId: project.projectId,
       ...initialWorkspacePlacement({ source: "checkout", cwd: normalizedCwd, checkout }),
       title: title?.trim() || null,
+      pendingFork: context?.pendingFork ? true : undefined,
       createdAt: timestamp,
       updatedAt: timestamp,
     });
-    await workspaceRegistry.upsert(workspace, context);
+    await workspaceRegistry.upsert(workspace, {
+      expectsInitialAgent: context?.expectsInitialAgent,
+    });
     return workspace;
   }
 
@@ -232,6 +263,7 @@ export function createWorkspaceProvisioningService(deps: {
         mainRepoRoot: repoRoot,
       }),
       title: input.title,
+      pendingFork: input.pendingFork ? true : undefined,
       createdAt: timestamp,
       updatedAt: timestamp,
     });
@@ -319,6 +351,7 @@ export function createWorkspaceProvisioningService(deps: {
     return (
       await createWorkspaceForDirectory(input.cwd, input.initialTitle, undefined, {
         expectsInitialAgent: true,
+        pendingFork: input.pendingFork,
       })
     ).workspaceId;
   }
@@ -351,19 +384,13 @@ export function createWorkspaceProvisioningService(deps: {
         : null;
     const autoArchivedChangeRequestUrl =
       await resolveRestoredAutoArchiveChangeRequestUrl(workspace);
-    let next: PersistedWorkspaceRecord | null = null;
+    let placementUpdate: ReturnType<typeof reconcileWorkspacePlacement> = null;
     if (workspace.archivedAt && checkout) {
-      const placementUpdate = reconcileWorkspacePlacement({
+      placementUpdate = reconcileWorkspacePlacement({
         workspace,
         checkout,
         updatedAt: timestamp,
       });
-      next = {
-        ...(placementUpdate?.workspace ?? workspace),
-        archivedAt: null,
-        autoArchivedChangeRequestUrl,
-        updatedAt: timestamp,
-      };
     }
     if (checkout && (project.archivedAt || workspace.archivedAt)) {
       const projectCheckout = areEquivalentPaths(project.rootPath, workspace.cwd)
@@ -387,9 +414,18 @@ export function createWorkspaceProvisioningService(deps: {
         });
       }
     }
-    if (!next) return workspace;
-    await workspaceRegistry.upsert(next);
-    return next;
+    if (!workspace.archivedAt || !checkout) return workspace;
+    return (
+      (await workspaceRegistry.update(workspace.workspaceId, (current) => ({
+        ...current,
+        ...placementUpdate?.fields,
+        archivedAt: null,
+        autoArchivedChangeRequestUrl,
+        pendingFork: undefined,
+        recoveryReason: undefined,
+        updatedAt: timestamp,
+      }))) ?? workspace
+    );
   }
 
   async function refreshWorkspaceRecord(
@@ -400,14 +436,20 @@ export function createWorkspaceProvisioningService(deps: {
     if (project && !project.archivedAt) {
       await refreshProjectKind(project, workspace.cwd, checkout);
     }
+    const timestamp = new Date().toISOString();
     const update = reconcileWorkspacePlacement({
       workspace,
       checkout,
-      updatedAt: new Date().toISOString(),
+      updatedAt: timestamp,
     });
     if (!update) return workspace;
-    await workspaceRegistry.upsert(update.workspace);
-    return update.workspace;
+    return (
+      (await workspaceRegistry.update(workspace.workspaceId, (current) => ({
+        ...current,
+        ...update.fields,
+        updatedAt: timestamp,
+      }))) ?? workspace
+    );
   }
 
   async function refreshProjectKind(
@@ -444,6 +486,7 @@ export function createWorkspaceProvisioningService(deps: {
     resolveOrCreateWorkspaceIdForCreateAgent,
     createWorkspaceForDirectory,
     createWorkspaceForWorktree,
+    resolveSourceProjectForWorktree,
     findOrCreateProjectForDirectory,
     ensureWorkspaceRecordUnarchived,
   };

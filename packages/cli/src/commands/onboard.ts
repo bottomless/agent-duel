@@ -267,12 +267,11 @@ function printNextSteps(pairingUrl: string | null, paseoHome: string, richUi: bo
   const daemonLogPath = path.join(paseoHome, "daemon.log");
   const nextStepsLines = [
     pairingUrl
-      ? "1. Open Paseo and scan the QR code above, or paste the pairing link."
-      : "1. Open Paseo and connect to your daemon.",
-    "2. Web app: https://app.paseo.sh",
-    "3. Desktop app: https://github.com/getpaseo/paseo/releases/latest",
-    "4. Docs: https://paseo.sh/docs",
-    '5. Example: paseo run --output-schema schema.json "extract fields"',
+      ? "1. Open Agent Duel and scan the QR code above, or paste the pairing link."
+      : "1. Open Agent Duel and connect to your daemon.",
+    "2. Desktop app: https://github.com/bottomless/agent-duel/releases/latest",
+    "3. Docs: https://github.com/bottomless/agent-duel#readme",
+    '4. Example: paseo run --output-schema schema.json "extract fields"',
   ];
   const quickReferenceLines = [
     "1. paseo --help",

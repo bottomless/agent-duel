@@ -10,6 +10,7 @@ export const ja: TranslationResources = {
       close: "閉じる",
       copy: "コピー",
       dismiss: "閉じる",
+      openExternalBrowser: "外部ブラウザで開く",
       retry: "再試行",
       search: "検索",
       select: "選択",
@@ -106,16 +107,9 @@ export const ja: TranslationResources = {
       interrupt: "中断",
     },
     voice: {
-      enableVoiceMode: "音声モードを有効にする",
-      voiceMode: "音声モード",
-      unmuteVoiceMode: "音声モードのミュートを解除",
-      muteVoiceMode: "音声モードをミュート",
       stopDictation: "音声入力を停止",
       startDictation: "音声入力を開始",
-      unmuteVoice: "音声のミュートを解除",
-      muteVoice: "音声をミュート",
       dictation: "音声入力",
-      interruptBeforeVoice: "音声モードを開始する前にエージェントを中断してください",
     },
     attachments: {
       addImage: "画像を追加",
@@ -132,9 +126,6 @@ export const ja: TranslationResources = {
       removeFile: "ファイル添付ファイルを削除",
       openGithub: "{{kind}} {{number}}を開く",
       removeGithub: "{{kind}} {{number}}を削除",
-      element: "要素",
-      openBrowserElement: "ブラウザ要素の添付ファイルを開く",
-      removeBrowserElement: "ブラウザ要素の添付ファイルを削除",
       openReview: "レビュー添付ファイルを開く",
       removeReview: "レビュー添付ファイルを削除",
     },
@@ -147,6 +138,13 @@ export const ja: TranslationResources = {
       uploadFailed: "ファイルのアップロードに失敗しました",
       noClipboardImage: "クリップボードに画像がありません",
       pasteImageFailed: "画像を貼り付けられませんでした",
+      unreadableImage:
+        "{{fileName}} を読み込めませんでした。PNG、JPEG、GIF、WebP、BMP 画像を添付してください。",
+      attachImageFailed: "画像を添付できませんでした",
+      imageLimitReached:
+        "バトルのメッセージに添付できる画像は最大 {{max}} 枚です。残りの画像は添付されませんでした。",
+      tooManyImages:
+        "バトルのメッセージに添付できる画像は最大 {{max}} 枚です。送信するには {{count}} 枚削除してください。",
       fileTooLarge: "{{fileName}}が大きすぎます（最大{{size}}）",
     },
     clientCommands: {
@@ -237,6 +235,10 @@ export const ja: TranslationResources = {
     },
   },
   sessions: {
+    interruptedForks: "中断されたフォーク",
+    recoveryLoadFailed: "{{host}}: 中断されたフォークを読み込めませんでした",
+    forkFilesPreserved: "フォークが中断されました。ローカルファイルは保持されています。",
+    restoreWorkspace: "ワークスペースを復元",
     title: "履歴",
     empty: "セッションがまだありません",
     noMatches: "一致するセッションはありません",
@@ -290,8 +292,9 @@ export const ja: TranslationResources = {
       copyTurn: "ターンをコピー",
       copyMessage: "メッセージをコピー",
       forkMenu: "メッセージをフォーク",
-      forkInNewTab: "新しいタブにフォーク",
-      forkInNewWorkspace: "新しいワークスペースにフォーク",
+      forkedFromChat: "前のチャットからフォーク",
+      forkInThisWorktree: "このワークツリーにフォーク",
+      forkInNewWorktree: "新しいワークツリーにフォーク",
       forkUnavailable: "これを使用するにはホストを更新してください。",
       forkMissingWorkspace: "このエージェントはワークスペース内にありません。",
       forkFailed: "チャットのフォークに失敗しました",
@@ -344,6 +347,7 @@ export const ja: TranslationResources = {
         started: "開始",
         completed: "完了",
         reopened: "再開",
+        cancelled: "キャンセル",
       },
     },
     compaction: {
@@ -352,36 +356,6 @@ export const ja: TranslationResources = {
       manual: "コンテキストが手動で圧縮されました",
       withTokens: "コンテキストを圧縮しました（{{tokens}}Kトークン）",
       completed: "コンテキストを圧縮しました",
-    },
-  },
-  importSession: {
-    title: "セッションをインポート",
-    filters: {
-      all: "すべて",
-    },
-    status: {
-      connectHost: "セッションをインポートするにはホストに接続してください",
-      updateHost: "セッションをインポートするにはホストを更新してください。",
-      noProviders: "インポート可能なプロバイダーが有効になっていません。",
-      loading: "最近のセッションを読み込み中...",
-      failedAll: "最近のセッションを読み込めませんでした。",
-      failedProviders: "{{providers}}のセッションを読み込めませんでした。",
-      failedImport: "選択したセッションをインポートできませんでした。",
-    },
-    actions: {
-      refresh: "セッションを更新",
-    },
-    preview: {
-      untitledSession: "無題のセッション",
-      noPrompt: "プロンプトのプレビューなし",
-    },
-    empty: {
-      noRecent: "インポートする最近のセッションがありません。",
-      alreadyImported: "最近のセッションはすでにすべてインポートされています。",
-      noProviderSessions: "{{provider}}のセッションが見つかりません。",
-    },
-    row: {
-      importing: "インポート中...",
     },
   },
   workspace: {
@@ -405,6 +379,15 @@ export const ja: TranslationResources = {
         restoringAction: "復元中...",
         unavailableTitle: "ワークスペースを利用できません",
         checkFailedTitle: "ワークスペースを確認できませんでした",
+        filesCleanedTitle: "容量確保のためファイルをクリーンアップしました",
+        filesCleanedDescription:
+          "コードを復元し、依存関係とローカル設定をプロジェクトから再度コピーします。実行中のプロセスは復元されません。",
+        filesCleaningTitle: "ワークスペースのファイルをクリーンアップ中",
+        filesCleaningDescription:
+          "このワークスペースが使用している容量を解放しています。ファイルは後で復元できます。",
+        filesRestoringTitle: "ワークスペースのファイルを復元中",
+        restoreFilesAction: "ファイルを復元",
+        filesRestoreUnavailable: "ワークスペースのファイルを復元できませんでした",
       },
     },
     hoverCard: {
@@ -521,18 +504,6 @@ export const ja: TranslationResources = {
         browserUrl: "ブラウザURL",
         enterUrl: "URLを入力",
         openDevTools: "ブラウザ開発ツールを開く",
-        cancelSelector: "要素セレクターをキャンセル",
-        annotateElement: "要素に注釈を付ける",
-        screenshotElement: "要素のスクリーンショット",
-        screenshotCopied: "スクリーンショットをクリップボードにコピーしました",
-        elementCopied: "要素をクリップボードにコピーしました",
-        screenshotFailed: "スクリーンショットをコピーできませんでした",
-      },
-      annotate: {
-        title: "要素に注釈を付ける",
-        placeholder: "この要素についてエージェントへのメッセージ…",
-        submit: "添付",
-        cancel: "キャンセル",
       },
       devices: {
         label: "デバイスサイズ",
@@ -548,6 +519,10 @@ export const ja: TranslationResources = {
       hostDisconnected: "ホストが接続されていません",
       updateHost: "ネイティブターミナルを使用するにはホストを更新してください。",
       unableToSubscribe: "ターミナルに接続できません",
+    },
+    arenaTerminal: {
+      noBattle: "進行中のバトルはありません",
+      noBattleHint: "このシェルは次のバトルターンまで停止しています",
     },
     tabs: {
       loading: "読み込み中...",
@@ -588,25 +563,27 @@ export const ja: TranslationResources = {
         renameAgent: "エージェントの名前を変更",
       },
       actions: {
-        newAgent: "新しいエージェント",
         newTerminal: "新しいターミナル",
+        newTerminalSeat: "{{agent}} のワークツリー",
+        newTerminalWorkspace: "このワークスペース",
         preparingTerminal: "ターミナルタブを準備中",
         preparingTerminalTooltip: "ターミナルを準備中...",
         newBrowser: "新しいブラウザ",
         exitFocusMode: "フォーカスモードを終了",
-        splitRight: "右にペインを分割",
-        splitDown: "下にペインを分割",
-        terminalProfilesMenu: "ターミナルプロファイル",
-        editTerminalProfiles: "プロファイルを編集…",
-        pinTarget: "ピン留め",
-        unpinTarget: "ピン留めを解除",
+        newSidePanelTab: "サイドパネルの新しいタブ",
+        sidePanelPlacement: "サイドパネルの位置",
+        dockSidePanelRight: "右に配置",
+        dockSidePanelBottom: "下に配置",
+        openChanges: "変更",
+        openFiles: "ファイル",
+        openPullRequest: "プルリクエスト",
       },
-      explorer: {
-        open: "エクスプローラーを開く",
-        close: "エクスプローラーを閉じる",
-        toggle: "エクスプローラーを切り替え",
-        changes: "変更",
-        files: "ファイル",
+      sidePanel: {
+        open: "サイドパネルを開く",
+        close: "サイドパネルを閉じる",
+        toggle: "サイドパネルを切り替え",
+        openChanges: "変更を開く",
+        launcherTitle: "サイドパネルで開く",
       },
       toasts: {
         copyFailed: "コピーに失敗しました",
@@ -655,16 +632,16 @@ export const ja: TranslationResources = {
     header: {
       actions: {
         workspaceActions: "ワークスペースアクション",
-        newAgent: "新しいエージェント",
         newTerminal: "新しいターミナル",
         newBrowser: "新しいブラウザタブ",
-        importSession: "セッションをインポート",
         copyPath: "ワークスペースパスをコピー",
         copyBranchName: "ブランチ名をコピー",
         showSetup: "セットアップを表示",
       },
       toasts: {
         workspacePathUnavailable: "ワークスペースパスはまだ利用できません",
+        workspaceFilesCleaned:
+          "ワークスペースのファイルはクリーンアップされました。先に復元してください。",
         branchNameUnavailable: "ブランチ名が利用できません",
         terminalQueued: "ワークスペースを準備中、準備ができたらターミナルを開きます...",
         workspacePathCopiedLabel: "ワークスペースパス",
@@ -747,6 +724,17 @@ export const ja: TranslationResources = {
           pending: "更新中...",
           success: "更新しました",
         },
+        createBranch: {
+          label: "ブランチを作成",
+          pending: "ブランチを作成中...",
+          success: "ブランチを作成しました",
+          dialogTitle: "ブランチを作成",
+          placeholder: "ブランチ名",
+          submit: "作成",
+          errors: {
+            exists: "'{{branch}}' という名前のブランチは既に存在します",
+          },
+        },
         archive: {
           label: "ワークスペースをアーカイブ",
           pending: "アーカイブ中...",
@@ -806,7 +794,7 @@ export const ja: TranslationResources = {
           updateCurrent: "このブランチはすでに{{baseRef}}と最新の状態のため、更新は利用できません",
           mergePrNoGithub: "GitHubが接続されていないため、PRのマージは現在利用できません",
           archiveNotWorktree:
-            "このワークスペースはPaseoワークツリーとして作成されていないため、アーカイブはここでは利用できません",
+            "このワークスペースはAgent Duelワークツリーとして作成されていないため、アーカイブはここでは利用できません",
           mergePrNoForge: "{{brand}}が接続されていないため、{{noun}}のマージは現在利用できません",
           mergePrMissing: "プルリクエストがまだないため、PRのマージは利用できません",
           mergePrDraft: "プルリクエストがまだドラフトのため、PRのマージは利用できません",
@@ -978,7 +966,6 @@ export const ja: TranslationResources = {
       },
       show: {
         label: "表示項目",
-        host: "ホスト",
         changeRequest: "プルリクエスト",
         checks: "チェック",
         services: "サービス",
@@ -998,15 +985,9 @@ export const ja: TranslationResources = {
     pinned: {
       title: "固定済み",
     },
-    host: {
-      noHost: "ホストなし",
-      switchTitle: "ホストを切り替え",
-      searchPlaceholder: "ホストを検索...",
-    },
     actions: {
       addProject: "プロジェクトを追加",
       newWorkspace: "新しいワークスペース",
-      hosts: "ホスト",
       home: "ホーム",
       settings: "設定",
       closeSidebar: "サイドバーを閉じる",
@@ -1014,23 +995,15 @@ export const ja: TranslationResources = {
     help: {
       trigger: "ヘルプとサポート",
       sectionHelp: "ヘルプ",
-      diagnostics: "診断を実行",
       shortcuts: "キーボードショートカット",
       reportIssue: "問題を報告",
       discord: "Discord",
       github: "GitHub Issueを作成",
       whatsNew: "新着情報",
-      appName: "Paseo",
+      appName: "Agent Duel",
     },
     sections: {
       sessions: "履歴",
-      schedules: "スケジュール",
-    },
-    worktreeSetup: {
-      title: "ワークツリースクリプトを設定",
-      description:
-        "新しいワークツリーが依存関係をインストールして自動的に準備できるようにセットアップコマンドを追加してください。",
-      openProjectSettings: "プロジェクト設定を開く",
     },
     project: {
       actions: {
@@ -1068,12 +1041,13 @@ export const ja: TranslationResources = {
       },
       actions: {
         menu: "ワークスペースアクション",
-        newWorkspace: "新しいワークスペース",
+        newChat: "新しいチャット",
         showMore: "さらに表示",
         showLess: "表示を減らす",
-        createWorkspaceFor: "{{projectName}}の新しいワークスペースを作成",
+        startChatFor: "{{projectName}}で新しいチャットを開始",
         copyPath: "パスをコピー",
         copyBranchName: "ブランチ名をコピー",
+        createBranch: "ここにブランチを作成",
         rename: "ワークスペースの名前を変更",
         pin: "上部に固定",
         unpin: "固定解除",
@@ -1095,6 +1069,11 @@ export const ja: TranslationResources = {
         submit: "名前を変更",
         invalidBranchName: "無効なブランチ名",
       },
+      createBranch: {
+        title: "ブランチを作成",
+        submit: "作成",
+        placeholder: "branch-name",
+      },
       toasts: {
         workspacePathUnavailable: "ワークスペースパスが利用できません",
         pathCopied: "パスをコピーしました",
@@ -1102,11 +1081,11 @@ export const ja: TranslationResources = {
         hostDisconnected: "ホストが接続されていません",
         hideFailed: "ワークスペースの非表示に失敗しました",
         archiveFailed: "ワークスペースのアーカイブに失敗しました",
+        createBranchFailed: "ブランチの作成に失敗しました",
       },
     },
   },
   newWorkspace: {
-    title: "新しいワークスペース",
     create: "作成",
     isolation: {
       local: "ローカル",
@@ -1122,6 +1101,8 @@ export const ja: TranslationResources = {
     errors: {
       hostDisconnected: "ホストが接続されていません",
       createWorktreeFailed: "ワークツリーの作成に失敗しました",
+      switchBranchFailed: "ブランチの切り替えに失敗しました",
+      branchMissing: "このブランチは存在しません。別のブランチを選択してください。",
       composerStateRequired: "コンポーザーの状態が必要です",
       selectModel: "モデルを選択してください",
     },
@@ -1140,19 +1121,45 @@ export const ja: TranslationResources = {
       searchPlaceholder: "ブランチとPRを検索",
       title: "開始点",
     },
+    newBranch: {
+      action: "新しいブランチを作成...",
+      title: "{{base}} から新しいブランチ",
+      placeholder: "new-branch",
+      submit: "作成",
+      submitLocal: "作成して切り替え",
+      fromBase: "{{base}} から",
+      errors: {
+        trailingSlash: "ブランチ名は「/」で終われません。",
+        exists: "ブランチはすでに存在します。",
+        baseMissing: "ブランチ {{base}} はもう存在しません。",
+        noBase: "先に開始するブランチを選んでください。",
+        createFailed: "ブランチを作成できませんでした",
+      },
+    },
     launch: {
       title: "What to launch",
       chat: "Chat",
       terminal: "Terminal",
-      manageProfiles: "Manage profiles",
       submit: "Launch",
       promptPlaceholder: "Prompt {{name}}",
       commandPlaceholder: "Run a command, or leave empty for a blank terminal",
     },
   },
+  arenaByok: {
+    keyMissing: "バトルを開始するには、設定で OpenRouter キーを追加してください。",
+  },
+  battleRepository: {
+    title: "Agent Duel にはコミットが必要です",
+    notGitMessage: "空の最初のコミットで Git リポジトリを作成しますか？",
+    noCommitMessage: "空の最初のコミットを作成しますか？",
+    confirm: "コミットを作成",
+    declined: "バトルには Git コミットが必要です。",
+    failed: "最初のコミットを作成できませんでした: {{error}}",
+    inspectFailed: "フォルダーの Git の状態を確認できませんでした: {{error}}",
+  },
   desktop: {
     quitting: {
-      title: "Paseoを終了中...",
+      title: "Agent Duelを終了中...",
       detail: "ローカルデーモンを停止中。",
     },
     daemon: {
@@ -1166,20 +1173,20 @@ export const ja: TranslationResources = {
       },
       management: {
         title: "組み込みデーモンを管理",
-        hint: "Paseoが組み込みデーモンを起動・停止できるようにする",
+        hint: "Agent Duelが組み込みデーモンを起動・停止できるようにする",
         pauseTitle: "組み込みデーモンを一時停止",
         pauseMessage:
           "これにより組み込みデーモンが即座に停止します。組み込みデーモンに接続されている実行中のエージェントとターミナルが停止されます。",
         pauseAndStop: "一時停止して停止",
         registrationFailed:
-          "組み込みデーモンは起動しましたが、Paseoがlocalhostの接続を保存できませんでした。デーモン管理をオフにしてから再度オンにするか、localhostを手動で追加してください。",
+          "組み込みデーモンは起動しましたが、Agent Duelがlocalhostの接続を保存できませんでした。デーモン管理をオフにしてから再度オンにするか、localhostを手動で追加してください。",
         pausedStopFailed:
-          "組み込みデーモン管理は一時停止されましたが、Paseoがデーモンを停止できませんでした。",
+          "組み込みデーモン管理は一時停止されましたが、Agent Duelがデーモンを停止できませんでした。",
         updateFailed: "組み込みデーモン管理を更新できません。",
       },
       keepRunning: {
         title: "終了後もデーモンを実行し続ける",
-        hint: "Paseoを終了してもデーモンは実行し続けます",
+        hint: "Agent Duelを終了してもデーモンは実行し続けます",
       },
       logs: {
         title: "ログファイル",
@@ -1247,7 +1254,7 @@ export const ja: TranslationResources = {
     },
     rosetta: {
       title: "Apple Siliconビルドをダウンロード",
-      runningIntel: "Apple Silicon上のRosettaでPaseoのIntelビルドを実行しています。",
+      runningIntel: "Apple Silicon上のRosettaでAgent DuelのIntelビルドを実行しています。",
       highCpu:
         "これにより高いCPU使用率が発生します。修正するにはApple Siliconビルドをダウンロードしてください。",
       download: "ダウンロード",
@@ -1258,7 +1265,14 @@ export const ja: TranslationResources = {
         denied: "通知はシステム設定で拒否されています。",
         notGranted: "通知はまだ許可されていません。",
         webOnly: "デスクトップ通知のステータスはWebランタイムでのみ利用できます。",
-        supported: "デスクトップ通知はサポートされています。",
+        nativeAllowed: "macOS で通知が許可されています。",
+        nativeQuiet: "通知は静かに配信されます。バナーが表示されない場合があります。",
+        nativeDenied: "macOS で通知が無効です。システム設定で有効にしてください。",
+        nativePrompt: "テストを送信するには通知を許可してください。",
+        nativeUnknown: "通知の許可を確認できません。更新するか、システム設定を開いてください。",
+        systemManaged:
+          "システム設定 > 通知で管理します。テスト通知を送信して届くか確認してください。",
+        supportCheckFailed: "通知のサポート状況を確認できませんでした。更新してみてください。",
         unsupported: "デスクトップ通知はこのプラットフォームではサポートされていません。",
         apiUnavailable: "この環境ではWeb Notification APIは利用できません。",
         requestsWebOnly: "デスクトップ通知のリクエストはWebランタイムでのみ利用できます。",
@@ -1290,7 +1304,7 @@ export const ja: TranslationResources = {
         microphone: "マイクのステータスはまだ確認されていません。",
       },
       testNotification: {
-        title: "Paseo通知テスト",
+        title: "Agent Duel通知テスト",
         body: "これが見えれば、デスクトップ通知は機能しています。",
         notDelivered: "通知が届きませんでした。システム設定 > 通知を確認してください。",
         failed: "通知の送信に失敗しました。",
@@ -1299,7 +1313,7 @@ export const ja: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "CLIのインストール状態を確認できません。",
-        installFailed: "Paseo CLIをインストールできません。",
+        installFailed: "Agent Duel CLIをインストールできません。",
       },
       skills: {
         statusFailed: "オーケストレーションスキルのステータスを確認できません。",
@@ -1311,7 +1325,7 @@ export const ja: TranslationResources = {
     },
   },
   rootError: {
-    title: "Paseo で問題が発生しました。",
+    title: "Agent Duel で問題が発生しました。",
     body: "アプリを再読み込みするにはもう一度お試しください。繰り返し発生する場合は、以下の詳細を添えて報告してください。",
     details: "詳細",
   },
@@ -1330,10 +1344,6 @@ export const ja: TranslationResources = {
       addProject: {
         title: "プロジェクトを追加",
         description: "マシン上のフォルダを開く",
-      },
-      importSession: {
-        title: "セッションをインポート",
-        description: "最近の外部CLIセッションを取り込む",
       },
       setupProviders: {
         title: "プロバイダーをセットアップ",
@@ -1405,7 +1415,7 @@ export const ja: TranslationResources = {
     },
   },
   onboarding: {
-    title: "Paseoへようこそ",
+    title: "Agent Duelへようこそ",
     subtitle: "始めるにはコンピューターに接続してください",
     actions: {
       settings: "設定",
@@ -1467,130 +1477,6 @@ export const ja: TranslationResources = {
       hostDisconnected: "ホストが接続されていません",
     },
   },
-  pairing: {
-    connectionMethods: {
-      title: "接続を追加",
-      direct: {
-        title: "直接接続",
-        description: "ローカルネットワークまたはVPN。",
-      },
-      scanQr: {
-        title: "QRコードをスキャン",
-        description: "暗号化されたリレー接続。",
-      },
-      pasteLink: {
-        title: "ペアリングリンクを貼り付け",
-        description: "暗号化されたリレー接続。",
-      },
-    },
-    direct: {
-      title: "直接接続",
-      helper: "Paseoサーバーのアドレスを入力してください。",
-      fields: {
-        host: "ホスト",
-        port: "ポート",
-        password: "パスワード",
-        optional: "任意",
-        useSsl: "SSLを使用",
-        connectionUri: "接続URI",
-      },
-      advanced: {
-        label: "詳細設定",
-        show: "詳細設定を表示",
-        hide: "詳細設定を非表示",
-      },
-      passwordVisibility: {
-        show: "パスワードを表示",
-        hide: "パスワードを非表示",
-      },
-      actions: {
-        cancel: "キャンセル",
-        connect: "接続",
-        connecting: "接続中...",
-      },
-      errors: {
-        hostRequired: "ホストは必須です",
-        invalidPort: "ポートは1から65535の間である必要があります",
-        invalidConnection: "無効な接続",
-        failedTitle: "接続に失敗しました",
-        failedToConnect: "{{endpoint}}への接続に失敗しました。",
-        noAdditionalDetails: "{{detail}}（追加の詳細は提供されていません）",
-        timedOut: "接続がタイムアウトしました。ホスト/ポートとネットワークを確認してください。",
-        refused: "接続が拒否されました。このアドレスでサーバーが実行されていますか？",
-        hostNotFound: "ホストが見つかりません。ホスト名を確認してもう一度試してください。",
-        hostUnreachable:
-          "ホストに到達できません。ネットワークとファイアウォールを確認してください。",
-        tlsError: "TLSエラー。直接接続は、デーモンの前にTLS終端がある場合のみSSLを使用します。",
-        unableToConnect: "接続できません。ホスト/ポートとデーモンが到達可能かを確認してください。",
-        details: "詳細: {{detail}}",
-      },
-    },
-    link: {
-      title: "ペアリングリンクを貼り付け",
-      helper: "サーバーからのペアリングリンクを貼り付けてください。",
-      label: "ペアリングリンク",
-      errors: {
-        required: "ペアリングリンクを貼り付けてください（.../#offer=...）",
-        missingOffer: "リンクには#offer=...が必要です",
-        emptyOffer: "オファーのペイロードが空です",
-        invalid: "無効なペアリングリンク",
-        unableToPair: "ホストをペアリングできません",
-      },
-      alert: {
-        failedTitle: "ペアリングに失敗しました",
-      },
-      actions: {
-        cancel: "キャンセル",
-        pair: "ペアリング",
-        pairing: "ペアリング中...",
-      },
-    },
-    scan: {
-      title: "QRをスキャン",
-      webUnavailableTitle: "Webでは利用できません",
-      webUnavailableBody:
-        "QRスキャンはWebビルドではサポートされていません。代わりに「リンクを貼り付け」を使用してください。",
-      backToSettings: "設定に戻る",
-      cameraPermissionTitle: "カメラの権限",
-      cameraPermissionBody:
-        "デーモンからのペアリングQRコードをスキャンするためにカメラへのアクセスを許可してください。",
-      grantPermission: "権限を許可",
-      pairing: "ペアリング中...",
-      unableToPair: "ホストをペアリングできません",
-      errorTitle: "エラー",
-    },
-    device: {
-      loadingOffer: "ペアリングオファーを読み込み中...",
-      failedToLoadOffer: "ペアリングオファーの読み込みに失敗しました。",
-      relayDisabled:
-        "リレーが有効になっていません。デバイスをペアリングするにはリレーを有効にしてください。",
-      enableTitle: "リレーを有効にしますか？",
-      enableDescription:
-        "リレーを使うと、このデバイスからどこでも接続できます。ペアリング通信はエンドツーエンドで暗号化されます。",
-      relayDocs: "リレーの仕組み",
-      relayDocsAccessibility: "Paseo リレーの仕組みを読む",
-      enableRelay: "リレーを有効にする",
-      enablingRelay: "有効化中...",
-      notNow: "今はしない",
-      directConnectionHint:
-        "リレーを使わない場合は、TCP、Tailscale、または別の VPN で直接接続してください。QR コードは作成されません。",
-      updateRequired: "Paseo Desktop からリレーを有効にするにはホストを更新してください。",
-      unavailable: "ペアリングオファーが利用できません。",
-      hint: "スマートフォンのPaseoでこのQRコードをスキャンするか、以下のリンクをコピーしてください。",
-      qrUnavailable: "QRコードが利用できません。",
-      qrAccessibility: "ペアリング QR コード",
-      retry: "再試行",
-      copy: "コピー",
-      copied: "コピーしました",
-    },
-  },
-  realtimeVoice: {
-    actions: {
-      mute: "リアルタイム音声をミュート",
-      unmute: "リアルタイム音声のミュートを解除",
-      stop: "リアルタイム音声を停止してターンを中断",
-    },
-  },
   rewind: {
     tooltip: "このメッセージに巻き戻す",
     warning: "この操作は元に戻せません",
@@ -1605,13 +1491,6 @@ export const ja: TranslationResources = {
   },
   diffViewer: {
     empty: "表示する変更がありません",
-  },
-  serviceUrl: {
-    title: "サービスURLを開く",
-    message: "{{url}}を開きますか？",
-    inPaseo: "Paseoで",
-    externalBrowser: "外部ブラウザ",
-    dontAskAgain: "次回から確認しない",
   },
   downloads: {
     requestTokenFailed: "ダウンロードトークンのリクエストに失敗しました。",
@@ -1639,6 +1518,8 @@ export const ja: TranslationResources = {
     },
     file: {
       directoryMissing: "ワークスペースディレクトリが見つかりません。",
+      directoryCleaned:
+        "容量を節約するためファイルをクリーンアップしました。このワークスペースを参照するには復元してください。",
       loading: "ファイルを読み込み中...",
       noPreview: "プレビューが利用できません",
       binaryPreviewUnavailable: "バイナリプレビューが利用できません",
@@ -1666,8 +1547,20 @@ export const ja: TranslationResources = {
         reloadMessage: "ローカルの変更は失われます。",
       },
     },
+    changes: {
+      label: "変更",
+      subtitle: "チェックアウト内の変更ファイル",
+    },
+    files: {
+      label: "ファイル",
+      subtitle: "ワークスペースのファイル",
+    },
+    pullRequest: {
+      label: "プルリクエスト",
+      subtitle: "オープン中の変更リクエスト",
+    },
     diff: {
-      changesLabel: "変更",
+      changesLabel: "差分",
       changesSubtitle: "作業ツリーの差分",
       commitSubtitle: "コミット差分",
       uncommittedSubtitle: "未コミットの変更",
@@ -1707,8 +1600,8 @@ export const ja: TranslationResources = {
       other: "その他のツールを{{count}}回使用",
     },
     paseoCalls: {
-      one: "Paseoを{{count}}回呼び出し",
-      other: "Paseoを{{count}}回呼び出し",
+      one: "Agent Duelを{{count}}回呼び出し",
+      other: "Agent Duelを{{count}}回呼び出し",
     },
     and: "および",
   },
@@ -1718,6 +1611,38 @@ export const ja: TranslationResources = {
   },
   sidebarCallout: {
     dismiss: "閉じる",
+  },
+  feedback: {
+    sidebarAction: "フィードバックを送信",
+    sendError: "フィードバックを送信できませんでした。もう一度お試しください。",
+    sheet: {
+      title: "フィードバックを送信",
+      subtitle: "Agent Duel の改善にご協力ください。",
+      kindLabel: "どのような内容ですか？",
+      kinds: { general: "全般", bug: "不具合", idea: "アイデア" },
+      messageLabel: "詳しく教えてください",
+      messagePlaceholder: "何が起き、代わりにどうなってほしかったですか？",
+      detailsTitle: "アプリ情報を含める",
+      detailsDescription: "バージョン、OS、現在の画面を含めます。コードや会話は含みません。",
+      contextTitle: "現在のチャットと Git の状態を含める",
+      contextDescription: "チャット全文とツール呼び出し、および現在の Git の状態を含めます。",
+      send: "フィードバックを送信",
+      done: "完了",
+      successTitle: "改善へのご協力ありがとうございます",
+      successDescription: "フィードバックをベータチームに共有しました。",
+    },
+    chat: {
+      eyebrow: "簡単なフィードバック",
+      title: "Agent Duel はいかがですか？",
+      description: "このチャット、ツール呼び出し、現在の Git 状態が含まれます。",
+      notGreat: "いまひとつ",
+      okay: "普通",
+      great: "とても良い",
+      commentPlaceholder: "改善してほしい点はありますか？（任意）",
+      dismiss: "後で",
+      send: "送信",
+      successTitle: "ありがとうございます。参考になります。",
+    },
   },
   contextWindow: {
     title: "コンテキストウィンドウ",
@@ -1751,7 +1676,6 @@ export const ja: TranslationResources = {
       local: "ローカル",
     },
     backToWorkspace: "戻る",
-    addHost: "ホストを追加",
     enableBuiltInDaemon: "組み込みデーモンを有効にする",
     projects: "プロジェクト",
     projectList: {
@@ -1767,8 +1691,19 @@ export const ja: TranslationResources = {
       integrations: "連携",
       notifications: "通知",
       permissions: "権限",
-      diagnostics: "診断",
       about: "アプリ情報",
+    },
+    account: {
+      title: "アカウント",
+      signedInAs: "サインイン中",
+      methods: {
+        email: "メールのサインインリンク",
+        google: "Google",
+        github: "GitHub",
+      },
+      signOut: "サインアウト",
+      signOutHint: "Agent Duel を使うには再度サインインが必要です。",
+      signOutFailed: "サインアウトできませんでした。もう一度お試しください。",
     },
     editor: {
       title: "エディター",
@@ -1779,20 +1714,29 @@ export const ja: TranslationResources = {
       title: "通知",
       permission: "通知の権限",
       refreshAccessibility: "通知の権限を更新",
+      agentFinished: "エージェントの完了",
+      agentFinishedHint: "対戦中のいずれかのエージェントが作業を終えたときに通知",
+      battleReady: "対戦結果の準備完了",
+      battleReadyHint: "両方の結果を確認できるようになったときに通知",
       playSound: "サウンドを再生",
       playSoundHint: "デスクトップ通知が届いたときにサウンドを再生します",
       test: "通知をテスト",
       testHint: "現在の設定でテスト通知を送信します",
-      permissionRequired: "テストする前に通知へのアクセスを許可してください",
       send: "送信",
       sending: "送信中...",
-      sentTitle: "テスト通知を送信しました",
-      sentDescription: "Paseo が通知をオペレーティングシステムに渡しました。",
+      sentTitle: "テスト通知を要求しました",
+      sentDescription:
+        "バナーが表示されない場合は、集中モードとシステムの通知設定を確認してください。",
+      allowNotifications: "通知を許可",
+      requestingPermission: "許可を待っています…",
+      openSystemSettings: "システム設定を開く",
+      openingSettings: "開いています…",
+      openSettingsFailed: "システム設定を開けません",
+      openSettingsManually: "システム設定 → 通知を開き、Agent Duel を選択してください。",
       sendFailedTitle: "テスト通知を送信できません",
     },
     hostSections: {
       projects: "プロジェクト",
-      connections: "接続",
       agents: "エージェント",
       metadata: "メタデータ",
       workspaces: "ワークスペース",
@@ -1808,15 +1752,33 @@ export const ja: TranslationResources = {
       selection: "モデル選択",
       automatic: "自動",
       preferred: "手動",
-      automaticHint: "Paseo が利用可能な高速モデルを選択します",
-      preferredHint: "Paseo が使用するモデルを選択します",
+      automaticHint: "Agent Duel が利用可能な高速モデルを選択します",
+      preferredHint: "Agent Duel が使用するモデルを選択します",
       model: "モデル",
-      fallbackHint: "利用できない場合、Paseo は別の利用可能なモデルを使用します",
+      fallbackHint: "利用できない場合、Agent Duel は別の利用可能なモデルを使用します",
       docs: "ドキュメント",
       saveError: "メタデータ生成を更新できません",
     },
     general: {
       title: "一般",
+      openRouterKey: {
+        title: "OpenRouter キー",
+        configured: "キーを追加済み",
+        notConfigured: "キーが追加されていません",
+        description: "バトルはこのキーを使います。キーはこのコンピューターに保存されます。",
+        inputLabel: "OpenRouter API キー",
+        save: "保存",
+        saving: "保存中...",
+        remove: "削除",
+        removing: "削除中...",
+        replaceTitle: "OpenRouter キーを置き換えますか？",
+        replaceMessage: "実行中のバトルは停止します。",
+        replace: "置き換え",
+        removeTitle: "OpenRouter キーを削除しますか？",
+        removeMessage: "実行中のバトルは停止し、キーを追加するまで新しいバトルを開始できません。",
+        saveFailed: "キーを保存できませんでした。もう一度お試しください。",
+        removeFailed: "キーを削除できませんでした。もう一度お試しください。",
+      },
       browserData: {
         title: "ブラウザーデータ",
         siteData: "Cookie とサイトデータ",
@@ -1827,26 +1789,6 @@ export const ja: TranslationResources = {
         confirmMessage: "サイトからログアウトし、開いているブラウザータブを再読み込みします。",
         success: "ブラウザーデータを消去しました。",
         error: "ブラウザーデータを消去できませんでした。",
-      },
-      defaultSend: {
-        label: "デフォルトの送信",
-        descriptions: {
-          interrupt: "エージェント実行中、Enterで中断します。Command/Ctrl+Enterでキューに追加。",
-          queue: "エージェント実行中、Enterでキューに追加します。Command/Ctrl+Enterで送信。",
-        },
-        options: {
-          interrupt: "中断",
-          queue: "キュー",
-        },
-      },
-      serviceUrls: {
-        label: "サービスURL",
-        description: "実行中のスクリプトからURLを開く場所",
-        options: {
-          ask: "確認する",
-          inApp: "Paseoで",
-          external: "外部ブラウザ",
-        },
       },
       terminalScrollback: {
         label: "ターミナルスクロールバック",
@@ -1883,34 +1825,6 @@ export const ja: TranslationResources = {
         },
       },
     },
-    diagnostics: {
-      title: "診断",
-      legacyTerminalRenderer: {
-        label: "以前のターミナルレンダラーを使用",
-        description: "ターミナルを開き直した後、以前の WebView ターミナルを使用します",
-        accessibilityLabel: "以前のターミナルレンダラーを使用",
-      },
-      testAudio: "音声をテスト",
-      playTest: "テスト再生",
-      playing: "再生中...",
-      playbackFailed: "再生に失敗しました: {{message}}",
-      app: {
-        title: "App diagnostic",
-        rowTitle: "App diagnostic",
-        rowHint: "Collect connection, daemon, provider, desktop, and log details",
-        run: "Run",
-        running: "Running diagnostic...",
-        copyLabel: "diagnostic",
-        copyAccessibility: "Copy diagnostic",
-        copyFailed: "Failed to copy diagnostic",
-        refreshAccessibility: "Refresh diagnostic",
-        refreshingAccessibility: "Refreshing diagnostic",
-        progress: {
-          client: "Client",
-          desktop: "Desktop",
-        },
-      },
-    },
     about: {
       title: "アプリ情報",
       appVersion: "アプリバージョン",
@@ -1928,7 +1842,7 @@ export const ja: TranslationResources = {
         label: "アプリの更新",
         readyToInstall: "インストール準備完了: {{version}}",
         installTitle: "デスクトップの更新をインストール",
-        installMessage: "このコンピューターのPaseoを更新します",
+        installMessage: "このコンピューターのAgent Duelを更新します",
         installConfirm: "更新をインストール",
         update: "更新",
         updateTo: "{{version}}に更新",
@@ -1952,6 +1866,15 @@ export const ja: TranslationResources = {
           ghostty: "Ghostty",
           pureBlack: "ピュアブラック",
           auto: "システム",
+        },
+      },
+      sidePanel: {
+        title: "サイドパネル",
+        placement: "配置",
+        accessibilityLabel: "サイドパネルの配置: {{value}}",
+        options: {
+          right: "右",
+          bottom: "下",
         },
       },
       detailLevel: {
@@ -2013,7 +1936,6 @@ export const ja: TranslationResources = {
         newWorkspace: "新しいワークスペース",
         newWorktree: "新しいワークツリー",
         archiveWorkspace: "ワークスペースをアーカイブ",
-        newTab: "新しいタブ",
         closeCurrentTab: "現在のタブを閉じる",
         jumpToWorkspace: "ワークスペースにジャンプ",
         jumpToTab: "タブにジャンプ",
@@ -2021,35 +1943,27 @@ export const ja: TranslationResources = {
         nextWorkspace: "次のワークスペース",
         previousTab: "前のタブ",
         nextTab: "次のタブ",
-        splitPaneRight: "右にペインを分割",
-        splitPaneDown: "下にペインを分割",
         focusPaneLeft: "左のペインにフォーカス",
         focusPaneRight: "右のペインにフォーカス",
-        focusPaneUp: "上のペインにフォーカス",
-        focusPaneDown: "下のペインにフォーカス",
         moveTabLeft: "タブを左に移動",
         moveTabRight: "タブを右に移動",
-        moveTabUp: "タブを上に移動",
-        moveTabDown: "タブを下に移動",
         closePane: "ペインを閉じる",
         newTerminal: "新しいターミナル",
         searchFiles: "ファイルを検索",
         toggleCommandCenter: "コマンドセンターを切り替え",
         showKeyboardShortcuts: "キーボードショートカットを表示",
         toggleLeftSidebar: "左サイドバーを切り替え",
-        toggleRightSidebar: "右サイドバーを切り替え",
+        toggleRightSidebar: "サイドパネルを切り替え",
         toggleBothSidebars: "両方のサイドバーを切り替え",
         toggleSettings: "設定を切り替え",
         toggleFocusMode: "フォーカスモードを切り替え",
         cycleTheme: "テーマを順に切り替え",
         focusMessageInput: "メッセージ入力にフォーカス",
         cycleAgentMode: "エージェントモードを順に切り替え",
-        toggleVoiceMode: "音声モードを切り替え",
         startStopDictation: "音声入力を開始/停止",
         interruptAgent: "エージェントを中断",
         sendMessage: "メッセージを送信",
         queueMessage: "メッセージをキューに追加",
-        muteUnmuteVoiceMode: "音声モードのミュートを切り替え",
         switchProject: "プロジェクトを切り替え",
       },
       helpNotes: {
@@ -2059,12 +1973,6 @@ export const ja: TranslationResources = {
     },
     integrations: {
       title: "連携",
-      docs: {
-        cli: "CLIドキュメント",
-        skills: "スキルドキュメント",
-        openCli: "CLIドキュメントを開く",
-        openSkills: "スキルドキュメントを開く",
-      },
       commandLine: {
         title: "コマンドライン",
         description: "ターミナルからエージェントを制御し、スクリプトで操作",
@@ -2073,11 +1981,11 @@ export const ja: TranslationResources = {
         title: "オーケストレーションスキル",
         description: "エージェントがCLI経由でオーケストレーションできるようにします。",
         updateAvailable: "更新が利用可能",
-        updateTitle: "Paseoスキルを更新しますか？",
+        updateTitle: "Agent Duelスキルを更新しますか？",
         updateFallback: "バンドルされたスキルをマシンに同期します。",
-        uninstallTitle: "Paseoスキルをアンインストールしますか？",
+        uninstallTitle: "Agent Duelスキルをアンインストールしますか？",
         uninstallMessage:
-          "~/.agents、~/.claude、~/.codexからすべてのPaseoオーケストレーションスキルを削除します。",
+          "~/.agents、~/.claude、~/.codexからすべてのAgent Duelオーケストレーションスキルを削除します。",
         choose: "スキルを選択",
         chooseAll: "すべてのスキル",
         chooseAllHint:
@@ -2119,67 +2027,21 @@ export const ja: TranslationResources = {
       },
     },
     host: {
-      appearance: {
-        title: "外観",
-        name: {
-          label: "名前",
-        },
-        color: {
-          label: "色",
-          accessibilityLabel: "色、{{value}}",
-          options: {
-            none: "デフォルト",
-            violet: "バイオレット",
-            sky: "スカイ",
-            emerald: "エメラルド",
-            orange: "オレンジ",
-            pink: "ピンク",
-            indigo: "インディゴ",
-            teal: "ティール",
-            red: "レッド",
-            amber: "アンバー",
-            blue: "ブルー",
-          },
-        },
-        badge: {
-          label: "サイドバーのバッジ",
-          accessibilityLabel: "サイドバーのバッジ、{{value}}",
-          options: {
-            name: "名前",
-            icon: "アイコンのみ",
-            hidden: "非表示",
-          },
-        },
-        preview: {
-          workspaceName: "my-workspace",
-        },
-      },
       notFound: "ホストが見つかりません",
       badges: {
         relay: "リレー",
         local: "ローカル",
       },
       connections: {
-        title: "接続",
-        removeTitle: "接続を削除",
-        removeMessage: "{{name}}を削除しますか？この操作は元に戻せません。",
         removeAction: "削除",
-        removeErrorTitle: "エラー",
-        removeErrorMessage: "接続を削除できません",
-        timeout: "タイムアウト",
-      },
-      pairDevices: {
-        title: "デバイスをペアリング",
-        rowTitle: "デバイスをペアリング",
-        rowHint: "QRコードをスキャンするかリンクをコピーしてスマートフォンをこのホストに接続",
       },
       orchestration: {
         title: "オーケストレーション",
         unavailable: "オーケストレーションを管理するにはこのホストに接続してください",
         enableTools: {
-          title: "Paseoツールを有効にする",
+          title: "Agent Duelツールを有効にする",
           hint: "エージェントがワークツリー、エージェント、スケジュールを管理できるようになります",
-          accessibilityLabel: "Paseoツールを有効にする",
+          accessibilityLabel: "Agent Duelツールを有効にする",
         },
         systemPrompt: {
           title: "システムプロンプト",
@@ -2198,31 +2060,6 @@ export const ja: TranslationResources = {
       },
       workspaces: {
         unavailable: "ワークスペースを管理するにはこのホストに接続してください",
-      },
-      terminalProfiles: {
-        unavailable: "ターミナルプロファイルを管理するにはこのホストに接続してください",
-        sectionTitle: "ターミナルプロファイル",
-        editProfile: "プロファイルを編集",
-        addProfileTitle: "ターミナルプロファイルを追加",
-        editProfileTitle: "ターミナルプロファイルを編集",
-        namePlaceholder: "Claude Code",
-        commandPlaceholder: "claude",
-        argsPlaceholder: "--dangerously-skip-permissions",
-        nameLabel: "名前",
-        commandLabel: "コマンド",
-        argsLabel: "引数",
-        nameRequired: "名前は必須です",
-        commandRequired: "コマンドは必須です",
-        argsHint: "コマンドに渡すスペース区切りの引数",
-        saving: "保存中...",
-        remove: "削除",
-        removeConfirmTitle: "プロファイルを削除しますか？",
-        removeConfirmMessage: '"{{name}}"を削除しますか？',
-        moveUp: "上に移動",
-        moveDown: "下に移動",
-        save: "保存",
-        emptyState:
-          "プロファイルがまだありません。特定のコマンドでターミナルを起動するために追加してください。",
       },
       agentProfiles: {
         sectionTitle: "エージェントプロファイル",
@@ -2263,12 +2100,6 @@ export const ja: TranslationResources = {
         moveDown: "下に移動",
       },
       daemon: {
-        rename: {
-          editLabel: "ラベルを編集",
-          title: "ホストの名前を変更",
-          placeholder: "マイホスト",
-          submit: "名前を変更",
-        },
         restart: {
           title: "デーモンを再起動",
           hint: "デーモンプロセスを再起動します。アプリは自動的に再接続します",
@@ -2285,15 +2116,15 @@ export const ja: TranslationResources = {
             "このホストは接続されていません。再起動する前にオンラインになるまでお待ちください。",
           offlineTitle: "ホストオフライン",
           offlineMessage:
-            "このホストはオフラインです。Paseoが自動再接続します。再起動は、ホストがオンラインに戻ってから行ってください。",
+            "このホストはオフラインです。Agent Duelが自動再接続します。再起動は、ホストがオンラインに戻ってから行ってください。",
           requestFailedTitle: "エラー",
           requestFailedMessage:
-            "再起動リクエストの送信に失敗しました。Paseoは自動的に再接続します。ホストがオンラインになったら再試行してください。",
+            "再起動リクエストの送信に失敗しました。Agent Duelは自動的に再接続します。ホストがオンラインになったら再試行してください。",
           dialogFailedMessage: "再起動確認ダイアログを開けませんでした。",
         },
         update: {
           desktopManagedHint:
-            "このデーモンはPaseo Desktopによって管理されています。ホスト上のPaseo Desktopを更新してください。",
+            "このデーモンはAgent Duel Desktopによって管理されています。ホスト上のAgent Duel Desktopを更新してください。",
           title: "デーモンを更新",
           hint: "デーモンを最新バージョンに更新して再起動します",
           confirm: "更新",
@@ -2422,46 +2253,9 @@ export const ja: TranslationResources = {
         failedTitle: "paseo.jsonを読み込めませんでした",
         failedDescription: "再読み込みして再試行してください。",
       },
-      worktree: {
-        title: "ワークツリーライフサイクルフック",
-        info: "このプロジェクトのワークツリーが作成または削除されたときに実行されるコマンド",
-        docs: "ドキュメント",
-        docsTooltip:
-          "これらのコマンドで使用可能な詳細と環境変数についてはドキュメントを参照してください",
-        setup: "セットアップ",
-        setupAccessibility: "ワークツリーセットアップコマンド",
-        teardown: "削除時",
-        teardownAccessibility: "ワークツリー削除時のコマンド",
-      },
-      scripts: {
-        title: "スクリプト",
-        info: "このプロジェクトのどのエージェントからでも起動できる、長時間実行サービスと単発コマンド",
-        empty: "スクリプトがまだありません。",
-        untitled: "無題のスクリプト",
-        port: "ポート{{port}}",
-        menuAccessibility: "スクリプトメニューを開く",
-        removeTitle: "スクリプトを削除しますか？",
-        removeMessage: "{{name}}を削除しますか？",
-        removeFallbackName: "このスクリプト",
-        name: "名前",
-        command: "コマンド",
-        nameAccessibility: "スクリプト名",
-        commandAccessibility: "スクリプトコマンド",
-        nameRequired: "名前は必須です",
-        commandRequired: "コマンドは必須です",
-        newScript: "新しいスクリプト",
-        editScript: "{{name}}を編集",
-        runAsService: "サービスとして実行",
-        serviceHint: "Paseoがプロセスを監督し、$PASEO_PORTを通じてポートを割り当てます",
-        actions: {
-          add: "スクリプトを追加",
-          edit: "編集",
-          remove: "削除",
-        },
-      },
       metadata: {
         title: "メタデータ生成",
-        info: "Paseoがメタデータ生成に使うAIプロンプトへ追加する、プロジェクト固有の指示です。ブランチ名、コミット形式、PR形式など、チームの規約を反映するために使います。",
+        info: "Agent Duelがメタデータ生成に使うAIプロンプトへ追加する、プロジェクト固有の指示です。ブランチ名、コミット形式、PR形式など、チームの規約を反映するために使います。",
         branchName: "ブランチ名",
         branchNamePlaceholder: "ブランチ名は feat/ または fix/ で始め、個人ブランチは mb/ にする",
         commitMessage: "コミットメッセージ",

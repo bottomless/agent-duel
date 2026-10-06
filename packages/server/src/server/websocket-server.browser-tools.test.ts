@@ -17,7 +17,6 @@ import { BrowserToolsBroker } from "./browser-tools/broker.js";
 import type { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
 import type { DownloadTokenStore } from "./file-download/token-store.js";
-import type { ScheduleService } from "./schedule/service.js";
 import { createStub } from "./test-utils/class-mocks.js";
 import { DaemonClient } from "./test-utils/daemon-client.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
@@ -305,7 +304,6 @@ function createVoiceAssistantWebSocketServer(params: {
     undefined,
     undefined,
     undefined,
-    createStub<ScheduleService>({}),
     createStub<CheckoutDiffManager>({
       subscribe: () => {},
       scheduleRefreshForCwd: () => {},

@@ -1,14 +1,18 @@
 # Architecture
 
-Paseo is a client-server system for monitoring and controlling local AI coding agents. The daemon runs on your machine, manages agent processes, and streams their output in real time over WebSocket. Clients (mobile app, CLI, desktop app) connect to the daemon to observe and interact with agents.
+Paseo is a client-server system for monitoring and controlling local AI coding agents. The daemon runs on your machine, manages agent processes, and streams their output in real time over WebSocket. Clients connect to the daemon to observe and interact with agents. Agent Duel ships the Electron desktop client; the browser build remains a development and QA surface, not a hosted product.
 
-Your code never leaves your machine. Paseo is local-first.
+Agent execution, repositories, worktrees, and Arena history stay on your machine. Model prompts
+leave through their configured provider. The runtime keeps canonical Arena records in
+`$PASEO_HOME/arena/arena.sqlite` and content-addressed artifacts under
+`$PASEO_HOME/arena/artifacts/sha256/`. It also sends selected research snapshots to the authenticated
+control plane in the background; a failed upload never removes or blocks local data.
 
 ## System overview
 
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  Mobile App  │    │     CLI     │    │ Desktop App │
+│  QA Harness │    │     CLI     │    │ Desktop App │
 │   (Expo)     │    │ (Commander) │    │ (Electron)  │
 └──────┬───────┘    └──────┬──────┘    └──────┬──────┘
        │                   │                  │
@@ -34,12 +38,108 @@ Your code never leaves your machine. Paseo is local-first.
 ## Components at a glance
 
 - **Daemon:** Local server that spawns and manages agent processes and exposes the WebSocket API.
-- **App:** Cross-platform Expo client for iOS, Android, web, and the shared UI used by desktop.
+- **App:** Expo renderer shared by Electron and the local browser QA harness; it is not hosted as a product.
 - **CLI:** Terminal interface for agent workflows that can also start and manage the daemon.
-- **Desktop app:** Electron wrapper around the web app that bundles and auto-manages its own daemon.
+- **Desktop app:** Electron wrapper around the Expo renderer that bundles and auto-manages its own daemon.
+- **Arena runtime:** Bun executable bundled with desktop; creates local worktrees and runs both contestants.
+- **Control plane:** Vercel-hosted authentication, signed sessions, research ingestion, private
+  contestant assignment, and OpenRouter routing for the official download. It is not part of this
+  repository, never executes agents, and never accesses a repository. The battle routes it serves
+  live in `arena-backend/packages/arena-service`.
+- **BYOK source builds:** with no control-plane URL, the Arena runtime runs `arena-service` in process
+  with your own OpenRouter key. There is no sign-in and nothing is uploaded.
 - **Relay:** Optional encrypted bridge for remote access without opening ports directly.
 
 ## Packages
+
+### `arena-backend` — Arena-enabled OpenCode runtime
+
+The Arena backend is an isolated Bun workspace tracked in this repository.
+Packaged desktop launches its compiled Arena executable. Source development
+launches the same entrypoint from `PASEO_ARENA_BACKEND_ROOT`, which defaults to
+`$REPO_ROOT/arena-backend`. Keeping its package graph outside the root npm
+workspaces preserves the backend's Schema → Core/Protocol → Server dependency
+direction while giving the Electron app and backend one Git revision and one
+branch lifecycle.
+
+An Arena chat stays bound to the existing Git checkout where its canonical
+session was created. Each turn freezes canonical `HEAD` plus the exact staged,
+unstaged, and nonignored-untracked state, then prepares A and B in isolated
+bare host repositories that borrow canonical objects. Both hosts use the
+developer's exact branch name, or detached `HEAD` when the canonical checkout
+is detached. Fixed side-worktree paths are scoped to the chat and generation;
+Arena copies state out and trashes them during fast cleanup. Exact base, side,
+and selected results remain available under generation-scoped local
+`refs/battles/` refs; companion private refs carry final index trees between
+isolated repositories. If the canonical checkout disappears, the chat enters
+a blocked state until the same path contains the recorded repository lineage
+again.
+
+Arena keeps three private environments under the excluded `.agent-duel`
+directory, outside the canonical Git state. The selected environment retains
+its services until the next send, while warm A and B have no services. A human
+or agent environment transition stops retained services before the next turn
+and exposes retained, warm, and trunk status. Each turn receives a fresh port
+bank. Per-turn, per-side, and per-service `.localhost` proxy routes are
+immutable; an old URL never retargets a later process.
+
+On vote, the selected contestant's Git state is authoritative. Preserve its
+no-commit dirty and index state, every actual commit (including empty or
+multiple commits), and commit-plus-residual state. Arena does not create a
+visible wrapper commit. If the public canonical baseline is unchanged,
+selected commits retain their exact OIDs. If the same branch advanced, replay
+selected commits in order. A newly created winner branch is created and checked out in the
+canonical repository. A public branch-name collision, detached winner, or unrelated history requires
+manual handling. Conflicts remain standard Git conflict state and the UX
+reports their paths. A vote returns after the choice is durable; transcript
+retention, application, cleanup, and warming continue while the chat remains
+active.
+
+`arena/service.ts` owns orchestration. Git snapshot and application, warm-pair
+state, process ownership, environment transitions, route and port allocation,
+and transition records remain behind the corresponding modules in `arena/`.
+The public projection exposes short checkout labels and redacted diagnostics;
+absolute paths and process identities do not reach the app. Operational records are written to the
+local Arena store before the runtime schedules a bounded research snapshot upload. The upload is
+best effort and has no durable queue or retry path, and BYOK source builds never upload. The control
+plane's database is never a local runtime dependency.
+The daemon retains the account session and gives the Arena runtime only a revocable loopback
+capability. A strict local proxy exchanges that capability for the account session on an allowlist of
+Arena control-plane routes. The local runtime knows only a neutral `contestant` model plus opaque
+assignment ids until a vote is committed. For an assigned OpenRouter request it sends the owning
+scope id and assignment id; the control plane routes only after matching both against the
+authenticated account and confirming the assignment is unresolved.
+Comparison has its own scoped, fixed-model endpoint rather than an unassigned OpenRouter path.
+Permanent assignment records on the control plane retain the selected model profile after resolution and when the
+configured pool changes.
+
+The daemon also owns the raw token for the Arena runtime's loopback OpenCode HTTP server. It gives
+the runtime only a one-way verifier at startup and attaches the token to its SDK and raw HTTP calls.
+The renderer continues to use the daemon WebSocket API; it never calls OpenCode HTTP directly. In
+Arena mode that server denies routes by default, leaves only `GET /global/health` public, requires
+the token for `/session` and Arena routes, and disables the legacy `/api/*` surface. See the local
+boundary in [Security](../SECURITY.md#agent-duel-control-plane) for the complete policy.
+Git, agents, worktrees, terminals, service processes, and the daemon WebSocket remain local.
+
+The packaged architecture has one outbound boundary:
+
+```text
+Electron UI -> local daemon -> local Arena runtime -> local SQLite + artifact CAS
+                    |                 |                         |
+                    |                 |                         `-- best-effort research upload
+                    |                 `-- local repositories, worktrees, agents, and services
+                    |
+                    `-- revocable Arena runtime proxy ----------> Vercel control plane
+                              (account token stays here)             |-- auth and sessions
+                                                                    |-- research ingestion
+                                                                    |-- private model assignments
+                                                                    |-- scoped comparison
+                                                                    `-- assigned OpenRouter routing
+```
+
+The UI WebSocket terminates at the local daemon. Vercel handles ordinary HTTP requests and the
+streaming OpenRouter response; it does not host a WebSocket, persistent filesystem, or background
+agent process.
 
 ### `packages/server` — The daemon
 
@@ -50,7 +150,7 @@ The heart of Paseo. A Node.js process that:
 - Streams agent output in real time via a timeline model
 - Provides agent-to-agent tools through a transport-neutral tool catalog, with MCP as one adapter
 - Optionally connects outbound to a relay for remote access
-- Optionally serves the browser web client from the same HTTP server (self-hosting guide: [public-docs/web-ui.md](../public-docs/web-ui.md))
+- Retains Paseo's optional self-hosted browser client, which is not an Agent Duel product surface ([inherited guide](web-ui.md))
 
 All paths are under `packages/server/src/`.
 
@@ -75,7 +175,6 @@ not retain non-Git directories.
 | `server/agent/mcp-server.ts`    | Thin MCP adapter that registers the Paseo tool catalog with the MCP SDK       |
 | `server/agent/providers/`       | Provider adapters (see "Agent providers" below)                               |
 | `server/relay-transport.ts`     | Outbound relay connection with E2E encryption                                 |
-| `server/schedule/`              | Cron-based scheduled agents                                                   |
 
 ### `packages/protocol` — Wire schemas and shared protocol types
 
@@ -91,9 +190,10 @@ facade. App and CLI may import the low-level driver from
 `@getpaseo/client/internal/daemon-client` during migration, while new SDK-shaped
 code imports from `@getpaseo/client`.
 
-### `packages/app` — Mobile + web client (Expo)
+### `packages/app` — Electron renderer and browser QA harness (Expo)
 
-Cross-platform React Native app that connects to one or more daemons.
+Shared React Native renderer that connects to one or more daemons. Electron is
+the product runtime; direct browser execution is for development and QA.
 
 - Expo Router navigation (`/h/[serverId]/workspace/[workspaceId]`, `/h/[serverId]/agent/[agentId]`, etc.). The `workspaceId` URL segment is an opaque workspace id, not a directly meaningful filesystem path.
 - `HostRuntimeController` manages saved host connections, reconnection, and per-host runtime state
@@ -119,8 +219,6 @@ Commander.js CLI with Docker-style commands. Common agent operations are also ex
 - `paseo daemon start/stop/restart/status/pair/set-password`
 - `paseo terminal ls/create/capture/send-keys/kill`
 - `paseo script ls/start/stop`
-- `paseo schedule create/ls/inspect/update/pause/resume/run-once/logs/delete`
-- `paseo heartbeat create/update/delete`
 - `paseo workspace create/ls/rename/archive`
 - `paseo permit allow/deny/ls`
 - `paseo provider ls/models`
@@ -145,18 +243,14 @@ The production relay server lives in [getpaseo/paseo-relay](https://github.com/g
 
 See [SECURITY.md](../SECURITY.md) for the full threat model.
 
-### Paseo Hub
-
-The optional Hub relationship is daemon-outbound and does not use the relay. Its connection,
-authorization, ownership, persistence, and lifecycle contract is documented in [hub.md](hub.md).
-
 ### `packages/desktop` — Desktop app (Electron)
 
-Electron wrapper for macOS, Linux, and Windows.
+Electron wrapper with macOS as the first release target. Linux and Windows
+support remains inherited code rather than a first-release commitment.
 
 - Can spawn the daemon as a managed subprocess
 - Native file access for workspace integration
-- Same WebSocket client as mobile app
+- Same WebSocket client as the browser QA harness
 
 **Multi-window (hybrid land-on model).** `createWindow()` in `main.ts` is reusable: `⌘⇧N`/File→New Window, relaunching the app (`second-instance`), and the sidebar "Open in new window" action each open a fresh `BrowserWindow`. Every window shows the full sidebar — there is no per-window project ownership or filtering. "Land on a project" is delivered by a per-`webContents` `PendingOpenProjectStore`: each window pulls its own pending project path on mount (`paseo:get-pending-open-project`) and runs the normal open-project flow, identical to a CLI `paseo <path>` launch.
 
@@ -165,6 +259,8 @@ Electron wrapper for macOS, Linux, and Windows.
 > **In-app browser profile.** Every browser guest uses one stable persistent Electron session, so cookies, authentication, cache, and site storage are shared across tabs, workspaces, and desktop windows and survive tab or app closure. Browser identity is independent of that storage partition: after every `did-attach`, the renderer explicitly registers its browser id, workspace id, and current guest `WebContents` id, and main accepts the registration only when that guest belongs to the calling renderer and the shared profile. Registration is intentionally repeated because reparenting a retained `<webview>` can replace its guest without replacing the DOM element. Settings > General > Clear browser data is the sole profile-deletion path; it clears the shared session and reloads live guests without deleting saved tabs or URLs.
 >
 > **In-app browser window opens.** Ordinary link opens, including Shift-clicked links, become Paseo workspace tabs. Script-created opens with popup features or a named window target and POST-backed opens remain secured Electron child windows in the shared browser profile, preserving `window.opener`, `postMessage`, named-window reuse, request bodies, and `window.close()` for OAuth, payment, and similar popup protocols. Unsupported URL schemes are denied before either path.
+>
+> **Workspace Markdown links.** HTTP(S) links rendered in a workspace open as in-app browser tabs on primary click. Right click exposes the external-browser action. Non-Electron clients keep their platform URL opener, and workspace file links keep the file-pane resolver.
 >
 > **In-app browser ownership.** Each registered guest records its owning host window. The active browser is keyed by `(host window, workspace)`, and application-menu Reload / Force Reload resolve only within the window Electron supplies to the menu callback. A non-null active update must name a browser owned by that host; a null update clears only that host/workspace. Browser automation continues to target explicit browser ids returned by `browser_new_tab` or `browser_list_tabs`.
 >
@@ -303,9 +399,9 @@ initializing → idle ⇄ running
 - Events stream to connected clients in real time; correctness is backed by authoritative timeline fetches and paged-to-completion catch-up.
 - Agent state persists to `$PASEO_HOME/agents/{cwd-with-dashes}/{agent-id}.json` (timeline rows live alongside the record). That storage path is derived from `cwd`, not from workspace id.
 
-## Right-sidebar boundary: directory-backed vs workspace-owned
+## Side panel boundary: directory-backed vs workspace-owned
 
-Two workspaces can share the same `cwd` (e.g. a `directory` workspace and a `local_checkout` workspace on the same folder, or several workspaces opened against one checkout). Model B keeps these distinct: they share everything the directory determines, but nothing the workspace owns. The right-sidebar surfaces split cleanly along this line, and the split is enforced purely by **what each piece of state is keyed by**.
+Two workspaces can share the same `cwd` (e.g. a `directory` workspace and a `local_checkout` workspace on the same folder, or several workspaces opened against one checkout). Model B keeps these distinct: they share everything the directory determines, but nothing the workspace owns. The side panel's tabs (see [side-panel.md](side-panel.md)) split cleanly along this line, and the split is enforced purely by **what each piece of state is keyed by**.
 
 **Directory-backed (shared by same-`cwd` workspaces) — keyed by `(serverId, cwd)`, never by `workspaceId`:**
 
@@ -380,7 +476,6 @@ $PASEO_HOME/
 ├── projects/projects.json                      # Project registry
 ├── projects/workspaces.json                    # Workspace registry
 ├── projects/icons/                             # Custom project icon images
-├── schedules/                                  # Scheduled-agent definitions and runs
 ├── config.json                                 # Daemon config (mutable)
 ├── daemon-keypair.json                         # Daemon identity for relay/E2EE
 ├── push-tokens.json                            # Mobile push tokens

@@ -9,8 +9,6 @@ import {
   GitPullRequestClosed,
   Globe,
 } from "lucide-react-native";
-import type { HostBadgeModel } from "@/hosts/appearance";
-import { HostBadge, HOST_BADGE_ICON_SIZE } from "@/hosts/host-badge";
 import type { PrHint } from "@/git/pr-hint";
 import { getForgePresentation, normalizeForge } from "@/git/forge";
 import { openExternalUrl } from "@/utils/open-external-url";
@@ -28,11 +26,10 @@ export {
 } from "./service-summary";
 
 /**
- * One size for every glyph on the line. The items are peers — host, change request, CI,
- * running service — so a glyph that differs in size reads as a different rank. The host badge
- * owns the size because it is the one item that also appears off this line.
+ * One size for every glyph on the line. The items are peers — change request, CI, running
+ * service — so a glyph that differs in size reads as a different rank.
  */
-const META_ICON_SIZE = HOST_BADGE_ICON_SIZE;
+const META_ICON_SIZE = 12;
 
 const ThemedExternalLink = withUnistyles(ExternalLink);
 const ThemedGitPullRequest = withUnistyles(GitPullRequest);
@@ -55,17 +52,14 @@ const dangerMapping = (theme: Theme) => ({ color: theme.colors.statusDanger });
  * leaves color to mean status.
  */
 export function WorkspaceMetaRow({
-  hostBadge,
   prHint,
   serviceSummary,
 }: {
-  hostBadge: HostBadgeModel | null;
   prHint: PrHint | null;
   serviceSummary: WorkspaceServiceSummary | null;
 }) {
   const { rowItems, checksDisplay } = useSidebarMetaPreferences();
   const items = selectMetaRowItems({
-    hasHostBadge: hostBadge !== null,
     prHint,
     serviceSummary,
     visible: rowItems,
@@ -79,23 +73,14 @@ export function WorkspaceMetaRow({
       {items.map((item, index) => (
         <Fragment key={item.kind}>
           {index > 0 ? <Text style={styles.separator}>·</Text> : null}
-          <MetaItemNode item={item} hostBadge={hostBadge} />
+          <MetaItemNode item={item} />
         </Fragment>
       ))}
     </View>
   );
 }
 
-function MetaItemNode({
-  item,
-  hostBadge,
-}: {
-  item: MetaRowItem;
-  hostBadge: HostBadgeModel | null;
-}): ReactNode {
-  if (item.kind === "host") {
-    return hostBadge ? <HostBadge badge={hostBadge} /> : null;
-  }
+function MetaItemNode({ item }: { item: MetaRowItem }): ReactNode {
   if (item.kind === "changeRequest") {
     return <PullRequestItem hint={item.hint} />;
   }

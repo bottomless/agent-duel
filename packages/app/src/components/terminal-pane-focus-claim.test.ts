@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   EMPTY_FOCUS_CLAIM_STATE,
+  canAttachWithSizeClaim,
   canRequestFocusClaim,
   reconcileFocusClaim,
   resolveTerminalResizeClaim,
@@ -14,6 +15,36 @@ function request(
 ): FocusClaimState {
   return reconcileFocusClaim(state, input).state;
 }
+
+describe("attaching with a size claim", () => {
+  const visibleReadiness = {
+    isWorkspaceFocused: true,
+    isPaneFocused: false,
+    isAppActivelyVisible: true,
+    isClientReady: true,
+    isConnected: true,
+    isRendererReady: true,
+  };
+
+  it("lets a visible pane hand over its size before focus lands", () => {
+    // The pane that just mounted paints at its own width. Until the daemon has that width the
+    // shell keeps drawing for the previous owner's, and the prompt lands in the wrong cells.
+    expect(canRequestFocusClaim(visibleReadiness)).toBe(false);
+    expect(canAttachWithSizeClaim(visibleReadiness)).toBe(true);
+  });
+
+  it("stays quiet for a pane that is not on screen", () => {
+    for (const hidden of [
+      { ...visibleReadiness, isWorkspaceFocused: false },
+      { ...visibleReadiness, isAppActivelyVisible: false },
+      { ...visibleReadiness, isConnected: false },
+      { ...visibleReadiness, isClientReady: false },
+      { ...visibleReadiness, isRendererReady: false },
+    ]) {
+      expect(canAttachWithSizeClaim(hidden)).toBe(false);
+    }
+  });
+});
 
 describe("terminal pane focus claim", () => {
   it("forwards resize callbacks only from the active focused ready candidate", () => {

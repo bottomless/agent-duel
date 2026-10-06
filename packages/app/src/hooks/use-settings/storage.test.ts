@@ -146,6 +146,38 @@ describe("loadAppSettingsFromStorage", () => {
     expect(result.workspaceTitleSource).toBe("title");
   });
 
+  it("docks the side panel to the right until someone moves it", async () => {
+    const deps = makeDeps({ storage: createInMemoryKeyValueStorage({}) });
+
+    const result = await loadAppSettingsFromStorage(deps);
+
+    expect(result.sidePanelPlacement).toBe("right");
+  });
+
+  it("loads a side panel docked to the bottom", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({ sidePanelPlacement: "bottom" }),
+      }),
+    });
+
+    const result = await loadAppSettingsFromStorage(deps);
+
+    expect(result.sidePanelPlacement).toBe("bottom");
+  });
+
+  it("drops an unknown side panel placement back to the right", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({ sidePanelPlacement: "left" }),
+      }),
+    });
+
+    const result = await loadAppSettingsFromStorage(deps);
+
+    expect(result.sidePanelPlacement).toBe("right");
+  });
+
   it("normalizes terminal scrollback lines from storage", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
@@ -255,7 +287,7 @@ describe("loadSettingsFromStorage", () => {
       isElectron: true,
       settings: {
         releaseChannel: "beta",
-        notifications: { playSound: true },
+        notifications: { agentFinished: true, battleReady: true, playSound: true },
         daemon: { manageBuiltInDaemon: false, keepRunningAfterQuit: true },
       },
     });
@@ -303,6 +335,43 @@ describe("loadSettingsFromStorage", () => {
 });
 
 describe("saveAppSettings", () => {
+  it("keeps the previous appearance after a failed write and allows a retry", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(APP_SETTINGS_QUERY_KEY, DEFAULT_CLIENT_SETTINGS);
+    const storage = createInMemoryKeyValueStorage();
+    let fail = true;
+    const deps = makeDeps({
+      storage: {
+        ...storage,
+        async setItem(key, value) {
+          if (fail) throw new Error("Storage unavailable");
+          await storage.setItem(key, value);
+        },
+      },
+    });
+    await expect(
+      saveAppSettings({ queryClient, updates: { uiFontSize: 20 }, deps }),
+    ).rejects.toThrow("Storage unavailable");
+    expect(queryClient.getQueryData(APP_SETTINGS_QUERY_KEY)).toEqual(DEFAULT_CLIENT_SETTINGS);
+    fail = false;
+    await saveAppSettings({ queryClient, updates: { uiFontSize: 20 }, deps });
+    expect(queryClient.getQueryData(APP_SETTINGS_QUERY_KEY)).toMatchObject({ uiFontSize: 20 });
+  });
+
+  it("preserves both fields when appearance changes are saved together", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(APP_SETTINGS_QUERY_KEY, DEFAULT_CLIENT_SETTINGS);
+    const deps = makeDeps();
+    await Promise.all([
+      saveAppSettings({ queryClient, updates: { uiFontSize: 20 }, deps }),
+      saveAppSettings({ queryClient, updates: { codeFontSize: 18 }, deps }),
+    ]);
+    expect(JSON.parse(deps.storage.entries.get(APP_SETTINGS_KEY) ?? "null")).toMatchObject({
+      uiFontSize: 20,
+      codeFontSize: 18,
+    });
+  });
+
   it("saves terminal scrollback through app settings persistence", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
@@ -369,7 +438,7 @@ describe("appearance settings", () => {
     expect(result.uiFontSize).toBe(DEFAULT_UI_FONT_SIZE);
     expect(result.codeFontSize).toBe(DEFAULT_CODE_FONT_SIZE);
     expect(result.syntaxTheme).toBe("one");
-    expect(result.toolCallDetailLevel).toBe("detailed");
+    expect(result.toolCallDetailLevel).toBe("overview");
   });
 
   it("migrates the enabled compact tool call preference to overview", async () => {

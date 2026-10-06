@@ -33,6 +33,7 @@ interface AgentListProps {
   selectedAgentId?: string;
   onAgentSelect?: () => void;
   listFooterComponent?: ReactElement | null;
+  listHeaderComponent?: ReactElement | null;
   showAttentionIndicator?: boolean;
   showHostColumn?: boolean;
   /**
@@ -395,6 +396,7 @@ export function AgentList({
   selectedAgentId,
   onAgentSelect,
   listFooterComponent,
+  listHeaderComponent,
   showAttentionIndicator = true,
   showHostColumn = false,
   searchMatchesByAgentKey,
@@ -569,6 +571,7 @@ export function AgentList({
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         ListFooterComponent={listFooterComponent}
+        ListHeaderComponent={listHeaderComponent}
         refreshControl={refreshControl}
       />
 

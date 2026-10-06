@@ -13,7 +13,6 @@ export interface PaneContextValue {
   closeCurrentTab: () => void;
   retargetCurrentTab: (target: WorkspaceTabTarget) => void;
   openFileInWorkspace: (request: WorkspaceFileOpenRequest) => void;
-  openImportSheet: () => void;
 }
 
 export interface PaneFocusContextValue {

@@ -1,8 +1,18 @@
+import { workspaceBattleStatus } from "@/components/sidebar/arena-status";
+import { useArenaActivityStore } from "@/arena/activity-store";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { memo, useId, useMemo, useCallback, useState, type ReactNode } from "react";
 import { Text, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from "react-native-svg";
-import { CircleAlert, Folder, FolderGit2, Monitor } from "lucide-react-native";
+import {
+  CircleAlert,
+  CircleCheck,
+  CircleHelp,
+  Folder,
+  FolderGit2,
+  Monitor,
+} from "lucide-react-native";
 import { ProjectStatusIndicator } from "@/components/sidebar/project-leading-visual";
 import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
 import {
@@ -10,7 +20,6 @@ import {
   type WorkspaceServiceSummary,
 } from "@/components/sidebar/workspace-meta-row";
 import { WorkspaceHoverCard } from "@/components/workspace-hover-card";
-import type { HostBadgeModel } from "@/hosts/appearance";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
 import {
   hasSidebarWorkspaceTrailing,
@@ -40,6 +49,8 @@ const needsInputColorMapping = (theme: Theme) => ({
   fill: getStatusDotColor({ theme, bucket: "needs_input" }) ?? undefined,
 });
 
+const ThemedCircleCheck = withUnistyles(CircleCheck);
+const ThemedCircleHelp = withUnistyles(CircleHelp);
 const ThemedCircleAlert = withUnistyles(CircleAlert);
 const ThemedMonitor = withUnistyles(Monitor);
 const ThemedFolder = withUnistyles(Folder);
@@ -120,7 +131,6 @@ export function SidebarWorkspaceRowFrame({
 
 export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowContent({
   workspace,
-  hostBadge,
   leadingProjectName = null,
   leadingProjectIconDataUri = null,
   serviceSummary = null,
@@ -134,7 +144,6 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   children,
 }: {
   workspace: SidebarWorkspaceEntry;
-  hostBadge?: HostBadgeModel | null;
   /** Hoisted rows use their project icon as the leading visual because no project row contains them. */
   leadingProjectName?: string | null;
   leadingProjectIconDataUri?: string | null;
@@ -153,6 +162,15 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   const {
     settings: { workspaceTitleSource },
   } = useAppSettings();
+  const liveActivity = useArenaActivityStore((state) =>
+    workspace.arenaActivity
+      ? state.hosts[workspace.serverId]?.get(workspace.arenaActivity.agentId)
+      : undefined,
+  );
+  const activityWorkspace = useMemo(
+    () => (liveActivity ? { ...workspace, arenaActivity: liveActivity } : workspace),
+    [workspace, liveActivity],
+  );
   const workspaceLabel = resolveSidebarWorkspacePrimaryLabel({ workspace, workspaceTitleSource });
   const workspaceBranchTextStyle = useMemo(
     () => [
@@ -166,24 +184,14 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   return (
     <View style={styles.workspaceRowContent}>
       <View style={styles.workspaceRowMain}>
-        {leadingProjectName ? (
-          <ProjectStatusIndicator
-            iconDataUri={leadingProjectIconDataUri}
-            displayName={leadingProjectName}
-            projectViewKey={workspace.projectViewKey}
-            statusBucket={workspace.statusBucket}
-            backdrop={backdrop}
-            loading={isLoading}
-            testID={`sidebar-row-project-icon-${workspace.workspaceKey}`}
-          />
-        ) : (
-          <WorkspaceStatusIndicator
-            bucket={workspace.statusBucket}
-            workspaceKind={workspace.workspaceKind}
-            loading={isLoading}
-            reserveIdleSpace={reserveIdleStatusIndicatorSpace}
-          />
-        )}
+        <SidebarWorkspaceLeadingVisual
+          workspace={activityWorkspace}
+          leadingProjectName={leadingProjectName}
+          leadingProjectIconDataUri={leadingProjectIconDataUri}
+          backdrop={backdrop}
+          loading={isLoading}
+          reserveIdleSpace={reserveIdleStatusIndicatorSpace}
+        />
         <View style={styles.workspaceContentColumn}>
           <View style={styles.workspaceTitleRow}>
             <Text style={workspaceBranchTextStyle} numberOfLines={1}>
@@ -191,11 +199,7 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             </Text>
             <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
           </View>
-          <WorkspaceMetaRow
-            hostBadge={hostBadge ?? null}
-            prHint={workspace.prHint}
-            serviceSummary={serviceSummary}
-          />
+          <WorkspaceMetaRow prHint={workspace.prHint} serviceSummary={serviceSummary} />
         </View>
       </View>
       {showShortcutBadge && shortcutNumber !== null ? (
@@ -206,6 +210,104 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
     </View>
   );
 });
+
+function SidebarWorkspaceLeadingVisual({
+  workspace,
+  leadingProjectName,
+  leadingProjectIconDataUri,
+  backdrop,
+  loading,
+  reserveIdleSpace,
+}: {
+  workspace: SidebarWorkspaceEntry;
+  leadingProjectName: string | null;
+  leadingProjectIconDataUri: string | null;
+  backdrop: SidebarSurfaceBackdrop;
+  loading: boolean;
+  reserveIdleSpace: boolean;
+}) {
+  const status = workspaceBattleStatus(workspace);
+  if (leadingProjectName) {
+    const statusIcon =
+      status?.icon === "ready" || status?.icon === "unknown" ? status.icon : undefined;
+    const project = (
+      <ProjectStatusIndicator
+        iconDataUri={leadingProjectIconDataUri}
+        displayName={leadingProjectName}
+        projectViewKey={workspace.projectViewKey}
+        statusBucket={workspace.statusBucket}
+        statusIcon={statusIcon}
+        statusLabel={status?.label}
+        backdrop={backdrop}
+        loading={loading}
+        testID={`sidebar-row-project-icon-${workspace.workspaceKey}`}
+      />
+    );
+    if (status)
+      return (
+        <ArenaStatusIndicator workspace={workspace} loading={loading}>
+          {project}
+        </ArenaStatusIndicator>
+      );
+    return project;
+  }
+  if (status) return <ArenaStatusIndicator workspace={workspace} loading={loading} />;
+  return (
+    <WorkspaceStatusIndicator
+      bucket={workspace.statusBucket}
+      workspaceKind={workspace.workspaceKind}
+      loading={loading}
+      reserveIdleSpace={reserveIdleSpace}
+    />
+  );
+}
+
+export function ArenaStatusIndicator({
+  workspace,
+  loading,
+  children,
+}: {
+  workspace: SidebarWorkspaceEntry;
+  loading: boolean;
+  children?: ReactNode;
+}) {
+  const status = workspaceBattleStatus(workspace);
+  if (!status) return null;
+  let icon = <View style={styles.idleStatusDot} />;
+  if (loading || status.icon === "running") icon = <StatusRing />;
+  else if (status.icon === "ready")
+    icon = (
+      <ThemedCircleCheck
+        size={STATUS_INDICATOR_ALERT_SIZE}
+        uniProps={foregroundMutedColorMapping}
+      />
+    );
+  else if (status.icon === "alert")
+    icon = (
+      <ThemedCircleAlert size={STATUS_INDICATOR_ALERT_SIZE} uniProps={needsInputColorMapping} />
+    );
+  else if (status.icon === "unknown")
+    icon = (
+      <ThemedCircleHelp size={STATUS_INDICATOR_ALERT_SIZE} uniProps={foregroundMutedColorMapping} />
+    );
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <View
+          style={styles.workspaceStatusDot}
+          accessibilityLabel={status.label}
+          tabIndex={0}
+          testID={`arena-status-${status.icon}`}
+        >
+          {children ?? icon}
+        </View>
+      </TooltipTrigger>
+      <TooltipContent side="right">
+        <Text style={styles.arenaStatusText}>{status.label}</Text>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 function WorkspaceStatusIndicator({
   bucket,
@@ -521,6 +623,7 @@ const styles = StyleSheet.create((theme) => ({
     top: 1,
     right: 0,
   },
+  arenaStatusText: { color: theme.colors.foreground, fontSize: 12 },
   workspaceStatusDot: {
     position: "relative",
     width: theme.iconSize.md,

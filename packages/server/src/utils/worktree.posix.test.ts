@@ -6,21 +6,13 @@ import {
   deriveWorktreeProjectHash,
   deletePaseoWorktree,
   InvalidGitBranchNameError,
-  getScriptConfigs,
-  getWorktreeSetupCommands,
-  getWorktreeTerminalSpecs,
-  getWorktreeTeardownCommands,
-  isServiceScript,
   isPaseoOwnedWorktreeCwd,
   listPaseoWorktrees,
-  readPaseoConfig,
+  getScriptConfigs,
   resolveWorktreeRuntimeEnv,
-  type WorktreeSetupCommandProgressEvent,
-  runWorktreeSetupCommands,
   type CreateWorktreeOptions,
   type WorktreeConfig,
 } from "./worktree";
-import type { PaseoConfig } from "@getpaseo/protocol/paseo-config-schema";
 import { getPaseoWorktreeMetadataPath } from "./worktree-metadata.js";
 import {
   getCheckoutDiff,
@@ -39,19 +31,13 @@ import {
   realpathSync,
   writeFileSync,
   readFileSync,
-  chmodSync,
   lstatSync,
   symlinkSync,
   unlinkSync,
 } from "fs";
-import { delimiter, dirname, join } from "path";
+import { dirname, join } from "path";
 import { tmpdir } from "os";
 import net from "node:net";
-
-function loadConfigForTest(repoRoot: string): PaseoConfig | null {
-  const result = readPaseoConfig(repoRoot);
-  return result.ok ? result.config : null;
-}
 
 interface LegacyCreateWorktreeTestOptions {
   branchName: string;
@@ -112,8 +98,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       rmSync(tempDir, { recursive: true, force: true });
     });
 
-    it("creates a worktree for the current branch (main)", async () => {
-      const projectHash = await deriveWorktreeProjectHash(repoDir);
+    it("creates a worktree inside the project's local-state directory", async () => {
       const result = await createLegacyWorktreeForTest({
         branchName: "main",
         cwd: repoDir,
@@ -122,7 +107,14 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         paseoHome,
       });
 
-      expect(result.worktreePath).toBe(join(paseoHome, "worktrees", projectHash, "hello-world"));
+      expect(result.worktreePath).toBe(join(repoDir, ".agent-duel", "worktrees", "hello-world"));
+      // Excluded before it lands, so the checkout never shows it as untracked.
+      expect(readFileSync(join(repoDir, ".git", "info", "exclude"), "utf8")).toContain(
+        "/.agent-duel/\n",
+      );
+      expect(
+        execFileSync("git", ["status", "--porcelain"], { cwd: repoDir, encoding: "utf8" }).trim(),
+      ).toBe("");
       expect(existsSync(result.worktreePath)).toBe(true);
       expect(existsSync(join(result.worktreePath, "file.txt"))).toBe(true);
       const metadataPath = getPaseoWorktreeMetadataPath(result.worktreePath);
@@ -230,7 +222,6 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
     });
 
     it("creates a worktree with a new branch", async () => {
-      const projectHash = await deriveWorktreeProjectHash(repoDir);
       const result = await createLegacyWorktreeForTest({
         cwd: repoDir,
         worktreeSlug: "my-feature",
@@ -239,7 +230,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         paseoHome,
       });
 
-      expect(result.worktreePath).toBe(join(paseoHome, "worktrees", projectHash, "my-feature"));
+      expect(result.worktreePath).toBe(join(repoDir, ".agent-duel", "worktrees", "my-feature"));
       expect(existsSync(result.worktreePath)).toBe(true);
 
       const currentBranch = execFileSync("git", ["branch", "--show-current"], {
@@ -314,7 +305,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       expect(existsSync(result.worktreePath)).toBe(true);
     });
 
-    it("fetches a GitHub PR branch, checks it out, writes metadata, and runs setup", async () => {
+    it("fetches a GitHub PR branch, checks it out, and writes metadata", async () => {
       const remoteDir = join(tempDir, "remote.git");
       const remoteCloneDir = join(tempDir, "remote-clone");
       execFileSync("git", ["clone", "--bare", repoDir, remoteDir]);
@@ -325,10 +316,6 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       execFileSync("git", ["config", "user.name", "Test"], { cwd: remoteCloneDir });
       execFileSync("git", ["checkout", "-b", "contributor/feature"], { cwd: remoteCloneDir });
       writeFileSync(join(remoteCloneDir, "file.txt"), "from-pr\n");
-      writeFileSync(
-        join(remoteCloneDir, "paseo.json"),
-        JSON.stringify({ worktree: { setup: ['echo "setup ran" > setup.log'] } }),
-      );
       execFileSync("git", ["add", "."], { cwd: remoteCloneDir });
       execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "pr branch"], {
         cwd: remoteCloneDir,
@@ -353,7 +340,6 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       });
 
       expect(readFileSync(join(result.worktreePath, "file.txt"), "utf8")).toBe("from-pr\n");
-      expect(readFileSync(join(result.worktreePath, "setup.log"), "utf8")).toBe("setup ran\n");
       const currentBranch = execFileSync("git", ["branch", "--show-current"], {
         cwd: result.worktreePath,
       })
@@ -687,7 +673,6 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
     });
 
     it("handles branch name collision by adding suffix", async () => {
-      const projectHash = await deriveWorktreeProjectHash(repoDir);
       // Create a branch named "hello" first
       execFileSync("git", ["branch", "hello"], { cwd: repoDir });
 
@@ -700,7 +685,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       });
 
       // Should create branch "hello-1" since "hello" exists
-      expect(result.worktreePath).toBe(join(paseoHome, "worktrees", projectHash, "hello"));
+      expect(result.worktreePath).toBe(join(repoDir, ".agent-duel", "worktrees", "hello"));
       expect(existsSync(result.worktreePath)).toBe(true);
 
       const branches = execFileSync("git", ["branch"], { cwd: repoDir }).toString();
@@ -726,189 +711,16 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       expect(branches).toContain("hello-2");
     });
 
-    it("runs setup commands from paseo.json", async () => {
-      // Create paseo.json with setup commands
-      const paseoConfig = {
-        worktree: {
-          setup: [
-            'echo "source=$PASEO_SOURCE_CHECKOUT_PATH" > setup.log',
-            'echo "root_alias=$PASEO_ROOT_PATH" >> setup.log',
-            'echo "worktree=$PASEO_WORKTREE_PATH" >> setup.log',
-            'echo "branch=$PASEO_BRANCH_NAME" >> setup.log',
-            'echo "port=$PASEO_WORKTREE_PORT" >> setup.log',
-          ],
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "add paseo.json"], {
-        cwd: repoDir,
-      });
-
-      const result = await createLegacyWorktreeForTest({
-        branchName: "main",
-        cwd: repoDir,
-        baseBranch: "main",
-        worktreeSlug: "setup-test",
-        paseoHome,
-      });
-
-      expect(existsSync(result.worktreePath)).toBe(true);
-
-      // Verify setup ran and env vars were available
-      const setupLog = readFileSync(join(result.worktreePath, "setup.log"), "utf8");
-      expect(setupLog).toContain(`source=${repoDir}`);
-      expect(setupLog).toContain(`root_alias=${repoDir}`);
-      expect(setupLog).toContain(`worktree=${result.worktreePath}`);
-      expect(setupLog).toContain("branch=setup-test");
-      const portLine = setupLog.split("\n").find((line) => line.startsWith("port="));
-      expect(portLine).toBeDefined();
-      const portValue = Number(portLine?.slice("port=".length));
-      expect(Number.isInteger(portValue)).toBe(true);
-      expect(portValue).toBeGreaterThan(0);
-    });
-
-    it("runs string setup scripts from paseo.json as a single shell command", async () => {
-      const paseoConfig = {
-        worktree: {
-          setup: 'greeting="hello from string setup"\necho "$greeting" > setup.log',
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "add string setup"], {
-        cwd: repoDir,
-      });
-
-      const result = await createLegacyWorktreeForTest({
-        branchName: "main",
-        cwd: repoDir,
-        baseBranch: "main",
-        worktreeSlug: "string-setup-test",
-        paseoHome,
-      });
-
-      expect(getWorktreeSetupCommands(result.worktreePath)).toEqual([
-        'greeting="hello from string setup"\necho "$greeting" > setup.log',
-      ]);
-      expect(readFileSync(join(result.worktreePath, "setup.log"), "utf8").trim()).toBe(
-        "hello from string setup",
-      );
-    });
-
-    it("runs setup commands with the daemon PATH instead of login profile PATH", async () => {
-      const home = join(tempDir, "host-home");
-      const binDir = join(tempDir, "daemon-bin");
-      mkdirSync(home);
-      mkdirSync(binDir);
-
-      const shimPath = join(binDir, "paseo-shim");
-      writeFileSync(shimPath, "#!/bin/sh\nprintf 'shim:%s\\n' \"$1\"\n");
-      chmodSync(shimPath, 0o755);
-      writeFileSync(join(home, ".bash_profile"), "export PATH=/usr/bin:/bin\n");
-      const bashEnvPath = join(home, "bash-env");
-      writeFileSync(bashEnvPath, "export PATH=/usr/bin:/bin\n");
-      writeFileSync(
-        join(repoDir, "paseo.json"),
-        JSON.stringify({
-          worktree: {
-            setup: "command -v paseo-shim >/dev/null && paseo-shim ok > setup-path.log",
-          },
-        }),
-      );
-
-      const originalHome = process.env.HOME;
-      const originalPath = process.env.PATH;
-      const originalBashEnv = process.env.BASH_ENV;
-      process.env.HOME = home;
-      process.env.PATH = `${binDir}${delimiter}${originalPath ?? "/usr/bin:/bin"}`;
-      process.env.BASH_ENV = bashEnvPath;
-
-      try {
-        await runWorktreeSetupCommands({
-          worktreePath: repoDir,
-          branchName: "main",
-          cleanupOnFailure: false,
-          runtimeEnv: {
-            PASEO_SOURCE_CHECKOUT_PATH: repoDir,
-            PASEO_ROOT_PATH: repoDir,
-            PASEO_WORKTREE_PATH: repoDir,
-            PASEO_BRANCH_NAME: "main",
-            PASEO_WORKTREE_PORT: "12345",
-          },
-        });
-      } finally {
-        if (originalHome === undefined) {
-          delete process.env.HOME;
-        } else {
-          process.env.HOME = originalHome;
-        }
-        if (originalPath === undefined) {
-          delete process.env.PATH;
-        } else {
-          process.env.PATH = originalPath;
-        }
-        if (originalBashEnv === undefined) {
-          delete process.env.BASH_ENV;
-        } else {
-          process.env.BASH_ENV = originalBashEnv;
-        }
-      }
-
-      expect(readFileSync(join(repoDir, "setup-path.log"), "utf8").trim()).toBe("shim:ok");
-    });
-
-    it("treats blank lifecycle strings as empty", () => {
-      writeFileSync(
-        join(repoDir, "paseo.json"),
-        JSON.stringify({
-          worktree: {
-            setup: " \n\t ",
-            teardown: " \n ",
-          },
-        }),
-      );
-
-      expect(getWorktreeSetupCommands(repoDir)).toEqual([]);
-      expect(getWorktreeTeardownCommands(repoDir)).toEqual([]);
-    });
-
-    it("filters non-string and blank entries from lifecycle arrays", () => {
-      writeFileSync(
-        join(repoDir, "paseo.json"),
-        JSON.stringify({
-          worktree: {
-            setup: [
-              'echo "first" > setup-array.log',
-              null,
-              "   ",
-              'echo "second" >> setup-array.log',
-            ],
-            teardown: [
-              'echo "first" > "$PASEO_SOURCE_CHECKOUT_PATH/teardown-array.log"',
-              null,
-              "",
-              'echo "second" >> "$PASEO_SOURCE_CHECKOUT_PATH/teardown-array.log"',
-            ],
-          },
-        }),
-      );
-
-      expect(getWorktreeSetupCommands(repoDir)).toEqual([
-        'echo "first" > setup-array.log',
-        'echo "second" >> setup-array.log',
-      ]);
-      expect(getWorktreeTeardownCommands(repoDir)).toEqual([
-        'echo "first" > "$PASEO_SOURCE_CHECKOUT_PATH/teardown-array.log"',
-        'echo "second" >> "$PASEO_SOURCE_CHECKOUT_PATH/teardown-array.log"',
-      ]);
-    });
-
-    it("does not run setup commands when runSetup=false", async () => {
+    // The point of the removal: a project that still carries lifecycle hooks and
+    // scripts gets exactly what a project with no paseo.json gets.
+    it("ignores worktree lifecycle hooks and scripts left in paseo.json", async () => {
       const paseoConfig = {
         worktree: {
           setup: ['echo "setup ran" > setup.log'],
+          teardown: ['echo "teardown ran" > teardown.log'],
+          terminals: [{ name: "dev", command: 'echo "terminal ran" > terminal.log' }],
         },
+        scripts: { dev: { type: "service", command: "echo dev", port: 3000 } },
       };
       writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
       execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
@@ -920,41 +732,18 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         branchName: "main",
         cwd: repoDir,
         baseBranch: "main",
-        worktreeSlug: "no-setup-test",
-        runSetup: false,
+        worktreeSlug: "inert-config",
+        runSetup: true,
         paseoHome,
       });
 
       expect(existsSync(result.worktreePath)).toBe(true);
       expect(existsSync(join(result.worktreePath, "setup.log"))).toBe(false);
-    });
+      expect(existsSync(join(result.worktreePath, "terminal.log"))).toBe(false);
+      expect(getScriptConfigs().size).toBe(0);
 
-    it("streams setup command progress events while commands are executing", async () => {
-      const paseoConfig = {
-        worktree: {
-          setup: ['echo "first line"; echo "second line" 1>&2'],
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "add streaming setup"], {
-        cwd: repoDir,
-      });
-
-      const progressEvents: WorktreeSetupCommandProgressEvent[] = [];
-      const results = await runWorktreeSetupCommands({
-        worktreePath: repoDir,
-        branchName: "main",
-        cleanupOnFailure: false,
-        onEvent: (event) => {
-          progressEvents.push(event);
-        },
-      });
-
-      expect(results).toHaveLength(1);
-      expect(progressEvents.some((event) => event.type === "command_started")).toBe(true);
-      expect(progressEvents.some((event) => event.type === "output")).toBe(true);
-      expect(progressEvents.some((event) => event.type === "command_completed")).toBe(true);
+      await deletePaseoWorktree({ cwd: repoDir, worktreePath: result.worktreePath, paseoHome });
+      expect(existsSync(join(repoDir, "teardown.log"))).toBe(false);
     });
 
     it("reuses persisted worktree runtime port across resolutions", async () => {
@@ -1019,157 +808,6 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       });
     });
 
-    it("cleans up worktree if setup command fails", async () => {
-      // Create paseo.json with failing setup command
-      const paseoConfig = {
-        worktree: {
-          setup: ["exit 1"],
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "add paseo.json"], {
-        cwd: repoDir,
-      });
-
-      const expectedWorktreePath = join(paseoHome, "worktrees", "test-repo", "fail-test");
-
-      await expect(
-        createLegacyWorktreeForTest({
-          branchName: "main",
-          cwd: repoDir,
-          baseBranch: "main",
-          worktreeSlug: "fail-test",
-          paseoHome,
-        }),
-      ).rejects.toThrow("Worktree setup command failed");
-
-      // Verify worktree was cleaned up
-      expect(existsSync(expectedWorktreePath)).toBe(false);
-    });
-
-    it("reads worktree terminal specs from paseo.json with optional name", async () => {
-      const paseoConfig = {
-        worktree: {
-          terminals: [
-            { name: "Dev Server", command: "npm run dev" },
-            { command: "cd packages/app && npm run dev" },
-          ],
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-
-      expect(getWorktreeTerminalSpecs(repoDir)).toEqual([
-        { name: "Dev Server", command: "npm run dev" },
-        { command: "cd packages/app && npm run dev" },
-      ]);
-    });
-
-    it("filters invalid worktree terminal specs", async () => {
-      const paseoConfig = {
-        worktree: {
-          terminals: [
-            null,
-            {},
-            { name: "   ", command: "   " },
-            { name: " Watch ", command: "npm run watch", cwd: "packages/app" },
-            { name: 123, command: "npm run test" },
-          ],
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-
-      expect(getWorktreeTerminalSpecs(repoDir)).toEqual([
-        { name: "Watch", command: "npm run watch" },
-        { command: "npm run test" },
-      ]);
-    });
-
-    it("parses omitted script type as a plain script", async () => {
-      writeFileSync(
-        join(repoDir, "paseo.json"),
-        JSON.stringify({
-          scripts: {
-            typecheck: {
-              command: " npm run typecheck ",
-            },
-          },
-        }),
-      );
-
-      const scriptConfigs = getScriptConfigs(loadConfigForTest(repoDir));
-      const typecheck = scriptConfigs.get("typecheck");
-
-      expect(typecheck).toEqual({
-        command: "npm run typecheck",
-      });
-      expect(typecheck).toBeDefined();
-      expect(isServiceScript(typecheck!)).toBe(false);
-    });
-
-    it("parses service scripts and preserves optional port", async () => {
-      writeFileSync(
-        join(repoDir, "paseo.json"),
-        JSON.stringify({
-          scripts: {
-            server: {
-              type: "service",
-              command: "npm run dev",
-              port: 4321,
-            },
-          },
-        }),
-      );
-
-      const scriptConfigs = getScriptConfigs(loadConfigForTest(repoDir));
-      const server = scriptConfigs.get("server");
-
-      expect(server).toEqual({
-        type: "service",
-        command: "npm run dev",
-        port: 4321,
-      });
-      expect(server).toBeDefined();
-      expect(isServiceScript(server!)).toBe(true);
-    });
-
-    it("ignores invalid script entries gracefully", async () => {
-      writeFileSync(
-        join(repoDir, "paseo.json"),
-        JSON.stringify({
-          scripts: {
-            valid: {
-              command: "npm run valid",
-            },
-            invalidType: {
-              type: "worker",
-              command: "npm run worker",
-            },
-            missingCommand: {
-              type: "service",
-            },
-            blankCommand: {
-              command: "   ",
-            },
-            nonObject: "npm run nope",
-            invalidPort: {
-              type: "service",
-              command: "npm run dev",
-              port: "3000",
-            },
-          },
-        }),
-      );
-
-      expect(getScriptConfigs(loadConfigForTest(repoDir))).toEqual(
-        new Map([
-          ["valid", { command: "npm run valid" }],
-          ["invalidType", { command: "npm run worker" }],
-          ["invalidPort", { type: "service", command: "npm run dev" }],
-        ]),
-      );
-    });
-
     it("seeds an uncommitted paseo.json from the main repo into a new worktree", async () => {
       writeFileSync(
         join(repoDir, "paseo.json"),
@@ -1189,37 +827,6 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       expect(JSON.parse(readFileSync(worktreeConfigPath, "utf8"))).toEqual({
         scripts: { dev: { command: "echo hi" } },
       });
-    });
-
-    it("runs setup from the edited source config when the selected ref already has paseo.json", async () => {
-      writeFileSync(
-        join(repoDir, "paseo.json"),
-        JSON.stringify({ worktree: { setup: 'echo "committed" > committed-setup.log' } }),
-      );
-      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "add paseo.json"], {
-        cwd: repoDir,
-      });
-
-      writeFileSync(
-        join(repoDir, "paseo.json"),
-        JSON.stringify({ worktree: { setup: 'echo "edited" > edited-setup.log' } }),
-      );
-
-      const result = await createLegacyWorktreeForTest({
-        cwd: repoDir,
-        worktreeSlug: "edited-config",
-        source: { kind: "branch-off", baseBranch: "main", branchName: "feature/edited-config" },
-        runSetup: true,
-        paseoHome,
-      });
-
-      const worktreeConfigPath = join(result.worktreePath, "paseo.json");
-      expect(JSON.parse(readFileSync(worktreeConfigPath, "utf8"))).toEqual({
-        worktree: { setup: 'echo "edited" > edited-setup.log' },
-      });
-      expect(readFileSync(join(result.worktreePath, "edited-setup.log"), "utf8")).toBe("edited\n");
-      expect(existsSync(join(result.worktreePath, "committed-setup.log"))).toBe(false);
     });
 
     it("replaces a selected ref's paseo.json symlink without writing through it", async () => {
@@ -1256,8 +863,6 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       expect(readFileSync(externalConfigPath, "utf8")).toBe(committedConfig);
       expect(lstatSync(worktreeConfigPath).isFile()).toBe(true);
       expect(readFileSync(worktreeConfigPath, "utf8")).toBe(editedConfig);
-      expect(readFileSync(join(result.worktreePath, "edited-setup.log"), "utf8")).toBe("edited\n");
-      expect(existsSync(join(result.worktreePath, "committed-setup.log"))).toBe(false);
     });
 
     it("creates a worktree without error when no paseo.json exists in the main repo", async () => {
@@ -1384,139 +989,6 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
 
       const remaining = await listPaseoWorktrees({ cwd: repoDir, paseoHome });
       expect(remaining.some((worktree) => worktree.path === created.worktreePath)).toBe(false);
-    });
-
-    it("runs teardown commands from paseo.json before deleting a worktree", async () => {
-      const paseoConfig = {
-        worktree: {
-          teardown: [
-            'echo "source=$PASEO_SOURCE_CHECKOUT_PATH" > "$PASEO_SOURCE_CHECKOUT_PATH/teardown.log"',
-            'echo "root_alias=$PASEO_ROOT_PATH" >> "$PASEO_SOURCE_CHECKOUT_PATH/teardown.log"',
-            'echo "worktree=$PASEO_WORKTREE_PATH" >> "$PASEO_SOURCE_CHECKOUT_PATH/teardown.log"',
-            'echo "branch=$PASEO_BRANCH_NAME" >> "$PASEO_SOURCE_CHECKOUT_PATH/teardown.log"',
-            'echo "port=$PASEO_WORKTREE_PORT" >> "$PASEO_SOURCE_CHECKOUT_PATH/teardown.log"',
-          ],
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "add teardown commands"], {
-        cwd: repoDir,
-      });
-
-      const created = await createLegacyWorktreeForTest({
-        branchName: "teardown-branch",
-        cwd: repoDir,
-        baseBranch: "main",
-        worktreeSlug: "teardown-test",
-        paseoHome,
-      });
-      const runtimeEnv = await resolveWorktreeRuntimeEnv({
-        worktreePath: created.worktreePath,
-        branchName: created.branchName,
-      });
-
-      await deletePaseoWorktree({ cwd: repoDir, worktreePath: created.worktreePath, paseoHome });
-      expect(existsSync(created.worktreePath)).toBe(false);
-
-      const teardownLog = readFileSync(join(repoDir, "teardown.log"), "utf8");
-      expect(teardownLog).toContain(`source=${repoDir}`);
-      expect(teardownLog).toContain(`root_alias=${repoDir}`);
-      expect(teardownLog).toContain(`worktree=${created.worktreePath}`);
-      expect(teardownLog).toContain("branch=teardown-branch");
-      expect(teardownLog).toContain(`port=${runtimeEnv.PASEO_WORKTREE_PORT}`);
-    });
-
-    it("runs string teardown scripts from paseo.json as a single shell command", async () => {
-      const paseoConfig = {
-        worktree: {
-          teardown:
-            'cleanup_message="teardown string"\necho "$cleanup_message" > "$PASEO_SOURCE_CHECKOUT_PATH/teardown.log"',
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "add string teardown"], {
-        cwd: repoDir,
-      });
-
-      const created = await createLegacyWorktreeForTest({
-        branchName: "teardown-string-branch",
-        cwd: repoDir,
-        baseBranch: "main",
-        worktreeSlug: "teardown-string-test",
-        paseoHome,
-      });
-
-      await deletePaseoWorktree({ cwd: repoDir, worktreePath: created.worktreePath, paseoHome });
-
-      expect(getWorktreeTeardownCommands(repoDir)).toEqual([
-        'cleanup_message="teardown string"\necho "$cleanup_message" > "$PASEO_SOURCE_CHECKOUT_PATH/teardown.log"',
-      ]);
-      expect(readFileSync(join(repoDir, "teardown.log"), "utf8").trim()).toBe("teardown string");
-    });
-
-    it("omits PASEO_WORKTREE_PORT from teardown env when runtime metadata is missing", async () => {
-      const paseoConfig = {
-        worktree: {
-          teardown: [
-            'echo "port=${PASEO_WORKTREE_PORT-unset}" > "$PASEO_SOURCE_CHECKOUT_PATH/teardown-port.log"',
-          ],
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync(
-        "git",
-        ["-c", "commit.gpgsign=false", "commit", "-m", "add teardown port logging"],
-        { cwd: repoDir },
-      );
-
-      const created = await createLegacyWorktreeForTest({
-        branchName: "teardown-port-missing-branch",
-        cwd: repoDir,
-        baseBranch: "main",
-        worktreeSlug: "teardown-port-missing-test",
-        paseoHome,
-      });
-
-      await deletePaseoWorktree({ cwd: repoDir, worktreePath: created.worktreePath, paseoHome });
-
-      expect(readFileSync(join(repoDir, "teardown-port.log"), "utf8").trim()).toBe("port=unset");
-      expect(existsSync(created.worktreePath)).toBe(false);
-    });
-
-    it("does not remove worktree when a teardown command fails", async () => {
-      const paseoConfig = {
-        worktree: {
-          teardown: [
-            'echo "started" > "$PASEO_SOURCE_CHECKOUT_PATH/teardown-start.log"',
-            "echo boom 1>&2; exit 9",
-          ],
-        },
-      };
-      writeFileSync(join(repoDir, "paseo.json"), JSON.stringify(paseoConfig));
-      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync(
-        "git",
-        ["-c", "commit.gpgsign=false", "commit", "-m", "add failing teardown commands"],
-        { cwd: repoDir },
-      );
-
-      const created = await createLegacyWorktreeForTest({
-        branchName: "teardown-failure-branch",
-        cwd: repoDir,
-        baseBranch: "main",
-        worktreeSlug: "teardown-failure-test",
-        paseoHome,
-      });
-
-      await expect(
-        deletePaseoWorktree({ cwd: repoDir, worktreePath: created.worktreePath, paseoHome }),
-      ).rejects.toThrow("Worktree teardown command failed");
-
-      expect(existsSync(created.worktreePath)).toBe(true);
-      expect(existsSync(join(repoDir, "teardown-start.log"))).toBe(true);
     });
   });
 });

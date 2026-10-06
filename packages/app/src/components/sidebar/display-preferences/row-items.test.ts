@@ -22,16 +22,22 @@ describe("parseSidebarRowItems", () => {
 
   it("leaves items absent from storage at their default", () => {
     // A newly added item must ship visible rather than inheriting "missing means off".
-    expect(parseSidebarRowItems({ host: false })).toEqual({
+    expect(parseSidebarRowItems({ changeRequest: false })).toEqual({
       ...DEFAULT_SIDEBAR_ROW_ITEMS,
-      host: false,
+      changeRequest: false,
     });
   });
 
   it("ignores unknown keys and non-boolean values", () => {
     expect(
-      parseSidebarRowItems({ checks: false, nonsense: false, services: null, host: false }),
-    ).toEqual({ ...DEFAULT_SIDEBAR_ROW_ITEMS, host: false });
+      parseSidebarRowItems({
+        checks: false,
+        host: false,
+        nonsense: false,
+        services: null,
+        changeRequest: false,
+      }),
+    ).toEqual({ ...DEFAULT_SIDEBAR_ROW_ITEMS, changeRequest: false });
   });
 
   it.each([[null], [undefined], ["diff"], [42], [["services"]]])(

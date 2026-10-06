@@ -35,6 +35,13 @@ $env:EXPO_DEV_URL = "http://localhost:$($env:EXPO_PORT)"
 $env:EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL = (git -C $RootDir branch --show-current).Trim()
 
 $env:PASEO_DEV_ROOT = $RootDir
+$DefaultArenaBackendRoot = (Join-Path $RootDir "arena-backend")
+if (-not $env:PASEO_ARENA_BACKEND_ROOT -and (Test-Path (Join-Path $DefaultArenaBackendRoot "packages\opencode\src\index.ts"))) {
+    $env:PASEO_ARENA_BACKEND_ROOT = $DefaultArenaBackendRoot
+}
+if (-not $env:PASEO_CONTROL_PLANE_PORT) { $env:PASEO_CONTROL_PLANE_PORT = "8790" }
+if (-not $env:PASEO_CONTROL_PLANE_URL) { $env:PASEO_CONTROL_PLANE_URL = "http://127.0.0.1:$($env:PASEO_CONTROL_PLANE_PORT)" }
+$env:PASEO_PUBLIC_BASE_URL = $env:PASEO_CONTROL_PLANE_URL
 $env:PASEO_DEV_RUNTIME_FALLBACK_ROOT = $RootDir
 $DevRuntime = node "$ScriptDir\dev-runtime.mjs" | ConvertFrom-Json
 $env:PASEO_ELECTRON_FLAGS = $DevRuntime.electronFlags
@@ -46,7 +53,7 @@ Remove-Item Env:\PASEO_DEV_RUNTIME_FALLBACK_ROOT -ErrorAction SilentlyContinue
 # the daemon binds to localhost and this script is never used for production.
 $env:PASEO_CORS_ORIGINS = "*"
 
-# Fully isolate the dev instance from a production Paseo install so `npm run dev`
+# Fully isolate the dev instance from a production Agent Duel install so `npm run dev`
 # works while the installed app is open. Without this the dev build loses the
 # Electron single-instance lock to the installed app and quits, and ends up
 # pointed at the production daemon, whose CORS allowlist rejects the Metro origin.
@@ -101,11 +108,13 @@ fs.writeFileSync(path, JSON.stringify(cfg, null, 2));
 
 Write-Host @"
 ======================================================
-  Paseo Desktop Dev (Windows)
+  Agent Duel Desktop Dev (Windows)
 ======================================================
   Metro:      http://localhost:$($env:EXPO_PORT)
   Daemon:     $($env:PASEO_LISTEN) (isolated)
   PASEO_HOME: $($env:PASEO_HOME)
+  Arena:      $($env:PASEO_ARENA_BACKEND_ROOT)
+  Control:    $($env:PASEO_CONTROL_PLANE_URL)
   userData:   $($env:PASEO_ELECTRON_USER_DATA_DIR)
 ======================================================
 "@
@@ -113,7 +122,8 @@ Write-Host @"
 # Launch Metro + Electron together, kill both on exit
 concurrently `
     --kill-others `
-    --names "metro,electron" `
-    --prefix-colors "magenta,cyan" `
+    --names "store,metro,electron" `
+    --prefix-colors "yellow,magenta,cyan" `
+    "cd `"$RootDir\arena-backend\packages\control-plane`" && bun run dev" `
     "cd `"$AppDir`" && cross-env PASEO_WEB_PLATFORM=electron npx expo start --port $($env:EXPO_PORT)" `
     "npx wait-on tcp:$($env:EXPO_PORT) && npx electron `"$DesktopDir`""

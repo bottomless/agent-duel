@@ -1,6 +1,8 @@
 # @getpaseo/client
 
-TypeScript SDK for building integrations on top of a Paseo daemon.
+TypeScript client for the daemon used by Agent Duel, inherited from Paseo.
+Build it with the repository; see [development](../../docs/development.md).
+The installation and SDK examples below describe the upstream published package.
 
 ```bash
 npm install @getpaseo/client
@@ -36,4 +38,6 @@ Use a WebSocket URL ending in `/ws`, such as `ws://127.0.0.1:6767/ws`. Pass `pas
 
 ## Stability
 
-The high-level API exported from `@getpaseo/client` is the supported SDK surface. The SDK and daemon remain protocol-compatible across versions, but newly added capabilities can require a newer daemon.
+Agent Duel ships its app, daemon, and desktop together. Follow the
+[shared-release protocol policy](../../docs/rpc-namespacing.md#compatibility);
+upstream SDK documentation does not establish an old-client contract for this fork.

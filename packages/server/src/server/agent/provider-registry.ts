@@ -102,11 +102,18 @@ export interface BuildProviderRegistryOptions {
   managedProcesses?: ManagedProcessRegistry;
   isDev?: boolean;
   ompRuntime?: OmpRuntime;
+  getArenaPreviewBaseUrl?: () => string | null;
+  /** The daemon's `$PASEO_HOME/uploads`, whose per-upload directories an agent may open. */
+  uploadsRoot?: string;
 }
 
 interface ProviderClientFactoryOptions extends Pick<
   BuildProviderRegistryOptions,
-  "workspaceGitService" | "managedProcesses" | "ompRuntime"
+  | "workspaceGitService"
+  | "managedProcesses"
+  | "ompRuntime"
+  | "getArenaPreviewBaseUrl"
+  | "uploadsRoot"
 > {
   providerParams?: unknown;
   customProvider?: {
@@ -154,33 +161,6 @@ const UNSUPPORTED_PROVIDER_CONTRACT: ProviderContract = {
   supportsExactMcpPreapproval: false,
 };
 
-const HUB_E2E_PROVIDER_ID = "hub-e2e";
-const HUB_E2E_MCP_SERVER = "hub";
-const HUB_E2E_TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/u;
-// The cross-repository Hub harness owns this synthetic provider ID. It exercises the production
-// registry path without extending exact-preapproval support to user-defined ACP providers.
-const HUB_E2E_PROVIDER_CONTRACT: ProviderContract = {
-  optionsSchema: EmptyProviderOptionsSchema,
-  supportsExactMcpPreapproval: true,
-  applyToolPolicy: (provider, toolPolicy) => {
-    for (const grant of toolPolicy.preapproved) {
-      if (
-        grant.kind !== "mcp" ||
-        grant.server !== HUB_E2E_MCP_SERVER ||
-        !HUB_E2E_TOOL_NAME.test(grant.tool)
-      ) {
-        throw new ToolPolicyUnsupportedError(
-          provider,
-          `Provider '${provider}' accepts only exact MCP tool grants for the injected '${HUB_E2E_MCP_SERVER}' server`,
-        );
-      }
-    }
-    return {
-      preapproved: toolPolicy.preapproved.map((grant) => ({ ...grant })),
-    };
-  },
-};
-
 const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
   claude: (logger, runtimeSettings) =>
     new ClaudeAgentClient({
@@ -206,6 +186,8 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
   opencode: (logger, runtimeSettings, options) =>
     new OpenCodeAgentClient(logger, runtimeSettings, {
       managedProcesses: options?.managedProcesses,
+      getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
+      uploadsRoot: options?.uploadsRoot,
     }),
   pi: (logger, runtimeSettings, options) =>
     new PiRpcAgentClient({
@@ -683,7 +665,11 @@ function buildResolvedBuiltinProviders(
   runtimeSettings: AgentProviderRuntimeSettingsMap | undefined,
   options: Pick<
     BuildProviderRegistryOptions,
-    "workspaceGitService" | "managedProcesses" | "ompRuntime"
+    | "workspaceGitService"
+    | "managedProcesses"
+    | "ompRuntime"
+    | "getArenaPreviewBaseUrl"
+    | "uploadsRoot"
   >,
   isDev: boolean,
 ): Map<string, ResolvedProvider> {
@@ -715,6 +701,8 @@ function buildResolvedBuiltinProviders(
           workspaceGitService: options.workspaceGitService,
           managedProcesses: options.managedProcesses,
           ompRuntime: options.ompRuntime,
+          getArenaPreviewBaseUrl: options.getArenaPreviewBaseUrl,
+          uploadsRoot: options.uploadsRoot,
           providerParams: override?.params,
         }),
       contract: PROVIDER_CONTRACTS[definition.id] ?? UNSUPPORTED_PROVIDER_CONTRACT,
@@ -787,10 +775,7 @@ function addDerivedProviders(
           }
           return new GenericACPAgentClient(acpOptions);
         },
-        contract:
-          providerId === HUB_E2E_PROVIDER_ID
-            ? HUB_E2E_PROVIDER_CONTRACT
-            : UNSUPPORTED_PROVIDER_CONTRACT,
+        contract: UNSUPPORTED_PROVIDER_CONTRACT,
       });
       continue;
     }
@@ -848,6 +833,8 @@ export function buildProviderRegistry(
       workspaceGitService: options?.workspaceGitService,
       managedProcesses: options?.managedProcesses,
       ompRuntime: options?.ompRuntime,
+      getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
+      uploadsRoot: options?.uploadsRoot,
     },
     options?.isDev === true,
   );

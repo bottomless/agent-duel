@@ -13,7 +13,6 @@ import {
   GitBranch,
   GitPullRequest,
   Globe,
-  Server,
   Settings2,
   Type,
 } from "lucide-react-native";
@@ -66,7 +65,6 @@ const TITLE_SOURCE_ICONS: Record<WorkspaceTitleSource, OptionIcon> = {
 // The same marks these things carry on the workspace row itself, so the menu and the row it
 // configures name each item the same way twice.
 const ROW_ITEM_ICONS: Record<SidebarRowItem, OptionIcon> = {
-  host: withUnistyles(Server),
   changeRequest: withUnistyles(GitPullRequest),
   services: withUnistyles(Globe),
 };
@@ -99,7 +97,6 @@ const TITLE_SOURCE_LABEL_KEYS: Record<WorkspaceTitleSource, string> = {
 };
 
 const ROW_ITEM_LABEL_KEYS: Record<SidebarRowItem, string> = {
-  host: "sidebar.display.show.host",
   changeRequest: "sidebar.display.show.changeRequest",
   services: "sidebar.display.show.services",
 };

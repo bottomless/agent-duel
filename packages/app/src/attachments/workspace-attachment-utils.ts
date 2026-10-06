@@ -24,7 +24,6 @@ export function isWorkspaceAttachment(
 ): attachment is WorkspaceComposerAttachment {
   return (
     attachment?.kind === "review" ||
-    attachment?.kind === "browser_element" ||
     attachment?.kind === "chat_history" ||
     isPullRequestContextAttachment(attachment)
   );
@@ -36,7 +35,6 @@ export function userAttachmentsOnly(
   return attachments.filter(
     (attachment): attachment is UserComposerAttachment =>
       attachment.kind !== "review" &&
-      attachment.kind !== "browser_element" &&
       attachment.kind !== "chat_history" &&
       !isPullRequestContextAttachment(attachment),
   );
@@ -45,14 +43,6 @@ export function userAttachmentsOnly(
 export function workspaceAttachmentToSubmitAttachment(
   attachment: ComposerAttachment,
 ): AgentAttachment | null {
-  if (attachment.kind === "browser_element") {
-    return {
-      type: "text",
-      mimeType: "text/plain",
-      title: `Browser element · ${attachment.attachment.tag}`,
-      text: attachment.attachment.formatted,
-    };
-  }
   if (isPullRequestContextAttachment(attachment)) {
     return {
       type: "text",

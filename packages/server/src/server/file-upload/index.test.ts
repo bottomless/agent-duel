@@ -56,6 +56,43 @@ describe("file uploads", () => {
     expect(readFileSync(path, "utf8")).toBe("hello world");
   });
 
+  it("completes an upload whose frames arrived before its request", async () => {
+    const paseoHome = makePaseoHome();
+    const uploads = new FileUploadStore({ paseoHome });
+
+    const frames = [
+      uploads.receiveFrame(uploadBegins("req-early")),
+      uploads.receiveFrame(uploadChunk("req-early", "hello world")),
+      uploads.receiveFrame(uploadEnds("req-early")),
+    ];
+    uploads.beginUpload({
+      type: "file.upload.request",
+      fileName: "notes.txt",
+      mimeType: "text/plain",
+      size: 11,
+      modifiedAt: "2026-05-02T00:00:00.000Z",
+      requestId: "req-early",
+    });
+
+    const [begin, chunk, end] = await Promise.all(frames);
+    expect(begin).toBeNull();
+    expect(chunk).toBeNull();
+    expect(end?.payload).toMatchObject({ requestId: "req-early", error: null, file: { size: 11 } });
+    expect(readFileSync(join(paseoHome, "uploads", "upload_req-early", "notes.txt"), "utf8")).toBe(
+      "hello world",
+    );
+  });
+
+  it("drops early frames whose request never arrives", async () => {
+    vi.useFakeTimers();
+    const uploads = new FileUploadStore({ paseoHome: makePaseoHome(), earlyFrameTimeoutMs: 1_000 });
+
+    const frame = uploads.receiveFrame(uploadBegins("req-orphan"));
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(frame).resolves.toBeNull();
+  });
+
   it("rejects chunks beyond the declared size and removes the partial file", async () => {
     const paseoHome = makePaseoHome();
     const uploads = new FileUploadStore({ paseoHome });

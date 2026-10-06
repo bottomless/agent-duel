@@ -1,7 +1,10 @@
 # Floating Panels
 
 Anchored popovers — tooltips, hover cards, dropdowns, autocompletes — that visually
-float above an anchor element on iOS, Android, and web. This doc captures the
+float above an anchor in the browser and Electron UI. Native-specific sections
+below retain upstream implementation history; they do not add native targets or
+QA requirements. Follow the shared anchoring and lifecycle rules when changing
+web surfaces. This doc captures the
 non-obvious traps. It is **not** a tutorial; it assumes you have seen the
 canonical files and are trying to add or change one.
 
@@ -38,9 +41,9 @@ Consumers: `composer/agent-controls/mode-control.tsx`,
 `composer/agent-controls/index.tsx`, `composer/index.tsx`,
 `components/combined-model-selector.tsx`, `components/hosts/host-picker.tsx`
 (including `components/hosts/host-filter.tsx`), `components/branch-switcher.tsx`,
-`components/left-sidebar.tsx`, `components/ui/select-field.tsx` (schedule form),
+`components/left-sidebar.tsx`, `components/ui/select-field.tsx`,
 `screens/new-workspace-screen.tsx` plus `screens/new-workspace/project-picker.ts`,
-`components/import-session-sheet.tsx`, `screens/workspace/workspace-screen.tsx`,
+`screens/workspace/workspace-screen.tsx`,
 `screens/settings-screen.tsx`, and `screens/project-settings-screen.tsx`.
 
 ## Gotcha 1 — Android touch hit-test by parent bounds
@@ -267,8 +270,9 @@ Wrapping providers _around_ the modal does nothing. They land on the wrong side.
 
 Before you write a new one, ask:
 
-1. **Can the underlying input lose its keyboard?** If yes, use Modal (simpler).
-   If no, use Portal.
+1. **Which existing web panel matches the interaction?** Reuse its portal, focus,
+   and dismissal pattern. The Android Modal/keyboard tradeoff in Gotcha 1 is
+   retained native history, not the selection rule for a new web panel.
 2. **Does the panel need to dismiss on screen change?** Almost always yes —
    gate `visible` on an upstream focus prop (`isPaneFocused` or similar).
 3. **Is the panel rendered in a Portal host?** Measure the host too. Never use

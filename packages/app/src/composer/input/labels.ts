@@ -14,32 +14,13 @@ export function resolveSubmitAccessibilityLabel(input: {
   return input.t("composer.input.sendMessage");
 }
 
-export function resolveVoiceAccessibilityLabel(input: {
-  isRealtimeVoiceForCurrentAgent: boolean;
-  isMuted: boolean;
+export function resolveDictationAccessibilityLabel(input: {
   isDictating: boolean;
   t: TFunction;
 }): string {
-  if (input.isRealtimeVoiceForCurrentAgent) {
-    return input.isMuted
-      ? input.t("composer.voice.unmuteVoiceMode")
-      : input.t("composer.voice.muteVoiceMode");
-  }
-  if (input.isDictating) return input.t("composer.voice.stopDictation");
-  return input.t("composer.voice.startDictation");
-}
-
-export function resolveVoiceTooltipText(input: {
-  isRealtimeVoiceForCurrentAgent: boolean;
-  isMuted: boolean;
-  t: TFunction;
-}): string {
-  if (input.isRealtimeVoiceForCurrentAgent) {
-    return input.isMuted
-      ? input.t("composer.voice.unmuteVoice")
-      : input.t("composer.voice.muteVoice");
-  }
-  return input.t("composer.voice.dictation");
+  return input.isDictating
+    ? input.t("composer.voice.stopDictation")
+    : input.t("composer.voice.startDictation");
 }
 
 export function resolveSendTooltipLabel(input: {

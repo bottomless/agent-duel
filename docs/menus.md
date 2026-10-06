@@ -10,8 +10,8 @@ Do not add a third menu implementation. The two that existed were byte-identical
 
 ## Two presentations
 
-`MenuRoot` picks one from form factor, never from platform — a tablet in a narrow split view
-sheets the same way a phone does.
+`MenuRoot` picks a presentation from form factor. A narrow browser or Electron
+window uses the compact layout; operating system does not determine it.
 
 | Screen                         | Surface                         | Submenus                                           |
 | ------------------------------ | ------------------------------- | -------------------------------------------------- |
@@ -27,6 +27,9 @@ when you have actually looked at it on a phone.
 Disable mobile triggering explicitly on draggable rows, where long press belongs to drag instead.
 
 ## Selecting an item on iOS
+
+Retained upstream behavior for existing native adapters. Agent Duel targets browser
+and Electron; do not add native branches to implement this historical workaround.
 
 An item that closes the menu runs its action after a fixed grace period on iOS, not immediately:
 a native presenter launched while UIKit is still tearing down the surface can hang. Both surfaces

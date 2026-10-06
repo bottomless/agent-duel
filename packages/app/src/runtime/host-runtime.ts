@@ -14,7 +14,6 @@ import {
   type HostConnection,
   type HostProfile,
 } from "@/types/host-connection";
-import { defaultHostAppearance, type HostBadgeDisplay, type HostColor } from "@/hosts/appearance";
 import {
   buildDaemonWebSocketUrl,
   buildRelayWebSocketUrl,
@@ -23,6 +22,8 @@ import {
   shouldUseTlsForDefaultHostedRelay,
 } from "@/utils/daemon-endpoints";
 import { resolveAppVersion } from "@/utils/app-version";
+import { getAccountSessionToken } from "@/accounts/session-store";
+import { deliverArenaByokKeyOnConnect } from "@/byok/key";
 import { ConnectionOfferSchema, type ConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { isWeb } from "@/constants/platform";
@@ -49,7 +50,6 @@ import {
   mountServerDataPushRouter,
 } from "@/data/push-router";
 import { mountBrowserAutomationDaemonClientHandler } from "@/desktop/browser/automation/handler";
-import { schedulesQueryBaseKey } from "@/schedules/aggregated-schedules";
 import { dispatchComposerAgentMessage, sendQueuedComposerMessageNow } from "@/composer/actions";
 import { createMessageSubmissionWriter } from "@/composer/submission/writer";
 import { resolveComposerAttachmentSubmitFormat } from "@/composer/attachments/submit";
@@ -488,6 +488,7 @@ function createDefaultDeps(): HostRuntimeControllerDeps {
         runtimeGeneration,
         capabilities: appCapabilities,
         trace: nativePerformanceTrace,
+        getSessionToken: getAccountSessionToken,
       };
       if (connection.type === "directSocket" || connection.type === "directPipe") {
         return new DaemonClient({
@@ -730,7 +731,21 @@ export class HostRuntimeController {
     await this.switchToConnection(input);
   }
 
-  async runProbeCycleNow(): Promise<void> {
+  /**
+   * Run a probe cycle now.
+   *
+   * `force` also drops every connection's cooldown. A cycle only probes connections whose
+   * interval has elapsed, and an unreachable one settles at a 30s interval, so asking for a
+   * cycle without this usually probes nothing at all. Sign-in is the caller that needs it: every
+   * probe made while signed out is refused, the probe closes the client it opened, and no host
+   * comes online — so the app would otherwise wait out a cooldown that was measuring a condition
+   * that has just changed. A cycle already in flight computed its list before the cooldowns were
+   * cleared; the 2s tick picks up whatever it skipped.
+   */
+  async runProbeCycleNow(options?: { force?: boolean }): Promise<void> {
+    if (options?.force) {
+      this.connectionLastProbedAt.clear();
+    }
     if (this.probeCycleInFlight) {
       return this.probeCycleInFlight;
     }
@@ -1322,6 +1337,27 @@ export function hasConfiguredLocalDaemonOverride(): boolean {
   return readConfiguredLocalDaemonOverride() !== null;
 }
 
+/**
+ * The daemon this app was pointed at before any connection succeeded. Sign-in
+ * needs it: a daemon that refuses unauthenticated clients never becomes a
+ * registered host, so waiting for one would deadlock.
+ */
+export function readConfiguredDaemonConnection(): HostConnection | null {
+  const override = readConfiguredLocalDaemonOverride();
+  if (override) {
+    return connectionFromListen(override);
+  }
+  const hint = readInitialDaemonConnectionHint();
+  if (!hint) {
+    return null;
+  }
+  const connection = connectionFromListen(hint.listen);
+  if (!connection || connection.type !== "directTcp") {
+    return connection;
+  }
+  return { ...connection, useTls: hint.useTls ?? false };
+}
+
 function isPlaceholderServerId(serverId: string): boolean {
   return serverId.startsWith("local:");
 }
@@ -1355,7 +1391,6 @@ export class HostRuntimeStore {
   private hostListVersion = 0;
   private hostRegistryLoaded = false;
   private hosts: HostProfile[] = [];
-  private hostAppearanceMutationTail: Promise<void> = Promise.resolve();
   private hostRegistryStatus: HostRegistryStatus = "loading";
   private deps: HostRuntimeControllerDeps;
   private lastConnectionStatusByServer = new Map<string, HostRuntimeConnectionStatus>();
@@ -1413,10 +1448,19 @@ export class HostRuntimeStore {
   }
 
   private async runBoot(): Promise<void> {
-    const override = readConfiguredLocalDaemonOverride();
     await this.loadFromStorage();
     this.markHostRegistryLoaded();
+    await this.bootstrapConfiguredConnection();
+  }
 
+  /**
+   * Probes the configured daemon and registers it as a host. Re-runnable: the
+   * first probe fails when the daemon refuses an unsigned-in client, and the
+   * app calls this again once an account is established. Each bootstrap path
+   * already skips a connection the registry holds, so a repeat is a no-op once
+   * the host is registered.
+   */
+  async bootstrapConfiguredConnection(): Promise<void> {
     let isE2E: string | null = null;
     try {
       isE2E = await this.storage.getItem(E2E_STORAGE_KEY);
@@ -1441,6 +1485,7 @@ export class HostRuntimeStore {
       }
     }
 
+    const override = readConfiguredLocalDaemonOverride();
     if (override) {
       this.bootstrapConfiguredOverride(override);
     } else {
@@ -1683,7 +1728,6 @@ export class HostRuntimeStore {
     const probeHost: HostProfile = {
       serverId: "",
       label: input.label ?? input.connection.id,
-      appearance: defaultHostAppearance(),
       lifecycle: {},
       connections: [input.connection],
       preferredConnectionId: input.connection.id,
@@ -1816,43 +1860,6 @@ export class HostRuntimeStore {
 
   async renameHost(serverId: string, label: string): Promise<void> {
     await this.updateHost(serverId, (host) => ({ ...host, label }));
-  }
-
-  async setHostColor(serverId: string, color: HostColor): Promise<void> {
-    await this.updateHostAppearance(serverId, (host) => ({
-      ...host,
-      appearance: { ...host.appearance, color },
-    }));
-  }
-
-  async setHostBadgeDisplay(serverId: string, badgeDisplay: HostBadgeDisplay): Promise<void> {
-    await this.updateHostAppearance(serverId, (host) => ({
-      ...host,
-      appearance: { ...host.appearance, badgeDisplay },
-    }));
-  }
-
-  private updateHostAppearance(
-    serverId: string,
-    apply: (host: HostProfile) => HostProfile,
-  ): Promise<void> {
-    const update = this.hostAppearanceMutationTail.then(() =>
-      this.applyHostAppearance(serverId, apply),
-    );
-    this.hostAppearanceMutationTail = update.catch(() => undefined);
-    return update;
-  }
-
-  private async applyHostAppearance(
-    serverId: string,
-    apply: (host: HostProfile) => HostProfile,
-  ): Promise<void> {
-    const updatedAt = new Date().toISOString();
-    const next = this.hosts.map((host) =>
-      host.serverId === serverId ? { ...apply(host), updatedAt } : host,
-    );
-    await this.persistHosts(next);
-    this.setHostsAndSync(next);
   }
 
   async removeHost(serverId: string): Promise<void> {
@@ -2079,7 +2086,7 @@ export class HostRuntimeStore {
       // queries refetch now and evicted ones on their next mount.
       void invalidateCheckoutGitQueriesForServer(queryClient, serverId);
       invalidateServerDataQueriesAfterReconnect({ queryClient, serverId });
-      void queryClient.invalidateQueries({ queryKey: schedulesQueryBaseKey });
+      if (snapshot.client) deliverArenaByokKeyOnConnect({ serverId, client: snapshot.client });
     }
 
     // Runtime owns directory bootstrap policy, including reconnect and delayed
@@ -2125,7 +2132,11 @@ export class HostRuntimeStore {
     this.directoryBootstrapInFlight.set(serverId, bootstrap);
   }
 
-  drainQueuedAgentMessage(serverId: string, agentId: string): void {
+  drainQueuedAgentMessage(
+    serverId: string,
+    agentId: string,
+    options?: { allowArenaFollowUp?: boolean },
+  ): void {
     const drainKey = `${serverId}:${agentId}`;
     if (this.queuedAgentDrainInFlight.has(drainKey)) return;
     const store = useSessionStore.getState();
@@ -2135,6 +2146,7 @@ export class HostRuntimeStore {
     if (!client || !queue?.length || session.initializingAgents.get(agentId) === true) {
       return;
     }
+    if (queue[0]?.arenaFollowUp && options?.allowArenaFollowUp !== true) return;
     this.queuedAgentDrainInFlight.add(drainKey);
     const next = queue[0];
     void sendQueuedComposerMessageNow({
@@ -2235,12 +2247,12 @@ export class HostRuntimeStore {
     }
   }
 
-  runProbeCycleNow(serverId?: string): Promise<void> {
+  runProbeCycleNow(serverId?: string, options?: { force?: boolean }): Promise<void> {
     if (serverId) {
-      return this.controllers.get(serverId)?.runProbeCycleNow() ?? Promise.resolve();
+      return this.controllers.get(serverId)?.runProbeCycleNow(options) ?? Promise.resolve();
     }
     return Promise.all(
-      Array.from(this.controllers.values(), (controller) => controller.runProbeCycleNow()),
+      Array.from(this.controllers.values(), (controller) => controller.runProbeCycleNow(options)),
     ).then(() => undefined);
   }
 
@@ -2488,8 +2500,6 @@ export interface HostMutations {
     label?: string,
   ) => Promise<HostProfile>;
   renameHost: (serverId: string, label: string) => Promise<void>;
-  setHostColor: (serverId: string, color: HostColor) => Promise<void>;
-  setHostBadgeDisplay: (serverId: string, badgeDisplay: HostBadgeDisplay) => Promise<void>;
   removeHost: (serverId: string) => Promise<void>;
   removeConnection: (serverId: string, connectionId: string) => Promise<void>;
 }
@@ -2504,9 +2514,6 @@ export function useHostMutations(): HostMutations {
       upsertConnectionFromOffer: (offer, label) => store.upsertConnectionFromOffer(offer, label),
       upsertConnectionFromOfferUrl: (url, label) => store.upsertConnectionFromOfferUrl(url, label),
       renameHost: (serverId, label) => store.renameHost(serverId, label),
-      setHostColor: (serverId, color) => store.setHostColor(serverId, color),
-      setHostBadgeDisplay: (serverId, badgeDisplay) =>
-        store.setHostBadgeDisplay(serverId, badgeDisplay),
       removeHost: (serverId) => store.removeHost(serverId),
       removeConnection: (serverId, connectionId) => store.removeConnection(serverId, connectionId),
     }),

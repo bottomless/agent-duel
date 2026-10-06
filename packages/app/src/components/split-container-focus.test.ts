@@ -34,4 +34,57 @@ describe("split focus root", () => {
       resolveSplitContainerRoot({ root, focusedPaneId: "right", focusModeEnabled: false }),
     ).toEqual({ root, usesFallbackStrip: false });
   });
+
+  it("drops a hidden side pane from the render", () => {
+    expect(
+      resolveSplitContainerRoot({
+        root,
+        focusedPaneId: "left",
+        focusModeEnabled: false,
+        sidePaneId: "right",
+        sidePanelOpen: false,
+      }),
+    ).toEqual({ root: pane("left"), usesFallbackStrip: false });
+  });
+
+  describe("compact widths", () => {
+    it("shows only the side pane while the panel is open", () => {
+      expect(
+        resolveSplitContainerRoot({
+          root,
+          focusedPaneId: "left",
+          focusModeEnabled: false,
+          sidePaneId: "right",
+          sidePanelOpen: true,
+          compact: true,
+        }),
+      ).toEqual({ root: pane("right"), usesFallbackStrip: false });
+    });
+
+    it("shows only the chat while the panel is hidden", () => {
+      expect(
+        resolveSplitContainerRoot({
+          root,
+          focusedPaneId: "right",
+          focusModeEnabled: false,
+          sidePaneId: "right",
+          sidePanelOpen: false,
+          compact: true,
+        }),
+      ).toEqual({ root: pane("left"), usesFallbackStrip: false });
+    });
+
+    it("shows the bare chat when there is no side pane", () => {
+      expect(
+        resolveSplitContainerRoot({
+          root: pane("left"),
+          focusedPaneId: "left",
+          focusModeEnabled: false,
+          sidePaneId: null,
+          sidePanelOpen: false,
+          compact: true,
+        }),
+      ).toEqual({ root: pane("left"), usesFallbackStrip: false });
+    });
+  });
 });

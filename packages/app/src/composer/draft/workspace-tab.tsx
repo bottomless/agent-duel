@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Keyboard, ScrollView, StyleSheet as RNStyleSheet, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import ReanimatedAnimated from "react-native-reanimated";
@@ -9,8 +9,8 @@ import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import invariant from "tiny-invariant";
 import { Composer } from "@/composer";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
-import { ComposerImportPill } from "@/composer/draft/import-pill";
 import { AgentStreamView } from "@/agent-stream/view";
+import { STREAM_CONTENT_TOP_INSET } from "@/agent-stream/spacing";
 import { composerWorkspaceAttachment } from "@/composer/attachments/workspace";
 import { useAgentInputDraft } from "@/composer/draft/input-draft";
 import type { CreateAgentInitialValues } from "@/hooks/use-agent-form-state";
@@ -19,7 +19,8 @@ import { resolveTurnPresentation, TURN_LIVENESS_IDLE } from "@/timeline/turn-liv
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { buildWorkspaceDraftAgentConfig } from "@/screens/workspace/workspace-draft-agent-config";
 import { buildDraftStoreKey } from "@/stores/draft-keys";
-import { usePanelStore } from "@/stores/panel-store";
+import { markArenaBattleHandoff } from "@/arena/battle-handoff";
+import { savePendingBattlePrompt } from "@/arena/pending-battle";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import type { Agent } from "@/stores/session-store";
 import { useWorkspaceFields } from "@/stores/session-store-hooks";
@@ -29,12 +30,12 @@ import { encodeImages } from "@/utils/encode-images";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { shouldAutoFocusWorkspaceDraftComposer } from "@/screens/workspace/workspace-draft-pane-focus";
 import {
+  isStartingArenaBattle,
   shouldAllowEmptyDraftText,
-  validateDraftSubmission,
 } from "@/composer/draft/workspace-tab-core";
 import type { AgentCapabilityFlags } from "@getpaseo/protocol/agent-types";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
-import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import type { ArenaPromptAttachments, DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { WorkspaceComposerAttachment } from "@/attachments/types";
 import {
   useDraftWorkspaceAttachmentScopeKey,
@@ -42,13 +43,45 @@ import {
   useWorkspaceAttachmentsStore,
 } from "@/attachments/workspace-attachments-store";
 import type { UserMessageImageAttachment } from "@/types/stream";
-import {
-  COMPACT_FORM_FACTOR_WIDTH,
-  MAX_CONTENT_WIDTH,
-  useIsCompactFormFactor,
-} from "@/constants/layout";
+import { COMPACT_FORM_FACTOR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 import type { WorkspaceDraftTabSetup } from "@/workspace-tabs/model";
+import {
+  ARENA_PROVIDER,
+  ARENA_BOOTSTRAP_MODEL,
+  ARENA_THINKING_OPTIONS,
+  arenaAgentPreferenceKey,
+  arenaDraftPreferenceKey,
+  type ArenaThinkingLevel,
+} from "@/arena/constants";
+import { arenaComposerMaxImages } from "@/arena/composer-state";
+import { canStartBattleOnChat } from "@/arena/conflict-guard";
+import {
+  copyArenaPreferences,
+  getArenaPreferences,
+  useArenaPreferences,
+} from "@/arena/preferences";
+import { useQueryClient } from "@tanstack/react-query";
+import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import { ArenaDraftBattleView } from "@/arena/battle-view";
+import { ArenaStartingBattleBar } from "@/arena/decision-bar";
+import { arenaSessionQueryKey } from "@/arena/use-arena-session";
+import { ArenaContentColumn } from "@/arena/content-column";
+import { ensureBattleRepository } from "@/arena/battle-repository";
+import { arenaByokKey } from "@/byok/key";
+import { router } from "expo-router";
+import { useToast } from "@/contexts/toast-context";
+import { useDraftStore } from "@/stores/draft-store";
+import { buildNewWorkspaceDraftKey } from "@/stores/draft-keys";
+import { useSessionStore } from "@/stores/session-store";
+import { buildWorkspaceArchiveRedirectRoute } from "@/utils/workspace-archive-navigation";
+import { archiveWorkspaceOptimistically } from "@/workspace/workspace-archive";
+import {
+  FirstSendError,
+  returnFailedFirstSendToNewChat,
+  type FailedFirstSendDeps,
+} from "@/composer/draft/failed-first-send";
+import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
 
 const EMPTY_PENDING_PERMISSIONS = new Map();
 const EMPTY_ONLINE_SERVER_IDS: string[] = [];
@@ -61,75 +94,10 @@ const DRAFT_CAPABILITIES: AgentCapabilityFlags = {
   supportsToolInvocations: false,
 };
 
-interface AutoSubmitConfig {
-  provider: string;
-  modeId: string | null;
-  model: string | null;
-  thinkingOptionId: string | null;
-  featureValues: Record<string, unknown>;
-}
-
-function resolveAutoSubmitConfig(
-  pending: {
-    provider: string;
-    modeId?: string | null;
-    model?: string | null;
-    thinkingOptionId?: string | null;
-    featureValues?: Record<string, unknown>;
-  } | null,
-): AutoSubmitConfig | null {
-  if (!pending) return null;
-  return {
-    provider: pending.provider,
-    modeId: pending.modeId ?? null,
-    model: pending.model ?? null,
-    thinkingOptionId: pending.thinkingOptionId ?? null,
-    featureValues: pending.featureValues ?? {},
-  };
-}
-
-// Reconcile the form's selected mode against the currently discovered modes.
-// The mode picker displays modeOptions[0] when the stored mode isn't in the
-// list (e.g. a globally-remembered "plan" that this workspace's OpenCode config
-// no longer defines), so the submitted mode must match that display — otherwise
-// we'd send a stale mode the provider rejects while the UI showed a valid one.
-function reconcileSelectedMode(modeOptionIds: readonly string[], selectedMode: string): string {
-  if (modeOptionIds.length === 0) {
-    return "";
-  }
-  return modeOptionIds.includes(selectedMode) ? selectedMode : (modeOptionIds[0] ?? "");
-}
-
-function resolveDraftModeIdOverride(input: {
-  autoSubmitConfig: AutoSubmitConfig | null;
-  modeOptionIds: readonly string[];
-  selectedMode: string;
-}): { modeId: string } | Record<string, never> {
-  const { autoSubmitConfig, modeOptionIds, selectedMode } = input;
-  if (autoSubmitConfig?.modeId) {
-    return { modeId: autoSubmitConfig.modeId };
-  }
-  const reconciled = reconcileSelectedMode(modeOptionIds, selectedMode);
-  if (reconciled !== "") {
-    return { modeId: reconciled };
-  }
-  return {};
-}
-
-function resolveDraftModeId(input: {
-  autoSubmitConfig: AutoSubmitConfig | null;
-  modeOptionIds: readonly string[];
-  selectedMode: string;
-}): string | null {
-  const { autoSubmitConfig, modeOptionIds, selectedMode } = input;
-  if (autoSubmitConfig?.modeId !== undefined) {
-    return autoSubmitConfig.modeId;
-  }
-  const reconciled = reconcileSelectedMode(modeOptionIds, selectedMode);
-  if (reconciled !== "") {
-    return reconciled;
-  }
-  return null;
+// Before createAgent, so a folder that cannot battle leaves no agent behind.
+async function checkBattleCanStart(input: { client: DaemonClient; cwd: string }): Promise<void> {
+  await arenaByokKey.ensure(input.client);
+  await ensureBattleRepository({ client: input.client, cwd: input.cwd });
 }
 
 async function submitDraftCreateRequest(input: {
@@ -141,30 +109,21 @@ async function submitDraftCreateRequest(input: {
   client: DaemonClient | null;
   workspaceDirectory: string | null;
   workspaceId: string | null;
-  autoSubmitConfig: AutoSubmitConfig | null;
-  composerState: {
-    selectedProvider: string | null;
-    selectedMode: string;
-    modeOptions: readonly { id: string }[];
-    effectiveModelId: string | null;
-    effectiveThinkingOptionId: string | null;
-    featureValues: Record<string, unknown> | undefined;
-  };
   hostDisconnectedMessage: string;
-  selectModelMessage: string;
-}): Promise<{ agentId: string | null; result: AgentSnapshotPayload }> {
-  const {
-    attempt,
-    text,
-    images,
-    attachments,
-    cwd,
-    client,
-    workspaceDirectory,
-    workspaceId,
-    autoSubmitConfig,
-    composerState,
-  } = input;
+  arenaPreferenceKey: string;
+  featureValues?: Record<string, unknown>;
+  createdPreferenceKey: (agentId: string) => string;
+  /** Give the workspace this draft becomes the started battle, and the licence to paint it. */
+  handOffStartedBattle: (agentId: string, snapshot: ArenaSnapshot) => void;
+  /** Hold the typed prompt and its images as the agent's next battle when nothing will send it now. */
+  queueBattlePrompt: (agentId: string, text: string, images: UserMessageImageAttachment[]) => void;
+}): Promise<{
+  agentId: string | null;
+  result: AgentSnapshotPayload;
+  handoffMessage?: boolean;
+}> {
+  const { attempt, text, images, attachments, cwd, client, workspaceDirectory, workspaceId } =
+    input;
 
   invariant(workspaceDirectory, "Workspace directory is required");
   invariant(workspaceId, "Workspace id is required");
@@ -172,39 +131,111 @@ async function submitDraftCreateRequest(input: {
     throw new Error(input.hostDisconnectedMessage);
   }
 
-  const provider = autoSubmitConfig?.provider ?? composerState.selectedProvider;
-  if (!provider) {
-    throw new Error(input.selectModelMessage);
-  }
-  const modeIdOverride = resolveDraftModeIdOverride({
-    autoSubmitConfig,
-    modeOptionIds: composerState.modeOptions.map((mode) => mode.id),
-    selectedMode: composerState.selectedMode,
-  });
+  const arenaPreferences = getArenaPreferences(input.arenaPreferenceKey);
+  const provider = ARENA_PROVIDER;
   const config = buildWorkspaceDraftAgentConfig({
     provider,
     cwd,
-    ...modeIdOverride,
-    model: autoSubmitConfig?.model ?? (composerState.effectiveModelId || undefined),
-    thinkingOptionId:
-      autoSubmitConfig?.thinkingOptionId ?? (composerState.effectiveThinkingOptionId || undefined),
-    featureValues: autoSubmitConfig?.featureValues ?? composerState.featureValues,
+    model: ARENA_BOOTSTRAP_MODEL,
+    thinkingOptionId: arenaPreferences.thinking,
+    featureValues: input.featureValues,
   });
 
+  if (arenaPreferences.battleMode) {
+    await checkBattleCanStart({ client, cwd });
+  }
   const imagesData = await encodeImages(images);
   const attachmentsArray = Array.isArray(attachments) ? attachments : undefined;
+  // A battle's prompt and its attachments ride on arenaStart below, never on the agent itself.
+  const promptAttachments = {
+    ...(imagesData && imagesData.length > 0 ? { images: imagesData } : {}),
+    ...(attachmentsArray && attachmentsArray.length > 0 ? { attachments: attachmentsArray } : {}),
+  };
   const result = await client.createAgent({
     config,
     workspaceId,
-    ...(text ? { initialPrompt: text } : {}),
-    clientMessageId: attempt.clientMessageId,
-    ...(imagesData && imagesData.length > 0 ? { images: imagesData } : {}),
-    ...(attachmentsArray && attachmentsArray.length > 0 ? { attachments: attachmentsArray } : {}),
+    ...(!arenaPreferences.battleMode && text ? { initialPrompt: text } : {}),
+    ...(!arenaPreferences.battleMode ? { clientMessageId: attempt.clientMessageId } : {}),
+    ...(!arenaPreferences.battleMode ? promptAttachments : {}),
   });
+
+  if (result.id) {
+    copyArenaPreferences(input.arenaPreferenceKey, input.createdPreferenceKey(result.id));
+  }
+  if (arenaPreferences.battleMode) {
+    if (!result.id) throw new Error("Created OpenCode agent did not return an id");
+    try {
+      await startDraftBattle({ ...input, client, agentId: result.id, promptAttachments });
+    } catch (error) {
+      throw new FirstSendError(error, result.id);
+    }
+  }
 
   return {
     agentId: result.id,
     result,
+    handoffMessage: !arenaPreferences.battleMode,
+  };
+}
+
+async function startDraftBattle(input: {
+  client: DaemonClient;
+  agentId: string;
+  text: string;
+  images?: UserMessageImageAttachment[];
+  promptAttachments: ArenaPromptAttachments;
+  handOffStartedBattle: (agentId: string, snapshot: ArenaSnapshot) => void;
+  queueBattlePrompt: (agentId: string, text: string, images: UserMessageImageAttachment[]) => void;
+}): Promise<void> {
+  const { client, agentId, text, images, promptAttachments } = input;
+  const snapshot = await client.arenaResolve(agentId);
+  if (!canStartBattleOnChat(snapshot.chat)) {
+    // The daemon would refuse this start. The agent panel mounts the arena query and explains
+    // the pause instead of burning the send on a toast.
+    //
+    // A battle prompt is withheld from createAgent above so arenaStart can carry it, so skipping
+    // the start leaves nothing holding the text. It used to be dropped here and the guard then
+    // prefilled the resolve prompt into the empty composer, which read as the app replacing what
+    // you wrote.
+    //
+    // It becomes the queued next battle rather than composer text: resolving conflicts is a
+    // conversation, and an agent that asks which side of a hunk to keep needs the composer the
+    // parked prompt would have been sitting in. The queue drains itself once the trunk is clean.
+    input.queueBattlePrompt(agentId, text, images ?? []);
+    return;
+  }
+  const started = await client.arenaStart(agentId, snapshot.chat.id, text, promptAttachments);
+  // Hand the started battle to the workspace this draft is about to become. Without it the
+  // agent panel mounts with nothing, renders its empty state, and waits up to a poll for a
+  // battle that has already begun — which is the blank chat between the draft's panes going
+  // and the real ones arriving.
+  input.handOffStartedBattle(agentId, started);
+}
+
+function failedFirstSendDeps(input: {
+  client: DaemonClient;
+  showError: (message: string) => void;
+}): FailedFirstSendDeps {
+  return {
+    readWorkspaceAgentIds: (serverId, workspaceId) =>
+      Array.from(useSessionStore.getState().sessions[serverId]?.agents.values() ?? []).flatMap(
+        (agent) => (agent.workspaceId === workspaceId ? [agent.id] : []),
+      ),
+    resolveNewChatRoute: (serverId, workspaceId) =>
+      buildWorkspaceArchiveRedirectRoute({
+        serverId,
+        archivedWorkspaceId: workspaceId,
+        workspaces: useSessionStore.getState().sessions[serverId]?.workspaces.values() ?? [],
+      }),
+    saveNewChatDraft: (draft) =>
+      useDraftStore.getState().saveDraftInput({ draftKey: buildNewWorkspaceDraftKey(), draft }),
+    navigate: (route) => router.replace(route),
+    showError: input.showError,
+    archiveWorkspace: (serverId, workspaceId) =>
+      archiveWorkspaceOptimistically({
+        client: input.client,
+        workspace: { serverId, workspaceId },
+      }),
   };
 }
 
@@ -213,32 +244,15 @@ function buildDraftAgentSnapshot(input: {
   serverId: string;
   tabId: string;
   workspaceDirectory: string | null;
-  autoSubmitConfig: AutoSubmitConfig | null;
-  composerState: {
-    effectiveModelId: string | null;
-    effectiveThinkingOptionId: string | null;
-    modeOptions: readonly { id: string }[];
-    selectedMode: string;
-    selectedProvider: string | null;
-    agentControls: { features?: Agent["features"] };
-  };
-  selectModelMessage: string;
+  arenaThinking: ArenaThinkingLevel;
 }): Agent {
-  const { attempt, serverId, tabId, workspaceDirectory, autoSubmitConfig, composerState } = input;
+  const { attempt, serverId, tabId, workspaceDirectory } = input;
   invariant(workspaceDirectory, "Workspace directory is required");
   const now = attempt.timestamp;
-  const model = autoSubmitConfig?.model ?? (composerState.effectiveModelId || null);
-  const thinkingOptionId =
-    autoSubmitConfig?.thinkingOptionId ?? (composerState.effectiveThinkingOptionId || null);
-  const modeId = resolveDraftModeId({
-    autoSubmitConfig,
-    modeOptionIds: composerState.modeOptions.map((mode) => mode.id),
-    selectedMode: composerState.selectedMode,
-  });
-  const provider = autoSubmitConfig?.provider ?? composerState.selectedProvider;
-  if (!provider) {
-    throw new Error(input.selectModelMessage);
-  }
+  const model = ARENA_BOOTSTRAP_MODEL;
+  const thinkingOptionId = input.arenaThinking;
+  const modeId = null;
+  const provider = ARENA_PROVIDER;
   return {
     serverId,
     id: tabId,
@@ -258,7 +272,7 @@ function buildDraftAgentSnapshot(input: {
     title: "Agent",
     cwd: workspaceDirectory,
     model,
-    features: composerState.agentControls.features,
+    features: [],
     thinkingOptionId,
     parentAgentId: null,
     labels: {},
@@ -273,14 +287,18 @@ function buildDraftInitialValues(input: {
     return undefined;
   }
   if (!input.initialSetup) {
-    return { workingDir: input.workingDir };
+    return {
+      workingDir: input.workingDir,
+      provider: ARENA_PROVIDER,
+      model: ARENA_BOOTSTRAP_MODEL,
+      thinkingOptionId: "high",
+    };
   }
   return {
     workingDir: input.workingDir,
-    provider: input.initialSetup.provider,
-    modeId: input.initialSetup.modeId,
-    model: input.initialSetup.model,
-    thinkingOptionId: input.initialSetup.thinkingOptionId,
+    provider: ARENA_PROVIDER,
+    model: ARENA_BOOTSTRAP_MODEL,
+    thinkingOptionId: "high",
   };
 }
 
@@ -310,17 +328,6 @@ interface WorkspaceDraftAgentTabProps {
   isPaneFocused: boolean;
   onCreated: (snapshot: AgentSnapshotPayload) => void;
   onOpenWorkspaceFile: (request: WorkspaceFileOpenRequest) => void;
-  onOpenImportSheet?: () => void;
-}
-
-function resolveImportPillPress(
-  onOpenImportSheet: (() => void) | undefined,
-  isSubmitting: boolean,
-): (() => void) | null {
-  if (isSubmitting) {
-    return null;
-  }
-  return onOpenImportSheet ?? null;
 }
 
 export function WorkspaceDraftAgentTab({
@@ -332,11 +339,14 @@ export function WorkspaceDraftAgentTab({
   isPaneFocused,
   onCreated,
   onOpenWorkspaceFile,
-  onOpenImportSheet,
 }: WorkspaceDraftAgentTabProps) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const toast = useToast();
   const insets = useSafeAreaInsets();
   const client = useHostRuntimeClient(serverId);
+  const arenaPreferenceKey = arenaDraftPreferenceKey(serverId, draftId);
+  const arenaPreferences = useArenaPreferences(arenaPreferenceKey);
   const isConnected = useHostRuntimeIsConnected(serverId);
   const workspaceFields = useWorkspaceFields(serverId, workspaceId, (w) => ({
     workspaceDirectory: w.workspaceDirectory,
@@ -403,7 +413,6 @@ export function WorkspaceDraftAgentTab({
   const consumePendingAutoSubmit = useWorkspaceDraftSubmissionStore(
     (state) => state.consumePending,
   );
-  const autoSubmitConfig = resolveAutoSubmitConfig(pendingAutoSubmit);
   const initialCreateAttempt = useMemo<DraftCreateAttempt | null>(() => {
     if (!pendingAutoSubmit || !pendingCreateAttempt) {
       return null;
@@ -442,31 +451,18 @@ export function WorkspaceDraftAgentTab({
   const clearWorkspaceAttachments = useWorkspaceAttachmentsStore(
     (state) => state.clearWorkspaceAttachments,
   );
-  const openFileExplorerForCheckout = usePanelStore((state) => state.openFileExplorerForCheckout);
-  const setExplorerTabForCheckout = usePanelStore((state) => state.setExplorerTabForCheckout);
   const handleOpenWorkspaceAttachment = useCallback(
     (attachment: WorkspaceComposerAttachment) => {
       if (attachment.kind !== "review") {
         return;
       }
-      const checkout = {
-        serverId,
-        cwd: attachment.attachment.cwd,
-        isGit: true,
-      };
-      openFileExplorerForCheckout({
-        checkout,
-        isCompact: isCompactFormFactor,
-      });
-      setExplorerTabForCheckout({
-        ...checkout,
-        tab: "changes",
-      });
+      openWorkspaceSidePanelTab({ serverId, workspaceId, target: { kind: "changes" } });
     },
-    [isCompactFormFactor, openFileExplorerForCheckout, serverId, setExplorerTabForCheckout],
+    [serverId, workspaceId],
   );
 
   const {
+    machine,
     formErrorMessage,
     isSubmitting,
     submittedStreamItems,
@@ -480,18 +476,15 @@ export function WorkspaceDraftAgentTab({
     initialAttempt: initialCreateAttempt,
     allowEmptyText: allowsEmptyAutoSubmit,
     validateBeforeSubmit: ({ text, attachments }) => {
-      const allowsEmptyDraftText = shouldAllowEmptyDraftText({
-        allowsEmptyAutoSubmit,
-        attachments,
-      });
-      return validateDraftSubmission({
-        text,
-        allowsEmptyAutoSubmit: allowsEmptyDraftText,
-        composerState,
-        autoSubmitConfig,
-        workspaceDirectory: draftWorkingDirectory,
-        hasClient: Boolean(client),
-      });
+      if (!draftWorkingDirectory) return "Workspace directory is required.";
+      if (!client) return t("workspace.terminal.hostDisconnected");
+      if (arenaPreferences.battleMode && !text.trim()) {
+        return "Enter a prompt to start the battle.";
+      }
+      if (!text && !shouldAllowEmptyDraftText({ allowsEmptyAutoSubmit, attachments })) {
+        return "Enter a prompt to start the agent.";
+      }
+      return null;
     },
     onBeforeSubmit: async () => {
       await composerState.persistFormPreferences();
@@ -506,9 +499,7 @@ export function WorkspaceDraftAgentTab({
         serverId,
         tabId,
         workspaceDirectory: draftWorkingDirectory,
-        autoSubmitConfig,
-        composerState,
-        selectModelMessage: t("workspaceSetup.errors.selectModel"),
+        arenaThinking: arenaPreferences.thinking,
       }),
     createRequest: async ({ attempt, text, images, attachments, cwd }) =>
       submitDraftCreateRequest({
@@ -520,10 +511,19 @@ export function WorkspaceDraftAgentTab({
         client,
         workspaceDirectory: draftWorkingDirectory,
         workspaceId: workspaceFields?.id ?? null,
-        autoSubmitConfig,
-        composerState,
         hostDisconnectedMessage: t("workspace.terminal.hostDisconnected"),
-        selectModelMessage: t("workspaceSetup.errors.selectModel"),
+        arenaPreferenceKey,
+        featureValues: composerState.featureValues,
+        createdPreferenceKey: (agentId) => arenaAgentPreferenceKey(serverId, agentId),
+        handOffStartedBattle: (agentId, snapshot) => {
+          queryClient.setQueryData(arenaSessionQueryKey(serverId, agentId), snapshot);
+          markArenaBattleHandoff({ serverId, agentId });
+        },
+        queueBattlePrompt: (agentId, promptText, promptImages) => {
+          // Held, not sent. It never enters the in-memory queue, because that queue drains itself
+          // and a battle must not start while the user is still talking through the conflict.
+          savePendingBattlePrompt({ serverId, agentId, text: promptText, images: promptImages });
+        },
       }),
     onCreateSuccess: ({ result }) => {
       clearDraftInput("sent");
@@ -538,7 +538,7 @@ export function WorkspaceDraftAgentTab({
   );
   useAgentControlCommandCenterActions({
     sourceId: `draft:${serverId}:${tabId}`,
-    enabled: isPaneFocused && !isSubmitting,
+    enabled: false,
     controls: {
       serverId,
       ownerKey: tabId,
@@ -603,9 +603,22 @@ export function WorkspaceDraftAgentTab({
           attachments: submission.attachments,
           cwd: submission.cwd,
         });
-    void createPromise.catch(() => {
-      setDraftText(submission.text);
-      setDraftAttachments(composerWorkspaceAttachment.userAttachmentsOnly(submission.attachments));
+    void createPromise.catch((error: unknown) => {
+      const draft = {
+        text: submission.text,
+        attachments: composerWorkspaceAttachment.userAttachmentsOnly(submission.attachments),
+      };
+      if (
+        client &&
+        returnFailedFirstSendToNewChat(
+          { serverId, workspaceId, error, draft },
+          failedFirstSendDeps({ client, showError: toast.error }),
+        )
+      ) {
+        return;
+      }
+      setDraftText(draft.text);
+      setDraftAttachments(draft.attachments);
       autoSubmitKeyRef.current = null;
     });
   }, [
@@ -615,9 +628,11 @@ export function WorkspaceDraftAgentTab({
     handleCreateFromInput,
     initialCreateAttempt,
     isReadyForPendingAutoSubmit,
+    client,
     serverId,
     setDraftAttachments,
     setDraftText,
+    toast.error,
     workspaceId,
   ]);
 
@@ -643,30 +658,53 @@ export function WorkspaceDraftAgentTab({
   const handleDropdownCloseFocus = useCallback(() => {
     focusInputRef.current?.();
   }, []);
-  const importPillPress = resolveImportPillPress(onOpenImportSheet, isSubmitting);
   const composerAgentControls = useMemo(
     () => ({
       ...composerState.agentControls,
+      thinkingOptions: [...ARENA_THINKING_OPTIONS],
+      selectedThinkingOptionId: arenaPreferences.thinking,
+      onSelectThinkingOption: (thinking: string) => {
+        if (!ARENA_THINKING_OPTIONS.some((option) => option.id === thinking)) return;
+        arenaPreferences.setThinking(thinking as ArenaThinkingLevel);
+      },
+      battleMode: arenaPreferences.battleMode,
+      onBattleModeChange: arenaPreferences.setBattleMode,
+      battleModeDisabled: isSubmitting,
       onDropdownClose: handleDropdownCloseFocus,
       disabled: isSubmitting,
     }),
-    [composerState.agentControls, handleDropdownCloseFocus, isSubmitting],
+    [arenaPreferences, composerState.agentControls, handleDropdownCloseFocus, isSubmitting],
   );
+  const isStartingBattle = isStartingArenaBattle({
+    battleMode: arenaPreferences.battleMode,
+    isCreating: machine.tag === "creating",
+  });
   return (
     <FileDropZone style={styles.container}>
       <View style={styles.contentContainer}>
         {isSubmitting && draftAgent ? (
           <View style={styles.streamContainer}>
-            <AgentStreamView
-              agentId={tabId}
-              serverId={serverId}
-              context={draftAgent}
-              streamItems={submittedStreamItems}
-              pendingMessageSubmissions={pendingMessageSubmissions}
-              turnPresentation={turnPresentation}
-              pendingPermissions={EMPTY_PENDING_PERMISSIONS}
-              onOpenWorkspaceFile={onOpenWorkspaceFile}
-            />
+            {arenaPreferences.battleMode && machine.tag === "creating" ? (
+              <View style={styles.draftBattleListPadding}>
+                <ArenaContentColumn fullBleed>
+                  <ArenaDraftBattleView
+                    prompt={machine.attempt.text}
+                    timestamp={machine.attempt.timestamp.getTime()}
+                  />
+                </ArenaContentColumn>
+              </View>
+            ) : (
+              <AgentStreamView
+                agentId={tabId}
+                serverId={serverId}
+                context={draftAgent}
+                streamItems={submittedStreamItems}
+                pendingMessageSubmissions={pendingMessageSubmissions}
+                turnPresentation={turnPresentation}
+                pendingPermissions={EMPTY_PENDING_PERMISSIONS}
+                onOpenWorkspaceFile={onOpenWorkspaceFile}
+              />
+            )}
           </View>
         ) : (
           <ScrollView style={styles.scrollView} contentContainerStyle={styles.configScrollContent}>
@@ -681,41 +719,56 @@ export function WorkspaceDraftAgentTab({
         )}
       </View>
 
-      <ReanimatedAnimated.View style={inputAreaWrapperStyle} onLayout={onInputAreaLayout}>
-        {importPillPress ? (
-          <View style={styles.importPillRow}>
-            <View style={styles.importPillContent}>
-              <ComposerImportPill onPress={importPillPress} />
-            </View>
-          </View>
-        ) : null}
-        <Composer
-          agentId={tabId}
-          serverId={serverId}
-          workspaceId={workspaceId}
-          externalKeyboardShift
-          isPaneFocused={isPaneFocused}
-          onSubmitMessage={handleCreateFromInput}
-          isSubmitLoading={isSubmitting}
-          blurOnSubmit={true}
-          value={draftInput.text}
-          onChangeText={draftInput.setText}
-          attachments={draftInput.attachments}
-          attachmentScopeKeys={attachmentScopeKeys}
-          onOpenWorkspaceAttachment={handleOpenWorkspaceAttachment}
-          onChangeAttachments={draftInput.setAttachments}
-          cwd={composerState.workingDir}
-          clearDraft={draftInput.clear}
-          autoFocus={shouldAutoFocusWorkspaceDraftComposer({ isPaneFocused, isSubmitting })}
-          autoFocusKey={String(draftInput.attachmentFocusRequestId)}
-          onFocusInput={handleFocusInputCallback}
-          commandDraftConfig={composerState.commandDraftConfig}
-          agentControls={composerAgentControls}
-          isCompactLayout={isCompactComposerLayout}
-        />
-      </ReanimatedAnimated.View>
+      <DraftInputSlot startingBattle={isStartingBattle}>
+        <ReanimatedAnimated.View style={inputAreaWrapperStyle} onLayout={onInputAreaLayout}>
+          <Composer
+            agentId={tabId}
+            serverId={serverId}
+            workspaceId={workspaceId}
+            externalKeyboardShift
+            isPaneFocused={isPaneFocused}
+            onSubmitMessage={handleCreateFromInput}
+            isSubmitLoading={isSubmitting}
+            blurOnSubmit={true}
+            value={draftInput.text}
+            onChangeText={draftInput.setText}
+            attachments={draftInput.attachments}
+            attachmentScopeKeys={attachmentScopeKeys}
+            onOpenWorkspaceAttachment={handleOpenWorkspaceAttachment}
+            onChangeAttachments={draftInput.setAttachments}
+            cwd={composerState.workingDir}
+            clearDraft={draftInput.clear}
+            autoFocus={shouldAutoFocusWorkspaceDraftComposer({ isPaneFocused, isSubmitting })}
+            autoFocusKey={String(draftInput.attachmentFocusRequestId)}
+            onFocusInput={handleFocusInputCallback}
+            commandDraftConfig={composerState.commandDraftConfig}
+            agentControls={composerAgentControls}
+            isCompactLayout={isCompactComposerLayout}
+            maxImages={arenaComposerMaxImages(arenaPreferences.battleMode)}
+          />
+        </ReanimatedAnimated.View>
+      </DraftInputSlot>
     </FileDropZone>
   );
+}
+
+/**
+ * The draft's bottom slot: the composer, or the battle's own line once one has been sent.
+ *
+ * A sent battle takes the slot here for the same reason it takes it in the chat — there is
+ * nothing left to write to — and taking it now rather than when the real panel arrives is
+ * what keeps one action from changing the slot twice. The composer is dropped rather than
+ * hidden, the way the panel drops its own: the prompt and its attachments belong to the tab
+ * above, so a start that fails still has them to hand back.
+ */
+function DraftInputSlot({
+  startingBattle,
+  children,
+}: {
+  startingBattle: boolean;
+  children: ReactNode;
+}) {
+  return startingBattle ? <ArenaStartingBattleBar /> : children;
 }
 
 const animatedStaticStyles = RNStyleSheet.create({
@@ -736,6 +789,18 @@ const styles = StyleSheet.create((theme) => ({
   streamContainer: {
     flex: 1,
   },
+  // Mirrors the stream list's own padding, so a draft battle sits exactly where it will once
+  // it renders inside the stream: same width, and the same distance down. The top inset is the
+  // scroll's own head — its padding plus the slot it keeps for the older-history spinner — and
+  // without it the whole conversation dropped by that much when the real stream took over.
+  draftBattleListPadding: {
+    flex: 1,
+    paddingTop: STREAM_CONTENT_TOP_INSET,
+    paddingHorizontal: {
+      xs: theme.spacing[3],
+      md: theme.spacing[4],
+    },
+  },
   scrollView: {
     flex: 1,
   },
@@ -746,18 +811,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   configSection: {
     gap: theme.spacing[3],
-  },
-  importPillRow: {
-    width: "100%",
-    paddingHorizontal: theme.spacing[4],
-    paddingTop: theme.spacing[3],
-    paddingBottom: theme.spacing[3],
-    alignItems: "center",
-  },
-  importPillContent: {
-    width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
-    flexDirection: "row",
   },
   errorContainer: {
     marginTop: theme.spacing[2],

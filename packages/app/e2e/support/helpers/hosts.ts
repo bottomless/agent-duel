@@ -1,8 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 import { identityForeground, type IdentityColorName } from "@/styles/identity-colors";
-import { openSettings } from "./app";
 import { buildSeededHost } from "./daemon-registry";
-import { clickSettingsBackToWorkspace, openHostSection, selectSettingsHost } from "./settings";
+import { clickSettingsBackToWorkspace } from "./settings";
 
 const REGISTRY_KEY = "@paseo:daemon-registry";
 const SEED_NONCE_KEY = "@paseo:e2e-seed-nonce";
@@ -149,13 +148,6 @@ export async function toggleHostFilter(page: Page, serverId: string): Promise<vo
 
 export async function selectAllHostsFilter(page: Page): Promise<void> {
   await page.getByTestId("sidebar-host-filter-all").click();
-}
-
-export async function openHostAppearanceSettings(page: Page, serverId: string): Promise<void> {
-  await openSettings(page);
-  await selectSettingsHost(page, serverId);
-  await openHostSection(page, serverId, "host");
-  await expect(page.getByTestId("host-appearance-preview")).toBeVisible({ timeout: 15_000 });
 }
 
 // Settings replaces the workspace sidebar, so badge assertions need the app shell back. Going

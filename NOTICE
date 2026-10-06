@@ -1,0 +1,21 @@
+Agent Duel
+Copyright (c) 2026 Bottomless
+
+This repository combines two codebases under different licences.
+
+Everything outside arena-backend/
+  Licence: GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).
+  See LICENSE.
+  Based on Paseo, Copyright (c) 2025-present Mohamed Boudra,
+  with modifications by Bottomless.
+
+arena-backend/
+  Licence: MIT. See arena-backend/LICENSE.
+  Based on OpenCode, Copyright (c) 2025 opencode,
+  with modifications by Bottomless.
+
+Third-party components keep their own licences, as stated in their source files
+and package metadata.
+
+The hosted Agent Duel service, including its control plane, is not part of this
+repository.

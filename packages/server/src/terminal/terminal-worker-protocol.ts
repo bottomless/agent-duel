@@ -67,6 +67,13 @@ export type TerminalWorkerRequest =
       terminalId: string;
     }
   | {
+      type: "rehomeTerminal";
+      requestId: string;
+      terminalId: string;
+      cwd: string;
+      bannerLabel?: string;
+    }
+  | {
       type: "killTerminalAndWait";
       requestId: string;
       terminalId: string;

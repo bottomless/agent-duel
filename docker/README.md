@@ -1,5 +1,10 @@
 # Paseo Docker Image
 
+> This is inherited Paseo documentation. The Agent Duel product does not ship
+> through this image or its browser UI. It does not replace the packaged local
+> Arena runtime or the Vercel control plane described in
+> [../docs/deployment.md](../docs/deployment.md).
+
 This directory contains the official Paseo daemon image.
 
 The image runs the daemon headless and serves the bundled web UI from the same

@@ -14,6 +14,11 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import type { Theme } from "@/styles/theme";
 import { WEB_SCROLLBAR_SIZE_PX } from "@/styles/web-scrollbar";
+import {
+  STREAM_CONTENT_PADDING_TOP,
+  STREAM_CONTENT_TOP_INSET,
+  STREAM_HISTORY_START_SLOT_HEIGHT,
+} from "./spacing";
 import { estimateStreamItemHeight } from "./web-virtualization";
 import type { StreamRenderInput, StreamStrategy, StreamViewportHandle } from "./strategy";
 import { createStreamStrategy } from "./strategy";
@@ -51,10 +56,10 @@ const BOTTOM_OVERSCROLL_TOLERANCE_PX = 2;
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 64;
 const AUTO_SCROLL_RESUME_THRESHOLD_PX = 1;
 const HISTORY_START_SETTLE_FRAMES = 2;
-const HISTORY_START_SLOT_HEIGHT_PX = 32;
-const CONTENT_PADDING_TOP_PX = 16;
+const HISTORY_START_SLOT_HEIGHT_PX = STREAM_HISTORY_START_SLOT_HEIGHT;
+const CONTENT_PADDING_TOP_PX = STREAM_CONTENT_PADDING_TOP;
 const UPWARD_INPUT_EVIDENCE_TIMEOUT_MS = 100;
-const VIRTUALIZER_SCROLL_MARGIN_PX = HISTORY_START_SLOT_HEIGHT_PX + CONTENT_PADDING_TOP_PX;
+const VIRTUALIZER_SCROLL_MARGIN_PX = STREAM_CONTENT_TOP_INSET;
 // A row has to clear this much of the viewport top before the next one takes over as the
 // reading position, so a row resting exactly on the edge does not flip back and forth.
 const READING_POSITION_OFFSET_PX = 8;

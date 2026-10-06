@@ -20,6 +20,7 @@ import {
   __resetPullRequestStatusCacheForTests,
   __setPullRequestStatusCacheTtlForTests,
   commitAll,
+  createBranch,
   discardChanges,
   CHECKOUT_DIFF_MAX_STRUCTURED_BYTES,
   createPullRequest,
@@ -496,6 +497,44 @@ describe("checkout git utilities", () => {
         .toString()
         .trim(),
     ).toContain("refs/heads/feature/new-name");
+  });
+
+  // The new-workspace picker names the base it will cut from before the branch is typed, and
+  // the checkout can move between those two moments. The ref is what keeps that promise.
+  it("cuts a branch at the requested base ref, wherever HEAD stands", async () => {
+    execSync("git checkout -b dev main", { cwd: repoDir });
+    writeFileSync(join(repoDir, "dev.txt"), "dev\n");
+    execSync("git add dev.txt", { cwd: repoDir });
+    execSync('git -c commit.gpgsign=false commit -m "dev only"', { cwd: repoDir });
+    const mainSha = execSync("git rev-parse refs/heads/main", { cwd: repoDir }).toString().trim();
+
+    const result = await createBranch(repoDir, "feature/from-main", {
+      baseRef: "refs/heads/main",
+    });
+
+    expect(result.currentBranch).toBe("feature/from-main");
+    expect(execSync("git rev-parse HEAD", { cwd: repoDir }).toString().trim()).toBe(mainSha);
+  });
+
+  it("cuts at HEAD when no base is requested", async () => {
+    execSync("git checkout -b dev main", { cwd: repoDir });
+    writeFileSync(join(repoDir, "dev.txt"), "dev\n");
+    execSync("git add dev.txt", { cwd: repoDir });
+    execSync('git -c commit.gpgsign=false commit -m "dev only"', { cwd: repoDir });
+    const devSha = execSync("git rev-parse HEAD", { cwd: repoDir }).toString().trim();
+
+    const result = await createBranch(repoDir, "feature/from-head");
+
+    expect(result.currentBranch).toBe("feature/from-head");
+    expect(execSync("git rev-parse HEAD", { cwd: repoDir }).toString().trim()).toBe(devSha);
+  });
+
+  it("refuses a base ref that no longer resolves rather than cutting at HEAD", async () => {
+    await expect(
+      createBranch(repoDir, "feature/no-base", { baseRef: "refs/heads/gone" }),
+    ).rejects.toThrow("Base branch not found: gone");
+
+    expect(execSync("git branch --show-current", { cwd: repoDir }).toString().trim()).toBe("main");
   });
 
   it("handles status/diff/commit in a normal repo", async () => {

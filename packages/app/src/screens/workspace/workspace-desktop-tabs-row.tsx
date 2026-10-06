@@ -20,27 +20,31 @@ import {
   CopyX,
   ArrowLeftToLine,
   ArrowRightToLine,
-  ChevronDown,
-  Columns2,
   Copy,
+  FolderTree,
+  GitCompareArrows,
+  GitPullRequest,
+  Columns2,
+  Rows2,
   Pencil,
   RotateCw,
-  Rows2,
   Globe,
   Plus,
-  SquarePen,
   SquareTerminal,
   X,
 } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import { useRouter, type Href } from "expo-router";
 import { SortableInlineList } from "@/components/sortable-inline-list";
 import type {
   DraggableListDragHandleProps,
   DraggableRenderItemInfo,
 } from "@/components/draggable-list.types";
 import { isNative, isWeb } from "@/constants/platform";
+import { useAppSettings } from "@/hooks/use-settings";
+import type { ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
+import { agentLabel } from "@/arena/environment";
+import type { SidePanelPlacement } from "@/workspace/side-panel-placement";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -52,15 +56,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import { WORKSPACE_SECONDARY_HEADER_HEIGHT } from "@/constants/layout";
-import type { ShortcutKey } from "@/utils/format-shortcut";
 import { useWorkspaceTabLayout } from "@/screens/workspace/use-workspace-tab-layout";
 import {
   WorkspaceTabPresentationResolver,
@@ -75,24 +78,13 @@ import {
   type WorkspaceTabMenuLabels,
 } from "@/screens/workspace/workspace-tab-menu";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
+import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
 import type { Theme } from "@/styles/theme";
 import { RenderProfile } from "@/utils/render-profiler";
-import { useDaemonConfig } from "@/hooks/use-daemon-config";
-import {
-  getTerminalProfileIcon,
-  resolveTerminalProfiles,
-} from "@getpaseo/protocol/terminal-profiles";
-import { buildSettingsHostSectionRoute } from "@/utils/host-routes";
 import type { TerminalProfileInput } from "@/screens/workspace/terminals/use-workspace-terminals";
-import { ProfileIcon, usePinnedLaunchers } from "@/workspace-pins/launch";
-import { runPinnedTabTarget, type TabTargetHandlers } from "@/workspace-pins/run";
-import type { PinnedTabTarget } from "@/workspace-pins/target";
-import { PinnedTargetsRow } from "@/workspace-pins/pinned-targets-row";
-import { PinnableMenuItem } from "@/workspace-pins/pinnable-menu-item";
 
 const DROPDOWN_WIDTH = 220;
 const LOADING_TAB_LABEL_SKELETON_WIDTH = 80;
-const DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH = 36;
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedX = withUnistyles(X);
@@ -102,23 +94,44 @@ const ThemedArrowLeftToLine = withUnistyles(ArrowLeftToLine);
 const ThemedArrowRightToLine = withUnistyles(ArrowRightToLine);
 const ThemedCopyX = withUnistyles(CopyX);
 const ThemedPencil = withUnistyles(Pencil);
-const ThemedSquarePen = withUnistyles(SquarePen);
 const ThemedSquareTerminal = withUnistyles(SquareTerminal);
-const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedGlobe = withUnistyles(Globe);
+const ThemedPlus = withUnistyles(Plus);
+const ThemedGitCompareArrows = withUnistyles(GitCompareArrows);
+const ThemedFolderTree = withUnistyles(FolderTree);
+const ThemedGitPullRequest = withUnistyles(GitPullRequest);
+const EMPTY_SEAT_SIDES: readonly ArenaSide[] = [];
 const ThemedColumns2 = withUnistyles(Columns2);
 const ThemedRows2 = withUnistyles(Rows2);
-const ThemedPlus = withUnistyles(Plus);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
-const AGENT_ICON = <ThemedSquarePen size={14} uniProps={mutedColorMapping} />;
 const TERMINAL_ICON = <ThemedSquareTerminal size={14} uniProps={mutedColorMapping} />;
 const BROWSER_ICON = <ThemedGlobe size={14} uniProps={mutedColorMapping} />;
+const CHANGES_ICON = <ThemedGitCompareArrows size={14} uniProps={mutedColorMapping} />;
+const FILES_ICON = <ThemedFolderTree size={14} uniProps={mutedColorMapping} />;
+const PULL_REQUEST_ICON = <ThemedGitPullRequest size={14} uniProps={mutedColorMapping} />;
+const DOCK_RIGHT_ICON = <ThemedColumns2 size={14} uniProps={mutedColorMapping} />;
+const DOCK_BOTTOM_ICON = <ThemedRows2 size={14} uniProps={mutedColorMapping} />;
 
-const DRAFT_TARGET: PinnedTabTarget = { kind: "draft" };
-const TERMINAL_TARGET: PinnedTabTarget = { kind: "terminal" };
-const BROWSER_TARGET: PinnedTabTarget = { kind: "browser" };
+/**
+ * The main pane holds the workspace's one chat and has no tab row; the side
+ * pane is the only pane that renders `WorkspaceDesktopTabsRow`.
+ */
+export type WorkspacePaneRole = "main" | "side";
+
+/** Which side panel surfaces the "+" menu may open for this workspace. */
+export interface SidePanelLaunchers {
+  changes: boolean;
+  files: boolean;
+  pullRequest: boolean;
+}
+
+const DEFAULT_SIDE_PANEL_LAUNCHERS: SidePanelLaunchers = {
+  changes: false,
+  files: true,
+  pullRequest: false,
+};
 
 function newTabActionButtonStyle({ hovered, pressed }: PressableStateCallbackType) {
   return [styles.newTabActionButton, (hovered || pressed) && styles.newTabActionButtonHovered];
@@ -131,192 +144,6 @@ function inlineAddActionButtonStyle({ hovered, pressed }: PressableStateCallback
 function updateMeasuredWidth(setWidth: Dispatch<SetStateAction<number>>, event: LayoutChangeEvent) {
   const nextWidth = Math.round(event.nativeEvent.layout.width);
   setWidth((current) => (Math.abs(current - nextWidth) > 1 ? nextWidth : current));
-}
-
-function ProfileLeadingIcon({ iconKey }: { iconKey: string | undefined }) {
-  return (
-    <View style={styles.terminalProfileIconWrapper}>
-      <ProfileIcon iconKey={iconKey} />
-    </View>
-  );
-}
-
-interface PinnableProfileMenuItemProps {
-  profile: { id: string; name: string; command: string; args?: string[]; icon?: string };
-  disabled?: boolean;
-  onLaunch: (target: PinnedTabTarget) => void;
-}
-
-function PinnableProfileMenuItem({ profile, disabled, onLaunch }: PinnableProfileMenuItemProps) {
-  const target = useMemo<PinnedTabTarget>(
-    () => ({ kind: "profile", profileId: profile.id }),
-    [profile.id],
-  );
-  const leading = useMemo(
-    () => <ProfileLeadingIcon iconKey={getTerminalProfileIcon(profile)} />,
-    [profile],
-  );
-  const handleSelect = useCallback(() => onLaunch(target), [onLaunch, target]);
-
-  return (
-    <PinnableMenuItem
-      target={target}
-      label={profile.name}
-      leading={leading}
-      disabled={disabled}
-      onSelect={handleSelect}
-    />
-  );
-}
-
-interface WorkspaceInlineAddTabButtonProps {
-  shortcutKeys: ShortcutKey[][] | null;
-  onCreateAgentTab: () => void;
-  onLayout: (event: LayoutChangeEvent) => void;
-}
-
-function WorkspaceInlineAddTabButton({
-  shortcutKeys,
-  onCreateAgentTab,
-  onLayout,
-}: WorkspaceInlineAddTabButtonProps) {
-  const { t } = useTranslation();
-  const tooltipText = t("workspace.tabs.actions.newAgent");
-
-  return (
-    <View style={styles.inlineAddButton} onLayout={onLayout}>
-      <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
-        <TooltipTrigger
-          testID="workspace-new-agent-tab-inline"
-          onPress={onCreateAgentTab}
-          accessibilityRole="button"
-          accessibilityLabel={tooltipText}
-          style={inlineAddActionButtonStyle}
-        >
-          <ThemedPlus size={14} uniProps={mutedColorMapping} />
-        </TooltipTrigger>
-        <TooltipContent side="bottom" align="center" offset={8}>
-          <View style={styles.newTabTooltipRow}>
-            <Text style={styles.newTabTooltipText}>{tooltipText}</Text>
-            {shortcutKeys ? (
-              <Shortcut chord={shortcutKeys} style={styles.newTabTooltipShortcut} />
-            ) : null}
-          </View>
-        </TooltipContent>
-      </Tooltip>
-    </View>
-  );
-}
-
-interface WorkspaceTabRowExtrasProps {
-  onCreateAgentTab: () => void;
-  onCreateTerminal: () => void;
-  onCreateBrowser: () => void;
-  onCreateTerminalWithProfile: (profile: TerminalProfileInput) => void;
-  onEditProfiles: () => void;
-  normalizedServerId: string;
-  showCreateBrowserTab: boolean;
-  terminalDisabled: boolean;
-}
-
-function WorkspaceTabRowExtras({
-  onCreateAgentTab,
-  onCreateTerminal,
-  onCreateBrowser,
-  onCreateTerminalWithProfile,
-  onEditProfiles,
-  normalizedServerId,
-  showCreateBrowserTab,
-  terminalDisabled,
-}: WorkspaceTabRowExtrasProps) {
-  const { t } = useTranslation();
-  const { config } = useDaemonConfig(normalizedServerId);
-  const profiles = useMemo(
-    () => resolveTerminalProfiles(config?.terminalProfiles),
-    [config?.terminalProfiles],
-  );
-
-  const handlers = useMemo<TabTargetHandlers>(
-    () => ({
-      createDraft: onCreateAgentTab,
-      createTerminal: onCreateTerminal,
-      createBrowser: onCreateBrowser,
-      createTerminalWithProfile: onCreateTerminalWithProfile,
-    }),
-    [onCreateAgentTab, onCreateBrowser, onCreateTerminal, onCreateTerminalWithProfile],
-  );
-
-  const onLaunch = useCallback(
-    (target: PinnedTabTarget) => {
-      runPinnedTabTarget(target, profiles, handlers);
-    },
-    [handlers, profiles],
-  );
-
-  const launchers = usePinnedLaunchers({ serverId: normalizedServerId, onLaunch });
-
-  return (
-    <>
-      <DropdownMenu>
-        <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
-          <TooltipTrigger asChild triggerRefProp="triggerRef">
-            <DropdownMenuTrigger
-              testID="workspace-new-tab-menu-trigger"
-              accessibilityRole="button"
-              accessibilityLabel={t("workspace.tabs.actions.moreActions")}
-              style={newTabActionButtonStyle}
-            >
-              <ThemedChevronDown size={14} uniProps={mutedColorMapping} />
-            </DropdownMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="center" offset={8}>
-            <Text style={styles.newTabTooltipText}>{t("workspace.tabs.actions.moreActions")}</Text>
-          </TooltipContent>
-        </Tooltip>
-        <DropdownMenuContent side="bottom" align="end" offset={4} minWidth={200}>
-          <PinnableMenuItem
-            testID="workspace-new-tab-menu-agent"
-            target={DRAFT_TARGET}
-            label={t("workspace.tabs.actions.newAgent")}
-            leading={AGENT_ICON}
-            onSelect={onCreateAgentTab}
-          />
-          <PinnableMenuItem
-            testID="workspace-new-tab-menu-terminal"
-            target={TERMINAL_TARGET}
-            label={t("workspace.tabs.actions.newTerminal")}
-            leading={TERMINAL_ICON}
-            disabled={terminalDisabled}
-            onSelect={terminalDisabled ? undefined : onCreateTerminal}
-          />
-          {showCreateBrowserTab ? (
-            <PinnableMenuItem
-              testID="workspace-new-tab-menu-browser"
-              target={BROWSER_TARGET}
-              label={t("workspace.tabs.actions.newBrowser")}
-              leading={BROWSER_ICON}
-              onSelect={onCreateBrowser}
-            />
-          ) : null}
-          <DropdownMenuSeparator />
-          <DropdownMenuLabel>{t("workspace.tabs.actions.terminalProfilesMenu")}</DropdownMenuLabel>
-          {profiles.map((profile) => (
-            <PinnableProfileMenuItem
-              key={profile.id}
-              profile={profile}
-              disabled={terminalDisabled}
-              onLaunch={onLaunch}
-            />
-          ))}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem testID="workspace-new-tab-menu-edit-profiles" onSelect={onEditProfiles}>
-            {t("workspace.tabs.actions.editTerminalProfiles")}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <PinnedTargetsRow launchers={launchers} testIdPrefix="workspace-pinned-target" />
-    </>
-  );
 }
 
 function TabContextMenuItem({
@@ -374,37 +201,242 @@ export interface WorkspaceDesktopTabRowItem {
   isClosingTab: boolean;
 }
 
-interface SplitActionButtonProps {
-  onPress: () => void;
-  label: string;
-  shortcutKeys: ShortcutKey[][] | null;
-  icon: "split-right" | "split-down";
+interface SidePanelTabRowExtrasProps {
+  launchers: SidePanelLaunchers;
+  onOpenChanges: () => void;
+  onOpenFiles: () => void;
+  onOpenPullRequest: () => void;
+  onCreateTerminal: () => void;
+  onCreateBrowser: () => void;
+  showCreateBrowserTab: boolean;
+  terminalDisabled: boolean;
+  seatSides: readonly ArenaSide[];
+  onCreateSeatTerminal: (side: ArenaSide) => void;
 }
 
-function SplitActionButton({ onPress, label, shortcutKeys, icon }: SplitActionButtonProps) {
+interface SeatTerminalMenuItemProps {
+  side: ArenaSide;
+  disabled: boolean;
+  onSelect: (side: ArenaSide) => void;
+}
+
+function SeatTerminalMenuItem({ side, disabled, onSelect }: SeatTerminalMenuItemProps) {
+  const { t } = useTranslation();
+  const select = useCallback(() => onSelect(side), [onSelect, side]);
   return (
-    <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
-      <TooltipTrigger
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        style={newTabActionButtonStyle}
-      >
-        {icon === "split-right" ? (
-          <ThemedColumns2 size={14} uniProps={mutedColorMapping} />
-        ) : (
-          <ThemedRows2 size={14} uniProps={mutedColorMapping} />
-        )}
-      </TooltipTrigger>
-      <TooltipContent side="bottom" align="center" offset={8}>
-        <View style={styles.newTabTooltipRow}>
+    <DropdownMenuItem
+      testID={`workspace-side-panel-menu-terminal-${side}`}
+      leading={TERMINAL_ICON}
+      disabled={disabled}
+      onSelect={disabled ? undefined : select}
+    >
+      {t("workspace.tabs.actions.newTerminalSeat", { agent: agentLabel(side) })}
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * The side pane's "+" menu: the launcher that lives in the side panel. Chats
+ * are absent on purpose; a workspace holds one, created from the sidebar.
+ */
+function SidePanelTabRowExtras({
+  launchers,
+  onOpenChanges,
+  onOpenFiles,
+  onOpenPullRequest,
+  onCreateTerminal,
+  onCreateBrowser,
+  showCreateBrowserTab,
+  terminalDisabled,
+  seatSides,
+  onCreateSeatTerminal,
+}: SidePanelTabRowExtrasProps) {
+  const { t } = useTranslation();
+  const label = t("workspace.tabs.actions.newSidePanelTab");
+
+  return (
+    <DropdownMenu>
+      <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
+        <TooltipTrigger asChild triggerRefProp="triggerRef">
+          <DropdownMenuTrigger
+            testID="workspace-side-panel-new-tab-menu-trigger"
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            style={newTabActionButtonStyle}
+          >
+            <ThemedPlus size={14} uniProps={mutedColorMapping} />
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="center" offset={8}>
           <Text style={styles.newTabTooltipText}>{label}</Text>
-          {shortcutKeys ? (
-            <Shortcut chord={shortcutKeys} style={styles.newTabTooltipShortcut} />
-          ) : null}
-        </View>
-      </TooltipContent>
-    </Tooltip>
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent side="bottom" align="end" offset={4} minWidth={200}>
+        {launchers.changes ? (
+          <DropdownMenuItem
+            testID="workspace-side-panel-menu-changes"
+            leading={CHANGES_ICON}
+            onSelect={onOpenChanges}
+          >
+            {t("workspace.tabs.actions.openChanges")}
+          </DropdownMenuItem>
+        ) : null}
+        {launchers.files ? (
+          <DropdownMenuItem
+            testID="workspace-side-panel-menu-files"
+            leading={FILES_ICON}
+            onSelect={onOpenFiles}
+          >
+            {t("workspace.tabs.actions.openFiles")}
+          </DropdownMenuItem>
+        ) : null}
+        {launchers.pullRequest ? (
+          <DropdownMenuItem
+            testID="workspace-side-panel-menu-pull-request"
+            leading={PULL_REQUEST_ICON}
+            onSelect={onOpenPullRequest}
+          >
+            {t("workspace.tabs.actions.openPullRequest")}
+          </DropdownMenuItem>
+        ) : null}
+        {launchers.changes || launchers.files || launchers.pullRequest ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {/* Always the same shape: what a new terminal would stand in, listed. A battle chat adds
+            each contestant's worktree above the workspace's own and keeps them there, rather
+            than the menu changing form under the reader between turns. */}
+        <DropdownMenuLabel>{t("workspace.tabs.actions.newTerminal")}</DropdownMenuLabel>
+        {seatSides.map((side) => (
+          <SeatTerminalMenuItem
+            key={side}
+            side={side}
+            disabled={terminalDisabled}
+            onSelect={onCreateSeatTerminal}
+          />
+        ))}
+        <DropdownMenuItem
+          testID="workspace-side-panel-menu-terminal"
+          leading={TERMINAL_ICON}
+          disabled={terminalDisabled}
+          onSelect={terminalDisabled ? undefined : onCreateTerminal}
+        >
+          {t("workspace.tabs.actions.newTerminalWorkspace")}
+        </DropdownMenuItem>
+        {/* Whatever follows the group is not a terminal, so it gets the rule the group got. */}
+        {showCreateBrowserTab ? <DropdownMenuSeparator /> : null}
+        {showCreateBrowserTab ? (
+          <DropdownMenuItem
+            testID="workspace-side-panel-menu-browser"
+            leading={BROWSER_ICON}
+            onSelect={onCreateBrowser}
+          >
+            {t("workspace.tabs.actions.newBrowser")}
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+interface SidePanelPlacementControlProps {
+  placement: SidePanelPlacement;
+  onDockRight: () => void;
+  onDockBottom: () => void;
+}
+
+/**
+ * Where the panel is docked, next to the "+" that fills it. The glyph is the arrangement it
+ * would leave behind — two columns, two rows — rather than a panel outline: that shape is the
+ * header toggle's, and two panel outlines in one corner read as one control drawn twice.
+ */
+function SidePanelPlacementControl({
+  placement,
+  onDockRight,
+  onDockBottom,
+}: SidePanelPlacementControlProps) {
+  const { t } = useTranslation();
+  const label = t("workspace.tabs.actions.sidePanelPlacement");
+
+  return (
+    <DropdownMenu>
+      <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
+        <TooltipTrigger asChild triggerRefProp="triggerRef">
+          <DropdownMenuTrigger
+            testID="workspace-side-panel-placement-trigger"
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            style={newTabActionButtonStyle}
+          >
+            {placement === "bottom" ? (
+              <ThemedRows2 size={14} uniProps={mutedColorMapping} />
+            ) : (
+              <ThemedColumns2 size={14} uniProps={mutedColorMapping} />
+            )}
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="center" offset={8}>
+          <Text style={styles.newTabTooltipText}>{label}</Text>
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent side="bottom" align="end" offset={4} minWidth={180}>
+        <DropdownMenuItem
+          testID="workspace-side-panel-placement-right"
+          leading={DOCK_RIGHT_ICON}
+          selected={placement === "right"}
+          showSelectedCheck
+          onSelect={onDockRight}
+        >
+          {t("workspace.tabs.actions.dockSidePanelRight")}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          testID="workspace-side-panel-placement-bottom"
+          leading={DOCK_BOTTOM_ICON}
+          selected={placement === "bottom"}
+          showSelectedCheck
+          onSelect={onDockBottom}
+        >
+          {t("workspace.tabs.actions.dockSidePanelBottom")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+interface WorkspaceExitFocusModeButtonProps {
+  onPress: () => void;
+  onLayout?: (event: LayoutChangeEvent) => void;
+}
+
+/** The way out of focus mode; the main pane shows it when it has no tab row. */
+export function WorkspaceExitFocusModeButton({
+  onPress,
+  onLayout,
+}: WorkspaceExitFocusModeButtonProps) {
+  const { t } = useTranslation();
+  const focusModeKeys = useShortcutKeys("toggle-focus");
+  const label = t("workspace.tabs.actions.exitFocusMode");
+  return (
+    <View style={styles.exitFocusModeSlot} onLayout={onLayout}>
+      <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
+        <TooltipTrigger
+          testID="workspace-exit-focus-mode"
+          onPress={onPress}
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          style={inlineAddActionButtonStyle}
+        >
+          <ThemedX size={14} uniProps={mutedColorMapping} />
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="center" offset={8}>
+          <View style={styles.newTabTooltipRow}>
+            <Text style={styles.newTabTooltipText}>{label}</Text>
+            {focusModeKeys ? (
+              <Shortcut chord={focusModeKeys} style={styles.newTabTooltipShortcut} />
+            ) : null}
+          </View>
+        </TooltipContent>
+      </Tooltip>
+    </View>
   );
 }
 
@@ -426,26 +458,35 @@ interface WorkspaceDesktopTabsRowProps {
   onCloseTabsToLeft: (tabId: string) => Promise<void> | void;
   onCloseTabsToRight: (tabId: string) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string) => Promise<void> | void;
-  onCreateDraftTab: (input: { paneId?: string }) => void;
   onCreateTerminalTab: (input: { paneId?: string; profile?: TerminalProfileInput }) => void;
+  arenaSeatSides?: readonly ArenaSide[];
+  onCreateArenaSeatTerminal?: (side: ArenaSide) => void;
   onCreateBrowserTab: (input: { paneId?: string }) => void;
   showCreateBrowserTab?: boolean;
   disableCreateTerminal?: boolean;
   isWaitingOnTerminalReadiness?: boolean;
   onReorderTabs: (nextTabs: WorkspaceTabDescriptor[]) => void;
-  onSplitRight: () => void;
-  onSplitDown: () => void;
   externalDndContext?: boolean;
   activeDragTabId?: string | null;
   tabDropPreviewIndex?: number | null;
-  showPaneSplitActions?: boolean;
+  sidePanelLaunchers?: SidePanelLaunchers;
+  onOpenSidePanelTab?: (target: WorkspaceTabTarget) => void;
   focusModeEnabled: boolean;
   onExitFocusMode: () => void;
 }
 
 function getFallbackTabLabel(
   tab: WorkspaceTabDescriptor,
-  labels: { newAgent: string; setup: string; terminal: string; agent: string; changes: string },
+  labels: {
+    newAgent: string;
+    setup: string;
+    terminal: string;
+    agent: string;
+    changes: string;
+    diff: string;
+    files: string;
+    pullRequest: string;
+  },
 ): string {
   if (tab.target.kind === "draft") {
     return labels.newAgent;
@@ -460,7 +501,16 @@ function getFallbackTabLabel(
     return tab.target.path.split("/").findLast(Boolean) ?? tab.target.path;
   }
   if (tab.target.kind === "working_diff") {
+    return labels.diff;
+  }
+  if (tab.target.kind === "changes") {
     return labels.changes;
+  }
+  if (tab.target.kind === "files") {
+    return labels.files;
+  }
+  if (tab.target.kind === "pull_request") {
+    return labels.pullRequest;
   }
   return labels.agent;
 }
@@ -772,43 +822,49 @@ export function WorkspaceDesktopTabsRow({
   onCloseTabsToLeft,
   onCloseTabsToRight,
   onCloseOtherTabs,
-  onCreateDraftTab,
   onCreateTerminalTab,
+  arenaSeatSides,
+  onCreateArenaSeatTerminal,
   onCreateBrowserTab,
   showCreateBrowserTab = false,
   disableCreateTerminal = false,
   isWaitingOnTerminalReadiness = false,
   onReorderTabs,
-  onSplitRight,
-  onSplitDown,
   externalDndContext = false,
   activeDragTabId = null,
   tabDropPreviewIndex = null,
-  showPaneSplitActions = true,
+  sidePanelLaunchers = DEFAULT_SIDE_PANEL_LAUNCHERS,
+  onOpenSidePanelTab,
   focusModeEnabled,
   onExitFocusMode,
 }: WorkspaceDesktopTabsRowProps) {
   const { t } = useTranslation();
-  const router = useRouter();
-  const newTabKeys = useShortcutKeys("workspace-tab-new");
-  const focusModeKeys = useShortcutKeys("toggle-focus");
-  const splitRightKeys = useShortcutKeys("workspace-pane-split-right");
-  const splitDownKeys = useShortcutKeys("workspace-pane-split-down");
   const [tabsContainerWidth, setTabsContainerWidth] = useState<number>(0);
   const [tabsActionsWidth, setTabsActionsWidth] = useState<number>(0);
-  const [inlineAddButtonWidth, setInlineAddButtonWidth] = useState<number>(0);
   const [exitFocusModeWidth, setExitFocusModeWidth] = useState<number>(0);
 
   const handleTabsContainerLayout = useCallback((event: LayoutChangeEvent) => {
     updateMeasuredWidth(setTabsContainerWidth, event);
   }, []);
 
+  const { settings, updateSettings } = useAppSettings();
+  const sidePanelPlacement = settings.sidePanelPlacement;
+  const handleDockRight = useCallback(() => {
+    void updateSettings({ sidePanelPlacement: "right" });
+  }, [updateSettings]);
+  const handleDockBottom = useCallback(() => {
+    void updateSettings({ sidePanelPlacement: "bottom" });
+  }, [updateSettings]);
+
+  const handleCreateSeatTerminal = useCallback(
+    (side: ArenaSide) => {
+      onCreateArenaSeatTerminal?.(side);
+    },
+    [onCreateArenaSeatTerminal],
+  );
+
   const handleTabsActionsLayout = useCallback((event: LayoutChangeEvent) => {
     updateMeasuredWidth(setTabsActionsWidth, event);
-  }, []);
-
-  const handleInlineAddButtonLayout = useCallback((event: LayoutChangeEvent) => {
-    updateMeasuredWidth(setInlineAddButtonWidth, event);
   }, []);
 
   const handleExitFocusModeLayout = useCallback((event: LayoutChangeEvent) => {
@@ -820,9 +876,7 @@ export function WorkspaceDesktopTabsRow({
       rowHorizontalInset: 0,
       actionsReservedWidth: Math.max(
         0,
-        tabsActionsWidth +
-          (inlineAddButtonWidth || DEFAULT_INLINE_ADD_BUTTON_RESERVED_WIDTH) +
-          (focusModeEnabled ? exitFocusModeWidth : 0),
+        tabsActionsWidth + (focusModeEnabled ? exitFocusModeWidth : 0),
       ),
       rowPaddingHorizontal: 0,
       tabGap: 0,
@@ -832,7 +886,7 @@ export function WorkspaceDesktopTabsRow({
       estimatedCharWidth: 7,
       closeButtonWidth: 22,
     }),
-    [exitFocusModeWidth, focusModeEnabled, inlineAddButtonWidth, tabsActionsWidth],
+    [exitFocusModeWidth, focusModeEnabled, tabsActionsWidth],
   );
 
   const fallbackTabLabels = useMemo(
@@ -841,7 +895,10 @@ export function WorkspaceDesktopTabsRow({
       setup: t("workspace.tabs.fallback.setup"),
       terminal: t("workspace.tabs.fallback.terminal"),
       agent: t("workspace.tabs.fallback.agent"),
-      changes: t("panels.diff.changesLabel"),
+      changes: t("panels.changes.label"),
+      diff: t("panels.diff.changesLabel"),
+      files: t("panels.files.label"),
+      pullRequest: t("panels.pullRequest.label"),
     }),
     [t],
   );
@@ -894,28 +951,25 @@ export function WorkspaceDesktopTabsRow({
     });
   }, [paneId]);
 
-  const handleCreateAgentTab = useCallback(() => {
-    onCreateDraftTab({ paneId });
-  }, [onCreateDraftTab, paneId]);
-
   const handleCreateTerminal = useCallback(() => {
     onCreateTerminalTab({ paneId });
   }, [onCreateTerminalTab, paneId]);
 
-  const handleCreateTerminalWithProfile = useCallback(
-    (profile: TerminalProfileInput) => {
-      onCreateTerminalTab({ paneId, profile });
-    },
-    [onCreateTerminalTab, paneId],
-  );
-
-  const handleEditProfiles = useCallback(() => {
-    router.push(buildSettingsHostSectionRoute(normalizedServerId, "terminals") as Href);
-  }, [normalizedServerId, router]);
-
   const handleCreateBrowser = useCallback(() => {
     onCreateBrowserTab({ paneId });
   }, [onCreateBrowserTab, paneId]);
+
+  const handleOpenChanges = useCallback(() => {
+    onOpenSidePanelTab?.({ kind: "changes" });
+  }, [onOpenSidePanelTab]);
+
+  const handleOpenFiles = useCallback(() => {
+    onOpenSidePanelTab?.({ kind: "files" });
+  }, [onOpenSidePanelTab]);
+
+  const handleOpenPullRequest = useCallback(() => {
+    onOpenSidePanelTab?.({ kind: "pull_request" });
+  }, [onOpenSidePanelTab]);
 
   const terminalDisabled = disableCreateTerminal || isWaitingOnTerminalReadiness;
 
@@ -1010,29 +1064,10 @@ export function WorkspaceDesktopTabsRow({
       onLayout={handleTabsContainerLayout}
     >
       {focusModeEnabled ? (
-        <View style={styles.exitFocusModeSlot} onLayout={handleExitFocusModeLayout}>
-          <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
-            <TooltipTrigger
-              testID="workspace-exit-focus-mode"
-              onPress={onExitFocusMode}
-              accessibilityRole="button"
-              accessibilityLabel={t("workspace.tabs.actions.exitFocusMode")}
-              style={inlineAddActionButtonStyle}
-            >
-              <ThemedX size={14} uniProps={mutedColorMapping} />
-            </TooltipTrigger>
-            <TooltipContent side="bottom" align="center" offset={8}>
-              <View style={styles.newTabTooltipRow}>
-                <Text style={styles.newTabTooltipText}>
-                  {t("workspace.tabs.actions.exitFocusMode")}
-                </Text>
-                {focusModeKeys ? (
-                  <Shortcut chord={focusModeKeys} style={styles.newTabTooltipShortcut} />
-                ) : null}
-              </View>
-            </TooltipContent>
-          </Tooltip>
-        </View>
+        <WorkspaceExitFocusModeButton
+          onPress={onExitFocusMode}
+          onLayout={handleExitFocusModeLayout}
+        />
       ) : null}
       <ScrollView
         horizontal
@@ -1053,39 +1088,25 @@ export function WorkspaceDesktopTabsRow({
           getItemData={getTabDragData}
           renderItem={renderTab}
         />
-        <WorkspaceInlineAddTabButton
-          shortcutKeys={newTabKeys}
-          onCreateAgentTab={handleCreateAgentTab}
-          onLayout={handleInlineAddButtonLayout}
-        />
       </ScrollView>
       <View style={styles.tabsActions} onLayout={handleTabsActionsLayout}>
-        <WorkspaceTabRowExtras
-          onCreateAgentTab={handleCreateAgentTab}
+        <SidePanelPlacementControl
+          placement={sidePanelPlacement}
+          onDockRight={handleDockRight}
+          onDockBottom={handleDockBottom}
+        />
+        <SidePanelTabRowExtras
+          launchers={sidePanelLaunchers}
+          onOpenChanges={handleOpenChanges}
+          onOpenFiles={handleOpenFiles}
+          onOpenPullRequest={handleOpenPullRequest}
           onCreateTerminal={handleCreateTerminal}
           onCreateBrowser={handleCreateBrowser}
-          onCreateTerminalWithProfile={handleCreateTerminalWithProfile}
-          onEditProfiles={handleEditProfiles}
-          normalizedServerId={normalizedServerId}
           showCreateBrowserTab={showCreateBrowserTab}
           terminalDisabled={terminalDisabled}
+          seatSides={arenaSeatSides ?? EMPTY_SEAT_SIDES}
+          onCreateSeatTerminal={handleCreateSeatTerminal}
         />
-        {showPaneSplitActions ? (
-          <>
-            <SplitActionButton
-              icon="split-right"
-              onPress={onSplitRight}
-              label={t("workspace.tabs.actions.splitRight")}
-              shortcutKeys={splitRightKeys}
-            />
-            <SplitActionButton
-              icon="split-down"
-              onPress={onSplitDown}
-              label={t("workspace.tabs.actions.splitDown")}
-              shortcutKeys={splitDownKeys}
-            />
-          </>
-        ) : null}
       </View>
     </View>
   );
@@ -1412,9 +1433,5 @@ const styles = StyleSheet.create((theme) => ({
   menuItemHint: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.xs,
-  },
-  terminalProfileIconWrapper: {
-    width: 14,
-    height: 14,
   },
 }));

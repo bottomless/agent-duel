@@ -21,12 +21,15 @@ interface UseWorkingDiffOptions {
   ignoreWhitespace: boolean;
   enabled: boolean;
   queryScope?: string;
+  /** Where to start when the checkout has nothing uncommitted. */
+  cleanFallbackMode?: "uncommitted" | "base";
 }
 
 export function useWorkingDiff({
   serverId,
   workspaceId,
   cwd,
+  cleanFallbackMode,
   ignoreWhitespace,
   enabled,
   queryScope,
@@ -62,6 +65,7 @@ export function useWorkingDiff({
   const diffMode = useResolvedDiffMode({
     scopeKey: reviewDraftScopeKey,
     hasUncommittedChanges,
+    cleanFallbackMode,
   });
   const setDiffModeOverride = useSetDiffModeOverride();
   const selectDiffMode = useCallback(

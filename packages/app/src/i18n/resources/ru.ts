@@ -10,6 +10,7 @@ export const ru: TranslationResources = {
       close: "Закрывать",
       copy: "Копировать",
       dismiss: "Увольнять",
+      openExternalBrowser: "Открыть во внешнем браузере",
       retry: "Повторить попытку",
       search: "Поиск",
       select: "Выбирать",
@@ -106,16 +107,9 @@ export const ru: TranslationResources = {
       interrupt: "Прерывать",
     },
     voice: {
-      enableVoiceMode: "Включить голосовой режим",
-      voiceMode: "Голосовой режим",
-      unmuteVoiceMode: "Включить голосовой режим",
-      muteVoiceMode: "Отключить голосовой режим",
       stopDictation: "Остановить диктовку",
       startDictation: "Начать диктовку",
-      unmuteVoice: "Включить звук",
-      muteVoice: "Отключить голос",
       dictation: "Диктант",
-      interruptBeforeVoice: "Прерывайте агента перед запуском голосового режима",
     },
     attachments: {
       addImage: "Добавить изображение",
@@ -132,9 +126,6 @@ export const ru: TranslationResources = {
       removeFile: "Remove file attachment",
       openGithub: "Открыть {{kind}} {{number}}",
       removeGithub: "Удалить {{kind}} {{number}}",
-      element: "Элемент",
-      openBrowserElement: "Открыть вложение элемента браузера",
-      removeBrowserElement: "Удалить вложение элемента браузера",
       openReview: "Открыть прикрепленный файл с отзывом",
       removeReview: "Удалить прикрепленный отзыв",
     },
@@ -147,6 +138,13 @@ export const ru: TranslationResources = {
       uploadFailed: "Failed to upload file",
       noClipboardImage: "В буфере обмена нет изображения",
       pasteImageFailed: "Не удалось вставить изображение",
+      unreadableImage:
+        "Не удалось прочитать {{fileName}}. Прикрепите изображение PNG, JPEG, GIF, WebP или BMP.",
+      attachImageFailed: "Не удалось прикрепить изображение",
+      imageLimitReached:
+        "Сообщение битвы может содержать не более {{max}} изображений. Остальные не прикреплены.",
+      tooManyImages:
+        "Сообщение битвы может содержать не более {{max}} изображений. Удалите лишние ({{count}}), чтобы отправить.",
       fileTooLarge: "{{fileName}} is too large (max {{size}})",
     },
     clientCommands: {
@@ -236,6 +234,10 @@ export const ru: TranslationResources = {
     },
   },
   sessions: {
+    interruptedForks: "Прерванные форки",
+    recoveryLoadFailed: "{{host}}: Не удалось загрузить прерванные форки",
+    forkFilesPreserved: "Форк был прерван. Локальные файлы сохранены.",
+    restoreWorkspace: "Восстановить рабочую область",
     title: "История",
     empty: "Сеансов пока нет",
     noMatches: "Нет подходящих сеансов",
@@ -289,8 +291,9 @@ export const ru: TranslationResources = {
       copyTurn: "Копировать ход",
       copyMessage: "Копировать сообщение",
       forkMenu: "Форкнуть сообщение",
-      forkInNewTab: "Форкнуть в новой вкладке",
-      forkInNewWorkspace: "Форкнуть в новом рабочем пространстве",
+      forkedFromChat: "Форк из предыдущего чата",
+      forkInThisWorktree: "Форкнуть в этом рабочем дереве",
+      forkInNewWorktree: "Форкнуть в новом рабочем дереве",
       forkUnavailable: "Обновите хост, чтобы использовать это.",
       forkMissingWorkspace: "Этот агент не находится в рабочем пространстве.",
       forkFailed: "Не удалось форкнуть чат",
@@ -343,6 +346,7 @@ export const ru: TranslationResources = {
         started: "Начата",
         completed: "Завершена",
         reopened: "Возобновлена",
+        cancelled: "Отменена",
       },
     },
     compaction: {
@@ -351,36 +355,6 @@ export const ru: TranslationResources = {
       manual: "Контекст сжимается вручную",
       withTokens: "Сжатый контекст (токены{{tokens}}K)",
       completed: "Контекст сжат",
-    },
-  },
-  importSession: {
-    title: "Импортировать сеанс",
-    filters: {
-      all: "Все",
-    },
-    status: {
-      connectHost: "Подключитесь к хосту, чтобы импортировать сеансы",
-      updateHost: "Обновите хост для импорта сеансов.",
-      noProviders: "Импортируемые поставщики не включены.",
-      loading: "Загрузка последних сеансов...",
-      failedAll: "Не удалось загрузить последние сеансы.",
-      failedProviders: "Не удалось загрузить сеансы для{{providers}}.",
-      failedImport: "Не удалось импортировать выбранный сеанс.",
-    },
-    actions: {
-      refresh: "Обновить сеансы",
-    },
-    preview: {
-      untitledSession: "Сессия без названия",
-      noPrompt: "Нет быстрого предварительного просмотра",
-    },
-    empty: {
-      noRecent: "Нет последних сеансов для импорта.",
-      alreadyImported: "Все последние сеансы уже импортированы.",
-      noProviderSessions: "Сеансы{{provider}}не найдены.",
-    },
-    row: {
-      importing: "Импорт...",
     },
   },
   workspace: {
@@ -404,6 +378,15 @@ export const ru: TranslationResources = {
         restoringAction: "Восстановление...",
         unavailableTitle: "Рабочая область недоступна",
         checkFailedTitle: "Не удалось проверить рабочую область",
+        filesCleanedTitle: "Файлы очищены для экономии места",
+        filesCleanedDescription:
+          "Восстанавливается код, затем зависимости и локальная конфигурация снова копируются из проекта. Работающие процессы не восстанавливаются.",
+        filesCleaningTitle: "Очистка файлов рабочей области",
+        filesCleaningDescription:
+          "Освобождается место, занятое этой рабочей областью. Файлы можно восстановить позже.",
+        filesRestoringTitle: "Восстановление файлов рабочей области",
+        restoreFilesAction: "Восстановить файлы",
+        filesRestoreUnavailable: "Не удалось восстановить файлы рабочей области",
       },
     },
     hoverCard: {
@@ -521,18 +504,6 @@ export const ru: TranslationResources = {
         browserUrl: "Браузер URL",
         enterUrl: "Введите URL",
         openDevTools: "Открыть инструменты разработки браузера",
-        cancelSelector: "Отменить выбор элемента",
-        annotateElement: "Аннотировать элемент",
-        screenshotElement: "Снимок элемента",
-        screenshotCopied: "Снимок скопирован в буфер обмена",
-        elementCopied: "Элемент скопирован в буфер обмена",
-        screenshotFailed: "Не удалось скопировать снимок",
-      },
-      annotate: {
-        title: "Аннотировать элемент",
-        placeholder: "Сообщение агенту об этом элементе…",
-        submit: "Прикрепить",
-        cancel: "Отмена",
       },
       devices: {
         label: "Размер устройства",
@@ -548,6 +519,10 @@ export const ru: TranslationResources = {
       hostDisconnected: "Host не подключен",
       updateHost: "Обновите хост, чтобы использовать нативный терминал.",
       unableToSubscribe: "Невозможно подписаться на терминал",
+    },
+    arenaTerminal: {
+      noBattle: "Битва не идёт",
+      noBattleHint: "Эта оболочка приостановлена до следующего хода битвы",
     },
     tabs: {
       loading: "Загрузка...",
@@ -587,25 +562,27 @@ export const ru: TranslationResources = {
         renameAgent: "Переименовать агента",
       },
       actions: {
-        newAgent: "Новый агент",
         newTerminal: "Новый терминал",
+        newTerminalSeat: "Рабочее дерево {{agent}}",
+        newTerminalWorkspace: "Это рабочее пространство",
         preparingTerminal: "Подготовка вкладки терминала",
         preparingTerminalTooltip: "Подготовка терминала...",
         newBrowser: "Новый браузер",
         exitFocusMode: "Выйти из режима фокусировки",
-        splitRight: "Разделить панель справа",
-        splitDown: "Разделить панель вниз",
-        terminalProfilesMenu: "Terminal profiles",
-        editTerminalProfiles: "Edit profiles…",
-        pinTarget: "Закрепить",
-        unpinTarget: "Открепить",
+        newSidePanelTab: "Новая вкладка боковой панели",
+        sidePanelPlacement: "Расположение боковой панели",
+        dockSidePanelRight: "Закрепить справа",
+        dockSidePanelBottom: "Закрепить снизу",
+        openChanges: "Изменения",
+        openFiles: "Файлы",
+        openPullRequest: "Pull request",
       },
-      explorer: {
-        open: "Открыть проводник",
-        close: "Закрыть проводник",
-        toggle: "Переключить проводник",
-        changes: "Изменения",
-        files: "Файлы",
+      sidePanel: {
+        open: "Открыть боковую панель",
+        close: "Закрыть боковую панель",
+        toggle: "Переключить боковую панель",
+        openChanges: "Открыть изменения",
+        launcherTitle: "Открыть в боковой панели",
       },
       toasts: {
         copyFailed: "Не удалось скопировать",
@@ -658,16 +635,15 @@ export const ru: TranslationResources = {
     header: {
       actions: {
         workspaceActions: "Действия Workspace",
-        newAgent: "Новый агент",
         newTerminal: "Новый терминал",
         newBrowser: "Новая вкладка браузера",
-        importSession: "Импортировать сеанс",
         copyPath: "Копировать путь к рабочей области",
         copyBranchName: "Скопировать название ветки",
         showSetup: "Показать настройки",
       },
       toasts: {
         workspacePathUnavailable: "Путь Workspace пока недоступен.",
+        workspaceFilesCleaned: "Файлы рабочей области были очищены. Сначала восстановите их.",
         branchNameUnavailable: "Название филиала недоступно",
         terminalQueued: "Подготовка рабочего пространства, открытие терминала по готовности...",
         workspacePathCopiedLabel: "Путь Workspace",
@@ -750,6 +726,17 @@ export const ru: TranslationResources = {
           pending: "Обновление...",
           success: "Обновлено",
         },
+        createBranch: {
+          label: "Создать ветку",
+          pending: "Создание ветки...",
+          success: "Ветка создана",
+          dialogTitle: "Создать ветку",
+          placeholder: "имя-ветки",
+          submit: "Создать",
+          errors: {
+            exists: "Ветка с именем '{{branch}}' уже существует",
+          },
+        },
         archive: {
           label: "Архивировать рабочее пространство",
           pending: "Архивирование...",
@@ -814,7 +801,7 @@ export const ru: TranslationResources = {
             "Обновление недоступно, поскольку эта ветка уже обновлена ​​до версии{{baseRef}}.",
           mergePrNoGithub: "Объединение PR сейчас недоступно, поскольку GitHub не подключен.",
           archiveNotWorktree:
-            "Архив здесь недоступен, поскольку это рабочее пространство не было создано как рабочее дерево Paseo.",
+            "Архив здесь недоступен, поскольку это рабочее пространство не было создано как рабочее дерево Agent Duel.",
           mergePrNoForge:
             "Объединение {{noun}} сейчас недоступно, поскольку {{brand}} не подключен.",
           mergePrMissing: "Объединение PR недоступно, поскольку еще нет запроса на включение",
@@ -989,7 +976,6 @@ export const ru: TranslationResources = {
       },
       show: {
         label: "Показывать",
-        host: "Хост",
         changeRequest: "Pull request",
         checks: "Проверки",
         services: "Сервисы",
@@ -1009,15 +995,9 @@ export const ru: TranslationResources = {
     pinned: {
       title: "Закреплённые",
     },
-    host: {
-      noHost: "Нет хоста",
-      switchTitle: "Сменить хост",
-      searchPlaceholder: "Поиск хостов...",
-    },
     actions: {
       addProject: "Добавить проект",
       newWorkspace: "Новое рабочее пространство",
-      hosts: "Хосты",
       home: "Дом",
       settings: "Настройки",
       closeSidebar: "Закрыть боковую панель",
@@ -1025,23 +1005,15 @@ export const ru: TranslationResources = {
     help: {
       trigger: "Помощь и поддержка",
       sectionHelp: "Помощь",
-      diagnostics: "Запустить диагностику",
       shortcuts: "Сочетания клавиш",
       reportIssue: "Сообщить о проблеме",
       discord: "Discord",
       github: "Создать issue в GitHub",
       whatsNew: "Что нового",
-      appName: "Paseo",
+      appName: "Agent Duel",
     },
     sections: {
       sessions: "История",
-      schedules: "Расписания",
-    },
-    worktreeSetup: {
-      title: "Настройка сценариев рабочего дерева",
-      description:
-        "Добавьте команды настройки, чтобы новые рабочие деревья могли автоматически устанавливать зависимости и готовиться.",
-      openProjectSettings: "Открыть настройки проекта",
     },
     project: {
       actions: {
@@ -1079,12 +1051,13 @@ export const ru: TranslationResources = {
       },
       actions: {
         menu: "Действия Workspace",
-        newWorkspace: "Новое рабочее пространство",
+        newChat: "Новый чат",
         showMore: "Показать ещё",
         showLess: "Показать меньше",
-        createWorkspaceFor: "Создайте новое рабочее пространство для{{projectName}}.",
+        startChatFor: "Начать новый чат в {{projectName}}",
         copyPath: "Копировать путь",
         copyBranchName: "Скопировать название ветки",
+        createBranch: "Создать ветку здесь",
         rename: "Переименовать рабочую область",
         pin: "Закрепить вверху",
         unpin: "Открепить",
@@ -1106,6 +1079,11 @@ export const ru: TranslationResources = {
         submit: "Переименовать",
         invalidBranchName: "Неверное название ветки",
       },
+      createBranch: {
+        title: "Создать ветку",
+        submit: "Создать",
+        placeholder: "имя-ветки",
+      },
       toasts: {
         workspacePathUnavailable: "Путь Workspace недоступен",
         pathCopied: "Путь скопирован",
@@ -1113,11 +1091,11 @@ export const ru: TranslationResources = {
         hostDisconnected: "Host не подключен",
         hideFailed: "Не удалось скрыть рабочую область.",
         archiveFailed: "Не удалось заархивировать рабочее пространство.",
+        createBranchFailed: "Не удалось создать ветку",
       },
     },
   },
   newWorkspace: {
-    title: "Новое рабочее пространство",
     create: "Создавать",
     isolation: {
       local: "Локально",
@@ -1133,6 +1111,8 @@ export const ru: TranslationResources = {
     errors: {
       hostDisconnected: "Host не подключен",
       createWorktreeFailed: "Не удалось создать рабочее дерево.",
+      switchBranchFailed: "Не удалось переключить ветку",
+      branchMissing: "Эта ветка больше не существует. Выберите другую ветку.",
       composerStateRequired: "Требуется состояние композитора.",
       selectModel: "Выберите модель",
     },
@@ -1151,19 +1131,45 @@ export const ru: TranslationResources = {
       searchPlaceholder: "Поиск филиалов и PR",
       title: "Начать с",
     },
+    newBranch: {
+      action: "Создать новую ветку...",
+      title: "Новая ветка от {{base}}",
+      placeholder: "new-branch",
+      submit: "Создать",
+      submitLocal: "Создать и переключиться",
+      fromBase: "от {{base}}",
+      errors: {
+        trailingSlash: "Имя ветки не может заканчиваться на “/”.",
+        exists: "Ветка уже существует.",
+        baseMissing: "Ветки {{base}} больше не существует.",
+        noBase: "Сначала выберите ветку, от которой начать.",
+        createFailed: "Не удалось создать ветку",
+      },
+    },
     launch: {
       title: "What to launch",
       chat: "Chat",
       terminal: "Terminal",
-      manageProfiles: "Manage profiles",
       submit: "Launch",
       promptPlaceholder: "Prompt {{name}}",
       commandPlaceholder: "Run a command, or leave empty for a blank terminal",
     },
   },
+  arenaByok: {
+    keyMissing: "Добавьте ключ OpenRouter в настройках, чтобы начать битву.",
+  },
+  battleRepository: {
+    title: "Agent Duel нужен коммит",
+    notGitMessage: "Создать репозиторий Git с пустым первым коммитом?",
+    noCommitMessage: "Создать пустой первый коммит?",
+    confirm: "Создать коммит",
+    declined: "Для битвы нужен коммит Git.",
+    failed: "Не удалось создать первый коммит: {{error}}",
+    inspectFailed: "Не удалось проверить состояние Git папки: {{error}}",
+  },
   desktop: {
     quitting: {
-      title: "Выход из Paseo...",
+      title: "Выход из Agent Duel...",
       detail: "Остановка локального демона.",
     },
     daemon: {
@@ -1177,20 +1183,20 @@ export const ru: TranslationResources = {
       },
       management: {
         title: "Управление встроенным демоном",
-        hint: "Позвольте Paseo запустить и остановить встроенный демон.",
+        hint: "Позвольте Agent Duel запустить и остановить встроенный демон.",
         pauseTitle: "Приостановить встроенный демон",
         pauseMessage:
           "Это немедленно остановит встроенный демон. Запущенные агенты и терминалы, подключенные к встроенному демону, будут остановлены.",
         pauseAndStop: "Пауза и остановка",
         registrationFailed:
-          "Built-in daemon started, but Paseo could not save the localhost connection. Toggle daemon management off and on again, or add localhost manually.",
+          "Built-in daemon started, but Agent Duel could not save the localhost connection. Toggle daemon management off and on again, or add localhost manually.",
         pausedStopFailed:
-          "Встроенное управление демоном было приостановлено, но Paseo не смог остановить демон.",
+          "Встроенное управление демоном было приостановлено, но Agent Duel не смог остановить демон.",
         updateFailed: "Невозможно обновить встроенное управление демонами.",
       },
       keepRunning: {
         title: "Продолжать работу демона после выхода",
-        hint: "Daemon продолжает работать, когда вы выходите из Paseo",
+        hint: "Daemon продолжает работать, когда вы выходите из Agent Duel",
       },
       logs: {
         title: "Файл журнала",
@@ -1260,7 +1266,7 @@ export const ru: TranslationResources = {
     },
     rosetta: {
       title: "Загрузите сборку Apple Silicon",
-      runningIntel: "Вы используете сборку Intel для Paseo под Rosetta на Apple Silicon.",
+      runningIntel: "Вы используете сборку Intel для Agent Duel под Rosetta на Apple Silicon.",
       highCpu:
         "Это приводит к высокой загрузке ЦП. Загрузите сборку Apple Silicon, чтобы исправить это.",
       download: "Скачать",
@@ -1271,7 +1277,15 @@ export const ru: TranslationResources = {
         denied: "Уведомления запрещены в настройках системы.",
         notGranted: "Уведомления еще не были предоставлены.",
         webOnly: "Статус уведомлений на рабочем столе доступен только в веб- среде выполнения.",
-        supported: "Уведомления на рабочем столе поддерживаются.",
+        nativeAllowed: "Уведомления разрешены в macOS.",
+        nativeQuiet: "Разрешена тихая доставка уведомлений; баннер может не появиться.",
+        nativeDenied: "Уведомления отключены в macOS. Включите их в Системных настройках.",
+        nativePrompt: "Разрешите уведомления, чтобы отправить тест.",
+        nativeUnknown:
+          "Не удалось проверить разрешение. Обновите данные или откройте Системные настройки.",
+        systemManaged:
+          "Управляется в Системных настройках > Уведомления. Отправьте тестовое уведомление, чтобы проверить его получение.",
+        supportCheckFailed: "Не удалось проверить поддержку уведомлений. Попробуйте обновить.",
         unsupported: "Уведомления на рабочем столе не поддерживаются на этой платформе.",
         apiUnavailable: "API веб- уведомлений недоступен в этой среде.",
         requestsWebOnly:
@@ -1305,7 +1319,7 @@ export const ru: TranslationResources = {
         microphone: "Состояние микрофона еще не проверялось.",
       },
       testNotification: {
-        title: "Тест уведомлений Paseo",
+        title: "Тест уведомлений Agent Duel",
         body: "Если вы это видите, уведомления на рабочем столе работают.",
         notDelivered:
           "Уведомление не было доставлено. Проверьте Системные настройки > Уведомления.",
@@ -1315,7 +1329,7 @@ export const ru: TranslationResources = {
     integrations: {
       cli: {
         statusFailed: "Невозможно проверить статус установки CLI.",
-        installFailed: "Невозможно установить PaseoCLI.",
+        installFailed: "Невозможно установить Agent Duel CLI.",
       },
       skills: {
         statusFailed: "Невозможно проверить статус навыков оркестровки.",
@@ -1327,7 +1341,7 @@ export const ru: TranslationResources = {
     },
   },
   rootError: {
-    title: "В Paseo возникла проблема.",
+    title: "В Agent Duel возникла проблема.",
     body: "Попробуйте снова перезагрузить приложение. Если это повторяется, приложите приведенные ниже подробности к отчету.",
     details: "Подробности",
   },
@@ -1346,10 +1360,6 @@ export const ru: TranslationResources = {
       addProject: {
         title: "Добавить проект",
         description: "Откройте папку на своем компьютере",
-      },
-      importSession: {
-        title: "Импортировать сеанс",
-        description: "Добавьте последние внешние сеансы CLI.",
       },
       setupProviders: {
         title: "Поставщики установки",
@@ -1423,7 +1433,7 @@ export const ru: TranslationResources = {
     },
   },
   onboarding: {
-    title: "Добро пожаловать в Paseo",
+    title: "Добро пожаловать в Agent Duel",
     subtitle: "Подключите компьютер, чтобы начать",
     actions: {
       settings: "Настройки",
@@ -1485,130 +1495,6 @@ export const ru: TranslationResources = {
       hostDisconnected: "Host не подключен",
     },
   },
-  pairing: {
-    connectionMethods: {
-      title: "Добавить соединение",
-      direct: {
-        title: "Прямое подключение",
-        description: "Локальная сеть или VPN.",
-      },
-      scanQr: {
-        title: "Сканировать код QR",
-        description: "Зашифрованное релейное соединение.",
-      },
-      pasteLink: {
-        title: "Вставьте ссылку на сопряжение",
-        description: "Зашифрованное релейное соединение.",
-      },
-    },
-    direct: {
-      title: "Прямое подключение",
-      helper: "Введите адрес сервера Paseo.",
-      fields: {
-        host: "Host",
-        port: "Порт",
-        password: "Пароль",
-        optional: "Необязательный",
-        useSsl: "Использовать SSL",
-        connectionUri: "URI подключения",
-      },
-      advanced: {
-        label: "Передовой",
-        show: "Показать расширенные",
-        hide: "Скрыть расширенные",
-      },
-      passwordVisibility: {
-        show: "Показать пароль",
-        hide: "Скрыть пароль",
-      },
-      actions: {
-        cancel: "Отмена",
-        connect: "Соединять",
-        connecting: "Подключение...",
-      },
-      errors: {
-        hostRequired: "Требуется Host",
-        invalidPort: "Порт должен быть в диапазоне от 1 до 65535.",
-        invalidConnection: "Неверное соединение",
-        failedTitle: "Соединение не удалось",
-        failedToConnect: "Нам не удалось подключиться к{{endpoint}}.",
-        noAdditionalDetails: "{{detail}}(дополнительная информация не предоставлена)",
-        timedOut: "Время подключения истекло. Проверьте хост /port и вашу сеть.",
-        refused: "В соединении отказано. Сервер работает по этому адресу?",
-        hostNotFound: "Host не найден. Проверьте имя хоста и повторите попытку.",
-        hostUnreachable: "Host недоступен. Проверьте свою сеть и брандмауэр.",
-        tlsError:
-          "Ошибка TLS. Прямые соединения используют SSL только тогда, когда перед демоном находится терминатор TLS.",
-        unableToConnect:
-          "Не удалось подключиться. Проверьте хост /port и убедитесь, что демон доступен.",
-        details: "Подробности:{{detail}}",
-      },
-    },
-    link: {
-      title: "Вставьте ссылку на сопряжение",
-      helper: "Вставьте ссылку на сопряжение с вашего сервера.",
-      label: "Ссылка на сопряжение",
-      errors: {
-        required: "Вставьте ссылку для сопряжения (.../#offer=...)",
-        missingOffer: "Ссылка должна содержать #offer=...",
-        emptyOffer: "Полезная нагрузка предложения пуста.",
-        invalid: "Неверная ссылка для сопряжения",
-        unableToPair: "Невозможно подключить хост",
-      },
-      alert: {
-        failedTitle: "Сопряжение не удалось",
-      },
-      actions: {
-        cancel: "Отмена",
-        pair: "Пара",
-        pairing: "Сопряжение...",
-      },
-    },
-    scan: {
-      title: "Сканировать QR",
-      webUnavailableTitle: "Недоступно в Интернете",
-      webUnavailableBody:
-        "Сканирование QR не поддерживается в веб- сборке. Вместо этого используйте «Вставить ссылку».",
-      backToSettings: "Вернуться к настройкам",
-      cameraPermissionTitle: "Разрешение камеры",
-      cameraPermissionBody:
-        "Разрешите камере доступ к сканированию кода сопряжения QR с вашего демона.",
-      grantPermission: "Предоставить разрешение",
-      pairing: "Сопряжение...",
-      unableToPair: "Невозможно подключить хост",
-      errorTitle: "Ошибка",
-    },
-    device: {
-      loadingOffer: "Загрузка предложения по сопряжению...",
-      failedToLoadOffer: "Не удалось загрузить предложение сопряжения.",
-      relayDisabled: "Реле не включено. Включите реле для сопряжения устройства.",
-      enableTitle: "Включить реле?",
-      enableDescription:
-        "Реле позволяет подключаться с этого устройства откуда угодно. Трафик сопряжения защищён сквозным шифрованием.",
-      relayDocs: "Как работает реле",
-      relayDocsAccessibility: "Прочитать, как работает реле Paseo",
-      enableRelay: "Включить реле",
-      enablingRelay: "Включение...",
-      notNow: "Не сейчас",
-      directConnectionHint:
-        "Без реле подключайтесь напрямую через TCP, Tailscale или другую VPN. QR-код не создаётся.",
-      updateRequired: "Обновите хост, чтобы включить реле из Paseo Desktop.",
-      unavailable: "Предложение по сопряжению недоступно.",
-      hint: "Отсканируйте этот код QR с помощью Paseo на своем телефоне или скопируйте ссылку ниже.",
-      qrUnavailable: "Код QR недоступен.",
-      qrAccessibility: "QR-код сопряжения",
-      retry: "Повторить попытку",
-      copy: "Копировать",
-      copied: "Скопировано",
-    },
-  },
-  realtimeVoice: {
-    actions: {
-      mute: "Отключить звук в реальном времени",
-      unmute: "Включить звук голоса в реальном времени",
-      stop: "Остановить голос в реальном времени и прервать поворот",
-    },
-  },
   rewind: {
     tooltip: "Перемотка назад к этому сообщению",
     warning: "Это действие нельзя отменить.",
@@ -1623,13 +1509,6 @@ export const ru: TranslationResources = {
   },
   diffViewer: {
     empty: "Нет изменений для отображения",
-  },
-  serviceUrl: {
-    title: "Открыть сервис URL",
-    message: "Открыть{{url}}?",
-    inPaseo: "В Paseo",
-    externalBrowser: "Внешний браузер",
-    dontAskAgain: "Не спрашивай больше",
   },
   downloads: {
     requestTokenFailed: "Не удалось запросить токен загрузки.",
@@ -1657,6 +1536,8 @@ export const ru: TranslationResources = {
     },
     file: {
       directoryMissing: "Каталог Workspace не найден.",
+      directoryCleaned:
+        "Файлы очищены для экономии места. Восстановите их, чтобы просматривать эту рабочую область.",
       loading: "Загрузка файла...",
       noPreview: "Предварительный просмотр недоступен",
       binaryPreviewUnavailable: "Предварительный просмотр двоичного файла недоступен.",
@@ -1684,8 +1565,20 @@ export const ru: TranslationResources = {
         reloadMessage: "Локальные изменения будут потеряны.",
       },
     },
+    changes: {
+      label: "Изменения",
+      subtitle: "Изменённые файлы в checkout",
+    },
+    files: {
+      label: "Файлы",
+      subtitle: "Файлы рабочего пространства",
+    },
+    pullRequest: {
+      label: "Pull request",
+      subtitle: "Открытый запрос на изменения",
+    },
     diff: {
-      changesLabel: "Изменения",
+      changesLabel: "Diff",
       changesSubtitle: "Различия рабочего дерева",
       commitSubtitle: "Различия коммита",
       uncommittedSubtitle: "Незафиксированные изменения",
@@ -1725,8 +1618,8 @@ export const ru: TranslationResources = {
       other: "использовано {{count}} других инструментов",
     },
     paseoCalls: {
-      one: "Paseo вызван {{count}} раз",
-      other: "Paseo вызван {{count}} раз",
+      one: "Agent Duel вызван {{count}} раз",
+      other: "Agent Duel вызван {{count}} раз",
     },
     and: "и",
   },
@@ -1736,6 +1629,39 @@ export const ru: TranslationResources = {
   },
   sidebarCallout: {
     dismiss: "Увольнять",
+  },
+  feedback: {
+    sidebarAction: "Отправить отзыв",
+    sendError: "Не удалось отправить отзыв. Повторите попытку.",
+    sheet: {
+      title: "Отправить отзыв",
+      subtitle: "Помогите нам улучшить Agent Duel.",
+      kindLabel: "О чём ваш отзыв?",
+      kinds: { general: "Общее", bug: "Ошибка", idea: "Идея" },
+      messageLabel: "Расскажите подробнее",
+      messagePlaceholder: "Что произошло и как, по-вашему, должно было быть?",
+      detailsTitle: "Добавить сведения о приложении",
+      detailsDescription:
+        "Версия, операционная система и текущий экран. Код и переписка сюда не входят.",
+      contextTitle: "Добавить текущий чат и состояние Git",
+      contextDescription: "Полная переписка и вызовы инструментов, а также текущее состояние Git.",
+      send: "Отправить отзыв",
+      done: "Готово",
+      successTitle: "Спасибо, что помогаете нам стать лучше",
+      successDescription: "Ваш отзыв передан команде бета-тестирования.",
+    },
+    chat: {
+      eyebrow: "Быстрый отзыв",
+      title: "Как вам Agent Duel?",
+      description: "Включает этот чат, вызовы инструментов и текущее состояние Git.",
+      notGreat: "Не очень",
+      okay: "Нормально",
+      great: "Отлично",
+      commentPlaceholder: "Что нам стоит улучшить? (необязательно)",
+      dismiss: "Не сейчас",
+      send: "Отправить",
+      successTitle: "Спасибо — это поможет.",
+    },
   },
   contextWindow: {
     title: "Контекстное окно",
@@ -1769,7 +1695,6 @@ export const ru: TranslationResources = {
       local: "Местный",
     },
     backToWorkspace: "Назад",
-    addHost: "Добавить хост",
     enableBuiltInDaemon: "Включить встроенный демон",
     projects: "Проекты",
     projectList: {
@@ -1785,8 +1710,19 @@ export const ru: TranslationResources = {
       integrations: "Интеграции",
       notifications: "Уведомления",
       permissions: "Разрешения",
-      diagnostics: "Диагностика",
       about: "О",
+    },
+    account: {
+      title: "Аккаунт",
+      signedInAs: "Вы вошли как",
+      methods: {
+        email: "Ссылка для входа по почте",
+        google: "Google",
+        github: "GitHub",
+      },
+      signOut: "Выйти",
+      signOutHint: "Чтобы пользоваться Agent Duel, потребуется войти снова.",
+      signOutFailed: "Не удалось выйти. Попробуйте ещё раз.",
     },
     editor: {
       title: "Редактор",
@@ -1797,20 +1733,29 @@ export const ru: TranslationResources = {
       title: "Уведомления",
       permission: "Разрешение на уведомления",
       refreshAccessibility: "Обновить разрешение на уведомления",
+      agentFinished: "Агент завершил работу",
+      agentFinishedHint: "Уведомлять о завершении работы каждого агента в битве",
+      battleReady: "Битва готова",
+      battleReadyHint: "Уведомлять, когда оба результата готовы к проверке",
       playSound: "Воспроизводить звук",
       playSoundHint: "Воспроизводит звук при получении уведомления на компьютере",
       test: "Проверить уведомление",
       testHint: "Отправляет уведомление с текущими настройками",
-      permissionRequired: "Разрешите доступ к уведомлениям перед проверкой",
       send: "Отправить",
       sending: "Отправка...",
-      sentTitle: "Тестовое уведомление отправлено",
-      sentDescription: "Paseo передал уведомление операционной системе.",
+      sentTitle: "Тестовое уведомление запрошено",
+      sentDescription:
+        "Если баннер не появился, проверьте фокусирование и системные настройки уведомлений.",
+      allowNotifications: "Разрешить уведомления",
+      requestingPermission: "Ожидание разрешения…",
+      openSystemSettings: "Открыть Системные настройки",
+      openingSettings: "Открытие…",
+      openSettingsFailed: "Не удалось открыть Системные настройки",
+      openSettingsManually: "Откройте Системные настройки → Уведомления и выберите Agent Duel.",
       sendFailedTitle: "Не удалось отправить тестовое уведомление",
     },
     hostSections: {
       projects: "Проекты",
-      connections: "Соединения",
       agents: "Agents",
       metadata: "Метаданные",
       workspaces: "Workspaces",
@@ -1822,23 +1767,42 @@ export const ru: TranslationResources = {
     metadataGeneration: {
       title: "Создание метаданных",
       description:
-        "Выберите модель, которую Paseo использует для названий рабочих пространств, веток, сообщений коммитов и черновиков pull request",
+        "Выберите модель, которую Agent Duel использует для названий рабочих пространств, веток, сообщений коммитов и черновиков pull request",
       selection: "Выбор модели",
       automatic: "Автоматически",
       preferred: "Вручную",
-      automaticHint: "Paseo выбирает быструю доступную модель",
-      preferredHint: "Выберите модель, которую использует Paseo",
+      automaticHint: "Agent Duel выбирает быструю доступную модель",
+      preferredHint: "Выберите модель, которую использует Agent Duel",
       model: "Модель",
-      fallbackHint: "Если она недоступна, Paseo использует другую доступную модель",
+      fallbackHint: "Если она недоступна, Agent Duel использует другую доступную модель",
       docs: "Документация",
       saveError: "Не удалось обновить создание метаданных",
     },
     general: {
       title: "Общий",
+      openRouterKey: {
+        title: "Ключ OpenRouter",
+        configured: "Ключ добавлен",
+        notConfigured: "Ключ не добавлен",
+        description: "Битвы используют этот ключ. Он хранится только на этом компьютере.",
+        inputLabel: "API-ключ OpenRouter",
+        save: "Сохранить",
+        saving: "Сохранение...",
+        remove: "Удалить",
+        removing: "Удаление...",
+        replaceTitle: "Заменить ключ OpenRouter?",
+        replaceMessage: "Текущие битвы будут остановлены.",
+        replace: "Заменить",
+        removeTitle: "Удалить ключ OpenRouter?",
+        removeMessage:
+          "Текущие битвы будут остановлены, а новые нельзя будет начать, пока вы не добавите ключ.",
+        saveFailed: "Не удалось сохранить ключ. Попробуйте ещё раз.",
+        removeFailed: "Не удалось удалить ключ. Попробуйте ещё раз.",
+      },
       browserData: {
         title: "Данные браузера",
         siteData: "Файлы cookie и данные сайтов",
-        description: "Вкладки браузера используют общие данные входа и данные сайтов в Paseo.",
+        description: "Вкладки браузера используют общие данные входа и данные сайтов в Agent Duel.",
         clear: "Очистить данные браузера",
         clearing: "Очистка...",
         confirmTitle: "Очистить данные браузера?",
@@ -1846,26 +1810,6 @@ export const ru: TranslationResources = {
           "На сайтах будет выполнен выход, а открытые вкладки браузера перезагрузятся.",
         success: "Данные браузера очищены.",
         error: "Не удалось очистить данные браузера.",
-      },
-      defaultSend: {
-        label: "Отправка по умолчанию",
-        descriptions: {
-          interrupt: "Когда агент работает, Enter прерывает. Command/Ctrl+Enter ставит в очередь.",
-          queue: "Когда агент работает, Enter ставит в очередь. Command/Ctrl+Enter отправляет.",
-        },
-        options: {
-          interrupt: "Прерывать",
-          queue: "Очередь",
-        },
-      },
-      serviceUrls: {
-        label: "URL- адреса служб",
-        description: "Где открыть URL- адреса запущенных скриптов",
-        options: {
-          ask: "Просить",
-          inApp: "В Paseo",
-          external: "Внешний браузер",
-        },
       },
       terminalScrollback: {
         label: "Terminal прокрутка назад",
@@ -1903,34 +1847,6 @@ export const ru: TranslationResources = {
         },
       },
     },
-    diagnostics: {
-      title: "Диагностика",
-      legacyTerminalRenderer: {
-        label: "Использовать прежний рендерер терминала",
-        description: "Использовать прежний WebView-терминал после повторного открытия",
-        accessibilityLabel: "Использовать прежний рендерер терминала",
-      },
-      testAudio: "Тестирование звука",
-      playTest: "Игровой тест",
-      playing: "Игра...",
-      playbackFailed: "Ошибка воспроизведения:{{message}}",
-      app: {
-        title: "App diagnostic",
-        rowTitle: "App diagnostic",
-        rowHint: "Collect connection, daemon, provider, desktop, and log details",
-        run: "Run",
-        running: "Running diagnostic...",
-        copyLabel: "diagnostic",
-        copyAccessibility: "Copy diagnostic",
-        copyFailed: "Failed to copy diagnostic",
-        refreshAccessibility: "Refresh diagnostic",
-        refreshingAccessibility: "Refreshing diagnostic",
-        progress: {
-          client: "Client",
-          desktop: "Desktop",
-        },
-      },
-    },
     about: {
       title: "О",
       appVersion: "Версия приложения",
@@ -1949,7 +1865,7 @@ export const ru: TranslationResources = {
         label: "Обновления приложений",
         readyToInstall: "Готово к установке:{{version}}",
         installTitle: "Установить обновление рабочего стола",
-        installMessage: "Это обновит Paseo на этом компьютере.",
+        installMessage: "Это обновит Agent Duel на этом компьютере.",
         installConfirm: "Установить обновление",
         update: "Обновлять",
         updateTo: "Обновление до{{version}}",
@@ -1973,6 +1889,15 @@ export const ru: TranslationResources = {
           ghostty: "Призрачный",
           pureBlack: "Чистый чёрный",
           auto: "Система",
+        },
+      },
+      sidePanel: {
+        title: "Боковая панель",
+        placement: "Расположение",
+        accessibilityLabel: "Расположение боковой панели: {{value}}",
+        options: {
+          right: "Справа",
+          bottom: "Снизу",
         },
       },
       detailLevel: {
@@ -2035,7 +1960,6 @@ export const ru: TranslationResources = {
         newWorkspace: "Новое рабочее пространство",
         newWorktree: "Новое рабочее дерево",
         archiveWorkspace: "Архивировать рабочее пространство",
-        newTab: "Новая вкладка",
         closeCurrentTab: "Закрыть текущую вкладку",
         jumpToWorkspace: "Перейти в рабочую область",
         jumpToTab: "Перейти на вкладку",
@@ -2043,35 +1967,27 @@ export const ru: TranslationResources = {
         nextWorkspace: "Следующая рабочая область",
         previousTab: "Предыдущая вкладка",
         nextTab: "Следующая вкладка",
-        splitPaneRight: "Разделить панель справа",
-        splitPaneDown: "Разделить панель вниз",
         focusPaneLeft: "Панель фокусировки слева",
         focusPaneRight: "Панель фокусировки справа",
-        focusPaneUp: "Панель фокусировки вверх",
-        focusPaneDown: "Панель фокусировки вниз",
         moveTabLeft: "Переместить вкладку влево",
         moveTabRight: "Переместить вкладку вправо",
-        moveTabUp: "Переместить вкладку вверх",
-        moveTabDown: "Переместить вкладку вниз",
         closePane: "Закрыть панель",
         newTerminal: "Новый терминал",
         searchFiles: "Поиск файлов",
         toggleCommandCenter: "Переключить командный центр",
         showKeyboardShortcuts: "Показать сочетания клавиш",
         toggleLeftSidebar: "Переключить левую боковую панель",
-        toggleRightSidebar: "Переключить правую боковую панель",
+        toggleRightSidebar: "Переключить боковую панель",
         toggleBothSidebars: "Переключить обе боковые панели",
         toggleSettings: "Переключить настройки",
         toggleFocusMode: "Переключить режим фокусировки",
         cycleTheme: "Циклическая тема",
         focusMessageInput: "Фокус ввода сообщения",
         cycleAgentMode: "Переключить режим агента",
-        toggleVoiceMode: "Переключить голосовой режим",
         startStopDictation: "Начать диктовку /stop",
         interruptAgent: "Агент прерываний",
         sendMessage: "Отправить сообщение",
         queueMessage: "Сообщение в очереди",
-        muteUnmuteVoiceMode: "Отключить голосовой режим /unmute",
         switchProject: "Сменить проект",
       },
       helpNotes: {
@@ -2080,12 +1996,6 @@ export const ru: TranslationResources = {
     },
     integrations: {
       title: "Интеграции",
-      docs: {
-        cli: "Документация CLI",
-        skills: "Документы по навыкам",
-        openCli: "Открыть документацию CLI",
-        openSkills: "Открытая документация по навыкам",
-      },
       commandLine: {
         title: "Командная строка",
         description: "Агенты управления и сценариев с вашего терминала",
@@ -2094,10 +2004,11 @@ export const ru: TranslationResources = {
         title: "Навыки оркестровки",
         description: "Научите своих агентов организовывать работу через CLI",
         updateAvailable: "Доступно обновление",
-        updateTitle: "Обновить навыки Paseo?",
+        updateTitle: "Обновить навыки Agent Duel?",
         updateFallback: "Синхронизируйте связанные навыки с вашим компьютером.",
-        uninstallTitle: "Удалить навыки Paseo?",
-        uninstallMessage: "Удаляет все навыки оркестровки Paseo из ~/.agents, ~/.claude, ~/.codex.",
+        uninstallTitle: "Удалить навыки Agent Duel?",
+        uninstallMessage:
+          "Удаляет все навыки оркестровки Agent Duel из ~/.agents, ~/.claude, ~/.codex.",
         choose: "Выбрать навыки",
         chooseAll: "Все навыки",
         chooseAllHint: "Держите установленными все входящие навыки, включая добавленные позже.",
@@ -2138,68 +2049,21 @@ export const ru: TranslationResources = {
       },
     },
     host: {
-      appearance: {
-        title: "Оформление",
-        name: {
-          label: "Имя",
-        },
-        color: {
-          label: "Цвет",
-          accessibilityLabel: "Цвет, {{value}}",
-          options: {
-            none: "По умолчанию",
-            violet: "Фиолетовый",
-            sky: "Небесный",
-            emerald: "Изумрудный",
-            orange: "Оранжевый",
-            pink: "Розовый",
-            indigo: "Индиго",
-            teal: "Бирюзовый",
-            red: "Красный",
-            amber: "Янтарный",
-            blue: "Синий",
-          },
-        },
-        badge: {
-          label: "Значок на боковой панели",
-          accessibilityLabel: "Значок на боковой панели, {{value}}",
-          options: {
-            name: "Имя",
-            icon: "Только значок",
-            hidden: "Скрыт",
-          },
-        },
-        preview: {
-          workspaceName: "my-workspace",
-        },
-      },
       notFound: "Host не найден",
       badges: {
         relay: "Реле",
         local: "Местный",
       },
       connections: {
-        title: "Соединения",
-        removeTitle: "Удалить соединение",
-        removeMessage: "Удалить{{name}}? Это невозможно отменить.",
         removeAction: "Удалять",
-        removeErrorTitle: "Ошибка",
-        removeErrorMessage: "Невозможно удалить соединение",
-        timeout: "Тайм- аут",
-      },
-      pairDevices: {
-        title: "Сопряжение устройств",
-        rowTitle: "Сопряжение устройства",
-        rowHint:
-          "Отсканируйте код QR или скопируйте ссылку, чтобы подключить свой телефон к этому хосту.",
       },
       orchestration: {
         title: "оркестровка",
         unavailable: "Подключитесь к этому хосту, чтобы управлять оркестрацией.",
         enableTools: {
-          title: "Включить инструменты Paseo",
+          title: "Включить инструменты Agent Duel",
           hint: "Агенты смогут управлять рабочими деревьями, агентами и расписаниями.",
-          accessibilityLabel: "Инструменты внедрения Paseo",
+          accessibilityLabel: "Инструменты внедрения Agent Duel",
         },
         systemPrompt: {
           title: "Системная подсказка",
@@ -2218,30 +2082,6 @@ export const ru: TranslationResources = {
       },
       workspaces: {
         unavailable: "Connect to this host to manage workspaces",
-      },
-      terminalProfiles: {
-        unavailable: "Connect to this host to manage terminal profiles",
-        sectionTitle: "Terminal profiles",
-        editProfile: "Edit profile",
-        addProfileTitle: "Add terminal profile",
-        editProfileTitle: "Edit terminal profile",
-        namePlaceholder: "Claude Code",
-        commandPlaceholder: "claude",
-        argsPlaceholder: "--dangerously-skip-permissions",
-        nameLabel: "Name",
-        commandLabel: "Command",
-        argsLabel: "Arguments",
-        nameRequired: "Name is required",
-        commandRequired: "Command is required",
-        argsHint: "Space-separated arguments passed to the command",
-        saving: "Saving...",
-        remove: "Remove",
-        removeConfirmTitle: "Remove profile?",
-        removeConfirmMessage: 'Remove "{{name}}"?',
-        moveUp: "Move up",
-        moveDown: "Move down",
-        save: "Save",
-        emptyState: "No profiles yet. Add one to launch terminals with a specific command.",
       },
       agentProfiles: {
         sectionTitle: "Профили агента",
@@ -2282,12 +2122,6 @@ export const ru: TranslationResources = {
         moveDown: "Переместить вниз",
       },
       daemon: {
-        rename: {
-          editLabel: "Изменить ярлык",
-          title: "Переименовать хост",
-          placeholder: "Мой Host",
-          submit: "Переименовать",
-        },
         restart: {
           title: "Перезапустить демон",
           hint: "Перезапускает процесс демона. Приложение автоматически переподключится",
@@ -2304,15 +2138,15 @@ export const ru: TranslationResources = {
             "Этот хост не подключен. Подождите, пока он подключится к сети, прежде чем перезапустить.",
           offlineTitle: "Host оффлайн",
           offlineMessage:
-            "Этот хост не в сети.Paseo автоматически повторно подключается — подождите, пока он снова подключится к сети, прежде чем перезапускаться.",
+            "Этот хост не в сети. Agent Duel автоматически повторно подключается — подождите, пока он снова подключится к сети, прежде чем перезапускаться.",
           requestFailedTitle: "Ошибка",
           requestFailedMessage:
-            "Не удалось отправить запрос на перезапуск.Paseo автоматически повторно подключается. Повторите попытку, как только хост окажется в сети.",
+            "Не удалось отправить запрос на перезапуск. Agent Duel автоматически повторно подключается. Повторите попытку, как только хост окажется в сети.",
           dialogFailedMessage: "Невозможно открыть диалоговое окно подтверждения перезапуска.",
         },
         update: {
           desktopManagedHint:
-            "Этот демон управляется Paseo Desktop. Обновите Paseo Desktop на хосте.",
+            "Этот демон управляется Agent Duel Desktop. Обновите Agent Duel Desktop на хосте.",
           title: "Update daemon",
           hint: "Update the daemon to the latest version and restart it",
           confirm: "Update",
@@ -2440,46 +2274,9 @@ export const ru: TranslationResources = {
         failedTitle: "Не удалось загрузить paseo.json.",
         failedDescription: "Перезагрузите, чтобы попробовать еще раз.",
       },
-      worktree: {
-        title: "Перехватчики жизненного цикла Worktree",
-        info: "Команды, которые выполняются при создании или удалении рабочего дерева для этого проекта.",
-        docs: "Документы",
-        docsTooltip:
-          "Дополнительную информацию и переменные среды, доступные для этих команд, см. в документации.",
-        setup: "Настраивать",
-        setupAccessibility: "Команды настройки рабочего дерева",
-        teardown: "Срывать",
-        teardownAccessibility: "Команды разрушения рабочего дерева",
-      },
-      scripts: {
-        title: "Скрипты",
-        info: "Долгоработающие службы и одноразовые команды, которые можно запускать из любого агента в этом проекте.",
-        empty: "Скриптов пока нет.",
-        untitled: "Безымянный сценарий",
-        port: "порт{{port}}",
-        menuAccessibility: "Открыть меню скриптов",
-        removeTitle: "Удалить скрипт?",
-        removeMessage: "Удалить{{name}}?",
-        removeFallbackName: "этот сценарий",
-        name: "Имя",
-        command: "Команда",
-        nameAccessibility: "Имя сценария",
-        commandAccessibility: "Команда сценария",
-        nameRequired: "Требуется имя",
-        commandRequired: "Требуется команда",
-        newScript: "Новый сценарий",
-        editScript: "Изменить{{name}}",
-        runAsService: "Запуск как служба",
-        serviceHint: "Paseo контролирует процесс и назначает порт через $PASEO_PORT.",
-        actions: {
-          add: "Добавить скрипт",
-          edit: "Редактировать",
-          remove: "Удалять",
-        },
-      },
       metadata: {
         title: "Генерация метаданных",
-        info: "Инструкции для конкретного проекта, внедренные в подсказки ИИ, которые Paseo использует для генерации метаданных. Используйте их для обеспечения соблюдения соглашений вашей команды, таких как наименование ветвей, стиль фиксации или формат PR.",
+        info: "Инструкции для конкретного проекта, внедренные в подсказки ИИ, которые Agent Duel использует для генерации метаданных. Используйте их для обеспечения соблюдения соглашений вашей команды, таких как наименование ветвей, стиль фиксации или формат PR.",
         branchName: "Названия ветвей",
         branchNamePlaceholder: "Префиксные ветки с feat/ или fix/, mb/ для личных веток",
         commitMessage: "Фиксировать сообщения",

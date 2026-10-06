@@ -5,7 +5,6 @@ import type { AgentManager } from "./agent/agent-manager.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import type { DownloadTokenStore } from "./file-download/token-store.js";
 import type { DaemonConfigStore } from "./daemon-config-store.js";
-import type { ScheduleService } from "./schedule/service.js";
 import type { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import type { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { asInternals, createStub } from "./test-utils/class-mocks.js";
@@ -271,7 +270,6 @@ function createServer(options?: {
     undefined,
     undefined,
     undefined,
-    createStub<ScheduleService>({}),
     createStub<CheckoutDiffManager>({
       subscribe: vi.fn(),
       scheduleRefreshForCwd: vi.fn(),
@@ -810,6 +808,37 @@ describe("relay external socket reconnect behavior", () => {
         },
       });
     });
+
+    await server.close();
+  });
+
+  test("keeps a BYOK key out of the log when its request fails", async () => {
+    const logger = createLogger();
+    const server = createServer({ logger });
+    const socket = new MockSocket();
+    await attachRelayAndHello({ server, socket, clientId: "cid-byok-request-failure" });
+
+    const session = sessionMock.instances[0];
+    session.handleMessage.mockRejectedValueOnce(new Error("handler exploded"));
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "session",
+        message: {
+          type: "arena.byok.key.set.request",
+          requestId: "failing-byok-key",
+          key: "sk-or-v1-private",
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(logger.error).toHaveBeenCalledWith(
+        { err: expect.any(Error), rawPayload: "<redacted>" },
+        "Failed to parse/handle message",
+      );
+    });
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain("sk-or-v1-private");
 
     await server.close();
   });

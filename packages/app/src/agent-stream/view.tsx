@@ -23,10 +23,12 @@ import {
 } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { MAX_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { ArenaContentColumn } from "@/arena/content-column";
+import { arenaTimelineQuestionResult } from "@/arena/question";
+import { ArenaQuestionResultView } from "@/arena/question-result";
 import { useMutation } from "@tanstack/react-query";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { Check, ChevronDown, X } from "lucide-react-native";
-import { usePanelStore } from "@/stores/panel-store";
 import {
   AssistantMessage,
   SpeakMessage,
@@ -38,6 +40,7 @@ import {
   MessageOuterSpacingProvider,
   type InlinePathTarget,
 } from "@/components/message";
+import { ThinkingBlock } from "@/components/thinking-block";
 import { PlanCard } from "@/components/plan-card";
 import type { StreamItem } from "@/types/stream";
 import type { PendingMessageSubmission } from "@/composer/submission/model";
@@ -99,20 +102,27 @@ import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store"
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { useForkAgent } from "@/hooks/use-fork-agent";
 import { isWeb } from "@/constants/platform";
-import type { Theme } from "@/styles/theme";
+import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { recordRenderProfileReasons } from "@/utils/render-profiler";
 import { useRetainedPanelActive } from "@/components/retained-panel";
+import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
 
 function renderLiveAuxiliaryNode(input: {
+  liveContent: ReactNode;
   pendingPermissions: ReactNode;
   turnFooter: ReactNode;
 }): ReactNode {
-  if (!input.pendingPermissions && !input.turnFooter) {
+  if (!input.liveContent && !input.pendingPermissions && !input.turnFooter) {
     return null;
   }
   return (
     <>
       {input.turnFooter}
+      {input.liveContent ? (
+        <ArenaContentColumn fullBleed>
+          <View style={stylesheet.listHeaderContent}>{input.liveContent}</View>
+        </ArenaContentColumn>
+      ) : null}
       {input.pendingPermissions ? (
         <View style={stylesheet.contentWrapper}>
           <View style={stylesheet.listHeaderContent}>{input.pendingPermissions}</View>
@@ -231,6 +241,7 @@ function renderLiveHeadStreamItem(input: {
 
 export interface AgentStreamViewHandle {
   scrollToBottom(reason?: BottomAnchorLocalRequest["reason"]): void;
+  scrollToMessage(itemId: string): void;
   prepareForViewportChange(): void;
 }
 
@@ -247,6 +258,14 @@ export interface AgentStreamViewProps {
   isAuthoritativeHistoryReady?: boolean;
   toast?: ToastApi | null;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
+  /** Content inserted immediately after a canonical stream item (for durable in-stream markers). */
+  afterItems?: ReadonlyMap<string, ReactNode>;
+  /** Canonical stream item after which inherited fork history ends. */
+  forkBoundaryAfterItemId?: string;
+  /** Transient content rendered at the live end of the transcript. */
+  liveContent?: ReactNode;
+  /** Height of floating composer controls that the jump button must clear. */
+  bottomOverlayHeight?: number;
   readOnly?: boolean;
   historyPagination?: {
     hasOlder: boolean;
@@ -295,6 +314,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       isAuthoritativeHistoryReady = true,
       toast,
       onOpenWorkspaceFile,
+      afterItems,
+      forkBoundaryAfterItemId,
+      liveContent,
+      bottomOverlayHeight = 0,
       readOnly = false,
       historyPagination,
     },
@@ -325,8 +348,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const [expandedToolCallGroupIds, setExpandedToolCallGroupIds] = useState<Set<string>>(
       new Set(),
     );
-    const openFileExplorerForCheckout = usePanelStore((state) => state.openFileExplorerForCheckout);
-    const setExplorerTabForCheckout = usePanelStore((state) => state.setExplorerTabForCheckout);
 
     // Get serverId (fallback to agent's serverId if not provided)
     const resolvedServerId = serverId ?? context.serverId ?? "";
@@ -431,15 +452,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           setCurrentPath: false,
         });
 
-        const checkout = {
+        openWorkspaceSidePanelTab({
           serverId: resolvedServerId,
-          cwd: context.cwd,
-          isGit: context.projectPlacement?.checkout?.isGit ?? true,
-        };
-        setExplorerTabForCheckout({ ...checkout, tab: "files" });
-        openFileExplorerForCheckout({
-          isCompact: isMobile,
-          checkout,
+          workspaceId: context.workspaceId,
+          target: { kind: "files" },
         });
       },
     );
@@ -453,7 +469,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         await forkAgent({
           agentId,
           agent: context,
-          workspaceId: context.workspaceId,
           target,
           boundary,
         });
@@ -468,7 +483,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       await forkAgent({
         agentId,
         agent: context,
-        workspaceId: context.workspaceId,
         target,
       });
     });
@@ -557,6 +571,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => ({
         scrollToBottom(reason = "jump-to-bottom") {
           viewportRef.current?.scrollToBottom(reason);
+        },
+        scrollToMessage(itemId: string) {
+          viewportRef.current?.scrollToMessage?.(itemId);
         },
         prepareForViewportChange() {
           viewportRef.current?.prepareForViewportChange();
@@ -664,19 +681,15 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const renderThoughtItem = useCallback(
       (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "thought" }>) => {
         return (
-          <ToolCallSlot
-            itemId={item.id}
-            onInlineDetailsExpandedChangeByItemId={setInlineDetailsExpanded}
-            toolName="thinking"
-            args={item.text}
-            status={item.status === "ready" ? "completed" : "executing"}
+          <ThinkingBlock
+            text={item.text}
+            active={item.status !== "ready"}
             isLastInSequence={layoutItem.isLastInToolSequence}
             defaultExpanded={autoExpandReasoning}
-            forceInline={autoExpandReasoning}
           />
         );
       },
-      [autoExpandReasoning, setInlineDetailsExpanded],
+      [autoExpandReasoning],
     );
 
     const renderSingleToolCallItem = useCallback(
@@ -685,6 +698,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         isLastInSequence: boolean,
         maxDetailHeight?: number,
       ) => {
+        const questionResult = arenaTimelineQuestionResult(item);
+        if (questionResult) return <ArenaQuestionResultView result={questionResult} />;
         const { payload } = item;
 
         if (payload.source === "agent") {
@@ -751,12 +766,21 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             onExpandedChange={setToolCallGroupExpanded}
           >
             {expanded
-              ? group.run.calls.map((call, index) => (
-                  <React.Fragment key={call.id}>
-                    {renderSingleToolCallItem(
-                      call,
-                      index === group.run.calls.length - 1,
-                      GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT,
+              ? group.run.items.map((runItem, index) => (
+                  <React.Fragment key={runItem.id}>
+                    {runItem.kind === "thought" ? (
+                      <ThinkingBlock
+                        text={runItem.text}
+                        active={runItem.status !== "ready"}
+                        isLastInSequence={index === group.run.items.length - 1}
+                        defaultExpanded={autoExpandReasoning}
+                      />
+                    ) : (
+                      renderSingleToolCallItem(
+                        runItem,
+                        index === group.run.items.length - 1,
+                        GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT,
+                      )
                     )}
                   </React.Fragment>
                 ))
@@ -765,6 +789,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         );
       },
       [
+        autoExpandReasoning,
         projectedToolCalls.groupsByHostId,
         expandedToolCallGroupIds,
         renderSingleToolCallItem,
@@ -822,20 +847,45 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const renderStreamItem = useCallback(
       (layoutItem: StreamLayoutItem) => {
         const content = renderStreamItemContent(layoutItem);
-        return renderStreamItemWithTurnFooter({
+        const streamItem = renderStreamItemWithTurnFooter({
           content,
           layoutItem,
           strategy: streamRenderStrategy,
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
         });
+        const after = afterItems?.get(layoutItem.item.id);
+        const showForkBoundary = forkBoundaryAfterItemId === layoutItem.item.id;
+        if (!after && !showForkBoundary) return streamItem;
+        return (
+          <>
+            {streamItem}
+            {after ? <ArenaContentColumn>{after}</ArenaContentColumn> : null}
+            {showForkBoundary ? (
+              <View
+                accessibilityLabel={t("message.actions.forkedFromChat")}
+                style={stylesheet.forkedChatBoundary}
+                testID="forked-chat-boundary"
+              >
+                <View style={stylesheet.forkedChatBoundaryLine} />
+                <Text style={stylesheet.forkedChatBoundaryText}>
+                  {t("message.actions.forkedFromChat")}
+                </Text>
+                <View style={stylesheet.forkedChatBoundaryLine} />
+              </View>
+            ) : null}
+          </>
+        );
       },
       [
+        afterItems,
+        forkBoundaryAfterItemId,
         handleForkAssistantTurn,
         readOnly,
         renderStreamItemContent,
         streamRenderStrategy,
         supportsAgentForkContextCursor,
+        t,
       ],
     );
 
@@ -947,10 +997,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     );
     const renderLiveAuxiliary = useCallback<StreamSegmentRenderers["renderLiveAuxiliary"]>(() => {
       return renderLiveAuxiliaryNode({
+        liveContent,
         pendingPermissions: auxiliary.pendingPermissions,
         turnFooter: auxiliary.turnFooter,
       });
-    }, [auxiliary.pendingPermissions, auxiliary.turnFooter]);
+    }, [auxiliary.pendingPermissions, auxiliary.turnFooter, liveContent]);
 
     const renderers = useMemo<StreamSegmentRenderers>(
       () => ({
@@ -1012,16 +1063,25 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             onJumpToPrompt={chatOutline.jumpToPrompt}
           />
           {(!isNearBottom || isTimelineDetached) && (
-            <View style={stylesheet.scrollToBottomContainer} pointerEvents="box-none">
+            <View
+              style={stylesheet.scrollToBottomContainer(bottomOverlayHeight)}
+              pointerEvents="box-none"
+            >
               <Animated.View entering={scrollIndicatorFadeIn} exiting={scrollIndicatorFadeOut}>
                 <Pressable
-                  style={stylesheet.scrollToBottomButton}
+                  style={[
+                    stylesheet.scrollToBottomButton,
+                    bottomOverlayHeight > 0 && stylesheet.scrollToBottomButtonCompact,
+                  ]}
                   onPress={scrollToBottom}
                   accessibilityRole="button"
                   accessibilityLabel={t("agentStream.scrollToBottom")}
                   testID="scroll-to-bottom-button"
                 >
-                  <ChevronDown size={24} color={stylesheet.scrollToBottomIcon.color} />
+                  <ChevronDown
+                    size={bottomOverlayHeight > 0 ? ICON_SIZE.sm : 24}
+                    color={stylesheet.scrollToBottomIcon.color}
+                  />
                 </Pressable>
               </Animated.View>
             </View>
@@ -1044,11 +1104,16 @@ function collectAgentProjectPlacementDiffs(
   right: AgentScreenAgent["projectPlacement"],
 ): string[] {
   const reasons: string[] = [];
-  if (left?.checkout?.cwd !== right?.checkout?.cwd) {
+  const leftCheckout = left?.checkout;
+  const rightCheckout = right?.checkout;
+  if (leftCheckout?.cwd !== rightCheckout?.cwd) {
     reasons.push("agent.projectPlacement.checkout.cwd");
   }
-  if (left?.checkout?.isGit !== right?.checkout?.isGit) {
+  if (leftCheckout?.isGit !== rightCheckout?.isGit) {
     reasons.push("agent.projectPlacement.checkout.isGit");
+  }
+  if (leftCheckout?.currentBranch !== rightCheckout?.currentBranch) {
+    reasons.push("agent.projectPlacement.checkout.currentBranch");
   }
   if (left?.projectName !== right?.projectName) {
     reasons.push("agent.projectPlacement.projectName");
@@ -1084,6 +1149,7 @@ function collectAgentScreenAgentDiffs(left: AgentScreenAgent, right: AgentScreen
   const reasons: string[] = [];
   if (left.serverId !== right.serverId) reasons.push("agent.serverId");
   if (left.id !== right.id) reasons.push("agent.id");
+  if (left.title !== right.title) reasons.push("agent.title");
   if (left.workspaceId !== right.workspaceId) reasons.push("agent.workspaceId");
   if (left.status !== right.status) reasons.push("agent.status");
   if (left.cwd !== right.cwd) reasons.push("agent.cwd");
@@ -1144,6 +1210,12 @@ function agentStreamViewPropsEqual(
   }
   if (left.toast !== right.toast) reasons.push("toast");
   if (left.onOpenWorkspaceFile !== right.onOpenWorkspaceFile) reasons.push("onOpenWorkspaceFile");
+  if (left.afterItems !== right.afterItems) reasons.push("afterItems");
+  if (left.forkBoundaryAfterItemId !== right.forkBoundaryAfterItemId) {
+    reasons.push("forkBoundaryAfterItemId");
+  }
+  if (left.liveContent !== right.liveContent) reasons.push("liveContent");
+  if (left.bottomOverlayHeight !== right.bottomOverlayHeight) reasons.push("bottomOverlayHeight");
   if (left.readOnly !== right.readOnly) reasons.push("readOnly");
   if (!historyPaginationPropsEqual(left.historyPagination, right.historyPagination)) {
     reasons.push("historyPagination");
@@ -1487,6 +1559,26 @@ const stylesheet = StyleSheet.create((theme) => ({
     alignSelf: "center",
     paddingHorizontal: theme.spacing[2],
   },
+  forkedChatBoundary: {
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[3],
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[4],
+  },
+  forkedChatBoundaryLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: theme.colors.border,
+  },
+  forkedChatBoundaryText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
+    fontWeight: theme.fontWeight.medium,
+  },
   emptyState: {
     flex: 1,
     alignItems: "center",
@@ -1519,13 +1611,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
     textAlign: "center",
   },
-  scrollToBottomContainer: {
+  scrollToBottomContainer: (bottomOverlayHeight: number) => ({
     position: "absolute",
-    bottom: 16,
+    bottom: bottomOverlayHeight + (bottomOverlayHeight > 0 ? theme.spacing[1] : theme.spacing[4]),
     left: 0,
     right: 0,
     alignItems: "center",
-  },
+  }),
   scrollToBottomButton: {
     width: 48,
     height: 48,
@@ -1534,6 +1626,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     ...theme.shadow.sm,
+  },
+  scrollToBottomButtonCompact: {
+    width: theme.spacing[8],
+    height: theme.spacing[8],
+    borderRadius: theme.borderRadius.full,
   },
   scrollToBottomIcon: {
     color: theme.colors.foreground,

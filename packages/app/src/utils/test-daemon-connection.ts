@@ -1,6 +1,7 @@
 import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { DaemonClientConfig } from "@getpaseo/client/internal/daemon-client";
 import type { HostConnection } from "@/types/host-connection";
+import { getAccountSessionToken } from "@/accounts/session-store";
 import { getOrCreateClientId } from "./client-id";
 import { resolveAppVersion } from "./app-version";
 import {
@@ -114,6 +115,9 @@ export async function buildClientConfig(
     appVersion: deps.resolveAppVersion() ?? undefined,
     suppressSendErrors: true,
     reconnect: { enabled: false },
+    // The probe is a real connection, so it has to present the same account the
+    // app will: a daemon with accounts refuses an unauthenticated socket.
+    getSessionToken: getAccountSessionToken,
     ...(options?.capabilities ? { capabilities: options.capabilities } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
     ...((connection.type === "directSocket" || connection.type === "directPipe") &&

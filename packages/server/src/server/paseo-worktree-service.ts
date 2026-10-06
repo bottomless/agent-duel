@@ -29,8 +29,13 @@ import { resolveFirstAgentPromptTitle } from "./agent/create-agent-title.js";
 import { buildAgentBranchNameSeed } from "./agent/prompt-attachments.js";
 import type { FirstAgentContext } from "@getpaseo/protocol/messages";
 import { runWithGitCommandPriority } from "../utils/run-git-command.js";
+import {
+  removePendingForkWorktreeIntent,
+  writePendingForkWorktreeIntent,
+} from "./pending-fork-worktree-intent.js";
 
 export interface CreatePaseoWorktreeInput extends CreateWorktreeCoreInput {
+  pendingFork?: boolean;
   projectId?: string;
   title?: string;
 }
@@ -73,58 +78,95 @@ async function createPaseoWorktreeWithPriority(
   deps: CreatePaseoWorktreeDeps,
 ): Promise<CreatePaseoWorktreeResult> {
   const workspaceCwdPlan = await planWorkspaceCwdForWorktree(input.cwd, deps.workspaceGitService);
-  const createdWorktree = await createWorktreeCore(input, deps);
+  let pendingIntent: { file: string; worktreePath: string } | undefined;
+  let workspacePersisted = false;
   try {
-    maybeMarkFirstAgentBranchAutoNameEligible({ createdWorktree });
-    const workspaceCwd = mapWorkspaceRelativeCwdToWorktree({
-      relativeWorkspaceCwd: workspaceCwdPlan.relativeWorkspaceCwd,
-      targetWorktreePath: createdWorktree.worktree.worktreePath,
+    const createdWorktree = await createWorktreeCore(input, {
+      ...deps,
+      onBeforeAdd: input.pendingFork
+        ? async (worktreePath, repoRoot) => {
+            const file = await writePendingForkWorktreeIntent(
+              {
+                repoRoot,
+                worktreePath,
+                worktreesBaseRoot: input.worktreesRoot,
+                sourceCwd: workspaceCwdPlan.inputCwd,
+                relativeWorkspaceCwd: workspaceCwdPlan.relativeWorkspaceCwd,
+                projectId: input.projectId,
+                title: input.title?.trim() || resolveFirstAgentPromptTitle(input.firstAgentContext),
+              },
+              input.paseoHome,
+            );
+            pendingIntent = { file, worktreePath };
+          }
+        : undefined,
+      onAddFailed: input.pendingFork
+        ? async (worktreePath) => {
+            if (pendingIntent?.worktreePath !== worktreePath) return;
+            await removePendingForkWorktreeIntent(pendingIntent.file);
+            pendingIntent = undefined;
+          }
+        : undefined,
     });
-    if (!(await isDirectory(workspaceCwd))) {
-      throw new Error(`Selected project directory is missing from the worktree: ${workspaceCwd}`);
-    }
-
-    if (createdWorktree.created) {
-      await copySourcePaseoConfigFile({
-        sourceCwd: workspaceCwdPlan.inputCwd,
-        targetCwd: workspaceCwd,
+    try {
+      maybeMarkFirstAgentBranchAutoNameEligible({ createdWorktree });
+      const workspaceCwd = mapWorkspaceRelativeCwdToWorktree({
+        relativeWorkspaceCwd: workspaceCwdPlan.relativeWorkspaceCwd,
+        targetWorktreePath: createdWorktree.worktree.worktreePath,
       });
-    }
-    const workspace = await deps.workspaceProvisioning.createWorkspaceForWorktree({
-      sourceCwd: workspaceCwdPlan.inputCwd,
-      projectId: input.projectId,
-      repoRoot: createdWorktree.repoRoot,
-      cwd: workspaceCwd,
-      worktreeRoot: createdWorktree.worktree.worktreePath,
-      branch: createdWorktree.worktree.branchName || null,
-      baseBranch: resolveIntentBaseBranch(createdWorktree.intent),
-      title: input.title?.trim() || resolveFirstAgentPromptTitle(input.firstAgentContext),
-      expectsInitialAgent: Boolean(input.firstAgentContext),
-    });
+      if (!(await isDirectory(workspaceCwd))) {
+        throw new Error(`Selected project directory is missing from the worktree: ${workspaceCwd}`);
+      }
 
-    deps.github.invalidate({ cwd: createdWorktree.worktree.worktreePath });
+      if (createdWorktree.created) {
+        await copySourcePaseoConfigFile({
+          sourceCwd: workspaceCwdPlan.inputCwd,
+          targetCwd: workspaceCwd,
+        });
+      }
+      const workspace = await deps.workspaceProvisioning.createWorkspaceForWorktree({
+        sourceCwd: workspaceCwdPlan.inputCwd,
+        projectId: input.projectId,
+        repoRoot: createdWorktree.repoRoot,
+        cwd: workspaceCwd,
+        worktreeRoot: createdWorktree.worktree.worktreePath,
+        branch: createdWorktree.worktree.branchName || null,
+        baseBranch: resolveIntentBaseBranch(createdWorktree.intent),
+        title: input.title?.trim() || resolveFirstAgentPromptTitle(input.firstAgentContext),
+        expectsInitialAgent: Boolean(input.firstAgentContext),
+        pendingFork: input.pendingFork,
+      });
+      workspacePersisted = true;
 
-    return {
-      worktree: createdWorktree.worktree,
-      intent: createdWorktree.intent,
-      workspace,
-      repoRoot: createdWorktree.repoRoot,
-      created: createdWorktree.created,
-    };
-  } catch (error) {
-    if (!createdWorktree.created) {
-      throw error;
+      deps.github.invalidate({ cwd: createdWorktree.worktree.worktreePath });
+
+      return {
+        worktree: createdWorktree.worktree,
+        intent: createdWorktree.intent,
+        workspace,
+        repoRoot: createdWorktree.repoRoot,
+        created: createdWorktree.created,
+      };
+    } catch (error) {
+      if (!createdWorktree.created) {
+        throw error;
+      }
+      return await rollbackCreatedPaseoWorktree(
+        {
+          cwd: createdWorktree.repoRoot,
+          worktreePath: createdWorktree.worktree.worktreePath,
+          ...(input.runSetup === false ? { teardownCwds: [] } : {}),
+          paseoHome: input.paseoHome,
+          worktreesBaseRoot: input.worktreesRoot,
+        },
+        error,
+      );
     }
-    return rollbackCreatedPaseoWorktree(
-      {
-        cwd: createdWorktree.repoRoot,
-        worktreePath: createdWorktree.worktree.worktreePath,
-        ...(input.runSetup === false ? { teardownCwds: [] } : {}),
-        paseoHome: input.paseoHome,
-        worktreesBaseRoot: input.worktreesRoot,
-      },
-      error,
-    );
+  } finally {
+    if (pendingIntent && (workspacePersisted || !(await isDirectory(pendingIntent.worktreePath)))) {
+      // A stale intent is harmless: startup checks the workspace registry before recovery.
+      await removePendingForkWorktreeIntent(pendingIntent.file).catch(() => {});
+    }
   }
 }
 
@@ -255,6 +297,12 @@ function maybeMarkFirstAgentBranchAutoNameEligible(options: {
   if (!createdWorktree.created || createdWorktree.intent.kind !== "branch-off") {
     return;
   }
+  // Only a placeholder earns a rename. A branch the user named is the one thing about this
+  // worktree they chose, and the first prompt replacing it with a title slug reads as the app
+  // losing their input.
+  if (!createdWorktree.branchNameIsPlaceholder) {
+    return;
+  }
 
   writePaseoWorktreeFirstAgentBranchAutoNameMetadata(createdWorktree.worktree.worktreePath, {
     placeholderBranchName: createdWorktree.worktree.branchName,
@@ -271,6 +319,8 @@ function resolveIntentBaseBranch(intent: WorktreeCreationIntent): string | null 
       return normalizeBaseRefName(intent.baseRefName);
     case "checkout-github-pr":
       return normalizeBaseRefName(intent.baseRefName);
+    case "detached":
+      return normalizeBaseRefName(intent.baseRef);
     case "checkout-branch":
       return null;
   }

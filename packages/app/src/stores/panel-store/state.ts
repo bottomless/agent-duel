@@ -1,12 +1,4 @@
-import {
-  buildExplorerCheckoutKey,
-  isExplorerTab,
-  resolveExplorerTabForCheckout,
-  type ExplorerTab,
-} from "../explorer-tab-memory";
-import { type ExplorerCheckoutContext } from "../explorer-checkout-context";
-
-export type MobilePanelView = "agent" | "agent-list" | "file-explorer";
+export type MobilePanelView = "agent" | "agent-list";
 
 export interface MobilePanelSelection {
   target: MobilePanelView;
@@ -15,7 +7,6 @@ export interface MobilePanelSelection {
 
 export interface DesktopSidebarState {
   agentListOpen: boolean;
-  fileExplorerOpen: boolean;
   focusModeEnabled: boolean;
 }
 
@@ -25,33 +16,17 @@ export const DEFAULT_SIDEBAR_WIDTH = 320;
 export const MIN_SIDEBAR_WIDTH = 200;
 export const MAX_SIDEBAR_WIDTH = 600;
 
-export const DEFAULT_EXPLORER_SIDEBAR_WIDTH = 400;
-export const MIN_EXPLORER_SIDEBAR_WIDTH = 280;
-// Upper bound is intentionally generous; desktop resizing enforces a min-chat-width constraint.
-export const MAX_EXPLORER_SIDEBAR_WIDTH = 2000;
-
-export const DEFAULT_EXPLORER_FILES_SPLIT_RATIO = 0.38;
-export const MIN_EXPLORER_FILES_SPLIT_RATIO = 0.2;
-export const MAX_EXPLORER_FILES_SPLIT_RATIO = 0.8;
-
 export interface PanelVisibilityState {
   isAgentListOpen: boolean;
-  isFileExplorerOpen: boolean;
 }
 
 export interface PanelLayoutInput {
   isCompact: boolean;
 }
 
-export interface ExplorerPanelIntent extends PanelLayoutInput {
-  checkout: ExplorerCheckoutContext;
-}
-
 export interface PanelCoreState {
   mobilePanel: MobilePanelSelection;
   desktop: DesktopSidebarState;
-  explorerTab: ExplorerTab;
-  explorerTabByCheckout: Record<string, ExplorerTab>;
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -65,36 +40,18 @@ export function clampSidebarWidth(width: number): number {
   return clampNumber(width, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
 }
 
-export function clampExplorerWidth(width: number): number {
-  return clampNumber(width, MIN_EXPLORER_SIDEBAR_WIDTH, MAX_EXPLORER_SIDEBAR_WIDTH);
-}
-
-export function clampExplorerFilesSplitRatio(ratio: number): number {
-  return clampNumber(ratio, MIN_EXPLORER_FILES_SPLIT_RATIO, MAX_EXPLORER_FILES_SPLIT_RATIO);
-}
-
 export function selectPanelVisibility(
   state: PanelCoreState,
   input: PanelLayoutInput,
 ): PanelVisibilityState {
   if (input.isCompact) {
-    return {
-      isAgentListOpen: state.mobilePanel.target === "agent-list",
-      isFileExplorerOpen: state.mobilePanel.target === "file-explorer",
-    };
+    return { isAgentListOpen: state.mobilePanel.target === "agent-list" };
   }
-  return {
-    isAgentListOpen: state.desktop.agentListOpen,
-    isFileExplorerOpen: state.desktop.fileExplorerOpen,
-  };
+  return { isAgentListOpen: state.desktop.agentListOpen };
 }
 
 export function selectIsAgentListOpen(state: PanelCoreState, input: PanelLayoutInput): boolean {
   return selectPanelVisibility(state, input).isAgentListOpen;
-}
-
-export function selectIsFileExplorerOpen(state: PanelCoreState, input: PanelLayoutInput): boolean {
-  return selectPanelVisibility(state, input).isFileExplorerOpen;
 }
 
 export function setMobilePanelTarget(
@@ -107,102 +64,7 @@ export function setMobilePanelTarget(
   return { target, revision: selection.revision + 1 };
 }
 
-function resolveExplorerTabFromCheckout(
-  state: PanelCoreState,
-  checkout: ExplorerCheckoutContext,
-): ExplorerTab {
-  return resolveExplorerTabForCheckout({
-    serverId: checkout.serverId,
-    cwd: checkout.cwd,
-    isGit: checkout.isGit,
-    explorerTabByCheckout: state.explorerTabByCheckout,
-  });
-}
-
-export interface OpenFileExplorerPatch {
-  mobilePanel?: MobilePanelSelection;
-  desktop?: DesktopSidebarState;
-  explorerTab: ExplorerTab;
-}
-
-export function buildOpenFileExplorerPatch(
-  state: PanelCoreState,
-  input: ExplorerPanelIntent,
-): OpenFileExplorerPatch {
-  const resolvedTab = resolveExplorerTabFromCheckout(state, input.checkout);
-  if (input.isCompact) {
-    return {
-      mobilePanel: setMobilePanelTarget(state.mobilePanel, "file-explorer"),
-      explorerTab: resolvedTab,
-    };
-  }
-  return {
-    desktop: { ...state.desktop, fileExplorerOpen: true },
-    explorerTab: resolvedTab,
-  };
-}
-
-export type ToggleFileExplorerPatch =
-  | OpenFileExplorerPatch
-  | { mobilePanel: MobilePanelSelection }
-  | { desktop: DesktopSidebarState };
-
-export function buildToggleFileExplorerPatch(
-  state: PanelCoreState,
-  input: ExplorerPanelIntent,
-): ToggleFileExplorerPatch {
-  const isOpen = selectIsFileExplorerOpen(state, input);
-  if (!isOpen) {
-    return buildOpenFileExplorerPatch(state, input);
-  }
-  if (input.isCompact) {
-    return { mobilePanel: setMobilePanelTarget(state.mobilePanel, "agent") };
-  }
-  return { desktop: { ...state.desktop, fileExplorerOpen: false } };
-}
-
 type MigratablePanelState = Record<string, unknown>;
-
-function migratePanelV2Explorer(state: MigratablePanelState, isWeb: boolean): void {
-  if (isWeb && typeof state.explorerWidth === "number" && state.explorerWidth === 400) {
-    state.explorerWidth = DEFAULT_EXPLORER_SIDEBAR_WIDTH;
-  }
-  if (typeof state.explorerFilesSplitRatio !== "number") {
-    state.explorerFilesSplitRatio = DEFAULT_EXPLORER_FILES_SPLIT_RATIO;
-  } else {
-    state.explorerFilesSplitRatio = clampExplorerFilesSplitRatio(state.explorerFilesSplitRatio);
-  }
-}
-
-function migratePanelV3Explorer(state: MigratablePanelState, isWeb: boolean): void {
-  if (
-    isWeb &&
-    typeof state.explorerWidth === "number" &&
-    (state.explorerWidth === 400 || state.explorerWidth === 520)
-  ) {
-    state.explorerWidth = DEFAULT_EXPLORER_SIDEBAR_WIDTH;
-  }
-}
-
-function migratePanelExplorerTabByCheckout(state: MigratablePanelState, version: number): void {
-  if (
-    version < 4 ||
-    typeof state.explorerTabByCheckout !== "object" ||
-    !state.explorerTabByCheckout
-  ) {
-    state.explorerTabByCheckout = {};
-    return;
-  }
-  const entries = Object.entries(state.explorerTabByCheckout as Record<string, unknown>);
-  const next: Record<string, ExplorerTab> = {};
-  for (const [key, value] of entries) {
-    if (!isExplorerTab(value)) {
-      continue;
-    }
-    next[key] = value;
-  }
-  state.explorerTabByCheckout = next;
-}
 
 function migratePanelDesktopFocusMode(state: MigratablePanelState): void {
   const desktop = state.desktop as Record<string, unknown> | undefined;
@@ -222,24 +84,22 @@ function migratePanelDesktopFocusMode(state: MigratablePanelState): void {
   }
 }
 
-export function migratePanelState(
-  persistedState: unknown,
-  version: number,
-  options: { isWeb: boolean },
-): MigratablePanelState {
-  const state = (persistedState ?? {}) as MigratablePanelState;
-  const { isWeb } = options;
+// The Explorer sidebar became side panel tabs owned by the workspace layout
+// store, so its open state, active tab, width and inner split no longer exist.
+function migratePanelV13SidePanel(state: MigratablePanelState): void {
+  delete state.explorerTab;
+  delete state.explorerTabByCheckout;
+  delete state.explorerWidth;
+  delete state.explorerFilesSplitRatio;
+  const desktop = state.desktop as Record<string, unknown> | undefined;
+  if (desktop) {
+    delete desktop.fileExplorerOpen;
+  }
+}
 
-  if (version < 2) {
-    migratePanelV2Explorer(state, isWeb);
-  }
-  if (version < 3) {
-    migratePanelV3Explorer(state, isWeb);
-  }
-  if (!isExplorerTab(state.explorerTab)) {
-    state.explorerTab = "changes";
-  }
-  migratePanelExplorerTabByCheckout(state, version);
+export function migratePanelState(persistedState: unknown, version: number): MigratablePanelState {
+  const state = (persistedState ?? {}) as MigratablePanelState;
+
   if (version < 8) {
     migratePanelDesktopFocusMode(state);
   }
@@ -276,9 +136,9 @@ export function migratePanelState(
     delete state.mobileView;
     delete state.mobilePanel;
   }
+  if (version < 13) {
+    migratePanelV13SidePanel(state);
+  }
 
   return state;
 }
-
-export { buildExplorerCheckoutKey, resolveExplorerTabForCheckout };
-export type { ExplorerTab, ExplorerCheckoutContext };

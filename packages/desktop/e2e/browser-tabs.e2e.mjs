@@ -673,16 +673,6 @@ async function runRegression({ page, client, serverId, targetUrl, callerAgentId 
     responsiveViewport,
   );
 
-  await originalDeck.getByRole("button", { name: "Annotate element" }).click();
-  await page.waitForTimeout(250);
-  const selectorResult = await callBrowserTool(client, "browser_evaluate", {
-    browserId,
-    function: "() => Boolean(globalThis.__paseoSelector)",
-  });
-  if (JSON.parse(selectorResult.resultJson) !== true) {
-    failures.push("reused loaded browser remains ready for element annotation after remount");
-  }
-
   if (failures.length > 0) {
     throw new Error(`Browser viewport regressions:\n- ${failures.join("\n- ")}`);
   }
@@ -796,10 +786,11 @@ async function main() {
       serverId: status.serverId,
       targetUrl: target.url,
       callerAgentId,
+      artifactDir,
     });
     writeJson(path.join(artifactDir, "result.json"), report);
     console.log(
-      `Browser desktop browser E2E passed: WebContents ${report.originalWebContentsId} remained ${report.finalWebContentsId}; viewport, inactive capture, focus continuity, list, snapshot, click passed.`,
+      `Browser desktop browser E2E passed: WebContents ${report.originalWebContentsId} remained ${report.finalWebContentsId}; viewport, inactive capture, focus continuity, list, snapshot, click, local-page selectors passed.`,
     );
   } catch (error) {
     console.error(`Browser desktop browser E2E failed. Artifacts: ${artifactDir}`);

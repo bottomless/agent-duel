@@ -8,6 +8,7 @@ interface MarkdownLinkTextProps {
   dataSet?: Record<string, string>;
   onPress(): void;
   onHoverIn?(): void;
+  onContextMenu?: (event: unknown) => void;
   children?: ReactNode;
 }
 
@@ -16,6 +17,7 @@ export function MarkdownLinkText({
   dataSet,
   onPress,
   onHoverIn,
+  onContextMenu,
   children,
 }: MarkdownLinkTextProps) {
   const [hovered, setHovered] = useState(false);
@@ -32,6 +34,8 @@ export function MarkdownLinkText({
       onPress={onPress}
       onHoverIn={handleHoverIn}
       onHoverOut={handleHoverOut}
+      // @ts-ignore - onContextMenu is web-only and not in RN types.
+      onContextMenu={onContextMenu}
     >
       <Text dataSet={dataSet} style={textStyle}>
         {children}

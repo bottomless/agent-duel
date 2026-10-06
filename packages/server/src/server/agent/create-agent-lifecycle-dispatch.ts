@@ -62,6 +62,7 @@ export class CreateAgentLifecycleDispatch {
     target: CreateAgentWorktreeTarget | undefined;
     firstAgentContext: FirstAgentContext;
     hasLegacyGitOptions: boolean;
+    pendingFork?: boolean;
   }): Promise<CreatePaseoWorktreeWorkflowResult | null> {
     if (input.target && input.hasLegacyGitOptions) {
       throw new Error("create_agent_request worktree cannot be combined with git options");
@@ -70,7 +71,12 @@ export class CreateAgentLifecycleDispatch {
       return null;
     }
 
-    return this.createWorktreeForTarget(input.cwd, input.target, input.firstAgentContext);
+    return this.createWorktreeForTarget(
+      input.cwd,
+      input.target,
+      input.firstAgentContext,
+      input.pendingFork,
+    );
   }
 
   registerAutoArchiveIfRequested(input: {
@@ -115,9 +121,11 @@ export class CreateAgentLifecycleDispatch {
     cwd: string,
     target: CreateAgentWorktreeTarget,
     firstAgentContext: FirstAgentContext,
+    pendingFork?: boolean,
   ): Promise<CreatePaseoWorktreeWorkflowResult> {
     const baseInput = {
       cwd,
+      pendingFork,
       firstAgentContext,
       runSetup: false,
       paseoHome: this.dependencies.paseoHome,
@@ -129,7 +137,8 @@ export class CreateAgentLifecycleDispatch {
         return this.dependencies.createPaseoWorktreeWorkflow(
           {
             ...baseInput,
-            worktreeSlug: target.newBranch,
+            branchName: target.newBranch,
+            ...(target.workspaceTitle ? { title: target.workspaceTitle } : {}),
             action: "branch-off",
             ...(target.base ? { refName: target.base } : {}),
           },

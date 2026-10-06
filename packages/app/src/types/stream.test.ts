@@ -197,7 +197,7 @@ function todoTimeline(
     id?: string;
     text: string;
     completed: boolean;
-    status?: "pending" | "in_progress" | "completed";
+    status?: "pending" | "in_progress" | "completed" | "cancelled";
     activeForm?: string;
   }>,
   provider: AgentProvider = "codex",
@@ -1020,6 +1020,45 @@ describe("stream reducer canonical tool calls", () => {
       { type: "completed", task: "Inspect provider" },
       { type: "started", task: "Ship fix" },
       { type: "completed", task: "Ship fix" },
+    ]);
+  });
+
+  it("shows cancelled task changes in the chat", () => {
+    const state = hydrateStreamState([
+      {
+        event: todoTimeline(
+          [
+            { text: "Pending task", completed: false, status: "pending" },
+            { text: "Active task", completed: false, status: "in_progress" },
+            { text: "Completed task", completed: true, status: "completed" },
+          ],
+          "opencode",
+        ),
+        timestamp: new Date("2025-01-01T10:50:00Z"),
+      },
+      {
+        event: todoTimeline(
+          [
+            { text: "Pending task", completed: false, status: "cancelled" },
+            { text: "Active task", completed: false, status: "cancelled" },
+            { text: "Completed task", completed: false, status: "cancelled" },
+          ],
+          "opencode",
+        ),
+        timestamp: new Date("2025-01-01T10:50:01Z"),
+      },
+    ]);
+    const cards = state.filter((item) => item.kind === "todo_list");
+    expect(cards.map((item) => item.activity)).toEqual([
+      { type: "created", count: 3 },
+      { type: "cancelled", task: "Pending task" },
+      { type: "cancelled", task: "Active task" },
+      { type: "cancelled", task: "Completed task" },
+    ]);
+    expect(cards.at(-1)?.items).toEqual([
+      { text: "Pending task", completed: false, status: "cancelled" },
+      { text: "Active task", completed: false, status: "cancelled" },
+      { text: "Completed task", completed: false, status: "cancelled" },
     ]);
   });
 
@@ -1882,6 +1921,92 @@ describe("turn lifecycle events", () => {
     assert.deepStrictEqual(
       userMessages.map((item) => item.id),
       ["native-1", "native-2"],
+    );
+  });
+});
+
+describe("replayed user message attachments", () => {
+  it("shows a replayed message's images and a battle's attachment labels", () => {
+    const event: AgentStreamEventPayload = {
+      type: "timeline",
+      provider: "opencode",
+      item: {
+        type: "user_message",
+        text: "Match this design",
+        messageId: "msg_user",
+        images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }],
+        labeledAttachments: [
+          { label: "Review comment", kind: "text" },
+          { label: "secret.txt", kind: "file" },
+          { label: "Makefile", kind: "file" },
+          { label: "notes.md" },
+        ],
+      },
+    };
+
+    const state = reduceStreamUpdate([], event, new Date("2026-09-30T10:00:00Z"));
+    const message = state.find((item) => item.kind === "user_message");
+
+    expect(message).toMatchObject({
+      text: "Match this design",
+      images: [
+        {
+          id: "msg_user:image:0",
+          mimeType: "image/png",
+          storageType: "inline",
+          storageKey: "data:image/png;base64,iVBORw0KGgo=",
+        },
+      ],
+      attachments: [
+        { type: "text", title: "Review comment", text: "" },
+        { type: "uploaded_file", fileName: "secret.txt" },
+        { type: "uploaded_file", fileName: "Makefile" },
+        // Recorded without its kind: taken as a file by its extension.
+        { type: "uploaded_file", fileName: "notes.md" },
+      ],
+    });
+  });
+
+  it("keeps a replayed message that is only an image", () => {
+    const event: AgentStreamEventPayload = {
+      type: "timeline",
+      provider: "opencode",
+      item: {
+        type: "user_message",
+        text: "",
+        messageId: "msg_image",
+        images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }],
+      },
+    };
+
+    const state = reduceStreamUpdate([], event, new Date("2026-09-30T10:00:00Z"));
+
+    expect(state.filter((item) => item.kind === "user_message")).toHaveLength(1);
+  });
+
+  it("fills in the images a local copy of the message never had", () => {
+    const local = createUserMessage({
+      id: "msg_user",
+      messageId: "msg_user",
+      text: "Match this design",
+      timestamp: new Date("2026-09-30T10:00:00Z"),
+    });
+    const event: AgentStreamEventPayload = {
+      type: "timeline",
+      provider: "opencode",
+      item: {
+        type: "user_message",
+        text: "Match this design",
+        messageId: "msg_user",
+        images: [{ mimeType: "image/png", data: "iVBORw0KGgo=" }],
+      },
+    };
+
+    const state = reduceStreamUpdate([local], event, new Date("2026-09-30T10:00:01Z"));
+    const message = state.find((item) => item.kind === "user_message");
+
+    expect(message?.kind === "user_message" ? message.images?.[0]?.storageType : undefined).toBe(
+      "inline",
     );
   });
 });

@@ -1,5 +1,9 @@
 # Contributing
 
+> Retained upstream Paseo reference. Native, packaging, and contribution details
+> here do not define Agent Duel requirements. See the
+> [Agent Duel documentation index](../../docs/README.md).
+
 Welcome to the Speechmatics Expo Two Way Audio Module! We're open to contributions from anyone. We hope you can find everything you need in here to get started contributing to this repo.
 
 ## Table of Contents

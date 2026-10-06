@@ -50,11 +50,6 @@
       "entry": ["src/index.ts", "src/e2ee.ts", "src/cloudflare-adapter.ts", "src/**/*.test.ts"],
       "project": ["src/**/*.ts"]
     },
-    "packages/website": {
-      "entry": ["src/router.tsx", "vite.config.ts", "src/routes/**/*.tsx"],
-      "project": ["src/**/*.{ts,tsx}"],
-      "ignore": ["src/routeTree.gen.ts"]
-    },
     "packages/desktop": {
       "entry": ["src/main.ts", "src/preload.ts", "src/**/*.test.ts"],
       "project": ["src/**/*.ts"]
@@ -72,7 +67,6 @@
     "sherpa-onnx-node",
     "@playwright/test",
     "material-icon-theme",
-    "eas-cli",
     "wait-on",
     "concurrently",
     "get-port-cli",
@@ -82,15 +76,5 @@
     "buffer",
     "metro-config"
   ],
-  "ignoreBinaries": [
-    "expo-module",
-    "xed",
-    "eas",
-    "playwright",
-    "wrangler",
-    "powershell",
-    "tsx",
-    "vitest",
-    "open"
-  ]
+  "ignoreBinaries": ["expo-module", "playwright", "wrangler", "powershell", "tsx", "vitest", "open"]
 }

@@ -18,6 +18,7 @@ import {
   TextInput,
   View,
   type NativeSyntheticEvent,
+  type PressableProps,
   type PressableStateCallbackType,
   type StyleProp,
   type TextInputKeyPressEventData,
@@ -28,6 +29,7 @@ import { useIsCompactFormFactor, WORKSPACE_SECONDARY_HEADER_HEIGHT } from "@/con
 import { isWeb } from "@/constants/platform";
 import * as Clipboard from "expo-clipboard";
 import { ChevronDown, Eye, EyeOff, FilePlus, FolderPlus, RotateCw } from "lucide-react-native";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MaterialFileIcon } from "@/components/material-file-icon";
 import {
   TreeChevron,
@@ -409,6 +411,8 @@ interface FileExplorerPaneProps {
   workspaceRoot: string;
   onOpenFile?: (filePath: string) => void;
   onAddToChat?: (path: string) => void;
+  /** Browsing a tree that belongs to something else: no create, rename, or delete. */
+  readOnly?: boolean;
 }
 
 export function FileExplorerPane({
@@ -417,6 +421,7 @@ export function FileExplorerPane({
   workspaceRoot,
   onOpenFile,
   onAddToChat,
+  readOnly = false,
 }: FileExplorerPaneProps) {
   const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
@@ -456,13 +461,15 @@ export function FileExplorerPane({
   });
   const fileManagerTarget = desktopOpenTargets.find((target) => target.kind === "file-manager");
   // COMPAT(fsEntryOps): added in v0.3.0, remove gate after 2027-02-08.
-  const fsEntryOpsEnabled = useSessionStore(
+  const fsEntryOpsSupported = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.fsEntryOps === true,
   );
   // COMPAT(fsEntryDuplicate): added in v0.3.0, remove gate after 2027-02-09.
-  const fsEntryDuplicateEnabled = useSessionStore(
+  const fsEntryDuplicateSupported = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.fsEntryDuplicate === true,
   );
+  const fsEntryOpsEnabled = fsEntryOpsSupported && !readOnly;
+  const fsEntryDuplicateEnabled = fsEntryDuplicateSupported && !readOnly;
   const [pendingEdit, setPendingEdit] = useState<ExplorerPendingEdit | null>(null);
   const downloadFile = useFileDownload({
     serverId,
@@ -1234,34 +1241,31 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
         <View style={styles.headerActions}>
           {onNewEntryAtRoot ? (
             <>
-              <Pressable
+              <FilesHeaderButton
                 onPress={handleNewFileAtRoot}
                 hitSlop={8}
                 style={iconButtonStyleProp}
-                accessibilityRole="button"
-                accessibilityLabel={t("workspace.fileActions.newFile")}
+                label={t("workspace.fileActions.newFile")}
                 testID="files-new-file"
               >
                 <FilePlus size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
-              </Pressable>
-              <Pressable
+              </FilesHeaderButton>
+              <FilesHeaderButton
                 onPress={handleNewFolderAtRoot}
                 hitSlop={8}
                 style={iconButtonStyleProp}
-                accessibilityRole="button"
-                accessibilityLabel={t("workspace.fileActions.newFolder")}
+                label={t("workspace.fileActions.newFolder")}
                 testID="files-new-folder"
               >
                 <FolderPlus size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
-              </Pressable>
+              </FilesHeaderButton>
             </>
           ) : null}
-          <Pressable
+          <FilesHeaderButton
             onPress={handleToggleHiddenFiles}
             hitSlop={8}
             style={hiddenFilesToggleStyle}
-            accessibilityRole="button"
-            accessibilityLabel={hiddenFilesToggleAccessibilityLabel}
+            label={hiddenFilesToggleAccessibilityLabel}
             accessibilityState={hiddenFilesToggleAccessibilityState}
             testID="files-hidden-toggle"
           >
@@ -1270,14 +1274,13 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
             ) : (
               <EyeOff size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
             )}
-          </Pressable>
-          <Pressable
+          </FilesHeaderButton>
+          <FilesHeaderButton
             onPress={handleRefresh}
             disabled={isRefreshFetching}
             hitSlop={8}
             style={iconButtonStyleProp}
-            accessibilityRole="button"
-            accessibilityLabel={
+            label={
               isRefreshFetching
                 ? t("workspace.fileExplorer.actions.refreshing")
                 : t("workspace.fileExplorer.actions.refresh")
@@ -1291,7 +1294,7 @@ function FileExplorerPaneContent(props: FileExplorerPaneContentProps) {
                 <RotateCw size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
               )}
             </View>
-          </Pressable>
+          </FilesHeaderButton>
         </View>
       </View>
       <ContextMenu>
@@ -1616,7 +1619,34 @@ function getErrorRecoveryPath(state: AgentFileExplorerState | undefined): string
   return candidate;
 }
 
+/** An icon button in the Files header, with the tooltip the Changes header gives its icons. */
+function FilesHeaderButton({
+  label,
+  children,
+  ...pressableProps
+}: Omit<PressableProps, "children" | "accessibilityLabel" | "accessibilityRole"> & {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip delayDuration={300}>
+      <TooltipTrigger asChild>
+        <Pressable accessibilityRole="button" accessibilityLabel={label} {...pressableProps}>
+          {children}
+        </Pressable>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        <Text style={styles.tooltipText}>{label}</Text>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 const styles = StyleSheet.create((theme) => ({
+  tooltipText: {
+    fontSize: theme.fontSize.xs,
+    color: theme.colors.foreground,
+  },
   container: {
     flex: 1,
     backgroundColor: theme.colors.surfaceSidebar,

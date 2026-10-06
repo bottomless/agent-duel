@@ -2,12 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Text, TextInput, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import {
-  AdaptiveModalSheet,
-  AdaptiveTextInput,
-  type SheetHeader,
-} from "@/components/adaptive-modal-sheet";
+import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
+import { type FieldControlSize } from "@/components/ui/control-geometry";
+import { FormTextInput } from "@/components/ui/form-field";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 
 export interface AdaptiveRenameModalProps {
@@ -36,6 +35,7 @@ export function AdaptiveRenameModal({
   testID,
 }: AdaptiveRenameModalProps) {
   const { t } = useTranslation();
+  const controlSize: FieldControlSize = useIsCompactFormFactor() ? "md" : "sm";
   const [draft, setDraft] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
@@ -72,10 +72,15 @@ export function AdaptiveRenameModal({
     [validate, t],
   );
 
-  const handleChange = useCallback((value: string) => {
-    setDraft(value);
-    setError(null);
-  }, []);
+  const handleChange = useCallback(
+    (value: string) => {
+      setDraft(value);
+      // A supplied validator states its rule as you type, so a disabled submit always has a
+      // reason under the field. An empty draft says nothing: nothing has been typed yet.
+      setError(value.trim() ? (validate?.(value) ?? null) : null);
+    },
+    [validate],
+  );
 
   const handleSubmit = useCallback(async () => {
     if (isPending) return;
@@ -123,7 +128,7 @@ export function AdaptiveRenameModal({
       testID={testID}
     >
       <View style={styles.body}>
-        <AdaptiveTextInput
+        <FormTextInput
           ref={inputRef}
           initialValue={initialValue}
           onChangeText={handleChange}
@@ -133,7 +138,7 @@ export function AdaptiveRenameModal({
           editable={!isPending}
           maxLength={maxLength}
           onSubmitEditing={handleSubmitVoid}
-          style={styles.input}
+          size={controlSize}
           testID={inputTestID}
         />
         {error ? (
@@ -172,16 +177,6 @@ const styles = StyleSheet.create((theme) => ({
   body: {
     gap: theme.spacing[3],
     paddingBottom: theme.spacing[2],
-  },
-  input: {
-    backgroundColor: theme.colors.surface0,
-    color: theme.colors.foreground,
-    paddingVertical: theme.spacing[3],
-    paddingHorizontal: theme.spacing[3],
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    fontSize: theme.fontSize.base,
   },
   errorText: {
     color: theme.colors.palette.red[300],

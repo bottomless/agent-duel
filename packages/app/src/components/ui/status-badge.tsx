@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { View, Text } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { tint } from "@/styles/tint";
 
 type StatusBadgeVariant = "success" | "error" | "muted";
 
@@ -46,14 +47,14 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: 3,
   },
   // Tinted from the one status token rather than a palette step, so the pill tracks the
-  // theme. `1a`/`33` are the 10%/20% alpha suffixes the identity table uses.
+  // theme: 10% fill, 20% border (docs/design.md §13).
   pillSuccess: {
-    backgroundColor: `${theme.colors.statusSuccess}1a`,
-    borderColor: `${theme.colors.statusSuccess}33`,
+    backgroundColor: tint(theme.colors.statusSuccess, 10),
+    borderColor: tint(theme.colors.statusSuccess, 20),
   },
   pillError: {
-    backgroundColor: `${theme.colors.statusDanger}1a`,
-    borderColor: `${theme.colors.statusDanger}33`,
+    backgroundColor: tint(theme.colors.statusDanger, 10),
+    borderColor: tint(theme.colors.statusDanger, 20),
   },
   pillText: {
     fontSize: theme.fontSize.xs,

@@ -4,7 +4,6 @@ import type { TerminalManager } from "../terminal/terminal-manager.js";
 import type { TerminalSession } from "../terminal/terminal.js";
 import {
   getScriptConfigs,
-  getWorktreeTerminalSpecs,
   isServiceScript,
   paseoConfigParseError,
   processCarriageReturns,
@@ -386,66 +385,6 @@ function buildSetupTimelineItem(input: {
   };
 }
 
-function buildTerminalTimelineItem(input: {
-  callId: string;
-  status: "running" | "completed" | "failed";
-  worktree: WorktreeConfig;
-  results: WorktreeBootstrapTerminalResult[];
-  errorMessage: string | null;
-}): AgentTimelineItem {
-  const detailInput = {
-    worktreePath: input.worktree.worktreePath,
-    branchName: input.worktree.branchName,
-  };
-  const detailOutput = {
-    worktreePath: input.worktree.worktreePath,
-    terminals: input.results,
-  };
-
-  if (input.status === "running") {
-    return {
-      type: "tool_call",
-      name: "paseo_worktree_terminals",
-      callId: input.callId,
-      status: "running",
-      detail: {
-        type: "unknown",
-        input: detailInput,
-        output: null,
-      },
-      error: null,
-    };
-  }
-
-  if (input.status === "completed") {
-    return {
-      type: "tool_call",
-      name: "paseo_worktree_terminals",
-      callId: input.callId,
-      status: "completed",
-      detail: {
-        type: "unknown",
-        input: detailInput,
-        output: detailOutput,
-      },
-      error: null,
-    };
-  }
-
-  return {
-    type: "tool_call",
-    name: "paseo_worktree_terminals",
-    callId: input.callId,
-    status: "failed",
-    detail: {
-      type: "unknown",
-      input: detailInput,
-      output: detailOutput,
-    },
-    error: { message: input.errorMessage ?? "Worktree terminal bootstrap failed" },
-  };
-}
-
 async function waitForTerminalBootstrapReadiness(
   terminal: Pick<TerminalSession, "getState" | "subscribe">,
 ): Promise<void> {
@@ -500,93 +439,6 @@ function terminalHasOutput(state: ReturnType<TerminalSession["getState"]>): bool
     }
   }
   return false;
-}
-
-async function runWorktreeTerminalBootstrap(
-  options: RunAsyncWorktreeBootstrapOptions,
-  runtimeEnv: WorktreeRuntimeEnv,
-): Promise<void> {
-  const workspaceCwd = options.workspaceCwd ?? options.worktree.worktreePath;
-  const terminalSpecs = getWorktreeTerminalSpecs(workspaceCwd);
-  if (terminalSpecs.length === 0) {
-    return;
-  }
-
-  const callId = uuidv4();
-  const started = await options.appendTimelineItem(
-    buildTerminalTimelineItem({
-      callId,
-      status: "running",
-      worktree: options.worktree,
-      results: [],
-      errorMessage: null,
-    }),
-  );
-  if (!started) {
-    return;
-  }
-
-  if (!options.terminalManager) {
-    await options.appendTimelineItem(
-      buildTerminalTimelineItem({
-        callId,
-        status: "failed",
-        worktree: options.worktree,
-        results: [],
-        errorMessage: "Terminal manager not available",
-      }),
-    );
-    return;
-  }
-
-  const terminalManager = options.terminalManager;
-  const results = await Promise.all(
-    terminalSpecs.map(async (spec): Promise<WorktreeBootstrapTerminalResult> => {
-      try {
-        const terminal = await terminalManager.createTerminal({
-          cwd: workspaceCwd,
-          name: spec.name,
-          env: runtimeEnv,
-          workspaceId: options.workspaceId,
-        });
-        await waitForTerminalBootstrapReadiness(terminal);
-        terminal.send({
-          type: "input",
-          data: `${spec.command}\r`,
-        });
-        return {
-          name: terminal.name ?? spec.name ?? null,
-          command: spec.command,
-          status: "started",
-          terminalId: terminal.id,
-          error: null,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        options.logger?.warn(
-          { agentId: options.agentId, command: spec.command, err: error },
-          "Failed to bootstrap worktree terminal",
-        );
-        return {
-          name: spec.name ?? null,
-          command: spec.command,
-          status: "failed",
-          terminalId: null,
-          error: message,
-        };
-      }
-    }),
-  );
-
-  await options.appendTimelineItem(
-    buildTerminalTimelineItem({
-      callId,
-      status: "completed",
-      worktree: options.worktree,
-      results,
-      errorMessage: null,
-    }),
-  );
 }
 
 export async function runAsyncWorktreeBootstrap(
@@ -684,8 +536,6 @@ export async function runAsyncWorktreeBootstrap(
     );
     return;
   }
-
-  await runWorktreeTerminalBootstrap(options, runtimeEnv);
 }
 
 // ---------------------------------------------------------------------------
@@ -882,7 +732,7 @@ export async function spawnWorkspaceScript(
   if (!configResult.ok) {
     throw paseoConfigParseError(configResult);
   }
-  const scriptConfigs = getScriptConfigs(configResult.config);
+  const scriptConfigs = getScriptConfigs();
   const config = scriptConfigs.get(scriptName);
   if (!config) {
     throw new Error(`Script '${scriptName}' is not configured in paseo.json`);

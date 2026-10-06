@@ -387,6 +387,27 @@ describe("deriveAgentScreenViewState", () => {
     expect(result.memory.lastReadyAgent).toBeNull();
   });
 
+  it("paints a seeded battle instead of blocking on its new agent's history", () => {
+    const result = deriveAgentScreenViewState({
+      input: {
+        ...createBaseInput(),
+        agent: createAgentWithStatus({ id: "agent-1", status: "idle" }),
+        continuity: { kind: "seeded-battle" },
+        needsAuthoritativeSync: true,
+        isHistorySyncing: true,
+        visibilityCatchUpStatus: "pending",
+        hasHydratedHistoryBefore: false,
+      },
+      memory: createBaseMemory(),
+    });
+
+    const ready = expectReadyState(result.state);
+    expect(ready.source).toBe("authoritative");
+    // The agent is real by the time a battle is handed over, so its status stands as reported.
+    expect(ready.agent.status).toBe("idle");
+    expect(ready.sync).toEqual({ status: "catching_up", ui: "silent" });
+  });
+
   it("renders an archived agent before provider history is initialized", () => {
     const result = deriveAgentScreenViewState({
       input: {

@@ -6,7 +6,6 @@ import { BrowserPane } from "@/desktop/browser/pane";
 import { usePaneContext, usePaneFocus } from "@/panels/pane-context";
 import type { PanelDescriptor, PanelIconProps, PanelRegistration } from "@/panels/panel-registry";
 import { useBrowserStore } from "@/desktop/browser/store";
-import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 
 function getBrowserLabel(input: { title: string; url: string }): string {
   const title = input.title.trim();
@@ -55,16 +54,13 @@ function useBrowserPanelDescriptor(target: {
 }
 
 function BrowserPanel() {
-  const { serverId, workspaceId, target } = usePaneContext();
+  const { workspaceId, target } = usePaneContext();
   const { focusPane, isInteractive } = usePaneFocus();
-  const cwd = useWorkspaceDirectory(serverId, workspaceId);
   invariant(target.kind === "browser", "BrowserPanel requires browser target");
   return (
     <BrowserPane
       browserId={target.browserId}
-      serverId={serverId}
       workspaceId={workspaceId}
-      cwd={cwd}
       isInteractive={isInteractive}
       onFocusPane={focusPane}
     />

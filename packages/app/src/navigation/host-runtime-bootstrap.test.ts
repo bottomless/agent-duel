@@ -3,6 +3,7 @@ import {
   resolveStartupBlocker,
   resolveStartupNavigationReady,
   resolveHostIndexRoute,
+  resolveOpenProjectRoute,
   resolveStartupRoute,
   shouldRunStartupGiveUpTimer,
   startHostRuntimeBootstrap,
@@ -391,5 +392,34 @@ describe("resolveHostIndexRoute", () => {
         workspaceSelectionStatus: "unknown",
       }),
     ).toEqual("/open-project");
+  });
+});
+
+describe("resolveOpenProjectRoute", () => {
+  it("shows the add-project screen after project loading confirms there are no projects", () => {
+    expect(
+      resolveOpenProjectRoute({
+        hasProjects: false,
+        isLoadingProjects: false,
+      }),
+    ).toEqual({ kind: "render" });
+  });
+
+  it("keeps the loading surface up instead of flashing the add-project screen", () => {
+    expect(
+      resolveOpenProjectRoute({
+        hasProjects: false,
+        isLoadingProjects: true,
+      }),
+    ).toEqual({ kind: "splash" });
+  });
+
+  it("opens the composer as soon as any project is available", () => {
+    expect(
+      resolveOpenProjectRoute({
+        hasProjects: true,
+        isLoadingProjects: true,
+      }),
+    ).toEqual({ kind: "redirect", href: "/new" });
   });
 });

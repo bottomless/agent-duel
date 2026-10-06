@@ -19,6 +19,7 @@ import {
 import type { CreatePaseoWorktreeWorkflowResult } from "../../worktree-session.js";
 import {
   createWorkspaceProvisioningService,
+  WorkspaceBranchChangedError,
   WorkspaceProvisioningError,
   type WorkspaceProvisioningService,
 } from "./workspace-provisioning-service.js";
@@ -181,6 +182,49 @@ test("re-opening refreshes mutable checkout metadata without renaming the worksp
   expect((await projectRegistry.get(first.projectId))?.kind).toBe("git");
 });
 
+test("a delayed active refresh cannot revive an archived workspace", async () => {
+  const repo = path.join(tmpDir, "repo");
+  gitRoots.add(repo);
+  const created = await provisioning.findOrCreateWorkspaceForDirectory(repo);
+  const checkoutStarted = Promise.withResolvers<void>();
+  const checkoutRelease = Promise.withResolvers<void>();
+  const delayedProvisioning = createWorkspaceProvisioningService({
+    workspaceRegistry,
+    projectRegistry,
+    workspaceGitService: createNoopWorkspaceGitService({
+      peekSnapshot: () => null,
+      getCheckout: async (cwd: string) => {
+        checkoutStarted.resolve();
+        await checkoutRelease.promise;
+        return {
+          cwd,
+          isGit: true,
+          currentBranch: "feature/delayed-refresh",
+          remoteUrl: null,
+          worktreeRoot: repo,
+          isPaseoOwnedWorktree: false,
+          mainRepoRoot: null,
+        };
+      },
+    }),
+    logger,
+  });
+
+  const reopening = delayedProvisioning.findOrCreateWorkspaceForDirectory(repo);
+  await checkoutStarted.promise;
+  await workspaceRegistry.archive(created.workspaceId, ARCHIVED_AT);
+  checkoutRelease.resolve();
+
+  const refreshed = await reopening;
+
+  expect(refreshed).toMatchObject({
+    workspaceId: created.workspaceId,
+    branch: "feature/delayed-refresh",
+    archivedAt: ARCHIVED_AT,
+  });
+  expect(await workspaceRegistry.get(created.workspaceId)).toEqual(refreshed);
+});
+
 test("persists manual worktree ownership separately from its workspace kind", async () => {
   const cwd = path.join(tmpDir, "manual-worktree");
   const mainRepoRoot = path.join(tmpDir, "main-repo");
@@ -220,6 +264,22 @@ test("re-opening an archived workspace by its exact path unarchives it and keeps
 
   expect(reopened.workspaceId).toBe(created.workspaceId);
   expect(reopened.archivedAt).toBeNull();
+});
+
+test("restoring an archived fork consumes its pending recovery marker", async () => {
+  const repo = path.join(tmpDir, "repo");
+  gitRoots.add(repo);
+  const created = await provisioning.createWorkspaceForDirectory(repo, "Failed fork", undefined, {
+    pendingFork: true,
+  });
+  await workspaceRegistry.archive(created.workspaceId, ARCHIVED_AT);
+  const archived = await workspaceRegistry.get(created.workspaceId);
+  expect(archived).toMatchObject({ archivedAt: ARCHIVED_AT, pendingFork: true });
+
+  const restored = await provisioning.ensureWorkspaceRecordUnarchived(archived!);
+
+  expect(restored).toMatchObject({ archivedAt: null, pendingFork: undefined });
+  expect(await workspaceRegistry.get(created.workspaceId)).toEqual(restored);
 });
 
 test("reopening archived exact-root records restores the fresh Git project", async () => {
@@ -292,6 +352,7 @@ test("uses one workspace snapshot when reopening an archived workspace", async (
     existsOnDisk: () => workspaceRegistry.existsOnDisk(),
     list: async () => (reads++ === 0 ? archived : []),
     get: (workspaceId) => workspaceRegistry.get(workspaceId),
+    update: (workspaceId, updater) => workspaceRegistry.update(workspaceId, updater),
     upsert: (workspace) => workspaceRegistry.upsert(workspace),
     archive: (workspaceId, archivedAt) => workspaceRegistry.archive(workspaceId, archivedAt),
     remove: (workspaceId) => workspaceRegistry.remove(workspaceId),
@@ -504,6 +565,33 @@ test("directory creation persists the live branch and a trimmed title", async ()
   gitRoots.add(repo);
   const workspace = await provisioning.createWorkspaceForDirectory(repo, "  Focused work  ");
   expect(workspace).toMatchObject({ branch: "main", title: "Focused work" });
+});
+
+test("directory creation rejects a checkout that moved off the expected branch", async () => {
+  const repo = path.join(tmpDir, "repo");
+  gitRoots.add(repo);
+  gitBranches.set(repo, "dev");
+
+  await expect(
+    provisioning.createWorkspaceForDirectory(repo, null, undefined, {
+      expectedBranch: "main",
+    }),
+  ).rejects.toMatchObject({
+    code: "branch_changed",
+  } satisfies Partial<WorkspaceBranchChangedError>);
+  expect(await workspaceRegistry.list()).toHaveLength(0);
+  expect(await projectRegistry.list()).toHaveLength(0);
+});
+
+test("directory creation accepts the checkout when its branch still matches", async () => {
+  const repo = path.join(tmpDir, "repo");
+  gitRoots.add(repo);
+
+  const workspace = await provisioning.createWorkspaceForDirectory(repo, null, undefined, {
+    expectedBranch: "main",
+  });
+
+  expect(workspace.branch).toBe("main");
 });
 
 test("createWorkspaceForDirectory honors an explicit active project without cwd containment", async () => {

@@ -24,6 +24,7 @@ import { createWorktree, getPaseoWorktreesRoot } from "../utils/worktree.js";
 import { isPlatform } from "../test-utils/platform.js";
 import { areEquivalentPaths, createRealpathAwarePathMatcher } from "../utils/path.js";
 import { deriveProjectKey } from "./project-key.js";
+import { listPendingForkWorktreeIntents } from "./pending-fork-worktree-intent.js";
 
 const cleanupPaths: string[] = [];
 
@@ -70,7 +71,7 @@ test("creates a worktree and registers it in the source workspace project withou
   expect(result.workspace.kind).toBe("worktree");
   expect(result.workspace.workspaceId).toMatch(/^wks_[0-9a-f]{16}$/);
   expect(result.workspace.projectId).toBe("remote:github.com/acme/repo");
-  expect(result.workspace.displayName).toBe("feature-one");
+  expect(result.workspace.displayName).toBe(result.worktree.branchName);
   expect(result.workspace.baseBranch).toBe("main");
   expect(result.workspace.title).toBe("Feature One");
   expect(deps.workspaceGitService.getSnapshot).not.toHaveBeenCalled();
@@ -312,6 +313,7 @@ test("removes a new worktree when workspace persistence fails", async () => {
         cwd: repoDir,
         projectId: "missing-project",
         worktreeSlug: "persistence-failure",
+        pendingFork: true,
         runSetup: false,
         paseoHome,
       },
@@ -319,12 +321,41 @@ test("removes a new worktree when workspace persistence fails", async () => {
     ),
   ).rejects.toThrow("Unknown project: missing-project");
 
+  expect(await listPendingForkWorktreeIntents(paseoHome)).toEqual([]);
+
   expect(existsSync(worktreePath)).toBe(false);
   expect(
     execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repoDir, stdio: "pipe" })
       .toString()
       .includes("persistence-failure"),
   ).toBe(false);
+});
+
+test("removes a fork worktree when setup fails before workspace persistence", async () => {
+  const { repoDir, tempDir } = createGitRepo();
+  cleanupPaths.push(tempDir);
+  const paseoHome = path.join(tempDir, ".paseo");
+  const worktreePath = path.join(await getPaseoWorktreesRoot(repoDir, paseoHome), "early-failure");
+  const deps = createDeps();
+  deps.seedIgnoredContent = async () => {
+    throw new Error("Seed failed");
+  };
+
+  await expect(
+    createPaseoWorktree(
+      {
+        cwd: repoDir,
+        worktreeSlug: "early-failure",
+        pendingFork: true,
+        runSetup: false,
+        paseoHome,
+      },
+      deps,
+    ),
+  ).rejects.toThrow("Seed failed");
+
+  expect(existsSync(worktreePath)).toBe(false);
+  expect(deps.workspaces.size).toBe(0);
 });
 
 test("maps a nested cwd from an existing Paseo worktree into the next worktree", async () => {
@@ -514,12 +545,13 @@ test("renames an eligible unnamed branch-off worktree once on first agent contex
     deps,
   );
 
-  expect(created.worktree.branchName).toBe("dazzling-yak");
+  const placeholderBranchName = created.worktree.branchName;
+  expect(placeholderBranchName).toMatch(/^[a-z0-9]+-[a-z0-9]+$/);
   expect(readPaseoWorktreeMetadata(created.worktree.worktreePath)).toMatchObject({
     version: 2,
     firstAgentBranchAutoName: {
       status: "pending",
-      placeholderBranchName: "dazzling-yak",
+      placeholderBranchName,
     },
   });
 
@@ -546,7 +578,7 @@ test("renames an eligible unnamed branch-off worktree once on first agent contex
     version: 2,
     firstAgentBranchAutoName: {
       status: "attempted",
-      placeholderBranchName: "dazzling-yak",
+      placeholderBranchName,
     },
   });
 
@@ -620,8 +652,8 @@ test("renames the branch even when the app supplies a random placeholder slug", 
     deps,
   );
 
-  expect(created.worktree.branchName).toBe("dazzling-yak");
-  expect(created.workspace.displayName).toBe("dazzling-yak");
+  expect(created.worktree.branchName).toMatch(/^[a-z0-9]+-[a-z0-9]+$/);
+  expect(created.workspace.displayName).toBe(created.worktree.branchName);
 
   await attemptFirstAgentBranchAutoName({
     cwd: created.worktree.worktreePath,
@@ -668,7 +700,7 @@ test("renames the branch from a github_pr attachment when no prompt is supplied"
     deps,
   );
 
-  expect(created.worktree.branchName).toBe("dazzling-yak");
+  expect(created.worktree.branchName).toMatch(/^[a-z0-9]+-[a-z0-9]+$/);
 
   await attemptFirstAgentBranchAutoName({
     cwd: created.worktree.worktreePath,
@@ -712,6 +744,7 @@ test("leaves the branch alone when generated branch text is invalid", async () =
     },
     createDeps(),
   );
+  const placeholderBranchName = created.worktree.branchName;
 
   await expect(
     attemptFirstAgentBranchAutoName({
@@ -728,14 +761,90 @@ test("leaves the branch alone when generated branch text is invalid", async () =
     })
       .toString()
       .trim(),
-  ).toBe("dazzling-yak");
+  ).toBe(placeholderBranchName);
   expect(readPaseoWorktreeMetadata(created.worktree.worktreePath)).toMatchObject({
     version: 2,
     firstAgentBranchAutoName: {
       status: "attempted",
-      placeholderBranchName: "dazzling-yak",
+      placeholderBranchName,
     },
   });
+});
+
+test("keeps a branch name the caller asked for when the first agent context lands", async () => {
+  const { repoDir, tempDir } = createGitRepo();
+  cleanupPaths.push(tempDir);
+
+  // What the picker's "Create new branch..." row sends in Worktree mode: an explicit
+  // branch-off with the name the user typed.
+  const created = await createPaseoWorktree(
+    {
+      cwd: repoDir,
+      worktreeSlug: "dazzling-yak",
+      action: "branch-off",
+      branchName: "qa/wt-branch",
+      runSetup: false,
+      paseoHome: path.join(tempDir, ".paseo"),
+    },
+    createDeps(),
+  );
+
+  expect(created.worktree.branchName).toBe("qa/wt-branch");
+  // Never marked pending, so nothing downstream can decide to rename it later.
+  expect(
+    readPaseoWorktreeMetadata(created.worktree.worktreePath)?.firstAgentBranchAutoName,
+  ).toBeUndefined();
+
+  await expect(
+    attemptFirstAgentBranchAutoName({
+      cwd: created.worktree.worktreePath,
+      firstAgentContext: { prompt: "Show current git branch and status" },
+      generateBranchNameFromContext: async () => "show-git-status",
+    }),
+  ).resolves.toEqual({ attempted: false, renamed: false, branchName: null });
+
+  expect(
+    execFileSync("git", ["branch", "--show-current"], {
+      cwd: created.worktree.worktreePath,
+      stdio: "pipe",
+    })
+      .toString()
+      .trim(),
+  ).toBe("qa/wt-branch");
+});
+
+test("renames the fallback slug when the requested branch name was already taken", async () => {
+  const { repoDir, tempDir } = createGitRepo();
+  cleanupPaths.push(tempDir);
+  execFileSync("git", ["branch", "qa/taken"], { cwd: repoDir, stdio: "pipe" });
+
+  // The requested name is unavailable, so the worktree lands on the generated slug instead.
+  // That slug is a placeholder like any other and stays eligible.
+  const created = await createPaseoWorktree(
+    {
+      cwd: repoDir,
+      worktreeSlug: "dazzling-yak",
+      action: "branch-off",
+      branchName: "qa/taken",
+      runSetup: false,
+      paseoHome: path.join(tempDir, ".paseo"),
+    },
+    createDeps(),
+  );
+  const placeholderBranchName = created.worktree.branchName;
+
+  expect(placeholderBranchName).toMatch(/^[a-z0-9]+-[a-z0-9]+$/);
+  expect(readPaseoWorktreeMetadata(created.worktree.worktreePath)).toMatchObject({
+    firstAgentBranchAutoName: { status: "pending", placeholderBranchName },
+  });
+
+  await expect(
+    attemptFirstAgentBranchAutoName({
+      cwd: created.worktree.worktreePath,
+      firstAgentContext: { prompt: "Name this from the prompt" },
+      generateBranchNameFromContext: async () => "named-from-prompt",
+    }),
+  ).resolves.toEqual({ attempted: true, renamed: true, branchName: "named-from-prompt" });
 });
 
 test("does not mark checkout branch worktrees as eligible for first-agent rename", async () => {

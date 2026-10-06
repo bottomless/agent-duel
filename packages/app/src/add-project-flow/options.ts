@@ -41,13 +41,14 @@ export function buildAddProjectMethods(host: AddProjectHost): AddProjectMethodOp
     label: "Search for directory",
     description: `Find a directory on ${host.label}`,
   });
-  if (host.canBrowse) {
-    options.push({
-      id: "browse",
-      label: "Browse",
-      description: "Choose or create a directory in Finder",
-    });
-  }
+  options.push({
+    id: "browse",
+    label: "Browse",
+    description: host.canBrowse
+      ? "Choose or create a directory in Finder"
+      : "Open Agent Arena in Electron to browse with Finder",
+    disabled: !host.canBrowse,
+  });
   options.push({
     id: "github",
     label: "Clone from GitHub",

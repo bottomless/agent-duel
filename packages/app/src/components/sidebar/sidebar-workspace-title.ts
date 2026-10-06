@@ -16,14 +16,13 @@ export function resolveSidebarWorkspaceAccessibilityLabel(input: {
   workspace: Pick<SidebarWorkspaceEntry, "name" | "currentBranch" | "statusBucket">;
   workspaceTitleSource: WorkspaceTitleSource;
   leadingProjectName?: string | null;
-  hostBadgeLabel?: string | null;
   pullRequestLabel?: string | null;
   serviceLabel?: string | null;
+  primaryLabel?: string | null;
 }): string {
   return [
     input.leadingProjectName,
-    resolveSidebarWorkspacePrimaryLabel(input),
-    input.hostBadgeLabel,
+    input.primaryLabel ?? resolveSidebarWorkspacePrimaryLabel(input),
     input.pullRequestLabel,
     input.serviceLabel,
     input.workspace.statusBucket === "done"

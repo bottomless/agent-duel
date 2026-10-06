@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,6 +29,51 @@ describe("desktop-settings", () => {
     directories.clear();
   });
 
+  it("defaults missing notification categories without changing a saved sound preference", async () => {
+    const userDataPath = await createTempUserDataDir();
+    directories.add(userDataPath);
+    await writeFile(
+      settingsFilePath(userDataPath),
+      JSON.stringify({ version: 1, settings: { notifications: { playSound: false } } }),
+    );
+    const store = createDesktopSettingsStore({ userDataPath });
+    expect((await store.get()).notifications).toEqual({
+      agentFinished: true,
+      battleReady: true,
+      playSound: false,
+    });
+    await store.patch({ notifications: { agentFinished: false } });
+    const reloaded = createDesktopSettingsStore({ userDataPath });
+    expect((await reloaded.get()).notifications).toEqual({
+      agentFinished: false,
+      battleReady: true,
+      playSound: false,
+    });
+    await reloaded.patch({ notifications: { battleReady: false } });
+    expect((await reloaded.get()).notifications).toEqual({
+      agentFinished: false,
+      battleReady: false,
+      playSound: false,
+    });
+  });
+
+  it("ignores invalid category values without overwriting other notification preferences", async () => {
+    const userDataPath = await createTempUserDataDir();
+    directories.add(userDataPath);
+    const store = createDesktopSettingsStore({ userDataPath });
+    await store.patch({
+      notifications: { agentFinished: false, battleReady: false, playSound: false },
+    });
+    await store.patch({
+      notifications: { agentFinished: "true", battleReady: null, playSound: true },
+    });
+    expect((await store.get()).notifications).toEqual({
+      agentFinished: false,
+      battleReady: false,
+      playSound: true,
+    });
+  });
+
   it("persists default settings for new users", async () => {
     const userDataPath = await createTempUserDataDir();
     directories.add(userDataPath);
@@ -41,6 +86,30 @@ describe("desktop-settings", () => {
 
     expect(settings).toEqual(DEFAULT_DESKTOP_SETTINGS);
     expect(persisted.settings).toEqual(DEFAULT_DESKTOP_SETTINGS);
+  });
+
+  it("preserves saved preferences when a patch cannot be written and allows retry", async () => {
+    const userDataPath = await createTempUserDataDir();
+    directories.add(userDataPath);
+    const store = createDesktopSettingsStore({ userDataPath });
+    const previous = await store.patch({ notifications: { playSound: false } });
+    const filePath = settingsFilePath(userDataPath);
+    const backupPath = `${filePath}.backup`;
+    await rename(filePath, backupPath);
+    await mkdir(filePath);
+
+    await expect(store.patch({ notifications: { agentFinished: false } })).rejects.toThrow();
+    expect(await store.get()).toEqual(previous);
+    await rm(filePath, { recursive: true });
+    await rename(backupPath, filePath);
+    expect(await createDesktopSettingsStore({ userDataPath }).get()).toEqual(previous);
+
+    await store.patch({ notifications: { battleReady: false } });
+    expect((await createDesktopSettingsStore({ userDataPath }).get()).notifications).toEqual({
+      agentFinished: true,
+      battleReady: false,
+      playSound: false,
+    });
   });
 
   it("handles concurrent first-launch reads without racing the settings write", async () => {
@@ -81,7 +150,7 @@ describe("desktop-settings", () => {
 
     expect(settings).toEqual({
       releaseChannel: "stable",
-      notifications: { playSound: true },
+      notifications: { agentFinished: true, battleReady: true, playSound: true },
       daemon: {
         manageBuiltInDaemon: true,
         keepRunningAfterQuit: false,
@@ -103,7 +172,7 @@ describe("desktop-settings", () => {
 
     expect(next).toEqual({
       releaseChannel: "beta",
-      notifications: { playSound: true },
+      notifications: { agentFinished: true, battleReady: true, playSound: true },
       daemon: {
         manageBuiltInDaemon: true,
         keepRunningAfterQuit: false,
@@ -270,7 +339,7 @@ describe("desktop-settings", () => {
 
     expect(migrated).toEqual({
       releaseChannel: "beta",
-      notifications: { playSound: true },
+      notifications: { agentFinished: true, battleReady: true, playSound: true },
       daemon: {
         manageBuiltInDaemon: false,
         keepRunningAfterQuit: false,

@@ -31,6 +31,8 @@ const DRAG_OVERLAY_STYLE: React.CSSProperties = {
 const TOP_RESIZER_STYLE: React.CSSProperties = {
   position: "absolute",
   top: 0,
+  // Without an explicit origin, header padding makes this full-width strip overflow.
+  left: 0,
   width: "100%",
   height: 4,
   // @ts-expect-error — WebkitAppRegion is not in CSSProperties

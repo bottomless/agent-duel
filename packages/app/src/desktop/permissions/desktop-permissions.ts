@@ -1,4 +1,8 @@
-import { type DesktopHostBridge, getDesktopHost } from "@/desktop/host";
+import {
+  type DesktopHostBridge,
+  type DesktopNotificationPermission,
+  getDesktopHost,
+} from "@/desktop/host";
 import { isNative, isWeb } from "@/constants/platform";
 import { i18n } from "@/i18n/i18next";
 
@@ -9,6 +13,7 @@ export type DesktopPermissionState =
   | "denied"
   | "prompt"
   | "not-granted"
+  | "system-managed"
   | "unavailable"
   | "unknown";
 
@@ -121,6 +126,38 @@ function mapNotificationPermissionString(permission: string): DesktopPermissionS
   });
 }
 
+function mapNativeNotificationPermission(
+  permission: DesktopNotificationPermission,
+): DesktopPermissionStatus {
+  switch (permission) {
+    case "authorized":
+      return status({
+        state: "granted",
+        detail: i18n.t("desktop.permissions.notifications.nativeAllowed"),
+      });
+    case "provisional":
+      return status({
+        state: "granted",
+        detail: i18n.t("desktop.permissions.notifications.nativeQuiet"),
+      });
+    case "denied":
+      return status({
+        state: "denied",
+        detail: i18n.t("desktop.permissions.notifications.nativeDenied"),
+      });
+    case "not-determined":
+      return status({
+        state: "prompt",
+        detail: i18n.t("desktop.permissions.notifications.nativePrompt"),
+      });
+    default:
+      return status({
+        state: "unknown",
+        detail: i18n.t("desktop.permissions.notifications.nativeUnknown"),
+      });
+  }
+}
+
 export function createDesktopPermissions(env: DesktopPermissionEnvironment): DesktopPermissions {
   function shouldShowDesktopPermissionSection(): boolean {
     return env.isWeb && env.getDesktopHost() !== null;
@@ -135,17 +172,36 @@ export function createDesktopPermissions(env: DesktopPermissionEnvironment): Des
     }
 
     const desktopHost = env.getDesktopHost();
-    if (desktopHost && typeof desktopHost.notification?.isSupported === "function") {
+    if (desktopHost) {
+      if (typeof desktopHost.notification?.isSupported !== "function") {
+        return status({
+          state: "unavailable",
+          detail: i18n.t("desktop.permissions.notifications.unsupported"),
+        });
+      }
       try {
         const supported = await desktopHost.notification.isSupported();
+        if (supported && desktopHost.platform === "darwin") {
+          const permission = await desktopHost.notification.getPermission?.();
+          return mapNativeNotificationPermission(permission ?? "unknown");
+        }
+        // Electron reports capability, not OS authorization. Chromium permission
+        // also cannot tell us whether the OS will display a native notification.
         return status({
-          state: supported ? "granted" : "unavailable",
+          state: supported ? "system-managed" : "unavailable",
           detail: supported
-            ? i18n.t("desktop.permissions.notifications.supported")
+            ? i18n.t("desktop.permissions.notifications.systemManaged")
             : i18n.t("desktop.permissions.notifications.unsupported"),
         });
       } catch {
-        // Fall through to web API check
+        return status({
+          state: "unknown",
+          detail: i18n.t(
+            desktopHost.platform === "darwin"
+              ? "desktop.permissions.notifications.nativeUnknown"
+              : "desktop.permissions.notifications.supportCheckFailed",
+          ),
+        });
       }
     }
 
@@ -239,6 +295,19 @@ export function createDesktopPermissions(env: DesktopPermissionEnvironment): Des
         state: "unavailable",
         detail: i18n.t("desktop.permissions.notifications.requestsWebOnly"),
       });
+    }
+
+    const desktopHost = env.getDesktopHost();
+    if (desktopHost) {
+      if (desktopHost.platform !== "darwin") return getNotificationPermissionStatus();
+      try {
+        const current = await getNotificationPermissionStatus();
+        if (current.state !== "prompt") return current;
+        const permission = await desktopHost.notification?.requestPermission?.();
+        return mapNativeNotificationPermission(permission ?? "unknown");
+      } catch {
+        return mapNativeNotificationPermission("unknown");
+      }
     }
 
     const NotificationConstructor = env.getNotification();

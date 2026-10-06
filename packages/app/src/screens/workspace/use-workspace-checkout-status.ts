@@ -53,5 +53,10 @@ export function useWorkspaceCheckoutStatus(input: UseWorkspaceCheckoutStatusInpu
     [checkoutQuery.data, checkoutQuery.isError, isCheckoutQueryEnabled],
   );
 
-  return { checkoutQuery, isCheckoutStatusLoading };
+  const isWorktree = Boolean(
+    checkoutQuery.data?.isGit &&
+    checkoutQuery.data.mainRepoRoot &&
+    checkoutQuery.data.mainRepoRoot !== checkoutQuery.data.repoRoot,
+  );
+  return { checkoutQuery, isCheckoutStatusLoading, isWorktree };
 }

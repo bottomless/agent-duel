@@ -275,6 +275,18 @@ async function handleRequest(message: TerminalWorkerRequest): Promise<void> {
       return;
     }
 
+    case "rehomeTerminal": {
+      // Go through the manager, not the session: it also re-files the terminal under the
+      // directory it now stands in, and the worker's own index answers cwd lookups.
+      await manager.rehomeTerminal({
+        id: message.terminalId,
+        cwd: message.cwd,
+        ...(message.bannerLabel === undefined ? {} : { bannerLabel: message.bannerLabel }),
+      });
+      sendToParent({ type: "response", requestId: message.requestId, ok: true });
+      return;
+    }
+
     case "killTerminalAndWait": {
       await manager.killTerminalAndWait(message.terminalId, message.options);
       clearTerminalSubscriptions(message.terminalId);
