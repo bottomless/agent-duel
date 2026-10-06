@@ -10,8 +10,8 @@ Agent Duel runs two blinded coding agents against one prompt in isolated local
 worktrees. You compare their results, choose A, B, or Tie, and continue from the
 selected result as ordinary chat history.
 
-Each contestant is a model drawn at random from a pool and run through the
-bundled engine. You only see which models they were after you vote.
+Each contestant is a model drawn at random [from a pool](#current-models) and run
+through the bundled engine. You only see which models they were after you vote.
 
 <p align="center">
   <img src="docs/images/battle.png" alt="A battle: two agents' results side by side, with Choose A, Tie and Choose B below">
@@ -21,6 +21,21 @@ The shipped product is the Electron desktop app. `packages/app` can run in a
 browser during development and automated QA, but there is no hosted browser
 product.
 
+## Download
+
+[Download for macOS (Apple silicon)](https://github.com/bottomless/agent-duel/releases)
+
+E-mail signup required for use. No cost for unlimited inference with frontier models.
+
+## Current models
+
+The hosted version draws from:
+
+- Claude Opus 5
+- Kimi K3
+- Qwen 3.8 Max
+- GPT-5.6 Sol
+
 ## Architecture
 
 Execution stays on your machine:
@@ -28,11 +43,16 @@ Execution stays on your machine:
 ```text
 Electron UI -> local daemon -> local Arena runtime -> local repositories and agents
                                        |
+                                       |-> Agent Duel cloud -> OpenRouter (official download)
                                        `-> OpenRouter (your key in a BYOK build)
 ```
 
 The UI WebSocket terminates at the local daemon. The packaged desktop
 application contains the daemon, renderer, and compiled Arena runtime.
+
+The official download uses Agent Duel's cloud service for sign-in, model
+assignments, and model calls. The cloud service is closed source and maintained
+outside this repository.
 
 Arena history is canonical on the desktop: SQLite records live under
 `$PASEO_HOME/arena/arena.sqlite` and artifact bytes under
@@ -41,19 +61,10 @@ Arena history is canonical on the desktop: SQLite records live under
 Read [docs/architecture.md](docs/architecture.md) for the complete system design
 and [docs/arena.md](docs/arena.md) for the battle.
 
-## Hosted version
-
-The [official macOS download](https://github.com/bottomless/agent-duel/releases)
-signs in to a hosted Agent Duel control plane that assigns the models and
-proxies model calls. That control plane is not open source and is not part of
-this repository. `npm run build:desktop` builds the same signed-in app. The
-development stack, and a build with `PASEO_BYOK_BUILD=1`, have no sign-in: they
-run battles on your own OpenRouter key, and their votes are not uploaded.
-
-The first release target is macOS. Windows and Linux code remains in the inherited
-desktop package but is not a release commitment for this version.
-
 ## Develop locally
+
+Local development requires no sign-in. Battles run on your own OpenRouter key,
+and votes are not uploaded.
 
 ### Requirements
 
@@ -86,6 +97,8 @@ battles run on that key.
 
 See [docs/development.md](docs/development.md) for worktrees, multiple instances,
 Playwright/Chrome testing, logs, and focused validation commands.
+To package the desktop app with hosted sign-in or your own OpenRouter key, see
+[the desktop build instructions](docs/deployment.md#build-the-macos-desktop-application).
 
 ## Repository map
 
