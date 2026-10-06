@@ -531,7 +531,7 @@ model names or slugs, until resolution. Changing a pool does not change assignme
 
 In hosted mode the control plane draws from its active model set.
 Development is the default and uses `defaultPool`: GLM 5.3 FlashX, Qwen 3.8 Max, and Grok 4.6. Production
-uses Claude Opus 5, Kimi K3, Qwen 3.8 Max, and GPT-5.6 Sol. Set `OPENCODE_ARENA_MODEL_SET=production`
+uses the [current hosted models](../README.md#current-models). Set `OPENCODE_ARENA_MODEL_SET=production`
 on the control plane to use it. The pool, its selection, and `arenaAssignmentSets` stay server-side; the local runtime never
 receives model slugs or stable aliases before reveal. A BYOK build always draws from `defaultPool`
 and keeps `arenaAssignmentSets` in its own SQLite store, so the mapping is on the user's machine
