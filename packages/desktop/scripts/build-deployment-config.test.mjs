@@ -17,16 +17,24 @@ describe("desktop deployment config", () => {
     });
   });
 
-  test("fails without a control plane unless the build is bring-your-own-key", () => {
-    expect(() => resolveDeploymentConfig({}, SHA)).toThrow(
-      "PASEO_CONTROL_PLANE_URL and PASEO_SESSION_PUBLIC_KEY are required",
-    );
+  test("signs in to the hosted control plane by default", () => {
+    const hosted = {
+      controlPlaneUrl: "https://agent-duel-cloud.vercel.app",
+      sessionPublicKey: expect.stringMatching(/^MCowBQYDK2VwAyEA/),
+      updatesEnabled: false,
+      arenaBuildSha: SHA,
+    };
+    expect(resolveDeploymentConfig({}, SHA)).toEqual(hosted);
+    expect(resolveDeploymentConfig({ PASEO_BYOK_BUILD: "0" }, SHA)).toEqual(hosted);
+  });
+
+  test("requires both values to override the hosted control plane", () => {
     expect(() =>
       resolveDeploymentConfig({ PASEO_CONTROL_PLANE_URL: HOSTED.PASEO_CONTROL_PLANE_URL }, SHA),
-    ).toThrow("PASEO_CONTROL_PLANE_URL and PASEO_SESSION_PUBLIC_KEY are required");
-    expect(() => resolveDeploymentConfig({ PASEO_BYOK_BUILD: "0" }, SHA)).toThrow(
-      "PASEO_CONTROL_PLANE_URL and PASEO_SESSION_PUBLIC_KEY are required",
-    );
+    ).toThrow("Set both PASEO_CONTROL_PLANE_URL and PASEO_SESSION_PUBLIC_KEY");
+    expect(() =>
+      resolveDeploymentConfig({ PASEO_SESSION_PUBLIC_KEY: HOSTED.PASEO_SESSION_PUBLIC_KEY }, SHA),
+    ).toThrow("Set both PASEO_CONTROL_PLANE_URL and PASEO_SESSION_PUBLIC_KEY");
   });
 
   test("writes no control plane for a bring-your-own-key build", () => {

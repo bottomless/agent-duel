@@ -12,6 +12,11 @@ function readFlag(env, name) {
   return value === "1";
 }
 
+// The hosted Agent Duel control plane. A release build signs in to it unless both values are
+// overridden. The public key only verifies sessions, so it is safe to publish.
+const DEFAULT_CONTROL_PLANE_URL = "https://agent-duel-cloud.vercel.app";
+const DEFAULT_SESSION_PUBLIC_KEY = "MCowBQYDK2VwAyEA761o9AYhsOdLYkE082hwxAbPEmsQvmaeZ/jWaWVce0Q=";
+
 function resolveControlPlane(env, { byok, updatesEnabled }) {
   const controlPlaneUrl = env.PASEO_CONTROL_PLANE_URL?.trim().replace(/\/$/, "");
   const sessionPublicKey = env.PASEO_SESSION_PUBLIC_KEY?.trim();
@@ -27,9 +32,16 @@ function resolveControlPlane(env, { byok, updatesEnabled }) {
     }
     return { controlPlaneUrl: null, sessionPublicKey: null };
   }
+  if (!controlPlaneUrl && !sessionPublicKey) {
+    return {
+      controlPlaneUrl: DEFAULT_CONTROL_PLANE_URL,
+      sessionPublicKey: DEFAULT_SESSION_PUBLIC_KEY,
+    };
+  }
+  // A URL paired with another control plane's key would reject every session, so override both.
   if (!controlPlaneUrl || !URL.canParse(controlPlaneUrl) || !sessionPublicKey) {
     throw new Error(
-      "PASEO_CONTROL_PLANE_URL and PASEO_SESSION_PUBLIC_KEY are required for a desktop release build; set PASEO_BYOK_BUILD=1 for a bring-your-own-key source build",
+      "Set both PASEO_CONTROL_PLANE_URL and PASEO_SESSION_PUBLIC_KEY to use another control plane, or neither for the hosted one; set PASEO_BYOK_BUILD=1 for a bring-your-own-key build",
     );
   }
   return { controlPlaneUrl, sessionPublicKey };

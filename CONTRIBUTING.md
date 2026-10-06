@@ -3,8 +3,8 @@
 Agent Duel is a desktop coding-agent battle interface forked from Paseo. The
 Electron application, local daemon, and local Arena runtime are the product. The
 browser renderer is a development and QA harness. The official download signs in
-to a hosted control plane that is not part of this repository; a source build
-runs battles on your own OpenRouter key.
+to a hosted control plane that is not part of this repository; the development
+stack runs battles on your own OpenRouter key.
 
 Read [docs/architecture.md](docs/architecture.md) before changing a runtime
 boundary and [docs/arena.md](docs/arena.md) before changing battle behavior.
@@ -78,8 +78,8 @@ which checks a person ran and which an agent ran.
 
 - Keep repositories, agents, Git worktrees, terminals, services, the daemon,
   and the UI WebSocket local.
-- Keep battles working in a source build, which has no sign-in and no control
-  plane.
+- Keep battles working in a BYOK build (the development stack, or
+  `PASEO_BYOK_BUILD=1`), which has no sign-in and no control plane.
 - Do not deploy `packages/app` as a browser product.
 - Keep provider credentials, including the OpenRouter key, out of contestant
   shell environments.

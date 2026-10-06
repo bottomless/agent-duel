@@ -25,18 +25,21 @@ The desktop application owns:
 
 ## Build the macOS desktop application
 
-Build with the hosted control plane's origin and public key:
+The build signs in to the hosted control plane, `https://agent-duel-cloud.vercel.app`, by default:
 
 ```bash
-PASEO_CONTROL_PLANE_URL=https://<control-plane-origin> \
-PASEO_SESSION_PUBLIC_KEY='<base64 SPKI public key>' \
 npm run build:desktop -- --publish never --mac --arm64
 ```
+
+To build against another control plane, set both `PASEO_CONTROL_PLANE_URL` and
+`PASEO_SESSION_PUBLIC_KEY`; the build refuses only one. The defaults live in
+`packages/desktop/scripts/build-deployment-config.mjs`, and every binary keeps the URL it was built
+with, so change them only together with a release.
 
 Builds leave `PASEO_DESKTOP_UPDATES_ENABLED` unset, which disables update checks. Set it to `1` only
 for an artifact you publish to the update feed configured in `packages/desktop/electron-builder.yml`.
 
-A source build without a control plane sets `PASEO_BYOK_BUILD=1` instead of the two control-plane
+A build without a control plane sets `PASEO_BYOK_BUILD=1` instead of the two control-plane
 values. The build writes neither into the deployment configuration and the packaged daemon starts
 without them, so the app has no sign-in and runs battles on the OpenRouter key saved in Settings.
 The build refuses the flag together with either control-plane value or with
@@ -63,8 +66,6 @@ To publish a release, attach the `.dmg` from `packages/desktop/release/` to a Gi
 
 SQLite and artifact migrations run on the desktop because the server cannot access device-local
 data. They must preserve existing history and be safe to resume after interruption.
-
-The build fails when either control-plane value is absent and `PASEO_BYOK_BUILD` is unset.
 
 ## Production smoke test
 

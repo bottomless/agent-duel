@@ -181,8 +181,8 @@ grace timer in the daemon.
 
 ## Configuration
 
-Hosted desktop release builds require these public values; a BYOK build leaves both unset (see
-[deployment](deployment.md)):
+Release builds embed these public values, which default to the hosted control plane; a BYOK build
+leaves both unset (see [deployment](deployment.md)):
 
 | Variable                   | Effect                                                      |
 | -------------------------- | ----------------------------------------------------------- |

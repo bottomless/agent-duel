@@ -28,7 +28,7 @@ Execution stays on your machine:
 ```text
 Electron UI -> local daemon -> local Arena runtime -> local repositories and agents
                                        |
-                                       `-> OpenRouter (your key in a source build)
+                                       `-> OpenRouter (your key in a BYOK build)
 ```
 
 The UI WebSocket terminates at the local daemon. The packaged desktop
@@ -46,8 +46,9 @@ and [docs/arena.md](docs/arena.md) for the battle.
 The [official macOS download](https://github.com/bottomless/agent-duel/releases)
 signs in to a hosted Agent Duel control plane that assigns the models and
 proxies model calls. That control plane is not open source and is not part of
-this repository. A build from this source has no sign-in: it runs battles on
-your own OpenRouter key, and its votes are not uploaded.
+this repository. `npm run build:desktop` builds the same signed-in app. The
+development stack, and a build with `PASEO_BYOK_BUILD=1`, have no sign-in: they
+run battles on your own OpenRouter key, and their votes are not uploaded.
 
 The first release target is macOS. Windows and Linux code remains in the inherited
 desktop package but is not a release commitment for this version.

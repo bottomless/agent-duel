@@ -10,11 +10,10 @@ Run the complete development stack from the repository root:
 npm run dev:desktop
 ```
 
-Build a production artifact only after deploying the control plane:
+Build a production artifact. It signs in to the hosted control plane by default; see
+[deployment](../../docs/deployment.md) to build against another one or without one:
 
 ```bash
-PASEO_CONTROL_PLANE_URL=https://<control-plane-origin> \
-PASEO_SESSION_PUBLIC_KEY='<base64 SPKI public key>' \
 npm run build:desktop -- --publish never --mac --arm64
 ```
 
