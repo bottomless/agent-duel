@@ -14,7 +14,7 @@ Each contestant is a model drawn at random from a pool and run through the
 bundled engine. You only see which models they were after you vote.
 
 <p align="center">
-  <img src="docs/images/battle.png" alt="A battle: both agents' changes side by side, with Choose A, Tie and Choose B below">
+  <img src="docs/images/battle.png" alt="A battle: two agents' results side by side, with Choose A, Tie and Choose B below">
 </p>
 
 The shipped product is the Electron desktop app. `packages/app` can run in a
