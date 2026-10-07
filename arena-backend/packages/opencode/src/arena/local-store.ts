@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Database, type SQLQueryBindings } from "bun:sqlite"
 import { compileFilter, fieldExpression } from "./sqlite-query"
@@ -22,6 +22,13 @@ const marker = "__arena_value_type"
 const blindedTelemetryPrivacyKey = "privacy.blinded-generation-telemetry"
 const blindedTelemetryPendingKey = "privacy.blinded-generation-telemetry-pending"
 const blindedTelemetryPrivacyVersion = "4"
+/**
+ * A file this recent may belong to a record another handle on the same directory has not inserted
+ * yet: `artifact` writes the file before the record that names it.
+ */
+const ARTIFACT_RECLAIM_GRACE_MS = 10 * 60_000
+/** Set when artifact records are deleted, so a start looks for unshared files only after that. */
+const artifactReclaimKey = "artifacts.reclaim"
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -106,6 +113,59 @@ async function removeUnreferencedArtifactFiles(database: Database, paths: readon
   for (const artifactPath of new Set(paths)) {
     if (!live.has(artifactPath)) await rm(artifactPath, { force: true })
   }
+}
+
+/**
+ * Delete the artifact files no record names. Deleting an artifact record leaves its file, because
+ * files are content-addressed and another record can share it; this is where the unshared ones go.
+ * Compared by name, the content hash, so a moved data directory does not orphan every file.
+ */
+export async function reclaimArtifactFiles(
+  database: Database,
+  artifactsRoot: string,
+  now = Date.now(),
+): Promise<{ readonly removed: number; readonly deferred: number }> {
+  const referenced = new Set(
+    database
+      .query<{ artifactPath: string | null }, []>(
+        "SELECT json_extract(document, '$.artifactPath') AS artifactPath FROM arena_documents WHERE collection = 'artifacts'",
+      )
+      .all()
+      .flatMap((row) => (row.artifactPath ? [path.basename(row.artifactPath)] : [])),
+  )
+  let removed = 0
+  let deferred = 0
+  for (const name of await readdir(artifactsRoot).catch(() => [] as string[])) {
+    if (referenced.has(name)) continue
+    const file = path.join(artifactsRoot, name)
+    const modified = await stat(file).then(
+      (info) => (info.isFile() ? info.mtimeMs : undefined),
+      () => undefined,
+    )
+    if (modified === undefined) continue
+    if (now - modified < ARTIFACT_RECLAIM_GRACE_MS) {
+      deferred += 1
+      continue
+    }
+    await rm(file, { force: true })
+    removed += 1
+  }
+  return { removed, deferred }
+}
+
+/**
+ * Reclaim at a start when records were deleted since the last complete pass, or when no pass has
+ * run yet. Before the store opens, so nothing in this process writes a file while it looks.
+ */
+async function reclaimArtifactFilesIfPending(database: Database, artifactsRoot: string) {
+  const state = database
+    .query<{ value: string }, [string]>("SELECT value FROM arena_metadata WHERE key = ?")
+    .get(artifactReclaimKey)?.value
+  if (state === "done") return
+  const { deferred } = await reclaimArtifactFiles(database, artifactsRoot)
+  // A file inside the grace period may still be orphaned; the next start looks again.
+  if (deferred > 0) return
+  database.query("INSERT OR REPLACE INTO arena_metadata (key, value) VALUES (?, 'done')").run(artifactReclaimKey)
 }
 
 /** Remove legacy per-side telemetry that can fingerprint a contestant before a vote. */
@@ -678,6 +738,12 @@ class LocalCollection<T extends ArenaRecord> implements ArenaCollection<T> {
         this.owner.mutation(this.name, row._id, null)
         deletedCount += 1
       }
+      // The file can be shared, so it stays; the next start reclaims it if nothing names it.
+      if (this.name === "artifacts" && deletedCount > 0) {
+        this.owner.database
+          .query("INSERT OR REPLACE INTO arena_metadata (key, value) VALUES (?, 'pending')")
+          .run(artifactReclaimKey)
+      }
     })
     return { acknowledged: true, matchedCount: 0, modifiedCount: 0, deletedCount }
   }
@@ -751,6 +817,7 @@ export async function connectLocalStore(
     )
   }
   await scrubLegacyBlindedTelemetry(database)
+  await reclaimArtifactFilesIfPending(database, path.join(input.directory, "artifacts", "sha256"))
   const local = new LocalDatabase(database, input.directory, input.onMutation, input.onClose)
   const store = Object.assign(new Store(local, local), { sourceID: local.sourceID })
   try {

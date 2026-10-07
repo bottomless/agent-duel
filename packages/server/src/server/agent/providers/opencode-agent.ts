@@ -1,4 +1,5 @@
 import { ArenaSessionActivitySchema } from "@getpaseo/protocol/arena/activity";
+import { ArenaEnvironmentTrimSchema } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   parseOpenCodeTodoList,
   parseOpenCodeTodoWriteState,
@@ -1641,6 +1642,30 @@ export class OpenCodeAgentClient implements AgentClient {
       },
       release: async (worktreeRoot) => {
         await request("release", worktreeRoot);
+      },
+      trimEnvironments: async (keep, volumeOf) => {
+        const current = await this.serverManager.acquireCurrent();
+        await acquisition.release();
+        acquisition = current;
+        const response = await fetch(new URL("/arena/environments/trim", acquisition.server.url), {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-opencode-directory": sourceRepoRoot,
+            "x-paseo-control-token": acquisition.server.controlToken,
+          },
+          body: JSON.stringify({ keep, volumeOf }),
+          // Each chat it releases stops its services and deletes its worktrees.
+          signal: AbortSignal.timeout(300_000),
+        });
+        if (!response.ok) {
+          const detail = await response.text().catch(() => "");
+          throw new Error(
+            `Arena environment trim failed with status ${response.status}: ${detail}`,
+          );
+        }
+        return ArenaEnvironmentTrimSchema.parse(await response.json());
       },
       close: () => acquisition.release(),
     };

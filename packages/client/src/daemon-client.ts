@@ -10,6 +10,8 @@ import type {
   ArenaByokKeySetResult,
   ArenaByokStatus,
   ArenaComparisonDiff,
+  ArenaEnvironmentStatus,
+  ArenaEnvironmentTrim,
   ArenaReplyTarget,
   ArenaSingleAgentVote,
   ArenaReviewEvent,
@@ -2937,6 +2939,30 @@ export class DaemonClient {
         },
       });
     return payload.state;
+  }
+
+  /** Release idle chats' battle environments past the `keep` most recently active. */
+  async trimArenaEnvironments(keep: number, requestId?: string): Promise<ArenaEnvironmentTrim> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"arena.environments.trim.response">({
+        requestId,
+        message: { type: "arena.environments.trim.request", keep },
+        // Each chat it releases stops its services and deletes its worktrees.
+        timeout: 300_000,
+      });
+    if (!payload.result) throw new Error(payload.error ?? "Battle environments could not be freed");
+    return payload.result;
+  }
+
+  /** Free space where battle environments live, for the Storage settings. */
+  async getArenaEnvironmentStatus(requestId?: string): Promise<ArenaEnvironmentStatus> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"arena.environments.get_status.response">({
+        requestId,
+        message: { type: "arena.environments.get_status.request" },
+      });
+    if (!payload.status) throw new Error(payload.error ?? "Storage status is unavailable");
+    return payload.status;
   }
 
   async restoreWorkspace(workspaceId: string, requestId?: string): Promise<void> {

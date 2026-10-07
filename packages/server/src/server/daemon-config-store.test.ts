@@ -85,6 +85,34 @@ describe("DaemonConfigStore", () => {
     expect(loadPersistedConfig(paseoHome).daemon?.relay?.enabled).toBe(true);
   });
 
+  test("patch persists both cleanup limits, including keeping everything", () => {
+    const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-"));
+    tempDirs.push(paseoHome);
+    const store = new DaemonConfigStore(paseoHome, {
+      relay: { enabled: false },
+      mcp: { injectIntoAgents: false },
+      browserTools: { enabled: false },
+      providers: {},
+      metadataGeneration: { providers: [] },
+      autoArchiveAfterMerge: false,
+      enableTerminalAgentHooks: false,
+      appendSystemPrompt: "",
+      arenaEnvironmentRetention: 5,
+    });
+
+    store.patch({ arenaEnvironmentRetention: 10 });
+    expect(loadPersistedConfig(paseoHome).daemon?.arenaEnvironmentRetention).toBe(10);
+
+    store.patch({ arenaEnvironmentRetention: null });
+    expect(store.get().arenaEnvironmentRetention).toBeNull();
+    expect(loadPersistedConfig(paseoHome).daemon?.arenaEnvironmentRetention).toBeNull();
+
+    store.patch({ worktreeRetention: 25 });
+    expect(loadPersistedConfig(paseoHome).daemon?.worktreeRetention).toBe(25);
+    store.patch({ worktreeRetention: null });
+    expect(loadPersistedConfig(paseoHome).daemon?.worktreeRetention).toBeNull();
+  });
+
   test("patch round-trips agent profiles through the strictly-parsed persisted config", () => {
     const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-"));
     tempDirs.push(paseoHome);

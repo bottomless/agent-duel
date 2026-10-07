@@ -674,6 +674,7 @@ export class VoiceAssistantWebSocketServer {
       this.speech?.onReadinessChange((snapshot) => {
         this.publishSpeechReadiness(snapshot);
       }) ?? null;
+    let retention = retentionLimits(this.daemonConfigStore.get());
     this.unsubscribeDaemonConfigChange = this.daemonConfigStore.onChange((config, details) => {
       const nextAgentManagerState = this.providerSnapshotManager.applyMutableProviderConfig(
         config.providers,
@@ -681,6 +682,11 @@ export class VoiceAssistantWebSocketServer {
       );
       this.agentManager.updateProviderRegistry(nextAgentManagerState);
       this.broadcastDaemonConfigChanged(config);
+      const nextRetention = retentionLimits(config);
+      if (nextRetention !== retention) {
+        retention = nextRetention;
+        this.workspaceCleanup.retentionChanged();
+      }
     });
 
     const pushLogger = this.logger.child({ module: "push" });
@@ -722,6 +728,8 @@ export class VoiceAssistantWebSocketServer {
       openSource: (cwd) => this.agentManager.openArenaCheckoutCleanupSource(cwd),
       isProtected: (parent) => this.isCleanupProtected(parent),
       seedIgnoredContent: (seedInput) => this.agentManager.seedWorktreeIgnoredContent(seedInput),
+      environmentRetention: () => this.daemonConfigStore.get().arenaEnvironmentRetention,
+      worktreeRetention: () => this.daemonConfigStore.get().worktreeRetention,
       stopTerminals: async (parent) => {
         for (const cwd of this.terminalManager?.listDirectories() ?? []) {
           if (!isRealpathInsideRoot(parent.root, cwd)) continue;
@@ -1399,6 +1407,8 @@ export class VoiceAssistantWebSocketServer {
       arenaActivity: this.arenaActivity,
       arenaByok: this.arenaByok,
       restoreCleanedWorkspace: (workspaceId) => this.workspaceCleanup.restore(workspaceId),
+      trimArenaEnvironments: (keep) => this.workspaceCleanup.trimEnvironments(keep),
+      getArenaEnvironmentStatus: () => this.workspaceCleanup.environmentStatus(),
       waitForWorkspaceCleanupReady: () => this.workspaceCleanupReady,
       clientId: options.clientId,
       accountUserId: options.accountUserId,
@@ -2982,4 +2992,9 @@ function extractRequestInfoFromUnknownWsInbound(
   }
 
   return null;
+}
+
+/** The two cleanup limits as one comparable value, to notice when either changes. */
+function retentionLimits(config: MutableDaemonConfig): string {
+  return `${config.arenaEnvironmentRetention}:${config.worktreeRetention}`;
 }

@@ -1,4 +1,5 @@
 import { Formatter, Logger, type LogLevel } from "effect"
+import { renameSync, statSync } from "fs"
 import path from "path"
 import { Global } from "../global"
 import { runID } from "./shared"
@@ -46,7 +47,27 @@ function format(input: unknown) {
   return /^[^\s="\\]+$/.test(value) ? value : JSON.stringify(value)
 }
 
-export function fileLogger(file = path.join(Global.Path.log, "opencode.log"), id: string = runID) {
+/** Past this size a log is moved aside when a logger opens it, so the log and one predecessor are kept. */
+const MAX_LOG_BYTES = 10 * 1024 * 1024
+
+/**
+ * A logger appends to its file for as long as the process runs and cannot reopen it, so the log is
+ * bounded where it is opened: at startup it moves to `<file>.1`, replacing the previous one.
+ */
+function rotate(file: string, limit: number) {
+  try {
+    if (statSync(file).size >= limit) renameSync(file, `${file}.1`)
+  } catch {
+    // No log yet, or it could not be moved; appending to it is still the right fallback.
+  }
+}
+
+export function fileLogger(
+  file = path.join(Global.Path.log, "opencode.log"),
+  id: string = runID,
+  limit = MAX_LOG_BYTES,
+) {
+  rotate(file, limit)
   // Do not set batchWindow to 0; it causes high idle CPU usage.
   return Logger.toFile(formatter(id), file, { flag: "a" })
 }

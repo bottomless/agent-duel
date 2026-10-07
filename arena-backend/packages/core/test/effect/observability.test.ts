@@ -107,3 +107,28 @@ test("file logger flattens nested objects", async () => {
   expect(line).toContain("session.id=session-1")
   expect(line).not.toContain("request={")
 })
+
+test("file logger moves a log past its limit aside before appending", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-log-test-"))
+  await using _ = {
+    async [Symbol.asyncDispose]() {
+      await fs.rm(dir, { recursive: true, force: true })
+    },
+  }
+  const file = path.join(dir, "opencode.log")
+  await fs.writeFile(`${file}.1`, "older run\n")
+  await fs.writeFile(file, "x".repeat(64))
+
+  await Effect.logInfo("after rotation").pipe(
+    Effect.provide(
+      Logger.layer([fileLogger(file, "run-a", 32)]).pipe(Layer.provide(NodeFileSystem.layer), Layer.orDie),
+    ),
+    Effect.scoped,
+    Effect.runPromise,
+  )
+
+  expect(await Bun.file(`${file}.1`).text()).toBe("x".repeat(64))
+  const lines = (await Bun.file(file).text()).trim().split("\n")
+  expect(lines).toHaveLength(1)
+  expect(lines[0]).toContain('message="after rotation"')
+})

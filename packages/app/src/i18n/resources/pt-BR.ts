@@ -1707,6 +1707,7 @@ export const ptBR: TranslationResources = {
       shortcuts: "Atalhos",
       integrations: "Integrações",
       notifications: "Notificações",
+      storage: "Armazenamento",
       permissions: "Permissões",
       about: "Sobre",
     },
@@ -1775,6 +1776,42 @@ export const ptBR: TranslationResources = {
       fallbackHint: "Se ele não estiver disponível, o Agent Duel usa outro modelo disponível",
       docs: "Documentação",
       saveError: "Não foi possível atualizar a geração de metadados",
+    },
+    storage: {
+      title: "Ambientes de batalha",
+      saveError: "Não foi possível atualizar: {{message}}",
+      worktrees: {
+        title: "Worktrees",
+        label: "Manter worktrees",
+        description:
+          "Os worktrees que você cria com New worktree. É aqui que fica o seu próprio trabalho. Acima desse número, os mais antigos inativos são limpos com o código salvo, e Restaurar arquivos os traz de volta.",
+        accessibilityLabel: "Escolher quantos worktrees mantêm seus arquivos ({{value}})",
+        recent: "Os {{limit}} mais recentes",
+        all: "Todos os worktrees",
+      },
+      retention: {
+        label: "Manter ambientes de",
+        description:
+          "Cópias temporárias do seu projeto onde as batalhas rodam, uma por agente. O resultado que você escolhe é aplicado ao seu projeto, então elas não guardam nada do seu trabalho. Mantê-las faz a próxima batalha de um chat começar mais rápido.",
+        accessibilityLabel: "Escolher quais chats mantêm ambientes de batalha ({{value}})",
+        recent: "Os {{limit}} mais recentes",
+        all: "Todos os chats",
+      },
+      free: {
+        label: "Liberar ambientes sem uso",
+        description:
+          "Remove agora as cópias dos chats inativos. O histórico é mantido e a próxima batalha deles demora mais para começar.",
+        action: "Liberar",
+        pending: "Liberando...",
+        space: "{{size}} livres neste disco",
+        result: "Liberados: {{released}} · Em uso: {{kept}}",
+        error: "Não foi possível liberar os ambientes: {{message}}",
+      },
+      lowDisk: {
+        title: "Disco quase cheio",
+        description:
+          "Restam menos de {{size}} livres, então só o chat mais recente neste disco mantém os ambientes de batalha.",
+      },
     },
     general: {
       title: "Geral",

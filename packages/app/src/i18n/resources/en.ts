@@ -1686,6 +1686,7 @@ export const en = {
       shortcuts: "Shortcuts",
       integrations: "Integrations",
       notifications: "Notifications",
+      storage: "Storage",
       permissions: "Permissions",
       about: "About",
     },
@@ -1753,6 +1754,42 @@ export const en = {
       fallbackHint: "If it is unavailable, Agent Duel falls back to another available model",
       docs: "Docs",
       saveError: "Unable to update metadata generation",
+    },
+    storage: {
+      title: "Battle environments",
+      saveError: "Unable to update: {{message}}",
+      worktrees: {
+        title: "Worktrees",
+        label: "Keep worktrees",
+        description:
+          "Worktrees you create with New worktree. Your own work lives here. Past this number, the oldest idle ones are cleaned up with their code saved, and Restore files brings them back.",
+        accessibilityLabel: "Select how many worktrees keep their files ({{value}})",
+        recent: "Most recent {{limit}}",
+        all: "All worktrees",
+      },
+      retention: {
+        label: "Keep environments for",
+        description:
+          "Temporary copies of your project that battles run in, one per agent. The result you choose is applied to your project, so they hold none of your work. Kept copies let a chat's next battle start sooner.",
+        accessibilityLabel: "Select which chats keep battle environments ({{value}})",
+        recent: "Most recent {{limit}}",
+        all: "All chats",
+      },
+      free: {
+        label: "Free unused environments",
+        description:
+          "Remove the copies idle chats hold now. Their history stays, and their next battle takes longer to start.",
+        action: "Free up",
+        pending: "Freeing...",
+        space: "{{size}} free on this disk",
+        result: "Freed: {{released}} · In use: {{kept}}",
+        error: "Unable to free environments: {{message}}",
+      },
+      lowDisk: {
+        title: "Disk almost full",
+        description:
+          "Less than {{size}} is free, so only the latest chat on this disk keeps its battle environments.",
+      },
     },
     general: {
       title: "General",

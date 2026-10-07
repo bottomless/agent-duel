@@ -1653,6 +1653,7 @@ export const zhCN: TranslationResources = {
       shortcuts: "快捷键",
       integrations: "集成",
       notifications: "通知",
+      storage: "存储",
       permissions: "权限",
       about: "关于",
     },
@@ -1719,6 +1720,40 @@ export const zhCN: TranslationResources = {
       fallbackHint: "如果不可用，Agent Duel 会改用其他可用模型",
       docs: "文档",
       saveError: "无法更新元数据生成设置",
+    },
+    storage: {
+      title: "对战环境",
+      saveError: "无法更新：{{message}}",
+      worktrees: {
+        title: "工作树",
+        label: "保留工作树",
+        description:
+          "你用 New worktree 创建的工作树，你自己的工作保存在这里。超过这个数量后，最早的空闲工作树会在保存代码后被清理，可通过“恢复文件”找回。",
+        accessibilityLabel: "选择保留文件的工作树数量 ({{value}})",
+        recent: "最近 {{limit}} 个",
+        all: "所有工作树",
+      },
+      retention: {
+        label: "保留环境的对话",
+        description:
+          "对战运行时使用的项目临时副本，每个智能体一份。你选择的结果会应用到你的项目，所以副本里没有你的工作。保留副本能让对话的下一场对战更快开始。",
+        accessibilityLabel: "选择保留对战环境的对话 ({{value}})",
+        recent: "最近 {{limit}} 个",
+        all: "所有对话",
+      },
+      free: {
+        label: "释放未使用的环境",
+        description: "立即删除空闲对话持有的副本。历史记录会保留，但它们的下一场对战启动会更慢。",
+        action: "释放",
+        pending: "正在释放...",
+        space: "此磁盘可用空间：{{size}}",
+        result: "已释放：{{released}} · 使用中：{{kept}}",
+        error: "无法释放环境：{{message}}",
+      },
+      lowDisk: {
+        title: "磁盘空间即将用尽",
+        description: "可用空间不足 {{size}}，因此只有此磁盘上最近的对话会保留对战环境。",
+      },
     },
     general: {
       title: "通用",

@@ -36,4 +36,11 @@ describe("ArenaTranscriptArtifact", () => {
       }),
     ).toEqual(transcript)
   })
+
+  test("refuses a transcript the store did not keep whole", () => {
+    const encoded = ArenaTranscriptArtifact.encode([{ sessionID: "cut", messages: [] }])
+    expect(() =>
+      ArenaTranscriptArtifact.decode({ ...encoded, data: encoded.data.subarray(0, 8), truncated: true }),
+    ).toThrow("larger than the artifact limit")
+  })
 })

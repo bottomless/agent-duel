@@ -403,10 +403,22 @@ stay until the next warm preparation adopts the slot. A free slot that any proce
 terminal left open in it, for example) is retired instead: a rename would carry that process into
 the next contestant's tree. Processes are listed a second time half a second later when the first
 listing finds one in a free slot, because a released side's services can still be exiting. Failure
-paths and discards still remove worktrees; archiving the workspace or evicting its checkout removes
-the chat's whole pool. Archive deletes the pool's trash before it answers, because the engine can
-stop right after and a background delete stops with it; startup finishes what an interrupted
-eviction or archive left.
+paths and discards still remove worktrees; archiving the workspace, evicting its checkout, or
+releasing an idle chat's environments (see the cleanup below) removes the chat's whole pool. Archive
+and release delete the pool's trash before they answer, waiting for deletes a removal started in the
+background, and then remove the empty pool, because the engine can stop right after and a
+background delete stops with it; startup finishes what an interrupted eviction or archive left.
+
+OpenCode keeps a snapshot repository per worktree path (`snapshot/<project>/<sha1 of the path>` in
+its data directory), and a slot moves to a new path every turn, so each released side leaves one
+that nothing opens again. The engine deletes a released run's repository once nothing is at its path
+(`discardSnapshotRepositories`): after a pair is prepared, after a pool is retired, and for every chat
+at startup. It hashes only run worktrees, so a standalone OpenCode's data in the same directory is
+never matched.
+
+A chat's pool directory carries Time Machine's sticky exclusion attribute (`arena/backup-exclusion.ts`):
+its slots are copies the next battle can build again. Spotlight already skips `.agent-duel`, whose
+name is hidden. Worktrees the user works in, under `.agent-duel/worktrees/<id>`, stay in backups.
 
 Each worktree a chat keeps, the retained winner and both warm sides, holds a loaded OpenCode instance
 (provider catalog, plugins, tool registry, location services). A ready chat with no open stream for
@@ -518,13 +530,36 @@ apart independently — the sign that something edited the checkout behind Arena
 
 ### Automatic workspace cleanup
 
-The daemon keeps a soft target of fifteen materialized, app-owned parent worktrees across projects.
-Chats sharing a checkout count once. A chat's contestant slots (warm pair, retained winner, free
-slots) follow their parent: they have no separate quota or expiry timer. Original source checkouts are outside this policy.
+Settings → Storage shows the two limits apart because they guard different things: a parent
+worktree from New worktree holds the user's own work, and a contestant slot holds only a battle's
+attempts, whose chosen result is applied to the checkout.
+
+The daemon keeps a soft target of materialized, app-owned parent worktrees across projects:
+`worktreeRetention`, fifteen by default, `null` to keep them all. Chats sharing a checkout count
+once. Original source checkouts are outside this policy.
+
+A chat's contestant slots (warm pair, retained winner, free slots) have a limit of their own, since a
+chat in the source checkout has no parent to evict. The daemon keeps them for the
+`arenaEnvironmentRetention` chats with the latest battle activity (five by default, Settings →
+Storage, `null` for every chat) and releases the others' at most once a minute, or at once when the
+limit changes (`arena/environments/trim`). Release takes what archive takes and keeps the chat
+ready; its next send builds a pair from nothing, as its first battle did. A chat keeps its slots
+while a battle or agent turn is in progress, a pair is being prepared, its retained winner has files
+its recorded result does not hold, or a terminal is open in one of its slots (`terminalOpenUnder`,
+checked before anything is stopped). Otherwise the release stops the servers the agents left running,
+as the next send would: winners often leave a preview running to check their build, and it would
+hold the chat's largest copy for as long as it lived. It then disposes the pool's OpenCode
+instances, which take a language server the engine started with them, and keeps the slots only if
+a process still works in the pool. Free up in Settings → Storage releases
+every idle chat's. While an open project's volume has less than 10 GB free, only the latest chat on
+that volume keeps its slots, whatever the limit says (`LOW_DISK_BYTES`): they can be built again, and
+a full disk fails the git writes every battle and vote depends on. Chats on other volumes keep the
+limit, since releasing them frees nothing on the full one. The Storage page shows the fullest
+volume's free space and says when this applies.
 
 Cleanup runs in the background, oldest chat activity first. Viewing a workspace does not update that
 order. Pinned workspaces, foreground work, active agents or terminals, and unresolved battles stay
-protected. If no safe candidate exists, the count can remain above fifteen without blocking creation.
+protected. If no safe candidate exists, the count can remain above the limit without blocking creation.
 
 Before removing files, cleanup saves the exact commit, staged state, and working files, including
 non-ignored new files. Git refs in the surviving source repository retain the snapshot through garbage
@@ -537,8 +572,8 @@ the same path, with a detached HEAD, and never overwrites an occupied directory.
 checkout's ignored content from the source the way a new worktree is seeded, so dependencies and
 local configuration come back without being stored; seeding failures cost that content, not the
 restore. It does not rerun setup or restart services. This is recovery from workspace cleanup, not
-a backup against deleting the source repository. The limit controls parent directories, not
-snapshot storage or disk bytes.
+a backup against deleting the source repository. Both limits count directories, not disk bytes: on
+APFS a slot's clones share blocks with the checkout until something writes to them.
 
 ## A turn
 
