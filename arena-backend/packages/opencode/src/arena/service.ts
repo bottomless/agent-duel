@@ -109,6 +109,7 @@ import {
   recoverFailedPromotion,
   removeRef,
   repositoryKey,
+  requireBattleGit,
   selectResult,
   snapshotBase,
   snapshotHostRefs,
@@ -5004,6 +5005,7 @@ export const layer: Layer.Layer<
       if (conflicts.length > 0) {
         return yield* Effect.fail(new Error(trunkConflictReason(conflicts)))
       }
+      yield* withGit(requireBattleGit(chat.repository.root)).pipe(Effect.mapError(error))
       const turnID = makeTurnID(chat._id, chat.turnCount)
       // The pair is drawn while the base freezes, so the send waits once for both. The draw is
       // account- and turn-scoped and idempotent on the control plane, so a send refused after this
