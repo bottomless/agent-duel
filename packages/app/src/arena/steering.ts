@@ -1,5 +1,6 @@
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { arenaUserMessageContent, type ArenaUserMessageContent } from "./prompt-images";
+import { arenaRunningTool } from "./run-liveness";
 import { arenaThreadMessages } from "./run-thread-selection";
 
 export interface QueuedArenaSteer extends ArenaUserMessageContent {
@@ -37,6 +38,17 @@ export function arenaQueuedSteering(run: ArenaRun): QueuedArenaSteer[] {
     if (!content.text && content.images.length === 0 && content.attachments.length === 0) return [];
     return [{ id: message.id, ...content }];
   });
+}
+
+/**
+ * When queued messages reach the model, named by what the contestant is in the middle of: a steer
+ * goes out with the next model request, after the running tool call or reply.
+ */
+export function arenaQueuedSteerDelivery(run: ArenaRun): string {
+  const tool = arenaRunningTool(run);
+  if (tool === "command") return "Sends when the current command finishes";
+  if (tool === "tool") return "Sends when the current tool finishes";
+  return "Sends after the current reply";
 }
 
 /** What a queued steer attaches, as one line under its text: `2 images · notes.md`. */

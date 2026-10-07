@@ -207,9 +207,10 @@ the verb. If the selected target stops being valid, keep the draft, clear the se
 require another pick instead of rerouting it. Prompts and replies carry attachments (see
 **Attachments** under [A turn](#a-turn)). Steering waits for
 the current tool call or response to finish. Keep pending messages in a panel below that
-contestant's scrolling thread until the next model request includes them. Show only the queued
-message text, a line naming its images and files, **Interrupt and send**, and a trash button; tool
-activity stays in the thread above. A file's contents never show in the queue.
+contestant's scrolling thread until the next model request includes them. Show only what the
+queue waits for (`Sends when the current command finishes`), the queued message text, a line naming
+its images and files, **Interrupt and send**, and a trash button; tool activity stays in the thread
+above. A file's contents never show in the queue.
 The trash button discards that contestant's queued messages without interrupting its current work.
 **Interrupt and send** resumes those stored messages immediately;
 it must not submit them again or finish the contestant's battle run. Paseo's ordinary queue waits
@@ -838,8 +839,10 @@ policy. The deadline pauses while a local tool runs or waits for approval; a lon
 be mistaken for a silent model stream.
 
 `No recent activity` means the run has emitted no event for 90 seconds; it is not proof of a
-stalled process. Explicit retry and user-input waits take precedence. That UI label alone must not
-stop or restart a contestant.
+stalled process. Explicit retry and user-input waits take precedence. A tool call that is still
+running reads `Running a command` or `Running a tool` instead: a long command emits nothing until it
+ends, the same reason the engine's deadline pauses for it. That UI label alone must not stop or
+restart a contestant.
 
 ## Gotchas
 
