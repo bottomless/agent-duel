@@ -513,6 +513,13 @@ export const fr: TranslationResources = {
         failedToLoad: "Échec du chargement de la page",
         invalidUrl: "NavigateurURLinvalide",
         unsupportedProtocol: "Navigateur non pris en charge bloquéURL:{{protocol}}",
+        notFound: "Impossible de trouver {{host}}. Vérifiez l'adresse.",
+        connectionRefused: "{{host}} a refusé la connexion. Le serveur est-il lancé ?",
+        timedOut: "{{host}} a mis trop de temps à répondre",
+        offline: "Vous êtes hors ligne",
+        unreachableTitle: "Ce site est inaccessible",
+        cannotOpenTitle: "Impossible d'ouvrir cette adresse",
+        reload: "Actualiser",
       },
     },
     terminal: {

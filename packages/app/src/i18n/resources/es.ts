@@ -513,6 +513,13 @@ export const es: TranslationResources = {
         failedToLoad: "No se pudo cargar la página",
         invalidUrl: "Navegador no válidoURL",
         unsupportedProtocol: "Navegador bloqueado no compatibleURL:{{protocol}}",
+        notFound: "No se encontró {{host}}. Revisa la dirección.",
+        connectionRefused: "{{host}} rechazó la conexión. ¿Está en marcha el servidor?",
+        timedOut: "{{host}} tardó demasiado en responder",
+        offline: "No tienes conexión a internet",
+        unreachableTitle: "No se puede acceder a este sitio",
+        cannotOpenTitle: "No se puede abrir esta dirección",
+        reload: "Volver a cargar",
       },
     },
     terminal: {

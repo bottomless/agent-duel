@@ -510,6 +510,13 @@ export const ko: TranslationResources = {
         failedToLoad: "페이지를 불러오지 못했습니다",
         invalidUrl: "잘못된 브라우저 URL",
         unsupportedProtocol: "지원되지 않는 브라우저 URL을 차단했습니다: {{protocol}}",
+        notFound: "{{host}}을(를) 찾을 수 없습니다. 주소를 확인하세요.",
+        connectionRefused: "{{host}}에서 연결을 거부했습니다. 서버가 실행 중인가요?",
+        timedOut: "{{host}}의 응답 시간이 초과되었습니다",
+        offline: "오프라인 상태입니다",
+        unreachableTitle: "사이트에 연결할 수 없음",
+        cannotOpenTitle: "이 주소를 열 수 없습니다",
+        reload: "새로고침",
       },
     },
     terminal: {

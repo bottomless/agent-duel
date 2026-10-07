@@ -87,21 +87,34 @@ export function trimNonEmpty(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+const LOCAL_HOST =
+  /^((?:[a-z\d-]+\.)*localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[\da-fA-F:.]+])(?::\d+)?(?:[/?#]|$)/i;
+const HOST_WITH_PORT = /^[a-z\d.-]+:\d+(?:[/?#]|$)/i;
+const DOMAIN = /^(?:[a-z\d](?:[a-z\d-]*[a-z\d])?\.)+[a-z]{2,63}\.?(?:[/?#]|$)/i;
+const SCHEME = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
+
+/**
+ * What the address bar does with what was typed, the way Chrome's omnibox and Codex's in-app
+ * browser read it: an address opens, local hosts over http; anything else searches the web.
+ */
 export function normalizeBrowserUrl(value: string | null | undefined): string {
   const trimmed = trimNonEmpty(value);
   if (!trimmed) {
     return "https://example.com";
   }
-  if (/^(localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[\da-fA-F:.]+])(?::\d+)?(?:[/?#]|$)/.test(trimmed)) {
+  if (LOCAL_HOST.test(trimmed)) {
     return `http://${trimmed}`;
-  }
-  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed)) {
-    return trimmed;
   }
   if (trimmed.startsWith("//")) {
     return `https:${trimmed}`;
   }
-  return `https://${trimmed}`;
+  if (SCHEME.test(trimmed) && !HOST_WITH_PORT.test(trimmed) && !/\s/.test(trimmed)) {
+    return trimmed;
+  }
+  if (!/\s/.test(trimmed) && (DOMAIN.test(trimmed) || HOST_WITH_PORT.test(trimmed))) {
+    return `https://${trimmed}`;
+  }
+  return `https://www.google.com/search?${new URLSearchParams({ q: trimmed }).toString()}`;
 }
 
 export function createBrowserRecord(input: {

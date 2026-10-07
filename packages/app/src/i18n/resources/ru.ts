@@ -513,6 +513,13 @@ export const ru: TranslationResources = {
         failedToLoad: "Не удалось загрузить страницу",
         invalidUrl: "Неверный браузер URL",
         unsupportedProtocol: "Заблокирован неподдерживаемый браузер URL:{{protocol}}",
+        notFound: "Не удалось найти {{host}}. Проверьте адрес.",
+        connectionRefused: "{{host}} отклонил подключение. Сервер запущен?",
+        timedOut: "{{host}} слишком долго не отвечает",
+        offline: "Нет подключения к интернету",
+        unreachableTitle: "Не удается получить доступ к сайту",
+        cannotOpenTitle: "Не удается открыть этот адрес",
+        reload: "Перезагрузить",
       },
     },
     terminal: {

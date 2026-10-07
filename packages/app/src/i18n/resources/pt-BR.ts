@@ -513,6 +513,13 @@ export const ptBR: TranslationResources = {
         failedToLoad: "Falha ao carregar página",
         invalidUrl: "URL de navegador inválida",
         unsupportedProtocol: "URL de navegador sem suporte bloqueada: {{protocol}}",
+        notFound: "Não foi possível encontrar {{host}}. Verifique o endereço.",
+        connectionRefused: "{{host}} recusou a conexão. O servidor está em execução?",
+        timedOut: "{{host}} demorou demais para responder",
+        offline: "Você está offline",
+        unreachableTitle: "Não é possível acessar esse site",
+        cannotOpenTitle: "Não é possível abrir este endereço",
+        reload: "Recarregar",
       },
     },
     terminal: {

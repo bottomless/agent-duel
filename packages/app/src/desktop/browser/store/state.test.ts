@@ -30,6 +30,21 @@ describe("normalizeBrowserUrl", () => {
     expect(normalizeBrowserUrl("//example.com/path")).toBe("https://example.com/path");
   });
 
+  it("opens a host with a port, and preview subdomains of localhost over http", () => {
+    expect(normalizeBrowserUrl("devbox:3000")).toBe("https://devbox:3000");
+    expect(normalizeBrowserUrl("turn1-a--072a6131.localhost:6768")).toBe(
+      "http://turn1-a--072a6131.localhost:6768",
+    );
+  });
+
+  it("searches the web for words that are not an address", () => {
+    expect(normalizeBrowserUrl("foo")).toBe("https://www.google.com/search?q=foo");
+    expect(normalizeBrowserUrl("hello world")).toBe("https://www.google.com/search?q=hello+world");
+    expect(normalizeBrowserUrl("what is example.com")).toBe(
+      "https://www.google.com/search?q=what+is+example.com",
+    );
+  });
+
   it("keeps explicit protocols unchanged", () => {
     expect(normalizeBrowserUrl("http://localhost:8081")).toBe("http://localhost:8081");
     expect(normalizeBrowserUrl("https://localhost:8081")).toBe("https://localhost:8081");

@@ -506,6 +506,13 @@ export const en = {
         failedToLoad: "Failed to load page",
         invalidUrl: "Invalid browser URL",
         unsupportedProtocol: "Blocked unsupported browser URL: {{protocol}}",
+        notFound: "Couldn't find {{host}}. Check the address.",
+        connectionRefused: "{{host}} refused to connect. Is the server running?",
+        timedOut: "{{host}} took too long to respond",
+        offline: "You're offline",
+        unreachableTitle: "This site can't be reached",
+        cannotOpenTitle: "This address can't be opened",
+        reload: "Reload",
       },
     },
     terminal: {

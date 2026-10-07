@@ -505,6 +505,13 @@ export const zhCN: TranslationResources = {
         failedToLoad: "页面加载失败",
         invalidUrl: "浏览器 URL 无效",
         unsupportedProtocol: "已阻止不支持的浏览器 URL：{{protocol}}",
+        notFound: "找不到 {{host}}。请检查地址。",
+        connectionRefused: "{{host}} 拒绝了连接。服务器是否在运行？",
+        timedOut: "{{host}} 响应超时",
+        offline: "你已离线",
+        unreachableTitle: "无法访问此网站",
+        cannotOpenTitle: "无法打开此地址",
+        reload: "重新加载",
       },
     },
     terminal: {

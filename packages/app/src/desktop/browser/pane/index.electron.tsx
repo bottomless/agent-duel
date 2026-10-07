@@ -24,6 +24,7 @@ import {
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { useRetainedPanelActive } from "@/components/retained-panel";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -53,6 +54,11 @@ import {
   removeResidentBrowserWebview,
   takeResidentBrowserWebview,
 } from "../resident-webviews";
+import {
+  describeBrowserLoadFailure,
+  parseLoadUrlRejection,
+  type BrowserLoadErrorLabels,
+} from "./load-error";
 
 type ElectronWebview = HTMLElement & {
   canGoBack?: () => boolean;
@@ -133,7 +139,7 @@ function formatDevicePresetLabel(preset: DeviceSizePreset, responsiveLabel: stri
 const ERR_ABORTED = -3;
 const ALLOWED_BROWSER_PROTOCOLS = new Set(["http:", "https:"]);
 
-function getWebviewLoadErrorMessage(event: Event, failedToLoadLabel: string): string | null {
+function getWebviewLoadErrorMessage(event: Event, labels: BrowserLoadErrorLabels): string | null {
   const details = event as Event & {
     errorCode?: unknown;
     errorDescription?: unknown;
@@ -147,35 +153,33 @@ function getWebviewLoadErrorMessage(event: Event, failedToLoadLabel: string): st
   const description =
     typeof details.errorDescription === "string" && details.errorDescription.trim()
       ? details.errorDescription.trim()
-      : failedToLoadLabel;
+      : null;
   const url =
     typeof details.validatedURL === "string" && details.validatedURL.trim()
       ? details.validatedURL.trim()
       : null;
-
-  return url ? `${description}: ${url}` : description;
+  if (description && !description.startsWith("ERR_")) {
+    return url ? `${description}: ${url}` : description;
+  }
+  return describeBrowserLoadFailure({ code: description, url }, labels);
 }
 
-function getLoadUrlRejectionMessage(error: unknown, failedToLoadLabel: string): string | null {
-  if (error instanceof Error && error.message.trim()) {
-    if (error.message.includes("ERR_ABORTED") || error.message.includes("ERR_BLOCKED_BY_CLIENT")) {
-      return null;
-    }
-    return error.message.trim();
-  }
-  if (typeof error === "string" && error.trim()) {
-    if (error.includes("ERR_ABORTED") || error.includes("ERR_BLOCKED_BY_CLIENT")) {
-      return null;
-    }
-    return error.trim();
-  }
-  return failedToLoadLabel;
+function getLoadUrlRejectionMessage(error: unknown, labels: BrowserLoadErrorLabels): string | null {
+  const parsed = parseLoadUrlRejection(error);
+  if (!parsed) return labels.failedToLoad;
+  if ("message" in parsed) return parsed.message;
+  return describeBrowserLoadFailure(parsed, labels);
 }
 
 function getUnsafeNavigationMessage(
   url: string,
   labels: { invalidUrl: string; unsupportedProtocol: (protocol: string) => string },
 ): string | null {
+  // Words typed into the bar are not an address. Chromium would percent-encode the space and
+  // fail the lookup, so say so before navigating.
+  if (/\s/.test(url)) {
+    return labels.invalidUrl;
+  }
   try {
     const parsed = new URL(url);
     if (ALLOWED_BROWSER_PROTOCOLS.has(parsed.protocol) || parsed.href === "about:blank") {
@@ -387,6 +391,13 @@ export function BrowserPane({
   browserIdRef.current = browserId;
   const browserRef = useRef(browser);
   browserRef.current = browser;
+  // A failed page takes the pane, as Chrome's and Codex's browsers show it, so the webview is
+  // parked while the error page is up. An address that was refused never loaded, so its page
+  // has nothing to reload.
+  const errorShown = Boolean(browser?.lastError);
+  const errorShownRef = useRef(errorShown);
+  errorShownRef.current = errorShown;
+  const [errorKind, setErrorKind] = useState<"address" | "load">("load");
   const pendingNavigationUrlRef = useRef<string | null>(null);
   const [draftUrl, setDraftUrl] = useState(browser?.url ?? "https://example.com");
   const titleStyle = useMemo(
@@ -407,16 +418,17 @@ export function BrowserPane({
     ],
     [theme.colors.foreground],
   );
-  const errorTextStyle = useMemo(
-    () => [styles.metaError, { color: theme.colors.palette.red[500] }],
-    [theme.colors.palette.red],
-  );
   const browserErrorLabels = useMemo(
     () => ({
       failedToLoad: t("workspace.browser.errors.failedToLoad"),
       invalidUrl: t("workspace.browser.errors.invalidUrl"),
       unsupportedProtocol: (protocol: string) =>
         t("workspace.browser.errors.unsupportedProtocol", { protocol }),
+      notFound: (host: string) => t("workspace.browser.errors.notFound", { host }),
+      connectionRefused: (host: string) =>
+        t("workspace.browser.errors.connectionRefused", { host }),
+      timedOut: (host: string) => t("workspace.browser.errors.timedOut", { host }),
+      offline: t("workspace.browser.errors.offline"),
     }),
     [t],
   );
@@ -495,7 +507,7 @@ export function BrowserPane({
       });
     }
     releaseResidentBrowserWebview(browserId, webview);
-    if (isPresentedRef.current) {
+    if (isPresentedRef.current && !errorShownRef.current) {
       presentBrowserWebview(browserId, webview, host, clip, browserViewportRef.current);
     } else {
       applyInactiveBrowserWebviewViewport(browserId, webview, browserViewportRef.current);
@@ -504,7 +516,7 @@ export function BrowserPane({
       typeof ResizeObserver === "undefined"
         ? null
         : new ResizeObserver(() => {
-            if (!isPresentedRef.current) {
+            if (!isPresentedRef.current || errorShownRef.current) {
               return;
             }
             presentBrowserWebview(
@@ -574,10 +586,11 @@ export function BrowserPane({
       updateBrowserRef.current(browserIdRef.current, { faviconUrl: favicons[0] ?? null });
     };
     const handleLoadFailed = (event: Event) => {
-      const message = getWebviewLoadErrorMessage(event, browserErrorLabelsRef.current.failedToLoad);
+      const message = getWebviewLoadErrorMessage(event, browserErrorLabelsRef.current);
       if (!message) {
         return;
       }
+      setErrorKind("load");
       updateBrowserRef.current(browserIdRef.current, {
         isLoading: false,
         lastError: message,
@@ -615,6 +628,7 @@ export function BrowserPane({
     sizeObserver?.observe(host);
     sizeObserver?.observe(clip);
     if (initialUnsafeNavigationMessage) {
+      setErrorKind("address");
       updateBrowserRef.current(browserIdRef.current, {
         isLoading: false,
         lastError: initialUnsafeNavigationMessage,
@@ -654,7 +668,7 @@ export function BrowserPane({
     if (!webview) {
       return;
     }
-    if (!isPresented) {
+    if (!isPresented || errorShown) {
       releaseResidentBrowserWebview(browserId, webview);
       return;
     }
@@ -672,7 +686,7 @@ export function BrowserPane({
     } else {
       rememberResolvedBrowserWebviewSize(browserId, webview);
     }
-  }, [browserId, browserViewport, isPresented]);
+  }, [browserId, browserViewport, errorShown, isPresented]);
 
   const navigate = useCallback(
     (nextUrl: string) => {
@@ -689,6 +703,7 @@ export function BrowserPane({
       });
       setDraftUrl((current) => (current === normalizedUrl ? current : normalizedUrl));
       if (unsafeNavigationMessage) {
+        setErrorKind("address");
         updateBrowserRef.current(browserIdRef.current, {
           isLoading: false,
           lastError: unsafeNavigationMessage,
@@ -697,10 +712,11 @@ export function BrowserPane({
       }
       if (webview?.loadURL) {
         void webview.loadURL(normalizedUrl).catch((error: unknown) => {
-          const message = getLoadUrlRejectionMessage(error, browserErrorLabels.failedToLoad);
+          const message = getLoadUrlRejectionMessage(error, browserErrorLabels);
           if (!message) {
             return;
           }
+          setErrorKind("load");
           updateBrowserRef.current(browserIdRef.current, {
             isLoading: false,
             lastError: message,
@@ -714,6 +730,10 @@ export function BrowserPane({
     },
     [browserErrorLabels],
   );
+
+  const handleReloadFailedPage = useCallback(() => {
+    navigate(browserRef.current?.url ?? initialUrlRef.current);
+  }, [navigate]);
 
   const handleBack = useCallback(() => {
     webviewRef.current?.goBack?.();
@@ -791,6 +811,12 @@ export function BrowserPane({
   }, [focusUrlBar, isInteractive]);
 
   const handleNavigateDraftUrl = useCallback(() => {
+    // An empty bar has nowhere to go. Put the current address back, as other browsers do,
+    // rather than opening the new-tab default.
+    if (!draftUrl.trim()) {
+      setDraftUrl(browserRef.current?.url ?? initialUrlRef.current);
+      return;
+    }
     navigate(draftUrl);
   }, [draftUrl, navigate]);
 
@@ -965,13 +991,6 @@ export function BrowserPane({
           </ToolbarButton>
         </View>
       </View>
-      {browser?.lastError ? (
-        <View style={styles.errorRow}>
-          <Text numberOfLines={1} style={errorTextStyle}>
-            {browser.lastError}
-          </Text>
-        </View>
-      ) : null}
       <View
         ref={setWebviewClipNode}
         style={webviewWrapStyle}
@@ -981,6 +1000,23 @@ export function BrowserPane({
           ref: setWebviewHostNode,
           style: webviewHostStyle,
         })}
+        {browser?.lastError ? (
+          <View style={styles.errorPage} testID={`browser-error-page-${browserId}`}>
+            <View style={styles.errorPageBody}>
+              <Text style={styles.errorPageTitle}>
+                {errorKind === "address"
+                  ? t("workspace.browser.errors.cannotOpenTitle")
+                  : t("workspace.browser.errors.unreachableTitle")}
+              </Text>
+              <Text style={styles.errorPageMessage}>{browser.lastError}</Text>
+              {errorKind === "load" ? (
+                <Button variant="outline" size="sm" onPress={handleReloadFailedPage}>
+                  {t("workspace.browser.errors.reload")}
+                </Button>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -1046,15 +1082,31 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: 0,
     paddingHorizontal: 0,
   },
-  errorRow: {
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+  errorPage: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    justifyContent: "center",
+    padding: theme.spacing[6],
     backgroundColor: theme.colors.surface0,
   },
-  metaError: {
-    fontSize: theme.fontSize.xs,
+  errorPageBody: {
+    alignSelf: "center",
+    width: "100%",
+    maxWidth: 420,
+    alignItems: "flex-start",
+    gap: theme.spacing[3],
+  },
+  errorPageTitle: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.lg,
+    fontWeight: theme.fontWeight.medium,
+  },
+  errorPageMessage: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
   },
   webviewWrap: {
     flex: 1,

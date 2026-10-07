@@ -507,6 +507,13 @@ export const ar: TranslationResources = {
         failedToLoad: "فشل تحميل الصفحة",
         invalidUrl: "متصفح غير صالح URL",
         unsupportedProtocol: "متصفح محظور غير مدعوم URL:{{protocol}}",
+        notFound: "تعذّر العثور على {{host}}. تحقّق من العنوان.",
+        connectionRefused: "رفض {{host}} الاتصال. هل الخادم قيد التشغيل؟",
+        timedOut: "استغرق {{host}} وقتًا طويلًا للاستجابة",
+        offline: "أنت غير متصل بالإنترنت",
+        unreachableTitle: "يتعذّر الوصول إلى هذا الموقع",
+        cannotOpenTitle: "يتعذّر فتح هذا العنوان",
+        reload: "إعادة التحميل",
       },
     },
     terminal: {

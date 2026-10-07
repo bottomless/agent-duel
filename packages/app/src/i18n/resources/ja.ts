@@ -513,6 +513,13 @@ export const ja: TranslationResources = {
         failedToLoad: "ページの読み込みに失敗しました",
         invalidUrl: "無効なブラウザURL",
         unsupportedProtocol: "サポートされていないブラウザURLをブロック: {{protocol}}",
+        notFound: "{{host}} が見つかりません。アドレスを確認してください。",
+        connectionRefused: "{{host}} に接続できませんでした。サーバーは起動していますか？",
+        timedOut: "{{host}} からの応答がタイムアウトしました",
+        offline: "オフラインです",
+        unreachableTitle: "このサイトにアクセスできません",
+        cannotOpenTitle: "このアドレスは開けません",
+        reload: "再読み込み",
       },
     },
     terminal: {
