@@ -31,7 +31,8 @@ import { workspaceAccess } from "./workspace-access.js";
 export const LOW_DISK_BYTES = 10_000_000_000;
 /**
  * A trim reads every chat's battle history and lists processes, and the sweep is scheduled on
- * every bit of activity, so it trims at most this often unless the limit changed.
+ * every bit of activity, so it trims at most this often unless the limit changed. A sweep inside
+ * the interval defers its trim to the end of it rather than dropping it.
  */
 const ENVIRONMENT_TRIM_INTERVAL_MS = 60_000;
 
@@ -90,6 +91,7 @@ export class WorkspaceCleanupService {
   private closed = false;
   private readonly restoring = new Set<string>();
   private lastEnvironmentTrim = 0;
+  private deferredTrim: NodeJS.Timeout | null = null;
   private sweepAgain = false;
 
   constructor(private readonly deps: CleanupDeps) {}
@@ -149,6 +151,7 @@ export class WorkspaceCleanupService {
     this.closed = true;
     if (this.pending) clearImmediate(this.pending);
     this.pending = null;
+    this.cancelDeferredTrim();
     await this.running;
   }
 
@@ -167,9 +170,15 @@ export class WorkspaceCleanupService {
 
   private async sweepEnvironments(): Promise<void> {
     if (this.closed) return;
-    const now = Date.now();
-    if (now - this.lastEnvironmentTrim < ENVIRONMENT_TRIM_INTERVAL_MS) return;
-    this.lastEnvironmentTrim = now;
+    const wait = this.lastEnvironmentTrim + ENVIRONMENT_TRIM_INTERVAL_MS - Date.now();
+    if (wait > 0) {
+      // A battle's last event often lands inside the interval, and nothing may follow it.
+      this.deferTrim(wait);
+      return;
+    }
+    // This trim sees everything a deferred one would have.
+    this.cancelDeferredTrim();
+    this.lastEnvironmentTrim = Date.now();
     const limit = this.deps.environmentRetention?.() ?? null;
     // A daemon without the Arena backend has no environments to trim.
     if (limit !== null && (await this.trimThroughBackend(limit)) === "unavailable") return;
@@ -181,6 +190,22 @@ export class WorkspaceCleanupService {
       );
       if ((await this.trimThroughBackend(1, root)) === "unavailable") return;
     }
+  }
+
+  private deferTrim(wait: number): void {
+    if (this.closed || this.deferredTrim) return;
+    this.deferredTrim = setTimeout(() => {
+      this.deferredTrim = null;
+      // A sweep in progress may have passed its trim already; another follows it.
+      if (this.running) this.sweepAgain = true;
+      this.schedule();
+    }, wait);
+    this.deferredTrim.unref();
+  }
+
+  private cancelDeferredTrim(): void {
+    if (this.deferredTrim) clearTimeout(this.deferredTrim);
+    this.deferredTrim = null;
   }
 
   /** Free space where battle environments live, for the Storage settings. */

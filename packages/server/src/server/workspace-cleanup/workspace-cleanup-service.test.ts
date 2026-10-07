@@ -410,6 +410,28 @@ test("trims battle environments to the configured limit through the latest open 
   expect(trims[2]?.keep).toBe(0);
 });
 
+test("a sweep inside the trim interval trims once the interval ends", async () => {
+  const { service, trims } = await environmentSetup({ keep: 3 });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    await service.initialize();
+    await vi.waitFor(() => expect(trims).toHaveLength(1));
+    // A battle ends 40 seconds later, and nothing happens after it.
+    await vi.advanceTimersByTimeAsync(40_000);
+    service.schedule();
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(trims).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(trims).toHaveLength(2));
+    expect(trims[1]?.keep).toBe(3);
+    // With nothing new to sweep, no further trim follows.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(trims).toHaveLength(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("leaves every chat's battle environments when the limit is off", async () => {
   const { service, trims } = await environmentSetup({ keep: null });
   await service.initialize();
