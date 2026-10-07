@@ -634,8 +634,12 @@ Git state are recorded under the generation's private battle refs, numstat is st
 applicability is set to `applicable` only when the frozen base is an ancestor of the result. A
 companion private ref transports the final index tree. Recording must preserve empty and multiple
 commits, commit-plus-residual state, and the index and dirty working tree; Arena does not add a
-wrapper commit to the developer-visible history. When both are in, the turn becomes `awaiting_vote`
-and the comparison starts in the background
+wrapper commit to the developer-visible history. Untracked dependency and cache folders
+(`node_modules`, `.venv` and the like, at any depth) are not part of a side's result: the
+contestant's own repository excludes them, because a project that ignores only its root
+`/node_modules` would otherwise count a tool a contestant installed under `qa/` as its change and
+apply it with the win (`DEPENDENCY_EXCLUDES` in `src/worktree/index.ts`). When both are in, the
+turn becomes `awaiting_vote` and the comparison starts in the background
 (`arena/service.ts:1968`). A failed comparison never blocks a vote.
 
 ## Blinding

@@ -227,6 +227,32 @@ function failedRemoves(...chunks: string[]) {
   );
 }
 
+/**
+ * Dependency folders a contestant installs are not part of its result.
+ *
+ * A project often ignores only its root `/node_modules`, so a contestant that installs a tool
+ * into a subfolder adds thousands of untracked files. They would count as its changes, slow its
+ * snapshot, and land in the checkout if that side won: one installed Playwright under `qa/`
+ * and showed +2.3m lines across 9,860 files. Unanchored, so the folders are ignored at any
+ * depth. An exclude only hides untracked files, so a project that tracks a dependency folder
+ * still sees changes to it. This goes into the contestant's own repository and never the
+ * checkout's, where the patterns would hide the developer's own files.
+ *
+ * Only names that are never source: `vendor`, `target`, `build` and `deps` are dependency or
+ * build folders in some ecosystems and real code in others, and a contestant's new code there
+ * would silently drop out of its result.
+ */
+const DEPENDENCY_EXCLUDES = ["node_modules/", ".venv/", "__pycache__/"];
+
+function withDependencyExcludes(excludes: string) {
+  const separator = excludes && !excludes.endsWith("\n") ? "\n" : "";
+  const block = [
+    "# Agent Duel: dependency folders are not a contestant's changes",
+    ...DEPENDENCY_EXCLUDES,
+  ];
+  return `${excludes}${separator}${block.join("\n")}\n`;
+}
+
 // ---------------------------------------------------------------------------
 // Effect service
 // ---------------------------------------------------------------------------
@@ -552,9 +578,10 @@ const layer: Layer.Layer<
       const hostedExcludes = yield* fs
         .readFileString(hostExclude)
         .pipe(Effect.catch(() => Effect.succeed("")));
-      if (hostedExcludes !== excludes) {
+      const contestantExcludes = withDependencyExcludes(excludes);
+      if (hostedExcludes !== contestantExcludes) {
         yield* fs.makeDirectory(pathSvc.dirname(hostExclude), { recursive: true }).pipe(Effect.orDie);
-        yield* fs.writeFileString(hostExclude, excludes).pipe(Effect.orDie);
+        yield* fs.writeFileString(hostExclude, contestantExcludes).pipe(Effect.orDie);
       }
       yield* markConfigBoundary(ctx.worktree);
 

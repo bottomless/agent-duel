@@ -330,6 +330,44 @@ describe("Worktree", () => {
       { git: true },
     );
 
+    wintest(
+      "keeps dependency folders out of an isolated contestant's changes",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance;
+          const svc = yield* Worktree.Service;
+          const info = yield* svc.reclaimWorktreeInfo({
+            name: `dependency-excludes-${Date.now().toString(36)}`,
+            branch: "main",
+            isolated: true,
+          });
+          const base = (yield* git(test.directory, ["rev-parse", "HEAD"])).trim();
+          yield* svc.attachAt(info, base, { reset: true });
+          const installed = [
+            "qa/node_modules/pkg/index.js",
+            "tools/.venv/lib/site.py",
+            "src/__pycache__/app.pyc",
+          ];
+          for (const file of installed) {
+            yield* Effect.promise(() =>
+              fs.mkdir(path.dirname(path.join(info.directory, file)), { recursive: true }),
+            );
+            yield* Effect.promise(() => fs.writeFile(path.join(info.directory, file), "installed\n"));
+          }
+          expect(yield* git(info.directory, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
+          // The patterns are the contestant's; the checkout's own excludes stay the developer's.
+          const exclude = (yield* git(test.directory, [
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "info/exclude",
+          ])).trim();
+          expect(yield* Effect.promise(() => fs.readFile(exclude, "utf8"))).not.toContain("node_modules/");
+          yield* svc.remove({ directory: info.directory });
+        }),
+      { git: true },
+    );
+
     // Both contestant sides claim at once and each makes sure the checkout excludes the local
     // state. The race this guards is timing-dependent, so this checks the outcome, not the race.
     wintest(
