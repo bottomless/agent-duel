@@ -24,6 +24,8 @@ import {
   writePaseoWorktreeRuntimeMetadata,
 } from "./worktree-metadata.js";
 import { runGitCommand } from "./run-git-command.js";
+import { ignoreForFileProviderSync } from "./file-provider-ignore.js";
+import type { Logger } from "pino";
 import { resolvePaseoHome } from "../server/paseo-home.js";
 import { writeFileAtomic } from "../server/atomic-file.js";
 import { parseGitRevParsePath, resolveGitRevParsePath } from "./git-rev-parse-path.js";
@@ -208,6 +210,7 @@ export interface CreateWorktreeOptions {
   seedIgnoredContent?: WorktreeSeedFn;
   onBeforeAdd?: (worktreePath: string) => Promise<void>;
   onAddFailed?: (worktreePath: string) => Promise<void>;
+  logger?: Pick<Logger, "warn">;
 }
 
 export class BranchAlreadyCheckedOutError extends Error {
@@ -996,6 +999,7 @@ export const createWorktree = async ({
   seedIgnoredContent,
   onBeforeAdd,
   onAddFailed,
+  logger,
 }: CreateWorktreeOptions): Promise<WorktreeConfig> => {
   const sourcePlan = await resolveWorktreeSourcePlan({ cwd, source, desiredSlug: worktreeSlug });
   const root = await getPaseoWorktreesRoot(cwd, paseoHome, worktreesRoot);
@@ -1005,6 +1009,18 @@ export const createWorktree = async ({
   // first `git status` shows the new worktree as an untracked directory.
   if (getRealpathAwareRelativePath(cwd, root) !== null) {
     await ensureLocalStateExcluded(cwd);
+    // Cloud sync of the local-state directory turns Arena's rewrites into conflict copies.
+    const localState = dirname(root);
+    const unsynced =
+      basename(localState) === LOCAL_STATE_DIRNAME
+        ? await ignoreForFileProviderSync(localState)
+        : undefined;
+    if (unsynced?.state === "failed") {
+      logger?.warn(
+        { directory: localState, reason: unsynced.reason },
+        "Could not exclude the local-state directory from cloud sync",
+      );
+    }
   }
 
   // Also handle worktree path collision

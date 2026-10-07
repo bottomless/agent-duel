@@ -36,6 +36,7 @@ import {
   LOCAL_STATE_DIRNAME,
   PRIVATE_REF_PREFIXES,
 } from "./layout";
+import { ignoreForFileProviderSync } from "@/util/file-provider-ignore";
 
 export const Event = WorktreeEvent;
 
@@ -430,6 +431,23 @@ const layer: Layer.Layer<
           yield* replaceFile(file, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`);
         }),
       );
+      yield* keepLocalStateUnsynced(checkout);
+    });
+
+    /**
+     * Keep cloud sync out of the local-state directory; see `FILE_PROVIDER_IGNORE_ATTRIBUTE`.
+     * Runs with the exclude, so with every host a slot is built or adopted into, which also marks
+     * a directory an older version created.
+     */
+    const keepLocalStateUnsynced = Effect.fnUntraced(function* (checkout: string) {
+      const directory = localStatePath(checkout);
+      const outcome = yield* Effect.promise(() => ignoreForFileProviderSync(directory));
+      if (outcome.state === "failed") {
+        yield* Effect.logWarning("Arena could not exclude its local state from cloud sync", {
+          directory,
+          reason: outcome.reason,
+        });
+      }
     });
 
     /**

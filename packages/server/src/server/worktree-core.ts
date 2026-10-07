@@ -1,4 +1,5 @@
 import { createNameId } from "mnemonic-id";
+import type { Logger } from "pino";
 
 import type { ForgeService } from "../services/forge-service.js";
 import {
@@ -43,6 +44,7 @@ export interface CreateWorktreeCoreDeps {
   seedIgnoredContent?: WorktreeSeedFn;
   onBeforeAdd?: (worktreePath: string, repoRoot: string) => Promise<void>;
   onAddFailed?: (worktreePath: string) => Promise<void>;
+  logger?: Pick<Logger, "warn">;
 }
 
 export interface CreateWorktreeCoreResult {
@@ -132,6 +134,7 @@ async function createWorktreeCoreWithPriority(
       ? (worktreePath) => deps.onBeforeAdd!(worktreePath, repoRoot)
       : undefined,
     onAddFailed: deps.onAddFailed,
+    logger: deps.logger,
   });
 
   return {

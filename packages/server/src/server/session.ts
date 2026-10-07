@@ -5444,6 +5444,7 @@ export class Session {
       workspaceGitService: this.workspaceGitService,
       workspaceProvisioning: this.workspaceProvisioning,
       seedIgnoredContent: (seedInput) => this.agentManager.seedWorktreeIgnoredContent(seedInput),
+      logger: this.sessionLogger,
     });
     void Promise.all([
       this.gitMutation.notifyGitMutation(input.cwd, "create-worktree"),
