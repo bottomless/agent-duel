@@ -1,24 +1,20 @@
 import { memo, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { StyleSheet } from "react-native-unistyles";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
-import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { ArenaTransitionStatus } from "./transition-status";
+import { arenaSetupStatus } from "./transition-progress";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { tint } from "@/styles/tint";
-import type { Theme } from "@/styles/theme";
 import { ArenaContentColumn } from "./content-column";
 import {
-  ARENA_PREPARING_WORKSPACES,
   arenaDecisionPhase,
   decisionBarShowsPhase,
   type ArenaDecisionPhase,
 } from "./decision-state";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
-
-const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
-const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
 /**
  * The decision for one side: the vote, the early pick, or keeping that side after a stop.
@@ -157,8 +153,11 @@ function TransitionalDecision({
 }) {
   return (
     <View style={styles.transitional} testID="arena-decision-transitional">
-      {phase.busy ? <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} /> : null}
-      <Text style={styles.status}>{phase.label}</Text>
+      {phase.busy ? (
+        <ArenaTransitionStatus label={phase.label} />
+      ) : (
+        <Text style={styles.status}>{phase.label}</Text>
+      )}
     </View>
   );
 }
@@ -189,55 +188,6 @@ function DecisionBarFrame({
     <View style={[styles.bar, safeAreaStyle]} onLayout={onLayout} testID={testID}>
       <ArenaContentColumn>{children}</ArenaContentColumn>
     </View>
-  );
-}
-
-const STARTING_BATTLE_PHASE: Extract<ArenaDecisionPhase, { kind: "transitional" }> = {
-  kind: "transitional",
-  label: ARENA_PREPARING_WORKSPACES,
-  busy: true,
-};
-
-/**
- * Reports the slot's height to the host, once per change.
- *
- * The stream follows its own tail by the height of whatever sits under it, so a bar taking
- * the composer's place has to say how tall it is — otherwise the stream keeps anchoring to
- * the composer that is no longer there.
- */
-function useReportedBarHeight(onHeightChange: ((height: number) => void) | undefined) {
-  const lastHeightRef = useRef<number | null>(null);
-  return useCallback(
-    (event: LayoutChangeEvent) => {
-      const height = event.nativeEvent.layout.height;
-      if (lastHeightRef.current === height) return;
-      lastHeightRef.current = height;
-      onHeightChange?.(height);
-    },
-    [onHeightChange],
-  );
-}
-
-/**
- * The slot while a battle is being started, before there is a turn to derive a phase from.
- *
- * Both hosts need it. A draft has no chat yet; a chat that is sending its next battle has one,
- * but its snapshot still describes the turn that finished. Either way the panes are already on
- * screen and there is nothing left to write, so the composer goes now rather than seconds
- * later when the start lands — one move, on the send that caused it.
- */
-export function ArenaStartingBattleBar({
-  onHeightChange,
-}: {
-  onHeightChange?: (height: number) => void;
-}) {
-  const handleLayout = useReportedBarHeight(onHeightChange);
-  return (
-    <DecisionBarFrame onLayout={handleLayout} testID="arena-starting-battle-bar">
-      <View style={styles.row}>
-        <TransitionalDecision phase={STARTING_BATTLE_PHASE} />
-      </View>
-    </DecisionBarFrame>
   );
 }
 
@@ -285,7 +235,7 @@ export const ArenaDecisionBar = memo(function ArenaDecisionBar({
     },
     [onHeightChange],
   );
-  const shown = decisionBarShowsPhase(phase);
+  const shown = decisionBarShowsPhase(phase) && arenaSetupStatus(snapshot.turn) === null;
   useEffect(() => {
     if (shown) return;
     if (lastHeightRef.current === 0) return;

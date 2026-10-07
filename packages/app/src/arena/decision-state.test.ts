@@ -243,7 +243,7 @@ describe("arenaDecisionPhase", () => {
 });
 
 describe("arenaDecisionPhase while the next battle is prepared", () => {
-  it("says what the preparation is waiting on", () => {
+  it("does not infer activity from retained services or an earlier warm-up failure", () => {
     expect(arenaDecisionPhase(snapshot({ state: "creating" }))).toEqual({
       kind: "transitional",
       label: "Preparing workspaces",
@@ -263,7 +263,7 @@ describe("arenaDecisionPhase while the next battle is prepared", () => {
           },
         }),
       ),
-    ).toMatchObject({ kind: "transitional", label: "Stopping the previous preview" });
+    ).toMatchObject({ kind: "transitional", label: "Preparing workspaces" });
     expect(
       arenaDecisionPhase(
         snapshot({
@@ -271,7 +271,23 @@ describe("arenaDecisionPhase while the next battle is prepared", () => {
           environment: { warmPair: { generation: 2, state: "failed", sides: [] } },
         }),
       ),
-    ).toMatchObject({ kind: "transitional", label: "Preparing workspaces again" });
+    ).toMatchObject({ kind: "transitional", label: "Preparing workspaces" });
+  });
+  it("reports the operations the engine is performing during setup", () => {
+    expect(
+      arenaDecisionPhase(
+        snapshot({
+          state: "creating",
+          turn: { activeOperations: ["preparing_workspaces", "releasing_environment"] },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "transitional",
+      label: "Preparing workspaces · Releasing the previous environment",
+    });
+    expect(arenaDecisionPhase(snapshot({ state: "worktrees_ready" }))).toMatchObject({
+      label: "Starting agents",
+    });
   });
 });
 

@@ -64,7 +64,6 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { ArenaDraftBattleView } from "@/arena/battle-view";
-import { ArenaStartingBattleBar } from "@/arena/decision-bar";
 import { arenaSessionQueryKey } from "@/arena/use-arena-session";
 import { ArenaContentColumn } from "@/arena/content-column";
 import { ensureBattleRepository } from "@/arena/battle-repository";
@@ -752,15 +751,7 @@ export function WorkspaceDraftAgentTab({
   );
 }
 
-/**
- * The draft's bottom slot: the composer, or the battle's own line once one has been sent.
- *
- * A sent battle takes the slot here for the same reason it takes it in the chat — there is
- * nothing left to write to — and taking it now rather than when the real panel arrives is
- * what keeps one action from changing the slot twice. The composer is dropped rather than
- * hidden, the way the panel drops its own: the prompt and its attachments belong to the tab
- * above, so a start that fails still has them to hand back.
- */
+/** Setup progress lives in the stream; a failed start restores the draft composer. */
 function DraftInputSlot({
   startingBattle,
   children,
@@ -768,7 +759,7 @@ function DraftInputSlot({
   startingBattle: boolean;
   children: ReactNode;
 }) {
-  return startingBattle ? <ArenaStartingBattleBar /> : children;
+  return startingBattle ? null : children;
 }
 
 const animatedStaticStyles = RNStyleSheet.create({

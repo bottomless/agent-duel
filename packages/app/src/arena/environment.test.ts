@@ -7,8 +7,6 @@ import {
   serviceDisplayName,
   shortWorktreeName,
   summarizeServices,
-  pendingTransitionLabel,
-  retainedProcessCount,
   transitionListenerLabels,
   transitionSummaryLabel,
   type LifecycleServiceEntry,
@@ -107,31 +105,6 @@ describe("Arena environment metadata", () => {
         ],
       }),
     ).toBeNull();
-  });
-
-  it("counts the retained winner's processes per command, not per listener", () => {
-    const service = (active: boolean, listeners: number) => ({
-      kind: "owned_process" as const,
-      command: "npm run dev",
-      relativeCwd: ".",
-      listeners: Array.from({ length: listeners }, (_unused, index) => ({ port: 3000 + index })),
-      proxyRoutes: [{ hostname: "h", port: 3000, active }],
-    });
-    // One command holding two ports is still one process to stop.
-    expect(retainedProcessCount({ services: [service(true, 2)] })).toBe(1);
-    expect(retainedProcessCount({ services: [service(true, 1), service(true, 1)] })).toBe(2);
-    // Counted whether or not its route is still live. Stopping the process takes the route
-    // down, so counting only live ones empties the row at the moment the stop finishes and the
-    // settled row has not arrived yet.
-    expect(retainedProcessCount({ services: [service(false, 1)] })).toBe(1);
-    expect(retainedProcessCount(undefined)).toBe(0);
-  });
-
-  it("announces the stop in the present tense before it has happened", () => {
-    expect(pendingTransitionLabel(1)).toBe("Stopping 1 process from the last winner");
-    expect(pendingTransitionLabel(3)).toBe("Stopping 3 processes from the last winner");
-    // Nothing running means nothing to say, same as the settled row.
-    expect(pendingTransitionLabel(0)).toBeNull();
   });
 
   it("labels historical listeners without exposing stale port numbers", () => {

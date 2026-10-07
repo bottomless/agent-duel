@@ -42,10 +42,11 @@ import { useContainerWidth } from "@/hooks/use-container-width";
 import { Alert } from "@/components/ui/alert";
 import { ArenaServicesStrip } from "./services-strip";
 import { ArenaTransitionRow, arenaTransitionRowVisible } from "./transition-row";
+import { ArenaTransitionTimeline } from "./transition-timeline";
+import { arenaResolutionStatus, arenaSetupStatus } from "./transition-progress";
 import { ArenaWorktreeMenuButton } from "./worktree-menu";
 import { useArenaCardBleed } from "./content-column";
 import { PaneIconAction } from "./pane-icon-action";
-import { retainedProcessCount } from "./environment";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { arenaPromptAttachmentPills } from "./prompt-attachment-pills";
 import { arenaPromptImages } from "./prompt-images";
@@ -462,26 +463,7 @@ function respondingIdsForRun(
   }
 }
 
-const ignoreQuestionResponse = (
-  _run: ArenaRun,
-  _question: ArenaPendingQuestion,
-  _response: AgentPermissionResponse,
-) => undefined;
-const ignorePermissionResponse = (
-  _run: ArenaRun,
-  _permission: ArenaPendingPermission,
-  _response: ArenaPermissionReply,
-) => undefined;
-
-/**
- * The two panes, in every state a battle can be in.
- *
- * One component so the starting view and the running view can put it at the same place in the
- * same skeleton. React reconciles by position and type: a different component here, or the
- * same one at a different index, and it discards both panes and builds new ones — which is
- * the blink this exists to prevent. A battle changes hands twice as it starts, and the panes
- * have to survive both.
- */
+/** Keep both contestant panes mounted while the reader switches between them. */
 function BattlePanes({
   serverId,
   workspaceId,
@@ -567,58 +549,7 @@ function BattlePanes({
   );
 }
 
-/** Both panes before either side has a run yet. */
-function BattlePanesPlaceholder({
-  paneView,
-  onPaneViewChange,
-}: {
-  paneView: ArenaPaneView;
-  onPaneViewChange: (value: ArenaPaneView) => void;
-}) {
-  const maxHeight = useArenaPaneMaxHeight();
-  return (
-    <View style={styles.panes}>
-      <BattlePane
-        serverId=""
-        workspaceId=""
-        agentId=""
-        turnId=""
-        side="a"
-        run={undefined}
-        stoppedByEarlyPick={false}
-        maxHeight={maxHeight}
-        respondingQuestionId={null}
-        respondingPermissionId={null}
-        onQuestionResponse={ignoreQuestionResponse}
-        onPermissionResponse={ignorePermissionResponse}
-        hidden={paneView === "b"}
-        showDivider={false}
-        paneView={paneView}
-        onPaneViewChange={onPaneViewChange}
-      />
-      <BattlePane
-        serverId=""
-        workspaceId=""
-        agentId=""
-        turnId=""
-        side="b"
-        run={undefined}
-        stoppedByEarlyPick={false}
-        maxHeight={maxHeight}
-        respondingQuestionId={null}
-        respondingPermissionId={null}
-        onQuestionResponse={ignoreQuestionResponse}
-        onPermissionResponse={ignorePermissionResponse}
-        hidden={paneView === "a"}
-        showDivider={paneView === "both"}
-        paneView={paneView}
-        onPaneViewChange={onPaneViewChange}
-      />
-    </View>
-  );
-}
-
-/** Keep the pane controls in place while the workspace is created. */
+/** Setup occupies the stream before contestant panes are ready to appear. */
 function ArenaPreparingBattleView({
   prompt,
   timestamp,
@@ -628,19 +559,15 @@ function ArenaPreparingBattleView({
   timestamp: number;
   testID: string;
 }) {
-  const [paneView, setPaneView] = useState<ArenaPaneView>("both");
-  // The prompt and the card are one block here, the way the stream holds them once the chat
-  // exists: its row gap between the two, and the message's own outer margins off, because the
-  // gap is the host's to set. Matching it is what keeps the pair from moving at the handoff.
   return (
     <MessageOuterSpacingProvider disableOuterSpacing>
-      <View style={styles.preparingBattle}>
+      <View style={styles.preparingBattle} testID={testID}>
         <BattleReadingColumn testID="arena-battle-prompt-column">
           <UserMessage message={prompt} timestamp={timestamp} isPending />
         </BattleReadingColumn>
-        <BattleCard testID={testID}>
-          <BattlePanesPlaceholder paneView={paneView} onPaneViewChange={setPaneView} />
-        </BattleCard>
+        <BattleReadingColumn>
+          <ArenaTransitionTimeline phase="setup" />
+        </BattleReadingColumn>
       </View>
     </MessageOuterSpacingProvider>
   );
@@ -683,12 +610,7 @@ export function ArenaBattleView({
   workspaceId: string;
   agentId: string;
   snapshot: ArenaSnapshot;
-  /**
-   * Set while a battle has been sent and its turn has not arrived. This view renders that
-   * state itself rather than yielding to a separate one: a different component in the same
-   * slot is a different element type, so React tears the panes down and builds them again,
-   * and the panes blink at exactly the moment they are supposed to be reassuring.
-   */
+  /** Keeps the submitted prompt visible until its turn arrives. */
   startingPrompt?: StartingArenaBattle;
 }) {
   // Only the battle this view owns. A ready chat still carries the last resolved turn; while
@@ -696,12 +618,6 @@ export function ArenaBattleView({
   const turn = isArenaBattleOnScreen(snapshot) ? snapshot.turn : undefined;
   const actions = useArenaBattleActions(serverId, agentId, turn);
   const paneMaxHeight = useArenaPaneMaxHeight();
-  // The retained winner is still on the chat until its processes are stopped, so this is what
-  // the transition row reports in the present tense until the real transition replaces it.
-  const retainedWinner = snapshot.environment.retainedWinner;
-  const pendingStops = retainedProcessCount(
-    retainedWinner ? snapshot.runs.find((run) => run.id === retainedWinner.runID) : undefined,
-  );
   const runA = snapshot.runs.find((run) => run.side === "a");
   const runB = snapshot.runs.find((run) => run.side === "b");
   const promptImages = useMemo(() => arenaPromptImages(snapshot.runs), [snapshot.runs]);
@@ -732,11 +648,7 @@ export function ArenaBattleView({
   const respondingA = respondingIdsForRun(pendingAction, runA);
   const respondingB = respondingIdsForRun(pendingAction, runB);
 
-  // Keep the panes on screen while the first turn is still arriving — swapping
-  // them for a spinner here is what made them blink out just after the draft
-  // handed over.
-  //
-  // Until the new turn arrives, keep the previous turn's runs out of the placeholders.
+  // Keep the previous turn's runs out of the next battle's setup.
   if (!turn) {
     return (
       <>
@@ -750,34 +662,15 @@ export function ArenaBattleView({
             />
           </BattleReadingColumn>
         ) : null}
-        <BattleCard testID="arena-battle-view">
-          <BattlePanes
-            key="battle-panes"
-            serverId={serverId}
-            workspaceId={workspaceId}
-            agentId={agentId}
-            turnId=""
-            runA={undefined}
-            runB={undefined}
-            turn={undefined}
-            maxHeight={paneMaxHeight}
-            respondingA={NOT_RESPONDING}
-            respondingB={NOT_RESPONDING}
-            onQuestionResponse={actions.replyQuestion}
-            onPermissionResponse={actions.replyPermission}
-            paneView={paneView}
-            onPaneViewChange={setPaneView}
-          />
-          {arenaTransitionRowVisible(undefined, pendingStops) ? (
-            <View style={styles.rootSection}>
-              <ArenaTransitionRow transition={undefined} pendingProcessCount={pendingStops} />
-            </View>
-          ) : null}
-        </BattleCard>
+        <BattleReadingColumn>
+          <ArenaTransitionTimeline phase="setup" />
+        </BattleReadingColumn>
       </>
     );
   }
 
+  const settingUp = arenaSetupStatus(turn) !== null;
+  const resolving = arenaResolutionStatus(turn) !== null;
   return (
     <>
       <BattleReadingColumn testID="arena-battle-prompt-column">
@@ -788,58 +681,74 @@ export function ArenaBattleView({
           timestamp={new Date(turn.createdAt).getTime()}
         />
       </BattleReadingColumn>
-      <BattleCard testID="arena-battle-view">
-        {actions.actionError ? (
-          <View style={styles.rootSection} accessibilityRole="alert">
-            <Alert variant="error" title="Battle action failed" description={actions.actionError} />
-          </View>
-        ) : null}
-        <BattlePanes
-          key="battle-panes"
-          serverId={serverId}
-          workspaceId={workspaceId}
-          agentId={agentId}
-          turnId={turn.id}
-          runA={runA}
-          runB={runB}
-          turn={turn}
-          maxHeight={paneMaxHeight}
-          respondingA={respondingA}
-          respondingB={respondingB}
-          onQuestionResponse={actions.replyQuestion}
-          onPermissionResponse={actions.replyPermission}
-          paneView={paneView}
-          onPaneViewChange={setPaneView}
-        />
-        {snapshot.chat.blockedReason ? (
-          <View style={styles.rootSection}>
-            <Alert
-              variant="warning"
-              title="Trunk unavailable"
-              description={snapshot.chat.blockedReason}
-              testID="arena-environment-problem"
-            />
-          </View>
-        ) : null}
-        {arenaTransitionRowVisible(turn.transition, pendingStops) ? (
-          <View style={styles.rootSection}>
-            <ArenaTransitionRow transition={turn.transition} pendingProcessCount={pendingStops} />
-          </View>
-        ) : null}
-        {reviewAvailable ? (
-          <View style={styles.reviewSection}>
-            <BattleJudging
-              serverId={serverId}
-              agentId={agentId}
-              turnId={turn.id}
-              comparison={snapshot.comparison}
-              comparisonState={turn.comparisonState}
-              retrying={pendingAction?.kind === "retry_comparison"}
-              onRetry={actions.retryComparison}
-            />
-          </View>
-        ) : null}
-      </BattleCard>
+      {settingUp ? (
+        <BattleReadingColumn>
+          <ArenaTransitionTimeline phase="setup" turn={turn} />
+        </BattleReadingColumn>
+      ) : null}
+      {!settingUp ? (
+        <BattleCard testID="arena-battle-view">
+          {actions.actionError ? (
+            <View style={styles.rootSection} accessibilityRole="alert">
+              <Alert
+                variant="error"
+                title="Battle action failed"
+                description={actions.actionError}
+              />
+            </View>
+          ) : null}
+          <BattlePanes
+            key="battle-panes"
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={agentId}
+            turnId={turn.id}
+            runA={runA}
+            runB={runB}
+            turn={turn}
+            maxHeight={paneMaxHeight}
+            respondingA={respondingA}
+            respondingB={respondingB}
+            onQuestionResponse={actions.replyQuestion}
+            onPermissionResponse={actions.replyPermission}
+            paneView={paneView}
+            onPaneViewChange={setPaneView}
+          />
+          {snapshot.chat.blockedReason ? (
+            <View style={styles.rootSection}>
+              <Alert
+                variant="warning"
+                title="Trunk unavailable"
+                description={snapshot.chat.blockedReason}
+                testID="arena-environment-problem"
+              />
+            </View>
+          ) : null}
+          {arenaTransitionRowVisible(turn.transition) ? (
+            <View style={styles.rootSection}>
+              <ArenaTransitionRow transition={turn.transition} />
+            </View>
+          ) : null}
+          {reviewAvailable ? (
+            <View style={styles.reviewSection}>
+              <BattleJudging
+                serverId={serverId}
+                agentId={agentId}
+                turnId={turn.id}
+                comparison={snapshot.comparison}
+                comparisonState={turn.comparisonState}
+                retrying={pendingAction?.kind === "retry_comparison"}
+                onRetry={actions.retryComparison}
+              />
+            </View>
+          ) : null}
+        </BattleCard>
+      ) : null}
+      {resolving ? (
+        <BattleReadingColumn>
+          <ArenaTransitionTimeline phase="resolution" turn={turn} />
+        </BattleReadingColumn>
+      ) : null}
     </>
   );
 }

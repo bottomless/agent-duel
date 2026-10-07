@@ -1,4 +1,5 @@
 import type { ArenaRun, ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import { arenaSetupStatus } from "./transition-progress";
 import { resolutionRetryDetail } from "./battle-result";
 import { arenaParkedPromotion } from "./conflict-guard";
 import { isArenaBattleUnresolved } from "./summary-anchor";
@@ -68,20 +69,8 @@ function transitional(label: string, busy: boolean): ArenaDecisionPhase {
   return { kind: "transitional", label, busy };
 }
 
-/**
- * What the next battle is waiting on before its contestants exist. The
- * previous winner's environment is stopped first, then the warm pair is
- * seeded; both used to be a card of their own after the vote, and now they
- * are this one line in the bar.
- */
 function preparingLabel(snapshot: ArenaSnapshot): string {
-  if (snapshot.environment.retainedWinner?.state === "stopping") {
-    return "Stopping the previous preview";
-  }
-  if (snapshot.environment.warmPair?.state === "failed") {
-    return "Preparing workspaces again";
-  }
-  return ARENA_PREPARING_WORKSPACES;
+  return arenaSetupStatus(snapshot.turn) ?? ARENA_PREPARING_WORKSPACES;
 }
 
 function settled(run: ArenaRun | undefined): boolean {

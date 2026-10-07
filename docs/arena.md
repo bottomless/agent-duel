@@ -224,8 +224,8 @@ action controls provide the retry so a destructive operation is never retried au
 `Choose A` and `Choose B` carry their side's colour as a tint, the blue and amber of the diff's
 column headings, so the vote reads as picking that column; two choices of equal weight mean
 neither can be the accent. `Tie`, `Stop`, and `Discard` stay plain. Transitional and recovery
-states still use the **decision bar** (`packages/app/src/arena/decision-bar.tsx`) in the composer's
-slot.
+states use the **decision bar** (`packages/app/src/arena/decision-bar.tsx`) in the composer's
+slot, except setup and application progress, which stay in the conversation.
 
 Contestants are blinded so the vote lands on the output rather than the label. That is why the
 blinding has four layers instead of one hidden field, and why something as small as the shape of a
@@ -684,13 +684,21 @@ Use one utility request; increase evidence quality before adding model passes.
 
 **Applying** (`arena/service.ts:4039`) records the resolution and enters `applying` in one
 compare-and-set. The response and feed reveal that durable choice before transcript retention,
-application, cancellation, or timeline hydration continue in the background. The resolved battle
-collapses immediately; expand it for the difference summary, changed files, both threads, and the transition
-report. Each contestant pane keeps its worktree menu in the header and its owned services below
+application, cancellation, or timeline hydration continue in the background. The battle stays open
+while the selected result is being applied, then collapses; expand it for the difference summary,
+changed files, both threads, and the transition report. Each contestant pane keeps its worktree menu
+in the header and its owned services below
 the thread. The workspace header shows the current branch beside Commit. Click the branch, or
 Environment in the header overflow, for checkout, retained environment, and service details.
-Normal warm preparation stays silent; failures remain visible. See the decision controls above
-for the vote, composer, and transitional states.
+Show a timeline of the operations the engine records in the conversation: before the battle during
+setup and after the battle during application. Hide the contestant panes and reply controls until
+setup finishes, including file copying that overlaps model startup. Keep completed
+steps beside active work, with each step's elapsed time. Concurrent steps can both be active; a failed
+or interrupted step never receives a completion check. Reserve the timeline's height while it fills
+so the chat does not move at each update.
+A retained winner with live services is not evidence of cleanup. Keep completed environment changes
+in the transition report. Normal background warm preparation stays silent; failures remain visible.
+See the decision controls above for the vote, composer, and transitional states.
 
 The selected contestant's Git state is the source of truth. Preserve its no-commit dirty and index
 state, every actual commit (including empty or multiple commits), and commit-plus-residual state.

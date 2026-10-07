@@ -1,4 +1,5 @@
 import type { BattleState, Resolution, Side, Vote } from "./domain"
+import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-tracker"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { GenerationMetrics, UsageTotals } from "@agent-duel/arena-service/metrics"
 import type { PlannedRef, ReviewAnswer, ReviewItem } from "./branch-review"
@@ -339,6 +340,9 @@ export type TurnDocument = {
     readonly resolvedPolicy: ResolvedArenaCopyPolicy
   }
   setupTimings?: TurnSetupTimings
+  /** Work currently keeping the turn in an active transition. */
+  activeOperations?: readonly ArenaActiveOperation[]
+  operationProgress?: readonly ArenaOperationProgress[]
   warmPreparation?: WarmPreparation
   transitionEventID?: Identifier
   transitionEvent?: EnvironmentTransition

@@ -144,34 +144,6 @@ export function transitionListenerLabels(
   );
 }
 
-/** The sentence the feed shows for a transition, or null when there is nothing to say. */
-/**
- * How many of the retained winner's processes a starting battle has to deal with.
- *
- * Per command, not per listener: `lifecycleServiceEntries` expands a command with two ports
- * into two rows, and stopping it is still one process.
- *
- * Every owned command counts, including one whose route has already gone inactive. Counting
- * only live ones ties this to state that disappears at the exact moment the stop completes,
- * so the count fell to zero, the row emptied, and the settled row arrived a poll later — the
- * "Stopping…" line blinking out before "Stopped…" replaced it.
- */
-export function retainedProcessCount(run: Pick<ArenaRun, "services"> | undefined): number {
-  return (run?.services ?? []).length;
-}
-
-/**
- * The transition row before the stop has happened.
- *
- * The row used to appear only once the processes were already stopped, which is well after the
- * prompt was sent and reads as something arriving late for no reason. Announced up front
- * instead, in the present tense, and replaced by `transitionSummaryLabel` when it is done.
- */
-export function pendingTransitionLabel(processCount: number): string | null {
-  if (processCount <= 0) return null;
-  return `Stopping ${plural(processCount, "process", "processes")} from the last winner`;
-}
-
 export function transitionSummaryLabel(transition: ArenaTransitionInput): string | null {
   const counts = environmentTransitionCounts(transition);
   const parts: string[] = [];

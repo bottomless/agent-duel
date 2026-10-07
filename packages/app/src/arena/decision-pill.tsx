@@ -9,7 +9,7 @@ import {
   arenaRunningDecisionOrder,
   type ArenaDecisionPhase,
 } from "./decision-state";
-import { resolvingBattleLabels } from "./battle-result";
+import { arenaSetupStatus } from "./transition-progress";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
 
@@ -17,12 +17,10 @@ function BattlePaneDecision({
   side,
   phase,
   actions,
-  resolvingLabels,
 }: {
   side: ArenaSide;
   phase: ArenaDecisionPhase;
   actions: ArenaBattleActions;
-  resolvingLabels: Record<ArenaSide, string | null>;
 }) {
   const { pending, pendingAction } = actions;
   const handleChoose = useCallback(() => {
@@ -31,7 +29,6 @@ function BattlePaneDecision({
   const handlePickEarly = useCallback(() => {
     void actions.pickEarly(side);
   }, [actions, side]);
-  const sideLabel = side.toUpperCase();
   const pendingVote = pendingAction?.kind === "vote" && pendingAction.vote === side;
 
   if (phase.kind === "running") {
@@ -53,18 +50,14 @@ function BattlePaneDecision({
     return <BattlePaneKeepDecision side={side} phase={phase} actions={actions} />;
   }
 
-  const resolutionInProgress = resolvingLabels.a !== null || resolvingLabels.b !== null;
-  if (phase.kind !== "awaiting_vote" && !resolutionInProgress) return null;
-  const canChoose =
-    phase.kind === "awaiting_vote" && (side === "a" ? phase.canChooseA : phase.canChooseB);
-  const resolvingLabel = resolvingLabels[side];
+  if (phase.kind !== "awaiting_vote") return null;
+  const canChoose = side === "a" ? phase.canChooseA : phase.canChooseB;
   return (
     <ArenaSideChoiceButton
       side={side}
       kind="vote"
-      label={resolvingLabel ?? `Choose ${sideLabel}`}
-      loading={Boolean(resolvingLabel) || pendingVote}
-      disabled={resolutionInProgress || pending || !canChoose}
+      loading={pendingVote}
+      disabled={pending || !canChoose}
       onPress={handleChoose}
       testID={`arena-choose-${side}`}
     />
@@ -138,15 +131,10 @@ export function ArenaDecisionPill({
 }) {
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const phase = arenaDecisionPhase(snapshot);
-  const resolvingLabels = resolvingBattleLabels(snapshot.turn);
+  const setupStatus = arenaSetupStatus(snapshot.turn);
   const stopped = phase.kind === "awaiting_stop_resolution";
-  const showChoices =
-    phase.kind === "running" ||
-    phase.kind === "awaiting_vote" ||
-    stopped ||
-    resolvingLabels.a !== null ||
-    resolvingLabels.b !== null;
-  const visible = isArenaBattleOnScreen(snapshot) && showChoices;
+  const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
+  const visible = isArenaBattleOnScreen(snapshot) && showChoices && setupStatus === null;
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
     [onHeightChange],
@@ -166,38 +154,23 @@ export function ArenaDecisionPill({
     >
       {stopped ? <Text style={styles.hint}>Battle stopped · choose what to keep</Text> : null}
       <View style={styles.pill} testID="arena-battle-choice-row">
-        {phase.kind === "running" ? (
-          arenaRunningDecisionOrder(phase).map((choice) =>
-            choice === "stop" ? (
-              <BattleStopDecision key="stop" phase={phase} actions={actions} />
-            ) : (
-              <BattlePaneDecision
-                key={choice}
-                side={choice}
-                phase={phase}
-                actions={actions}
-                resolvingLabels={resolvingLabels}
-              />
-            ),
-          )
-        ) : (
+        {phase.kind === "running"
+          ? arenaRunningDecisionOrder(phase).map((choice) =>
+              choice === "stop" ? (
+                <BattleStopDecision key="stop" phase={phase} actions={actions} />
+              ) : (
+                <BattlePaneDecision key={choice} side={choice} phase={phase} actions={actions} />
+              ),
+            )
+          : null}
+        {phase.kind !== "running" ? (
           <>
-            <BattlePaneDecision
-              side="a"
-              phase={phase}
-              actions={actions}
-              resolvingLabels={resolvingLabels}
-            />
+            <BattlePaneDecision side="a" phase={phase} actions={actions} />
             {phase.kind === "awaiting_vote" ? <VoteDecision actions={actions} /> : null}
             {stopped ? <DiscardDecision actions={actions} /> : null}
-            <BattlePaneDecision
-              side="b"
-              phase={phase}
-              actions={actions}
-              resolvingLabels={resolvingLabels}
-            />
+            <BattlePaneDecision side="b" phase={phase} actions={actions} />
           </>
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -217,6 +190,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
   },
   pill: {
+    maxWidth: "100%",
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[1],

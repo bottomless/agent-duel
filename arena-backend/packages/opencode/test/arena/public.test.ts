@@ -119,6 +119,40 @@ function containsUndefined(value: unknown): boolean {
 }
 
 describe("ArenaPublic", () => {
+  test("projects active transition operations only for current active turns", () => {
+    const input = snapshot(true)
+    input.turn!.activeOperations = ["preparing_workspaces", "applying_changes"]
+    input.turn!.operationProgress = [
+      { operation: "preparing_workspaces", startedAt: 10, state: "running" },
+      { operation: "applying_changes", startedAt: 20, finishedAt: 30, state: "completed" },
+    ]
+    const activeStates = [
+      "creating",
+      "worktrees_ready",
+      "running",
+      "early_selected",
+      "applying",
+      "canonicalizing",
+      "cleanup_pending",
+    ] as const
+    for (const state of activeStates) {
+      input.turn!.state = state
+      expect(project(input).turn?.activeOperations).toEqual(["preparing_workspaces", "applying_changes"])
+      expect(project(input).turn?.operationProgress).toEqual(input.turn!.operationProgress)
+    }
+
+    for (const state of ["awaiting_vote", "complete", "creation_failed", "application_failed"] as const) {
+      input.turn!.state = state
+      expect(project(input).turn?.activeOperations).toBeUndefined()
+      expect(project(input).turn?.operationProgress).toEqual([
+        { operation: "applying_changes", startedAt: 20, finishedAt: 30, state: "completed" },
+      ])
+    }
+
+    input.turn!.state = "complete"
+    expect(project({ ...input, history: [input.turn!] }).history[0]?.activeOperations).toBeUndefined()
+  })
+
   test.each([false, true])("hides billing details in payment errors, revealed=%s", (revealed) => {
     const input = snapshot(revealed)
     input.runs[0]!.runState = "error"

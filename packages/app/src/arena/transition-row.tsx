@@ -4,16 +4,13 @@ import { AlertTriangle, ChevronDown, ChevronRight, Monitor } from "lucide-react-
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { Theme } from "@/styles/theme";
-import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import {
   environmentTransitionCounts,
-  pendingTransitionLabel,
   transitionListenerLabels,
   transitionSummaryLabel,
   type ArenaTransition,
 } from "./environment";
 
-const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedAlertTriangle = withUnistyles(AlertTriangle);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedChevronRight = withUnistyles(ChevronRight);
@@ -21,16 +18,9 @@ const ThemedMonitor = withUnistyles(Monitor);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const dangerColorMapping = (theme: Theme) => ({ color: theme.colors.statusDanger });
 
-/**
- * Whether the row has anything to say. Silent warm preparation has a transition with no
- * label, so the battle card asks this before drawing a section around the row.
- */
-export function arenaTransitionRowVisible(
-  transition: ArenaTransition | undefined,
-  pendingProcessCount: number,
-): boolean {
-  if (transition) return transitionSummaryLabel(transition) !== null;
-  return pendingTransitionLabel(pendingProcessCount) !== null;
+/** Completed environment changes stay available as a report. */
+export function arenaTransitionRowVisible(transition: ArenaTransition | undefined): boolean {
+  return transition !== undefined && transitionSummaryLabel(transition) !== null;
 }
 
 function TransitionDetails({ transition }: { transition: ArenaTransition }) {
@@ -96,34 +86,12 @@ function TransitionDetails({ transition }: { transition: ArenaTransition }) {
  * What Arena did to the previous winner's environment before this turn started. One muted
  * line, only when something actually happened; the details stay behind a toggle.
  */
-export function ArenaTransitionRow({
-  transition,
-  pendingProcessCount = 0,
-}: {
-  transition?: ArenaTransition;
-  /**
-   * How many of the last winner's processes are still to be stopped. Reported in the present
-   * tense from the moment the prompt is sent, so the row arrives with the panes rather than
-   * after the work it describes is already over.
-   */
-  pendingProcessCount?: number;
-}) {
+export function ArenaTransitionRow({ transition }: { transition?: ArenaTransition }) {
   const [expanded, setExpanded] = useState(false);
   const handleToggle = useCallback(() => setExpanded((value) => !value), []);
   const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
   const label = transition ? transitionSummaryLabel(transition) : null;
-  if (!transition || !label) {
-    const pending = transition ? null : pendingTransitionLabel(pendingProcessCount);
-    if (!pending) return null;
-    return (
-      <View style={styles.root} testID="arena-environment-transition">
-        <View style={styles.header}>
-          <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />
-          <Text style={styles.summary}>{pending}</Text>
-        </View>
-      </View>
-    );
-  }
+  if (!transition || !label) return null;
   const failed = environmentTransitionCounts(transition).failures > 0;
   const Icon = failed ? ThemedAlertTriangle : ThemedMonitor;
   return (

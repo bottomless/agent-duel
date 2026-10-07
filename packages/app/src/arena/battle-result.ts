@@ -1,8 +1,4 @@
-import type {
-  ArenaHistoryItem,
-  ArenaSide,
-  ArenaSnapshot,
-} from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaHistoryItem, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 
 export function battleWinnerSide(item: ArenaHistoryItem): ArenaSide | undefined {
   return item.vote === "a" || item.vote === "b" ? item.vote : undefined;
@@ -62,32 +58,8 @@ export const RESOLVING_BATTLE_STATES: ReadonlySet<string> = new Set([
   "cleanup_pending",
 ]);
 
-/**
- * One label for the whole resolution, deliberately.
- *
- * Naming each phase changed the button's copy two or three times inside four seconds, which
- * reads as flicker rather than as progress — the eye catches the change and not the word. The
- * phases are still worth distinguishing when something fails, and the turn's state carries
- * that; the button is not where it belongs.
- */
-export const RESOLVING_BUTTON_LABEL = "Applying changes…";
-
 export function isResolvingBattleState(state: string | undefined): boolean {
   return state !== undefined && RESOLVING_BATTLE_STATES.has(state);
-}
-
-/**
- * What each side's vote button says. Only the chosen side gets a label; the other keeps
- * its own copy and is disabled by the turn's state like any other non-votable moment.
- */
-export function resolvingBattleLabels(
-  turn: ArenaSnapshot["turn"],
-): Record<ArenaSide, string | null> {
-  const chosen = isResolvingBattleState(turn?.state) ? turn?.appliedSide : undefined;
-  return {
-    a: chosen === "a" ? RESOLVING_BUTTON_LABEL : null,
-    b: chosen === "b" ? RESOLVING_BUTTON_LABEL : null,
-  };
 }
 
 export interface GitApplicationNotice {

@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { BattleState, Side, StopResolution, Vote } from "./domain"
+import { ArenaActiveOperation } from "./operation-tracker"
 
 const Identity = Schema.Struct({ name: Schema.String })
 const Identities = Schema.Struct({ a: Identity, b: Identity })
@@ -225,6 +226,21 @@ const HistoryItem = Schema.Struct({
   updatedAt: Schema.String,
 })
 
+const ActiveOperations = Schema.Array(Schema.Literals(ArenaActiveOperation))
+const OperationProgress = Schema.Union([
+  Schema.Struct({
+    operation: Schema.Literals(ArenaActiveOperation),
+    startedAt: Schema.Number,
+    state: Schema.Literal("running"),
+  }),
+  Schema.Struct({
+    operation: Schema.Literals(ArenaActiveOperation),
+    startedAt: Schema.Number,
+    finishedAt: Schema.Number,
+    state: Schema.Literals(["completed", "failed", "interrupted"]),
+  }),
+])
+
 const Inspection = Schema.Struct({
   status: Schema.String,
   patch: Schema.String,
@@ -312,6 +328,8 @@ export const Snapshot = Schema.Struct({
       ),
       baseSHA: Schema.String,
       comparisonState: Schema.Literals(["pending", "running", "complete", "skipped", "failed"]),
+      activeOperations: Schema.optional(ActiveOperations),
+      operationProgress: Schema.optional(Schema.Array(OperationProgress)),
       canVote: Schema.Boolean,
       canRetryResolution: Schema.Boolean,
       canDiscardWinner: Schema.Boolean,

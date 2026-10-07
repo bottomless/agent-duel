@@ -1,0 +1,214 @@
+Battle transition QA — 2026-10-05
+
+Verified after merging origin/main at 5fbec2951.
+macOS Electron desktop stack (npm run dev:desktop -- --dev-login) and Chromium browser QA harness.
+Real battle and normal vote in a disposable Git project, with 3,000 ignored dependency fixtures and preview processes.
+No synthetic progress delays. Windows and Linux were not exercised.
+Setup: no battle panes, decision choices, or Working label before setup completes.
+Vote: progress below the battle; frame observations show battle -> applying -> result on both surfaces.
+The original reported visual flicker was not reproduced; regression tests cover premature completed-summary eligibility.
+
+Repository root: npm run build:server
+
+> paseo@0.4.0-beta.1 build:server
+> npm run build:server-deps && npm run build --workspace=@getpaseo/server && npm run build --workspace=@getpaseo/cli
+
+
+> paseo@0.4.0-beta.1 build:server-deps
+> concurrently --kill-others-on-fail --names highlight,relay,client --prefix-colors yellow,blue,cyan "npm run build:highlight" "npm run build:relay" "npm run build:client"
+
+[relay]
+[relay] > paseo@0.4.0-beta.1 build:relay
+[relay] > npm run build --workspace=@getpaseo/relay
+[relay]
+[client]
+[client] > paseo@0.4.0-beta.1 build:client
+[client] > npm run build --workspace=@getpaseo/client
+[client]
+[highlight]
+[highlight] > paseo@0.4.0-beta.1 build:highlight
+[highlight] > npm run build --workspace=@getpaseo/highlight
+[highlight]
+[relay]
+[relay] > @getpaseo/relay@0.4.0-beta.1 build
+[relay] > tsc -p tsconfig.json --incremental false
+[relay]
+[client]
+[client] > @getpaseo/client@0.4.0-beta.1 build
+[client] > npm run build --workspace=@getpaseo/protocol && tsc -p tsconfig.json --incremental false
+[client]
+[highlight]
+[highlight] > @getpaseo/highlight@0.4.0-beta.1 build
+[highlight] > tsc -p tsconfig.json --incremental false
+[highlight]
+[client]
+[client] > @getpaseo/protocol@0.4.0-beta.1 prebuild
+[client] > npm run generate:validators
+[client]
+[client]
+[client] > @getpaseo/protocol@0.4.0-beta.1 generate:validators
+[client] > node scripts/generate-validation-aot.mjs
+[client]
+[highlight] npm run build:highlight exited with code 0
+[client] generated src/generated/validation/ws-outbound.aot.ts from codegen/ws-outbound.compile.ts (WSOutboundMessageSchema)
+[client]
+[client] > @getpaseo/protocol@0.4.0-beta.1 build
+[client] > tsc -p tsconfig.json --incremental false
+[client]
+[relay] npm run build:relay exited with code 0
+[client] npm run build:client exited with code 0
+
+> @getpaseo/server@0.4.0-beta.1 build
+> npm run build:lib && npm run build:scripts
+
+
+> @getpaseo/server@0.4.0-beta.1 build:lib
+> tsc -p tsconfig.server.json --incremental false && node -e "const fs=require('node:fs'); fs.mkdirSync('dist/server/server/speech/providers/local/sherpa/assets',{recursive:true}); fs.copyFileSync('src/server/speech/providers/local/sherpa/assets/silero_vad.onnx','dist/server/server/speech/providers/local/sherpa/assets/silero_vad.onnx'); fs.cpSync('src/terminal/shell-integration','dist/server/terminal/shell-integration',{recursive:true}); fs.cpSync('src/terminal/shell-integration','dist/src/terminal/shell-integration',{recursive:true}); fs.copyFileSync('src/terminal/terminal-ts-loader.mjs','dist/server/terminal/terminal-ts-loader.mjs');"
+
+
+> @getpaseo/server@0.4.0-beta.1 build:scripts
+> tsc -p tsconfig.scripts.json --incremental false && node -e "const fs=require('node:fs'); fs.mkdirSync('dist/scripts',{recursive:true}); fs.copyFileSync('scripts/mcp-stdio-socket-bridge-cli.mjs','dist/scripts/mcp-stdio-socket-bridge-cli.mjs');"
+
+
+> @getpaseo/cli@0.4.0-beta.1 build
+> tsc -p tsconfig.json --incremental false
+
+
+Repository root: npm run typecheck
+
+> paseo@0.4.0-beta.1 typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> @getpaseo/expo-two-way-audio@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/highlight@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/protocol@0.4.0-beta.1 pretypecheck
+> npm run generate:validators
+
+
+> @getpaseo/protocol@0.4.0-beta.1 generate:validators
+> node scripts/generate-validation-aot.mjs
+
+generated src/generated/validation/ws-outbound.aot.ts from codegen/ws-outbound.compile.ts (WSOutboundMessageSchema)
+
+> @getpaseo/protocol@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/client@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/server@0.4.0-beta.1 typecheck
+> tsgo -p tsconfig.server.typecheck.json --noEmit
+
+
+> @getpaseo/app@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/relay@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/desktop@0.4.0-beta.1 typecheck
+> tsgo --noEmit -p tsconfig.json
+
+
+> @getpaseo/cli@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+Repository root: npm run lint
+
+> paseo@0.4.0-beta.1 lint
+> oxlint --disable-nested-config
+
+Found 0 warnings and 0 errors.
+Finished in 1.1s on 3446 files with 177 rules using 18 threads.
+
+packages/app: npx vitest run src/arena/battle-summary.test.ts --maxWorkers=1 --bail=1
+
+ RUN  v4.1.7 /Users/michaelmayer/.codex/worktrees/34fc/agent-arena-frontend/packages/app
+
+
+ Test Files  1 passed (1)
+      Tests  54 passed (54)
+   Start at  16:35:57
+   Duration  596ms (transform 246ms, setup 62ms, import 316ms, tests 17ms, environment 0ms)
+
+
+packages/app: npx vitest run src/arena/decision-state.test.ts --maxWorkers=1 --bail=1
+
+ RUN  v4.1.7 /Users/michaelmayer/.codex/worktrees/34fc/agent-arena-frontend/packages/app
+
+
+ Test Files  1 passed (1)
+      Tests  22 passed (22)
+   Start at  16:35:58
+   Duration  330ms (transform 107ms, setup 31ms, import 140ms, tests 5ms, environment 0ms)
+
+
+arena-backend/packages/opencode: bun run typecheck
+$ tsgo --noEmit
+
+arena-backend/packages/opencode: bun test test/arena/operation-tracker.test.ts test/arena/public.test.ts --bail
+bun test v1.3.14 (0d9b296a)
+
+test/arena/public.test.ts:
+(pass) ArenaPublic > projects active transition operations only for current active turns [12.79ms]
+(pass) ArenaPublic > hides billing details in payment errors, revealed=%s [0.37ms]
+(pass) ArenaPublic > hides billing details in payment errors, revealed=%s [0.14ms]
+(pass) ArenaPublic > keeps the battle end boundary stable after background updates [0.43ms]
+(pass) ArenaPublic > reveals a single-agent identity only after its separate thumbs vote [0.35ms]
+(pass) ArenaPublic > does not expose identity, usage, cost, or private configuration before a decision [0.18ms]
+(pass) ArenaPublic > exposes only a boolean selectability signal before a decision [0.16ms]
+(pass) ArenaPublic > keeps a finalized empty result selectable [0.08ms]
+(pass) ArenaPublic > projects a missing trunk as a durable blocked state [0.08ms]
+(pass) ArenaPublic > projects workspace lifecycle metadata without copy identities and preserves inactive routes [0.78ms]
+(pass) ArenaPublic > normalizes Mongo's null stopped-resolution side [0.13ms]
+(pass) ArenaPublic > reveals only the human identity after a decision [0.15ms]
+(pass) ArenaPublic > keeps an unfinished early-selected run duration null [0.13ms]
+(pass) ArenaPublic > omits early-selection state for stopped and aborted turns [0.16ms]
+(pass) ArenaPublic > offers a retry and a discard for a result that stopped before writing [0.37ms]
+(pass) ArenaPublic > offers the retry that finishes a promotion parked on conflicts [0.06ms]
+(pass) ArenaPublic > produces a JSON-encodable projection without explicit undefined fields [0.18ms]
+(pass) ArenaPublic > normalizes malformed nested values without discarding healthy siblings [0.13ms]
+
+test/arena/operation-tracker.test.ts:
+(pass) arena operation tracker > keeps a shared operation visible until its last lease ends [2.72ms]
+(pass) arena operation tracker > publishes concurrent different operations as a set [0.67ms]
+(pass) arena operation tracker > clears on failure and interruption [0.78ms]
+(pass) arena operation tracker > records completed, failed, and interrupted exits, including overlap [2.12ms]
+(pass) arena operation tracker > serializes delayed publications in mutation order [0.63ms]
+
+ 23 pass
+ 0 fail
+ 105 expect() calls
+Ran 23 tests across 2 files. [975.00ms]
+
+arena-backend/packages/opencode: bun run test ./test/arena/service.integration.test.ts --test-name-pattern 'completes with visible conflict markers and admits the next battle' --bail
+$ bun test --timeout 30000 --only-failures ./test/arena/service.integration.test.ts --test-name-pattern "completes with visible conflict markers and admits the next battle" --bail
+bun test v1.3.14 (0d9b296a)
+
+ 1 pass
+ 48 filtered out
+ 0 fail
+ 38 expect() calls
+Ran 1 test across 1 file. [23.45s]
+
+Before main merge; unchanged timeline state: packages/app: npx vitest run src/arena/transition-timeline-state.test.ts --maxWorkers=1 --bail=1
+
+ RUN  v4.1.7 /Users/michaelmayer/.codex/worktrees/34fc/agent-arena-frontend/packages/app
+
+
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  15:14:04
+   Duration  145ms (transform 29ms, setup 22ms, import 17ms, tests 2ms, environment 0ms)

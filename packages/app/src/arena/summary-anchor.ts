@@ -118,7 +118,11 @@ export function partitionArenaSummaries(
   inline: readonly ArenaHistoryItem[];
   live: ArenaHistoryItem | null;
 } {
-  const resolved = history.filter((item) => item.resolution && item.identities);
+  // Recording the vote reveals identities before application and transcript grafting finish.
+  // That turn still belongs to the live battle, even if its history anchor already exists.
+  const resolved = history.filter(
+    (item) => item.resolution && item.identities && !isResolvingBattleState(item.state),
+  );
   if (battleIsActive || resolved.length === 0) {
     return { inline: resolved, live: null };
   }

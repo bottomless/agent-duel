@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { basename } from "path"
 import type { Resolution, Side } from "./domain"
+import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument } from "./records"
 import { ArenaSchema } from "./schema"
 import { runPaymentMessage } from "@agent-duel/arena-service/request-error"
@@ -195,9 +196,22 @@ export function parseSnapshot(value: unknown): ArenaSchema.Snapshot {
   return Schema.decodeUnknownSync(ArenaSchema.Snapshot)(value)
 }
 
+const ACTIVE_TURN_STATES = new Set([
+  "creating",
+  "worktrees_ready",
+  "running",
+  "early_selected",
+  "applying",
+  "canonicalizing",
+  "cleanup_pending",
+])
+
 export function project(snapshot: BattleSnapshot) {
   const turn = snapshot.turn
   const revealed = turn?.resolution !== undefined
+  const operationProgress = turn?.operationProgress?.filter(
+    (entry) => entry.state !== "running" || ACTIVE_TURN_STATES.has(turn.state),
+  )
   const selected = turn?.appliedSide ? snapshot.runs.find((run) => run.side === turn.appliedSide) : undefined
   const trunkBranch = snapshot.chat.canonicalCheckout?.branch ?? snapshot.chat.arenaBranch
   const retained = snapshot.chat.retainedWinner
@@ -275,6 +289,14 @@ export function project(snapshot: BattleSnapshot) {
             baseSHA: turn.frozenBaseSHA,
             state: turn.state,
             comparisonState: turn.comparisonState,
+            ...(operationProgress?.length ? { operationProgress } : {}),
+            ...(ACTIVE_TURN_STATES.has(turn.state) && turn.activeOperations?.length
+              ? {
+                  activeOperations: turn.activeOperations.filter((operation) =>
+                    ArenaActiveOperation.includes(operation),
+                  ),
+                }
+              : {}),
             ...(turn.resolution ? { resolution: resolution(turn.resolution) } : {}),
             ...(turn.vote ? { vote: turn.vote } : {}),
             ...(turn.selectedEarly === undefined ? {} : { selectedEarly: turn.selectedEarly }),
