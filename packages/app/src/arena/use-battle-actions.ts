@@ -48,8 +48,12 @@ export function useArenaBattleActions(
     feedback?.status === "pending" ? (feedback.action ?? null) : null;
   const belongsToTurn =
     !turn?.createdAt || (feedback?.submittedAt ?? 0) >= Date.parse(turn.createdAt);
+  const errorBelongsToBattle =
+    belongsToTurn &&
+    feedback?.action?.kind !== "interrupt_steer" &&
+    feedback?.action?.kind !== "discard_steer";
   const actionError =
-    belongsToTurn && feedback?.status === "error" ? toErrorMessage(feedback.error) : null;
+    errorBelongsToBattle && feedback?.status === "error" ? toErrorMessage(feedback.error) : null;
   const turnId = turn?.id;
   const turnState = turn?.state;
 

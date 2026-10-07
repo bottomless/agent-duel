@@ -25,9 +25,17 @@ import type {
   ArenaRunQuestionRejectResponses,
   ArenaRunQuestionReplyErrors,
   ArenaRunQuestionReplyResponses,
+  ArenaRunSteerDiscardErrors,
+  ArenaRunSteerDiscardResponses,
+  ArenaRunSteerInterruptErrors,
+  ArenaRunSteerInterruptResponses,
   ArenaSessionArchiveErrors,
   ArenaSessionArchiveResponses,
+  ArenaSessionAutoAcceptErrors,
+  ArenaSessionAutoAcceptResponses,
   ArenaSessionErrors,
+  ArenaSessionForkErrors,
+  ArenaSessionForkResponses,
   ArenaSessionResponses,
   ArenaSingleAgentVoteErrors,
   ArenaSingleAgentVoteResponses,
@@ -1553,6 +1561,88 @@ export class Session2 extends HeyApiClient {
       },
     )
   }
+
+  /**
+   * Fork a chat into another directory
+   *
+   * Copy a session through the selected message, move the copy into the destination, and point every path the copy names at the destination.
+   */
+  public fork<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      destination?: string
+      messageID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "destination" },
+            { in: "body", key: "messageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ArenaSessionForkResponses, ArenaSessionForkErrors, ThrowOnError>({
+      url: "/arena/sessions/{sessionID}/fork",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Set automatic tool permission approval for an active battle
+   */
+  public autoAccept<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      enabled?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "enabled" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ArenaSessionAutoAcceptResponses,
+      ArenaSessionAutoAcceptErrors,
+      ThrowOnError
+    >({
+      url: "/arena/sessions/{sessionID}/auto-accept",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Inspect extends HeyApiClient {
@@ -1643,13 +1733,19 @@ export class Resolution extends HeyApiClient {
   /**
    * Retry an Arena resolution
    *
-   * Retry the recorded winner after Git application or session canonicalization was blocked.
+   * Retry the recorded winner after Git application or session canonicalization was blocked. A review application carries the developer's answers; `discard_winner` drops the result instead.
    */
   public retry<ThrowOnError extends boolean = false>(
     parameters: {
       turnID: string
       directory?: string
       workspace?: string
+      mode?: "discard_winner" | "restore_workspace"
+      answers?: Array<{
+        key: string
+        fingerprint: string
+        choice: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "take" | "stay"
+      }>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1661,6 +1757,8 @@ export class Resolution extends HeyApiClient {
             { in: "path", key: "turnID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "mode" },
+            { in: "body", key: "answers" },
           ],
         },
       ],
@@ -1673,6 +1771,11 @@ export class Resolution extends HeyApiClient {
       url: "/arena/turns/{turnID}/retry-resolution",
       ...options,
       ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
@@ -1841,6 +1944,26 @@ export class Turn extends HeyApiClient {
       workspace?: string
       prompt?: string
       participantID?: string
+      autoAccept?: boolean
+      attachments?: Array<
+        | {
+            type: "image"
+            mimeType: string
+            data: string
+          }
+        | {
+            type: "text"
+            label: string
+            text: string
+          }
+        | {
+            type: "file"
+            path: string
+            name: string
+            mimeType: string
+            size: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+      >
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1854,6 +1977,8 @@ export class Turn extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "prompt" },
             { in: "body", key: "participantID" },
+            { in: "body", key: "autoAccept" },
+            { in: "body", key: "attachments" },
           ],
         },
       ],
@@ -1882,6 +2007,25 @@ export class Turn extends HeyApiClient {
       workspace?: string
       prompt?: string
       target?: "a" | "b" | "both"
+      attachments?: Array<
+        | {
+            type: "image"
+            mimeType: string
+            data: string
+          }
+        | {
+            type: "text"
+            label: string
+            text: string
+          }
+        | {
+            type: "file"
+            path: string
+            name: string
+            mimeType: string
+            size: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+      >
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1895,6 +2039,7 @@ export class Turn extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "prompt" },
             { in: "body", key: "target" },
+            { in: "body", key: "attachments" },
           ],
         },
       ],
@@ -2184,6 +2329,89 @@ export class Question extends HeyApiClient {
   }
 }
 
+export class Steer extends HeyApiClient {
+  /**
+   * Interrupt a contestant and run a queued steer
+   *
+   * Cancel the active contestant request and resume the expected pending user message.
+   */
+  public interrupt<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      messageID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "path", key: "messageID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ArenaRunSteerInterruptResponses,
+      ArenaRunSteerInterruptErrors,
+      ThrowOnError
+    >({
+      url: "/arena/runs/{runID}/steer/{messageID}/interrupt",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Discard queued steers
+   *
+   * Remove queued contestant messages without interrupting active work.
+   */
+  public discard<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      messageIDs?: Array<string>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "messageIDs" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ArenaRunSteerDiscardResponses,
+      ArenaRunSteerDiscardErrors,
+      ThrowOnError
+    >({
+      url: "/arena/runs/{runID}/steer/discard",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Run extends HeyApiClient {
   private _permission?: Permission
   get permission(): Permission {
@@ -2193,6 +2421,11 @@ export class Run extends HeyApiClient {
   private _question?: Question
   get question(): Question {
     return (this._question ??= new Question({ client: this.client }))
+  }
+
+  private _steer?: Steer
+  get steer(): Steer {
+    return (this._steer ??= new Steer({ client: this.client }))
   }
 }
 

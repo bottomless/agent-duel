@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
-import { isArenaRunPossiblyStalled, POSSIBLY_STALLED_AFTER_MS } from "./run-liveness";
+import {
+  arenaRunningTool,
+  isArenaRunPossiblyStalled,
+  POSSIBLY_STALLED_AFTER_MS,
+} from "./run-liveness";
 
 function run(input: Partial<ArenaRun> = {}): ArenaRun {
   return {
@@ -46,5 +50,40 @@ describe("isArenaRunPossiblyStalled", () => {
         Date.parse("2026-08-14T13:00:00.000Z"),
       ),
     ).toBe(false);
+  });
+});
+
+describe("arenaRunningTool", () => {
+  const tool = (name: string, status: string, input: unknown = {}) => ({
+    type: "tool",
+    tool: name,
+    state: { status, input },
+  });
+
+  it("names a running shell command before any other running tool", () => {
+    expect(
+      arenaRunningTool(
+        run({
+          parts: {
+            first: [tool("read", "running", { filePath: "README.md" })],
+            second: [tool("bash", "running", { command: "npm run check" })],
+          },
+        }),
+      ),
+    ).toBe("command");
+    expect(arenaRunningTool(run({ parts: { only: [tool("read", "running")] } }))).toBe("tool");
+  });
+
+  it("ignores finished tool calls and settled runs", () => {
+    const parts = { done: [tool("bash", "completed", { command: "npm test" })] };
+    expect(arenaRunningTool(run({ parts }))).toBeNull();
+    expect(
+      arenaRunningTool(
+        run({
+          runState: "complete",
+          parts: { open: [tool("bash", "running", { command: "npm run check" })] },
+        }),
+      ),
+    ).toBeNull();
   });
 });

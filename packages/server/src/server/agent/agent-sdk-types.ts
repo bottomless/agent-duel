@@ -733,6 +733,8 @@ export interface AgentSession {
       target: "a" | "b" | "both",
       attachments?: readonly ArenaPromptAttachment[],
     ): Promise<ArenaSnapshot>;
+    interruptSteer(runId: string, messageId: string): Promise<ArenaSnapshot>;
+    discardSteer(runId: string, messageIds: string[]): Promise<ArenaSnapshot>;
     vote(turnId: string, vote: ArenaVote, participantId: string): Promise<ArenaSnapshot>;
     /**
      * Append what a voter did while reviewing. Idempotent on event id, so the

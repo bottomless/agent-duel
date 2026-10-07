@@ -1,0 +1,6 @@
+{
+  "deletedQueueAbsent": true,
+  "activeCommandStillVisible": true,
+  "discardedTextAbsent": true,
+  "paneB": "Agent B\nWorking\n·\n1m 24s\nRunning 1 command\nRunning 1 command\n1m 24s"
+}

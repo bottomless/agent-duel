@@ -1120,10 +1120,16 @@ const layer = Layer.effect(
             ...message,
             parts: message.parts.map(ArenaPrivacy.restorePart),
           }))
+          const hasDiscardedContext = () =>
+            msgs.some(
+              (message) => message.info.role === "user" && ArenaPrivacy.isMessageDiscarded(sessionID, message.info.id),
+            )
 
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+          if (hasDiscardedContext()) continue
+          const realUsers = msgs.filter((message) => message.info.role === "user")
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -1163,25 +1169,34 @@ const layer = Layer.effect(
               session,
               modelID: lastUser.model.modelID,
               providerID: lastUser.model.providerID,
-              history: msgs,
+              history: msgs.filter((message) => !ArenaPrivacy.isMessageDiscarded(sessionID, message.info.id)),
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+          if (hasDiscardedContext()) continue
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
-            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
+            const claimedIDs = realUsers.map((message) => message.info.id)
+            if (!ArenaPrivacy.claimMessages(sessionID, claimedIDs)) continue
+            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs }).pipe(
+              Effect.ensuring(Effect.sync(() => ArenaPrivacy.releaseClaims(sessionID, claimedIDs))),
+            )
             continue
           }
 
           if (task?.type === "compaction") {
-            const result = yield* compaction.process({
-              messages: msgs,
-              parentID: lastUser.id,
-              sessionID,
-              auto: task.auto,
-              overflow: task.overflow,
-            })
+            const claimedIDs = realUsers.map((message) => message.info.id)
+            if (!ArenaPrivacy.claimMessages(sessionID, claimedIDs)) continue
+            const result = yield* compaction
+              .process({
+                messages: msgs,
+                parentID: lastUser.id,
+                sessionID,
+                auto: task.auto,
+                overflow: task.overflow,
+              })
+              .pipe(Effect.ensuring(Effect.sync(() => ArenaPrivacy.releaseClaims(sessionID, claimedIDs))))
             if (result === "stop") break
             continue
           }
@@ -1215,6 +1230,7 @@ const layer = Layer.effect(
             Effect.provideService(FSUtil.Service, fsys),
             Effect.provideService(Session.Service, sessions),
           )
+          if (hasDiscardedContext()) continue
 
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
@@ -1311,6 +1327,10 @@ const layer = Layer.effect(
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            if (hasDiscardedContext()) {
+              yield* sessions.removeMessage({ sessionID, messageID: handle.message.id })
+              return "continue" as const
+            }
             const result = yield* handle.process({
               user: lastUser,
               agent,

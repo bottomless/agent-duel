@@ -1,0 +1,8 @@
+{
+  "elapsedSinceClickMs": 90,
+  "deletedQueueAbsent": true,
+  "otherQueueStillPresent": true,
+  "activeCommandStillVisible": true,
+  "discardedTextAbsent": true,
+  "paneA": "Agent A\nWorking\n·\n35s\nRunning 1 command\nRunning 1 command\n35s"
+}

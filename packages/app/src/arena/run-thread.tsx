@@ -30,6 +30,7 @@ import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
+import { arenaQueuedSteering, arenaToolOutput } from "./steering";
 import {
   arenaPartIsWork,
   arenaWorkSummaryLabel,
@@ -70,7 +71,7 @@ function ArenaToolPart({ part }: { part: UnknownRecord }) {
   const state = asRecord(part.state);
   const tool = typeof part.tool === "string" ? part.tool : "tool";
   const input = state?.input;
-  const output = state?.output;
+  const output = arenaToolOutput(state);
   const error = state?.error;
   const status = useMemo(
     () => normalizeArenaToolCallStatus(state?.status, error, output),
@@ -403,6 +404,10 @@ export function ArenaRunThread({
   ) => void;
 }) {
   const visibleMessages = arenaThreadMessages(run);
+  const queuedMessageIds = useMemo(
+    () => new Set(arenaQueuedSteering(run).map((message) => message.id)),
+    [run],
+  );
   const pendingQuestions = useMemo(() => arenaPendingQuestions(run), [run]);
   const pendingPermissions = useMemo(() => arenaPendingPermissions(run), [run]);
   const pending = run.runState === "pending";
@@ -440,6 +445,7 @@ export function ArenaRunThread({
         if (group.kind === "user") {
           const message = group.message;
           const id = messageId(message) ?? fallbackMessageId(run.id, message);
+          if (queuedMessageIds.has(id)) return null;
           const content = arenaUserMessageContent(id, run.parts?.[id] ?? []);
           if (!content.text && content.images.length === 0 && content.attachments.length === 0) {
             return null;
@@ -467,7 +473,9 @@ export function ArenaRunThread({
         );
       })}
       {tasks.length > 0 ? <ArenaTaskProgressCard key={run.id} tasks={tasks} state="ended" /> : null}
-      {pending ? <RunningTurnFooter inFlightTurnStartedAt={startedAt} /> : null}
+      {pending && queuedMessageIds.size === 0 ? (
+        <RunningTurnFooter inFlightTurnStartedAt={startedAt} />
+      ) : null}
       {/* The note reports the pick; anything the run recorded for its own reasons still shows
           under it. */}
       {stoppedByEarlyPick ? (

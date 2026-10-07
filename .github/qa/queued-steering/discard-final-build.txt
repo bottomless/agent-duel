@@ -1,0 +1,26 @@
+[
+  {
+    "side": "a",
+    "elapsedMs": 126,
+    "running": true,
+    "deletedMessageVisible": false
+  },
+  {
+    "side": "b",
+    "elapsedMs": 108,
+    "running": true,
+    "deletedMessageVisible": false
+  }
+]
+
+After commands finished:
+[
+  {
+    "side": "a",
+    "text": "Agent A\nFinished\n·\n1m 2s\n·\nNo changes\nFINAL_DELETE_CHECK_FINISHED\nRan 1 command"
+  },
+  {
+    "side": "b",
+    "text": "Agent B\nFinished\n·\n1m 7s\nFINAL_DELETE_CHECK_FINISHED\nRan 1 command"
+  }
+]

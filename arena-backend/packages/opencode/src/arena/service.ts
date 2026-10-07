@@ -966,6 +966,14 @@ export interface Interface {
     target: ReplyTarget,
     attachments?: readonly ArenaAttachments.Input[],
   ) => Effect.Effect<ReturnType<typeof project>, Error>
+  readonly interruptSteer: (
+    runID: string,
+    expectedMessageID: string,
+  ) => Effect.Effect<ReturnType<typeof project>, Error>
+  readonly discardSteer: (
+    runID: string,
+    expectedMessageIDs: readonly string[],
+  ) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly vote: (
     turnID: string,
     vote: Vote,
@@ -1049,6 +1057,12 @@ export const layer: Layer.Layer<
     // Root sessions whose request another instance hosts: the canonical checkout's, while their
     // worktree is staged. Their runner is registered there, so cancels and steers go there too.
     const promptHosts = new Map<SessionID, string>()
+    // A queued steer can be promoted by interrupting the current request. Keep this marker in
+    // memory so the prompt fiber that owns finalization resumes the persisted user message after
+    // its runner is cancelled. A separate reply fiber must not call prompts.loop: doing so would
+    // let the original settleSide finalize the run while the replacement is still starting.
+    const interruptingSteers = new Map<string, { readonly messageID: string; readonly hostDirectory: string }>()
+    const discardingSteers = new Set<string>()
     // Aborted by Stop, so a stopped battle resolves without waiting for the rest of its copy.
     const environmentCopyStops = new Map<string, AbortController>()
     const trustedWarmPairs = new WeakMap<Store, Set<string>>()
@@ -3739,7 +3753,7 @@ export const layer: Layer.Layer<
       if (beforeDispatch?.state === "stopping" || beforeDispatch?.state === "early_selected") return Exit.void
       yield* allowReading(run.worktree.directory, run.sessionID, prompt.readable)
       if (hostDirectory !== run.worktree.directory) promptHosts.set(run.sessionID, hostDirectory)
-      const result = yield* Effect.exit(
+      let result = yield* Effect.exit(
         inDirectory(
           hostDirectory,
           prompts.prompt({
@@ -3762,6 +3776,33 @@ export const layer: Layer.Layer<
           ),
         ),
       )
+      while (true) {
+        const steer = interruptingSteers.get(run.runID)
+        if (!steer) break
+        interruptingSteers.delete(run.runID)
+        const interrupted =
+          (Exit.isFailure(result) && Cause.hasInterrupts(result.cause)) ||
+          (Exit.isSuccess(result) &&
+            result.value?.info.role === "assistant" &&
+            result.value.info.error?.name === "MessageAbortedError")
+        const current = yield* promise(() => store.turn(run.turnID))
+        // Stop and early vote own cancellation. Let the normal stopped-side path settle instead of
+        // reviving a queued message after the battle has left the running state.
+        if (!interrupted || current?.state !== "running") break
+        promptHosts.set(run.sessionID, steer.hostDirectory)
+        result = yield* Effect.exit(
+          inDirectory(
+            steer.hostDirectory,
+            prompts.loop({ sessionID: run.sessionID }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  if (promptHosts.get(run.sessionID) === steer.hostDirectory) promptHosts.delete(run.sessionID)
+                }),
+              ),
+            ),
+          ),
+        )
+      }
       if (Exit.isSuccess(result) && result.value?.info.role === "assistant") {
         const env = previewEnvironment(run.worktree.directory)
         yield* Effect.forEach(result.value.parts, (part) => sessions.updatePart(localizeArenaEnvironment(part, env)), {
@@ -3769,6 +3810,7 @@ export const layer: Layer.Layer<
         })
       }
       yield* promise(() => store.updateRun(run.runID, { completedAt: new Date() }))
+      ArenaPrivacy.clearDiscardedMessages(run.sessionID)
       return result
     })
 
@@ -3876,6 +3918,142 @@ export const layer: Layer.Layer<
         yield* cancelRun(directory, sessionID)
         yield* Effect.sleep(Duration.millis(25))
       }
+    })
+
+    const interruptSteer = Effect.fn("Arena.interruptSteer")(function* (runID: string, expectedMessageID: string) {
+      const store = yield* available()
+      const run = yield* runForReply(store, runID)
+      if (run.runState !== "pending") {
+        return yield* Effect.fail(new Error("Arena steer is no longer running"))
+      }
+      if (discardingSteers.has(runID)) {
+        return yield* Effect.fail(new Error("Arena steer mutation is already in progress"))
+      }
+      const sessionID = SessionID.make(run.rootSessionID)
+      const existing = interruptingSteers.get(runID)
+      if (existing) {
+        if (existing.messageID !== expectedMessageID) {
+          return yield* Effect.fail(new Error("Arena steer interruption is already targeting another message"))
+        }
+        const turn = yield* promise(() => store.turn(run.turnID))
+        if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${run.turnID}`))
+        return yield* respond(store, turn.chatID)
+      }
+      const hostDirectory = promptHosts.get(sessionID) ?? run.worktree
+      const status = yield* inDirectory(hostDirectory, statuses.get(sessionID))
+      if (status.type === "idle") {
+        return yield* Effect.fail(new Error("Arena contestant is no longer running"))
+      }
+      const messages = yield* inDirectory(hostDirectory, sessions.messages({ sessionID }))
+      const expectedIndex = messages.findIndex(
+        (message) => message.info.id === expectedMessageID && message.info.role === "user",
+      )
+      if (expectedIndex < 0) {
+        return yield* Effect.fail(new Error("Arena pending steer message was not found"))
+      }
+      const later = messages.slice(expectedIndex + 1)
+      const consumesExpected = later.some((message) => {
+        if (message.info.role !== "assistant" || !message.info.parentID) return false
+        const parentID = message.info.parentID
+        const parentIndex = messages.findIndex((candidate) => candidate.info.id === parentID)
+        return parentIndex >= expectedIndex
+      })
+      if (consumesExpected) {
+        return yield* Effect.fail(new Error("Arena pending steer was already consumed"))
+      }
+      if (later.some((message) => message.info.role === "user")) {
+        return yield* Effect.fail(new Error("Arena pending steer is not the latest queued message"))
+      }
+      interruptingSteers.set(runID, { messageID: expectedMessageID, hostDirectory })
+      const cancelled = yield* Effect.exit(cancelRun(run.worktree, sessionID))
+      if (Exit.isFailure(cancelled)) {
+        if (interruptingSteers.get(runID)?.messageID === expectedMessageID) interruptingSteers.delete(runID)
+        return yield* Effect.failCause(cancelled.cause)
+      }
+      const turn = yield* promise(() => store.turn(run.turnID))
+      if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${run.turnID}`))
+      return yield* respond(store, turn.chatID)
+    })
+
+    const discardSteer = Effect.fn("Arena.discardSteer")(function* (
+      runID: string,
+      expectedMessageIDs: readonly string[],
+    ) {
+      const store = yield* available()
+      const run = yield* runForReply(store, runID)
+      if (run.runState !== "pending") {
+        return yield* Effect.fail(new Error("Arena steer is no longer running"))
+      }
+      if (interruptingSteers.has(runID) || discardingSteers.has(runID)) {
+        return yield* Effect.fail(new Error("Arena steer mutation is already in progress"))
+      }
+      const sessionID = SessionID.make(run.rootSessionID)
+      discardingSteers.add(runID)
+      if (!ArenaPrivacy.reserveDiscard(sessionID, expectedMessageIDs)) {
+        discardingSteers.delete(runID)
+        return yield* Effect.fail(new Error("Arena pending steer is already consumed or being discarded"))
+      }
+      return yield* Effect.gen(function* () {
+        const turn = yield* promise(() => store.turn(run.turnID))
+        if (!turn || turn.state !== "running") {
+          return yield* Effect.fail(new Error("Arena steer is no longer running"))
+        }
+        if (
+          expectedMessageIDs.length === 0 ||
+          expectedMessageIDs.some((messageID) => messageID.length === 0) ||
+          new Set(expectedMessageIDs).size !== expectedMessageIDs.length
+        ) {
+          return yield* Effect.fail(new Error("Arena pending steer message IDs must be unique and nonempty"))
+        }
+        const hostDirectory = promptHosts.get(sessionID) ?? run.worktree
+        const status = yield* inDirectory(hostDirectory, statuses.get(sessionID))
+        if (status.type === "idle") {
+          return yield* Effect.fail(new Error("Arena contestant is no longer running"))
+        }
+        const messages = yield* inDirectory(hostDirectory, sessions.messages({ sessionID }))
+        const boundaryIndex = run.promptMessageID
+          ? messages.findIndex((message) => message.info.id === run.promptMessageID)
+          : -1
+        if (boundaryIndex < 0) {
+          return yield* Effect.fail(new Error("Arena contestant prompt boundary was not found"))
+        }
+        const assistants = messages.flatMap((message, index) =>
+          message.info.role === "assistant" && message.info.parentID
+            ? [{ index, parentID: message.info.parentID }]
+            : [],
+        )
+        for (const expectedMessageID of expectedMessageIDs) {
+          const index = messages.findIndex((message) => message.info.id === expectedMessageID)
+          const message = messages[index]
+          if (!message || message.info.role !== "user" || index <= boundaryIndex) {
+            return yield* Effect.fail(new Error("Arena pending steer message was not found"))
+          }
+          if (
+            assistants.some((assistant) => {
+              const parentIndex = messages.findIndex((candidate) => candidate.info.id === assistant.parentID)
+              return assistant.index > index && parentIndex >= index
+            })
+          ) {
+            return yield* Effect.fail(new Error("Arena pending steer was already consumed"))
+          }
+        }
+        yield* Effect.forEach(
+          expectedMessageIDs,
+          (messageID) =>
+            inDirectory(hostDirectory, sessions.removeMessage({ sessionID, messageID: MessageID.make(messageID) })),
+          { discard: true },
+        )
+        return yield* respond(store, turn.chatID)
+      }).pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            discardingSteers.delete(runID)
+            if (Exit.isFailure(exit)) {
+              ArenaPrivacy.releaseDiscard(sessionID, expectedMessageIDs)
+            }
+          }),
+        ),
+      )
     })
 
     const startUtility = Effect.fn("Arena.startUtility")(function* (
@@ -5357,6 +5535,10 @@ export const layer: Layer.Layer<
       }
       if (turn.state === "awaiting_vote" && working.length > 0) {
         return yield* Effect.fail(new Error("Arena replies after the battle finished can only resume contestants"))
+      }
+      // Checked before anything is claimed, so a refused steer leaves both sides untouched.
+      if (working.some((run) => interruptingSteers.has(run._id) || discardingSteers.has(run._id))) {
+        return yield* Effect.fail(new Error("Arena steer mutation is already in progress"))
       }
       const finishedSides = finished.map((run) => run.side)
       const claimed =
@@ -9104,6 +9286,8 @@ export const layer: Layer.Layer<
       singleAgentVote,
       startTurn,
       reply,
+      interruptSteer,
+      discardSteer,
       vote,
       recordReview,
       retryResolution,

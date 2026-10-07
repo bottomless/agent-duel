@@ -1,0 +1,108 @@
+npm run typecheck
+
+> paseo@0.4.0-beta.1 typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> @getpaseo/expo-two-way-audio@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/highlight@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/protocol@0.4.0-beta.1 pretypecheck
+> npm run generate:validators
+
+
+> @getpaseo/protocol@0.4.0-beta.1 generate:validators
+> node scripts/generate-validation-aot.mjs
+
+generated src/generated/validation/ws-outbound.aot.ts from codegen/ws-outbound.compile.ts (WSOutboundMessageSchema)
+
+> @getpaseo/protocol@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/client@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/server@0.4.0-beta.1 typecheck
+> tsgo -p tsconfig.server.typecheck.json --noEmit
+
+
+> @getpaseo/app@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/relay@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/desktop@0.4.0-beta.1 typecheck
+> tsgo --noEmit -p tsconfig.json
+
+
+> @getpaseo/cli@0.4.0-beta.1 typecheck
+> tsgo --noEmit
+
+
+
+npm run lint -- --ignore-pattern '.agent-duel/**' --ignore-pattern 'packages/protocol/src/generated/**'
+
+> paseo@0.4.0-beta.1 lint
+> oxlint --disable-nested-config --ignore-pattern .agent-duel/** --ignore-pattern packages/protocol/src/generated/**
+
+Found 0 warnings and 0 errors.
+Finished in 952ms on 3440 files with 177 rules using 18 threads.
+
+
+From packages/app: npx vitest run src/arena/steering.test.ts --bail=1
+
+ RUN  v4.1.7
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  16:19:59
+   Duration  264ms (transform 62ms, setup 70ms, import 33ms, tests 3ms, environment 0ms)
+
+
+From arena-backend/packages/opencode:
+bun test test/arena/service.integration.test.ts --test-name-pattern 'discards multiple queued steers without interrupting active work'
+
+(pass) Arena service vertical slice > discards multiple queued steers without interrupting active work [12828.83ms]
+
+ 1 pass
+ 48 filtered out
+ 0 fail
+ 14 expect() calls
+Ran 1 test across 1 file. [13.98s]
+
+bun test test/arena/service.integration.test.ts --test-name-pattern 'interrupts a queued steer and resumes the same contestant session'
+
+(pass) Arena service vertical slice > interrupts a queued steer and resumes the same contestant session [17399.80ms]
+
+ 1 pass
+ 48 filtered out
+ 0 fail
+ 11 expect() calls
+Ran 1 test across 1 file. [18.51s]
+
+bun run typecheck
+$ tsgo --noEmit
+Exit code: 0
+
+SDK generation from arena-backend/packages/sdk/js: bun run build
+Completed with exit code 0, including generated SDK typecheck.
+
+Reservation/claim guards from arena-backend/packages/opencode:
+$ bun test test/arena/privacy.test.ts --bail=1
+15 pass
+0 fail
+125 expect() calls
+Ran 15 tests across 1 file. [1.85s]
+
+$ bun run typecheck
+$ tsgo --noEmit
+Exit code: 0
