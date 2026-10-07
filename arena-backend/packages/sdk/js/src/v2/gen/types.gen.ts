@@ -7602,6 +7602,11 @@ export type ArenaActivityResponses = {
     }>
     comparisonState?: "pending" | "running" | "complete" | "skipped" | "failed"
     summary?: string
+    chatDiff?: {
+      files: number
+      additions: number
+      deletions: number
+    }
   }>
 }
 
@@ -7673,6 +7678,7 @@ export type ArenaSessionResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -7753,6 +7759,7 @@ export type ArenaSessionResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -7762,17 +7769,77 @@ export type ArenaSessionResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -7803,10 +7870,15 @@ export type ArenaSessionResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -7856,6 +7928,7 @@ export type ArenaSessionResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -7865,17 +7938,77 @@ export type ArenaSessionResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -8035,6 +8168,7 @@ export type ArenaSingleAgentVoteResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -8115,6 +8249,7 @@ export type ArenaSingleAgentVoteResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -8124,17 +8259,77 @@ export type ArenaSingleAgentVoteResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -8165,10 +8360,15 @@ export type ArenaSingleAgentVoteResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -8218,6 +8418,7 @@ export type ArenaSingleAgentVoteResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -8227,17 +8428,77 @@ export type ArenaSingleAgentVoteResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -8393,6 +8654,7 @@ export type ArenaSessionArchiveResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -8473,6 +8735,7 @@ export type ArenaSessionArchiveResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -8482,17 +8745,77 @@ export type ArenaSessionArchiveResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -8523,10 +8846,15 @@ export type ArenaSessionArchiveResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -8576,6 +8904,7 @@ export type ArenaSessionArchiveResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -8585,17 +8914,77 @@ export type ArenaSessionArchiveResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -8718,6 +9107,41 @@ export type ArenaSessionArchiveResponses = {
 
 export type ArenaSessionArchiveResponse = ArenaSessionArchiveResponses[keyof ArenaSessionArchiveResponses]
 
+export type ArenaSessionForkData = {
+  body?: {
+    destination: string
+    messageID?: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/arena/sessions/{sessionID}/fork"
+}
+
+export type ArenaSessionForkErrors = {
+  /**
+   * ArenaApiError | InvalidRequestError
+   */
+  400: ArenaApiError | InvalidRequestError
+}
+
+export type ArenaSessionForkError = ArenaSessionForkErrors[keyof ArenaSessionForkErrors]
+
+export type ArenaSessionForkResponses = {
+  /**
+   * Success
+   */
+  200: {
+    sessionID: string
+  }
+}
+
+export type ArenaSessionForkResponse = ArenaSessionForkResponses[keyof ArenaSessionForkResponses]
+
 export type ArenaSnapshotData = {
   body?: never
   path: {
@@ -8752,6 +9176,7 @@ export type ArenaSnapshotResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -8832,6 +9257,7 @@ export type ArenaSnapshotResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -8841,17 +9267,77 @@ export type ArenaSnapshotResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -8882,10 +9368,15 @@ export type ArenaSnapshotResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -8935,6 +9426,7 @@ export type ArenaSnapshotResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -8944,17 +9436,77 @@ export type ArenaSnapshotResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -9111,6 +9663,7 @@ export type ArenaTurnResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -9191,6 +9744,7 @@ export type ArenaTurnResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -9200,17 +9754,77 @@ export type ArenaTurnResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -9241,10 +9855,15 @@ export type ArenaTurnResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -9294,6 +9913,7 @@ export type ArenaTurnResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -9303,17 +9923,77 @@ export type ArenaTurnResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -9580,6 +10260,7 @@ export type ArenaTurnInspectResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -9660,6 +10341,7 @@ export type ArenaTurnInspectResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -9669,17 +10351,77 @@ export type ArenaTurnInspectResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -9710,10 +10452,15 @@ export type ArenaTurnInspectResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -9763,6 +10510,7 @@ export type ArenaTurnInspectResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -9772,17 +10520,77 @@ export type ArenaTurnInspectResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -10054,6 +10862,7 @@ export type ArenaRunPermissionReplyResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -10134,6 +10943,7 @@ export type ArenaRunPermissionReplyResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -10143,17 +10953,77 @@ export type ArenaRunPermissionReplyResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -10184,10 +11054,15 @@ export type ArenaRunPermissionReplyResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -10237,6 +11112,7 @@ export type ArenaRunPermissionReplyResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -10246,17 +11122,77 @@ export type ArenaRunPermissionReplyResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -10413,6 +11349,7 @@ export type ArenaRunQuestionReplyResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -10493,6 +11430,7 @@ export type ArenaRunQuestionReplyResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -10502,17 +11440,77 @@ export type ArenaRunQuestionReplyResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -10543,10 +11541,15 @@ export type ArenaRunQuestionReplyResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -10596,6 +11599,7 @@ export type ArenaRunQuestionReplyResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -10605,17 +11609,77 @@ export type ArenaRunQuestionReplyResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -10772,6 +11836,7 @@ export type ArenaRunQuestionRejectResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -10852,6 +11917,7 @@ export type ArenaRunQuestionRejectResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -10861,17 +11927,77 @@ export type ArenaRunQuestionRejectResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -10902,10 +12028,15 @@ export type ArenaRunQuestionRejectResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -10955,6 +12086,7 @@ export type ArenaRunQuestionRejectResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -10964,17 +12096,77 @@ export type ArenaRunQuestionRejectResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -11097,10 +12289,62 @@ export type ArenaRunQuestionRejectResponses = {
 
 export type ArenaRunQuestionRejectResponse = ArenaRunQuestionRejectResponses[keyof ArenaRunQuestionRejectResponses]
 
+export type ArenaSessionAutoAcceptData = {
+  body?: {
+    enabled: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/arena/sessions/{sessionID}/auto-accept"
+}
+
+export type ArenaSessionAutoAcceptErrors = {
+  /**
+   * ArenaApiError | InvalidRequestError
+   */
+  400: ArenaApiError | InvalidRequestError
+}
+
+export type ArenaSessionAutoAcceptError = ArenaSessionAutoAcceptErrors[keyof ArenaSessionAutoAcceptErrors]
+
+export type ArenaSessionAutoAcceptResponses = {
+  /**
+   * Success
+   */
+  200: null
+}
+
+export type ArenaSessionAutoAcceptResponse = ArenaSessionAutoAcceptResponses[keyof ArenaSessionAutoAcceptResponses]
+
 export type ArenaTurnStartData = {
   body?: {
     prompt: string
     participantID?: string
+    autoAccept?: boolean
+    attachments?: Array<
+      | {
+          type: "image"
+          mimeType: string
+          data: string
+        }
+      | {
+          type: "text"
+          label: string
+          text: string
+        }
+      | {
+          type: "file"
+          path: string
+          name: string
+          mimeType: string
+          size: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+    >
   }
   path: {
     chatID: string
@@ -11133,6 +12377,7 @@ export type ArenaTurnStartResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -11213,6 +12458,7 @@ export type ArenaTurnStartResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -11222,17 +12468,77 @@ export type ArenaTurnStartResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -11263,10 +12569,15 @@ export type ArenaTurnStartResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -11316,6 +12627,7 @@ export type ArenaTurnStartResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -11325,17 +12637,77 @@ export type ArenaTurnStartResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -11458,31 +12830,29 @@ export type ArenaTurnStartResponses = {
 
 export type ArenaTurnStartResponse = ArenaTurnStartResponses[keyof ArenaTurnStartResponses]
 
-export type ArenaTurnReplyData = {
-  body?: {
-    prompt: string
-    target: "a" | "b" | "both"
-  }
+export type ArenaRunSteerInterruptData = {
+  body?: never
   path: {
-    turnID: string
+    runID: string
+    messageID: string
   }
   query?: {
     directory?: string
     workspace?: string
   }
-  url: "/arena/turns/{turnID}/reply"
+  url: "/arena/runs/{runID}/steer/{messageID}/interrupt"
 }
 
-export type ArenaTurnReplyErrors = {
+export type ArenaRunSteerInterruptErrors = {
   /**
    * ArenaApiError | InvalidRequestError
    */
   400: ArenaApiError | InvalidRequestError
 }
 
-export type ArenaTurnReplyError = ArenaTurnReplyErrors[keyof ArenaTurnReplyErrors]
+export type ArenaRunSteerInterruptError = ArenaRunSteerInterruptErrors[keyof ArenaRunSteerInterruptErrors]
 
-export type ArenaTurnReplyResponses = {
+export type ArenaRunSteerInterruptResponses = {
   /**
    * Success
    */
@@ -11494,6 +12864,7 @@ export type ArenaTurnReplyResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -11574,6 +12945,7 @@ export type ArenaTurnReplyResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -11583,17 +12955,77 @@ export type ArenaTurnReplyResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -11624,10 +13056,15 @@ export type ArenaTurnReplyResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -11677,6 +13114,7 @@ export type ArenaTurnReplyResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -11686,17 +13124,1073 @@ export type ArenaTurnReplyResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
+      }
+      transition?: {
+        id: string
+        previousWinningRunID: string
+        stoppedCommands: Array<{
+          command: string
+          relativeCwd: string
+          status: "stopped" | "already_absent" | "failed"
+          verified: boolean
+          listeners?: Array<{
+            alias?: string
+          }>
+          error?: string
+        }>
+        copyOmissions: Array<{
+          relativePath: string
+          omissionReason?: string
+        }>
+        summary?: {
+          commandsStopped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          commandsAlreadyAbsent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          stopFailures: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          listenersReleased: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          pathsOmitted: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+        createdAt: string
+      }
+      createdAt: string
+      updatedAt: string
+    }>
+    runs: Array<{
+      id: string
+      side: "a" | "b"
+      sessionID: string
+      descendantSessionIDs: Array<string>
+      worktree: string
+      worktreeName: string
+      branchAtRun?: string
+      worktreeActive: boolean
+      copyOmissions?: Array<{
+        relativePath: string
+        omissionReason?: string
+      }>
+      portAliases?: {
+        [key: string]: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      services?: Array<{
+        kind: "owned_process"
+        command: string
+        relativeCwd: string
+        listeners: Array<{
+          port: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          alias?: string
+        }>
+        proxyRoutes: Array<{
+          hostname: string
+          url?: string
+          port?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          alias?: string
+          active: boolean
+        }>
+      }>
+      retention?: "none" | "retained_until_next_send" | "cleanup_failed"
+      runState: "pending" | "complete" | "stopped" | "error" | "interrupted"
+      error?: string
+      startedAt?: string
+      firstEventAt?: string
+      lastEventAt?: string
+      completedAt?: string
+      durationMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      promptMessageID?: string
+      diff?: {
+        files: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        additions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        deletions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      finalCommit?: string
+      finalTree?: string
+      permanentRef?: string
+      selectable: boolean
+      applicable: boolean
+      identity?: {
+        name: string
+      }
+      messages?: Array<unknown>
+      parts?: {
+        [key: string]: Array<unknown>
+      }
+      status?: unknown
+      permissions?: Array<unknown>
+      questions?: Array<unknown>
+      inspection?: {
+        status: string
+        patch: string
+        patchTruncated: boolean
+        finalRef?: string
+        finalCommit?: string
+        files: Array<{
+          path: string
+          status?: string
+          additions?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          deletions?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          binary?: boolean
+        }>
+        commands: Array<{
+          command: string
+        }>
+        commandsTruncated: boolean
+      }
+    }>
+    events: Array<unknown>
+    comparison?: {
+      state: "pending" | "running" | "complete" | "failed"
+      output?: string
+      truncated: boolean
+      omittedArtifacts: Array<string>
+    }
+  }
+}
+
+export type ArenaRunSteerInterruptResponse = ArenaRunSteerInterruptResponses[keyof ArenaRunSteerInterruptResponses]
+
+export type ArenaRunSteerDiscardData = {
+  body?: {
+    messageIDs: Array<string>
+  }
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/arena/runs/{runID}/steer/discard"
+}
+
+export type ArenaRunSteerDiscardErrors = {
+  /**
+   * ArenaApiError | InvalidRequestError
+   */
+  400: ArenaApiError | InvalidRequestError
+}
+
+export type ArenaRunSteerDiscardError = ArenaRunSteerDiscardErrors[keyof ArenaRunSteerDiscardErrors]
+
+export type ArenaRunSteerDiscardResponses = {
+  /**
+   * Success
+   */
+  200: {
+    chat: {
+      id: string
+      status: "ready" | "battle_active" | "blocked" | "failed" | "archived"
+      canonicalSessionID: string
+      canonicalSHA: string
+      activeTurnID?: string
+      blockedReason?: string
+      trunkConflicts?: Array<string>
+      trunk: {
+        worktreeName: string
+        branch?: string
+      }
+    }
+    environment: {
+      retainedWinner?: {
+        runID: string
+        side: "a" | "b"
+        worktreeName: string
+        branch?: string
+        state: "live" | "stopping" | "cleanup_failed"
+      }
+      warmPair?: {
+        generation: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        state: "pending" | "ready" | "failed"
+        sides: Array<{
+          side: "a" | "b"
+          worktreeName: string
+          branch?: string
+          ready: boolean
+        }>
+        error?: string
+      }
+    }
+    singleAgent?: {
+      id: string
+      revealed: boolean
+      vote?: "up" | "down"
+      identity?: {
+        name: string
+      }
+    }
+    turn?: {
+      id: string
+      index: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      state:
+        | "creating"
+        | "worktrees_ready"
+        | "running"
+        | "early_selected"
+        | "finalizing"
+        | "awaiting_vote"
+        | "applying"
+        | "canonicalizing"
+        | "cleanup_pending"
+        | "complete"
+        | "stopping"
+        | "awaiting_stop_resolution"
+        | "discarding"
+        | "discarded"
+        | "creation_failed"
+        | "finalization_failed"
+        | "application_failed"
+        | "canonicalization_failed"
+        | "interrupted_recovery"
+      resolution?:
+        | {
+            kind: "vote"
+            vote: "a" | "b" | "tie"
+            appliedSide: "a" | "b"
+          }
+        | {
+            kind: "stopped"
+            resolution: "discard" | "apply_a" | "apply_b"
+            appliedSide?: "a" | "b"
+          }
+        | {
+            kind: "early"
+            vote: "a" | "b"
+            appliedSide: "a" | "b"
+          }
+        | {
+            kind: "aborted"
+            reason: string
+          }
+      vote?: "a" | "b" | "tie"
+      selectedEarly?: boolean
+      appliedSide?: "a" | "b"
+      canonicalUserMessageID?: string
+      endedAt?: string
+      identities?: {
+        a: {
+          name: string
+        }
+        b: {
+          name: string
+        }
+      }
+      gitApplication?: {
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
+        reason?: string
+        resultCommit?: string
+        branch?: string
+        baseCommit?: string
+        conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
+        refs?: Array<{
+          ref: string
+          action: "created" | "updated" | "deleted" | "skipped"
+          reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
+        }>
+        switchedTo?: string
+      }
+      transition?: {
+        id: string
+        previousWinningRunID: string
+        stoppedCommands: Array<{
+          command: string
+          relativeCwd: string
+          status: "stopped" | "already_absent" | "failed"
+          verified: boolean
+          listeners?: Array<{
+            alias?: string
+          }>
+          error?: string
+        }>
+        copyOmissions: Array<{
+          relativePath: string
+          omissionReason?: string
+        }>
+        summary?: {
+          commandsStopped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          commandsAlreadyAbsent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          stopFailures: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          listenersReleased: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          pathsOmitted: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+        createdAt: string
+      }
+      createdAt: string
+      updatedAt: string
+      prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
+      baseSHA: string
+      comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
+      canVote: boolean
+      canRetryResolution: boolean
+      canDiscardWinner: boolean
+      revealed: boolean
+    }
+    history: Array<{
+      id: string
+      index: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      state:
+        | "creating"
+        | "worktrees_ready"
+        | "running"
+        | "early_selected"
+        | "finalizing"
+        | "awaiting_vote"
+        | "applying"
+        | "canonicalizing"
+        | "cleanup_pending"
+        | "complete"
+        | "stopping"
+        | "awaiting_stop_resolution"
+        | "discarding"
+        | "discarded"
+        | "creation_failed"
+        | "finalization_failed"
+        | "application_failed"
+        | "canonicalization_failed"
+        | "interrupted_recovery"
+      resolution?:
+        | {
+            kind: "vote"
+            vote: "a" | "b" | "tie"
+            appliedSide: "a" | "b"
+          }
+        | {
+            kind: "stopped"
+            resolution: "discard" | "apply_a" | "apply_b"
+            appliedSide?: "a" | "b"
+          }
+        | {
+            kind: "early"
+            vote: "a" | "b"
+            appliedSide: "a" | "b"
+          }
+        | {
+            kind: "aborted"
+            reason: string
+          }
+      vote?: "a" | "b" | "tie"
+      selectedEarly?: boolean
+      appliedSide?: "a" | "b"
+      canonicalUserMessageID?: string
+      endedAt?: string
+      identities?: {
+        a: {
+          name: string
+        }
+        b: {
+          name: string
+        }
+      }
+      gitApplication?: {
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
+        reason?: string
+        resultCommit?: string
+        branch?: string
+        baseCommit?: string
+        conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
+        refs?: Array<{
+          ref: string
+          action: "created" | "updated" | "deleted" | "skipped"
+          reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
+        }>
+        switchedTo?: string
+      }
+      transition?: {
+        id: string
+        previousWinningRunID: string
+        stoppedCommands: Array<{
+          command: string
+          relativeCwd: string
+          status: "stopped" | "already_absent" | "failed"
+          verified: boolean
+          listeners?: Array<{
+            alias?: string
+          }>
+          error?: string
+        }>
+        copyOmissions: Array<{
+          relativePath: string
+          omissionReason?: string
+        }>
+        summary?: {
+          commandsStopped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          commandsAlreadyAbsent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          stopFailures: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          listenersReleased: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          pathsOmitted: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+        createdAt: string
+      }
+      createdAt: string
+      updatedAt: string
+    }>
+    runs: Array<{
+      id: string
+      side: "a" | "b"
+      sessionID: string
+      descendantSessionIDs: Array<string>
+      worktree: string
+      worktreeName: string
+      branchAtRun?: string
+      worktreeActive: boolean
+      copyOmissions?: Array<{
+        relativePath: string
+        omissionReason?: string
+      }>
+      portAliases?: {
+        [key: string]: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      services?: Array<{
+        kind: "owned_process"
+        command: string
+        relativeCwd: string
+        listeners: Array<{
+          port: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          alias?: string
+        }>
+        proxyRoutes: Array<{
+          hostname: string
+          url?: string
+          port?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          alias?: string
+          active: boolean
+        }>
+      }>
+      retention?: "none" | "retained_until_next_send" | "cleanup_failed"
+      runState: "pending" | "complete" | "stopped" | "error" | "interrupted"
+      error?: string
+      startedAt?: string
+      firstEventAt?: string
+      lastEventAt?: string
+      completedAt?: string
+      durationMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      promptMessageID?: string
+      diff?: {
+        files: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        additions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        deletions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      finalCommit?: string
+      finalTree?: string
+      permanentRef?: string
+      selectable: boolean
+      applicable: boolean
+      identity?: {
+        name: string
+      }
+      messages?: Array<unknown>
+      parts?: {
+        [key: string]: Array<unknown>
+      }
+      status?: unknown
+      permissions?: Array<unknown>
+      questions?: Array<unknown>
+      inspection?: {
+        status: string
+        patch: string
+        patchTruncated: boolean
+        finalRef?: string
+        finalCommit?: string
+        files: Array<{
+          path: string
+          status?: string
+          additions?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          deletions?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          binary?: boolean
+        }>
+        commands: Array<{
+          command: string
+        }>
+        commandsTruncated: boolean
+      }
+    }>
+    events: Array<unknown>
+    comparison?: {
+      state: "pending" | "running" | "complete" | "failed"
+      output?: string
+      truncated: boolean
+      omittedArtifacts: Array<string>
+    }
+  }
+}
+
+export type ArenaRunSteerDiscardResponse = ArenaRunSteerDiscardResponses[keyof ArenaRunSteerDiscardResponses]
+
+export type ArenaTurnReplyData = {
+  body?: {
+    prompt: string
+    target: "a" | "b" | "both"
+    attachments?: Array<
+      | {
+          type: "image"
+          mimeType: string
+          data: string
+        }
+      | {
+          type: "text"
+          label: string
+          text: string
+        }
+      | {
+          type: "file"
+          path: string
+          name: string
+          mimeType: string
+          size: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+    >
+  }
+  path: {
+    turnID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/arena/turns/{turnID}/reply"
+}
+
+export type ArenaTurnReplyErrors = {
+  /**
+   * ArenaApiError | InvalidRequestError
+   */
+  400: ArenaApiError | InvalidRequestError
+}
+
+export type ArenaTurnReplyError = ArenaTurnReplyErrors[keyof ArenaTurnReplyErrors]
+
+export type ArenaTurnReplyResponses = {
+  /**
+   * Success
+   */
+  200: {
+    chat: {
+      id: string
+      status: "ready" | "battle_active" | "blocked" | "failed" | "archived"
+      canonicalSessionID: string
+      canonicalSHA: string
+      activeTurnID?: string
+      blockedReason?: string
+      trunkConflicts?: Array<string>
+      trunk: {
+        worktreeName: string
+        branch?: string
+      }
+    }
+    environment: {
+      retainedWinner?: {
+        runID: string
+        side: "a" | "b"
+        worktreeName: string
+        branch?: string
+        state: "live" | "stopping" | "cleanup_failed"
+      }
+      warmPair?: {
+        generation: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        state: "pending" | "ready" | "failed"
+        sides: Array<{
+          side: "a" | "b"
+          worktreeName: string
+          branch?: string
+          ready: boolean
+        }>
+        error?: string
+      }
+    }
+    singleAgent?: {
+      id: string
+      revealed: boolean
+      vote?: "up" | "down"
+      identity?: {
+        name: string
+      }
+    }
+    turn?: {
+      id: string
+      index: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      state:
+        | "creating"
+        | "worktrees_ready"
+        | "running"
+        | "early_selected"
+        | "finalizing"
+        | "awaiting_vote"
+        | "applying"
+        | "canonicalizing"
+        | "cleanup_pending"
+        | "complete"
+        | "stopping"
+        | "awaiting_stop_resolution"
+        | "discarding"
+        | "discarded"
+        | "creation_failed"
+        | "finalization_failed"
+        | "application_failed"
+        | "canonicalization_failed"
+        | "interrupted_recovery"
+      resolution?:
+        | {
+            kind: "vote"
+            vote: "a" | "b" | "tie"
+            appliedSide: "a" | "b"
+          }
+        | {
+            kind: "stopped"
+            resolution: "discard" | "apply_a" | "apply_b"
+            appliedSide?: "a" | "b"
+          }
+        | {
+            kind: "early"
+            vote: "a" | "b"
+            appliedSide: "a" | "b"
+          }
+        | {
+            kind: "aborted"
+            reason: string
+          }
+      vote?: "a" | "b" | "tie"
+      selectedEarly?: boolean
+      appliedSide?: "a" | "b"
+      canonicalUserMessageID?: string
+      endedAt?: string
+      identities?: {
+        a: {
+          name: string
+        }
+        b: {
+          name: string
+        }
+      }
+      gitApplication?: {
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
+        reason?: string
+        resultCommit?: string
+        branch?: string
+        baseCommit?: string
+        conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
+        refs?: Array<{
+          ref: string
+          action: "created" | "updated" | "deleted" | "skipped"
+          reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
+        }>
+        switchedTo?: string
+      }
+      transition?: {
+        id: string
+        previousWinningRunID: string
+        stoppedCommands: Array<{
+          command: string
+          relativeCwd: string
+          status: "stopped" | "already_absent" | "failed"
+          verified: boolean
+          listeners?: Array<{
+            alias?: string
+          }>
+          error?: string
+        }>
+        copyOmissions: Array<{
+          relativePath: string
+          omissionReason?: string
+        }>
+        summary?: {
+          commandsStopped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          commandsAlreadyAbsent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          stopFailures: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          listenersReleased: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          pathsOmitted: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+        createdAt: string
+      }
+      createdAt: string
+      updatedAt: string
+      prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
+      baseSHA: string
+      comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
+      canVote: boolean
+      canRetryResolution: boolean
+      canDiscardWinner: boolean
+      revealed: boolean
+    }
+    history: Array<{
+      id: string
+      index: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      state:
+        | "creating"
+        | "worktrees_ready"
+        | "running"
+        | "early_selected"
+        | "finalizing"
+        | "awaiting_vote"
+        | "applying"
+        | "canonicalizing"
+        | "cleanup_pending"
+        | "complete"
+        | "stopping"
+        | "awaiting_stop_resolution"
+        | "discarding"
+        | "discarded"
+        | "creation_failed"
+        | "finalization_failed"
+        | "application_failed"
+        | "canonicalization_failed"
+        | "interrupted_recovery"
+      resolution?:
+        | {
+            kind: "vote"
+            vote: "a" | "b" | "tie"
+            appliedSide: "a" | "b"
+          }
+        | {
+            kind: "stopped"
+            resolution: "discard" | "apply_a" | "apply_b"
+            appliedSide?: "a" | "b"
+          }
+        | {
+            kind: "early"
+            vote: "a" | "b"
+            appliedSide: "a" | "b"
+          }
+        | {
+            kind: "aborted"
+            reason: string
+          }
+      vote?: "a" | "b" | "tie"
+      selectedEarly?: boolean
+      appliedSide?: "a" | "b"
+      canonicalUserMessageID?: string
+      endedAt?: string
+      identities?: {
+        a: {
+          name: string
+        }
+        b: {
+          name: string
+        }
+      }
+      gitApplication?: {
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
+        reason?: string
+        resultCommit?: string
+        branch?: string
+        baseCommit?: string
+        conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
+        refs?: Array<{
+          ref: string
+          action: "created" | "updated" | "deleted" | "skipped"
+          reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
+        }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -11855,6 +14349,7 @@ export type ArenaTurnVoteResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -11935,6 +14430,7 @@ export type ArenaTurnVoteResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -11944,17 +14440,77 @@ export type ArenaTurnVoteResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -11985,10 +14541,15 @@ export type ArenaTurnVoteResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -12038,6 +14599,7 @@ export type ArenaTurnVoteResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -12047,17 +14609,77 @@ export type ArenaTurnVoteResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -12218,7 +14840,14 @@ export type ArenaTurnRecordReviewResponses = {
 export type ArenaTurnRecordReviewResponse = ArenaTurnRecordReviewResponses[keyof ArenaTurnRecordReviewResponses]
 
 export type ArenaTurnResolutionRetryData = {
-  body?: never
+  body?: {
+    mode?: "discard_winner" | "restore_workspace"
+    answers?: Array<{
+      key: string
+      fingerprint: string
+      choice: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "take" | "stay"
+    }>
+  }
   path: {
     turnID: string
   }
@@ -12250,6 +14879,7 @@ export type ArenaTurnResolutionRetryResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -12330,6 +14960,7 @@ export type ArenaTurnResolutionRetryResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -12339,17 +14970,77 @@ export type ArenaTurnResolutionRetryResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -12380,10 +15071,15 @@ export type ArenaTurnResolutionRetryResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -12433,6 +15129,7 @@ export type ArenaTurnResolutionRetryResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -12442,17 +15139,77 @@ export type ArenaTurnResolutionRetryResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -12609,6 +15366,7 @@ export type ArenaTurnComparisonRetryResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -12689,6 +15447,7 @@ export type ArenaTurnComparisonRetryResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -12698,17 +15457,77 @@ export type ArenaTurnComparisonRetryResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -12739,10 +15558,15 @@ export type ArenaTurnComparisonRetryResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -12792,6 +15616,7 @@ export type ArenaTurnComparisonRetryResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -12801,17 +15626,77 @@ export type ArenaTurnComparisonRetryResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -12968,6 +15853,7 @@ export type ArenaTurnStopResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -13048,6 +15934,7 @@ export type ArenaTurnStopResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -13057,17 +15944,77 @@ export type ArenaTurnStopResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -13098,10 +16045,15 @@ export type ArenaTurnStopResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -13151,6 +16103,7 @@ export type ArenaTurnStopResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -13160,17 +16113,77 @@ export type ArenaTurnStopResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -13328,6 +16341,7 @@ export type ArenaTurnStopResolveResponses = {
       canonicalSHA: string
       activeTurnID?: string
       blockedReason?: string
+      trunkConflicts?: Array<string>
       trunk: {
         worktreeName: string
         branch?: string
@@ -13408,6 +16422,7 @@ export type ArenaTurnStopResolveResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -13417,17 +16432,77 @@ export type ArenaTurnStopResolveResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string
@@ -13458,10 +16533,15 @@ export type ArenaTurnStopResolveResponses = {
       createdAt: string
       updatedAt: string
       prompt: string
+      attachments?: Array<{
+        kind: "image" | "text" | "file"
+        label: string
+      }>
       baseSHA: string
       comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
       canVote: boolean
       canRetryResolution: boolean
+      canDiscardWinner: boolean
       revealed: boolean
     }
     history: Array<{
@@ -13511,6 +16591,7 @@ export type ArenaTurnStopResolveResponses = {
       selectedEarly?: boolean
       appliedSide?: "a" | "b"
       canonicalUserMessageID?: string
+      endedAt?: string
       identities?: {
         a: {
           name: string
@@ -13520,17 +16601,77 @@ export type ArenaTurnStopResolveResponses = {
         }
       }
       gitApplication?: {
-        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual"
+        state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
         reason?: string
         resultCommit?: string
         branch?: string
         baseCommit?: string
         conflicts?: Array<string>
+        review?: {
+          items: Array<
+            | {
+                kind: "ref"
+                key: string
+                fingerprint: string
+                namespace: "branch" | "tag" | "remote"
+                agentMove: "created" | "added" | "rewrote" | "deleted"
+                yourMove: "untouched" | "created" | "added" | "rewrote" | "deleted"
+                proposal: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine" | "ask_agent"
+                choices: Array<"agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine">
+                checkout: boolean
+                checkedOutAt?: string
+                clash?: Array<string>
+                agentRef?: string
+                lost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                lostSubjects?: Array<string>
+                rewound?: boolean
+                agentSubject?: string
+              }
+            | {
+                kind: "edits"
+                key: "@edits"
+                fingerprint: string
+                paths: Array<string>
+                unmergeable: Array<string>
+                choices: Array<"combine" | "agent" | "yours">
+              }
+            | {
+                kind: "occupied"
+                key: "@occupied"
+                fingerprint: string
+                branch: string
+                path: string
+                proposal: "take" | "stay"
+                choices: Array<"take" | "stay">
+              }
+            | {
+                kind: "busy"
+                key: "@busy"
+                fingerprint: string
+                operation: string
+              }
+          >
+          planned: Array<{
+            ref: string
+            action: "agent" | "yours" | "agent_on_yours" | "yours_on_agent" | "combine"
+          }>
+          switchTo?: string
+        }
+        partial?: {
+          expectedBranch?: string
+          expectedDetached?: boolean
+          targetBranch?: string
+        }
+        discardedRef?: string
         refs?: Array<{
           ref: string
           action: "created" | "updated" | "deleted" | "skipped"
           reason?: string
+          backupRef?: string
+          removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          how?: "agent_on_yours" | "yours_on_agent"
         }>
+        switchedTo?: string
       }
       transition?: {
         id: string

@@ -3820,6 +3820,18 @@ class OpenCodeAgentSession implements AgentSession {
           method: "POST",
           body: { prompt, target, ...(attachments?.length ? { attachments } : {}) },
         }),
+      discardSteer: (runId, messageIds) =>
+        this.arenaRequest(`/arena/runs/${encodeURIComponent(runId)}/steer/discard`, {
+          method: "POST",
+          body: { messageIDs: messageIds },
+        }),
+      interruptSteer: (runId, messageId) =>
+        this.arenaRequest(
+          `/arena/runs/${encodeURIComponent(runId)}/steer/${encodeURIComponent(messageId)}/interrupt`,
+          {
+            method: "POST",
+          },
+        ),
       vote: (turnId, vote, participantId) =>
         this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/vote`, {
           method: "POST",

@@ -84,6 +84,8 @@ type LivePartOverlay = {
 }
 
 const liveParts = new Map<string, LivePartOverlay>()
+const discardedMessages = new Map<string, Set<string>>()
+const claimedMessages = new Map<string, Set<string>>()
 
 export function rememberPart(input: MessagePart) {
   if (!ArenaRuntime.enabled()) return
@@ -135,8 +137,57 @@ export function forgetMessage(messageID: string) {
   for (const [id, item] of liveParts) if (item.messageID === messageID) liveParts.delete(id)
 }
 
+/**
+ * Marks an Arena steer as discarded before its removal event is projected. The prompt loop checks
+ * this marker after its asynchronous preparation work, closing the gap where it could otherwise
+ * have loaded a queued message before the delete reached the session database.
+ */
+export function reserveDiscard(sessionID: string, messageIDs: readonly string[]) {
+  const discarded = discardedMessages.get(sessionID)
+  const claimed = claimedMessages.get(sessionID)
+  if (messageIDs.some((messageID) => discarded?.has(messageID) || claimed?.has(messageID))) return false
+  const messages = discarded ?? new Set<string>()
+  for (const messageID of messageIDs) messages.add(messageID)
+  discardedMessages.set(sessionID, messages)
+  return true
+}
+
+export function releaseDiscard(sessionID: string, messageIDs: readonly string[]) {
+  const messages = discardedMessages.get(sessionID)
+  if (!messages) return
+  for (const messageID of messageIDs) messages.delete(messageID)
+  if (messages.size === 0) discardedMessages.delete(sessionID)
+}
+
+export function claimMessages(sessionID: string, messageIDs: readonly string[]) {
+  const discarded = discardedMessages.get(sessionID)
+  const claimed = claimedMessages.get(sessionID)
+  if (messageIDs.some((messageID) => discarded?.has(messageID) || claimed?.has(messageID))) return false
+  const messages = claimed ?? new Set<string>()
+  for (const messageID of messageIDs) messages.add(messageID)
+  claimedMessages.set(sessionID, messages)
+  return true
+}
+
+export function releaseClaims(sessionID: string, messageIDs: readonly string[]) {
+  const messages = claimedMessages.get(sessionID)
+  if (!messages) return
+  for (const messageID of messageIDs) messages.delete(messageID)
+  if (messages.size === 0) claimedMessages.delete(sessionID)
+}
+
+export function isMessageDiscarded(sessionID: string, messageID: string) {
+  return discardedMessages.get(sessionID)?.has(messageID) ?? false
+}
+
+export function clearDiscardedMessages(sessionID: string) {
+  discardedMessages.delete(sessionID)
+}
+
 export function forgetSession(sessionID: string) {
   for (const [id, item] of liveParts) if (item.sessionID === sessionID) liveParts.delete(id)
+  discardedMessages.delete(sessionID)
+  claimedMessages.delete(sessionID)
 }
 
 function omitUndefined(value: unknown): unknown {

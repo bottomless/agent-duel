@@ -41,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { Alert } from "@/components/ui/alert";
 import { ArenaServicesStrip } from "./services-strip";
+import { ArenaSteeringPanel } from "./steering-panel";
 import { ArenaTransitionRow, arenaTransitionRowVisible } from "./transition-row";
 import { ArenaWorktreeMenuButton } from "./worktree-menu";
 import { useArenaCardBleed } from "./content-column";
@@ -351,7 +352,10 @@ function BattlePane({
           ) : null}
         </View>
         {run?.runState === "pending" ? (
-          <ArenaRunTaskFooter run={run} paneMaxHeight={maxHeight} />
+          <>
+            <ArenaSteeringPanel run={run} serverId={serverId} agentId={agentId} />
+            <ArenaRunTaskFooter run={run} paneMaxHeight={maxHeight} />
+          </>
         ) : null}
         {run ? <ArenaServicesStrip turnId={turnId} run={run} /> : null}
       </View>

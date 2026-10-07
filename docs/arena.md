@@ -205,7 +205,15 @@ The placeholder names the target
 and the verb (`Steer Agent A`, `Ask both a follow-up before choosing`) and the send button carries
 the verb. If the selected target stops being valid, keep the draft, clear the selection, and
 require another pick instead of rerouting it. Prompts and replies carry attachments (see
-**Attachments** under [A turn](#a-turn)). The toolbar stays on one row.
+**Attachments** under [A turn](#a-turn)). Steering waits for
+the current tool call or response to finish. Keep pending messages in a panel below that
+contestant's scrolling thread until the next model request includes them. Show only the queued
+message text, a line naming its images and files, **Interrupt and send**, and a trash button; tool
+activity stays in the thread above. A file's contents never show in the queue.
+The trash button discards that contestant's queued messages without interrupting its current work.
+**Interrupt and send** resumes those stored messages immediately;
+it must not submit them again or finish the contestant's battle run. Paseo's ordinary queue waits
+for an entire run, so the battle owns delivery while reusing the shared controls. The toolbar stays on one row.
 When its own available width is narrow, shorten the target labels, show tool permissions as a
 status icon, and use the send arrow; retain the target-specific placeholder and accessible labels. Tool permissions use a quiet
 status menu: `Auto Accept` or `Ask before tools`. Its description names the scope and explains

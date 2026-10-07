@@ -401,6 +401,35 @@ const group = HttpApiGroup.make("arena")
     ),
   )
   .add(
+    HttpApiEndpoint.post("interruptSteer", "/arena/runs/:runID/steer/:messageID/interrupt", {
+      params: { runID: Schema.String, messageID: Schema.String },
+      query: WorkspaceRoutingQuery,
+      success: ArenaSchema.Snapshot,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.run.steer.interrupt",
+        summary: "Interrupt a contestant and run a queued steer",
+        description: "Cancel the active contestant request and resume the expected pending user message.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("discardSteer", "/arena/runs/:runID/steer/discard", {
+      params: { runID: Schema.String },
+      query: WorkspaceRoutingQuery,
+      payload: Schema.Struct({ messageIDs: Schema.Array(Schema.String) }),
+      success: ArenaSchema.Snapshot,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.run.steer.discard",
+        summary: "Discard queued steers",
+        description: "Remove queued contestant messages without interrupting active work.",
+      }),
+    ),
+  )
+  .add(
     HttpApiEndpoint.post("reply", "/arena/turns/:turnID/reply", {
       params: { turnID: Schema.String },
       query: WorkspaceRoutingQuery,
