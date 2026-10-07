@@ -1,0 +1,125 @@
+name: Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version already committed in package.json (without v)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment: desktop-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Validate release version and credentials
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const version = process.env.RELEASE_VERSION;
+          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid release version');
+          for (const file of ['package.json', 'packages/desktop/package.json']) {
+            if (JSON.parse(fs.readFileSync(file)).version !== version) throw new Error(`Commit the requested version in ${file} first`);
+          }
+          for (const name of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID']) {
+            if (!process.env[name]) throw new Error(`Missing release secret: ${name}`);
+          }
+          JS
+          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo 'Release already exists; use a new version.' >&2
+            exit 1
+          fi
+
+      - name: Install npm dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Install Arena dependencies
+        working-directory: arena-backend
+        run: bun install --frozen-lockfile
+
+      - name: Check formatting and lint
+        run: |
+          npm run format:check
+          npm run lint
+
+      - name: Build, sign, and notarize Apple Silicon app
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run build:desktop -- --publish never --mac --arm64 -c.mac.type=distribution -c.forceCodeSigning=true
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Verify signing and notarization
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          APP='packages/desktop/release/mac-arm64/Agent Duel.app'
+          codesign --verify --deep --strict "$APP"
+          codesign --display --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/signing.txt"
+          grep -F 'Authority=Developer ID Application: Bottomless Supply Inc (LGVJP2HNM2)' "$RUNNER_TEMP/signing.txt"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=4 "$APP"
+          xcrun stapler validate "packages/desktop/release/Agent-Duel-$RELEASE_VERSION-arm64.dmg"
+
+      - name: Save verified installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-macos-arm64
+          if-no-files-found: error
+          path: |
+            packages/desktop/release/*.dmg
+            packages/desktop/release/*.zip
+            packages/desktop/release/*.blockmap
+            packages/desktop/release/*-mac.yml
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          args=(--draft --target "$GITHUB_SHA" --title "Agent Duel $RELEASE_VERSION" --generate-notes)
+          if [[ "$RELEASE_VERSION" == *-* ]]; then args+=(--prerelease); fi
+          files=(packages/desktop/release/*.dmg packages/desktop/release/*.zip)
+          for file in packages/desktop/release/*.blockmap packages/desktop/release/*-mac.yml; do
+            if [[ -f "$file" ]]; then files+=("$file"); fi
+          done
+          gh release create "v$RELEASE_VERSION" "${args[@]}" "${files[@]}"
