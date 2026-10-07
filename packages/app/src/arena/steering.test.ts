@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
-import { arenaQueuedSteerAttachments, arenaQueuedSteering, arenaToolOutput } from "./steering";
+import {
+  arenaQueuedSteerAttachments,
+  arenaQueuedSteerDelivery,
+  arenaQueuedSteering,
+  arenaToolOutput,
+} from "./steering";
 
 function running(): ArenaRun {
   return {
@@ -91,6 +96,18 @@ describe("queued Arena steering", () => {
   it("leaves ended runs with transcript history instead of a live queue", () => {
     const run = { ...running(), runState: "stopped" as const };
     expect(arenaQueuedSteering(run)).toEqual([]);
+  });
+
+  it("says the queue waits for the running command, tool, or reply", () => {
+    const run = running();
+    expect(arenaQueuedSteerDelivery(run)).toBe("Sends when the current command finishes");
+    run.parts = {
+      ...run.parts,
+      working: [{ type: "tool", tool: "read", state: { status: "running", input: {} } }],
+    };
+    expect(arenaQueuedSteerDelivery(run)).toBe("Sends when the current tool finishes");
+    run.parts = { ...run.parts, working: [{ type: "text", text: "Thinking it through" }] };
+    expect(arenaQueuedSteerDelivery(run)).toBe("Sends after the current reply");
   });
 
   it("prefers final output over running tool output", () => {

@@ -1,5 +1,5 @@
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
-import { isArenaRunPossiblyStalled } from "./run-liveness";
+import { arenaRunningTool, isArenaRunPossiblyStalled } from "./run-liveness";
 
 type ArenaRunTiming = Pick<ArenaRun, "runState" | "startedAt" | "completedAt" | "durationMs">;
 
@@ -37,7 +37,12 @@ export function arenaRunStatusLabel(run: ArenaRun, now: number): string {
         run.status.type === "retry"
       )
         return "Retrying";
-      if (isArenaRunPossiblyStalled(run, now)) return "No recent activity";
+      if (isArenaRunPossiblyStalled(run, now)) {
+        const tool = arenaRunningTool(run);
+        if (tool === "command") return "Running a command";
+        if (tool === "tool") return "Running a tool";
+        return "No recent activity";
+      }
       return "Working";
     case "complete":
       return "Finished";

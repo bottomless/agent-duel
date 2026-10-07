@@ -87,6 +87,26 @@ describe("arenaRunStatusLabel", () => {
     );
   });
 
+  it("names a long tool call instead of calling its silence no activity", () => {
+    const quietAt = Date.parse(STARTED_AT) + POSSIBLY_STALLED_AFTER_MS;
+    const running = (tool: string, input: unknown) =>
+      run({
+        startedAt: STARTED_AT,
+        lastEventAt: STARTED_AT,
+        parts: { step: [{ type: "tool", tool, state: { status: "running", input } }] },
+      });
+    expect(arenaRunStatusLabel(running("bash", { command: "npm run check" }), quietAt)).toBe(
+      "Running a command",
+    );
+    expect(arenaRunStatusLabel(running("task", { prompt: "Audit the site" }), quietAt)).toBe(
+      "Running a tool",
+    );
+    const beforeQuiet = Date.parse(STARTED_AT) + 1_000;
+    expect(arenaRunStatusLabel(running("bash", { command: "npm run check" }), beforeQuiet)).toBe(
+      "Working",
+    );
+  });
+
   it("shows retry before the silence warning", () => {
     const quiet = run({ startedAt: STARTED_AT, lastEventAt: STARTED_AT });
     expect(

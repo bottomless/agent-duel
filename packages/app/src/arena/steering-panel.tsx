@@ -5,7 +5,11 @@ import { StyleSheet } from "react-native-unistyles";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { arenaQueuedSteerAttachments, arenaQueuedSteering } from "./steering";
+import {
+  arenaQueuedSteerAttachments,
+  arenaQueuedSteerDelivery,
+  arenaQueuedSteering,
+} from "./steering";
 import { useArenaTurnMutation, useArenaTurnPending } from "./use-arena-session";
 
 export function ArenaSteeringPanel({
@@ -49,6 +53,9 @@ export function ArenaSteeringPanel({
       <View style={styles.row}>
         <ScrollView style={styles.content} nestedScrollEnabled>
           <View style={styles.messages}>
+            <Text style={styles.attached} testID={`arena-steering-delivery-${run.side}`}>
+              {arenaQueuedSteerDelivery(run)}
+            </Text>
             {queued.map((message) => {
               const attached = arenaQueuedSteerAttachments(message);
               return (
