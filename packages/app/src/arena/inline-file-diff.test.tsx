@@ -8,7 +8,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.stubGlobal("React", React);
 vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 
-import { InlineFileDiff } from "./inline-file-diff";
+// The tooltip animates with reanimated, which jsdom cannot host. Its trigger is the button
+// itself, so the stand-in keeps that button and drops the hover label.
+vi.mock("@/components/ui/tooltip", async () => {
+  const { Pressable } = await import("react-native");
+  return {
+    Tooltip: ({ children }: { children: React.ReactElement }) => children,
+    TooltipTrigger: (props: React.ComponentProps<typeof Pressable>) => <Pressable {...props} />,
+    TooltipContent: () => null,
+  };
+});
+
+import { InlineFileDiff, openChangesFile } from "./inline-file-diff";
+import { arenaChangesRows } from "./changes-rows";
 import {
   rewrite,
   sameResult,
@@ -150,6 +162,21 @@ describe("InlineFileDiff", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Expand Agent B");
   });
 
+  it("offers Close only when the caller can close the diff", () => {
+    const diff = shortConflict();
+    act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" />));
+    expect(byTestId("arena-diff-close")).toBeNull();
+    const onClose = vi.fn();
+    act(() =>
+      root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" onClose={onClose} />),
+    );
+    // Close sits beside Back in the one-side view too, so the diff can go from either.
+    act(() => container.querySelector<HTMLElement>('[aria-label="Expand Agent A"]')!.click());
+    expect(byTestId("arena-diff-back")).not.toBeNull();
+    act(() => byTestId("arena-diff-close")!.click());
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("resets detail mode when the layout or turn changes", () => {
     const diff = shortConflict();
     act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" />));
@@ -160,5 +187,22 @@ describe("InlineFileDiff", () => {
     diff.turnID = "next-turn";
     act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="single" />));
     expect(byTestId("arena-inline-diff")?.getAttribute("data-detail-side")).toBe("both");
+  });
+});
+
+describe("openChangesFile", () => {
+  const rows = arenaChangesRows(shortConflict());
+
+  it("opens the default file until the reader chooses", () => {
+    expect(openChangesFile(rows, undefined)).toBe("main.py");
+  });
+
+  it("keeps a closed diff closed", () => {
+    expect(openChangesFile(rows, null)).toBeNull();
+  });
+
+  it("falls back to the default when the chosen file is gone", () => {
+    expect(openChangesFile(rows, "deleted.py")).toBe("main.py");
+    expect(openChangesFile(rows, "main.py")).toBe("main.py");
   });
 });

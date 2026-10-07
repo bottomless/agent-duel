@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Text, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { Maximize2, Minimize2 } from "lucide-react-native";
+import { Maximize2, Minimize2, X } from "lucide-react-native";
 import type { HighlightToken } from "@getpaseo/highlight";
 import type { ArenaFileContent, ArenaThreeWayFile } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
@@ -74,6 +74,7 @@ function sideTokens(
 
 const ThemedMaximize2 = withUnistyles(Maximize2);
 const ThemedMinimize2 = withUnistyles(Minimize2);
+const ThemedX = withUnistyles(X);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const sideColorMappings: Record<Side, (theme: Theme) => { color: string }> = {
   a: (theme) => ({ color: theme.colors.statusDotRunning }),
@@ -81,31 +82,31 @@ const sideColorMappings: Record<Side, (theme: Theme) => { color: string }> = {
 };
 
 /**
- * Expand and Back are the pane header's icon action, so the diff and the panes share one
+ * Expand, Back and Close are the pane header's icon action, so the diff and the panes share one
  * affordance. In the one-column layout the two Expand icons carry their side's colour, since
  * without a column heading beside them nothing else says which side each opens.
  */
 function Action({
   label,
   onPress,
-  back = false,
+  icon = "expand",
   side,
   testID,
 }: {
   label: string;
   onPress: () => void;
-  back?: boolean;
+  icon?: "expand" | "back" | "close";
   side?: Side;
   testID: string;
 }) {
   const mapping = side ? sideColorMappings[side] : foregroundColorMapping;
+  let glyph = <ThemedMaximize2 size={ICON_SIZE.xs} uniProps={mapping} />;
+  if (icon === "back")
+    glyph = <ThemedMinimize2 size={ICON_SIZE.xs} uniProps={foregroundColorMapping} />;
+  if (icon === "close") glyph = <ThemedX size={ICON_SIZE.xs} uniProps={foregroundColorMapping} />;
   return (
     <PaneIconAction accessibilityLabel={label} onPress={onPress} testID={testID}>
-      {back ? (
-        <ThemedMinimize2 size={ICON_SIZE.xs} uniProps={foregroundColorMapping} />
-      ) : (
-        <ThemedMaximize2 size={ICON_SIZE.xs} uniProps={mapping} />
-      )}
+      {glyph}
     </PaneIconAction>
   );
 }
@@ -213,11 +214,13 @@ function ReadyDiff({
   diff,
   truncated,
   layout,
+  onClose,
 }: {
   file: ArenaThreeWayFile;
   diff: ThreeWayWindowedDiff;
   truncated: boolean;
   layout: ArenaDiffLayout;
+  onClose?: () => void;
 }) {
   const viewportRef = useRef<View>(null);
   const [mode, setMode] = useState<Side | null>(null);
@@ -337,25 +340,36 @@ function ReadyDiff({
           <Text style={styles.caption}>
             {mode ? `${labelFor(mode)} · Changes from original` : "Changes from original"}
           </Text>
-          {mode ? (
-            <Action label="Back to comparison" onPress={back} back testID="arena-diff-back" />
-          ) : null}
-          {!mode && layout === "single" ? (
-            <View style={styles.actions}>
+          <View style={styles.actions}>
+            {mode ? (
               <Action
-                label="Expand Agent A"
-                onPress={expandA}
-                side="a"
-                testID="arena-diff-expand-a"
+                label="Back to comparison"
+                onPress={back}
+                icon="back"
+                testID="arena-diff-back"
               />
-              <Action
-                label="Expand Agent B"
-                onPress={expandB}
-                side="b"
-                testID="arena-diff-expand-b"
-              />
-            </View>
-          ) : null}
+            ) : null}
+            {!mode && layout === "single" ? (
+              <>
+                <Action
+                  label="Expand Agent A"
+                  onPress={expandA}
+                  side="a"
+                  testID="arena-diff-expand-a"
+                />
+                <Action
+                  label="Expand Agent B"
+                  onPress={expandB}
+                  side="b"
+                  testID="arena-diff-expand-b"
+                />
+              </>
+            ) : null}
+            {/* The header stays pinned while the diff scrolls, so the way out is always here. */}
+            {onClose ? (
+              <Action label="Close diff" onPress={onClose} icon="close" testID="arena-diff-close" />
+            ) : null}
+          </View>
         </View>
         {!mode && layout === "split" ? (
           <View style={styles.pair}>
@@ -444,9 +458,12 @@ function ReadyDiff({
 export function BaseRelativeFileView({
   file,
   layout,
+  onClose,
 }: {
   file: ArenaThreeWayFile;
   layout: ArenaDiffLayout;
+  /** Closes the file's diff; the row above it reopens it. */
+  onClose?: () => void;
 }) {
   const comparison = useMemo<BaseRelativeDiff>(() => buildBaseRelativeDiff(file), [file]);
   if (comparison.kind === "unavailable")
@@ -461,6 +478,7 @@ export function BaseRelativeFileView({
       diff={comparison.diff}
       truncated={comparison.truncated}
       layout={layout}
+      onClose={onClose}
     />
   );
 }

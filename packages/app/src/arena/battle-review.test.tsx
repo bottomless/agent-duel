@@ -21,6 +21,17 @@ vi.mock("./battle-summary", () => ({
   SummaryOmissionNotice: () => null,
 }));
 
+// The tooltip animates with reanimated too. Its trigger is the button itself, so the
+// stand-in keeps that button and drops the hover label.
+vi.mock("@/components/ui/tooltip", async () => {
+  const { Pressable } = await import("react-native");
+  return {
+    Tooltip: ({ children }: { children: React.ReactElement }) => children,
+    TooltipTrigger: (props: React.ComponentProps<typeof Pressable>) => <Pressable {...props} />,
+    TooltipContent: () => null,
+  };
+});
+
 import { BattleReview } from "./battle-review";
 import { useArenaReviewStore } from "./review-state";
 import { verdictFolds } from "./verdict-body";
@@ -158,6 +169,53 @@ describe("BattleReview", () => {
     expect(opened?.shownIndex).toBe(0);
     // Nothing was clicked, so the reader has still chosen no file of their own.
     expect(opened?.file).toBeUndefined();
+  });
+
+  it("closes the open diff from its row and opens it again", () => {
+    render({ summaryAvailable: false });
+    const row = () => byTestId("arena-changes-row-main.py") as HTMLElement;
+    expect(byTestId("arena-inline-diff")).not.toBeNull();
+    expect(row().getAttribute("aria-label")).toBe("Hide the diff of main.py");
+
+    act(() => fireEvent.click(row()));
+    expect(byTestId("arena-inline-diff")).toBeNull();
+    expect(row().getAttribute("aria-label")).toBe("Show the diff of main.py");
+    // Closed is the reader's choice, so the default file does not reopen on its own.
+    render({ summaryAvailable: false });
+    expect(byTestId("arena-inline-diff")).toBeNull();
+
+    act(() => fireEvent.click(row()));
+    expect(byTestId("arena-inline-diff")).not.toBeNull();
+  });
+
+  it("closes the diff from its pinned header", () => {
+    render({ summaryAvailable: false });
+    act(() => fireEvent.click(byTestId("arena-diff-close") as HTMLElement));
+    expect(byTestId("arena-inline-diff")).toBeNull();
+    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.file).toBeNull();
+  });
+
+  it("folds the whole section away and opens it again from a tab", () => {
+    render({ summaryAvailable: true });
+    const collapse = () => byTestId("arena-review-collapse") as HTMLElement;
+    expect(collapse().getAttribute("aria-label")).toBe("Hide the difference summary and changes");
+    act(() => fireEvent.click(collapse()));
+    expect(container.textContent).not.toContain("The judge's report");
+    expect(byTestId("arena-review-tabs")).not.toBeNull();
+    expect(collapse().getAttribute("aria-label")).toBe("Show the difference summary and changes");
+
+    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
+    expect(byTestId("arena-inline-diff")).not.toBeNull();
+    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.collapsed).toBe(false);
+  });
+
+  it("records nothing as shown while the section is folded", () => {
+    useArenaReviewStore.setState({ byTurn: { "turn-1": { collapsed: true } } });
+    render({ summaryAvailable: false });
+    expect(byTestId("arena-inline-diff")).toBeNull();
+    const state = useArenaReviewStore.getState().byTurn["turn-1"];
+    expect(state?.shownFile).toBeUndefined();
+    expect(state?.shownTab).toBeUndefined();
   });
 
   it("shows the changes alone when there is no verdict to read", () => {

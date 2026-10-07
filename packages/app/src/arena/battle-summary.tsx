@@ -46,7 +46,7 @@ import { ArenaPathList } from "./path-list";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { useArenaDiffLayout } from "./diff-layout";
 import { DiffLayoutControl } from "./diff-layout-control";
-import { defaultChangesFile, InlineFileDiff } from "./inline-file-diff";
+import { InlineFileDiff, openChangesFile } from "./inline-file-diff";
 import { VerdictBody } from "./verdict-body";
 import { ArenaChangesList } from "./changes-list";
 import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
@@ -96,10 +96,10 @@ function ArchivedChanges({ agentId, diff }: { agentId: string; diff: ArenaCompar
   const { onLayout, width } = useContainerWidth();
   const measured = width > 0 ? width : null;
   const layout = useArenaDiffLayout(agentId, measured);
-  const [chosenFile, setChosenFile] = useState<string | null>(null);
-  const selectedFile = rows.some((row) => row.file === chosenFile)
-    ? chosenFile
-    : defaultChangesFile(rows);
+  // Undefined until the reader picks a row; null once they close the open diff.
+  const [chosenFile, setChosenFile] = useState<string | null | undefined>(undefined);
+  const selectedFile = openChangesFile(rows, chosenFile);
+  const closeFile = useCallback(() => setChosenFile(null), []);
   return (
     <View style={styles.section} onLayout={onLayout}>
       <View style={styles.sectionHeader}>
@@ -114,7 +114,9 @@ function ArchivedChanges({ agentId, diff }: { agentId: string; diff: ArenaCompar
         onSelect={setChosenFile}
         selectedFile={selectedFile ?? undefined}
       />
-      {selectedFile ? <InlineFileDiff diff={diff} file={selectedFile} layout={layout} /> : null}
+      {selectedFile ? (
+        <InlineFileDiff diff={diff} file={selectedFile} layout={layout} onClose={closeFile} />
+      ) : null}
       {diff.filesTruncated ? (
         <Text style={styles.warning}>
           This battle touched more files than the comparison view can show at once; the rest are
