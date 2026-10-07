@@ -19,8 +19,11 @@ export interface ArenaReviewState {
    * or not they ever touched the tab control.
    */
   readonly shownTab?: ArenaReviewTab;
-  /** The file the reader picked. Absent means the card's default is standing. */
-  readonly file?: string;
+  /**
+   * The file the reader picked. Absent means the card's default is standing; null means the
+   * reader closed the open diff, which the default must not reopen.
+   */
+  readonly file?: string | null;
   /**
    * The file whose diff is actually on screen, default included. Telemetry
    * counts this rather than `file`: a reader who opens Changes and reads the
@@ -30,6 +33,8 @@ export interface ArenaReviewState {
   /** Row position of `shownFile`, which says whether the reader went in order. */
   readonly shownIndex?: number;
   readonly verdictExpanded?: boolean;
+  /** The reader folded the difference summary and changes away. Absent means open. */
+  readonly collapsed?: boolean;
   /**
    * Whether the report was long enough to clip. Without it an unexpanded
    * verdict is indistinguishable from one that was never foldable.
@@ -43,10 +48,11 @@ interface ArenaReviewStore {
   /** Per turn, not per chat: a chat holds many battles and each is reviewed on its own. */
   byTurn: Record<string, ArenaReviewState>;
   setTab: (turnId: string, tab: ArenaReviewTab) => void;
-  setFile: (turnId: string, file: string) => void;
+  setFile: (turnId: string, file: string | null) => void;
   setShownTab: (turnId: string, shownTab: ArenaReviewTab) => void;
   setShownFile: (turnId: string, shownFile: string, shownIndex: number) => void;
   setVerdictExpanded: (turnId: string, expanded: boolean) => void;
+  setCollapsed: (turnId: string, collapsed: boolean) => void;
   setVerdictFolded: (turnId: string) => void;
   addPreviewOpened: (turnId: string, side: ArenaSide) => void;
 }
@@ -78,6 +84,7 @@ export const useArenaReviewStore = create<ArenaReviewStore>((set) => ({
       };
     }),
   setVerdictExpanded: (turnId, verdictExpanded) => set(patch(turnId, { verdictExpanded })),
+  setCollapsed: (turnId, collapsed) => set(patch(turnId, { collapsed })),
   addPreviewOpened: (turnId, side) =>
     set((state) => {
       const opened = state.byTurn[turnId]?.previewsOpened ?? [];
