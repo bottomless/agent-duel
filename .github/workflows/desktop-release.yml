@@ -78,12 +78,17 @@ jobs:
 
       - name: Build, sign, and notarize Apple Silicon app
         env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          PASEO_WEB_PLATFORM: electron
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run build:desktop -- --publish never --mac --arm64 -c.mac.type=distribution -c.forceCodeSigning=true
+        run: |
+          npm run build:app-deps:clean
+          (cd packages/app && npx expo export --platform web --max-workers 1)
+          npm run build --workspace=@getpaseo/desktop -- --publish never --mac --arm64 -c.mac.type=distribution -c.forceCodeSigning=true
 
       - name: Typecheck
         run: npm run typecheck
