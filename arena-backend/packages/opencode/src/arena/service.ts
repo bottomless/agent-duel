@@ -182,7 +182,7 @@ import {
 } from "./copy-snapshot"
 import { assignProxyRoutes, captureOwnedServices, persistedProxyRoutes, stopOwnedServices } from "./services"
 import { buildEnvironmentTransition } from "./transition"
-import { createIgnoredJournal, createSlotWatch, type JournalMark } from "./environment-watch"
+import { createIgnoredJournal, createSlotWatch, watcherBackendUnavailable, type JournalMark } from "./environment-watch"
 import type { Store } from "./mongo"
 
 const encoder = new TextEncoder()
@@ -1057,6 +1057,14 @@ export const layer: Layer.Layer<
     const journal = createIgnoredJournal()
     // Each kept worktree's copied roots, from the end of its sync to the start of its next one.
     const slotWatch = createSlotWatch()
+    const watcherUnavailable = watcherBackendUnavailable()
+    if (watcherUnavailable) {
+      yield* Effect.logError("Arena filesystem watcher unavailable; every send re-syncs both sides", {
+        reason: watcherUnavailable,
+        platform: process.platform,
+        arch: process.arch,
+      })
+    }
     // What this process knows about a kept worktree's ignored content, by resolved directory. A
     // worktree without an entry has unknown history, so its roots are cloned again, which is
     // always exact. Moved with the worktree when it is adopted into a new path.

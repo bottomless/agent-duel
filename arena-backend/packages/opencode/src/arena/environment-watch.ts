@@ -82,15 +82,33 @@ const backend = (): ParcelWatcher.BackendType | undefined => {
 }
 
 let binding: typeof import("@parcel/watcher") | undefined | null
+let bindingError: string | undefined
 
 /**
- * The package first, then the platform binding the way the core watcher resolves it. The
- * package is what resolves under `bun run` and the tests; the explicit platform require is
- * what survives bundling, where the optional dependency is not reachable by name.
+ * A packaged engine ships the binding beside its executable. The copy compiled into the
+ * executable is extracted to an unsigned temp file at run time, which the hardened runtime
+ * refuses to map ("different Team IDs"); the shipped file is signed with the app.
+ */
+const SHIPPED_BINDING = path.join(path.dirname(process.execPath), "watcher.node")
+
+/**
+ * The shipped binding first, then the package, then the platform binding the way the core
+ * watcher resolves it. The package is what resolves under `bun run` and the tests; the
+ * explicit platform require is what survives bundling, where the optional dependency is not
+ * reachable by name.
  */
 function watcher() {
   if (binding !== undefined) return binding ?? undefined
   binding = null
+  if (lstatSync(SHIPPED_BINDING, { throwIfNoEntry: false })?.isFile()) {
+    try {
+      binding = createWrapper(require(SHIPPED_BINDING)) as typeof import("@parcel/watcher")
+      return binding
+    } catch (error) {
+      bindingError = error instanceof Error ? error.message : String(error)
+      binding = null
+    }
+  }
   try {
     const parcel = require("@parcel/watcher") as typeof import("@parcel/watcher")
     if (typeof parcel?.subscribe === "function") {
@@ -105,8 +123,9 @@ function watcher() {
       `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? "-glibc" : ""}`,
     )
     binding = createWrapper(platform) as typeof import("@parcel/watcher")
-  } catch {
+  } catch (error) {
     binding = null
+    bindingError = error instanceof Error ? error.message : String(error)
   }
   return binding ?? undefined
 }
@@ -207,6 +226,17 @@ async function releaseAnchor() {
   const replacement = anchor as Anchor | undefined
   await replacement?.ready
   await dropAnchor(current)
+}
+
+/**
+ * Why this process cannot watch ignored content, if it cannot. Without a backend no warm pair can
+ * be trusted, so every send re-syncs both sides: exact, but seconds slower. A compiled engine
+ * reaches this state when the platform binding was not resolvable at build time.
+ */
+export function watcherBackendUnavailable(): string | undefined {
+  if (backend() === undefined) return `no watcher backend for ${process.platform}`
+  if (watcher() === undefined) return bindingError ?? "the watcher binding did not load"
+  return undefined
 }
 
 export function createEnvironmentWatch(): EnvironmentWatch {
