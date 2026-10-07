@@ -48,7 +48,7 @@ extraResources:
 publish:
   provider: github
   owner: bottomless
-  repo: agent-arena2
+  repo: agent-duel
 mac:
   icon: assets/icon.icns
   artifactName: "Agent-Duel-${version}-${arch}.${ext}"
