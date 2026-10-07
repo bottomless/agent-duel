@@ -83,7 +83,7 @@ describe("ArenaRunMeta", () => {
     };
     const view = render(<ArenaRunMeta run={run} side="a" active />);
     const label = () => view.getByTestId("arena-run-meta-a").textContent;
-    expect(label()).toBe("Waiting for your reply·");
+    expect(label()).toBe("Waiting for your answer·");
     view.rerender(<ArenaRunMeta run={{ ...run, questions: [] }} side="a" active />);
     expect(label()).toBe("Retrying·");
     view.rerender(
