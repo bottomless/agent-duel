@@ -20,6 +20,7 @@ export type LiveChange =
   | { kind: "remove_part"; runId: string; messageId: string; partId: string }
 export interface LiveNotification {
   turnID: string
+  rootSessionID: string
   change: LiveChange
   // Bootstrap needs the latest value, not an append which the DB read may already contain.
   replacement: Exclude<LiveChange, { kind: "text" }>
@@ -84,10 +85,10 @@ export class ArenaLive {
     let change: Exclude<LiveChange, { kind: "text" }> | undefined
     if (type === "message.updated") {
       const message = readMessage(properties.info)
-      if (message?.sessionID === binding.rootSessionID) change = { kind: "message", runId, message }
+      if (message) change = { kind: "message", runId, message }
     } else if (type === "message.part.updated") {
       const part = readPart(properties.part)
-      if (!part || part.sessionID !== binding.rootSessionID) return
+      if (!part) return
       const time = readRecord(part.time)
       if ((part.type === "text" || part.type === "reasoning") && typeof time?.end !== "number") {
         const current = this.pending.get(runId) ?? new Map<string, LivePart>()
@@ -96,12 +97,7 @@ export class ArenaLive {
       } else this.pending.get(runId)?.delete(part.id)
       change = { kind: "part", runId, part }
     } else if (type === "message.part.delta") {
-      if (
-        properties.sessionID !== binding.rootSessionID ||
-        properties.field !== "text" ||
-        typeof properties.delta !== "string" ||
-        typeof properties.partID !== "string"
-      )
+      if (properties.field !== "text" || typeof properties.delta !== "string" || typeof properties.partID !== "string")
         return
       const current = this.pending.get(runId)
       const previous = current?.get(properties.partID)
@@ -119,19 +115,19 @@ export class ArenaLive {
         offset: previous.text.length,
         text: properties.delta,
       }
-      this.emit({ turnID: binding.turnID, change: delta, replacement: { kind: "part", runId, part } })
+      this.emit({
+        turnID: binding.turnID,
+        rootSessionID: binding.rootSessionID,
+        change: delta,
+        replacement: { kind: "part", runId, part },
+      })
       return
-    } else if (
-      type === "message.removed" &&
-      properties.sessionID === binding.rootSessionID &&
-      typeof properties.messageID === "string"
-    ) {
+    } else if (type === "message.removed" && typeof properties.messageID === "string") {
       for (const part of this.partsFor(runId))
         if (part.messageID === properties.messageID) this.pending.get(runId)?.delete(part.id)
       change = { kind: "remove_message", runId, messageId: properties.messageID }
     } else if (
       type === "message.part.removed" &&
-      properties.sessionID === binding.rootSessionID &&
       typeof properties.messageID === "string" &&
       typeof properties.partID === "string"
     ) {
@@ -144,7 +140,7 @@ export class ArenaLive {
       type === "session.error"
     )
       this.dirty()
-    if (change) this.emit({ turnID: binding.turnID, change, replacement: change })
+    if (change) this.emit({ turnID: binding.turnID, rootSessionID: binding.rootSessionID, change, replacement: change })
   }
 
   private emit(event: LiveNotification) {

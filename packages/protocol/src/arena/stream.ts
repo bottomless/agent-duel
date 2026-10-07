@@ -108,10 +108,9 @@ function applyRunChange(run: ArenaRun, change: Exclude<ArenaChange, { kind: "sta
   const messages = run.messages ?? [];
   switch (change.kind) {
     case "message":
-      if (change.message.sessionID !== run.sessionID) throw new ArenaStreamMismatch();
+      // The engine assigns root and descendant events to the contestant's run.
       return { ...run, messages: upsert(messages, change.message) };
     case "part":
-      if (change.part.sessionID !== run.sessionID) throw new ArenaStreamMismatch();
       return {
         ...run,
         parts: {

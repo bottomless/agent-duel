@@ -1,5 +1,9 @@
-import { deriveArenaToolCallDetail } from "./tool-call-detail";
+import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
+import { buildToolCallDisplayModel } from "@/utils/tool-call-display";
+import { deriveArenaToolCallDetail, normalizeArenaToolCallStatus } from "./tool-call-detail";
 import { isArenaQuestionPart } from "./question";
+import { arenaReasoningPartIsActive } from "./run-thread-selection";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -47,6 +51,7 @@ function partIsTextUpdate(part: unknown): boolean {
 export function projectArenaActivitySegments(
   messageIds: readonly string[],
   partsByMessage: Readonly<Record<string, readonly unknown[] | undefined>>,
+  isSubagent: (part: unknown) => boolean = () => false,
 ): ArenaActivitySegment[] {
   const segments: ArenaActivitySegment[] = [];
   const leading: ArenaActivityPart[] = [];
@@ -56,15 +61,15 @@ export function projectArenaActivitySegments(
     const parts = partsByMessage[messageId] ?? [];
     for (const [partIndex, part] of parts.entries()) {
       const entry = { messageId, partIndex, part };
-      const question = isArenaQuestionPart(part);
-      if (question && leading.length > 0) {
+      const standalone = isArenaQuestionPart(part) || isSubagent(part);
+      if (standalone && leading.length > 0) {
         segments.push({
           key: `${leading[0].messageId}:activity`,
           content: null,
           trailing: leading.splice(0),
         });
       }
-      if (partIsTextUpdate(part) || question) {
+      if (partIsTextUpdate(part) || standalone) {
         if (current) segments.push(current);
         current = {
           key: `${messageId}:${partIndex}`,
@@ -94,6 +99,96 @@ export function projectArenaActivitySegments(
 export function arenaPartIsWork(part: unknown): boolean {
   const type = partType(part);
   return type === "tool" || type === "reasoning" || type === "thought";
+}
+
+function arenaWorkPartIsActive(part: unknown, runState: ArenaRun["runState"]): boolean {
+  if (runState !== "pending") return false;
+  if (arenaReasoningPartIsActive({ runState }, part)) return true;
+
+  const record = asRecord(part);
+  if (record?.type !== "tool") return false;
+  const state = asRecord(record.state);
+  return normalizeArenaToolCallStatus(state?.status, state?.error, state?.output) === "running";
+}
+
+export type ArenaWorkPresentation =
+  | { kind: "summary" | "reasoning"; label: string; active: boolean }
+  | {
+      kind: "tool";
+      label: string;
+      secondaryLabel?: string;
+      toolName: string;
+      detail?: ToolCallDetail;
+      active: boolean;
+      failed: boolean;
+    };
+
+export function arenaRunIsAwaitingResponse(
+  run: Pick<ArenaRun, "runState" | "messages" | "parts">,
+): boolean {
+  if (run.runState !== "pending") return false;
+  const message = asRecord(run.messages?.at(-1));
+  if (message?.role !== "assistant" || typeof message.id !== "string") return false;
+  if (typeof asRecord(message.time)?.completed === "number") return false;
+  const parts = run.parts?.[message.id] ?? [];
+  return !parts.some((part) => arenaPartIsWork(part) || partIsTextUpdate(part));
+}
+
+interface ArenaWorkPresentationInput {
+  parts: readonly unknown[];
+  runState: ArenaRun["runState"];
+  isLatest: boolean;
+  awaitingResponse: boolean;
+}
+
+export function presentArenaWork({
+  parts,
+  runState,
+  isLatest,
+  awaitingResponse,
+}: ArenaWorkPresentationInput): ArenaWorkPresentation {
+  if (!isLatest) {
+    return {
+      kind: "summary",
+      label: arenaWorkSummaryLabel(summarizeArenaWork(parts), false),
+      active: false,
+    };
+  }
+
+  const waitingForModel = awaitingResponse && runState === "pending";
+  if (waitingForModel) return { kind: "reasoning", label: "Thinking…", active: true };
+
+  // Completion can arrive out of order. It controls animation, never recency.
+  const current = parts.at(-1);
+  const active = arenaWorkPartIsActive(current, runState);
+  const record = asRecord(current);
+  if (record?.type !== "tool") {
+    return { kind: "reasoning", label: active ? "Reasoning…" : "Reasoned", active };
+  }
+  const state = asRecord(record.state) ?? {};
+  const toolName = typeof record.tool === "string" ? record.tool : "tool";
+  const detail = deriveArenaToolCallDetail(toolName, state.input, state.output);
+  const status = normalizeArenaToolCallStatus(state.status, state.error, state.output);
+  const display = buildToolCallDisplayModel({
+    name: toolName,
+    status,
+    metadata: { subAgentActivity: asRecord(state.input)?.description },
+    error: state.error ?? null,
+    detail: detail ?? {
+      type: "unknown",
+      input: state.input ?? null,
+      output: state.output ?? null,
+    },
+  });
+  return {
+    kind: "tool",
+    label: display.displayName,
+    secondaryLabel: display.summary,
+    toolName,
+    detail,
+    active,
+    failed: status === "failed",
+  };
 }
 
 function isSearchTool(tool: string): boolean {

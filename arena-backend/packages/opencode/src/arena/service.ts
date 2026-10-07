@@ -140,6 +140,7 @@ import { ArenaSchema } from "./schema"
 import { ArenaPrivacy } from "./privacy"
 import { resolveBuildCommit } from "./provenance"
 import { ArenaTranscriptArtifact } from "./transcript-artifact"
+import { ArenaTranscript } from "./transcript"
 import type {
   ApplyBaseChoice,
   ChatDocument,
@@ -1432,49 +1433,13 @@ export const layer: Layer.Layer<
                   if (!root || !Array.isArray(root.messages)) {
                     throw new Error(`Arena root transcript archive is missing: ${run._id}`)
                   }
-                  const messages = root.messages.flatMap((message) => {
-                    if (
-                      typeof message !== "object" ||
-                      message === null ||
-                      Array.isArray(message) ||
-                      typeof message.info !== "object" ||
-                      message.info === null ||
-                      Array.isArray(message.info) ||
-                      typeof message.info.id !== "string" ||
-                      !Array.isArray(message.parts)
-                    )
-                      return []
-                    const infoEnvelope = ArenaPrivacy.event({
-                      type: "message.updated",
-                      properties: { info: message.info },
-                    })
-                    if (
-                      typeof infoEnvelope !== "object" ||
-                      infoEnvelope === null ||
-                      !("properties" in infoEnvelope) ||
-                      typeof infoEnvelope.properties !== "object" ||
-                      infoEnvelope.properties === null ||
-                      !("info" in infoEnvelope.properties)
-                    )
-                      return []
-                    const parts = message.parts.flatMap((part: unknown) => {
-                      const partEnvelope = ArenaPrivacy.event({
-                        type: "message.part.updated",
-                        properties: { part },
-                      })
-                      if (
-                        typeof partEnvelope !== "object" ||
-                        partEnvelope === null ||
-                        !("properties" in partEnvelope) ||
-                        typeof partEnvelope.properties !== "object" ||
-                        partEnvelope.properties === null ||
-                        !("part" in partEnvelope.properties)
-                      )
-                        return []
-                      return [partEnvelope.properties.part]
-                    })
-                    return [{ info: infoEnvelope.properties.info, parts }]
-                  })
+                  const transcript = ArenaTranscript.project(
+                    payload.flatMap((item) =>
+                      typeof item === "object" && item !== null && "messages" in item && Array.isArray(item.messages)
+                        ? item.messages
+                        : [],
+                    ),
+                  )
                   const permissions = Array.isArray(root.permissionState)
                     ? root.permissionState.map((request) => safeRequest("permission.asked", request))
                     : []
@@ -1482,17 +1447,7 @@ export const layer: Layer.Layer<
                     ? root.questionState.map((request) => safeRequest("question.asked", request))
                     : []
                   return {
-                    messages: messages.map((message) => message.info),
-                    parts: Object.fromEntries(
-                      messages.flatMap((message) =>
-                        typeof message.info === "object" &&
-                        message.info !== null &&
-                        "id" in message.info &&
-                        typeof message.info.id === "string"
-                          ? [[message.info.id, message.parts] as const]
-                          : [],
-                      ),
-                    ),
+                    ...transcript,
                     permissions,
                     questions,
                   }
@@ -1510,7 +1465,12 @@ export const layer: Layer.Layer<
                 messages: controlsOnly
                   ? Effect.succeed({ available: false as const })
                   : bestEffort(
-                      sessions.messages({ sessionID }).pipe(Effect.map(ArenaPrivacy.messages), Effect.mapError(error)),
+                      Effect.forEach([...sessionIDs], (id) => sessions.messages({ sessionID: SessionID.make(id) }), {
+                        concurrency: 4,
+                      }).pipe(
+                        Effect.map((transcripts) => ArenaTranscript.project(transcripts.flat())),
+                        Effect.mapError(error),
+                      ),
                     ),
                 status: bestEffort(statuses.get(sessionID).pipe(Effect.map(ArenaPrivacy.status))),
                 permissions: bestEffort(
@@ -1540,12 +1500,7 @@ export const layer: Layer.Layer<
             return {
               key: run._id,
               value: {
-                ...(live.messages.available
-                  ? {
-                      messages: live.messages.value.map((message) => message.info),
-                      parts: Object.fromEntries(live.messages.value.map((message) => [message.info.id, message.parts])),
-                    }
-                  : {}),
+                ...(live.messages.available ? live.messages.value : {}),
                 ...(live.status.available ? { status: live.status.value } : {}),
                 ...(live.permissions.available ? { permissions: live.permissions.value } : {}),
                 ...(live.questions.available ? { questions: live.questions.value } : {}),

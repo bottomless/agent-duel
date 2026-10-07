@@ -11,33 +11,36 @@ afterEach(() => {
 })
 
 describe("Arena live transcript", () => {
-  test("captures token-only output for a late baseline without persisting token events", () => {
-    const live = new ArenaLive()
-    const binding = { runID: "run", turnID: "turn", rootSessionID: "session" }
-    const received: unknown[] = []
-    const off = live.subscribe((event) => received.push(event.change))
-    live.capture(binding, {
-      type: "message.part.updated",
-      properties: {
-        part: { id: "p", messageID: "m", sessionID: "session", type: "text", text: "", time: { start: 1 } },
-      },
-    })
-    live.capture(binding, {
-      type: "message.part.delta",
-      properties: { sessionID: "session", messageID: "m", partID: "p", field: "text", delta: "hello" },
-    })
-    expect(received[1]).toEqual({ kind: "text", runId: "run", messageId: "m", partId: "p", offset: 0, text: "hello" })
-    expect(live.partsFor("run")[0]).toMatchObject({ text: "hello" })
-    off()
-    live.capture(binding, {
-      type: "message.part.delta",
-      properties: { sessionID: "session", messageID: "m", partID: "p", field: "text", delta: " world" },
-    })
-    expect(live.partsFor("run")[0]).toMatchObject({ text: "hello world" })
-    live.release("run")
-    expect(live.partsFor("run")).toEqual([])
-  })
-  test("applies the existing tool blinding rules and publishes part removal", () => {
+  test.each(["session", "child"])(
+    "captures %s token-only output for a late baseline without persisting token events",
+    (sessionID) => {
+      const live = new ArenaLive()
+      const binding = { runID: "run", turnID: "turn", rootSessionID: "session" }
+      const received: unknown[] = []
+      const off = live.subscribe((event) => received.push(event.change))
+      live.capture(binding, {
+        type: "message.part.updated",
+        properties: {
+          part: { id: "p", messageID: "m", sessionID, type: "text", text: "", time: { start: 1 } },
+        },
+      })
+      live.capture(binding, {
+        type: "message.part.delta",
+        properties: { sessionID, messageID: "m", partID: "p", field: "text", delta: "hello" },
+      })
+      expect(received[1]).toEqual({ kind: "text", runId: "run", messageId: "m", partId: "p", offset: 0, text: "hello" })
+      expect(live.partsFor("run")[0]).toMatchObject({ text: "hello" })
+      off()
+      live.capture(binding, {
+        type: "message.part.delta",
+        properties: { sessionID, messageID: "m", partID: "p", field: "text", delta: " world" },
+      })
+      expect(live.partsFor("run")[0]).toMatchObject({ text: "hello world" })
+      live.release("run")
+      expect(live.partsFor("run")).toEqual([])
+    },
+  )
+  test.each(["root", "child"])("applies %s tool blinding and publishes part removal", (sessionID) => {
     const live = new ArenaLive()
     const values: unknown[] = []
     live.subscribe((event) => values.push(event.change))
@@ -48,7 +51,7 @@ describe("Arena live transcript", () => {
         part: {
           id: "p",
           messageID: "m",
-          sessionID: "root",
+          sessionID,
           type: "tool",
           tool: "bash",
           callID: "provider-secret-call",
@@ -78,14 +81,14 @@ describe("Arena live transcript", () => {
     live.capture(binding, {
       type: "message.part.removed",
       properties: {
-        sessionID: "root",
+        sessionID,
         messageID: "m",
         partID: "p",
       },
     })
     expect(values[1]).toEqual({ kind: "remove_part", runId: "run", messageId: "m", partId: "p" })
   })
-  test("redacts identities and excludes child transcripts", () => {
+  test("redacts identities in both parent and child transcripts", () => {
     const live = new ArenaLive()
     const values: unknown[] = []
     live.subscribe((event) => values.push(event.change))
@@ -95,7 +98,10 @@ describe("Arena live transcript", () => {
       properties: { info: { id: "m", sessionID: "root", providerID: "secret", modelID: "secret" } },
     })
     live.capture(binding, { type: "message.updated", properties: { info: { id: "child", sessionID: "child" } } })
-    expect(values).toEqual([{ kind: "message", runId: "run", message: { id: "m", sessionID: "root" } }])
+    expect(values).toEqual([
+      { kind: "message", runId: "run", message: { id: "m", sessionID: "root" } },
+      { kind: "message", runId: "run", message: { id: "child", sessionID: "child" } },
+    ])
   })
   test("refreshes interaction state without forwarding raw permission or question events", () => {
     const live = new ArenaLive()
