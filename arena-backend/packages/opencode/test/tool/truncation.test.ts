@@ -12,6 +12,8 @@ import path from "path"
 import { testEffect } from "../lib/effect"
 import { writeFileStringScoped } from "../lib/filesystem"
 import { TestConfig } from "../fixture/config"
+import { mkdtemp, rm } from "fs/promises"
+import os from "os"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
 const ROOT = path.resolve(import.meta.dir, "..", "..")
@@ -189,6 +191,25 @@ describe("Truncate", () => {
         const fsys = yield* FSUtil.Service
         const written = yield* fsys.readFileString(result.outputPath!)
         expect(written).toBe(lines)
+      }),
+    )
+
+    it.live("saves an Arena contestant's output under its own temp directory", () =>
+      Effect.gen(function* () {
+        const svc = yield* Truncate.Service
+        const root = yield* Effect.acquireRelease(
+          Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "truncate-"))),
+          (dir) => Effect.promise(() => rm(dir, { recursive: true, force: true })),
+        )
+        const tmpDirectory = path.join(root, "contestant")
+        const lines = Array.from({ length: 100 }, (_, i) => `line${i}`).join("\n")
+        const result = yield* svc.output(lines, { maxLines: 10, ...Truncate.within(tmpDirectory) })
+
+        if (!result.truncated) throw new Error("expected truncated")
+        expect(path.dirname(result.outputPath)).toBe(path.join(tmpDirectory, "tool-output"))
+        expect(result.content).toContain(result.outputPath)
+        expect(yield* (yield* FSUtil.Service).readFileString(result.outputPath)).toBe(lines)
+        expect(Truncate.within(undefined)).toEqual({})
       }),
     )
 

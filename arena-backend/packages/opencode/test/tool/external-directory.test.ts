@@ -95,6 +95,21 @@ describe("tool.assertExternalDirectory", () => {
     }),
   )
 
+  it.instance("names written directories so read-only rules apply to them", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const target = path.join(path.dirname(test.directory), "outside", "file.txt")
+      const expected = glob(path.join(path.dirname(target), "*"))
+      const requests: Array<Parameters<Tool.Context["ask"]>[0]> = []
+      const ctx: Tool.Context = { ...baseCtx, ask: (req) => Effect.sync(() => void requests.push(req)) }
+
+      yield* assertExternalDirectoryEffect(ctx, target)
+      yield* assertExternalDirectoryEffect(ctx, target, { access: "read" })
+
+      expect(requests.map((req) => req.writes)).toEqual([[expected], undefined])
+    }),
+  )
+
   it.live("skips prompting when bypass=true", () =>
     Effect.gen(function* () {
       const { requests, ctx } = makeCtx()

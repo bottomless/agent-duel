@@ -64,6 +64,7 @@ import {
 } from "./tool-execution-gate"
 import { LLMEvent } from "@opencode-ai/llm"
 import { ArenaPrivacy } from "@/arena/privacy"
+import { ArenaContestant } from "@/arena/contestant"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -360,6 +361,7 @@ const layer = Layer.effect(
                 ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
               })
               .pipe(Effect.orDie),
+          tmpDirectory: ArenaContestant.sandboxTmp(Permission.merge(taskAgent.permission, session.permission ?? [])),
         })
         .pipe(
           Effect.catchCause((cause) => {

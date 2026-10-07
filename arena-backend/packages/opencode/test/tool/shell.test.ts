@@ -1,5 +1,7 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
+import { stat } from "fs/promises"
+import { Global } from "@opencode-ai/core/global"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Effect, Exit, Layer } from "effect"
 import type * as Scope from "effect/Scope"
@@ -1241,4 +1243,68 @@ describe("tool.shell truncation", () => {
       }),
     ),
   )
+})
+
+describe("tool.shell Arena contestant sandbox", () => {
+  if (process.platform === "win32") return
+
+  it.live("marks only the external paths a command writes to", () =>
+    Effect.gen(function* () {
+      const outside = yield* tmpdirScoped()
+      const source = path.join(outside, "source")
+      const target = path.join(outside, "target")
+      yield* Effect.promise(() => Bun.write(path.join(source, "a.txt"), "a"))
+      yield* Effect.promise(() => Bun.write(path.join(target, "keep.txt"), "b"))
+      yield* runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const err = new Error("stop after permission")
+          const requests: Array<Parameters<Tool.Context["ask"]>[0]> = []
+          const stop: Tool.Context = {
+            ...ctx,
+            ask: (req) =>
+              Effect.sync(() => {
+                requests.push(req)
+                throw err
+              }),
+          }
+          yield* fail({ command: `cat ${source}/a.txt && cp ${source}/a.txt ${target}/b.txt` }, stop)
+          const request = requests.find((r) => r.permission === "external_directory")
+          expect(request!.patterns).toEqual([path.join(source, "*"), path.join(target, "*")])
+          expect(request!.writes).toEqual([path.join(target, "*")])
+
+          requests.length = 0
+          yield* fail({ command: `rm ${source}/a.txt` }, stop)
+          expect(requests.find((r) => r.permission === "external_directory")!.writes).toEqual([path.join(source, "*")])
+        }),
+      )
+    }),
+  )
+
+  it.live("gives the shell the contestant's temp directory and saves truncated output there", () =>
+    Effect.gen(function* () {
+      const tmpDirectory = path.join(yield* tmpdirScoped(), "contestant")
+      yield* runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const contestant = { ...ctx, tmpDirectory }
+          const env = yield* run({ command: 'printf "%s" "$TMPDIR"' }, contestant)
+          expect(env.output).toBe(tmpDirectory)
+          expect((yield* Effect.promise(() => stat(tmpDirectory))).isDirectory()).toBe(true)
+
+          const result = yield* run({ command: fill("lines", Truncate.MAX_LINES + 500) }, contestant)
+          mustTruncate(result)
+          expect(String(result.metadata.outputPath)).toStartWith(path.join(tmpDirectory, "tool-output") + path.sep)
+        }),
+      )
+    }),
+  )
+
+  test("names the contestant's temp directory in the description", () => {
+    const description = ShellPrompt.render("bash", "darwin", { maxLines: 1, maxBytes: 1 }, 1000).description
+    const tmp = path.join(os.tmpdir(), "contestant")
+    const rendered = ShellPrompt.withTmp(description, tmp)
+    expect(rendered).toContain(`Use \`${tmp}\` for temporary work`)
+    expect(rendered).not.toContain(`\`${Global.Path.tmp}\``)
+  })
 })

@@ -543,10 +543,10 @@ reply takes the same attachments as a chat message, and both contestants get ide
 - Pasted images travel as bytes and context attachments (PR comments, reviews) as text. An uploaded
   file of any type travels as Paseo sends it to a single agent: a note with its path under
   `$PASEO_HOME/uploads/<id>/`, for the contestant to open with its own tools. The daemon resolves
-  that path from the upload id, never from the client's path. Contestants may not read outside
-  their worktree, so before each prompt and reply the engine adds an `external_directory` allow for
-  each upload's directory to the contestant session (`allowReading`). An upload sits alone in its
-  directory, so that admits the one file, and both sides get the same path.
+  that path from the upload id, never from the client's path. An upload is outside the contestant's
+  sandbox (see **Setup**), so before each prompt and reply the engine adds an `external_directory`
+  allow for each upload's directory to the contestant session (`allowReading`). An upload sits alone
+  in its directory, so that admits the one file, and both sides get the same path.
 - Contestants take PDFs. OpenRouter passes one natively to a model that reads PDFs and parses it
   with mistral-ocr for one that does not, so the two sides can read different renderings of the
   same file.
@@ -575,10 +575,9 @@ run, so a contestant gets the frozen tree and the copied untracked and ignored f
 Auto Accept follows the chat's OpenCode feature. The daemon sends its value when admitting a battle;
 the engine applies it in each contestant worktree and updates both sides when the toggle changes.
 It approves tool prompts that would otherwise ask, including pending ones. Explicit denies still
-apply, including the contestant's external-directory rule.
+apply, including the contestant's sandbox.
 The session is forked from canonical, set to provider `arena` with `contestant` as its neutral model
-id, given inherited permissions plus a hard `external_directory: deny`
-(`arena/contestant.ts`), and moved into the side worktree. Retarget declared file-tool paths,
+id, given its sandbox, and moved into the side worktree. Retarget declared file-tool paths,
 attachment paths, assistant locations, literal POSIX Bash arguments, and complete old-worktree path
 references in assistant text. Later turns can reuse a path the assistant printed. Keep user prompts,
 file contents, unknown tool inputs, and arbitrary output unchanged; a shared path prefix alone is not
@@ -586,6 +585,27 @@ enough to rewrite a string. Bash output has two explicit adapters:
 the result of a plain `pwd`, and a complete single-line `cd <literal> [&& pwd]` command example. The latter
 keeps an executable example from referring to a worktree removed after an earlier vote.
 Shell expansions and paths crossing `..` remain unchanged; resolving them requires runtime state.
+
+The sandbox (`arena/contestant.ts`) is the inherited permissions, then a hard
+`external_directory: deny`, then allows for what both sides need outside the worktree. Rules match
+last first, so the deny overrides the allows every agent gets for `$TMPDIR/opencode`, the truncation
+directory and skill directories, and only the rules after it reopen paths. Never turn the deny into
+`ask`: a prompt the user answers for one side and not the other makes the sides unequal.
+
+- Skill directories, read-only. The list comes from the canonical checkout's instance, so both sides
+  get the same one; project skills are left out because the worktree holds its own copy. An
+  `external_directory_write` deny on each keeps file tools and the shell's file commands from
+  writing there (`writes` on the permission request). Shell redirection and other programs are not
+  checked, as for any path.
+- A temp directory per side, `$TMPDIR/opencode/arena/<session id>`, readable and writable. The
+  shell exports it as `TMPDIR` and the shell tool's description names it, and truncated tool output
+  is saved under it, so the hint to read that file works. The two sides never share it, and it is
+  removed when the run's worktree is released (`releaseRunSlot`). Subagents inherit the rules and
+  so share their side's directory.
+
+A contestant denied a path outside the sandbox gets one sentence that names the sandbox, not the
+generic list of matching rules, which holds dozens of home-directory paths that contestants copy
+into their answers and that reach research uploads.
 
 The two sides are prepared **at once**, since each has its own host repository and session, and
 the host repository is a copy-on-write clone of the checkout's git directory where the
