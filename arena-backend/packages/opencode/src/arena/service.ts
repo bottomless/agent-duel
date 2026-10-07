@@ -157,6 +157,7 @@ import { create as createTelemetry } from "./telemetry"
 import { Recorder } from "./events"
 import {
   createArenaOperationTracker,
+  mergeOperationProgress,
   type ArenaActiveOperation,
   type ArenaOperationProgress,
 } from "./operation-tracker"
@@ -1054,10 +1055,7 @@ export const layer: Layer.Layer<
             } = { activeOperations: [...activeOperations] }
             if (progress) {
               const current = await store.turn(turnID)
-              const existing = current?.operationProgress ?? []
-              patch.operationProgress = existing.some((entry) => entry.operation === progress.operation)
-                ? existing.map((entry) => (entry.operation === progress.operation ? progress : entry))
-                : [...existing, progress]
+              patch.operationProgress = mergeOperationProgress(current?.operationProgress ?? [], progress)
             }
             await store.updateTurn(turnID, patch)
           }).pipe(Effect.asVoid),

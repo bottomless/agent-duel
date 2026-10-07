@@ -262,6 +262,76 @@ describe("ArenaGit", () => {
     }),
   )
 
+  it.live("writes a large winner's files, modes, symlinks, and removals into the checkout", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const candidate = yield* scopedTmpdir()
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/remove.txt`, "remove\n", "utf8"))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/tool`, "a file that becomes a directory\n", "utf8"))
+      yield* Effect.promise(() => fs.mkdir(`${canonical.path}/notes`))
+      yield* Effect.promise(() =>
+        fs.writeFile(`${canonical.path}/notes/old.md`, "a directory that becomes a file\n", "utf8"),
+      )
+      yield* Effect.promise(() => $`git add . && git commit -m base`.cwd(canonical.path).quiet())
+      const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() =>
+        $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet(),
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() =>
+          $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow(),
+        ).pipe(Effect.ignore),
+      )
+      const pages = Array.from({ length: 400 }, (_, index) => `pages/page-${String(index).padStart(3, "0")}.html`)
+      yield* Effect.promise(async () => {
+        await fs.mkdir(`${candidate.path}/pages`)
+        for (const [index, page] of pages.entries())
+          await fs.writeFile(`${candidate.path}/${page}`, `<p>page ${index}</p>\n`)
+        await fs.writeFile(`${candidate.path}/same-a.txt`, "same content\n")
+        await fs.writeFile(`${candidate.path}/same-b.txt`, "same content\n")
+        await fs.writeFile(`${candidate.path}/run.sh`, "#!/bin/sh\necho run\n", { mode: 0o755 })
+        await fs.symlink("pages/page-000.html", `${candidate.path}/latest.html`)
+        await fs.rm(`${candidate.path}/remove.txt`)
+        await fs.rm(`${candidate.path}/tool`)
+        await fs.mkdir(`${candidate.path}/tool`)
+        await fs.writeFile(`${candidate.path}/tool/main.txt`, "now a directory\n")
+        await fs.rm(`${candidate.path}/notes`, { recursive: true })
+        await fs.writeFile(`${candidate.path}/notes`, "now a file\n")
+      })
+      const result = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: frozenHead,
+        permanentRef: "refs/battles/large/a",
+      })
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead,
+        baseWorkingTree: frozenHead,
+        baseIndexTree: frozenHead,
+        resultCommit: result.finalCommit,
+        finalIndexTree: result.finalIndexTree,
+        safetyRef: "refs/battles/large/safety",
+      })
+      expect(promoted.conflicts).toEqual([])
+      const read = (path: string) => Effect.promise(() => fs.readFile(`${canonical.path}/${path}`, "utf8"))
+      for (const [index, page] of pages.entries()) expect(yield* read(page)).toBe(`<p>page ${index}</p>\n`)
+      expect(yield* read("same-a.txt")).toBe("same content\n")
+      expect(yield* read("same-b.txt")).toBe("same content\n")
+      expect((yield* Effect.promise(() => fs.stat(`${canonical.path}/run.sh`))).mode & 0o777).toBe(0o755)
+      expect(yield* Effect.promise(() => fs.readlink(`${canonical.path}/latest.html`))).toBe("pages/page-000.html")
+      expect(yield* read("tool/main.txt")).toBe("now a directory\n")
+      expect(yield* read("notes")).toBe("now a file\n")
+      expect(
+        yield* Effect.promise(() =>
+          fs.access(`${canonical.path}/remove.txt`).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      ).toBe(false)
+    }),
+  )
+
   it.live("promotes committed baseline state without reapplying the frozen baseline", () =>
     Effect.gen(function* () {
       const canonical = yield* scopedTmpdir({ git: true })

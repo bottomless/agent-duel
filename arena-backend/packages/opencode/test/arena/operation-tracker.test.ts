@@ -1,6 +1,52 @@
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Fiber } from "effect"
-import { createArenaOperationTracker } from "../../src/arena/operation-tracker"
+import { createArenaOperationTracker, mergeOperationProgress } from "../../src/arena/operation-tracker"
+
+describe("arena operation progress", () => {
+  test("keeps the first part of an operation that completes and starts again", () => {
+    const saved = { operation: "preserving_results", state: "completed", startedAt: 0, finishedAt: 100 } as const
+    const firstPart = mergeOperationProgress([saved], {
+      operation: "applying_changes",
+      state: "completed",
+      startedAt: 1_000,
+      finishedAt: 31_000,
+    })
+    const resumed = mergeOperationProgress(firstPart, {
+      operation: "applying_changes",
+      state: "running",
+      startedAt: 33_000,
+    })
+    expect(resumed).toEqual([saved, { operation: "applying_changes", state: "running", startedAt: 3_000 }])
+    const finished = mergeOperationProgress(resumed, {
+      operation: "applying_changes",
+      state: "completed",
+      startedAt: 33_000,
+      finishedAt: 33_050,
+    })
+    expect(finished).toEqual([
+      saved,
+      { operation: "applying_changes", state: "completed", startedAt: 3_000, finishedAt: 33_050 },
+    ])
+  })
+
+  test("starts a retry after a failure fresh", () => {
+    const failed = { operation: "applying_changes", state: "failed", startedAt: 1_000, finishedAt: 31_000 } as const
+    const retry = mergeOperationProgress([failed], {
+      operation: "applying_changes",
+      state: "running",
+      startedAt: 60_000,
+    })
+    expect(retry).toEqual([{ operation: "applying_changes", state: "running", startedAt: 60_000 }])
+    expect(
+      mergeOperationProgress(retry, {
+        operation: "applying_changes",
+        state: "completed",
+        startedAt: 60_000,
+        finishedAt: 61_000,
+      }),
+    ).toEqual([{ operation: "applying_changes", state: "completed", startedAt: 60_000, finishedAt: 61_000 }])
+  })
+})
 
 describe("arena operation tracker", () => {
   test("keeps a shared operation visible until its last lease ends", async () => {
