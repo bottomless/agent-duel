@@ -1,0 +1,6 @@
+{
+  "bothCompletedOriginalPrompt": true,
+  "discardedTextAbsent": true,
+  "paneA": "Agent A\nFinished\n·\n2m 6s\n·\nNo changes\nBASE_PROMPT_FINISHED\nRan 1 command",
+  "paneB": "Agent B\nFinished\n·\n2m 1s\n·\nNo changes\nBASE_PROMPT_FINISHED\nRan 1 command"
+}

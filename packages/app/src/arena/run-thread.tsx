@@ -29,6 +29,7 @@ import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
+import { arenaQueuedSteering, arenaToolOutput } from "./steering";
 import { arenaSubagentRunState, projectArenaSessions, type ArenaSessionThread } from "./subagents";
 import {
   arenaPartIsWork,
@@ -71,7 +72,7 @@ function ArenaToolPart({ part, cwd }: { part: UnknownRecord; cwd?: string }) {
   const state = asRecord(part.state);
   const tool = typeof part.tool === "string" ? part.tool : "tool";
   const input = state?.input;
-  const output = state?.output;
+  const output = arenaToolOutput(state);
   const error = state?.error;
   const status = useMemo(
     () => normalizeArenaToolCallStatus(state?.status, error, output),
@@ -669,7 +670,14 @@ export function ArenaRunThread({
     response: ArenaPermissionReply,
   ) => void;
 }) {
-  const visibleMessages = arenaThreadMessages(run);
+  // A steer the model has not received yet shows in the queue under the thread, not as sent.
+  const visibleMessages = useMemo(() => {
+    const queued = new Set(arenaQueuedSteering(run).map((message) => message.id));
+    return arenaThreadMessages(run).filter((message) => {
+      const id = messageId(message);
+      return id === null || !queued.has(id);
+    });
+  }, [run]);
   const pendingQuestions = useMemo(() => arenaPendingQuestions(run), [run]);
   const pendingPermissions = useMemo(() => arenaPendingPermissions(run), [run]);
   const pending = run.runState === "pending";

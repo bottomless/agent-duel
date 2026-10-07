@@ -179,6 +179,8 @@ export type ArenaTurnAction =
       target: ArenaReplyTarget;
       attachments?: readonly ComposerAttachment[];
     }
+  | { kind: "interrupt_steer"; runId: string; messageId: string }
+  | { kind: "discard_steer"; runId: string; messageIds: string[] }
   | { kind: "vote"; turnId: string; vote: ArenaVote }
   | { kind: "stop"; turnId: string }
   | {
@@ -250,6 +252,10 @@ export function useArenaTurnMutation(serverId: string, agentId: string) {
             action.target,
             await encodeArenaPromptAttachments(action.attachments),
           );
+        case "interrupt_steer":
+          return client.arenaInterruptSteer(agentId, action.runId, action.messageId);
+        case "discard_steer":
+          return client.arenaDiscardSteer(agentId, action.runId, action.messageIds);
         case "vote":
           return client.arenaVote(agentId, action.turnId, action.vote);
         case "stop":

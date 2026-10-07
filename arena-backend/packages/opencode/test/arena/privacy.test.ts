@@ -171,6 +171,56 @@ afterEach(async () => {
 })
 
 describe("ArenaPrivacy", () => {
+  test("coordinates queued-message discard reservations and prompt claims atomically", () => {
+    const claimedFirst = "privacy-claims-first"
+    const discardedFirst = "privacy-discard-first"
+    const conflict = "conflict"
+    const available = "available"
+    const released = "released"
+
+    try {
+      expect(ArenaPrivacy.claimMessages(claimedFirst, [conflict, available])).toBe(true)
+      expect(ArenaPrivacy.reserveDiscard(claimedFirst, [conflict])).toBe(false)
+      expect(ArenaPrivacy.reserveDiscard(claimedFirst, [released, conflict])).toBe(false)
+      expect(ArenaPrivacy.isMessageDiscarded(claimedFirst, released)).toBe(false)
+      expect(ArenaPrivacy.isMessageDiscarded(claimedFirst, conflict)).toBe(false)
+
+      expect(ArenaPrivacy.reserveDiscard(discardedFirst, [conflict, available])).toBe(true)
+      expect(ArenaPrivacy.claimMessages(discardedFirst, [conflict])).toBe(false)
+      expect(ArenaPrivacy.claimMessages(discardedFirst, [available])).toBe(false)
+
+      const discardConflict = "privacy-discard-conflict"
+      expect(ArenaPrivacy.claimMessages(discardConflict, [conflict])).toBe(true)
+      expect(ArenaPrivacy.reserveDiscard(discardConflict, [available, conflict])).toBe(false)
+      expect(ArenaPrivacy.isMessageDiscarded(discardConflict, available)).toBe(false)
+      expect(ArenaPrivacy.reserveDiscard(discardConflict, [available])).toBe(true)
+      ArenaPrivacy.releaseDiscard(discardConflict, [available])
+      expect(ArenaPrivacy.reserveDiscard(discardConflict, [released])).toBe(true)
+      ArenaPrivacy.releaseDiscard(discardConflict, [released])
+      expect(ArenaPrivacy.reserveDiscard(discardConflict, [released])).toBe(true)
+      ArenaPrivacy.releaseDiscard(discardConflict, [released])
+
+      const claimRelease = "privacy-claim-release"
+      expect(ArenaPrivacy.reserveDiscard(claimRelease, [released])).toBe(true)
+      ArenaPrivacy.releaseDiscard(claimRelease, [released])
+      expect(ArenaPrivacy.claimMessages(claimRelease, [released])).toBe(true)
+      ArenaPrivacy.releaseClaims(claimRelease, [released])
+      expect(ArenaPrivacy.claimMessages(claimRelease, [released])).toBe(true)
+      ArenaPrivacy.releaseClaims(claimRelease, [released])
+
+      expect(ArenaPrivacy.reserveDiscard(claimRelease, [released])).toBe(true)
+      expect(ArenaPrivacy.claimMessages(claimRelease, [available])).toBe(true)
+      ArenaPrivacy.forgetSession(claimRelease)
+      expect(ArenaPrivacy.reserveDiscard(claimRelease, [released])).toBe(true)
+      expect(ArenaPrivacy.claimMessages(claimRelease, [available])).toBe(true)
+    } finally {
+      ArenaPrivacy.forgetSession(claimedFirst)
+      ArenaPrivacy.forgetSession(discardedFirst)
+      ArenaPrivacy.forgetSession("privacy-discard-conflict")
+      ArenaPrivacy.forgetSession("privacy-claim-release")
+    }
+  })
+
   test("leaves non-Arena values and mutation behavior unchanged", () => {
     delete process.env.OPENCODE_ARENA
     const config = { model: `${hiddenProvider}/${hiddenAlias}`, provider: { [hiddenProvider]: {} } }
