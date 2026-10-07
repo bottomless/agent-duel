@@ -612,7 +612,7 @@ and the comparison starts in the background
 ## Blinding
 
 A contestant's identity is hidden until the vote lands, and it leaks from more places than the model
-field. Four layers, each with its own file:
+field. Each layer has its own file:
 
 - **Assignment** (`arena-service/src/assignments.ts`) — in hosted mode the model pool and
   assignment mapping exist only on the server. The desktop cannot derive the private profile from
@@ -644,6 +644,11 @@ field. Four layers, each with its own file:
   provider and model metadata, cost and token usage, flattens errors, and rehashes tool-call IDs to
   `call_arena_<hash>`. Each upstream mints those IDs in a recognizable shape, and xAI's counter
   additionally counts calls the voter never saw (`arena/privacy.ts:72`).
+- **System prompt** (`session/system.ts`) — every `arena` session, contestant or single-agent, gets
+  a fixed instruction where other providers get the model line: its identity is hidden until the
+  vote or a reveal, and it must not guess, name, or look up a model or company. Without it, models answer as
+  "opencode" or claim a model they are not, and a strong model can name itself in text the judge
+  reads. The text is static because anything assignment-derived would differ between the sides.
 - **The judge** (`arena/comparison-timeline.ts`) — sees narrative text and tool name/status only.
   Reasoning is excluded deliberately: it dwarfs the visible text and sends the comparison model
   after differences that exist only in private deliberation.
