@@ -95,6 +95,9 @@ jobs:
 
       - name: Verify signing and notarization
         env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           APP='packages/desktop/release/mac-arm64/Agent Duel.app'
@@ -103,7 +106,10 @@ jobs:
           grep -F 'Authority=Developer ID Application: Bottomless Supply Inc (LGVJP2HNM2)' "$RUNNER_TEMP/signing.txt"
           xcrun stapler validate "$APP"
           spctl --assess --type execute --verbose=4 "$APP"
-          xcrun stapler validate "packages/desktop/release/Agent-Duel-$RELEASE_VERSION-arm64.dmg"
+          DMG="packages/desktop/release/Agent-Duel-$RELEASE_VERSION-arm64.dmg"
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
 
       - name: Save verified installers
         uses: actions/upload-artifact@v4
