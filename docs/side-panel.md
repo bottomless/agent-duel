@@ -143,6 +143,9 @@ card would only narrow it to show the same thing.
 
 ## Shortcuts
 
+Close-tab and close-pane shortcuts act only on the focused side panel, whether docked right or
+bottom. Consume them without closing anything when the main pane is focused; the chat stays open.
+
 | Action                     | Mac                 |
 | -------------------------- | ------------------- |
 | Toggle side panel          | Cmd+E               |
