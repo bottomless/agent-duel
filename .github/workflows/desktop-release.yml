@@ -110,6 +110,27 @@ jobs:
           xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
+          node <<'JS'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const yaml = require('js-yaml');
+          const { executeAppBuilderAsJson } = require('app-builder-lib/out/util/appBuilder');
+          (async () => {
+            const dir = 'packages/desktop/release';
+            const name = `Agent-Duel-${process.env.RELEASE_VERSION}-arm64.dmg`;
+            const file = path.join(dir, name);
+            const info = await executeAppBuilderAsJson(['blockmap', '--input', file, '--output', `${file}.blockmap`]);
+            for (const metadata of fs.readdirSync(dir).filter(name => name.endsWith('-mac.yml'))) {
+              const target = path.join(dir, metadata);
+              const data = yaml.load(fs.readFileSync(target, 'utf8'));
+              const entry = data.files.find(entry => entry.url === name);
+              if (!entry) throw new Error(`Missing DMG entry in ${metadata}`);
+              entry.sha512 = info.sha512;
+              entry.size = info.size;
+              fs.writeFileSync(target, yaml.dump(data));
+            }
+          })().catch(error => { console.error(error); process.exit(1); });
+          JS
 
       - name: Save verified installers
         uses: actions/upload-artifact@v4
