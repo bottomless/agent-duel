@@ -30,6 +30,7 @@ function fixture() {
       comparisonState: "pending",
       canVote: false,
       canRetryResolution: false,
+      canDiscardWinner: false,
       revealed: false,
       createdAt: "now",
       updatedAt: "now",
@@ -255,6 +256,45 @@ test("publishes a new contestant session before its live messages", async () => 
   expect(Array.from(frames)[1]).toMatchObject({
     kind: "snapshot",
     snapshot: { runs: [{ sessionID: "new-session", parts: { m: [{ text: "new text" }] } }] },
+  })
+})
+
+test("delivers child activity without waiting for a different root session", async () => {
+  const live = new ArenaLive()
+  const snapshot = fixture()
+  const frames: Frame[] = []
+  await Effect.runPromise(
+    createArenaStream({
+      live,
+      read: (full) =>
+        Effect.succeed(
+          full
+            ? snapshot
+            : {
+                ...snapshot,
+                runs: snapshot.runs.map(({ messages: _messages, parts: _parts, ...run }) => run),
+              },
+        ),
+      discover: Effect.void,
+      onChange: () => () => {},
+    }).pipe(
+      Stream.take(2),
+      Stream.runForEach((frame) =>
+        Effect.sync(() => {
+          frames.push(frame)
+          if (frame.kind === "snapshot")
+            live.capture(binding, {
+              type: "message.updated",
+              properties: { info: { id: "child-message", sessionID: "child", role: "assistant" } },
+            })
+        }),
+      ),
+      Effect.timeout("2 seconds"),
+    ),
+  )
+  expect(frames[1]).toMatchObject({
+    kind: "changes",
+    changes: [{ kind: "message", runId: "a", message: { id: "child-message", sessionID: "child" } }],
   })
 })
 

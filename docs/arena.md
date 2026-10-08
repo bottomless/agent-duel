@@ -69,6 +69,8 @@ a filesystem repair once a second and publishes recovery without rereading trans
 
 Begin with a redacted snapshot, reconciled with events received during the read
 and unfinished token text held in memory. Then apply messages and parts by ID.
+Include each contestant's descendant sessions in both the live feed and transcript snapshots;
+delegated work must remain visible while the parent waits, including after reconnecting or archiving.
 Append text only at its expected UTF-16 offset, batching for at most 100 ms. Keep this
 live overlay separate from durable event compression: token transport must not
 turn into one SQLite write per token. Control state does not reread transcripts;
@@ -237,8 +239,17 @@ Product decisions that are settled, so they do not get relitigated per feature:
 - Both results are kept until the vote; nothing is auto-selected.
 - A vote is final. There is no rematch on the same prompt.
 - The loser's work survives only as a git ref, not as anything the UI offers to recover.
-- Contestant text stays prominent. Tool calls and reasoning fold into an expandable activity
-  summary beneath the text update they belong to; complete details remain available inside it.
+- Contestant text stays prominent. The newest activity block shows its latest tool or reasoning,
+  even after it finishes. An older unfinished task must not replace newer activity. Animate only
+  the displayed activity while it is running. Show thinking when the next model request has started
+  without content. Once newer conversation content puts a block into history, show its aggregate
+  work summary without animation. Complete details remain available by expanding either row.
+  Give each subagent a static, named, expandable heading with its latest activity on an indented
+  line beneath it. Animate only the activity text. When the subagent ends, replace that activity
+  with its final status on the same indented line. Keep its transcript inside that group so
+  concurrent agents cannot replace each other's current tool.
+  Use the activity row for thinking and the pane heading for elapsed time, without a second
+  thinking control or timer below the transcript.
 - Questions stay in the conversation after submission, with each answer beneath its prompt.
   Keep the exchange outside folded activity and between the work before and after it, including
   in archived battles and the applied winner's conversation. Interrupted questions remain visible

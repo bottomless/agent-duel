@@ -100,6 +100,16 @@ describe("arenaThreadMessages", () => {
       { id: "second-agent", role: "assistant" },
     ]);
   });
+
+  it("does not mistake a subagent prompt for the legacy battle boundary", () => {
+    const parent = { id: "parent", role: "assistant", sessionID: "session-a" };
+    const child = { id: "child-prompt", role: "user", sessionID: "child" };
+    expect(
+      arenaThreadMessages(
+        run([{ id: "prompt", role: "user", sessionID: "session-a" }, parent, child]),
+      ),
+    ).toEqual([parent, child]);
+  });
 });
 
 describe("arenaReasoningPartIsActive", () => {

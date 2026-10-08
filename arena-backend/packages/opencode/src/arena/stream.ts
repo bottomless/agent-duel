@@ -86,6 +86,7 @@ export function createArenaStream(source: Source): Stream.Stream<Frame, Error> {
         let currentTurn: string | undefined
         let currentLifecycle = ""
         let currentSessions = new Map<string, string | undefined>()
+        const pendingRoots = new Map<string, string>()
         let lastControl = ""
         let overflow = false
 
@@ -124,6 +125,7 @@ export function createArenaStream(source: Source): Stream.Stream<Frame, Error> {
             pendingBytes += Buffer.byteLength(JSON.stringify(event.replacement))
           } else {
             const change = event.change
+            pendingRoots.set(change.runId, event.rootSessionID)
             const previous = pending.at(-1)
             if (
               previous?.kind === "text" &&
@@ -178,9 +180,8 @@ export function createArenaStream(source: Source): Stream.Stream<Frame, Error> {
             pending
               .filter((change) => {
                 if (!currentSessions.get(change.runId)) return true
-                if (change.kind === "message") return currentSessions.get(change.runId) !== change.message.sessionID
-                if (change.kind === "part") return currentSessions.get(change.runId) !== change.part.sessionID
-                return false
+                // A child belongs to the same run; only a replacement root requires hydration.
+                return currentSessions.get(change.runId) !== pendingRoots.get(change.runId)
               })
               .map((change) => change.runId),
           )

@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Text, View } from "react-native";
-import { Wrench } from "lucide-react-native";
+import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
@@ -10,12 +10,11 @@ import {
   ToolCall,
   UserMessage,
 } from "@/components/message";
-import { ThinkingBlock } from "@/components/thinking-block";
 import { QuestionFormCard } from "@/components/question-form-card";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
-import { RunningTurnFooter } from "@/agent-stream/turn-footer";
-import { useSettings } from "@/hooks/use-settings";
-import { arenaReasoningPartIsActive, arenaThreadMessages } from "./run-thread-selection";
+import { thinkingMarkdownParser } from "@/components/markdown/thinking-parser";
+import { resolveToolCallIcon } from "@/utils/tool-call-icon";
+import { arenaThreadMessages } from "./run-thread-selection";
 import { arenaPendingQuestions, arenaQuestionResult, type ArenaPendingQuestion } from "./question";
 import { ArenaQuestionResultView } from "./question-result";
 import {
@@ -30,11 +29,13 @@ import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
+import { arenaSubagentRunState, projectArenaSessions, type ArenaSessionThread } from "./subagents";
 import {
   arenaPartIsWork,
-  arenaWorkSummaryLabel,
+  arenaRunIsAwaitingResponse,
+  arenaRunIsResponding,
+  presentArenaWork,
   projectArenaActivitySegments,
-  summarizeArenaWork,
   type ArenaActivityPart,
   type ArenaActivitySegment,
 } from "./work-summary";
@@ -66,7 +67,7 @@ function stringifyBounded(value: unknown, maxLength = 8_000): string {
   }
 }
 
-function ArenaToolPart({ part }: { part: UnknownRecord }) {
+function ArenaToolPart({ part, cwd }: { part: UnknownRecord; cwd?: string }) {
   const state = asRecord(part.state);
   const tool = typeof part.tool === "string" ? part.tool : "tool";
   const input = state?.input;
@@ -88,28 +89,16 @@ function ArenaToolPart({ part }: { part: UnknownRecord }) {
       error={error}
       status={status}
       detail={detail}
+      cwd={cwd}
       disableOuterSpacing
       compactLabel
     />
   );
 }
 
-function ArenaReasoningPart({ text, pending }: { text: string; pending: boolean }) {
-  const autoExpandReasoning = useSettings((settings) => settings.autoExpandReasoning);
-  return (
-    <ThinkingBlock
-      text={text}
-      active={pending}
-      defaultExpanded={autoExpandReasoning}
-      disableOuterSpacing
-      compact
-    />
-  );
-}
-
 function ArenaPart({
   value,
-  pending,
+  cwd,
   question,
   permission,
   questionResponding,
@@ -118,7 +107,7 @@ function ArenaPart({
   onPermissionResponse,
 }: {
   value: unknown;
-  pending: boolean;
+  cwd?: string;
   question?: ArenaPendingQuestion;
   permission?: ArenaPendingPermission;
   questionResponding: boolean;
@@ -143,7 +132,18 @@ function ArenaPart({
     return <MarkdownRenderer text={text} compact />;
   }
   if ((type === "reasoning" || type === "thought") && text) {
-    return <ArenaReasoningPart text={text} pending={pending} />;
+    // Subdued like a Thinking block, so reasoning never reads as the contestant's reply.
+    return (
+      <MarkdownRenderer
+        text={text}
+        compact
+        subdued
+        markdownit={thinkingMarkdownParser}
+        enableHtmlish={false}
+        enableDiagrams={false}
+        horizontalScrollCodeBlocks
+      />
+    );
   }
   if (type === "tool" && question && onQuestionResponse) {
     return (
@@ -168,7 +168,7 @@ function ArenaPart({
     if (questionResult) return <ArenaQuestionResultView result={questionResult} />;
     const tasks = arenaTodoWriteTasks(part);
     if (tasks !== null) return <ArenaTaskProgressCard tasks={tasks} state="snapshot" />;
-    return <ArenaToolPart part={part} />;
+    return <ArenaToolPart part={part} cwd={cwd} />;
   }
   return null;
 }
@@ -217,6 +217,8 @@ function buildRenderGroups(messages: readonly unknown[], runId: string): RenderG
 
 interface AssistantPartsContext {
   run: ArenaRun;
+  subagents: Map<unknown, ArenaSessionThread>;
+  sessionPath: string[];
   pendingQuestions: ArenaPendingQuestion[];
   pendingPermissions: ArenaPendingPermission[];
   respondingQuestionId: string | null;
@@ -268,17 +270,6 @@ function arenaPartShouldFold(part: unknown, context: AssistantPartsContext): boo
   return true;
 }
 
-function arenaWorkPartIsActive(run: ArenaRun, part: unknown): boolean {
-  if (arenaReasoningPartIsActive(run, part)) return true;
-  if (run.runState !== "pending") return false;
-
-  const record = asRecord(part);
-  if (record?.type !== "tool") return false;
-  const state = asRecord(record.state);
-  const status = normalizeArenaToolCallStatus(state?.status, state?.error, state?.output);
-  return status === "running";
-}
-
 function ArenaActivityPartView({
   entry,
   context,
@@ -287,7 +278,6 @@ function ArenaActivityPartView({
   context: AssistantPartsContext;
 }) {
   const {
-    run,
     pendingQuestions,
     pendingPermissions,
     respondingQuestionId,
@@ -297,10 +287,14 @@ function ArenaActivityPartView({
   } = context;
   const question = pendingQuestionForPart(entry.part, pendingQuestions);
   const permission = pendingPermissionForPart(entry.part, pendingPermissions);
+  const subagent = context.subagents.get(entry.part);
+  if (subagent && !context.sessionPath.includes(subagent.id) && !question && !permission) {
+    return <ArenaSubagent session={subagent} context={context} />;
+  }
   return (
     <ArenaPart
       value={entry.part}
-      pending={arenaReasoningPartIsActive(run, entry.part)}
+      cwd={context.run.worktree}
       question={question}
       permission={permission}
       questionResponding={question?.id === respondingQuestionId}
@@ -315,12 +309,35 @@ function activityPartKey(entry: ArenaActivityPart): string {
   return `${entry.messageId}:${entry.partIndex}`;
 }
 
+function sessionNeedsInput(session: ArenaSessionThread, context: AssistantPartsContext): boolean {
+  const visited = new Set<string>();
+  function needsInput(current: ArenaSessionThread): boolean {
+    if (visited.has(current.id)) return false;
+    visited.add(current.id);
+    return current.messages.some((message) => {
+      const id = messageId(message);
+      const parts = id ? (context.run.parts?.[id] ?? []) : [];
+      return parts.some((part) => {
+        if (pendingQuestionForPart(part, context.pendingQuestions)) return true;
+        if (pendingPermissionForPart(part, context.pendingPermissions)) return true;
+        const child = context.subagents.get(part);
+        return child ? needsInput(child) : false;
+      });
+    });
+  }
+  return needsInput(session);
+}
+
 function ArenaActivitySegmentView({
   segment,
   context,
+  isLatest,
+  awaitingResponse,
 }: {
   segment: ArenaActivitySegment;
   context: AssistantPartsContext;
+  isLatest: boolean;
+  awaitingResponse: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => setExpanded((current) => !current), []);
@@ -328,9 +345,14 @@ function ArenaActivitySegmentView({
   const visibleEntries = segment.trailing.filter(
     (entry) => !arenaPartShouldFold(entry.part, context),
   );
-  const isActive = workEntries.some((entry) => arenaWorkPartIsActive(context.run, entry.part));
-  const workSummary = summarizeArenaWork(workEntries.map((entry) => entry.part));
-  const label = arenaWorkSummaryLabel(workSummary, isActive);
+  const presentation = presentArenaWork({
+    parts: workEntries.map((entry) => entry.part),
+    runState: context.run.runState,
+    isLatest,
+    awaitingResponse,
+    cwd: context.run.worktree,
+  });
+  const hasDetails = workEntries.length > 0;
   const renderDetails = useCallback(
     () => (
       <View style={styles.workDetails}>
@@ -344,15 +366,21 @@ function ArenaActivitySegmentView({
   return (
     <View style={styles.activitySegment}>
       {segment.content ? <ArenaActivityPartView entry={segment.content} context={context} /> : null}
-      {workEntries.length > 0 ? (
+      {hasDetails || awaitingResponse ? (
         <ExpandableBadge
           testID="arena-activity-group"
-          label={label}
-          icon={Wrench}
-          isLoading={isActive}
+          label={presentation.label}
+          secondaryLabel={presentation.kind === "tool" ? presentation.secondaryLabel : undefined}
+          icon={
+            presentation.kind === "tool"
+              ? resolveToolCallIcon(presentation.toolName, presentation.detail)
+              : Wrench
+          }
+          isLoading={presentation.active}
+          isError={presentation.kind === "tool" && presentation.failed}
           isExpanded={expanded}
-          onToggle={toggle}
-          renderDetails={renderDetails}
+          onToggle={hasDetails ? toggle : undefined}
+          renderDetails={hasDetails ? renderDetails : undefined}
           disableOuterSpacing
           borderlessWhenExpanded
           bandWhenExpanded
@@ -370,17 +398,191 @@ function ArenaActivitySegmentView({
 function ArenaActivityGroup({
   messageIds,
   context,
+  isLatest,
 }: {
   messageIds: string[];
   context: AssistantPartsContext;
+  isLatest: boolean;
 }) {
   const segments = useMemo(
-    () => projectArenaActivitySegments(messageIds, context.run.parts ?? {}),
-    [context.run.parts, messageIds],
+    () =>
+      projectArenaActivitySegments(messageIds, context.run.parts ?? {}, (part) =>
+        context.subagents.has(part),
+      ),
+    [context.run.parts, context.subagents, messageIds],
   );
-  return segments.map((segment) => (
-    <ArenaActivitySegmentView key={segment.key} segment={segment} context={context} />
+  const awaitingResponse = isLatest && arenaRunIsAwaitingResponse(context.run);
+  const visibleSegments =
+    segments.length === 0 && awaitingResponse
+      ? [{ key: `${messageIds[0]}:activity`, content: null, trailing: [] }]
+      : segments;
+  return visibleSegments.map((segment) => (
+    <ArenaActivitySegmentView
+      key={segment.key}
+      segment={segment}
+      context={context}
+      isLatest={isLatest && segment === visibleSegments.at(-1)}
+      awaitingResponse={awaitingResponse && segment === visibleSegments.at(-1)}
+    />
   ));
+}
+
+function ArenaSubagent({
+  session,
+  context,
+}: {
+  session: ArenaSessionThread;
+  context: AssistantPartsContext;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback(() => setExpanded((current) => !current), []);
+  const childContext = useMemo(
+    () => ({
+      ...context,
+      sessionPath: [...context.sessionPath, session.id],
+      run: {
+        ...context.run,
+        sessionID: session.id,
+        messages: session.messages,
+        runState: arenaSubagentRunState(context.run.runState, session.task),
+      },
+    }),
+    [context, session],
+  );
+  const work = session.messages.flatMap((message) => {
+    if (messageRole(message) !== "assistant") return [];
+    const id = messageId(message);
+    return id ? (context.run.parts?.[id] ?? []).filter(arenaPartIsWork) : [];
+  });
+  const awaitingResponse = arenaRunIsAwaitingResponse(childContext.run);
+  const responding = arenaRunIsResponding(childContext.run);
+  const needsInput = sessionNeedsInput(session, context);
+  const latest = presentArenaWork({
+    parts: work,
+    runState: childContext.run.runState,
+    isLatest: true,
+    awaitingResponse,
+    responding,
+    cwd: childContext.run.worktree,
+  });
+  const statusLabels = {
+    pending: "Working",
+    complete: "Completed",
+    stopped: "Stopped",
+    interrupted: "Interrupted",
+    error: "Failed",
+  };
+  const status = statusLabels[childContext.run.runState];
+  const pending = childContext.run.runState === "pending";
+  const hasActivity = pending && (work.length > 0 || awaitingResponse || responding);
+  const activityLabel = hasActivity ? latest.label : status;
+  const showTool = hasActivity && latest.kind === "tool";
+  let activityIcon =
+    latest.kind === "tool" ? resolveToolCallIcon(latest.toolName, latest.detail) : Wrench;
+  if (!pending) activityIcon = childContext.run.runState === "complete" ? Check : CircleStop;
+  return (
+    <View testID="arena-subagent">
+      <ExpandableBadge
+        testID="arena-subagent-heading"
+        label={`Subagent · ${session.name}`}
+        icon={Users}
+        isExpanded={expanded || needsInput}
+        onToggle={toggle}
+        disableOuterSpacing
+        borderlessWhenExpanded
+        transparentWhenExpanded
+        compactLabel
+        flushRow
+      />
+      <View style={styles.subagentActivity} testID="arena-subagent-activity">
+        <ExpandableBadge
+          testID="arena-subagent-latest"
+          label={activityLabel}
+          secondaryLabel={showTool ? latest.secondaryLabel : undefined}
+          icon={activityIcon}
+          isLoading={pending && latest.active}
+          isError={childContext.run.runState === "error"}
+          isExpanded={false}
+          disableOuterSpacing
+          compactLabel
+          flushRow
+        />
+        {expanded || needsInput ? <ArenaSessionMessages context={childContext} /> : null}
+      </View>
+    </View>
+  );
+}
+
+/** A delegation prompt is written for the model, not by the user, so it opens on request. */
+function ArenaTaskPrompt({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback(() => setExpanded((current) => !current), []);
+  const renderDetails = useCallback(
+    () => (
+      <View style={styles.workDetails}>
+        <MarkdownRenderer text={text} compact subdued />
+      </View>
+    ),
+    [text],
+  );
+  return (
+    <ExpandableBadge
+      testID="arena-subagent-prompt"
+      label="Task prompt"
+      icon={FileText}
+      isExpanded={expanded}
+      onToggle={toggle}
+      renderDetails={renderDetails}
+      disableOuterSpacing
+      borderlessWhenExpanded
+      bandWhenExpanded
+      compactLabel
+    />
+  );
+}
+
+function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
+  const { run } = context;
+  const isSubagent = context.sessionPath.length > 1;
+  const renderGroups = useMemo(
+    () => buildRenderGroups(run.messages ?? [], run.id),
+    [run.messages, run.id],
+  );
+  return renderGroups.map((group) => {
+    if (group.kind === "user") {
+      const message = group.message;
+      const id = messageId(message) ?? fallbackMessageId(run.id, message);
+      const content = arenaUserMessageContent(id, run.parts?.[id] ?? []);
+      if (!content.text && content.images.length === 0 && content.attachments.length === 0) {
+        return null;
+      }
+      if (isSubagent && content.text) return <ArenaTaskPrompt key={id} text={content.text} />;
+      const fallbackTimestamp = new Date(
+        run.firstEventAt ?? run.startedAt ?? run.completedAt ?? 0,
+      ).getTime();
+      return (
+        <UserMessage
+          key={id}
+          messageId={id}
+          message={content.text}
+          images={content.images}
+          attachmentPills={arenaMessageAttachmentPills(content.attachments)}
+          timestamp={messageCreatedAt(message) ?? fallbackTimestamp}
+          disableOuterSpacing
+          withoutTrailingRow
+        />
+      );
+    }
+    return (
+      <View key={group.key} style={styles.assistantMessage}>
+        <ArenaActivityGroup
+          messageIds={group.messageIds}
+          context={context}
+          isLatest={group === renderGroups.at(-1)}
+        />
+      </View>
+    );
+  });
 }
 
 export function ArenaRunThread({
@@ -407,15 +609,16 @@ export function ArenaRunThread({
   const pendingPermissions = useMemo(() => arenaPendingPermissions(run), [run]);
   const pending = run.runState === "pending";
   const tasks = useMemo(() => (pending ? [] : arenaRunTasks(run)), [pending, run]);
-  const startedAt = run.startedAt ? new Date(run.startedAt) : null;
   const errorToShow = arenaRunErrorToShow({ error: run.error, stoppedByEarlyPick });
-  const renderGroups = useMemo(
-    () => buildRenderGroups(visibleMessages, run.id),
-    [visibleMessages, run.id],
+  const sessions = useMemo(
+    () => projectArenaSessions({ ...run, messages: visibleMessages }),
+    [visibleMessages, run],
   );
   const assistantPartsContext: AssistantPartsContext = useMemo(
     () => ({
-      run,
+      run: { ...run, messages: sessions.root.messages },
+      subagents: sessions.byTask,
+      sessionPath: [sessions.root.id],
       pendingQuestions,
       pendingPermissions,
       respondingQuestionId,
@@ -425,6 +628,7 @@ export function ArenaRunThread({
     }),
     [
       run,
+      sessions,
       pendingQuestions,
       pendingPermissions,
       respondingQuestionId,
@@ -436,38 +640,11 @@ export function ArenaRunThread({
 
   return (
     <View style={styles.thread}>
-      {renderGroups.map((group) => {
-        if (group.kind === "user") {
-          const message = group.message;
-          const id = messageId(message) ?? fallbackMessageId(run.id, message);
-          const content = arenaUserMessageContent(id, run.parts?.[id] ?? []);
-          if (!content.text && content.images.length === 0 && content.attachments.length === 0) {
-            return null;
-          }
-          const fallbackTimestamp = new Date(
-            run.firstEventAt ?? run.startedAt ?? run.completedAt ?? 0,
-          ).getTime();
-          return (
-            <UserMessage
-              key={id}
-              messageId={id}
-              message={content.text}
-              images={content.images}
-              attachmentPills={arenaMessageAttachmentPills(content.attachments)}
-              timestamp={messageCreatedAt(message) ?? fallbackTimestamp}
-              disableOuterSpacing
-              withoutTrailingRow
-            />
-          );
-        }
-        return (
-          <View key={group.key} style={styles.assistantMessage}>
-            <ArenaActivityGroup messageIds={group.messageIds} context={assistantPartsContext} />
-          </View>
-        );
-      })}
+      <ArenaSessionMessages context={assistantPartsContext} />
+      {sessions.unattached.map((session) => (
+        <ArenaSubagent key={session.id} session={session} context={assistantPartsContext} />
+      ))}
       {tasks.length > 0 ? <ArenaTaskProgressCard key={run.id} tasks={tasks} state="ended" /> : null}
-      {pending ? <RunningTurnFooter inFlightTurnStartedAt={startedAt} /> : null}
       {/* The note reports the pick; anything the run recorded for its own reasons still shows
           under it. */}
       {stoppedByEarlyPick ? (
@@ -499,6 +676,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   activitySegment: {
     gap: 0,
+  },
+  subagentActivity: {
+    paddingLeft: theme.spacing[6],
+    gap: theme.spacing[2],
   },
   // 8px here measures 12px between glyphs once the summary row's slack and the next text's
   // line box are counted, matching the 12px above the summary.

@@ -84,7 +84,7 @@ describe("Arena push changes", () => {
     };
     const after = applyArenaChanges(before, [{ kind: "state", snapshot: state }]);
     expect(after.runs[0].parts).toBe(before.runs[0].parts);
-    expect(after.runs[0].terminal).toBe("complete");
+    expect(after.runs[0].runState).toBe("complete");
     const other = {
       ...state,
       runs: state.runs.map((run) => Object.assign({}, run, { sessionID: "other" })),
@@ -93,11 +93,36 @@ describe("Arena push changes", () => {
       ArenaStreamMismatch,
     );
   });
-  it("does not merge descendant transcript records into the root run", () => {
-    expect(() =>
-      applyArenaChanges(fixture(), [
-        { kind: "message", runId: "a", message: { id: "child", sessionID: "descendant" } },
-      ]),
-    ).toThrow(ArenaStreamMismatch);
+  it("merges descendant activity into its assigned run before the descendant list catches up", () => {
+    const before = fixture();
+    const after = applyArenaChanges(before, [
+      {
+        kind: "message",
+        runId: "a",
+        message: { id: "child", sessionID: "descendant", role: "assistant" },
+      },
+      {
+        kind: "part",
+        runId: "a",
+        part: {
+          id: "child-part",
+          messageID: "child",
+          sessionID: "descendant",
+          type: "text",
+          text: "",
+        },
+      },
+      {
+        kind: "text",
+        runId: "a",
+        messageId: "child",
+        partId: "child-part",
+        offset: 0,
+        text: "Working",
+      },
+    ]);
+    expect(after.runs[0].messages?.at(-1)).toMatchObject({ id: "child", sessionID: "descendant" });
+    expect(after.runs[0].parts?.child[0]).toMatchObject({ text: "Working" });
+    expect(after.runs[1]).toBe(before.runs[1]);
   });
 });
