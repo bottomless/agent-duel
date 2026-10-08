@@ -336,10 +336,12 @@ describe("Worktree", () => {
         Effect.gen(function* () {
           const test = yield* TestInstance;
           const svc = yield* Worktree.Service;
+          const baseTree = (yield* git(test.directory, ["rev-parse", "HEAD^{tree}"])).trim();
           const info = yield* svc.reclaimWorktreeInfo({
             name: `dependency-excludes-${Date.now().toString(36)}`,
             branch: "main",
             isolated: true,
+            baseTree,
           });
           const base = (yield* git(test.directory, ["rev-parse", "HEAD"])).trim();
           yield* svc.attachAt(info, base, { reset: true });
@@ -363,6 +365,60 @@ describe("Worktree", () => {
             "info/exclude",
           ])).trim();
           expect(yield* Effect.promise(() => fs.readFile(exclude, "utf8"))).not.toContain("node_modules/");
+          yield* svc.remove({ directory: info.directory });
+        }),
+      { git: true },
+    );
+
+    // The contestant is checked against the frozen base, which holds the checkout's tracked files
+    // and the untracked ones its rules do not ignore. An exclude that hid either would fail that
+    // check, or drop the new files of a package installed into a tracked `node_modules`.
+    wintest(
+      "leaves a dependency folder the frozen base holds visible to the contestant",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance;
+          const svc = yield* Worktree.Service;
+          const write = (root: string, file: string) =>
+            Effect.promise(async () => {
+              await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+              await fs.writeFile(path.join(root, file), "content\n");
+            });
+          yield* write(test.directory, "vendor/node_modules/pkg/index.js");
+          yield* git(test.directory, ["add", "-A"]);
+          yield* git(test.directory, ["commit", "-qm", "vendored"]);
+          // Untracked and not ignored: a project that ignores only `*.pyc`, say.
+          yield* write(test.directory, "src/__pycache__/app.pyc");
+          // The frozen working tree, as `snapshotBase` takes it.
+          const index = path.join(test.directory, ".git", "base-index");
+          yield* Effect.promise(() => fs.copyFile(path.join(test.directory, ".git", "index"), index));
+          const service = yield* Git.Service;
+          yield* service.run(["add", "-A"], { cwd: test.directory, env: { GIT_INDEX_FILE: index } });
+          const baseTree = (yield* service.run(["write-tree"], {
+            cwd: test.directory,
+            env: { GIT_INDEX_FILE: index },
+          })).text().trim();
+          yield* Effect.promise(() => fs.rm(index));
+
+          const info = yield* svc.reclaimWorktreeInfo({
+            name: `dependency-held-${Date.now().toString(36)}`,
+            branch: "main",
+            isolated: true,
+            baseTree,
+          });
+          const head = (yield* git(test.directory, ["rev-parse", "HEAD"])).trim();
+          yield* svc.attachAt(info, head, { reset: true });
+          yield* git(info.directory, ["reset", "-q", "--hard", head]);
+          // What the sync restores from the base, then what the contestant installs.
+          yield* write(info.directory, "src/__pycache__/app.pyc");
+          yield* write(info.directory, "vendor/node_modules/new/index.js");
+          yield* write(info.directory, "tools/.venv/lib/site.py");
+          expect(
+            (yield* git(info.directory, ["status", "--porcelain", "--untracked-files=all"]))
+              .trim()
+              .split("\n")
+              .sort(),
+          ).toEqual(["?? src/__pycache__/app.pyc", "?? vendor/node_modules/new/index.js"]);
           yield* svc.remove({ directory: info.directory });
         }),
       { git: true },

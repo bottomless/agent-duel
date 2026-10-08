@@ -638,7 +638,11 @@ wrapper commit to the developer-visible history. Untracked dependency and cache 
 (`node_modules`, `.venv` and the like, at any depth) are not part of a side's result: the
 contestant's own repository excludes them, because a project that ignores only its root
 `/node_modules` would otherwise count a tool a contestant installed under `qa/` as its change and
-apply it with the win (`DEPENDENCY_EXCLUDES` in `src/worktree/index.ts`). When both are in, the
+apply it with the win (`DEPENDENCY_FOLDERS` in `src/worktree/index.ts`). A name the frozen base
+already holds is not excluded: a committed `node_modules`, or an untracked `__pycache__` the
+checkout does not ignore. The contestant is checked against the base, and in a committed
+`node_modules` the exclude would drop a new package's files while its edits to tracked ones still
+apply. When both are in, the
 turn becomes `awaiting_vote` and the comparison starts in the background
 (`arena/service.ts:1968`). A failed comparison never blocks a vote.
 

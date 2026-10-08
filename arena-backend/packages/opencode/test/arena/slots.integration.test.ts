@@ -881,6 +881,48 @@ describe("persistent contestant worktrees", () => {
     }
   }, 120_000)
 
+  test("leaves a dependency folder a contestant installs out of the vote, and keeps one the base holds", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    // Ignored only at the root, as in the project whose battle counted qa/node_modules.
+    await writeFile(path.join(root, ".gitignore"), "/node_modules\n")
+    await $`git add .gitignore`.cwd(root).quiet()
+    await $`git commit -qm "test: ignore the root node_modules"`.cwd(root).quiet()
+    // Untracked and not ignored, so the frozen base carries it and each contestant must too.
+    await mkdir(path.join(root, "src/__pycache__"), { recursive: true })
+    await writeFile(path.join(root, "src/__pycache__/app.pyc"), "bytecode\n")
+    const memory = memoryStore()
+    const INSTALL = [
+      "mkdir -p qa/node_modules/tool",
+      "printf 'tool\\n' > qa/node_modules/tool/index.js",
+      "printf 'answer\\n' > answer.txt",
+    ].join(" && ")
+    const router = installOpenRouterStub({
+      promptCommands: (text) => (text.includes("install a tool") ? INSTALL : undefined),
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "install a tool" })
+      expect(await readFile(path.join(root, "answer.txt"), "utf8")).toBe("answer\n")
+      expect(await exists(path.join(root, "qa"))).toBe(false)
+      expect(await readFile(path.join(root, "src/__pycache__/app.pyc"), "utf8")).toBe("bytecode\n")
+      // The loser's slot still holds the tool, now ignored, so `clean -fd` keeps it: the ignored
+      // resync has to clear it for the next pair.
+      const warm = await waitForWarmPair(memory.store, turn, 1)
+      for (const side of [warm.warmPreparation!.worktrees.a!, warm.warmPreparation!.worktrees.b!]) {
+        expect(await exists(path.join(side.directory, "qa"))).toBe(false)
+        expect(await readFile(path.join(side.directory, "src/__pycache__/app.pyc"), "utf8")).toBe("bytecode\n")
+      }
+    } finally {
+      await archive?.()
+      router.restore()
+    }
+  }, 120_000)
+
   test("refreshes a warm pair when the checkout's stash changed", async () => {
     await using directory = await fixture()
     const root = directory.path
