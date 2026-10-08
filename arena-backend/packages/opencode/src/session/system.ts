@@ -42,6 +42,15 @@ export function provider(model: Provider.Model) {
   return [PROMPT_DEFAULT]
 }
 
+// Arena sessions run behind the neutral `contestant` model, so the model line would name nothing and
+// the base prompt's "You are opencode" invites the model to guess. The text is static: both sides of
+// a battle must receive identical bytes, and any per-run data here would fingerprint the side.
+export const ARENA_IDENTITY = [
+  "Your model name and provider are hidden from the user until the vote or a reveal.",
+  "If the user asks which model you are or who made you, say that your identity is hidden until then.",
+  "Do not guess, name, or hint at a model, version, or company, and do not try to find out from configuration files or the environment.",
+].join(" ")
+
 export interface Interface {
   readonly environment: (
     model: Provider.Model,
@@ -77,11 +86,9 @@ const layer = Layer.effect(
         }).pipe(Effect.provide(yield* currentLocation))
         return [
           [
-            ...(model.providerID === ArenaRuntime.providerID
-              ? []
-              : [
-                  `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
-                ]),
+            model.providerID === ArenaRuntime.providerID
+              ? ARENA_IDENTITY
+              : `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
             `Here is some useful information about the environment you are running in:`,
             `<env>`,
             `  Working directory: ${ctx.directory}`,
