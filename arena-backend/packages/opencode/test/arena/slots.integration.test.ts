@@ -8,6 +8,7 @@ import { Global } from "@opencode-ai/core/global"
 import type { Store } from "@/arena/mongo"
 import type { TurnDocument } from "@/arena/records"
 import * as CopySnapshot from "@/arena/copy-snapshot"
+import { ArenaContestant } from "@/arena/contestant"
 import { hostRepoPath, isolatedRoot } from "@/worktree"
 import { registry, setStoreForTest } from "@/arena/runtime"
 import { resetDatabase } from "../fixture/db"
@@ -1210,6 +1211,11 @@ describe("persistent contestant worktrees", () => {
       expect(elsewhere).toEqual({ chats: 0, released: 0, kept: 0 })
       expect((await poolWorktrees(pools[0]!)).length).toBeGreaterThanOrEqual(3)
       const updatedAt = (await memory.store.chat(chats[0]!))!.updatedAt
+      // What the retained winner's shell left in its temp directory goes with its worktree.
+      const winner = await memory.store.run((await memory.store.chat(chats[0]!))!.retainedWinner!.runID)
+      const tmp = ArenaContestant.tmpDirectory(winner!.rootSessionID)
+      await mkdir(tmp, { recursive: true })
+      await writeFile(path.join(tmp, "scratch.txt"), "left by the winner\n")
 
       const trimmed = await json<{ chats: number; released: number; kept: number }>(
         await arenaRequest("/arena/environments/trim", {
@@ -1228,6 +1234,7 @@ describe("persistent contestant worktrees", () => {
       expect(released?.warmGeneration).toBeUndefined()
       // A release is no work in the chat: a restart re-warms the chat updated last.
       expect(released?.updatedAt).toEqual(updatedAt)
+      expect(await exists(tmp)).toBe(false)
       expect((await memory.store.turnsForChat(chats[0]!)).some((turn) => turn.warmPreparation)).toBe(false)
       expect((await memory.store.runsForChat(chats[0]!)).every((run) => run.worktreeRemovedAt)).toBe(true)
 

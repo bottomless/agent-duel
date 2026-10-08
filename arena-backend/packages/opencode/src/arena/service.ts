@@ -5767,6 +5767,14 @@ export const layer: Layer.Layer<
       return historicalServices
     })
 
+    /** Delete a run's contestant temp directory once its sessions are gone and nothing writes to it. */
+    const removeContestantTmp = (run: RunDocument) =>
+      promise(() => rm(ArenaContestant.tmpDirectory(run.rootSessionID), { recursive: true, force: true })).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Arena could not remove a contestant temp directory", { runID: run._id, cause }),
+        ),
+      )
+
     const removeStoppedRun = Effect.fn("Arena.removeStoppedRun")(function* (
       store: Store,
       chat: ChatDocument,
@@ -5774,6 +5782,7 @@ export const layer: Layer.Layer<
     ) {
       const at = new Date()
       const historicalServices = yield* endRunEnvironment(store, run, at)
+      yield* removeContestantTmp(run)
       yield* forgetSlot(run.worktree)
       yield* withRepositoryMutation(
         chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
@@ -5803,11 +5812,7 @@ export const layer: Layer.Layer<
       yield* instances.disposeDirectory(run.worktree)
       markSlotStopped(run.worktree)
       // The run's sessions are gone with the instance, so nothing writes to its temp directory.
-      yield* promise(() => rm(ArenaContestant.tmpDirectory(run.rootSessionID), { recursive: true, force: true })).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Arena could not remove a contestant temp directory", { runID: run._id, cause }),
-        ),
-      )
+      yield* removeContestantTmp(run)
       yield* promise(() =>
         store.updateRun(run._id, {
           retention: "none",

@@ -556,11 +556,10 @@ release stops anything and before it removes anything, so a chat opened or sent 
 what is left. Only a ready chat is released: a blocked chat's trunk is unavailable until it comes
 back, and a failed chat can only be archived, which takes its slots. Otherwise the release stops the
 servers the agents left running, as the next send would: winners often leave a preview running to
-check their build, and it would
-hold the chat's largest copy for as long as it lived. It then disposes the pool's OpenCode
-instances, which take a language server the engine started with them, and keeps the slots only if
-a process still works in the pool. Free up in Settings → Storage releases
-every idle chat's. While an open project's volume has less than 10 GB free, only the latest chat on
+check their build, and it would hold the chat's largest copy for as long as it lived. It then
+disposes the pool's OpenCode instances, which take a language server the engine started with them,
+and keeps the slots only if a process still works in the pool. Free up in Settings → Storage
+releases every idle chat's. While an open project's volume has less than 10 GB free, only the latest chat on
 that volume keeps its slots, whatever the limit says (`LOW_DISK_BYTES`): they can be built again, and
 a full disk fails the git writes every battle and vote depends on. Chats on other volumes keep the
 limit, since releasing them frees nothing on the full one. The Storage page shows the fullest
@@ -669,8 +668,9 @@ directory and skill directories, and only the rules after it reopen paths. Never
 - A temp directory per side, `$TMPDIR/opencode/arena/<session id>`, readable and writable. The
   shell exports it as `TMPDIR` and the shell tool's description names it, and truncated tool output
   is saved under it, so the hint to read that file works. The two sides never share it, and it is
-  removed when the run's worktree is released (`releaseRunSlot`). Subagents inherit the rules and
-  so share their side's directory.
+  removed when the run gives up its worktree: released for the next pair (`releaseRunSlot`) or
+  removed by archive, eviction or an environment release (`removeStoppedRun`). Subagents inherit
+  the rules and so share their side's directory.
 
 A contestant denied a path outside the sandbox gets one sentence that names the sandbox, not the
 generic list of matching rules, which holds dozens of home-directory paths that contestants copy
