@@ -314,6 +314,15 @@ anything else in the pool goes to the trash, when a pair is prepared after a vot
 a turn's contestants start (`sweepSlotPool`), since a retained winner answering a follow-up can
 leave one after the pair was prepared.
 
+On macOS, Arena and the daemon set the `com.apple.fileprovider.ignore#P` extended attribute on
+`.agent-duel` whenever they create or reuse it, so iCloud Drive and other File Provider sync clients
+skip the pool. Synced, the pool's renamed slots and re-cloned ignored files came back as numbered
+conflict copies (`.env 2`, `generation-2-a 2.git`), and the provider removed objects from a host
+under a running contestant. Nothing ignores a copy like `.env 2`, so snapshots also leave out an
+untracked numbered copy whose original beside it is git-ignored and has the same bytes
+(`excludeSyncConflictCopies` in `arena/git.ts`); otherwise `add -A` would carry the secret into a
+result and on into the checkout.
+
 A slot serves one generation at a time, at that generation's path, `generation-<n>-<side>`. `n`
 counts from 1 so the directory reads as the turn number the UI shows; turn indices stay 0-based in
 the documents and on the wire. Taking a free slot for the next turn renames it to the new path, so

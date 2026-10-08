@@ -41,7 +41,8 @@ import { Question } from "@/question"
 import { QuestionID } from "@/question/schema"
 import { hostRepoPath, isolatedRoot, Worktree } from "@/worktree"
 import { TRASH_DIRNAME } from "@/util/discard-tree"
-import { LOCAL_STATE_DIRNAME, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
+import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
+import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { generate as generateComparison } from "./comparison"
 import {
   canonicalizeArenaEnvironment,
@@ -4248,7 +4249,8 @@ export const layer: Layer.Layer<
         // staged at a path known now, so its request can leave from the canonical instance first.
         const reused = warm !== undefined && !refreshing
         // In the resolved form the claim uses, since the request is bound to this exact path.
-        const slotRoot = isolatedRoot(yield* promise(() => realpath(chat.repository.root)))
+        const canonicalRoot = yield* promise(() => realpath(chat.repository.root))
+        const slotRoot = isolatedRoot(canonicalRoot)
         const plannedDirectory = warm?.directory ?? join(slotRoot, worktreeName)
         let info: Worktree.Info = {
           name: warm?.name ?? worktreeName,
@@ -4257,7 +4259,16 @@ export const layer: Layer.Layer<
           host: hostRepoPath(plannedDirectory),
         }
         if (reused) setupWorktrees.set(info.directory, info)
-        else yield* promise(() => mkdir(info.directory, { recursive: true }))
+        else {
+          yield* promise(() => mkdir(info.directory, { recursive: true }))
+          const unsynced = yield* promise(() => ignoreForFileProviderSync(localStatePath(canonicalRoot)))
+          if (unsynced.state === "failed") {
+            yield* Effect.logWarning("Arena could not exclude its local state from cloud sync", {
+              ...context,
+              reason: unsynced.reason,
+            })
+          }
+        }
 
         // A warm bank was reserved at warm-up. If a port has been taken since, the fresh bank no
         // longer matches the warm fork's, so the fork below is made now instead.

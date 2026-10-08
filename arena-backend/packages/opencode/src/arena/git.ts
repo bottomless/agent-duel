@@ -21,6 +21,7 @@ import { tmpdir } from "os"
 import { basename, dirname, join, resolve } from "path"
 import { Git } from "@/git"
 import { IGNORED_PATHS_COMMAND, parseIgnoredPaths } from "./warm"
+import { identicalNumberedCopies } from "./sync-conflict-copy"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { AgentMove, BranchAction, RefNamespace, RefObservation, YourMove } from "./branch-review"
 
@@ -517,12 +518,20 @@ function parseStats(text: string): DiffStat[] {
 }
 
 function gitlinks(text: string) {
-  return new Set(
-    text.split("\0").flatMap((entry) => {
-      const match = entry.match(/^160000 [0-9a-f]+ \d+\t([\s\S]+)$/)
-      return match?.[1] ? [match[1]] : []
-    }),
-  )
+  return indexListing(text).gitlinks
+}
+
+/** `ls-files --stage -z`: every path, and the paths that are gitlinks. */
+function indexListing(text: string) {
+  const paths = new Set<string>()
+  const links = new Set<string>()
+  for (const entry of text.split("\0")) {
+    const match = entry.match(/^(\d+) [0-9a-f]+ \d+\t([\s\S]+)$/)
+    if (!match?.[2]) continue
+    paths.add(match[2])
+    if (match[1] === "160000") links.add(match[2])
+  }
+  return { paths, gitlinks: links }
 }
 
 const isAncestor = Effect.fn("ArenaGit.isAncestor")(function* (
@@ -2423,15 +2432,60 @@ const seedSnapshotIndex = Effect.fnUntraced(function* (
     catch: (cause) => new OperationError("copy_canonical_index", String(cause)),
   }).pipe(
     Effect.andThen(run(git, root, "read_canonical_gitlinks", ["ls-files", "--stage", "-z"], { env })),
-    Effect.map((listed) => gitlinks(listed.text())),
+    Effect.map((listed) => indexListing(listed.text())),
     Effect.catch(() => Effect.succeed(undefined)),
   )
   if (copied) return copied
-  const canonical = gitlinks((yield* run(git, root, "read_canonical_gitlinks", ["ls-files", "--stage", "-z"])).text())
+  const canonical = indexListing(
+    (yield* run(git, root, "read_canonical_gitlinks", ["ls-files", "--stage", "-z"])).text(),
+  )
   // A copy that failed partway leaves bytes `read-tree` would refuse to load over.
   yield* Effect.promise(() => unlink(index).catch(() => undefined))
   yield* run(git, root, "initialize_snapshot_index", ["read-tree", "HEAD"], { env })
   return canonical
+})
+
+/**
+ * Unstage the sync conflict copies of ignored files among the paths `add -A` just added to the
+ * scratch index: a numbered copy (`.env 2`, `.env 2.save`) with the same bytes as the original
+ * beside it, which git ignores. A project in iCloud Drive or another synced folder gets one
+ * whenever Arena's sync of ignored files and the provider's cross, and nothing ignores the copy.
+ * Unstaged here rather than kept out of `add`, so a snapshot with no candidate name costs nothing.
+ */
+const excludeSyncConflictCopies = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  added: readonly string[],
+  env: Record<string, string>,
+) {
+  const candidates = yield* Effect.promise(() => identicalNumberedCopies(root, added).catch(() => []))
+  if (candidates.length === 0) return
+  // `check-ignore` refuses `--literal-pathspecs`, so a leading `:` would read as pathspec magic.
+  const originals = Array.from(new Set(candidates.map((candidate) => candidate.original))).filter(
+    (original) => !original.startsWith(":"),
+  )
+  if (originals.length === 0) return
+  const checked = yield* git.run(["check-ignore", "--stdin", "-z"], {
+    cwd: root,
+    env,
+    stdin: Stream.make(new TextEncoder().encode(`${originals.join("\0")}\0`)),
+  })
+  // 1 is "none of them is ignored"; anything else is an error, and nothing is excluded.
+  if (checked.exitCode !== 0) return
+  const ignored = new Set(checked.text().split("\0").filter(Boolean))
+  const copies = candidates.filter((candidate) => ignored.has(candidate.original)).map((candidate) => candidate.copy)
+  if (copies.length === 0) return
+  yield* run(
+    git,
+    root,
+    "exclude_sync_conflict_copies",
+    ["--literal-pathspecs", "rm", "--cached", "--force", "--ignore-unmatch", "--quiet", "--", ...copies],
+    { env },
+  )
+  yield* Effect.logWarning("Arena left sync conflict copies of ignored files out of a snapshot", {
+    root,
+    paths: copies,
+  })
 })
 
 /**
@@ -2446,12 +2500,18 @@ const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function
   const index = join(tmpdir(), `opencode-arena-index-${randomUUID()}`)
   return yield* Effect.gen(function* () {
     const env = { GIT_INDEX_FILE: index }
-    const canonicalGitlinks = yield* seedSnapshotIndex(git, root, index, gitDir)
+    const seeded = yield* seedSnapshotIndex(git, root, index, gitDir)
     yield* run(git, root, "stage_snapshot", ["add", "-A", "--", "."], { env })
-    const snapshotGitlinks = gitlinks(
+    const snapshot = indexListing(
       (yield* run(git, root, "read_snapshot_gitlinks", ["ls-files", "--stage", "-z"], { env })).text(),
     )
-    const nestedRepositories = Array.from(snapshotGitlinks).filter((path) => !canonicalGitlinks.has(path))
+    const nestedRepositories = Array.from(snapshot.gitlinks).filter((path) => !seeded.gitlinks.has(path))
+    yield* excludeSyncConflictCopies(
+      git,
+      root,
+      Array.from(snapshot.paths).filter((path) => !seeded.paths.has(path)),
+      env,
+    )
     yield* Effect.forEach(
       nestedRepositories,
       (path) =>

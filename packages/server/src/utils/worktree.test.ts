@@ -22,6 +22,7 @@ import {
 import { join } from "path";
 import { tmpdir } from "os";
 import { createRealpathAwarePathMatcher } from "./path";
+import { hasFileProviderIgnore } from "./file-provider-ignore";
 
 interface LegacyCreateWorktreeTestOptions {
   branchName: string;
@@ -162,6 +163,21 @@ describe("paseo worktree manager", () => {
       isPaseoOwnedWorktreeCwd(contestant, { knownGitCommonDir: join(tempDir, "elsewhere.git") }),
     ).resolves.toMatchObject({ allowed: false });
   });
+
+  it.skipIf(process.platform !== "darwin")(
+    "keeps the project's local-state directory out of cloud sync",
+    async () => {
+      await createLegacyWorktreeForTest({
+        branchName: "unsynced-branch",
+        cwd: repoDir,
+        baseBranch: "main",
+        worktreeSlug: "5e6f7a8b",
+        paseoHome,
+      });
+      expect(await hasFileProviderIgnore(join(repoDir, ".agent-duel"))).toBe(true);
+      expect(await hasFileProviderIgnore(join(repoDir, ".agent-duel", "worktrees"))).toBe(false);
+    },
+  );
 
   it("rejects paths that are not under the paseo worktrees root", async () => {
     const outsidePath = join(tempDir, "outside-paseo-home");

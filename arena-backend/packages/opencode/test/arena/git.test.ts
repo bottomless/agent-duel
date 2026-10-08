@@ -1435,6 +1435,35 @@ describe("ArenaGit", () => {
     }),
   )
 
+  it.live("leaves sync conflict copies of ignored files out of snapshots", () =>
+    Effect.gen(function* () {
+      // A synced folder answers Arena's rewrite of an ignored `.env` with a `.env 2` that no
+      // ignore rule matches. Only a numbered copy of an ignored file with the same bytes goes.
+      const canonical = yield* scopedTmpdir({ git: true })
+      const write = (name: string, text: string) =>
+        Effect.promise(() => fs.writeFile(path.join(canonical.path, name), text, "utf8"))
+      yield* write(".gitignore", ".env\n*.save\n")
+      yield* write("report.pdf", "report\n")
+      yield* Effect.promise(() => $`git add .gitignore report.pdf`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => $`git commit -m tracked`.cwd(canonical.path).quiet())
+      yield* write(".env", "SECRET=1\n")
+      yield* write(".env 2", "SECRET=1\n")
+      yield* write(".env.save", "SECRET=0\n")
+      yield* write(".env 2.save", "SECRET=0\n")
+      yield* write(".env 3", "SECRET=other\n")
+      yield* write("report 2.pdf", "report\n")
+      yield* write("notes 2.txt", "notes\n")
+
+      const base = yield* snapshotBase({ canonical: canonical.path })
+      const listed = yield* Effect.promise(() =>
+        $`git ls-tree -r -z --name-only ${base.baseTree}`.cwd(canonical.path).quiet().text(),
+      )
+      expect(listed.split("\0").filter(Boolean).sort()).toEqual(
+        [".env 3", ".gitignore", "notes 2.txt", "report 2.pdf", "report.pdf"].sort(),
+      )
+    }),
+  )
+
   it.live("excludes untracked embedded repositories from dirty snapshots", () =>
     Effect.gen(function* () {
       const canonical = yield* scopedTmpdir({ git: true })
