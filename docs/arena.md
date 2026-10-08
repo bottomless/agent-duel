@@ -394,8 +394,10 @@ worktrees in place under the start lock. A send that arrives meanwhile waits for
 the pair. A prompt to the chat's agent that arrives before the build claims the two worktrees makes
 it stand down, since the agent's edits would leave the pair stale. Every other chat's pair is
 refreshed at its next send: an older chat is less likely to be sent to than to hold up, while its
-host copies take the repository lock, a vote or a prompt in the chat the user is in. A slot that
-cannot be verified is retired and a new one created.
+host copies take the repository lock, a vote or a prompt in the chat the user is in. Background
+cleanup (checkout eviction, its release, and environment release) leaves `updatedAt` alone, so the
+chat cleaned up last is not taken for the chat worked in last. A slot that cannot be verified is
+retired and a new one created.
 
 The loser's slot is released after the vote, and the retained winner's at the next send: services
 stopped, sessions and the OpenCode instance disposed, the run marked `worktreeRemovedAt`. The files
@@ -407,7 +409,9 @@ paths and discards still remove worktrees; archiving the workspace, evicting its
 releasing an idle chat's environments (see the cleanup below) removes the chat's whole pool. Archive
 and release delete the pool's trash before they answer, waiting for deletes a removal started in the
 background, and then remove the empty pool, because the engine can stop right after and a
-background delete stops with it; startup finishes what an interrupted eviction or archive left.
+background delete stops with it; startup finishes what an interrupted eviction, archive, or release
+left. Release deletes after it lets go of the chat's start lock, so a send to the chat does not wait
+for the deletes, and leaves the pool to a send that is building in it.
 
 OpenCode keeps a snapshot repository per worktree path (`snapshot/<project>/<sha1 of the path>` in
 its data directory), and a slot moves to a new path every turn, so each released side leaves one
@@ -545,9 +549,14 @@ Storage, `null` for every chat) and releases the others' at most once a minute, 
 limit changes (`arena/environments/trim`). Release takes what archive takes and keeps the chat
 ready; its next send builds a pair from nothing, as its first battle did. A chat keeps its slots
 while a battle or agent turn is in progress, a pair is being prepared, its retained winner has files
-its recorded result does not hold, or a terminal is open in one of its slots (`terminalOpenUnder`,
-checked before anything is stopped). Otherwise the release stops the servers the agents left running,
-as the next send would: winners often leave a preview running to check their build, and it would
+its recorded result does not hold, a terminal is open in one of its slots (`terminalOpenUnder`,
+checked before anything is stopped), the app shows the chat (an open stream, as for unloading
+above), or a send to it is waiting for its start lock. The last two are checked again before the
+release stops anything and before it removes anything, so a chat opened or sent to meanwhile keeps
+what is left. Only a ready chat is released: a blocked chat's trunk is unavailable until it comes
+back, and a failed chat can only be archived, which takes its slots. Otherwise the release stops the
+servers the agents left running, as the next send would: winners often leave a preview running to
+check their build, and it would
 hold the chat's largest copy for as long as it lived. It then disposes the pool's OpenCode
 instances, which take a language server the engine started with them, and keeps the slots only if
 a process still works in the pool. Free up in Settings → Storage releases

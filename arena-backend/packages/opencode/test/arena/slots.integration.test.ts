@@ -997,6 +997,7 @@ describe("persistent contestant worktrees", () => {
       const turn1 = await battle({ store: memory.store, directory: root, chatID, prompt: "evict turn one" })
       const warm = await waitForWarmPair(memory.store, turn1, 1)
       const pool = path.dirname(warm.warmPreparation!.worktrees.a!.directory)
+      const updatedAt = (await memory.store.chat(chatID))!.updatedAt
       const prepared = await arenaRequest("/arena/checkout/prepare", {
         method: "POST",
         headers: headers(root),
@@ -1004,7 +1005,20 @@ describe("persistent contestant worktrees", () => {
       })
       expect(prepared.status).toBe(204)
       expect((await readdir(pool).catch(() => [] as string[])).filter((name) => name !== ".trash")).toEqual([])
-      expect((await memory.store.chat(chatID))?.checkoutEvicted).toBe(true)
+      const evicted = await memory.store.chat(chatID)
+      expect(evicted?.checkoutEvicted).toBe(true)
+      // Eviction is no work in the chat: a restart re-warms the chat updated last.
+      expect(evicted?.updatedAt).toEqual(updatedAt)
+
+      const released = await arenaRequest("/arena/checkout/release", {
+        method: "POST",
+        headers: headers(root),
+        body: JSON.stringify({ root }),
+      })
+      expect(released.status).toBe(204)
+      const restored = await memory.store.chat(chatID)
+      expect(restored?.checkoutEvicted).toBeUndefined()
+      expect(restored?.updatedAt).toEqual(updatedAt)
     } finally {
       await archive?.()
       router.restore()
@@ -1195,6 +1209,7 @@ describe("persistent contestant worktrees", () => {
       )
       expect(elsewhere).toEqual({ chats: 0, released: 0, kept: 0 })
       expect((await poolWorktrees(pools[0]!)).length).toBeGreaterThanOrEqual(3)
+      const updatedAt = (await memory.store.chat(chats[0]!))!.updatedAt
 
       const trimmed = await json<{ chats: number; released: number; kept: number }>(
         await arenaRequest("/arena/environments/trim", {
@@ -1211,6 +1226,8 @@ describe("persistent contestant worktrees", () => {
       expect(released?.status).toBe("ready")
       expect(released?.retainedWinner).toBeUndefined()
       expect(released?.warmGeneration).toBeUndefined()
+      // A release is no work in the chat: a restart re-warms the chat updated last.
+      expect(released?.updatedAt).toEqual(updatedAt)
       expect((await memory.store.turnsForChat(chats[0]!)).some((turn) => turn.warmPreparation)).toBe(false)
       expect((await memory.store.runsForChat(chats[0]!)).every((run) => run.worktreeRemovedAt)).toBe(true)
 
@@ -1269,6 +1286,107 @@ describe("persistent contestant worktrees", () => {
       expect((await memory.store.chat(chat.chatID))?.retainedWinner).toBeDefined()
     } finally {
       for (const pid of spawned) killQuietly(pid)
+      await archive?.()
+      router.restore()
+    }
+  }, 120_000)
+
+  test("keeps the worktrees of the chat the app shows, and releases them once it stops", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "watched" })
+      const warm = await waitForWarmPair(memory.store, turn, 1)
+      const pool = path.dirname(warm.warmPreparation!.worktrees.a!.directory)
+      const trim = () =>
+        arenaRequest("/arena/environments/trim", {
+          method: "POST",
+          headers: headers(root),
+          body: JSON.stringify({ keep: 0 }),
+        }).then((response) => json<{ chats: number; released: number; kept: number }>(response))
+      // The app streams the chat it shows; the first frame means the stream has started.
+      const stream = await arenaRequest(`/arena/sessions/${chat.sessionID}/stream`, { headers: headers(root) })
+      reader = stream.body!.getReader()
+      await reader.read()
+
+      expect(await trim()).toEqual({ chats: 1, released: 0, kept: 1 })
+      expect((await poolWorktrees(pool)).length).toBeGreaterThanOrEqual(3)
+      expect((await memory.store.chat(chat.chatID))?.retainedWinner).toBeDefined()
+
+      await reader.cancel()
+      reader = undefined
+      await waitForCondition(
+        async () => (await trim()).released === 1,
+        "the chat kept its worktrees after the app stopped showing it",
+      )
+      expect(await exists(pool)).toBe(false)
+    } finally {
+      await reader?.cancel()
+      await archive?.()
+      router.restore()
+    }
+  }, 120_000)
+
+  test("lets a send start while a released chat's worktrees are still being deleted", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    let stuck: string | undefined
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "slow delete" })
+      const warm = await waitForWarmPair(memory.store, turn, 1)
+      const pool = path.dirname(warm.warmPreparation!.worktrees.a!.directory)
+      // A tree in the trash that cannot be deleted keeps the release waiting for the trash to empty.
+      stuck = path.join(pool, ".trash", "stuck", "locked")
+      await mkdir(stuck, { recursive: true })
+      await writeFile(path.join(stuck, "file"), "locked\n")
+      await chmod(stuck, 0o555)
+
+      let trimDone = false
+      const trimming = arenaRequest("/arena/environments/trim", {
+        method: "POST",
+        headers: headers(root),
+        body: JSON.stringify({ keep: 0 }),
+      })
+        .then((response) => json<{ chats: number; released: number; kept: number }>(response))
+        .finally(() => {
+          trimDone = true
+        })
+      await waitForCondition(
+        async () => (await memory.store.chat(chat.chatID))?.retainedWinner === undefined,
+        "the chat's worktrees were not released",
+      )
+
+      const admitted = await json<PublicSnapshot>(
+        await arenaRequest(`/arena/chats/${chat.chatID}/turns`, {
+          method: "POST",
+          headers: headers(root),
+          body: JSON.stringify({ prompt: "during the delete" }),
+        }),
+      )
+
+      expect(admitted.turn?.id).toBeDefined()
+      expect(trimDone).toBe(false)
+      expect(await trimming).toEqual({ chats: 1, released: 1, kept: 0 })
+      await waitForTurn(memory.store, admitted.turn!.id, "awaiting_vote")
+    } finally {
+      if (stuck) await chmod(stuck, 0o755).catch(() => undefined)
       await archive?.()
       router.restore()
     }

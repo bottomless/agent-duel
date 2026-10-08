@@ -913,7 +913,7 @@ export type ArenaEnvironmentTrim = {
 
 /** What releasing one chat's contestant worktrees came to; `absent` when it held none by then. */
 type EnvironmentRelease =
-  | { readonly kind: "released" }
+  | { readonly kind: "released"; readonly chat: ChatDocument }
   | { readonly kind: "absent" }
   | { readonly kind: "kept"; readonly reason: string }
 
@@ -1150,6 +1150,8 @@ export const layer: Layer.Layer<
     // restarted engine has loaded nothing.
     const watchedChats = new Map<string, number>()
     const unwatchedSince = new Map<string, number>()
+    // Sends waiting for a chat's start lock, so an environment release holding it can stand down.
+    const waitingStarts = new Map<string, number>()
     let idleUnloadStarted = false
     const reconciledComparisonStores = new WeakSet<Store>()
     let recoverInterrupted: (store: Store) => Effect.Effect<void, Error> = () => Effect.void
@@ -2472,15 +2474,85 @@ export const layer: Layer.Layer<
     })
 
     /**
-     * Take everything out of a chat's worktree directory, for archive, eviction and environment
-     * release once their own removals are done: free worktrees, the spare, anything left behind,
-     * and their hosts. The chat's watches stop with it.
+     * Take everything out of a chat's worktree directory and delete it, for archive and eviction
+     * once their own removals are done (`vacateSlotPool`). Environment release vacates the pool
+     * under the chat's start lock and deletes it after (`drainReleasedPool`).
      */
     const retireSlotPool = Effect.fn("Arena.retireSlotPool")(function* (
       store: Store,
       chat: ChatDocument,
       options?: SlotTrashOptions,
     ) {
+      const pool = slotPool(chat)
+      yield* vacateSlotPool(chat)
+      yield* sweepSlotTrash(chat, options)
+      yield* discardSnapshotRepositories(store, chat._id)
+      if (!options?.wait) return
+      // A drain logs what it cannot delete and goes on, and skips a tree a removal above is still
+      // deleting in the background, so wait for the trash to empty and check that nothing is
+      // left. An empty pool goes, so the chat no longer holds one; startup retries what remains.
+      const deadline = Date.now() + POOL_EMPTY_WAIT_MS
+      while (true) {
+        const { entries, trash } = yield* poolContents(pool)
+        if (entries.length === 0 && trash === 0) {
+          yield* Effect.promise(() => rm(pool, { recursive: true, force: true }))
+          return
+        }
+        if (entries.length > 0 || Date.now() >= deadline) {
+          yield* Effect.logWarning("Arena could not empty a chat's worktree directory", {
+            chatID: chat._id,
+            entries: entries.join(", "),
+            trash,
+          })
+          return
+        }
+        yield* Effect.sleep(Duration.millis(100))
+      }
+    })
+
+    /**
+     * Delete a released chat's worktrees once its start lock is free again: a pool can take long
+     * enough to delete that a send to the chat would feel it. That send builds its pair beside the
+     * trash. The empty pool goes only while no send holds the lock, so a pair being built keeps it.
+     */
+    const drainReleasedPool = Effect.fn("Arena.drainReleasedPool")(function* (store: Store, chat: ChatDocument) {
+      const pool = slotPool(chat)
+      yield* sweepSlotTrash(chat, { wait: true })
+      yield* discardSnapshotRepositories(store, chat._id)
+      // A removal during the release may still be deleting a tree in the background.
+      const deadline = Date.now() + POOL_EMPTY_WAIT_MS
+      while ((yield* poolContents(pool)).trash > 0) {
+        if (Date.now() >= deadline) {
+          yield* Effect.logWarning("Arena could not empty a released chat's trash", { chatID: chat._id })
+          return
+        }
+        yield* Effect.sleep(Duration.millis(100))
+      }
+      yield* turnStartLock(chat._id).withPermitsIfAvailable(1)(
+        Effect.gen(function* () {
+          const { entries, trash } = yield* poolContents(pool)
+          if (entries.length === 0 && trash === 0)
+            yield* Effect.promise(() => rm(pool, { recursive: true, force: true }))
+        }),
+      )
+    })
+
+    /** A pool's entries besides its trash, and how many trees its trash still holds. */
+    const poolContents = (pool: string) =>
+      Effect.promise(async () => {
+        const left = await readdir(pool).catch(() => [] as string[])
+        const trash = left.includes(TRASH_DIRNAME)
+          ? await readdir(join(pool, TRASH_DIRNAME)).catch(() => [] as string[])
+          : []
+        return { entries: left.filter((name) => name !== TRASH_DIRNAME), trash: trash.length }
+      })
+
+    /**
+     * Move everything in a chat's worktree directory to its trash and forget what this process
+     * knew of it: free worktrees, the spare, anything left behind, and their hosts. The chat's
+     * watches stop with it.
+     */
+    const vacateSlotPool = Effect.fnUntraced(function* (chat: ChatDocument) {
       const pool = slotPool(chat)
       const entries = yield* Effect.promise(() => readdir(pool).catch(() => [] as string[]))
       const directories = new Set(
@@ -2506,33 +2578,6 @@ export const layer: Layer.Layer<
         if (key.startsWith(`${chat._id}:`)) warmMarks.delete(key)
       }
       yield* promise(() => journal.stop(chat._id)).pipe(Effect.ignore)
-      yield* sweepSlotTrash(chat, options)
-      yield* discardSnapshotRepositories(store, chat._id)
-      if (!options?.wait) return
-      // A drain logs what it cannot delete and goes on, and skips a tree a removal above is still
-      // deleting in the background, so wait for the trash to empty and check that nothing is
-      // left. An empty pool goes, so the chat no longer holds one; startup retries what remains.
-      const deadline = Date.now() + POOL_EMPTY_WAIT_MS
-      while (true) {
-        const left = yield* Effect.promise(() => readdir(pool).catch(() => [] as string[]))
-        const trash = left.includes(TRASH_DIRNAME)
-          ? yield* Effect.promise(() => readdir(join(pool, TRASH_DIRNAME)).catch(() => [] as string[]))
-          : []
-        const entries = left.filter((name) => name !== TRASH_DIRNAME)
-        if (entries.length === 0 && trash.length === 0) {
-          yield* Effect.promise(() => rm(pool, { recursive: true, force: true }))
-          return
-        }
-        if (entries.length > 0 || Date.now() >= deadline) {
-          yield* Effect.logWarning("Arena could not empty a chat's worktree directory", {
-            chatID: chat._id,
-            entries: entries.join(", "),
-            trash: trash.length,
-          })
-          return
-        }
-        yield* Effect.sleep(Duration.millis(100))
-      }
     })
 
     /**
@@ -5461,7 +5506,18 @@ export const layer: Layer.Layer<
         const immediate = yield* lock.withPermitsIfAvailable(1)(admission)
         if (Option.isSome(immediate)) return immediate.value
         yield* Effect.logInfo("Arena turn waiting for preparation", { chatID: id })
-        return yield* lock.withPermits(1)(admission)
+        waitingStarts.set(id, (waitingStarts.get(id) ?? 0) + 1)
+        return yield* lock
+          .withPermits(1)(admission)
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                const waiting = (waitingStarts.get(id) ?? 1) - 1
+                if (waiting > 0) waitingStarts.set(id, waiting)
+                else waitingStarts.delete(id)
+              }),
+            ),
+          )
       }).pipe(preparationPhase("admission", { chatID: id }))
     })
 
@@ -5953,6 +6009,8 @@ export const layer: Layer.Layer<
                   }
                 }
                 yield* promise(() => store.claimCheckoutEviction(worktreeRoot))
+                // Eviction, its completion and its release leave `updatedAt` alone, as an environment
+                // release does: the chat updated last is the one a restart re-warms (`rewarmLatestPair`).
                 yield* promise(() =>
                   store.chats.updateMany(
                     {
@@ -5960,7 +6018,7 @@ export const layer: Layer.Layer<
                       status: "ready",
                       activeTurnID: { $exists: false },
                     },
-                    { $set: { checkoutEvicted: true, updatedAt: new Date() } },
+                    { $set: { checkoutEvicted: true } },
                   ),
                 )
                 const claimedChats = yield* checkoutChats(store, worktreeRoot)
@@ -6048,7 +6106,7 @@ export const layer: Layer.Layer<
             yield* Effect.forEach(claimed.claimedChats, (chat) => retireSlotPool(store, chat), { discard: true })
             yield* promise(() =>
               store.chats.updateMany(checkoutChatFilter(claimed.claimedChats), {
-                $set: { checkoutEvicted: true, updatedAt: new Date() },
+                $set: { checkoutEvicted: true },
                 // A first pair's record goes with its worktrees; the chat prepares another once restored.
                 $unset: { retainedWinner: "", warmGeneration: "", initialWarmPreparation: "" },
               }),
@@ -6063,12 +6121,7 @@ export const layer: Layer.Layer<
       yield* checkoutCleanupLock(worktreeRoot).withPermits(1)(
         Effect.gen(function* () {
           const chats = yield* checkoutChats(store, worktreeRoot)
-          yield* promise(() =>
-            store.chats.updateMany(checkoutChatFilter(chats), {
-              $unset: { checkoutEvicted: "" },
-              $set: { updatedAt: new Date() },
-            }),
-          )
+          yield* promise(() => store.chats.updateMany(checkoutChatFilter(chats), { $unset: { checkoutEvicted: "" } }))
           yield* promise(() => store.releaseCheckoutEviction(worktreeRoot))
         }),
       )
@@ -6081,17 +6134,29 @@ export const layer: Layer.Layer<
      *
      * Anything that could still need the worktrees keeps them: a battle or an agent turn in
      * progress, a pair being prepared, a retained winner whose files moved past its recorded
-     * result, and a terminal open in one of them. The servers the agents left running there, such
-     * as a preview the winner started to check its build, are stopped as the next send would stop
-     * them: one of those holds the chat's largest copy for as long as it lives.
+     * result, a terminal open in one of them, and a chat the app shows (`watchChat`) or a send is
+     * waiting for: its worktrees are what the user is looking at or about to battle in. The servers
+     * the agents left running there, such as a preview the winner started to check its build, are
+     * stopped as the next send would stop them: one of those holds the chat's largest copy for as
+     * long as it lives.
+     *
+     * The chat and its start lock are looked at again before each step that stops or removes
+     * something, so a chat opened or sent to meanwhile keeps what is left. The deletes, the slow
+     * part, run after the lock is let go.
      */
     const releaseChatEnvironments = Effect.fn("Arena.releaseChatEnvironments")(function* (
       store: Store,
       chatID: string,
     ) {
-      return yield* turnStartLock(chatID).withPermits(1)(
+      const outcome = yield* turnStartLock(chatID).withPermits(1)(
         Effect.gen(function* () {
           const kept = (reason: string): EnvironmentRelease => ({ kind: "kept", reason })
+          const wanted = () =>
+            watchedChats.has(chatID)
+              ? "the app shows the chat"
+              : waitingStarts.has(chatID)
+                ? "a send to the chat is waiting"
+                : undefined
           const chat = yield* promise(() => store.chat(chatID))
           if (!chat || chat.status !== "ready" || chat.activeTurnID || chat.checkoutEvicted) {
             return kept(`the chat is ${chat?.activeTurnID ? "active" : (chat?.status ?? "missing")}`)
@@ -6100,6 +6165,8 @@ export const layer: Layer.Layer<
           const pool = slotPool(chat)
           const entries = yield* Effect.promise(() => readdir(pool).catch(() => [] as string[]))
           if (!entries.some((name) => name !== TRASH_DIRNAME)) return { kind: "absent" } as EnvironmentRelease
+          const shown = wanted()
+          if (shown) return kept(shown)
           if (activeNormalTurns.active(chat.canonicalSessionID)) return kept("the chat's agent is working")
           const turns = yield* promise(() => store.turnsForChat(chat._id))
           if (warmRecordsOf(chat, turns).some((record) => record.state === "pending")) {
@@ -6118,6 +6185,8 @@ export const layer: Layer.Layer<
           if (yield* Effect.promise(() => terminalOpenUnder(identities))) {
             return kept("a terminal is open in one of its worktrees")
           }
+          const opened = wanted()
+          if (opened) return kept(opened)
           for (const run of yield* promise(() => store.runsForChat(chat._id))) {
             if (run.worktreeRemovedAt) continue
             const stopped = yield* stopRunServices(store, run)
@@ -6143,6 +6212,9 @@ export const layer: Layer.Layer<
           if (!listed) return kept("its processes could not be listed")
           // Something no run started and no terminal holds, such as a process in a free worktree.
           if (inPool(listed)) return kept("a process is still working in one of its worktrees")
+          // Past here the worktrees go; a chat wanted now keeps them and starts its instances again.
+          const reached = wanted()
+          if (reached) return kept(reached)
 
           // A spare still being built or a worktree still being released would race the removals.
           yield* endSlotWork(chat._id)
@@ -6178,19 +6250,26 @@ export const layer: Layer.Layer<
             yield* writeWarmRecord(store, { kind: "turn", turn }, undefined)
           }
           if (chat.initialWarmPreparation) yield* writeWarmRecord(store, { kind: "chat", chatID: chat._id }, undefined)
-          yield* retireSlotPool(store, chat, { wait: true })
+          yield* vacateSlotPool(chat)
+          // `updatedAt` stays: after a restart the chat updated last is the one whose pair is
+          // prepared again (`rewarmLatestPair`), and a release is no sign the user is working there.
           yield* promise(() =>
             store.updateChat(
               { _id: chat._id },
-              {
-                $set: { updatedAt: new Date() },
-                $unset: { retainedWinner: "", warmGeneration: "", initialWarmPreparation: "" },
-              },
+              { $unset: { retainedWinner: "", warmGeneration: "", initialWarmPreparation: "" } },
             ),
           )
-          return { kind: "released" } as EnvironmentRelease
+          return { kind: "released", chat } as EnvironmentRelease
         }),
       )
+      if (outcome.kind !== "released") return outcome
+      // The worktrees are already given up; what is not deleted now, startup deletes.
+      yield* drainReleasedPool(store, outcome.chat).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not delete a released chat's worktrees", { chatID, cause }),
+        ),
+      )
+      return outcome
     })
 
     /**
