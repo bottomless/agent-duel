@@ -83,7 +83,7 @@ describe("pid-lock ownership", () => {
       await expect(isLocked(paseoHome)).resolves.toMatchObject({ locked: true });
       await expect(
         acquirePidLock(paseoHome, null, { ownerPid: replacementOwnerPid }),
-      ).rejects.toThrow("Another Paseo daemon is already running");
+      ).rejects.toThrow("Another Agent Duel daemon is already running");
 
       const lock = await getPidLockInfo(paseoHome);
       expect(lock?.pid).toBe(process.pid);
@@ -147,7 +147,7 @@ describe("pid-lock ownership", () => {
 
       await expect(
         acquirePidLock(paseoHome, null, { ownerPid: process.pid + 10_000 }),
-      ).rejects.toThrow("Another Paseo daemon is already running");
+      ).rejects.toThrow("Another Agent Duel daemon is already running");
 
       const lock = await getPidLockInfo(paseoHome);
       expect(lock?.pid).toBe(process.pid);
@@ -245,7 +245,7 @@ describe("pid-lock ownership", () => {
 
       await expect(
         acquirePidLock(paseoHome, null, { ownerPid: process.pid + 10_000 }),
-      ).rejects.toThrow("Another Paseo daemon is already running");
+      ).rejects.toThrow("Another Agent Duel daemon is already running");
 
       const lock = await getPidLockInfo(paseoHome);
       expect(lock?.pid).toBe(process.pid);

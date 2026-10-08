@@ -111,7 +111,7 @@ describe("prompt attachments", () => {
       }),
     ).toBe(
       [
-        "Paseo review attachment (base)",
+        "Agent Duel review attachment (base)",
         "CWD: /tmp/repo",
         "Base: main",
         "",

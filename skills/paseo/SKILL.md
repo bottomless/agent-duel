@@ -1,9 +1,9 @@
 ---
 name: paseo
-description: Paseo reference for managing workspaces, workspace scripts, agents, schedules, and heartbeats.
+description: Agent Duel reference for managing workspaces, workspace scripts, agents, schedules, and heartbeats.
 ---
 
-Paseo is a remote daemon that manages coding agents, terminals. Control it through MCP tools or the CLI.
+Agent Duel manages coding agents, terminals, and workspaces through its local or connected daemon. Control it through MCP tools or the CLI.
 
 ## Workspaces
 
@@ -11,7 +11,7 @@ Paseo is a remote daemon that manages coding agents, terminals. Control it throu
 
 **`list_workspaces`** — list active workspaces.
 
-**`archive_workspace`** — `{ workspaceId }`. Archives the workspace, its agents, and its terminals. Local directories remain; Paseo removes an owned worktree only after its final active workspace reference is archived.
+**`archive_workspace`** — `{ workspaceId }`. Archives the workspace, its agents, and its terminals. Local directories remain; Agent Duel removes an owned worktree only after its final active workspace reference is archived.
 
 **`rename_workspace`** — `{ workspaceId, name }`. Rename workspace.
 
@@ -21,7 +21,7 @@ Configured `paseo.json` scripts use the same supervised lifecycle from tools and
 
 **`list_workspace_scripts`** — `{ workspaceId }`. Lists configured scripts with lifecycle, service port, proxy URLs, health, exit code, and terminal ID.
 
-**`start_workspace_script`** — `{ workspaceId, scriptName }`. Starts one configured script through Paseo's managed workspace-script launcher and returns its status metadata.
+**`start_workspace_script`** — `{ workspaceId, scriptName }`. Starts one configured script through Agent Duel's managed workspace-script launcher and returns its status metadata.
 
 **`stop_workspace_script`** — `{ workspaceId, scriptName }`. Stops a running script through its supervised terminal and returns the stopped status metadata.
 

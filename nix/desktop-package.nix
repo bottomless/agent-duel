@@ -252,7 +252,7 @@ buildNpmPackage {
 
   meta = {
     description = "Agent Duel desktop app (Electron wrapper)";
-    homepage = "https://github.com/getpaseo/paseo";
+    homepage = "https://github.com/bottomless/agent-duel";
     license = lib.licenses.agpl3Plus;
     mainProgram = "paseo-desktop";
     platforms = lib.platforms.linux ++ lib.platforms.darwin;

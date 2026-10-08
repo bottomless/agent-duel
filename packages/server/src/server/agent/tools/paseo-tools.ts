@@ -441,7 +441,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     ): Promise<PaseoToolResult> {
       const tool = tools.get(name);
       if (!tool) {
-        throw new Error(`Paseo tool not found: ${name}`);
+        throw new Error(`Agent Duel tool not found: ${name}`);
       }
       return tool.handler(await parseToolInput(tool, input), context);
     },
@@ -610,7 +610,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           .string()
           .min(1)
           .optional()
-          .describe("Optional worktree slug/path label. Omit to let Paseo generate one."),
+          .describe("Optional worktree slug/path label. Omit to let Agent Duel generate one."),
         branchName: z
           .string()
           .min(1)
@@ -623,21 +623,21 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           .describe("Optional base branch. Defaults to the repository default branch."),
       })
       .strict()
-      .describe("Create a new branch in a new Paseo worktree."),
+      .describe("Create a new branch in a new Agent Duel worktree."),
     z
       .object({
         kind: z.literal("checkout-branch"),
         branch: z.string().min(1).describe("Existing branch to check out."),
       })
       .strict()
-      .describe("Check out an existing branch in a new Paseo worktree."),
+      .describe("Check out an existing branch in a new Agent Duel worktree."),
     z
       .object({
         kind: z.literal("checkout-pr"),
         githubPrNumber: z.number().int().positive().describe("GitHub pull request number."),
       })
       .strict()
-      .describe("Check out a GitHub pull request in a new Paseo worktree."),
+      .describe("Check out a GitHub pull request in a new Agent Duel worktree."),
   ]);
   const AgentWorkspaceInputSchema = z.discriminatedUnion("kind", [
     z
@@ -927,7 +927,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     {
       title: "Create workspace",
       description:
-        "Create a workspace using an existing local checkout or a new Paseo-managed worktree.",
+        "Create a workspace using an existing local checkout or a new Agent Duel-managed worktree.",
       inputSchema: {
         isolation: z.enum(["local", "worktree"]),
         path: z
@@ -1977,7 +1977,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     {
       title: "Start workspace script",
       description:
-        "Start one configured workspace script through Paseo's managed workspace-script launcher.",
+        "Start one configured workspace script through Agent Duel's managed workspace-script launcher.",
       inputSchema: {
         workspaceId: z.string().describe("Workspace ID containing the configured script."),
         scriptName: z.string().min(1).describe("Configured paseo.json script name to start."),

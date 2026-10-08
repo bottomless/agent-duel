@@ -292,7 +292,7 @@ export function requirePaseoWorktreeBaseRefName(worktreeRoot: string): string {
   const metadataPath = getPaseoWorktreeMetadataPath(worktreeRoot);
   const metadata = readPaseoWorktreeMetadata(worktreeRoot);
   if (!metadata) {
-    throw new Error(`Missing Paseo worktree base metadata: ${metadataPath}`);
+    throw new Error(`Missing Agent Duel worktree base metadata: ${metadataPath}`);
   }
   return metadata.baseRefName;
 }

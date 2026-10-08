@@ -1,6 +1,7 @@
 npmRebuild: false
 appId: sh.paseo.desktop
 productName: Agent Duel
+copyright: "Copyright © 2026 Bottomless"
 executableName: Agent Duel
 protocols:
   - name: Agent Duel agent link
@@ -66,8 +67,8 @@ mac:
 linux:
   category: Development
   artifactName: "Agent-Duel-${version}-${arch}.${ext}"
-  maintainer: "Mohamed Boudra <hello@moboudra.com>"
-  vendor: "Agent Duel"
+  maintainer: "Bottomless"
+  vendor: "Bottomless"
   extraResources:
     - from: bin/paseo
       to: bin/paseo

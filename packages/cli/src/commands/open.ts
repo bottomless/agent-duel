@@ -4,11 +4,21 @@ import path from "node:path";
 import { spawnProcess } from "@getpaseo/server";
 import { buildAgentDeepLink, type AgentDeepLinkTarget } from "@getpaseo/protocol/agent-deep-link";
 
-function findDesktopApp(): string | null {
-  if (process.platform === "darwin") {
+export interface DesktopAppDiscoveryInput {
+  platform?: NodeJS.Platform;
+  homeDirectory?: string;
+  localAppData?: string;
+  systemCandidates?: string[];
+}
+
+export function findDesktopApp(input: DesktopAppDiscoveryInput = {}): string | null {
+  const platform = input.platform ?? process.platform;
+  const homeDirectory = input.homeDirectory ?? homedir();
+
+  if (platform === "darwin") {
     const candidates = [
-      "/Applications/Paseo.app",
-      path.join(homedir(), "Applications", "Paseo.app"),
+      ...(input.systemCandidates ?? ["/Applications/Agent Duel.app"]),
+      path.join(homeDirectory, "Applications", "Agent Duel.app"),
     ];
 
     for (const candidate of candidates) {
@@ -20,11 +30,10 @@ function findDesktopApp(): string | null {
     return null;
   }
 
-  if (process.platform === "linux") {
+  if (platform === "linux") {
     const candidates = [
-      "/usr/bin/Paseo",
-      "/opt/Paseo/Paseo",
-      path.join(homedir(), "Applications", "Paseo.AppImage"),
+      ...(input.systemCandidates ?? ["/usr/bin/Agent Duel", "/opt/Agent Duel/Agent Duel"]),
+      path.join(homeDirectory, "Applications", `Agent-Duel-${process.arch}.AppImage`),
     ];
 
     for (const candidate of candidates) {
@@ -36,13 +45,13 @@ function findDesktopApp(): string | null {
     return null;
   }
 
-  if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA;
+  if (platform === "win32") {
+    const localAppData = input.localAppData ?? process.env.LOCALAPPDATA;
     if (!localAppData) {
       return null;
     }
 
-    const candidate = path.join(localAppData, "Programs", "Paseo", "Paseo.exe");
+    const candidate = path.join(localAppData, "Programs", "Agent Duel", "Agent Duel.exe");
     return existsSync(candidate) ? candidate : null;
   }
 
@@ -70,7 +79,9 @@ function spawnDetached(command: string, args: string[]): void {
 
 function launchDesktop(args: string[]): void {
   if (process.env.PASEO_DESKTOP_CLI === "1") {
-    throw new Error("Cannot open Paseo Desktop while running in desktop CLI passthrough mode.");
+    throw new Error(
+      "Cannot open Agent Duel Desktop while running in desktop CLI passthrough mode.",
+    );
   }
 
   const desktopApp = findDesktopApp();

@@ -456,7 +456,7 @@ describe("WorkspaceGitServiceImpl", () => {
   test("getSnapshot keeps plain git classification when shortstat lookup fails", async () => {
     const getCheckoutShortstat = vi.fn(async () => {
       throw new Error(
-        "Missing Paseo worktree base metadata: /tmp/repo/.git/worktrees/feature/paseo/worktree.json",
+        "Missing Agent Duel worktree base metadata: /tmp/repo/.git/worktrees/feature/paseo/worktree.json",
       );
     });
     const service = createService({

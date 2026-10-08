@@ -154,8 +154,8 @@ export function WelcomeScreen() {
     router.replace(buildOpenProjectRoute());
   }, [anyOnlineServerId, router]);
 
-  const handleOpenPaseoSite = useCallback(() => {
-    void openExternalUrl("https://paseo.sh");
+  const handleOpenProjectSite = useCallback(() => {
+    void openExternalUrl("https://github.com/bottomless/agent-duel");
   }, []);
 
   const handleOpenSettings = useCallback(() => {
@@ -180,8 +180,8 @@ export function WelcomeScreen() {
             <Text style={styles.title}>{t("onboarding.title")}</Text>
             <Text style={styles.subtitle}>{t("onboarding.subtitle")}</Text>
             {isNative ? (
-              <Pressable style={styles.setupLink} onPress={handleOpenPaseoSite}>
-                <Text style={styles.setupLinkText}>paseo.sh</Text>
+              <Pressable style={styles.setupLink} onPress={handleOpenProjectSite}>
+                <Text style={styles.setupLinkText}>Agent Duel on GitHub</Text>
                 <ExternalLink size={14} color={theme.colors.accent} />
               </Pressable>
             ) : null}
