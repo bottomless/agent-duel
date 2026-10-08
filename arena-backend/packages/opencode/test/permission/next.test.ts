@@ -1,6 +1,8 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { test, expect } from "bun:test"
 import os from "os"
+import path from "path"
+import { ArenaContestant, contestantPermissions } from "../../src/arena/contestant"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -638,6 +640,75 @@ it.instance(
         }),
       )
       expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true },
+)
+
+const contestantSkill = path.join(path.sep, "home", "user", ".agents", "skills", "review")
+const contestantRuleset = contestantPermissions(
+  [{ permission: "external_directory", pattern: path.join(contestantSkill, "*"), action: "allow" }],
+  { tmp: ArenaContestant.tmpDirectory("ses_contestant"), skills: [contestantSkill] },
+)
+const externalAsk = (pattern: string, writes: string[], ruleset: PermissionV1.Ruleset) =>
+  ask({
+    sessionID: SessionID.make("session_test"),
+    permission: "external_directory",
+    patterns: [pattern],
+    always: [pattern],
+    writes,
+    metadata: {},
+    ruleset,
+  })
+
+it.instance(
+  "ask - lets a contestant read a skill directory but not write to it",
+  () =>
+    Effect.gen(function* () {
+      const pattern = path.join(contestantSkill, "references", "*")
+      expect(yield* externalAsk(pattern, [], contestantRuleset)).toBeUndefined()
+      const err = yield* fail(externalAsk(pattern, [pattern], contestantRuleset))
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+      expect((err as Error).message).toBe(
+        `${path.join(contestantSkill, "references")} is in a skill directory, which Arena contestants can read but not change.`,
+      )
+      const tmp = path.join(ArenaContestant.tmpDirectory("ses_contestant"), "*")
+      expect(yield* externalAsk(tmp, [tmp], contestantRuleset)).toBeUndefined()
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - explains a contestant denial without listing the rules",
+  () =>
+    Effect.gen(function* () {
+      const err = yield* fail(externalAsk("/outside/*", [], contestantRuleset))
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+      expect((err as Error).message).toBe(
+        `Arena contestants can access only the worktree, ${ArenaContestant.tmpDirectory("ses_contestant")}, attached files, and skill directories (read-only). /outside is outside them.`,
+      )
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - keeps the rule listing and a single question outside Arena",
+  () =>
+    Effect.gen(function* () {
+      const denied = yield* fail(
+        externalAsk("/outside/*", ["/outside/*"], [{ permission: "external_directory", pattern: "*", action: "deny" }]),
+      )
+      expect((denied as Error).message).toContain("Here are some of the relevant rules")
+      // A `*` rule must not turn the write into a second check.
+      expect(
+        yield* externalAsk(
+          "/outside/*",
+          ["/outside/*"],
+          [
+            { permission: "*", pattern: "*", action: "deny" },
+            { permission: "external_directory", pattern: "*", action: "allow" },
+          ],
+        ),
+      ).toBeUndefined()
     }),
   { git: true },
 )

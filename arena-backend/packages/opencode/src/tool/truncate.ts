@@ -23,6 +23,16 @@ export interface Options {
   maxLines?: number
   maxBytes?: number
   direction?: "head" | "tail"
+  /** Where to save the full output instead of the shared `DIR`. */
+  directory?: string
+}
+
+/**
+ * Options that save output under an Arena contestant's temp directory. A contestant may not read
+ * the shared `DIR`, which also holds every other session's output.
+ */
+export function within(tmpDirectory: string | undefined): Options {
+  return tmpDirectory ? { directory: path.join(tmpDirectory, "tool-output") } : {}
 }
 
 function hasTaskTool(agent?: Agent.Info) {
@@ -32,7 +42,7 @@ function hasTaskTool(agent?: Agent.Info) {
 
 export interface Interface {
   readonly cleanup: () => Effect.Effect<void>
-  readonly write: (text: string) => Effect.Effect<string>
+  readonly write: (text: string, directory?: string) => Effect.Effect<string>
   /**
    * Returns output unchanged when it fits within the limits, otherwise writes the full text
    * to the truncation directory and returns a preview plus a hint to inspect the saved file.
@@ -65,9 +75,9 @@ const layer = Layer.effect(
       }
     })
 
-    const write = Effect.fn("Truncate.write")(function* (text: string) {
-      const file = path.join(TRUNCATION_DIR, ToolID.ascending())
-      yield* fs.ensureDir(TRUNCATION_DIR).pipe(Effect.orDie)
+    const write = Effect.fn("Truncate.write")(function* (text: string, directory = TRUNCATION_DIR) {
+      const file = path.join(directory, ToolID.ascending())
+      yield* fs.ensureDir(directory).pipe(Effect.orDie)
       yield* fs.writeFileString(file, text).pipe(Effect.orDie)
       return file
     })
@@ -124,7 +134,7 @@ const layer = Layer.effect(
       const removed = hitBytes ? totalBytes - bytes : lines.length - out.length
       const unit = hitBytes ? "bytes" : "lines"
       const preview = out.join("\n")
-      const file = yield* write(text)
+      const file = yield* write(text, options.directory)
 
       const hint = hasTaskTool(agent)
         ? `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`

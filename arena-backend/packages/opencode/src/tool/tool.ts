@@ -42,7 +42,16 @@ export type Context<M extends Metadata = Metadata> = {
   extra?: { [key: string]: unknown }
   messages: SessionV1.WithParts[]
   metadata(input: { title?: string; metadata?: M }): Effect.Effect<void>
-  ask(input: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">): Effect.Effect<void>
+  /** `writes` lists the `external_directory` patterns the call writes to; see `Permission.AskInput`. */
+  ask(
+    input: Omit<PermissionV1.Request, "id" | "sessionID" | "tool"> & { writes?: readonly string[] },
+  ): Effect.Effect<void>
+  /**
+   * An Arena contestant's own temp directory (`ArenaContestant.sandboxTmp`). Shell commands get it
+   * as `TMPDIR` and truncated output is saved under it, the only places outside the worktree the
+   * contestant may write.
+   */
+  tmpDirectory?: string
 }
 
 export interface ExecuteResult<M extends Metadata = Metadata> {
@@ -132,7 +141,7 @@ function wrap<Parameters extends Schema.Decoder<unknown>, Result extends Metadat
             return result
           }
           const agent = yield* agents.get(ctx.agent)
-          const truncated = yield* truncate.output(result.output, {}, agent)
+          const truncated = yield* truncate.output(result.output, Truncate.within(ctx.tmpDirectory), agent)
           return {
             ...result,
             output: truncated.content,

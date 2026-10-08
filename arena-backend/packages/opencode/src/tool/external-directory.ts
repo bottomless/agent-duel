@@ -10,6 +10,11 @@ type Kind = "file" | "directory"
 type Options = {
   bypass?: boolean
   kind?: Kind
+  /**
+   * What the tool does there. Writes are also held to the read-only rules that keep Arena
+   * contestants out of skill directories; the default is the stricter `write`.
+   */
+  access?: "read" | "write"
 }
 
 export const assertExternalDirectoryEffect = Effect.fn("Tool.assertExternalDirectory")(function* (
@@ -36,6 +41,7 @@ export const assertExternalDirectoryEffect = Effect.fn("Tool.assertExternalDirec
     permission: "external_directory",
     patterns: [glob],
     always: [glob],
+    ...(options?.access === "read" ? {} : { writes: [glob] }),
     metadata: {
       filepath: full,
       parentDir: dir,

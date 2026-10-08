@@ -4,8 +4,15 @@ import { createArenaStream, type Frame as ArenaStreamFrame } from "./stream"
 import { execFile as nodeExecFile } from "child_process"
 import { createHash, randomBytes } from "crypto"
 import { realpathSync, type BigIntStats } from "fs"
-import { lstat, mkdir, readdir, readFile, readlink, realpath } from "fs/promises"
-import { basename, dirname, join, relative as relativePath, resolve as resolvePath } from "path"
+import { lstat, mkdir, readdir, readFile, readlink, realpath, rm } from "fs/promises"
+import {
+  basename,
+  dirname,
+  isAbsolute as isAbsolutePath,
+  join,
+  relative as relativePath,
+  resolve as resolvePath,
+} from "path"
 import { promisify } from "util"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -38,6 +45,7 @@ import { MessageID, PartID, SessionID } from "@/session/schema"
 import { clearToolExecutionEnvironment, gateToolExecution, isToolExecutionGated } from "@/session/tool-execution-gate"
 import { Permission } from "@/permission"
 import { Question } from "@/question"
+import { Skill } from "@/skill"
 import { QuestionID } from "@/question/schema"
 import { hostRepoPath, isolatedRoot, Worktree } from "@/worktree"
 import { TRASH_DIRNAME } from "@/util/discard-tree"
@@ -50,7 +58,7 @@ import {
   localizeArenaEnvironment,
 } from "./canonical-path"
 import { comparisonTimeline } from "./comparison-timeline"
-import { contestantPermissions } from "./contestant"
+import { ArenaContestant, contestantPermissions } from "./contestant"
 import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
 import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
 import { ArenaAttachments } from "./attachments"
@@ -1022,6 +1030,7 @@ export const layer: Layer.Layer<
   | Question.Service
   | Worktree.Service
   | MoveSession.Service
+  | Skill.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -1036,6 +1045,7 @@ export const layer: Layer.Layer<
     const questions = yield* Question.Service
     const worktrees = yield* Worktree.Service
     const mover = yield* MoveSession.Service
+    const skills = yield* Skill.Service
     const scope = yield* Scope.Scope
     let telemetryStore: Store | undefined
     let telemetry: ReturnType<typeof createTelemetry> | undefined
@@ -1115,6 +1125,29 @@ export const layer: Layer.Layer<
       instances.provide({ directory }, effect)
     const withGit = <A, E, R>(effect: Effect.Effect<A, E, R | Git.Service>) =>
       effect.pipe(Effect.provideService(Git.Service, git))
+    /**
+     * What a contestant session may reach outside its worktree. Skill directories come from the
+     * canonical checkout's instance, which is loaded before either side's worktree exists, so both
+     * sides get the same list. Project skills are left out: the worktree copies them and the
+     * contestant reaches them there.
+     */
+    const contestantSandbox = Effect.fnUntraced(function* (repositoryRoot: string, sessionID: string) {
+      const dirs = yield* inDirectory(repositoryRoot, skills.dirs()).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not list skill directories for a contestant", { cause }).pipe(
+            Effect.as([] as string[]),
+          ),
+        ),
+      )
+      const outside = (dir: string) => {
+        const relative = relativePath(repositoryRoot, dir)
+        return relative.startsWith("..") || isAbsolutePath(relative)
+      }
+      return {
+        tmp: ArenaContestant.tmpDirectory(sessionID),
+        skills: dirs.filter(outside).toSorted(),
+      } satisfies ArenaContestant.Sandbox
+    })
     const forkInto = (input: ArenaFork.Input) =>
       forkSessionInto(input).pipe(
         Effect.provideService(Session.Service, sessions),
@@ -4134,7 +4167,10 @@ export const layer: Layer.Layer<
                 })
                 yield* sessions.setPermission({
                   sessionID: session.id,
-                  permission: contestantPermissions(source.value.permission),
+                  permission: contestantPermissions(
+                    source.value.permission,
+                    yield* contestantSandbox(chat.repository.root, session.id),
+                  ),
                 })
                 return {
                   ...slot,
@@ -4334,7 +4370,10 @@ export const layer: Layer.Layer<
           })
           yield* sessions.setPermission({
             sessionID: forked.id,
-            permission: contestantPermissions(source.permission),
+            permission: contestantPermissions(
+              source.permission,
+              yield* contestantSandbox(chat.repository.root, forked.id),
+            ),
           })
           forkedID = forked.id
         }
@@ -5587,6 +5626,12 @@ export const layer: Layer.Layer<
       yield* stopPreparation(run.worktree)
       yield* instances.disposeDirectory(run.worktree)
       markSlotStopped(run.worktree)
+      // The run's sessions are gone with the instance, so nothing writes to its temp directory.
+      yield* promise(() => rm(ArenaContestant.tmpDirectory(run.rootSessionID), { recursive: true, force: true })).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Arena could not remove a contestant temp directory", { runID: run._id, cause }),
+        ),
+      )
       yield* promise(() =>
         store.updateRun(run._id, {
           retention: "none",

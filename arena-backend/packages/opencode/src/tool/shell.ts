@@ -63,6 +63,10 @@ const CMD_FILES = new Set([
   "rmdir",
   "type",
 ])
+// File commands that only read their paths. The rest of FILES and CMD_FILES write to them, except
+// that a copy reads every path but the last (see `writtenPaths`).
+const READS = new Set([...CWD, "cat", "get-content", "dir", "type"])
+const COPIES = new Set(["cp", "copy-item", "copy"])
 const FLAGS = new Set(["-destination", "-literalpath", "-path"])
 const SWITCHES = new Set(["-confirm", "-debug", "-force", "-nonewline", "-recurse", "-verbose", "-whatif"])
 
@@ -73,6 +77,8 @@ type Part = {
 
 type Scan = {
   dirs: Set<string>
+  /** The subset of `dirs` a command writes to. */
+  writes: Set<string>
   patterns: Set<string>
   always: Set<string>
 }
@@ -264,14 +270,16 @@ const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boole
 const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan, input: { command: string }) {
   if (scan.dirs.size > 0) {
     const directories = Array.from(scan.dirs)
-    const globs = directories.map((dir) => {
+    const glob = (dir: string) => {
       if (process.platform === "win32") return FSUtil.normalizePathPattern(path.join(dir, "*"))
       return path.join(dir, "*")
-    })
+    }
+    const globs = directories.map(glob)
     yield* ctx.ask({
       permission: "external_directory",
       patterns: globs,
       always: globs,
+      writes: Array.from(scan.writes, glob),
       metadata: {
         command: input.command,
         directories,
@@ -385,6 +393,7 @@ export const ShellTool = Tool.define(
     ) {
       const scan: Scan = {
         dirs: new Set<string>(),
+        writes: new Set<string>(),
         patterns: new Set<string>(),
         always: new Set<string>(),
       }
@@ -396,12 +405,15 @@ export const ShellTool = Tool.define(
         const cmd = ps || shellKind === "cmd" ? tokens[0]?.toLowerCase() : tokens[0]
 
         if (cmd && (FILES.has(cmd) || (shellKind === "cmd" && CMD_FILES.has(cmd)))) {
-          for (const arg of pathArgs(command, ps, shellKind === "cmd")) {
+          const args = pathArgs(command, ps, shellKind === "cmd")
+          for (const [index, arg] of args.entries()) {
             const resolved = yield* argPath(arg, cwd, ps, shell)
             yield* Effect.logInfo("resolved path", { arg, resolved })
             if (!resolved || containsPath(resolved, instance)) continue
             const dir = (yield* fs.isDir(resolved)) ? resolved : path.dirname(resolved)
             scan.dirs.add(dir)
+            if (READS.has(cmd) || (COPIES.has(cmd) && index < args.length - 1)) continue
+            scan.writes.add(dir)
           }
         }
 
@@ -420,9 +432,14 @@ export const ShellTool = Tool.define(
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
         { env: {} },
       )
+      // An Arena contestant may write only to its worktree and its own temp directory, which the
+      // tool description names instead of the shared one.
+      const tmp = ctx.tmpDirectory
+      if (tmp) yield* fs.ensureDir(tmp).pipe(Effect.orDie)
       return withoutArenaCredentials({
         ...process.env,
         ...extra.env,
+        ...(tmp ? { TMPDIR: tmp, TMP: tmp, TEMP: tmp } : {}),
       })
     })
 
@@ -503,7 +520,7 @@ export const ShellTool = Tool.define(
               } else {
                 full += chunk
                 if (Buffer.byteLength(full, "utf-8") > limits.maxBytes) {
-                  return trunc.write(full).pipe(
+                  return trunc.write(full, Truncate.within(ctx.tmpDirectory).directory).pipe(
                     Effect.andThen((next) =>
                       Effect.sync(() => {
                         file = next
@@ -576,7 +593,7 @@ export const ShellTool = Tool.define(
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       if (end.cut) cut = true
       if (!file && end.cut) {
-        file = yield* trunc.write(raw)
+        file = yield* trunc.write(raw, Truncate.within(ctx.tmpDirectory).directory)
       }
 
       let output = end.text
