@@ -73,7 +73,7 @@ const refusal = (exit: Exit.Exit<unknown, unknown>) => {
   return error instanceof Error ? error.message : String(error)
 }
 
-describe("ArenaGit on git 2.38 and 2.39", () => {
+describe("ArenaGit on git 2.39", () => {
   it.live("classifies divergence without merge-tree --merge-base", () =>
     Effect.gen(function* () {
       const { log } = yield* git239()
@@ -233,9 +233,9 @@ describe("ArenaGit battle git check", () => {
     return refusal(yield* Effect.exit(requireBattleGit(cwd.path)))
   })
 
-  it.live("admits git 2.38 and newer", () =>
+  it.live("admits git 2.39 and newer", () =>
     Effect.gen(function* () {
-      for (const version of ["2.38.0", "2.39.5 (Apple Git-154)", "2.54.0", "3.0.0", "2.45.1.windows.1"]) {
+      for (const version of ["2.39.0", "2.39.5 (Apple Git-154)", "2.54.0", "3.0.0", "2.45.1.windows.1"]) {
         yield* Effect.scoped(
           Effect.gen(function* () {
             yield* fakeGit(`echo "git version ${version}"`)
@@ -246,12 +246,20 @@ describe("ArenaGit battle git check", () => {
     }),
   )
 
-  it.live("refuses git older than 2.38 with the version it found", () =>
+  it.live("refuses git older than 2.39 with the version it found", () =>
     Effect.gen(function* () {
-      yield* fakeGit('echo "git version 2.37.1 (Apple Git-137.1)"')
-      const message = yield* check
-      expect(message).toContain("Git 2.38 or newer")
-      expect(message).toContain("2.37.1")
+      for (const version of ["2.37.1 (Apple Git-137.1)", "2.38.5"]) {
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* fakeGit(`echo "git version ${version}"`)
+            const message = yield* check
+            expect(message).toContain("Git 2.39 or newer")
+            expect(message).toContain(version.split(" ")[0])
+            // The engine keeps the git it started with, so the fix needs a restart, not a retry.
+            expect(message).toContain("quit and reopen Agent Duel")
+          }),
+        )
+      }
     }),
   )
 

@@ -399,10 +399,11 @@ export class PublicEditsAtRiskError extends OperationError {
   }
 }
 
-// The battle's merges run `merge-tree --write-tree`, new in git 2.38. Many Macs still run Apple's
-// git 2.39 from older Command Line Tools, so the engine must not use a newer git option
-// (merge-tree's `--merge-base` is 2.40) without raising this floor.
-const MIN_BATTLE_GIT = { major: 2, minor: 38 }
+// The battle's merges run `merge-tree --write-tree` (git 2.38), and contestant setup runs
+// `symbolic-ref --no-recurse` (2.39). Many Macs still run Apple's git 2.39 from older Command Line
+// Tools, so the engine must not use a newer git option (merge-tree's `--merge-base` is 2.40)
+// without raising this floor.
+const MIN_BATTLE_GIT = { major: 2, minor: 39 }
 
 /**
  * Refuses a battle before it starts when the git on PATH cannot run its merges, with the step that
@@ -426,7 +427,9 @@ function battleGitProblem(result: Git.Result): string | undefined {
   if (!version) return undefined
   const [major, minor] = [Number(version[2]), Number(version[3])]
   if (major !== MIN_BATTLE_GIT.major ? major > MIN_BATTLE_GIT.major : minor >= MIN_BATTLE_GIT.minor) return undefined
-  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with brew install git, then retry.`
+  // The engine keeps the git it found at startup first on PATH (`preferDirectGit`), so a newly
+  // installed git is used only after a restart.
+  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with brew install git, then quit and reopen Agent Duel.`
 }
 
 // Wrapper commits are transport objects, not user-authored history. A fixed
