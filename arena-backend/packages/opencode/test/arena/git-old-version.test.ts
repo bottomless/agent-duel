@@ -100,11 +100,14 @@ describe("ArenaGit on git 2.39", () => {
       yield* Effect.promise(() =>
         fs.writeFile(`${candidateA.path}/greet.py`, 'def greet():\n    return "hello from A"\n', "utf8"),
       )
-      yield* Effect.promise(() => fs.writeFile(`${candidateA.path}/notes.txt`, "ONE\ntwo\nthree\nfour\nfive\n", "utf8"))
+      // Every edit here changes the file's size. The snapshot reads a copy of the worktree's index,
+      // which loses git's same-second check, so a same-size rewrite this close to the checkout can
+      // go unseen.
+      yield* Effect.promise(() => fs.writeFile(`${candidateA.path}/notes.txt`, "one by A\ntwo\nthree\nfour\nfive\n", "utf8"))
       yield* Effect.promise(() =>
         fs.writeFile(`${candidateB.path}/greet.py`, 'def greet():\n    print("hello from B")\n', "utf8"),
       )
-      yield* Effect.promise(() => fs.writeFile(`${candidateB.path}/notes.txt`, "one\ntwo\nthree\nfour\nFIVE\n", "utf8"))
+      yield* Effect.promise(() => fs.writeFile(`${candidateB.path}/notes.txt`, "one\ntwo\nthree\nfour\nfive by B\n", "utf8"))
       const a = yield* finalize({ worktree: candidateA.path, baseSHA: base, permanentRef: "refs/battles/old-git/a" })
       const b = yield* finalize({ worktree: candidateB.path, baseSHA: base, permanentRef: "refs/battles/old-git/b" })
 
@@ -146,7 +149,8 @@ describe("ArenaGit on git 2.39", () => {
         ).pipe(Effect.ignore),
       )
       yield* Effect.promise(() => fs.writeFile(`${candidate.path}/conflict.txt`, "winner\n", "utf8"))
-      yield* Effect.promise(() => fs.writeFile(`${candidate.path}/clean.txt`, "ONE\ntwo\nthree\nfour\nfive\n", "utf8"))
+      // Size-changing edits, for the reason given in the divergence test above.
+      yield* Effect.promise(() => fs.writeFile(`${candidate.path}/clean.txt`, "one by the winner\ntwo\nthree\nfour\nfive\n", "utf8"))
       const result = yield* finalize({
         worktree: candidate.path,
         baseSHA: base.baseCommit,
@@ -154,7 +158,7 @@ describe("ArenaGit on git 2.39", () => {
       })
       const indexTree = (yield* Effect.promise(() => $`git write-tree`.cwd(canonical.path).quiet().text())).trim()
       yield* Effect.promise(() => fs.writeFile(`${canonical.path}/conflict.txt`, "canonical\n", "utf8"))
-      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/clean.txt`, "one\ntwo\nthree\nfour\nFIVE\n", "utf8"))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/clean.txt`, "one\ntwo\nthree\nfour\nfive by the checkout\n", "utf8"))
 
       const applied = yield* applySnapshot({
         canonical: canonical.path,
@@ -167,7 +171,7 @@ describe("ArenaGit on git 2.39", () => {
       })
       expect(applied.conflicts).toEqual(["conflict.txt"])
       expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/clean.txt`, "utf8"))).toBe(
-        "ONE\ntwo\nthree\nfour\nFIVE\n",
+        "one by the winner\ntwo\nthree\nfour\nfive by the checkout\n",
       )
       const conflicted = yield* Effect.promise(() => fs.readFile(`${canonical.path}/conflict.txt`, "utf8"))
       expect(conflicted).toContain("canonical\n")
