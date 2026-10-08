@@ -2961,12 +2961,20 @@ export const layer: Layer.Layer<
       readonly name: string
       readonly branch?: string
       readonly head: string
+      /** The frozen working tree the slot is synced to next; see `Worktree.ReclaimInput`. */
+      readonly baseTree: string
       readonly metadataFingerprint: string
     }) {
       yield* forgetSlot(join(isolatedRoot(input.chat.repository.root), input.name))
       const info = yield* inDirectory(
         input.chat.repository.root,
-        worktrees.reclaimWorktreeInfo({ name: input.name, branch: input.branch, isolated: true, freshHost: true }),
+        worktrees.reclaimWorktreeInfo({
+          name: input.name,
+          branch: input.branch,
+          isolated: true,
+          freshHost: true,
+          baseTree: input.baseTree,
+        }),
       ).pipe(Effect.mapError(error))
       yield* forgetSlot(info.directory)
       yield* inDirectory(input.chat.repository.root, worktrees.attachAt(info, input.head, { reset: true })).pipe(
@@ -2995,6 +3003,7 @@ export const layer: Layer.Layer<
       readonly name: string
       readonly branch?: string
       readonly head: string
+      readonly baseTree: string
       readonly roots: readonly string[]
       readonly metadataFingerprint: string
     }) {
@@ -3025,6 +3034,7 @@ export const layer: Layer.Layer<
           name: input.name,
           ...(input.branch ? { branch: input.branch } : {}),
           head: input.head,
+          baseTree: input.baseTree,
         }),
       ).pipe(Effect.mapError(error))
       if (!inPlace) yield* forgetSlot(adopted.directory)
@@ -4516,6 +4526,7 @@ export const layer: Layer.Layer<
                   name: previous.name,
                   branch,
                   head: contestantSnapshot.frozenHead,
+                  baseTree: contestantSnapshot.workingTree,
                   roots: copiedDirectoryRoots(copyManifest),
                   metadataFingerprint,
                 })
@@ -4528,6 +4539,7 @@ export const layer: Layer.Layer<
                   name: relativePath(slotRoot, plannedDirectory),
                   branch,
                   head: contestantSnapshot.frozenHead,
+                  baseTree: contestantSnapshot.workingTree,
                   metadataFingerprint,
                 })
             setupWorktrees.set(staged.directory, staged)
@@ -6048,7 +6060,14 @@ export const layer: Layer.Layer<
             chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
             Effect.gen(function* () {
               const metadataFingerprint = yield* promise(() => hostMetadataFingerprint(commonGitDir))
-              return yield* claimSlot({ chat, name, branch, head: base.frozenHead, metadataFingerprint })
+              return yield* claimSlot({
+                chat,
+                name,
+                branch,
+                head: base.frozenHead,
+                baseTree: base.workingTree,
+                metadataFingerprint,
+              })
             }),
           )
           directory = info.directory
@@ -6480,6 +6499,7 @@ export const layer: Layer.Layer<
                       name,
                       branch,
                       head: base.frozenHead,
+                      baseTree: snapshot.workingTree,
                       roots,
                       metadataFingerprint,
                     }),
@@ -6509,7 +6529,14 @@ export const layer: Layer.Layer<
                   yield* retireSlot(chat, targets[side]).pipe(Effect.ignore)
                 }
                 touched.add(targets[side])
-                const info = yield* claimSlot({ chat, name, branch, head: base.frozenHead, metadataFingerprint })
+                const info = yield* claimSlot({
+                  chat,
+                  name,
+                  branch,
+                  head: base.frozenHead,
+                  baseTree: snapshot.workingTree,
+                  metadataFingerprint,
+                })
                 touched.add(info.directory)
                 return {
                   side,
@@ -6573,6 +6600,7 @@ export const layer: Layer.Layer<
                   name: slot.name,
                   branch,
                   head: base.frozenHead,
+                  baseTree: snapshot.workingTree,
                   metadataFingerprint: claimed.metadataFingerprint,
                 })
                 touched.add(created.directory)

@@ -92,6 +92,11 @@ export const ReclaimInput = Schema.Struct({
    * worktree claimed at this path never inherits what an earlier occupant left in its host.
    */
   freshHost: Schema.optional(Schema.Boolean),
+  /**
+   * The frozen working tree an isolated worktree will be synced to. Its host ignores the
+   * dependency folders this tree does not hold; without it, the host ignores none.
+   */
+  baseTree: Schema.optional(Schema.String),
 }).annotate({ identifier: "WorktreeReclaimInput" });
 export type ReclaimInput = Schema.Schema.Type<typeof ReclaimInput>;
 
@@ -105,6 +110,8 @@ export const AdoptInput = Schema.Struct({
   branch: Schema.optional(Schema.String),
   /** The commit a detached worktree, or a branch the checkout does not have, starts at. */
   head: Schema.String,
+  /** As `ReclaimInput.baseTree`. */
+  baseTree: Schema.optional(Schema.String),
 }).annotate({ identifier: "WorktreeAdoptInput" });
 export type AdoptInput = Schema.Schema.Type<typeof AdoptInput>;
 
@@ -225,6 +232,42 @@ function failedRemoves(...chunks: string[]) {
         return [value];
       }),
   );
+}
+
+/**
+ * Dependency folders a contestant installs are not part of its result.
+ *
+ * A project often ignores only its root `/node_modules`, so a contestant that installs a tool
+ * into a subfolder adds thousands of untracked files. They would count as its changes, slow its
+ * snapshot, and land in the checkout if that side won: one installed Playwright under `qa/`
+ * and showed +2.3m lines across 9,860 files. Unanchored, so the folders are ignored at any
+ * depth. This goes into the contestant's own repository and never the checkout's, where the
+ * patterns would hide the developer's own files.
+ *
+ * A name the frozen base already holds, at any depth, is left out (`dependencyFoldersIn`). The
+ * base carries the checkout's tracked files and the untracked ones its own rules do not ignore,
+ * and the contestant's tree is checked against it: an untracked `__pycache__` in a project that
+ * ignores only `*.pyc` would fail that check on every battle. In a project that commits its
+ * `node_modules`, the exclude would also hide the new files of a package the contestant
+ * installs while its edits to the tracked ones still count, and the vote would apply half an
+ * install.
+ *
+ * Only names that are never source: `vendor`, `target`, `build` and `deps` are dependency or
+ * build folders in some ecosystems and real code in others, and a contestant's new code there
+ * would silently drop out of its result.
+ */
+const DEPENDENCY_FOLDERS = ["node_modules", ".venv", "__pycache__"];
+
+/** `held` is the dependency folder names the frozen base holds, which stay visible. */
+function withDependencyExcludes(excludes: string, held: ReadonlySet<string>) {
+  const folders = DEPENDENCY_FOLDERS.filter((name) => !held.has(name));
+  if (folders.length === 0) return excludes;
+  const separator = excludes && !excludes.endsWith("\n") ? "\n" : "";
+  const block = [
+    "# Agent Duel: dependency folders are not a contestant's changes",
+    ...folders.map((name) => `${name}/`),
+  ];
+  return `${excludes}${separator}${block.join("\n")}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -475,6 +518,28 @@ const layer: Layer.Layer<
     });
 
     /**
+     * The `DEPENDENCY_FOLDERS` names `tree` holds as a directory at any depth. Read from the
+     * checkout, which wrote the frozen tree. Compared without case: a checkout that ignores case
+     * matches `node_modules/` against `Node_Modules` too, and keeping a name is always safe.
+     */
+    const dependencyFoldersIn = Effect.fnUntraced(function* (checkout: string, tree: string) {
+      const listed = yield* git(["ls-tree", "-r", "-d", "-z", "--name-only", "--full-tree", tree], {
+        cwd: checkout,
+      });
+      if (listed.code !== 0) {
+        return yield* new CreateFailedError({
+          message: listed.stderr || listed.text || `Failed to read the frozen tree ${tree}`,
+        });
+      }
+      const held = new Set<string>();
+      for (const directory of listed.text.split("\0")) {
+        const name = directory.slice(directory.lastIndexOf("/") + 1).toLowerCase();
+        if (DEPENDENCY_FOLDERS.includes(name)) held.add(name);
+      }
+      return held;
+    });
+
+    /**
      * Create — or repair — the bare repository an isolated worktree is registered in.
      *
      * It is a copy of the checkout's git directory without the worktree registrations, so a
@@ -488,7 +553,7 @@ const layer: Layer.Layer<
      */
     const ensureHostRepo = Effect.fnUntraced(function* (
       directory: string,
-      options?: { readonly fresh?: boolean },
+      options?: { readonly fresh?: boolean; readonly baseTree?: string },
     ) {
       const ctx = yield* InstanceState.context;
       const host = hostRepoPath(directory);
@@ -552,9 +617,13 @@ const layer: Layer.Layer<
       const hostedExcludes = yield* fs
         .readFileString(hostExclude)
         .pipe(Effect.catch(() => Effect.succeed("")));
-      if (hostedExcludes !== excludes) {
+      const held = options?.baseTree
+        ? yield* dependencyFoldersIn(ctx.worktree, options.baseTree)
+        : new Set(DEPENDENCY_FOLDERS);
+      const contestantExcludes = withDependencyExcludes(excludes, held);
+      if (hostedExcludes !== contestantExcludes) {
         yield* fs.makeDirectory(pathSvc.dirname(hostExclude), { recursive: true }).pipe(Effect.orDie);
-        yield* fs.writeFileString(hostExclude, excludes).pipe(Effect.orDie);
+        yield* fs.writeFileString(hostExclude, contestantExcludes).pipe(Effect.orDie);
       }
       yield* markConfigBoundary(ctx.worktree);
 
@@ -1307,7 +1376,7 @@ const layer: Layer.Layer<
       // Built before the worktree is claimed, because every git command below has to run
       // against the repository that will hold the registration, not the user's checkout.
       const host = input.isolated
-        ? yield* ensureHostRepo(directory, { fresh: input.freshHost })
+        ? yield* ensureHostRepo(directory, { fresh: input.freshHost, baseTree: input.baseTree })
         : undefined;
       const repo = host ?? ctx.worktree;
 
@@ -1541,7 +1610,7 @@ const layer: Layer.Layer<
         const admin = pathSvc.join(host, "worktrees", pathSvc.basename(to));
         const hostStarted = performance.now();
         const { commit, hostCopyMs } = yield* Effect.gen(function* () {
-          yield* ensureHostRepo(to, { fresh: true });
+          yield* ensureHostRepo(to, { fresh: true, baseTree: input.baseTree });
           const hostCopyMs = Math.round(performance.now() - hostStarted);
           const resolved = yield* git(
             ["rev-parse", "--verify", "--quiet", "--end-of-options", `${input.head}^{commit}`],
