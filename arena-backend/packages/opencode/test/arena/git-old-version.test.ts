@@ -225,6 +225,50 @@ describe("ArenaGit on git 2.39", () => {
       expect((yield* mergeTreeCalls(log)).length).toBeGreaterThan(0)
     }),
   )
+
+  it.live("labels the diff3 base in a promoted winner's markers instead of naming a wrapper commit", () =>
+    Effect.gen(function* () {
+      yield* git239()
+      const canonical = yield* scopedTmpdir({ git: true })
+      const candidate = yield* scopedTmpdir()
+      yield* Effect.promise(() => $`git config merge.conflictStyle diff3`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/shared.txt`, "base\n", "utf8"))
+      yield* Effect.promise(() => $`git add shared.txt && git commit -m base`.cwd(canonical.path).quiet())
+      const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      const baseTree = (yield* Effect.promise(() =>
+        $`git rev-parse HEAD^{tree}`.cwd(canonical.path).quiet().text(),
+      )).trim()
+      yield* Effect.promise(() =>
+        $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet(),
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() =>
+          $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow(),
+        ).pipe(Effect.ignore),
+      )
+      yield* Effect.promise(() => fs.writeFile(`${candidate.path}/shared.txt`, "winner\n", "utf8"))
+      const winner = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: frozenHead,
+        permanentRef: "refs/battles/old-git-labels/a",
+      })
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/shared.txt`, "public\n", "utf8"))
+
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead,
+        baseWorkingTree: baseTree,
+        baseIndexTree: baseTree,
+        resultCommit: winner.finalCommit,
+        finalIndexTree: winner.finalIndexTree,
+        safetyRef: "refs/battles/old-git-labels/safety",
+      })
+      expect(promoted.conflicts).toEqual(["shared.txt"])
+      expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/shared.txt`, "utf8"))).toBe(
+        "<<<<<<< ours\npublic\n||||||| base\nbase\n=======\nwinner\n>>>>>>> theirs\n",
+      )
+    }),
+  )
 })
 
 describe("ArenaGit battle git check", () => {
@@ -278,6 +322,15 @@ describe("ArenaGit battle git check", () => {
         'echo "xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), missing xcrun at: /Library/Developer/CommandLineTools/usr/bin/xcrun" >&2\nexit 1',
       )
       expect(yield* check).toContain("Install Git")
+    }),
+  )
+
+  it.live("reports git's own error when git is there but fails", () =>
+    Effect.gen(function* () {
+      yield* fakeGit('echo "fatal: unable to access \'/etc/gitconfig\': Permission denied" >&2\nexit 128')
+      const message = yield* check
+      expect(message).toContain("fatal: unable to access")
+      expect(message).not.toContain("Install Git")
     }),
   )
 

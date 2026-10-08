@@ -411,17 +411,27 @@ const MIN_BATTLE_GIT = { major: 2, minor: 39 }
  */
 export const requireBattleGit = Effect.fn("ArenaGit.requireBattleGit")(function* (cwd: string) {
   const git = yield* Git.Service
-  const problem = battleGitProblem(yield* git.run(["version"], { cwd }))
+  const result = yield* git.run(["version"], { cwd })
+  // The PATH git.run spawns with, not the one Bun.which read at startup.
+  const gitOnPath = result.exitCode === 0 || Bun.which("git", { PATH: process.env.PATH ?? "" }) !== null
+  const problem = battleGitProblem(result, gitOnPath)
   if (problem) return yield* Effect.fail(new OperationError("check_git_version", problem))
 })
 
-function battleGitProblem(result: Git.Result): string | undefined {
+function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | undefined {
   if (result.exitCode !== 0) {
+    const stderr = result.stderr.toString("utf8")
     // macOS refuses to run any developer tool, git included, until the Xcode license is accepted.
-    if (result.stderr.toString("utf8").includes("xcodebuild -license")) {
+    if (stderr.includes("xcodebuild -license")) {
       return "Git can't run until the Xcode license is accepted. Run sudo xcodebuild -license in Terminal, then retry."
     }
-    return "Battles need Git, and Agent Duel couldn't run it. Install Git, for example with xcode-select --install, then retry."
+    // Without the Command Line Tools, macOS's /usr/bin/git is only a stub that points at them.
+    if (!gitOnPath || stderr.includes("invalid active developer path")) {
+      return "Battles need Git, and Agent Duel couldn't find it. Install Git, for example with xcode-select --install, then retry."
+    }
+    // Git is there but failed: its own error says why better than a guess would.
+    const detail = stderr.trim().split(/\r?\n/)[0] || `exit code ${result.exitCode}`
+    return `Battles need Git, and running it failed: ${detail}`
   }
   const version = /git version ((\d+)\.(\d+)(?:\.\d+)*)/.exec(output(result))
   if (!version) return undefined
@@ -3910,7 +3920,13 @@ const mergeTrees = Effect.fn("ArenaGit.mergeTrees")(function* (
       if (!conflicts.includes(field)) conflicts.push(field)
     }
   }
-  // merge-tree labels the markers with the wrapper commits it was given. Name the sides instead.
+  // merge-tree labels the markers with the wrapper commits it was given, and the diff3 base (when
+  // the checkout's merge.conflictStyle asks for one) with an abbreviation of the base wrapper. Name
+  // the sides instead.
+  const isBaseLabel = (line: string) => {
+    const label = line.startsWith("||||||| ") ? line.slice("||||||| ".length) : ""
+    return label.length >= 4 && baseCommit.startsWith(label)
+  }
   let labelled = tree
   for (const path of conflicts) {
     const blob = yield* treeEntry(git, root, tree, path)
@@ -3918,7 +3934,15 @@ const mergeTrees = Effect.fn("ArenaGit.mergeTrees")(function* (
     const content = (yield* run(git, root, "read_conflicted_blob", ["cat-file", "blob", blob], { maxOutputBytes: 100 * 1024 * 1024 })).stdout.toString("utf8")
     const relabelled = content
       .split("\n")
-      .map((line) => (line === `<<<<<<< ${oursCommit}` ? "<<<<<<< ours" : line === `>>>>>>> ${theirsCommit}` ? ">>>>>>> theirs" : line))
+      .map((line) =>
+        line === `<<<<<<< ${oursCommit}`
+          ? "<<<<<<< ours"
+          : line === `>>>>>>> ${theirsCommit}`
+            ? ">>>>>>> theirs"
+            : isBaseLabel(line)
+              ? "||||||| base"
+              : line,
+      )
       .join("\n")
     if (relabelled === content) continue
     const written = yield* read(git, root, "write_relabelled_blob", ["hash-object", "-w", "--stdin"], {
