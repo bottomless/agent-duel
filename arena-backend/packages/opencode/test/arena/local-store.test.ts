@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { access, mkdir, mkdtemp, readdir, rm, unlink, utimes, writeFile } from "node:fs/promises"
+import { access, chmod, mkdir, mkdtemp, readdir, rm, unlink, utimes, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Database } from "bun:sqlite"
@@ -298,6 +298,49 @@ describe("local Arena store", () => {
     }
   })
 
+  test("opens while a scrubbed telemetry file cannot be deleted, and deletes it at a later start", async () => {
+    const directory = await temporaryDirectory()
+    const root = path.join(directory, "artifacts", "sha256")
+    try {
+      const store = await connectLocalStore({ directory })
+      await store.db.collection<ArenaRecord>("turns").insertOne({ _id: "turn", state: "awaiting_vote" })
+      await store.db.collection<ArenaRecord>("runs").insertOne({ _id: "run", turnID: "turn" })
+      await store.db
+        .collection<ArenaRecord>("generations")
+        .insertOne({ _id: "generation", runID: "run", responseArtifactID: "generation|response" })
+      const response = Buffer.from('{"format":"anthropic-claude-v1"}')
+      await store.storeArtifact({
+        _id: "generation|response",
+        runID: "run",
+        kind: "generation_response",
+        mimeType: "application/json",
+        encoding: "utf8",
+        compression: "none",
+        data: response,
+        createdAt: now,
+      })
+      await store.close()
+      const database = new Database(path.join(directory, "arena.sqlite"))
+      database.query("DELETE FROM arena_metadata WHERE key = 'privacy.blinded-generation-telemetry'").run()
+      database.close()
+      const file = createHash("sha256").update(response).digest("hex")
+      // A directory nobody may write to refuses the delete, as a locked file does.
+      await chmod(root, 0o555)
+
+      const reopened = await connectLocalStore({ directory })
+      expect(await reopened.artifacts.findOne({ _id: "generation|response" })).toBeNull()
+      await reopened.close()
+      expect(await readdir(root)).toEqual([file])
+
+      await chmod(root, 0o755)
+      await (await connectLocalStore({ directory })).close()
+      expect(await readdir(root)).toEqual([])
+    } finally {
+      await chmod(root, 0o755).catch(() => undefined)
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("does not hydrate artifact bytes for metadata projections", async () => {
     const directory = await temporaryDirectory()
     try {
@@ -442,6 +485,41 @@ describe("local Arena store", () => {
       await (await connectLocalStore({ directory })).close()
       expect(await readdir(root)).toEqual([])
     } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("opens with an artifact file it cannot delete, and deletes it at a later start", async () => {
+    const directory = await temporaryDirectory()
+    const root = path.join(directory, "artifacts", "sha256")
+    try {
+      const writer = await connectLocalStore({ directory })
+      await writer.storeArtifact({
+        _id: "gone",
+        runID: "run",
+        kind: "other",
+        mimeType: "text/plain",
+        encoding: "binary",
+        compression: "none",
+        data: Buffer.from("locked"),
+        createdAt: now,
+      })
+      await writer.artifacts.deleteOne({ _id: "gone" })
+      await writer.close()
+      const locked = createHash("sha256").update("locked").digest("hex")
+      const hourAgo = new Date(Date.now() - 60 * 60_000)
+      await utimes(path.join(root, locked), hourAgo, hourAgo)
+      // A directory nobody may write to refuses the delete, as a locked file does.
+      await chmod(root, 0o555)
+
+      await (await connectLocalStore({ directory })).close()
+      expect(await readdir(root)).toEqual([locked])
+
+      await chmod(root, 0o755)
+      await (await connectLocalStore({ directory })).close()
+      expect(await readdir(root)).toEqual([])
+    } finally {
+      await chmod(root, 0o755).catch(() => undefined)
       await rm(directory, { recursive: true, force: true })
     }
   })

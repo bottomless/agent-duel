@@ -104,21 +104,33 @@ function documents(database: Database, collection: string) {
     .map((row) => ({ id: row.id, document: decode(JSON.parse(row.document)) as Record<string, unknown> }))
 }
 
+/**
+ * Delete the files among `paths` that no record names, and say whether all of them are gone. One
+ * that cannot be deleted, such as a locked one, is left for the next start rather than keeping the
+ * store from opening.
+ */
 async function removeUnreferencedArtifactFiles(database: Database, paths: readonly string[]) {
   const live = new Set(
     documents(database, "artifacts")
       .map(({ document }) => document.artifactPath)
       .filter((value): value is string => typeof value === "string"),
   )
+  let removed = true
   for (const artifactPath of new Set(paths)) {
-    if (!live.has(artifactPath)) await rm(artifactPath, { force: true })
+    if (live.has(artifactPath)) continue
+    await rm(artifactPath, { force: true }).catch((error: unknown) => {
+      console.warn("[arena] could not delete a scrubbed artifact file; the next start tries again", error)
+      removed = false
+    })
   }
+  return removed
 }
 
 /**
  * Delete the artifact files no record names. Deleting an artifact record leaves its file, because
  * files are content-addressed and another record can share it; this is where the unshared ones go.
- * Compared by name, the content hash, so a moved data directory does not orphan every file.
+ * Compared by name, the content hash, so a moved data directory does not orphan every file. A file
+ * that cannot be deleted, such as a locked one, is left for a later pass and counted as deferred.
  */
 export async function reclaimArtifactFiles(
   database: Database,
@@ -147,25 +159,35 @@ export async function reclaimArtifactFiles(
       deferred += 1
       continue
     }
-    await rm(file, { force: true })
-    removed += 1
+    const deleted = await rm(file, { force: true }).then(
+      () => true,
+      () => false,
+    )
+    if (deleted) removed += 1
+    else deferred += 1
   }
   return { removed, deferred }
 }
 
 /**
  * Reclaim at a start when records were deleted since the last complete pass, or when no pass has
- * run yet. Before the store opens, so nothing in this process writes a file while it looks.
+ * run yet. Before the store opens, so nothing in this process writes a file while it looks. Never
+ * fails the start: the files are only disk, and a store that does not open fails every battle.
  */
 async function reclaimArtifactFilesIfPending(database: Database, artifactsRoot: string) {
-  const state = database
-    .query<{ value: string }, [string]>("SELECT value FROM arena_metadata WHERE key = ?")
-    .get(artifactReclaimKey)?.value
-  if (state === "done") return
-  const { deferred } = await reclaimArtifactFiles(database, artifactsRoot)
-  // A file inside the grace period may still be orphaned; the next start looks again.
-  if (deferred > 0) return
-  database.query("INSERT OR REPLACE INTO arena_metadata (key, value) VALUES (?, 'done')").run(artifactReclaimKey)
+  try {
+    const state = database
+      .query<{ value: string }, [string]>("SELECT value FROM arena_metadata WHERE key = ?")
+      .get(artifactReclaimKey)?.value
+    if (state === "done") return
+    const { deferred } = await reclaimArtifactFiles(database, artifactsRoot)
+    // A file inside the grace period may still be orphaned, and one that could not be deleted
+    // still is; the next start looks again.
+    if (deferred > 0) return
+    database.query("INSERT OR REPLACE INTO arena_metadata (key, value) VALUES (?, 'done')").run(artifactReclaimKey)
+  } catch (error) {
+    console.warn("[arena] artifact file cleanup failed", error)
+  }
 }
 
 /** Remove legacy per-side telemetry that can fingerprint a contestant before a vote. */
@@ -179,7 +201,8 @@ async function scrubLegacyBlindedTelemetry(database: Database) {
     .query<{ value: string }, [string]>("SELECT value FROM arena_metadata WHERE key = ?")
     .get(blindedTelemetryPendingKey)?.value
   if (pending) {
-    await removeUnreferencedArtifactFiles(database, JSON.parse(pending) as string[])
+    // The records are already scrubbed; a file still on disk keeps the pass pending.
+    if (!(await removeUnreferencedArtifactFiles(database, JSON.parse(pending) as string[]))) return
     database.transaction(() => {
       database
         .query("INSERT OR REPLACE INTO arena_metadata (key, value) VALUES (?, ?)")
@@ -255,7 +278,7 @@ async function scrubLegacyBlindedTelemetry(database: Database) {
       .run(blindedTelemetryPendingKey, JSON.stringify(artifactPaths))
   })()
 
-  await removeUnreferencedArtifactFiles(database, artifactPaths)
+  if (!(await removeUnreferencedArtifactFiles(database, artifactPaths))) return
   database.transaction(() => {
     database
       .query("INSERT OR REPLACE INTO arena_metadata (key, value) VALUES (?, ?)")
