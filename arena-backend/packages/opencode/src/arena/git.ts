@@ -2242,7 +2242,7 @@ export const verifyContestantState = Effect.fn("ArenaGit.verifyContestantState")
         git.run(["ls-tree", "-r", "-z", "--name-only", probe.indexTree], { cwd: root }),
         git.run(["ls-tree", "-r", "-z", probe.workingTree], { cwd: root }),
         Effect.exit(read(git, root, "verify_contestant_index", ["write-tree"])),
-        Effect.exit(readWorkingTreeState(git, root, probe.gitDir)),
+        Effect.exit(readWorkingTreeState(git, root, { gitDir: probe.gitDir })),
         git.run(["worktree", "list", "--porcelain"], { cwd: root }),
         git.run(["for-each-ref", "--format=%(refname)", ...MIRROR_EXCLUDED_PREFIXES], { cwd: root }),
         Effect.promise(() =>
@@ -2390,6 +2390,17 @@ export const selectResult = Effect.fn("ArenaGit.selectResult")(function* (input:
   return input.resultCommit
 })
 
+interface WorkingTreeSnapshotOptions {
+  readonly gitDir?: string
+  readonly trackedTree?: string
+}
+
+interface SnapshotIndexInput extends WorkingTreeSnapshotOptions {
+  readonly git: Git.Interface
+  readonly root: string
+  readonly index: string
+}
+
 /**
  * Seed the scratch index the working-tree snapshot is staged into.
  *
@@ -2407,21 +2418,20 @@ export const selectResult = Effect.fn("ArenaGit.selectResult")(function* (input:
  * seed silently overwrites.
  *
  * Reading the gitlinks back out of the seeded index doubles as the check that git can load
- * it, so the copy costs no more subprocesses than the `read-tree` it replaces. They are the
- * checkout's own gitlinks either way: the copy is the checkout's own index.
+ * it, so the copy costs no more subprocesses than the `read-tree` it replaces. Verification
+ * overlays its planned tree with `read-tree -m`, preserving stat data for unchanged entries.
  */
-const seedSnapshotIndex = Effect.fnUntraced(function* (
-  git: Git.Interface,
-  root: string,
-  index: string,
-  knownGitDir?: string,
-) {
+const seedSnapshotIndex = Effect.fnUntraced(function* (input: SnapshotIndexInput) {
+  const { git, root, index, trackedTree } = input
   const env = { GIT_INDEX_FILE: index }
-  const gitDir = knownGitDir ?? (yield* read(git, root, "find_canonical_git_dir", ["rev-parse", "--absolute-git-dir"]))
+  const gitDir = input.gitDir ?? (yield* read(git, root, "find_canonical_git_dir", ["rev-parse", "--absolute-git-dir"]))
   const copied = yield* Effect.tryPromise({
     try: () => copyFile(join(gitDir, "index"), index),
     catch: (cause) => new OperationError("copy_canonical_index", String(cause)),
   }).pipe(
+    Effect.andThen(
+      trackedTree ? run(git, root, "seed_verification_tree", ["read-tree", "-m", trackedTree], { env }) : Effect.void,
+    ),
     Effect.andThen(run(git, root, "read_canonical_gitlinks", ["ls-files", "--stage", "-z"], { env })),
     Effect.map((listed) => gitlinks(listed.text())),
     Effect.catch(() => Effect.succeed(undefined)),
@@ -2430,7 +2440,12 @@ const seedSnapshotIndex = Effect.fnUntraced(function* (
   const canonical = gitlinks((yield* run(git, root, "read_canonical_gitlinks", ["ls-files", "--stage", "-z"])).text())
   // A copy that failed partway leaves bytes `read-tree` would refuse to load over.
   yield* Effect.promise(() => unlink(index).catch(() => undefined))
-  yield* run(git, root, "initialize_snapshot_index", ["read-tree", "HEAD"], { env })
+  yield* run(git, root, "initialize_snapshot_index", ["read-tree", trackedTree ?? "HEAD"], { env })
+  if (trackedTree) {
+    return gitlinks(
+      (yield* run(git, root, "read_verification_gitlinks", ["ls-files", "--stage", "-z"], { env })).text(),
+    )
+  }
   return canonical
 })
 
@@ -2441,12 +2456,12 @@ const seedSnapshotIndex = Effect.fnUntraced(function* (
 const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function* (
   git: Git.Interface,
   root: string,
-  gitDir?: string,
+  options?: WorkingTreeSnapshotOptions,
 ) {
   const index = join(tmpdir(), `opencode-arena-index-${randomUUID()}`)
   return yield* Effect.gen(function* () {
     const env = { GIT_INDEX_FILE: index }
-    const canonicalGitlinks = yield* seedSnapshotIndex(git, root, index, gitDir)
+    const canonicalGitlinks = yield* seedSnapshotIndex({ git, root, index, ...options })
     yield* run(git, root, "stage_snapshot", ["add", "-A", "--", "."], { env })
     const snapshotGitlinks = gitlinks(
       (yield* run(git, root, "read_snapshot_gitlinks", ["ls-files", "--stage", "-z"], { env })).text(),
@@ -2471,8 +2486,12 @@ const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function
   )
 })
 
-const readWorkingTree = Effect.fn("ArenaGit.readWorkingTree")(function* (git: Git.Interface, root: string) {
-  return (yield* readWorkingTreeState(git, root)).tree
+const readWorkingTree = Effect.fn("ArenaGit.readWorkingTree")(function* (
+  git: Git.Interface,
+  root: string,
+  options?: WorkingTreeSnapshotOptions,
+) {
+  return (yield* readWorkingTreeState(git, root, options)).tree
 })
 
 /** List ignored setup output as collapsed copy roots for the second contestant. */
@@ -3730,7 +3749,9 @@ export const promoteWinnerState = Effect.fn("ArenaGit.promoteWinnerState")(funct
   yield* git.run(["update-index", "-q", "--refresh"], { cwd: root })
 
   const verifiedHead = yield* read(git, root, "verify_winner_promotion_head", ["rev-parse", "HEAD"])
-  const verifiedTree = yield* readWorkingTree(git, root)
+  // The winner's .gitignore may hide public files that the merged tree still preserves.
+  // Track that tree in the scratch index so verification reads those bytes as well.
+  const verifiedTree = yield* readWorkingTree(git, root, { trackedTree: worktreeTree })
   if (verifiedHead !== resultingHead || verifiedTree !== worktreeTree) {
     return yield* Effect.fail(new OperationError("verify_winner_promotion", "Promoted winner state could not be verified"))
   }

@@ -169,6 +169,58 @@ for (const scenario of [
 }
 
 describe("ArenaGit", () => {
+  it.live("preserves public untracked files newly ignored by the winner", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const candidate = yield* scopedTmpdir()
+      const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      const originalIndex = (yield* Effect.promise(() => $`git write-tree`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() =>
+        $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet(),
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() =>
+          $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow(),
+        ).pipe(Effect.ignore),
+      )
+      yield* Effect.promise(() => fs.writeFile(`${candidate.path}/.gitignore`, ".DS_Store\nlocal/\n"))
+      yield* Effect.promise(() => fs.writeFile(`${candidate.path}/winner.txt`, "winner\n"))
+      const winner = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: frozenHead,
+        permanentRef: "refs/battles/new-ignore/a",
+      })
+      const metadata = Buffer.from([0, 1, 2, 255])
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/.DS_Store`, metadata))
+      yield* Effect.promise(() => fs.mkdir(`${canonical.path}/local`))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/local/notes.txt`, "developer notes\n"))
+
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead,
+        baseWorkingTree: frozenHead,
+        baseIndexTree: originalIndex,
+        resultCommit: winner.finalCommit,
+        finalIndexTree: winner.finalIndexTree,
+        safetyRef: "refs/battles/new-ignore/public-safety",
+      })
+
+      expect(promoted.conflicts).toEqual([])
+      expect(promoted.resultingHead).toBe(frozenHead)
+      expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/.DS_Store`))).toEqual(metadata)
+      expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/local/notes.txt`, "utf8"))).toBe(
+        "developer notes\n",
+      )
+      expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/winner.txt`, "utf8"))).toBe("winner\n")
+      expect((yield* Effect.promise(() => $`git write-tree`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        originalIndex,
+      )
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        "?? .gitignore\n?? winner.txt",
+      )
+    }),
+  )
+
   it.live("prepares staged, unstaged, deleted, and untracked contestant state without changing identity", () =>
     Effect.gen(function* () {
       const canonical = yield* scopedTmpdir({ git: true })
