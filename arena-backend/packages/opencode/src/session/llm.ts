@@ -34,6 +34,11 @@ import { LLMRequestPrep } from "./llm/request"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
+// A contestant can reason for minutes in chunks that carry only OpenRouter `reasoning_details`,
+// which the AI SDK turns into no stream part. Raw chunks are then the only sign the model is still
+// working, and the Arena idle deadline counts them.
+export const arenaStreamOptions = { includeRawChunks: true } as const
+
 export type StreamInput = {
   user: SessionV1.User
   sessionID: string
@@ -297,6 +302,7 @@ const live: Layer.Layer<
           },
           // Copilot returns the authoritative billed amount only in provider-specific response fields.
           includeRawChunks: input.model.providerID.includes("github-copilot"),
+          ...(input.model.providerID === ArenaRuntime.providerID ? arenaStreamOptions : {}),
           async experimental_repairToolCall(failed) {
             const lower = failed.toolCall.toolName.toLowerCase()
             if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {

@@ -936,9 +936,14 @@ Never restart once the attempt has started a local tool: the resent request does
 call, and the model can repeat its side effect. That failure ends the step instead, and the next
 step continues from the stored tool call and result (`session/processor.ts`).
 
-An Arena model response that emits no new event for two minutes fails and enters the same retry
-policy. The deadline pauses while a local tool runs or waits for approval; a long tool call must not
-be mistaken for a silent model stream.
+An Arena model response that sends no provider chunk for two minutes fails and enters the same retry
+policy. Arena streams request raw chunks (`session/llm.ts`) because some models reason for minutes in
+chunks that carry only OpenRouter `reasoning_details`, which produce no AI SDK part; counting only
+parts kills those streams mid-thought. Keep-alive comments are not chunks, so a stalled model still
+times out. The deadline pauses while a local tool runs or waits for approval; a long tool call must
+not be mistaken for a silent model stream. When the runtime abandons a request, the daemon's Arena
+proxy aborts its control-plane request too; otherwise the hosted function keeps streaming, and
+billing, until its own 300-second limit.
 
 `No recent activity` means the run has emitted no event for 90 seconds; it is not proof of a
 stalled process. Explicit retry and user-input waits take precedence. That UI label alone must not
