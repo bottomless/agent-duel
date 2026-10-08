@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { ArenaActiveOperation } from "../../src/arena/operation-tracker"
 import { jsonValue, project } from "../../src/arena/public"
 import type { BattleSnapshot } from "../../src/arena/records"
 
@@ -151,6 +152,23 @@ describe("ArenaPublic", () => {
 
     input.turn!.state = "complete"
     expect(project({ ...input, history: [input.turn!] }).history[0]?.activeOperations).toBeUndefined()
+  })
+
+  test("drops transition operations this build does not know", () => {
+    const input = snapshot(true)
+    input.turn!.state = "applying"
+    const unknown = "renamed_step" as ArenaActiveOperation
+    input.turn!.activeOperations = ["applying_changes", unknown]
+    input.turn!.operationProgress = [
+      { operation: unknown, startedAt: 10, finishedAt: 20, state: "completed" },
+      { operation: "applying_changes", startedAt: 20, state: "running" },
+    ]
+    // `project` validates against the snapshot schema, so an unknown name that got through throws.
+    const projected = project(input)
+    expect(projected.turn?.activeOperations).toEqual(["applying_changes"])
+    expect(projected.turn?.operationProgress).toEqual([
+      { operation: "applying_changes", startedAt: 20, state: "running" },
+    ])
   })
 
   test.each([false, true])("hides billing details in payment errors, revealed=%s", (revealed) => {

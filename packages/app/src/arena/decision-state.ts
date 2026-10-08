@@ -98,14 +98,17 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
     case "worktrees_ready":
       return transitional(preparingLabel(snapshot), true);
     case "running": {
+      // The panes stay hidden while files are still copying, so a result cannot be judged yet.
+      // Stop stays: the engine aborts the copy instead of waiting for it.
+      const settingUp = arenaSetupStatus(turn) !== null;
       return {
         kind: "running",
         a: { side: "a", run: runA },
         b: { side: "b", run: runB },
         waitingFor: waitingFor(runA, runB),
         canStop: canStopArenaBattle(turn.state),
-        canPickA: canChooseArenaRun(turn.state, runA),
-        canPickB: canChooseArenaRun(turn.state, runB),
+        canPickA: !settingUp && canChooseArenaRun(turn.state, runA),
+        canPickB: !settingUp && canChooseArenaRun(turn.state, runB),
       };
     }
     case "finalizing":

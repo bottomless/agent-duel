@@ -209,8 +209,12 @@ const ACTIVE_TURN_STATES = new Set([
 export function project(snapshot: BattleSnapshot) {
   const turn = snapshot.turn
   const revealed = turn?.resolution !== undefined
+  // Progress is stored on the turn, so it can hold a step name from an older or newer build. The
+  // snapshot schema accepts only this build's names, and one unknown name would fail the snapshot.
   const operationProgress = turn?.operationProgress?.filter(
-    (entry) => entry.state !== "running" || ACTIVE_TURN_STATES.has(turn.state),
+    (entry) =>
+      ArenaActiveOperation.includes(entry.operation) &&
+      (entry.state !== "running" || ACTIVE_TURN_STATES.has(turn.state)),
   )
   const selected = turn?.appliedSide ? snapshot.runs.find((run) => run.side === turn.appliedSide) : undefined
   const trunkBranch = snapshot.chat.canonicalCheckout?.branch ?? snapshot.chat.arenaBranch

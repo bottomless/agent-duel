@@ -691,8 +691,9 @@ in the header and its owned services below
 the thread. The workspace header shows the current branch beside Commit. Click the branch, or
 Environment in the header overflow, for checkout, retained environment, and service details.
 Show a timeline of the operations the engine records in the conversation: before the battle during
-setup and after the battle during application. Hide the contestant panes and reply controls until
-setup finishes, including file copying that overlaps model startup. Keep completed
+setup and after the battle during application. Hide the contestant panes, reply controls, and early
+picks until setup finishes, including file copying that overlaps model startup. `Stop` stays from
+the moment the battle runs, since the engine aborts the copy rather than waiting for it. Keep completed
 steps beside active work, with each step's elapsed time. Concurrent steps can both be active; a failed
 or interrupted step never receives a completion check. Reserve the timeline's height while it fills
 so the chat does not move at each update.

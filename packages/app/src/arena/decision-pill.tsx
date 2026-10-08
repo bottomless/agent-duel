@@ -9,7 +9,6 @@ import {
   arenaRunningDecisionOrder,
   type ArenaDecisionPhase,
 } from "./decision-state";
-import { arenaSetupStatus } from "./transition-progress";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
 
@@ -131,10 +130,9 @@ export function ArenaDecisionPill({
 }) {
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const phase = arenaDecisionPhase(snapshot);
-  const setupStatus = arenaSetupStatus(snapshot.turn);
   const stopped = phase.kind === "awaiting_stop_resolution";
   const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
-  const visible = isArenaBattleOnScreen(snapshot) && showChoices && setupStatus === null;
+  const visible = isArenaBattleOnScreen(snapshot) && showChoices;
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
     [onHeightChange],

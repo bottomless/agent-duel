@@ -125,6 +125,18 @@ describe("arenaDecisionPhase", () => {
     expect(phase).toMatchObject({ kind: "running", canPickA: false, canPickB: true });
   });
 
+  it("offers only stop while files are still copying", () => {
+    const phase = arenaDecisionPhase(
+      snapshot({ state: "running", turn: { activeOperations: ["copying_environment"] } }),
+    );
+    expect(phase).toMatchObject({
+      kind: "running",
+      canStop: true,
+      canPickA: false,
+      canPickB: false,
+    });
+  });
+
   it("names the side still working once the other has settled", () => {
     const phase = arenaDecisionPhase(
       snapshot({
