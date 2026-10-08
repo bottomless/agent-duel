@@ -279,6 +279,11 @@ same-worktree fork creates another workspace backed by the current `cwd`. A new-
 atomically creates a branch-off worktree and workspace. Both open the forked chat directly. The
 copied messages remain native transcript history; they are not flattened into the first battle
 prompt.
+A battle needs Git 2.39 or newer, and a send refuses an older or missing Git with the command that
+fixes it (`requireBattleGit` in `arena/git.ts`). Many Macs still run Apple's Git 2.39 from older
+Command Line Tools, so the engine's merges pick their base by parenting wrapper commits on it rather
+than with `merge-tree --merge-base`, which needs 2.40. Raise that floor before using a newer Git
+option.
 A battle needs a `HEAD` to freeze and cut contestant worktrees from, even before any files exist.
 New directory creates the repository with an empty first commit before registering the project. For
 an existing folder with no Git or no commit, a battle send asks first ("Agent Duel needs a commit")

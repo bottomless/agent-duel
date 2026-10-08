@@ -399,6 +399,49 @@ export class PublicEditsAtRiskError extends OperationError {
   }
 }
 
+// The battle's merges run `merge-tree --write-tree` (git 2.38), and contestant setup runs
+// `symbolic-ref --no-recurse` (2.39). Many Macs still run Apple's git 2.39 from older Command Line
+// Tools, so the engine must not use a newer git option (merge-tree's `--merge-base` is 2.40)
+// without raising this floor.
+const MIN_BATTLE_GIT = { major: 2, minor: 39 }
+
+/**
+ * Refuses a battle before it starts when the git on PATH cannot run its merges, with the step that
+ * fixes it, rather than failing in review after both contestants have run.
+ */
+export const requireBattleGit = Effect.fn("ArenaGit.requireBattleGit")(function* (cwd: string) {
+  const git = yield* Git.Service
+  const result = yield* git.run(["version"], { cwd })
+  // The PATH git.run spawns with, not the one Bun.which read at startup.
+  const gitOnPath = result.exitCode === 0 || Bun.which("git", { PATH: process.env.PATH ?? "" }) !== null
+  const problem = battleGitProblem(result, gitOnPath)
+  if (problem) return yield* Effect.fail(new OperationError("check_git_version", problem))
+})
+
+function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | undefined {
+  if (result.exitCode !== 0) {
+    const stderr = result.stderr.toString("utf8")
+    // macOS refuses to run any developer tool, git included, until the Xcode license is accepted.
+    if (stderr.includes("xcodebuild -license")) {
+      return "Git can't run until the Xcode license is accepted. Run sudo xcodebuild -license in Terminal, then retry."
+    }
+    // Without the Command Line Tools, macOS's /usr/bin/git is only a stub that points at them.
+    if (!gitOnPath || stderr.includes("invalid active developer path")) {
+      return "Battles need Git, and Agent Duel couldn't find it. Install Git, for example with xcode-select --install, then retry."
+    }
+    // Git is there but failed: its own error says why better than a guess would.
+    const detail = stderr.trim().split(/\r?\n/)[0] || `exit code ${result.exitCode}`
+    return `Battles need Git, and running it failed: ${detail}`
+  }
+  const version = /git version ((\d+)\.(\d+)(?:\.\d+)*)/.exec(output(result))
+  if (!version) return undefined
+  const [major, minor] = [Number(version[2]), Number(version[3])]
+  if (major !== MIN_BATTLE_GIT.major ? major > MIN_BATTLE_GIT.major : minor >= MIN_BATTLE_GIT.minor) return undefined
+  // The engine keeps the git it found at startup first on PATH (`preferDirectGit`), so a newly
+  // installed git is used only after a restart.
+  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with brew install git, then quit and reopen Agent Duel.`
+}
+
 // Wrapper commits are transport objects, not user-authored history. A fixed
 // timestamp makes the object ID deterministic so a restart can safely repeat
 // finalization after the ref was written but before Mongo was updated.
@@ -2817,7 +2860,6 @@ export const applySnapshot = Effect.fn("ArenaGit.applySnapshot")(function* (inpu
           baseCommit: input.expectedBaseCommit,
           currentTree,
           resultCommit: input.resultCommit,
-          parent: previousHead,
         })
 
   const patch = yield* run(git, root, "read_snapshot_result_patch", patchArgs(currentTree, merged.tree), {
@@ -2854,13 +2896,15 @@ export const applySnapshot = Effect.fn("ArenaGit.applySnapshot")(function* (inpu
 const mergeIntoWorkingTree = Effect.fn("ArenaGit.mergeIntoWorkingTree")(function* (
   git: Git.Interface,
   root: string,
-  input: { readonly baseCommit: string; readonly currentTree: string; readonly resultCommit: string; readonly parent: string },
+  input: { readonly baseCommit: string; readonly currentTree: string; readonly resultCommit: string },
 ) {
+  // The result descends from the base (the caller checked), so parenting the checkout's tree on
+  // the base leaves the base as the merge's only merge base.
   const currentCommit = yield* read(
     git,
     root,
     "create_current_commit",
-    ["commit-tree", input.currentTree, "-p", input.parent, "-m", "Arena canonical snapshot"],
+    ["commit-tree", input.currentTree, "-p", input.baseCommit, "-m", "Arena canonical snapshot"],
     {
       env: {
         GIT_AUTHOR_NAME: "OpenCode Arena",
@@ -2872,10 +2916,10 @@ const mergeIntoWorkingTree = Effect.fn("ArenaGit.mergeIntoWorkingTree")(function
       },
     },
   )
-  const result = yield* git.run(
-    ["merge-tree", "--write-tree", `--merge-base=${input.baseCommit}`, currentCommit, input.resultCommit],
-    { cwd: root, maxOutputBytes: 16 * 1024 * 1024 },
-  )
+  const result = yield* git.run(["merge-tree", "--write-tree", currentCommit, input.resultCommit], {
+    cwd: root,
+    maxOutputBytes: 16 * 1024 * 1024,
+  })
   if (result.exitCode !== 0 && result.exitCode !== 1) {
     const detail = result.stderr.toString("utf8").trim() || "git merge-tree failed"
     return yield* Effect.fail(new OperationError("merge_result_into_canonical", detail))
@@ -3810,16 +3854,32 @@ const arenaCommitterEnv = {
   GIT_COMMITTER_DATE: wrapperDate,
 }
 
-/** Wrap a tree in a parentless commit so merge-tree and friends can name it. */
-const treeCommit = Effect.fn("ArenaGit.treeCommit")(function* (git: Git.Interface, root: string, tree: string) {
-  return yield* read(git, root, "wrap_tree_commit", ["commit-tree", tree, "-m", "Agent Duel merge input"], {
-    env: {
-      GIT_AUTHOR_NAME: "OpenCode Arena",
-      GIT_AUTHOR_EMAIL: "arena@localhost",
-      GIT_AUTHOR_DATE: wrapperDate,
-      ...arenaCommitterEnv,
+/**
+ * Wrap a tree in a commit so merge-tree and friends can name it. Wrapping both sides of a merge
+ * as children of its base makes that base their only merge base, which is how the merge picks
+ * its base without `merge-tree --merge-base` (see MIN_BATTLE_GIT).
+ */
+const treeCommit = Effect.fn("ArenaGit.treeCommit")(function* (
+  git: Git.Interface,
+  root: string,
+  tree: string,
+  parent?: string,
+) {
+  const parentArgs = parent ? ["-p", parent] : []
+  return yield* read(
+    git,
+    root,
+    "wrap_tree_commit",
+    ["commit-tree", tree, ...parentArgs, "-m", "Agent Duel merge input"],
+    {
+      env: {
+        GIT_AUTHOR_NAME: "OpenCode Arena",
+        GIT_AUTHOR_EMAIL: "arena@localhost",
+        GIT_AUTHOR_DATE: wrapperDate,
+        ...arenaCommitterEnv,
+      },
     },
-  })
+  )
 })
 
 /**
@@ -3837,15 +3897,15 @@ const mergeTrees = Effect.fn("ArenaGit.mergeTrees")(function* (
   const [baseTree, oursTree, theirsTree] = [yield* resolve(base), yield* resolve(ours), yield* resolve(theirs)]
   if (oursTree === baseTree) return { tree: theirsTree, conflicts: [] as string[] }
   if (theirsTree === baseTree || theirsTree === oursTree) return { tree: oursTree, conflicts: [] as string[] }
-  const [baseCommit, oursCommit, theirsCommit] = [
-    yield* treeCommit(git, root, baseTree),
-    yield* treeCommit(git, root, oursTree),
-    yield* treeCommit(git, root, theirsTree),
+  const baseCommit = yield* treeCommit(git, root, baseTree)
+  const [oursCommit, theirsCommit] = [
+    yield* treeCommit(git, root, oursTree, baseCommit),
+    yield* treeCommit(git, root, theirsTree, baseCommit),
   ]
-  const merged = yield* git.run(
-    ["merge-tree", "--write-tree", "-z", "--name-only", `--merge-base=${baseCommit}`, oursCommit, theirsCommit],
-    { cwd: root, maxOutputBytes: 16 * 1024 * 1024 },
-  )
+  const merged = yield* git.run(["merge-tree", "--write-tree", "-z", "--name-only", oursCommit, theirsCommit], {
+    cwd: root,
+    maxOutputBytes: 16 * 1024 * 1024,
+  })
   if (merged.exitCode !== 0 && merged.exitCode !== 1) {
     const detail = merged.stderr.toString("utf8").trim() || "git merge-tree failed"
     return yield* Effect.fail(new OperationError("merge_trees", detail))
@@ -3860,7 +3920,13 @@ const mergeTrees = Effect.fn("ArenaGit.mergeTrees")(function* (
       if (!conflicts.includes(field)) conflicts.push(field)
     }
   }
-  // merge-tree labels the markers with the wrapper commits it was given. Name the sides instead.
+  // merge-tree labels the markers with the wrapper commits it was given, and the diff3 base (when
+  // the checkout's merge.conflictStyle asks for one) with an abbreviation of the base wrapper. Name
+  // the sides instead.
+  const isBaseLabel = (line: string) => {
+    const label = line.startsWith("||||||| ") ? line.slice("||||||| ".length) : ""
+    return label.length >= 4 && baseCommit.startsWith(label)
+  }
   let labelled = tree
   for (const path of conflicts) {
     const blob = yield* treeEntry(git, root, tree, path)
@@ -3868,7 +3934,15 @@ const mergeTrees = Effect.fn("ArenaGit.mergeTrees")(function* (
     const content = (yield* run(git, root, "read_conflicted_blob", ["cat-file", "blob", blob], { maxOutputBytes: 100 * 1024 * 1024 })).stdout.toString("utf8")
     const relabelled = content
       .split("\n")
-      .map((line) => (line === `<<<<<<< ${oursCommit}` ? "<<<<<<< ours" : line === `>>>>>>> ${theirsCommit}` ? ">>>>>>> theirs" : line))
+      .map((line) =>
+        line === `<<<<<<< ${oursCommit}`
+          ? "<<<<<<< ours"
+          : line === `>>>>>>> ${theirsCommit}`
+            ? ">>>>>>> theirs"
+            : isBaseLabel(line)
+              ? "||||||| base"
+              : line,
+      )
       .join("\n")
     if (relabelled === content) continue
     const written = yield* read(git, root, "write_relabelled_blob", ["hash-object", "-w", "--stdin"], {
@@ -4701,19 +4775,16 @@ export const compare = Effect.fn("ArenaGit.compare")(
         ),
         // git's own verdict on where the two sides disagree. zdiff3 keeps the conflict blocks
         // as small as diff3 can make them and carries the base in the middle. Exit 1 is a
-        // conflicted merge, not a failure; both leave the tree on the first line.
-        git.run(
-          [
-            "-c",
-            "merge.conflictStyle=zdiff3",
-            "merge-tree",
-            "--write-tree",
-            `--merge-base=${input.baseCommit}`,
-            input.aCommit,
-            input.bCommit,
-          ],
-          { cwd: root, maxOutputBytes: 16 * 1024 * 1024 },
-        ),
+        // conflicted merge, not a failure; both leave the tree on the first line. A and B are
+        // merged as wrappers on the frozen base so that base is the merge base.
+        Effect.gen(function* () {
+          const a = yield* treeCommit(git, root, `${input.aCommit}^{tree}`, input.baseCommit)
+          const b = yield* treeCommit(git, root, `${input.bCommit}^{tree}`, input.baseCommit)
+          return yield* git.run(["-c", "merge.conflictStyle=zdiff3", "merge-tree", "--write-tree", a, b], {
+            cwd: root,
+            maxOutputBytes: 16 * 1024 * 1024,
+          })
+        }),
       ])
 
     if (mergeResult.truncated) {
