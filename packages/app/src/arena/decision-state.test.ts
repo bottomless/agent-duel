@@ -285,22 +285,6 @@ describe("arenaDecisionPhase while the next battle is prepared", () => {
       ),
     ).toMatchObject({ kind: "transitional", label: "Preparing workspaces" });
   });
-  it("reports the operations the engine is performing during setup", () => {
-    expect(
-      arenaDecisionPhase(
-        snapshot({
-          state: "creating",
-          turn: { activeOperations: ["preparing_workspaces", "releasing_environment"] },
-        }),
-      ),
-    ).toMatchObject({
-      kind: "transitional",
-      label: "Preparing workspaces · Releasing the previous environment",
-    });
-    expect(arenaDecisionPhase(snapshot({ state: "worktrees_ready" }))).toMatchObject({
-      label: "Starting agents",
-    });
-  });
 });
 
 describe("decisionBarShowsPhase", () => {

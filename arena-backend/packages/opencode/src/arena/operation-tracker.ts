@@ -30,10 +30,10 @@ export type ArenaOperationProgress =
 /**
  * Folds one update into a turn's recorded progress. A vote applies changes in two parts with a
  * Store write between them, so `applying_changes` completes and starts again; replacing the
- * entry let the 0.05 s second part erase the 30 s first one, and the row finished as "<1s". An
- * operation that restarts after completing carries its earlier time forward by starting that much
- * earlier, so the gap between the parts is not counted. A restart after a failure or interruption
- * is a retry and starts fresh.
+ * entry let the 0.05 s second part erase the 30 s first one, and the row finished as "<1s". Its
+ * second part carries the first part's time forward by starting that much earlier, so the gap
+ * between the parts is not counted. Any other restart is a new attempt, such as the plan running
+ * again after the developer answers a review, and starts fresh.
  */
 export function mergeOperationProgress(
   existing: readonly ArenaOperationProgress[],
@@ -42,7 +42,11 @@ export function mergeOperationProgress(
   const previous = existing.find((entry) => entry.operation === progress.operation)
   if (!previous) return [...existing, progress]
   let startedAt = progress.startedAt
-  if (previous.state === "completed" && progress.startedAt >= previous.finishedAt) {
+  if (
+    progress.operation === "applying_changes" &&
+    previous.state === "completed" &&
+    progress.startedAt >= previous.finishedAt
+  ) {
     startedAt -= previous.finishedAt - previous.startedAt
   } else if (previous.state === "running" && progress.state !== "running") {
     // The run that is ending may have been moved earlier when it started.

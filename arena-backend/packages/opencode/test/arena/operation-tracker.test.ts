@@ -29,6 +29,29 @@ describe("arena operation progress", () => {
     ])
   })
 
+  test("starts a step that runs again in a new attempt fresh", () => {
+    const checked = {
+      operation: "checking_workspace",
+      state: "completed",
+      startedAt: 1_000,
+      finishedAt: 3_000,
+    } as const
+    const replanned = mergeOperationProgress([checked], {
+      operation: "checking_workspace",
+      state: "running",
+      startedAt: 90_000,
+    })
+    expect(replanned).toEqual([{ operation: "checking_workspace", state: "running", startedAt: 90_000 }])
+    expect(
+      mergeOperationProgress(replanned, {
+        operation: "checking_workspace",
+        state: "completed",
+        startedAt: 90_000,
+        finishedAt: 91_000,
+      }),
+    ).toEqual([{ operation: "checking_workspace", state: "completed", startedAt: 90_000, finishedAt: 91_000 }])
+  })
+
   test("starts a retry after a failure fresh", () => {
     const failed = { operation: "applying_changes", state: "failed", startedAt: 1_000, finishedAt: 31_000 } as const
     const retry = mergeOperationProgress([failed], {

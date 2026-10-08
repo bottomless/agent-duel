@@ -9,7 +9,7 @@ describe("battle transition progress", () => {
         activeOperations: ["updating_conversation", "applying_changes", "releasing_loser"],
       }),
     ).toBe(
-      "Applying changes to your workspace · Updating the conversation · Releasing the other agent's environment",
+      "Applying changes to your workspace · Updating the conversation · Releasing the other environment",
     );
     expect(
       arenaResolutionStatus({
@@ -22,7 +22,7 @@ describe("battle transition progress", () => {
         state: "cleanup_pending",
         activeOperations: ["releasing_loser"],
       }),
-    ).toBe("Releasing the other agent's environment");
+    ).toBe("Releasing the other environment");
   });
 
   it("does not claim a process is stopping when application has no reported operation", () => {
@@ -39,7 +39,7 @@ describe("battle transition progress", () => {
 
   it("keeps environment copying visible when model requests have already started", () => {
     expect(arenaSetupStatus({ state: "running", activeOperations: ["copying_environment"] })).toBe(
-      "Copying project files and dependencies",
+      "Copying files and dependencies",
     );
     expect(arenaSetupStatus({ state: "running", activeOperations: [] })).toBeNull();
   });

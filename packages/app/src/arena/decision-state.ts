@@ -62,15 +62,14 @@ export function arenaRunningDecisionOrder({
   return canPickB ? ["stop", "b"] : ["stop"];
 }
 
-/** The line the slot holds while a battle's workspaces are being prepared. */
-export const ARENA_PREPARING_WORKSPACES = "Preparing workspaces";
+/**
+ * Setup reports its steps in the conversation and the bar stays hidden until it is done
+ * (`decision-bar.tsx`), so this phase never reaches the screen and needs no step names.
+ */
+const PREPARING_WORKSPACES = "Preparing workspaces";
 
 function transitional(label: string, busy: boolean): ArenaDecisionPhase {
   return { kind: "transitional", label, busy };
-}
-
-function preparingLabel(snapshot: ArenaSnapshot): string {
-  return arenaSetupStatus(snapshot.turn) ?? ARENA_PREPARING_WORKSPACES;
 }
 
 function settled(run: ArenaRun | undefined): boolean {
@@ -92,11 +91,11 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
   if (turn?.canRetryResolution) {
     return { kind: "retry_resolution", detail: resolutionRetryDetail(turn.gitApplication) };
   }
-  if (!turn) return transitional(preparingLabel(snapshot), true);
+  if (!turn) return transitional(PREPARING_WORKSPACES, true);
   switch (turn.state) {
     case "creating":
     case "worktrees_ready":
-      return transitional(preparingLabel(snapshot), true);
+      return transitional(PREPARING_WORKSPACES, true);
     case "running": {
       // The panes stay hidden while files are still copying, so a result cannot be judged yet.
       // Stop stays: the engine aborts the copy instead of waiting for it.

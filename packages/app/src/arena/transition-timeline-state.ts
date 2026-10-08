@@ -1,11 +1,15 @@
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
-import { arenaResolutionStatus, arenaSetupStatus } from "./transition-progress";
+import {
+  ARENA_OPERATION_LABELS,
+  ARENA_SETUP_OPERATIONS,
+  arenaResolutionStatus,
+  arenaSetupStatus,
+} from "./transition-progress";
 
 export type TransitionPhase = "setup" | "resolution";
 type Turn = NonNullable<ArenaSnapshot["turn"]>;
 export type TimelineTurn = Pick<Turn, "state" | "activeOperations" | "operationProgress">;
 type Progress = NonNullable<Turn["operationProgress"]>[number];
-type Operation = Progress["operation"];
 
 export interface TransitionTimelineRow {
   id: string;
@@ -14,41 +18,6 @@ export interface TransitionTimelineRow {
   startedAt: number | null;
   finishedAt: number | null;
 }
-
-const SETUP_OPERATIONS = new Set<Operation>([
-  "preparing_workspaces",
-  "copying_environment",
-  "releasing_environment",
-]);
-
-const LABELS: Record<Operation, { running: string; completed: string }> = {
-  preparing_workspaces: { running: "Preparing workspaces", completed: "Workspaces prepared" },
-  copying_environment: {
-    running: "Copying files and dependencies",
-    completed: "Files and dependencies copied",
-  },
-  releasing_environment: {
-    running: "Releasing the previous environment",
-    completed: "Previous environment released",
-  },
-  preserving_results: { running: "Saving battle results", completed: "Battle results saved" },
-  checking_workspace: {
-    running: "Checking workspace changes",
-    completed: "Workspace changes checked",
-  },
-  applying_changes: {
-    running: "Applying changes to your workspace",
-    completed: "Changes applied to your workspace",
-  },
-  updating_conversation: {
-    running: "Updating the conversation",
-    completed: "Conversation updated",
-  },
-  releasing_loser: {
-    running: "Releasing the other environment",
-    completed: "Other environment released",
-  },
-};
 
 export function transitionTimelineRows({
   phase,
@@ -59,14 +28,14 @@ export function transitionTimelineRows({
 }): TransitionTimelineRow[] {
   const setup = phase === "setup";
   const progress = (turn?.operationProgress ?? []).filter(
-    (entry) => SETUP_OPERATIONS.has(entry.operation) === setup,
+    (entry) => ARENA_SETUP_OPERATIONS.has(entry.operation) === setup,
   );
   const rows: TransitionTimelineRow[] = progress.map((entry) => ({
     id: entry.operation,
     label:
       entry.state === "completed"
-        ? LABELS[entry.operation].completed
-        : LABELS[entry.operation].running,
+        ? ARENA_OPERATION_LABELS[entry.operation].completed
+        : ARENA_OPERATION_LABELS[entry.operation].running,
     state: entry.state,
     startedAt: entry.startedAt,
     finishedAt: entry.state === "running" ? null : entry.finishedAt,
