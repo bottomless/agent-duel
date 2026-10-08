@@ -25,7 +25,9 @@ export function arenaThreadMessages(run: ArenaRun): unknown[] {
     );
   } else {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messageField(messages[index], "role") === "user") {
+      const sessionID = messageField(messages[index], "sessionID");
+      const isRoot = !sessionID || sessionID === run.sessionID;
+      if (isRoot && messageField(messages[index], "role") === "user") {
         promptIndex = index;
         break;
       }
@@ -39,7 +41,10 @@ export function arenaThreadMessages(run: ArenaRun): unknown[] {
   });
 }
 
-export function arenaReasoningPartIsActive(run: ArenaRun, part: unknown): boolean {
+export function arenaReasoningPartIsActive(
+  run: Pick<ArenaRun, "runState">,
+  part: unknown,
+): boolean {
   if (run.runState !== "pending") return false;
   if (typeof part !== "object" || part === null || Array.isArray(part)) return false;
   const record = part as Record<string, unknown>;

@@ -6,11 +6,18 @@ import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { ArenaContestant } from "@/arena/contestant"
 
 export const Event = PermissionV1.Event
 
+/**
+ * `writes` names the patterns of an `external_directory` request that the tool writes to. They are
+ * also checked against the read-only rules under `ArenaContestant.EXTERNAL_WRITE`.
+ */
+export type AskInput = PermissionV1.AskInput & { readonly writes?: readonly string[] }
+
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  readonly ask: (input: AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
   readonly setAutoAccept: (enabled: boolean) => Effect.Effect<void>
@@ -67,18 +74,30 @@ const layer = Layer.effect(
       }),
     )
 
-    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
+    const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
       const { approved, pending, autoAccept } = yield* InstanceState.get(state)
-      const { ruleset, ...request } = input
+      const { ruleset, writes, ...request } = input
+      // Only exact keys count: a `*` rule must not make an external write ask twice.
+      const readOnly = ruleset.filter((rule) => rule.permission === ArenaContestant.EXTERNAL_WRITE)
       let needsAsk = false
+
+      const denied = (pattern: string, write: boolean) =>
+        new PermissionV1.DeniedError({
+          ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+          reason: ArenaContestant.denial({ ruleset, permission: request.permission, pattern, write }),
+        })
 
       for (const pattern of request.patterns) {
         const rule = evaluate(request.permission, pattern, ruleset, approved)
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
-        if (rule.action === "deny") {
-          return yield* new PermissionV1.DeniedError({
-            ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
-          })
+        if (rule.action === "deny") return yield* denied(pattern, false)
+        if (
+          request.permission === "external_directory" &&
+          readOnly.length > 0 &&
+          writes?.includes(pattern) &&
+          evaluate(ArenaContestant.EXTERNAL_WRITE, pattern, readOnly).action === "deny"
+        ) {
+          return yield* denied(pattern, true)
         }
         if (rule.action === "allow") continue
         needsAsk = true

@@ -69,6 +69,8 @@ a filesystem repair once a second and publishes recovery without rereading trans
 
 Begin with a redacted snapshot, reconciled with events received during the read
 and unfinished token text held in memory. Then apply messages and parts by ID.
+Include each contestant's descendant sessions in both the live feed and transcript snapshots;
+delegated work must remain visible while the parent waits, including after reconnecting or archiving.
 Append text only at its expected UTF-16 offset, batching for at most 100 ms. Keep this
 live overlay separate from durable event compression: token transport must not
 turn into one SQLite write per token. Control state does not reread transcripts;
@@ -237,8 +239,17 @@ Product decisions that are settled, so they do not get relitigated per feature:
 - Both results are kept until the vote; nothing is auto-selected.
 - A vote is final. There is no rematch on the same prompt.
 - The loser's work survives only as a git ref, not as anything the UI offers to recover.
-- Contestant text stays prominent. Tool calls and reasoning fold into an expandable activity
-  summary beneath the text update they belong to; complete details remain available inside it.
+- Contestant text stays prominent. The newest activity block shows its latest tool or reasoning,
+  even after it finishes. An older unfinished task must not replace newer activity. Animate only
+  the displayed activity while it is running. Show thinking when the next model request has started
+  without content. Once newer conversation content puts a block into history, show its aggregate
+  work summary without animation. Complete details remain available by expanding either row.
+  Give each subagent a static, named, expandable heading with its latest activity on an indented
+  line beneath it. Animate only the activity text. When the subagent ends, replace that activity
+  with its final status on the same indented line. Keep its transcript inside that group so
+  concurrent agents cannot replace each other's current tool.
+  Use the activity row for thinking and the pane heading for elapsed time, without a second
+  thinking control or timer below the transcript.
 - Questions stay in the conversation after submission, with each answer beneath its prompt.
   Keep the exchange outside folded activity and between the work before and after it, including
   in archived battles and the applied winner's conversation. Interrupted questions remain visible
@@ -313,6 +324,15 @@ host. Taken for a slot, it stayed as the pool's spare and every later contestant
 anything else in the pool goes to the trash, when a pair is prepared after a vote and again before
 a turn's contestants start (`sweepSlotPool`), since a retained winner answering a follow-up can
 leave one after the pair was prepared.
+
+On macOS, Arena and the daemon set the `com.apple.fileprovider.ignore#P` extended attribute on
+`.agent-duel` whenever they create or reuse it, so iCloud Drive and other File Provider sync clients
+skip the pool. Synced, the pool's renamed slots and re-cloned ignored files came back as numbered
+conflict copies (`.env 2`, `generation-2-a 2.git`), and the provider removed objects from a host
+under a running contestant. Nothing ignores a copy like `.env 2`, so snapshots also leave out an
+untracked numbered copy whose original beside it is git-ignored and has the same bytes
+(`excludeSyncConflictCopies` in `arena/git.ts`); otherwise `add -A` would carry the secret into a
+result and on into the checkout.
 
 A slot serves one generation at a time, at that generation's path, `generation-<n>-<side>`. `n`
 counts from 1 so the directory reads as the turn number the UI shows; turn indices stay 0-based in
@@ -543,10 +563,10 @@ reply takes the same attachments as a chat message, and both contestants get ide
 - Pasted images travel as bytes and context attachments (PR comments, reviews) as text. An uploaded
   file of any type travels as Paseo sends it to a single agent: a note with its path under
   `$PASEO_HOME/uploads/<id>/`, for the contestant to open with its own tools. The daemon resolves
-  that path from the upload id, never from the client's path. Contestants may not read outside
-  their worktree, so before each prompt and reply the engine adds an `external_directory` allow for
-  each upload's directory to the contestant session (`allowReading`). An upload sits alone in its
-  directory, so that admits the one file, and both sides get the same path.
+  that path from the upload id, never from the client's path. An upload is outside the contestant's
+  sandbox (see **Setup**), so before each prompt and reply the engine adds an `external_directory`
+  allow for each upload's directory to the contestant session (`allowReading`). An upload sits alone
+  in its directory, so that admits the one file, and both sides get the same path.
 - Contestants take PDFs. OpenRouter passes one natively to a model that reads PDFs and parses it
   with mistral-ocr for one that does not, so the two sides can read different renderings of the
   same file.
@@ -575,10 +595,9 @@ run, so a contestant gets the frozen tree and the copied untracked and ignored f
 Auto Accept follows the chat's OpenCode feature. The daemon sends its value when admitting a battle;
 the engine applies it in each contestant worktree and updates both sides when the toggle changes.
 It approves tool prompts that would otherwise ask, including pending ones. Explicit denies still
-apply, including the contestant's external-directory rule.
+apply, including the contestant's sandbox.
 The session is forked from canonical, set to provider `arena` with `contestant` as its neutral model
-id, given inherited permissions plus a hard `external_directory: deny`
-(`arena/contestant.ts`), and moved into the side worktree. Retarget declared file-tool paths,
+id, given its sandbox, and moved into the side worktree. Retarget declared file-tool paths,
 attachment paths, assistant locations, literal POSIX Bash arguments, and complete old-worktree path
 references in assistant text. Later turns can reuse a path the assistant printed. Keep user prompts,
 file contents, unknown tool inputs, and arbitrary output unchanged; a shared path prefix alone is not
@@ -586,6 +605,27 @@ enough to rewrite a string. Bash output has two explicit adapters:
 the result of a plain `pwd`, and a complete single-line `cd <literal> [&& pwd]` command example. The latter
 keeps an executable example from referring to a worktree removed after an earlier vote.
 Shell expansions and paths crossing `..` remain unchanged; resolving them requires runtime state.
+
+The sandbox (`arena/contestant.ts`) is the inherited permissions, then a hard
+`external_directory: deny`, then allows for what both sides need outside the worktree. Rules match
+last first, so the deny overrides the allows every agent gets for `$TMPDIR/opencode`, the truncation
+directory and skill directories, and only the rules after it reopen paths. Never turn the deny into
+`ask`: a prompt the user answers for one side and not the other makes the sides unequal.
+
+- Skill directories, read-only. The list comes from the canonical checkout's instance, so both sides
+  get the same one; project skills are left out because the worktree holds its own copy. An
+  `external_directory_write` deny on each keeps file tools and the shell's file commands from
+  writing there (`writes` on the permission request). Shell redirection and other programs are not
+  checked, as for any path.
+- A temp directory per side, `$TMPDIR/opencode/arena/<session id>`, readable and writable. The
+  shell exports it as `TMPDIR` and the shell tool's description names it, and truncated tool output
+  is saved under it, so the hint to read that file works. The two sides never share it, and it is
+  removed when the run's worktree is released (`releaseRunSlot`). Subagents inherit the rules and
+  so share their side's directory.
+
+A contestant denied a path outside the sandbox gets one sentence that names the sandbox, not the
+generic list of matching rules, which holds dozens of home-directory paths that contestants copy
+into their answers and that reach research uploads.
 
 The two sides are prepared **at once**, since each has its own host repository and session, and
 the host repository is a copy-on-write clone of the checkout's git directory where the
@@ -612,7 +652,7 @@ and the comparison starts in the background
 ## Blinding
 
 A contestant's identity is hidden until the vote lands, and it leaks from more places than the model
-field. Four layers, each with its own file:
+field. Each layer has its own file:
 
 - **Assignment** (`arena-service/src/assignments.ts`) — in hosted mode the model pool and
   assignment mapping exist only on the server. The desktop cannot derive the private profile from
@@ -644,6 +684,11 @@ field. Four layers, each with its own file:
   provider and model metadata, cost and token usage, flattens errors, and rehashes tool-call IDs to
   `call_arena_<hash>`. Each upstream mints those IDs in a recognizable shape, and xAI's counter
   additionally counts calls the voter never saw (`arena/privacy.ts:72`).
+- **System prompt** (`session/system.ts`) — every `arena` session, contestant or single-agent, gets
+  a fixed instruction where other providers get the model line: its identity is hidden until the
+  vote or a reveal, and it must not guess, name, or look up a model or company. Without it, models answer as
+  "opencode" or claim a model they are not, and a strong model can name itself in text the judge
+  reads. The text is static because anything assignment-derived would differ between the sides.
 - **The judge** (`arena/comparison-timeline.ts`) — sees narrative text and tool name/status only.
   Reasoning is excluded deliberately: it dwarfs the visible text and sends the comparison model
   after differences that exist only in private deliberation.

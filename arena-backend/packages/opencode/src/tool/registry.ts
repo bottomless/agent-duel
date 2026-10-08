@@ -5,6 +5,8 @@ import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
+import { ShellPrompt } from "./shell/prompt"
+import { ArenaContestant } from "@/arena/contestant"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
@@ -151,7 +153,7 @@ const layer = Layer.effect(
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const attachments = typeof result === "string" ? undefined : result.attachments
                 const info = yield* agent.get(toolCtx.agent)
-                const out = yield* truncate.output(output, {}, info)
+                const out = yield* truncate.output(output, Truncate.within(toolCtx.tmpDirectory), info)
                 return {
                   title: typeof result === "string" ? "" : (result.title ?? ""),
                   output: out.truncated ? out.content : output,
@@ -301,6 +303,7 @@ const layer = Layer.effect(
         ? yield* describeCodeMode(input)
         : undefined
       const visible = filtered.filter((tool) => tool.id !== "execute" || codeModeDescription)
+      const contestantTmp = ArenaContestant.sandboxTmp(Permission.merge(input.agent.permission, input.permission ?? []))
 
       return yield* Effect.forEach(
         visible,
@@ -318,7 +321,9 @@ const layer = Layer.effect(
           return {
             id: tool.id,
             description: [
-              output.description,
+              tool.id === ShellTool.id && contestantTmp
+                ? ShellPrompt.withTmp(output.description, contestantTmp)
+                : output.description,
               tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined,
               tool.id === "execute" ? codeModeDescription : undefined,
             ]

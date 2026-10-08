@@ -1,11 +1,362 @@
 import { describe, expect, it } from "vitest";
 import {
   arenaPartIsWork,
+  arenaRunIsAwaitingResponse,
+  arenaRunIsResponding,
+  presentArenaWork,
   arenaWorkSummaryLabel,
   projectArenaActivitySegments,
   summarizeArenaWork,
   type ArenaWorkSummary,
 } from "./work-summary";
+
+describe("presentArenaWork", () => {
+  it.each(["running", "completed"])(
+    "shows the latest %s shell even while an older task is unfinished",
+    (status) => {
+      const task = {
+        type: "tool",
+        tool: "task",
+        state: { status: "running", input: { description: "Explore vote storage" } },
+      };
+      const shell = {
+        type: "tool",
+        tool: "bash",
+        state: { status, input: { command: "ls docs" } },
+      };
+
+      expect(
+        presentArenaWork({
+          parts: [task, shell],
+          runState: "pending",
+          isLatest: true,
+          awaitingResponse: false,
+        }),
+      ).toMatchObject({
+        kind: "tool",
+        label: "Shell",
+        secondaryLabel: "ls docs",
+        active: status === "running",
+      });
+    },
+  );
+
+  it("does not promote earlier unfinished reasoning over the latest tool", () => {
+    expect(
+      presentArenaWork({
+        parts: [
+          { type: "reasoning", text: "Inspecting the result", time: { start: 1 } },
+          toolPart("read", { filePath: "app.ts" }),
+        ],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+      }),
+    ).toMatchObject({ kind: "tool", label: "Read", secondaryLabel: "app.ts", active: false });
+  });
+
+  it("shows thinking during the next empty assistant message instead of a finished tool", () => {
+    const run = {
+      runState: "pending" as const,
+      messages: [
+        { id: "previous", role: "assistant", time: { completed: 2 } },
+        { id: "next", role: "assistant", time: { created: 3 } },
+      ],
+      parts: { next: [{ type: "step-start" }] },
+    };
+    const awaitingResponse = arenaRunIsAwaitingResponse(run);
+    expect(awaitingResponse).toBe(true);
+    expect(
+      presentArenaWork({
+        parts: [toolPart("read", { filePath: "app.ts" })],
+        runState: run.runState,
+        isLatest: true,
+        awaitingResponse,
+      }),
+    ).toEqual({ kind: "reasoning", label: "Thinking…", active: true });
+    expect(
+      presentArenaWork({ parts: [], runState: run.runState, isLatest: true, awaitingResponse }),
+    ).toEqual({ kind: "reasoning", label: "Thinking…", active: true });
+    expect(
+      presentArenaWork({
+        parts: [{ type: "tool", tool: "task", state: { status: "running" } }],
+        runState: run.runState,
+        isLatest: true,
+        awaitingResponse,
+      }),
+    ).toEqual({ kind: "reasoning", label: "Thinking…", active: true });
+  });
+
+  it("keeps historical summaries still even when an old part has no completion timestamp", () => {
+    expect(
+      presentArenaWork({
+        parts: [{ type: "reasoning", text: "Old reasoning" }],
+        runState: "pending",
+        isLatest: false,
+        awaitingResponse: true,
+      }),
+    ).toEqual({ kind: "summary", label: "Reasoned", active: false });
+  });
+
+  it("shows the latest tool until newer content moves its block into history", () => {
+    const input = { command: "npm run typecheck" };
+    const running = { type: "tool", tool: "bash", state: { status: "running", input } };
+    const completed = {
+      ...running,
+      state: { status: "completed", input, output: "Passed" },
+    };
+    const before = toolPart("read", { filePath: "README.md" });
+
+    expect(
+      presentArenaWork({
+        parts: [before, running],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+      }),
+    ).toMatchObject({
+      kind: "tool",
+      label: "Shell",
+      secondaryLabel: "npm run typecheck",
+      active: true,
+      failed: false,
+    });
+    expect(
+      presentArenaWork({
+        parts: [before, completed],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+      }),
+    ).toMatchObject({
+      kind: "tool",
+      label: "Shell",
+      secondaryLabel: "npm run typecheck",
+      active: false,
+      failed: false,
+    });
+    expect(
+      presentArenaWork({
+        parts: [before, completed],
+        runState: "pending",
+        isLatest: false,
+        awaitingResponse: false,
+      }),
+    ).toEqual({
+      kind: "summary",
+      label: "Read 1 file · Ran 1 command",
+      active: false,
+    });
+  });
+
+  it("updates the current row to the next tool without aggregating the newest block", () => {
+    expect(
+      presentArenaWork({
+        parts: [
+          toolPart("bash", { command: "git status" }),
+          toolPart("read", { filePath: "src/app.ts" }),
+        ],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+      }),
+    ).toMatchObject({
+      kind: "tool",
+      label: "Read",
+      secondaryLabel: "src/app.ts",
+      active: false,
+    });
+  });
+
+  it("shows current reasoning until a newer block arrives", () => {
+    const thinking = { type: "reasoning", text: "Checking", time: { start: 1 } };
+    const finished = { ...thinking, time: { start: 1, end: 2 } };
+    expect(
+      presentArenaWork({
+        parts: [thinking],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+      }),
+    ).toEqual({
+      kind: "reasoning",
+      label: "Reasoning…",
+      active: true,
+    });
+    expect(
+      presentArenaWork({
+        parts: [finished],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+      }),
+    ).toEqual({
+      kind: "reasoning",
+      label: "Reasoned",
+      active: false,
+    });
+    expect(
+      presentArenaWork({
+        parts: [finished],
+        runState: "pending",
+        isLatest: false,
+        awaitingResponse: false,
+      }),
+    ).toEqual({
+      kind: "summary",
+      label: "Reasoned",
+      active: false,
+    });
+  });
+
+  it.each(["complete", "stopped", "error", "interrupted"] as const)(
+    "keeps the newest tool visible without ongoing progress when the run is %s",
+    (runState) => {
+      expect(
+        presentArenaWork({
+          parts: [
+            {
+              type: "tool",
+              tool: "bash",
+              state: { status: "running", input: { command: "npm run lint" } },
+            },
+          ],
+          runState: runState,
+          isLatest: true,
+          awaitingResponse: false,
+        }),
+      ).toMatchObject({
+        kind: "tool",
+        label: "Shell",
+        secondaryLabel: "npm run lint",
+        active: false,
+        failed: false,
+      });
+    },
+  );
+
+  it("animates Responding while a reply streams after finished reasoning", () => {
+    const reasoning = { type: "reasoning", text: "Ready to report", time: { start: 1, end: 2 } };
+    expect(
+      presentArenaWork({
+        parts: [reasoning],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+        responding: true,
+      }),
+    ).toEqual({ kind: "reasoning", label: "Responding…", active: true });
+    expect(
+      presentArenaWork({
+        parts: [reasoning],
+        runState: "stopped",
+        isLatest: true,
+        awaitingResponse: false,
+        responding: true,
+      }),
+    ).toEqual({ kind: "reasoning", label: "Reasoned", active: false });
+  });
+
+  it("shows paths inside the contestant worktree relative to it", () => {
+    const worktree = "/repo/.agent-duel/worktrees/turn/generation-1-a";
+    expect(
+      presentArenaWork({
+        parts: [toolPart("write", { filePath: `${worktree}/test/dates.test.js` })],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+        cwd: worktree,
+      }),
+    ).toMatchObject({ kind: "tool", secondaryLabel: "test/dates.test.js" });
+  });
+});
+
+describe("arenaRunIsResponding", () => {
+  const message = { id: "latest", role: "assistant", time: { created: 1 } };
+  const reasoning = { type: "reasoning", text: "Ready", time: { start: 1, end: 2 } };
+
+  it("holds while the newest part is unfinished reply text", () => {
+    expect(
+      arenaRunIsResponding({
+        runState: "pending",
+        messages: [message],
+        parts: { latest: [reasoning, { type: "text", text: "Found", time: { start: 2 } }] },
+      }),
+    ).toBe(true);
+  });
+
+  it("stops once the text ends, a tool follows, the message finishes or the run ends", () => {
+    const streaming = { type: "text", text: "Found", time: { start: 2 } };
+    const cases = [
+      {
+        runState: "pending" as const,
+        messages: [message],
+        parts: { latest: [{ ...streaming, time: { start: 2, end: 3 } }] },
+      },
+      {
+        runState: "pending" as const,
+        messages: [message],
+        parts: { latest: [streaming, toolPart("read", { filePath: "app.ts" })] },
+      },
+      {
+        runState: "pending" as const,
+        messages: [{ ...message, time: { created: 1, completed: 4 } }],
+        parts: { latest: [streaming] },
+      },
+      { runState: "stopped" as const, messages: [message], parts: { latest: [streaming] } },
+      { runState: "pending" as const, messages: [message], parts: { latest: [reasoning] } },
+    ];
+    for (const run of cases) expect(arenaRunIsResponding(run)).toBe(false);
+  });
+});
+
+describe("arenaRunIsAwaitingResponse", () => {
+  it("stops waiting when content arrives or the latest message finishes", () => {
+    const message = { id: "latest", role: "assistant", time: { created: 1 } };
+    expect(
+      arenaRunIsAwaitingResponse({
+        runState: "pending",
+        messages: [message],
+        parts: { latest: [{ type: "text", text: "An update" }] },
+      }),
+    ).toBe(false);
+    expect(
+      arenaRunIsAwaitingResponse({
+        runState: "pending",
+        messages: [message],
+        parts: { latest: [{ type: "reasoning", text: "Thinking" }] },
+      }),
+    ).toBe(false);
+    expect(
+      arenaRunIsAwaitingResponse({
+        runState: "pending",
+        messages: [message],
+        parts: { latest: [{ type: "tool", tool: "read", state: { status: "pending" } }] },
+      }),
+    ).toBe(false);
+    expect(
+      arenaRunIsAwaitingResponse({
+        runState: "pending",
+        messages: [{ ...message, time: { created: 1, completed: 2 } }],
+        parts: { latest: [] },
+      }),
+    ).toBe(false);
+    expect(
+      arenaRunIsAwaitingResponse({
+        runState: "complete",
+        messages: [message],
+        parts: { latest: [] },
+      }),
+    ).toBe(false);
+    expect(
+      arenaRunIsAwaitingResponse({
+        runState: "pending",
+        messages: [{ id: "user", role: "user" }],
+        parts: {},
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("projectArenaActivitySegments", () => {
   it("keeps a question between the work before and after it", () => {

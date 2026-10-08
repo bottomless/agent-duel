@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "path"
 import { promisify } from "util"
 import { cloneFile, cloneTree, type CloneMethod, type CloneOptions, type CopyMethod } from "@/util/copy-tree"
 import { discardTree, TRASH_DIRNAME } from "@/util/discard-tree"
+import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { isolatedRoot, LOCAL_STATE_DIRNAME, localStatePath } from "@/worktree/layout"
 import {
   decideIgnoredCopy,
@@ -331,6 +332,11 @@ async function probeClone(canonical: string, clone: Clone) {
   const stem = join(directory, `clone-probe-${process.pid}-${randomUUID()}`)
   try {
     await mkdir(directory, { recursive: true })
+    // The staging and trash this snapshot fills sit under the same directory.
+    const unsynced = await ignoreForFileProviderSync(directory)
+    if (unsynced.state === "failed") {
+      console.warn("[arena] could not exclude local state from cloud sync", directory, unsynced.reason)
+    }
     await writeFile(stem, "")
     return (await clone(stem, `${stem}.clone`)) !== undefined
   } catch {

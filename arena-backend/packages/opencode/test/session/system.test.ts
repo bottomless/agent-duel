@@ -90,6 +90,35 @@ describe("session.system", () => {
     )
   })
 
+  it.instance("arena sessions get the static identity section instead of the model line", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const output = (yield* prompt.environment({
+        providerID: "arena",
+        api: { id: "contestant" },
+      } as Provider.Model))[0]
+
+      expect(output.startsWith(SystemPrompt.ARENA_IDENTITY + "\n")).toBe(true)
+      expect(output).not.toContain("You are powered by")
+    }),
+  )
+
+  it.instance("non-arena sessions keep the model line and omit the identity section", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const output = (yield* prompt.environment({
+        providerID: "openrouter",
+        api: { id: "some/model" },
+      } as Provider.Model))[0]
+
+      expect(output).toContain(
+        "You are powered by the model named some/model. The exact model ID is openrouter/some/model",
+      )
+      expect(output).not.toContain(SystemPrompt.ARENA_IDENTITY)
+      expect(output).not.toContain("identity is hidden")
+    }),
+  )
+
   it.effect("skills output is sorted by name and stable across calls", () =>
     Effect.gen(function* () {
       const prompt = yield* SystemPrompt.Service

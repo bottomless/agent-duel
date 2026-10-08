@@ -20,7 +20,6 @@ import { ARENA_MAX_CONTENT_WIDTH, MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { MessageOuterSpacingProvider, UserMessage } from "@/components/message";
-import { RunningTurnFooter } from "@/agent-stream/turn-footer";
 import { useSessionStore } from "@/stores/session-store";
 import { useFetchQuery } from "@/data/query";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
@@ -330,11 +329,7 @@ function BattlePane({
                 onQuestionResponse={handleQuestionResponse}
                 onPermissionResponse={handlePermissionResponse}
               />
-            ) : (
-              <View style={styles.preparingThread}>
-                <RunningTurnFooter inFlightTurnStartedAt={null} />
-              </View>
-            )}
+            ) : null}
           </ScrollView>
           {awayFromLatest ? (
             <View style={styles.latestOverlay} pointerEvents="box-none">
@@ -971,8 +966,5 @@ const styles = StyleSheet.create((theme) => ({
   threadContent: {
     flexGrow: 1,
     minHeight: 120,
-  },
-  preparingThread: {
-    padding: theme.spacing[3],
   },
 }));

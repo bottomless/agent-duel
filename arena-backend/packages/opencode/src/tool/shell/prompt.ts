@@ -278,4 +278,12 @@ export function render(name: string, platform: NodeJS.Platform, limits: Limits, 
   }
 }
 
+/**
+ * The description naming `tmp` instead of the shared temp directory. An Arena contestant may not
+ * use the shared one; its own is what the shell exports as `TMPDIR`.
+ */
+export function withTmp(description: string, tmp: string) {
+  return description.replaceAll(`\`${Global.Path.tmp}\``, `\`${tmp}\``)
+}
+
 export * as ShellPrompt from "./prompt"
