@@ -74,4 +74,23 @@ describe("arenaSubagentRunState", () => {
     expect(arenaSubagentRunState("pending", { state: { status: "running" } })).toBe("pending");
     expect(arenaSubagentRunState("stopped", { state: { status: "running" } })).toBe("stopped");
   });
+
+  it("reports a delegation cut short by Stop as stopped rather than failed", () => {
+    const aborted = {
+      state: {
+        status: "error",
+        error: "Tool execution aborted",
+        metadata: { sessionId: "child", interrupted: true },
+      },
+    };
+    expect(arenaSubagentRunState("stopped", aborted)).toBe("stopped");
+    expect(arenaSubagentRunState("pending", aborted)).toBe("interrupted");
+    expect(arenaSubagentRunState("interrupted", aborted)).toBe("interrupted");
+  });
+
+  it("keeps a delegation that failed on its own as failed", () => {
+    const failed = { state: { status: "error", error: "Model unavailable", metadata: {} } };
+    expect(arenaSubagentRunState("stopped", failed)).toBe("error");
+    expect(arenaSubagentRunState("pending", failed)).toBe("error");
+  });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   arenaPartIsWork,
   arenaRunIsAwaitingResponse,
+  arenaRunIsResponding,
   presentArenaWork,
   arenaWorkSummaryLabel,
   projectArenaActivitySegments,
@@ -233,6 +234,80 @@ describe("presentArenaWork", () => {
       });
     },
   );
+
+  it("animates Responding while a reply streams after finished reasoning", () => {
+    const reasoning = { type: "reasoning", text: "Ready to report", time: { start: 1, end: 2 } };
+    expect(
+      presentArenaWork({
+        parts: [reasoning],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+        responding: true,
+      }),
+    ).toEqual({ kind: "reasoning", label: "Responding…", active: true });
+    expect(
+      presentArenaWork({
+        parts: [reasoning],
+        runState: "stopped",
+        isLatest: true,
+        awaitingResponse: false,
+        responding: true,
+      }),
+    ).toEqual({ kind: "reasoning", label: "Reasoned", active: false });
+  });
+
+  it("shows paths inside the contestant worktree relative to it", () => {
+    const worktree = "/repo/.agent-duel/worktrees/turn/generation-1-a";
+    expect(
+      presentArenaWork({
+        parts: [toolPart("write", { filePath: `${worktree}/test/dates.test.js` })],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+        cwd: worktree,
+      }),
+    ).toMatchObject({ kind: "tool", secondaryLabel: "test/dates.test.js" });
+  });
+});
+
+describe("arenaRunIsResponding", () => {
+  const message = { id: "latest", role: "assistant", time: { created: 1 } };
+  const reasoning = { type: "reasoning", text: "Ready", time: { start: 1, end: 2 } };
+
+  it("holds while the newest part is unfinished reply text", () => {
+    expect(
+      arenaRunIsResponding({
+        runState: "pending",
+        messages: [message],
+        parts: { latest: [reasoning, { type: "text", text: "Found", time: { start: 2 } }] },
+      }),
+    ).toBe(true);
+  });
+
+  it("stops once the text ends, a tool follows, the message finishes or the run ends", () => {
+    const streaming = { type: "text", text: "Found", time: { start: 2 } };
+    const cases = [
+      {
+        runState: "pending" as const,
+        messages: [message],
+        parts: { latest: [{ ...streaming, time: { start: 2, end: 3 } }] },
+      },
+      {
+        runState: "pending" as const,
+        messages: [message],
+        parts: { latest: [streaming, toolPart("read", { filePath: "app.ts" })] },
+      },
+      {
+        runState: "pending" as const,
+        messages: [{ ...message, time: { created: 1, completed: 4 } }],
+        parts: { latest: [streaming] },
+      },
+      { runState: "stopped" as const, messages: [message], parts: { latest: [streaming] } },
+      { runState: "pending" as const, messages: [message], parts: { latest: [reasoning] } },
+    ];
+    for (const run of cases) expect(arenaRunIsResponding(run)).toBe(false);
+  });
 });
 
 describe("arenaRunIsAwaitingResponse", () => {

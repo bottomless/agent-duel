@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Text, View } from "react-native";
-import { Check, CircleStop, Users, Wrench } from "lucide-react-native";
+import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
@@ -12,6 +12,7 @@ import {
 } from "@/components/message";
 import { QuestionFormCard } from "@/components/question-form-card";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { thinkingMarkdownParser } from "@/components/markdown/thinking-parser";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { arenaThreadMessages } from "./run-thread-selection";
 import { arenaPendingQuestions, arenaQuestionResult, type ArenaPendingQuestion } from "./question";
@@ -32,6 +33,7 @@ import { arenaSubagentRunState, projectArenaSessions, type ArenaSessionThread } 
 import {
   arenaPartIsWork,
   arenaRunIsAwaitingResponse,
+  arenaRunIsResponding,
   presentArenaWork,
   projectArenaActivitySegments,
   type ArenaActivityPart,
@@ -65,7 +67,7 @@ function stringifyBounded(value: unknown, maxLength = 8_000): string {
   }
 }
 
-function ArenaToolPart({ part }: { part: UnknownRecord }) {
+function ArenaToolPart({ part, cwd }: { part: UnknownRecord; cwd?: string }) {
   const state = asRecord(part.state);
   const tool = typeof part.tool === "string" ? part.tool : "tool";
   const input = state?.input;
@@ -87,6 +89,7 @@ function ArenaToolPart({ part }: { part: UnknownRecord }) {
       error={error}
       status={status}
       detail={detail}
+      cwd={cwd}
       disableOuterSpacing
       compactLabel
     />
@@ -95,6 +98,7 @@ function ArenaToolPart({ part }: { part: UnknownRecord }) {
 
 function ArenaPart({
   value,
+  cwd,
   question,
   permission,
   questionResponding,
@@ -103,6 +107,7 @@ function ArenaPart({
   onPermissionResponse,
 }: {
   value: unknown;
+  cwd?: string;
   question?: ArenaPendingQuestion;
   permission?: ArenaPendingPermission;
   questionResponding: boolean;
@@ -127,7 +132,18 @@ function ArenaPart({
     return <MarkdownRenderer text={text} compact />;
   }
   if ((type === "reasoning" || type === "thought") && text) {
-    return <MarkdownRenderer text={text} compact />;
+    // Subdued like a Thinking block, so reasoning never reads as the contestant's reply.
+    return (
+      <MarkdownRenderer
+        text={text}
+        compact
+        subdued
+        markdownit={thinkingMarkdownParser}
+        enableHtmlish={false}
+        enableDiagrams={false}
+        horizontalScrollCodeBlocks
+      />
+    );
   }
   if (type === "tool" && question && onQuestionResponse) {
     return (
@@ -152,7 +168,7 @@ function ArenaPart({
     if (questionResult) return <ArenaQuestionResultView result={questionResult} />;
     const tasks = arenaTodoWriteTasks(part);
     if (tasks !== null) return <ArenaTaskProgressCard tasks={tasks} state="snapshot" />;
-    return <ArenaToolPart part={part} />;
+    return <ArenaToolPart part={part} cwd={cwd} />;
   }
   return null;
 }
@@ -278,6 +294,7 @@ function ArenaActivityPartView({
   return (
     <ArenaPart
       value={entry.part}
+      cwd={context.run.worktree}
       question={question}
       permission={permission}
       questionResponding={question?.id === respondingQuestionId}
@@ -333,6 +350,7 @@ function ArenaActivitySegmentView({
     runState: context.run.runState,
     isLatest,
     awaitingResponse,
+    cwd: context.run.worktree,
   });
   const hasDetails = workEntries.length > 0;
   const renderDetails = useCallback(
@@ -437,12 +455,15 @@ function ArenaSubagent({
     return id ? (context.run.parts?.[id] ?? []).filter(arenaPartIsWork) : [];
   });
   const awaitingResponse = arenaRunIsAwaitingResponse(childContext.run);
+  const responding = arenaRunIsResponding(childContext.run);
   const needsInput = sessionNeedsInput(session, context);
   const latest = presentArenaWork({
     parts: work,
     runState: childContext.run.runState,
     isLatest: true,
     awaitingResponse,
+    responding,
+    cwd: childContext.run.worktree,
   });
   const statusLabels = {
     pending: "Working",
@@ -453,7 +474,7 @@ function ArenaSubagent({
   };
   const status = statusLabels[childContext.run.runState];
   const pending = childContext.run.runState === "pending";
-  const hasActivity = pending && (work.length > 0 || awaitingResponse);
+  const hasActivity = pending && (work.length > 0 || awaitingResponse || responding);
   const activityLabel = hasActivity ? latest.label : status;
   const showTool = hasActivity && latest.kind === "tool";
   let activityIcon =
@@ -492,8 +513,37 @@ function ArenaSubagent({
   );
 }
 
+/** A delegation prompt is written for the model, not by the user, so it opens on request. */
+function ArenaTaskPrompt({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback(() => setExpanded((current) => !current), []);
+  const renderDetails = useCallback(
+    () => (
+      <View style={styles.workDetails}>
+        <MarkdownRenderer text={text} compact subdued />
+      </View>
+    ),
+    [text],
+  );
+  return (
+    <ExpandableBadge
+      testID="arena-subagent-prompt"
+      label="Task prompt"
+      icon={FileText}
+      isExpanded={expanded}
+      onToggle={toggle}
+      renderDetails={renderDetails}
+      disableOuterSpacing
+      borderlessWhenExpanded
+      bandWhenExpanded
+      compactLabel
+    />
+  );
+}
+
 function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
   const { run } = context;
+  const isSubagent = context.sessionPath.length > 1;
   const renderGroups = useMemo(
     () => buildRenderGroups(run.messages ?? [], run.id),
     [run.messages, run.id],
@@ -506,6 +556,7 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
       if (!content.text && content.images.length === 0 && content.attachments.length === 0) {
         return null;
       }
+      if (isSubagent && content.text) return <ArenaTaskPrompt key={id} text={content.text} />;
       const fallbackTimestamp = new Date(
         run.firstEventAt ?? run.startedAt ?? run.completedAt ?? 0,
       ).getTime();

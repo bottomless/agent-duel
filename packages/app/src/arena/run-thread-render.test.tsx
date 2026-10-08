@@ -20,10 +20,11 @@ vi.mock("@/components/message", () => ({
     testID: string;
     isExpanded: boolean;
     isLoading: boolean;
+    isError?: boolean;
     onToggle?: () => void;
     renderDetails?: () => React.ReactNode;
   }) => (
-    <div data-testid={props.testID} data-loading={props.isLoading}>
+    <div data-testid={props.testID} data-loading={props.isLoading} data-error={props.isError}>
       <button type="button" onClick={props.onToggle}>
         {props.label}
       </button>
@@ -39,7 +40,9 @@ vi.mock("@/components/question-form-card", () => ({
   QuestionFormCard: () => <div data-testid="pending-question">Choose a scope</div>,
 }));
 vi.mock("@/components/markdown/renderer", () => ({
-  MarkdownRenderer: ({ text }: { text: string }) => <p>{text}</p>,
+  MarkdownRenderer: ({ text, subdued }: { text: string; subdued?: boolean }) => (
+    <p data-subdued={subdued ? "true" : undefined}>{text}</p>
+  ),
 }));
 vi.mock("@/agent-stream/turn-footer", () => ({
   RunningTurnFooter: () => <div data-testid="paseo-turn-footer" />,
@@ -139,14 +142,57 @@ function questioningSubagentRun(): ArenaRun {
   };
 }
 
+function respondingSubagentRun(): ArenaRun {
+  const run = subagentRun();
+  return {
+    ...run,
+    parts: {
+      ...run.parts,
+      "child-work": [
+        { type: "reasoning", text: "Done looking", time: { start: 1, end: 2 } },
+        { type: "text", text: "Report so far", time: { start: 2 } },
+      ],
+    },
+  };
+}
+
+function stoppedSubagentRun(): ArenaRun {
+  const run = subagentRun();
+  const aborted = {
+    type: "tool",
+    tool: "task",
+    state: {
+      status: "error",
+      error: "Tool execution aborted",
+      input: { description: "Find vote storage" },
+      metadata: { sessionId: "child", interrupted: true },
+    },
+  };
+  return { ...run, runState: "stopped", parts: { ...run.parts, assistant: [aborted] } };
+}
+
+function promptedSubagentRun(): ArenaRun {
+  const run = subagentRun();
+  const messages = run.messages ?? [];
+  return {
+    ...run,
+    messages: [
+      ...messages.slice(0, 2),
+      { id: "child-prompt", role: "user", sessionID: "child" },
+      ...messages.slice(2),
+    ],
+    parts: { ...run.parts, "child-prompt": [{ type: "text", text: "Find where votes live." }] },
+  };
+}
+
 describe("ArenaRunThread", () => {
   it("reveals reasoning inside activity details without a second thinking row", () => {
     const view = render(<ArenaRunThread run={PENDING_REASONING_RUN} />);
     fireEvent.click(view.getByRole("button", { name: "Reasoning…" }));
 
-    expect(view.getByText("Check `grid-template-columns`.").textContent).toBe(
-      "Check `grid-template-columns`.",
-    );
+    const reasoning = view.getByText("Check `grid-template-columns`.");
+    expect(reasoning.textContent).toBe("Check `grid-template-columns`.");
+    expect(reasoning.getAttribute("data-subdued")).toBe("true");
     expect(view.queryByTestId("paseo-thinking")).toBeNull();
     expect(view.queryByTestId("paseo-turn-footer")).toBeNull();
   });
@@ -186,6 +232,38 @@ describe("ArenaRunThread", () => {
     ).toBe("false");
     expect(within(completed).getByTestId("arena-activity-group").getAttribute("data-loading")).toBe(
       "false",
+    );
+  });
+
+  it("keeps a subagent's row moving while its reply streams", () => {
+    const run = respondingSubagentRun();
+    const view = render(<ArenaRunThread run={run} />);
+    const latest = within(view.getByTestId("arena-subagent")).getByTestId("arena-subagent-latest");
+    expect(latest.textContent).toBe("Responding…");
+    expect(latest.getAttribute("data-loading")).toBe("true");
+  });
+
+  it("shows a subagent cut short by Stop as stopped, not failed", () => {
+    const run = stoppedSubagentRun();
+    const view = render(<ArenaRunThread run={run} />);
+    const latest = within(view.getByTestId("arena-subagent")).getByTestId("arena-subagent-latest");
+    expect(latest.textContent).toBe("Stopped");
+    expect(latest.getAttribute("data-error")).toBe("false");
+  });
+
+  it("folds a subagent's delegation prompt until it is opened", () => {
+    const run = promptedSubagentRun();
+    const view = render(<ArenaRunThread run={run} />);
+    const child = view.getByTestId("arena-subagent");
+    fireEvent.click(
+      within(within(child).getByTestId("arena-subagent-heading")).getByRole("button"),
+    );
+    const prompt = within(child).getByTestId("arena-subagent-prompt");
+    expect(within(child).queryByText("Find where votes live.")).toBeNull();
+
+    fireEvent.click(within(prompt).getByRole("button", { name: "Task prompt" }));
+    expect(within(prompt).getByText("Find where votes live.").getAttribute("data-subdued")).toBe(
+      "true",
     );
   });
 

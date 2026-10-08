@@ -74,8 +74,12 @@ export function arenaSubagentRunState(
   runState: ArenaRun["runState"],
   task: unknown,
 ): ArenaRun["runState"] {
-  const status = record(record(task)?.state)?.status;
-  if (status === "completed") return "complete";
-  if (status === "error") return "error";
+  const state = record(record(task)?.state);
+  if (state?.status === "completed") return "complete";
+  if (state?.status === "error") {
+    // Stop aborts the delegation, which OpenCode records as an error marked `interrupted`.
+    if (record(state.metadata)?.interrupted !== true) return "error";
+    return runState === "stopped" ? "stopped" : "interrupted";
+  }
   return runState;
 }

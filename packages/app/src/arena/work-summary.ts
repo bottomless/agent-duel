@@ -134,11 +134,32 @@ export function arenaRunIsAwaitingResponse(
   return !parts.some((part) => arenaPartIsWork(part) || partIsTextUpdate(part));
 }
 
+/**
+ * A subagent's reply is folded away with its transcript, so while it streams the row has to say
+ * so; the finished reasoning before it would otherwise read as a stall.
+ */
+export function arenaRunIsResponding(
+  run: Pick<ArenaRun, "runState" | "messages" | "parts">,
+): boolean {
+  if (run.runState !== "pending") return false;
+  const message = asRecord(run.messages?.at(-1));
+  if (message?.role !== "assistant" || typeof message.id !== "string") return false;
+  if (typeof asRecord(message.time)?.completed === "number") return false;
+  const parts = run.parts?.[message.id] ?? [];
+  const latest = asRecord(
+    parts.findLast((part) => arenaPartIsWork(part) || partIsTextUpdate(part)),
+  );
+  return latest?.type === "text" && typeof asRecord(latest.time)?.end !== "number";
+}
+
 interface ArenaWorkPresentationInput {
   parts: readonly unknown[];
   runState: ArenaRun["runState"];
   isLatest: boolean;
   awaitingResponse: boolean;
+  responding?: boolean;
+  /** The contestant's worktree; paths inside it are shown relative to it. */
+  cwd?: string;
 }
 
 export function presentArenaWork({
@@ -146,6 +167,8 @@ export function presentArenaWork({
   runState,
   isLatest,
   awaitingResponse,
+  responding = false,
+  cwd,
 }: ArenaWorkPresentationInput): ArenaWorkPresentation {
   if (!isLatest) {
     return {
@@ -157,6 +180,9 @@ export function presentArenaWork({
 
   const waitingForModel = awaitingResponse && runState === "pending";
   if (waitingForModel) return { kind: "reasoning", label: "Thinking…", active: true };
+  if (responding && runState === "pending") {
+    return { kind: "reasoning", label: "Responding…", active: true };
+  }
 
   // Completion can arrive out of order. It controls animation, never recency.
   const current = parts.at(-1);
@@ -172,6 +198,7 @@ export function presentArenaWork({
   const display = buildToolCallDisplayModel({
     name: toolName,
     status,
+    cwd,
     metadata: { subAgentActivity: asRecord(state.input)?.description },
     error: state.error ?? null,
     detail: detail ?? {
