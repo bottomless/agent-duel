@@ -26,6 +26,20 @@ describe("ArenaArtifact", () => {
     expect(result).toMatchObject({ storedSize: 2, truncated: true, truncationReason: "run_limit" })
   })
 
+  test("stores a whole artifact or nothing when a prefix would not decode", () => {
+    const fits = bound({ data: Buffer.from("0123"), runStoredBytes: 0, artifactLimit: 4, runLimit: 100, whole: true })
+    expect(fits).toMatchObject({ storedSize: 4, truncated: false })
+    const cut = bound({
+      data: Buffer.from("0123456789"),
+      runStoredBytes: 96,
+      artifactLimit: 8,
+      runLimit: 100,
+      whole: true,
+    })
+    expect(cut.data.byteLength).toBe(0)
+    expect(cut).toMatchObject({ originalSize: 10, storedSize: 0, truncated: true, truncationReason: "run_limit" })
+  })
+
   test("rejects invalid accounting inputs", () => {
     expect(() => bound({ data: Buffer.alloc(0), runStoredBytes: -1 })).toThrow("Run stored byte count")
   })

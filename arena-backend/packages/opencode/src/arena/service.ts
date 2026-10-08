@@ -142,6 +142,9 @@ import { ArenaPrivacy } from "./privacy"
 import { resolveBuildCommit } from "./provenance"
 import { ArenaTranscriptArtifact } from "./transcript-artifact"
 import { ArenaTranscript } from "./transcript"
+import { excludeFromBackup } from "./backup-exclusion"
+import { Global } from "@opencode-ai/core/global"
+import { Hash } from "@opencode-ai/core/util/hash"
 import type {
   ApplyBaseChoice,
   ChatDocument,
@@ -197,7 +200,13 @@ import {
   type RootObservation,
   type SlotRootRecord,
 } from "./copy-snapshot"
-import { assignProxyRoutes, captureOwnedServices, persistedProxyRoutes, stopOwnedServices } from "./services"
+import {
+  assignProxyRoutes,
+  captureOwnedServices,
+  persistedProxyRoutes,
+  stopOwnedServices,
+  terminalOpenUnder,
+} from "./services"
 import { buildEnvironmentTransition } from "./transition"
 import { createIgnoredJournal, createSlotWatch, watcherBackendUnavailable, type JournalMark } from "./environment-watch"
 import type { Store } from "./mongo"
@@ -559,6 +568,8 @@ const SLOT_PROCESS_RELIST_MS = 500
 
 /** The next pair plus the retained winner, which keeps its worktree until the next send. */
 const SLOT_POOL_TARGET = 3
+/** How long removing a chat's pool waits for background deletes into its trash to finish. */
+const POOL_EMPTY_WAIT_MS = 10_000
 
 /**
  * Where a generation's warm record is kept: on the turn before it, or, for generation 0, which
@@ -891,6 +902,21 @@ export type ArenaCheckoutInspection = {
   readonly reason?: string
 }
 
+export type ArenaEnvironmentTrim = {
+  /** Chats that held contestant worktrees before the trim. */
+  readonly chats: number
+  /** Chats whose worktrees were released. */
+  readonly released: number
+  /** Chats past the limit that could not give theirs up yet, such as one with a battle open. */
+  readonly kept: number
+}
+
+/** What releasing one chat's contestant worktrees came to; `absent` when it held none by then. */
+type EnvironmentRelease =
+  | { readonly kind: "released"; readonly chat: ChatDocument }
+  | { readonly kind: "absent" }
+  | { readonly kind: "kept"; readonly reason: string }
+
 /** Turn activity used by checkout eviction; environment/setup timestamps are intentionally absent. */
 export function latestArenaChatActivity(turns: readonly TurnDocument[], runs: readonly RunDocument[]) {
   const dates = turns.flatMap((turn) => [
@@ -936,6 +962,7 @@ export interface Interface {
   readonly inspectCheckout: (worktreeRoot: string) => Effect.Effect<ArenaCheckoutInspection, Error>
   readonly prepareCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
   readonly releaseCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
+  readonly trimEnvironments: (keep: number, volumeOf?: string) => Effect.Effect<ArenaEnvironmentTrim, Error>
   readonly snapshot: (chatID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly turn: (turnID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly diff: (turnID: string) => Effect.Effect<ArenaSchema.ComparisonDiff, Error>
@@ -1123,6 +1150,8 @@ export const layer: Layer.Layer<
     // restarted engine has loaded nothing.
     const watchedChats = new Map<string, number>()
     const unwatchedSince = new Map<string, number>()
+    // Sends waiting for a chat's start lock, so an environment release holding it can stand down.
+    const waitingStarts = new Map<string, number>()
     let idleUnloadStarted = false
     const reconciledComparisonStores = new WeakSet<Store>()
     let recoverInterrupted: (store: Store) => Effect.Effect<void, Error> = () => Effect.void
@@ -2445,14 +2474,85 @@ export const layer: Layer.Layer<
     })
 
     /**
-     * Take everything out of a chat's worktree directory, for archive and eviction once their
-     * own removals are done: free worktrees, the spare, anything left behind, and their hosts.
-     * The chat's watches stop with it.
+     * Take everything out of a chat's worktree directory and delete it, for archive and eviction
+     * once their own removals are done (`vacateSlotPool`). Environment release vacates the pool
+     * under the chat's start lock and deletes it after (`drainReleasedPool`).
      */
     const retireSlotPool = Effect.fn("Arena.retireSlotPool")(function* (
+      store: Store,
       chat: ChatDocument,
       options?: SlotTrashOptions,
     ) {
+      const pool = slotPool(chat)
+      yield* vacateSlotPool(chat)
+      yield* sweepSlotTrash(chat, options)
+      yield* discardSnapshotRepositories(store, chat._id)
+      if (!options?.wait) return
+      // A drain logs what it cannot delete and goes on, and skips a tree a removal above is still
+      // deleting in the background, so wait for the trash to empty and check that nothing is
+      // left. An empty pool goes, so the chat no longer holds one; startup retries what remains.
+      const deadline = Date.now() + POOL_EMPTY_WAIT_MS
+      while (true) {
+        const { entries, trash } = yield* poolContents(pool)
+        if (entries.length === 0 && trash === 0) {
+          yield* Effect.promise(() => rm(pool, { recursive: true, force: true }))
+          return
+        }
+        if (entries.length > 0 || Date.now() >= deadline) {
+          yield* Effect.logWarning("Arena could not empty a chat's worktree directory", {
+            chatID: chat._id,
+            entries: entries.join(", "),
+            trash,
+          })
+          return
+        }
+        yield* Effect.sleep(Duration.millis(100))
+      }
+    })
+
+    /**
+     * Delete a released chat's worktrees once its start lock is free again: a pool can take long
+     * enough to delete that a send to the chat would feel it. That send builds its pair beside the
+     * trash. The empty pool goes only while no send holds the lock, so a pair being built keeps it.
+     */
+    const drainReleasedPool = Effect.fn("Arena.drainReleasedPool")(function* (store: Store, chat: ChatDocument) {
+      const pool = slotPool(chat)
+      yield* sweepSlotTrash(chat, { wait: true })
+      yield* discardSnapshotRepositories(store, chat._id)
+      // A removal during the release may still be deleting a tree in the background.
+      const deadline = Date.now() + POOL_EMPTY_WAIT_MS
+      while ((yield* poolContents(pool)).trash > 0) {
+        if (Date.now() >= deadline) {
+          yield* Effect.logWarning("Arena could not empty a released chat's trash", { chatID: chat._id })
+          return
+        }
+        yield* Effect.sleep(Duration.millis(100))
+      }
+      yield* turnStartLock(chat._id).withPermitsIfAvailable(1)(
+        Effect.gen(function* () {
+          const { entries, trash } = yield* poolContents(pool)
+          if (entries.length === 0 && trash === 0)
+            yield* Effect.promise(() => rm(pool, { recursive: true, force: true }))
+        }),
+      )
+    })
+
+    /** A pool's entries besides its trash, and how many trees its trash still holds. */
+    const poolContents = (pool: string) =>
+      Effect.promise(async () => {
+        const left = await readdir(pool).catch(() => [] as string[])
+        const trash = left.includes(TRASH_DIRNAME)
+          ? await readdir(join(pool, TRASH_DIRNAME)).catch(() => [] as string[])
+          : []
+        return { entries: left.filter((name) => name !== TRASH_DIRNAME), trash: trash.length }
+      })
+
+    /**
+     * Move everything in a chat's worktree directory to its trash and forget what this process
+     * knew of it: free worktrees, the spare, anything left behind, and their hosts. The chat's
+     * watches stop with it.
+     */
+    const vacateSlotPool = Effect.fnUntraced(function* (chat: ChatDocument) {
       const pool = slotPool(chat)
       const entries = yield* Effect.promise(() => readdir(pool).catch(() => [] as string[]))
       const directories = new Set(
@@ -2478,7 +2578,6 @@ export const layer: Layer.Layer<
         if (key.startsWith(`${chat._id}:`)) warmMarks.delete(key)
       }
       yield* promise(() => journal.stop(chat._id)).pipe(Effect.ignore)
-      yield* sweepSlotTrash(chat, options)
     })
 
     /**
@@ -2952,6 +3051,60 @@ export const layer: Layer.Layer<
       })
 
     /**
+     * Delete OpenCode's snapshot repositories of contestant worktrees that are gone. OpenCode keys
+     * one by worktree path (`snapshot/<project>/<sha1 of the path>`, `snapshot/index.ts`) and a slot
+     * moves to a new path every turn, so each released side leaves one that nothing opens again.
+     * A path qualifies once its run released it, no live run names it, and nothing is there. Only
+     * run worktrees are hashed, so a standalone OpenCode's data in the same directory is never
+     * matched. In the background: a missed one goes at the next start.
+     */
+    const discardSnapshotRepositories = (store: Store, chatID?: string) =>
+      Effect.gen(function* () {
+        const runs = yield* promise(() => (chatID ? store.runsForChat(chatID) : store.runs.find({}).toArray()))
+        const live = new Set(runs.flatMap((run) => (run.worktreeRemovedAt ? [] : [run.worktree])))
+        const released = new Map(
+          runs.flatMap((run) =>
+            run.worktreeRemovedAt && !live.has(run.worktree) ? [[Hash.fast(run.worktree), run.worktree] as const] : [],
+          ),
+        )
+        if (released.size === 0) return
+        const root = join(Global.Path.data, "snapshot")
+        let removed = 0
+        for (const project of yield* Effect.promise(() => readdir(root).catch(() => [] as string[]))) {
+          for (const name of yield* Effect.promise(() => readdir(join(root, project)).catch(() => [] as string[]))) {
+            const worktree = released.get(name)
+            if (!worktree) continue
+            const present = yield* Effect.promise(() => lstat(worktree).then(Boolean, () => false))
+            if (present) continue
+            yield* Effect.promise(() => rm(join(root, project, name), { recursive: true, force: true }))
+            removed += 1
+          }
+        }
+        if (removed > 0) {
+          yield* Effect.logInfo("Arena removed snapshot repositories of released worktrees", {
+            removed,
+            ...(chatID ? { chatID } : {}),
+          })
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not remove released snapshot repositories", { cause }),
+        ),
+        Effect.forkIn(scope),
+      )
+
+    /** Keep a chat's worktrees out of Time Machine, in the background: nothing waits on it. */
+    const excludePoolFromBackup = (chat: Pick<ChatDocument, "_id" | "repository">) =>
+      Effect.promise(() => excludeFromBackup(slotPool(chat))).pipe(
+        Effect.flatMap((written) =>
+          written
+            ? Effect.void
+            : Effect.logWarning("Arena could not exclude a chat's worktrees from Time Machine", { chatID: chat._id }),
+        ),
+        Effect.forkIn(scope),
+      )
+
+    /**
      * Register a new contestant worktree at `name` in a fresh host, at `head` and not yet checked
      * out. Whatever was at the path goes to the trash first, host included. The caller holds the
      * repository lock: the host is a copy of the checkout's git directory.
@@ -2985,6 +3138,7 @@ export const layer: Layer.Layer<
         marks: new Map(),
         metadataFingerprint: input.metadataFingerprint,
       })
+      yield* excludePoolFromBackup(input.chat)
       return info
     })
 
@@ -3045,6 +3199,8 @@ export const layer: Layer.Layer<
         ...(state?.files ? { files: state.files } : {}),
         metadataFingerprint: input.metadataFingerprint,
       })
+      // Pools made before the exclusion existed get it the next time one of their slots moves.
+      yield* excludePoolFromBackup(input.chat)
       return { info: adopted, observeSlot: observed ? Effect.succeed(observed) : settle }
     })
 
@@ -5350,7 +5506,18 @@ export const layer: Layer.Layer<
         const immediate = yield* lock.withPermitsIfAvailable(1)(admission)
         if (Option.isSome(immediate)) return immediate.value
         yield* Effect.logInfo("Arena turn waiting for preparation", { chatID: id })
-        return yield* lock.withPermits(1)(admission)
+        waitingStarts.set(id, (waitingStarts.get(id) ?? 0) + 1)
+        return yield* lock
+          .withPermits(1)(admission)
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                const waiting = (waitingStarts.get(id) ?? 1) - 1
+                if (waiting > 0) waitingStarts.set(id, waiting)
+                else waitingStarts.delete(id)
+              }),
+            ),
+          )
       }).pipe(preparationPhase("admission", { chatID: id }))
     })
 
@@ -5600,6 +5767,14 @@ export const layer: Layer.Layer<
       return historicalServices
     })
 
+    /** Delete a run's contestant temp directory once its sessions are gone and nothing writes to it. */
+    const removeContestantTmp = (run: RunDocument) =>
+      promise(() => rm(ArenaContestant.tmpDirectory(run.rootSessionID), { recursive: true, force: true })).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Arena could not remove a contestant temp directory", { runID: run._id, cause }),
+        ),
+      )
+
     const removeStoppedRun = Effect.fn("Arena.removeStoppedRun")(function* (
       store: Store,
       chat: ChatDocument,
@@ -5607,6 +5782,7 @@ export const layer: Layer.Layer<
     ) {
       const at = new Date()
       const historicalServices = yield* endRunEnvironment(store, run, at)
+      yield* removeContestantTmp(run)
       yield* forgetSlot(run.worktree)
       yield* withRepositoryMutation(
         chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
@@ -5636,11 +5812,7 @@ export const layer: Layer.Layer<
       yield* instances.disposeDirectory(run.worktree)
       markSlotStopped(run.worktree)
       // The run's sessions are gone with the instance, so nothing writes to its temp directory.
-      yield* promise(() => rm(ArenaContestant.tmpDirectory(run.rootSessionID), { recursive: true, force: true })).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Arena could not remove a contestant temp directory", { runID: run._id, cause }),
-        ),
-      )
+      yield* removeContestantTmp(run)
       yield* promise(() =>
         store.updateRun(run._id, {
           retention: "none",
@@ -5842,6 +6014,8 @@ export const layer: Layer.Layer<
                   }
                 }
                 yield* promise(() => store.claimCheckoutEviction(worktreeRoot))
+                // Eviction, its completion and its release leave `updatedAt` alone, as an environment
+                // release does: the chat updated last is the one a restart re-warms (`rewarmLatestPair`).
                 yield* promise(() =>
                   store.chats.updateMany(
                     {
@@ -5849,7 +6023,7 @@ export const layer: Layer.Layer<
                       status: "ready",
                       activeTurnID: { $exists: false },
                     },
-                    { $set: { checkoutEvicted: true, updatedAt: new Date() } },
+                    { $set: { checkoutEvicted: true } },
                   ),
                 )
                 const claimedChats = yield* checkoutChats(store, worktreeRoot)
@@ -5934,10 +6108,10 @@ export const layer: Layer.Layer<
             )
             yield* disposeWarmSessions(warmSlots.map((slot) => slot.forkedSessionID))
             // Released worktrees nobody adopted yet, spares, and anything else each chat left.
-            yield* Effect.forEach(claimed.claimedChats, (chat) => retireSlotPool(chat), { discard: true })
+            yield* Effect.forEach(claimed.claimedChats, (chat) => retireSlotPool(store, chat), { discard: true })
             yield* promise(() =>
               store.chats.updateMany(checkoutChatFilter(claimed.claimedChats), {
-                $set: { checkoutEvicted: true, updatedAt: new Date() },
+                $set: { checkoutEvicted: true },
                 // A first pair's record goes with its worktrees; the chat prepares another once restored.
                 $unset: { retainedWinner: "", warmGeneration: "", initialWarmPreparation: "" },
               }),
@@ -5952,15 +6126,216 @@ export const layer: Layer.Layer<
       yield* checkoutCleanupLock(worktreeRoot).withPermits(1)(
         Effect.gen(function* () {
           const chats = yield* checkoutChats(store, worktreeRoot)
-          yield* promise(() =>
-            store.chats.updateMany(checkoutChatFilter(chats), {
-              $unset: { checkoutEvicted: "" },
-              $set: { updatedAt: new Date() },
-            }),
-          )
+          yield* promise(() => store.chats.updateMany(checkoutChatFilter(chats), { $unset: { checkoutEvicted: "" } }))
           yield* promise(() => store.releaseCheckoutEviction(worktreeRoot))
         }),
       )
+    })
+
+    /**
+     * Give back an idle chat's contestant worktrees and keep the chat. Archive takes the same
+     * things and the chat with them; here the chat stays ready, and its next send builds a pair
+     * from nothing the way its first battle did.
+     *
+     * Anything that could still need the worktrees keeps them: a battle or an agent turn in
+     * progress, a pair being prepared, a retained winner whose files moved past its recorded
+     * result, a terminal open in one of them, and a chat the app shows (`watchChat`) or a send is
+     * waiting for: its worktrees are what the user is looking at or about to battle in. The servers
+     * the agents left running there, such as a preview the winner started to check its build, are
+     * stopped as the next send would stop them: one of those holds the chat's largest copy for as
+     * long as it lives.
+     *
+     * The chat and its start lock are looked at again before each step that stops or removes
+     * something, so a chat opened or sent to meanwhile keeps what is left. The deletes, the slow
+     * part, run after the lock is let go.
+     */
+    const releaseChatEnvironments = Effect.fn("Arena.releaseChatEnvironments")(function* (
+      store: Store,
+      chatID: string,
+    ) {
+      const outcome = yield* turnStartLock(chatID).withPermits(1)(
+        Effect.gen(function* () {
+          const kept = (reason: string): EnvironmentRelease => ({ kind: "kept", reason })
+          const wanted = () =>
+            watchedChats.has(chatID)
+              ? "the app shows the chat"
+              : waitingStarts.has(chatID)
+                ? "a send to the chat is waiting"
+                : undefined
+          const chat = yield* promise(() => store.chat(chatID))
+          if (!chat || chat.status !== "ready" || chat.activeTurnID || chat.checkoutEvicted) {
+            return kept(`the chat is ${chat?.activeTurnID ? "active" : (chat?.status ?? "missing")}`)
+          }
+          // Another trim may have released it while this one waited for the lock.
+          const pool = slotPool(chat)
+          const entries = yield* Effect.promise(() => readdir(pool).catch(() => [] as string[]))
+          if (!entries.some((name) => name !== TRASH_DIRNAME)) return { kind: "absent" } as EnvironmentRelease
+          const shown = wanted()
+          if (shown) return kept(shown)
+          if (activeNormalTurns.active(chat.canonicalSessionID)) return kept("the chat's agent is working")
+          const turns = yield* promise(() => store.turnsForChat(chat._id))
+          if (warmRecordsOf(chat, turns).some((record) => record.state === "pending")) {
+            return kept("its worktrees are being prepared")
+          }
+          if (chat.retainedWinner) {
+            const retained = yield* promise(() => store.run(chat.retainedWinner!.runID))
+            const present = retained && !retained.worktreeRemovedAt
+            if (!retained || (present && !(yield* retainedRunMatchesResult(retained)))) {
+              return kept("the retained winner has changes its result does not hold")
+            }
+          }
+          const real = yield* Effect.promise(() => realpath(pool).catch(() => resolvePath(pool)))
+          const identities = [resolvePath(pool), real]
+          // Checked before anything is stopped, so a terminal keeps what runs in it too.
+          if (yield* Effect.promise(() => terminalOpenUnder(identities))) {
+            return kept("a terminal is open in one of its worktrees")
+          }
+          const opened = wanted()
+          if (opened) return kept(opened)
+          for (const run of yield* promise(() => store.runsForChat(chat._id))) {
+            if (run.worktreeRemovedAt) continue
+            const stopped = yield* stopRunServices(store, run)
+            if (stopped.some((record) => record.status === "failed" || !record.verified)) {
+              return kept("its services could not be stopped")
+            }
+          }
+          // The engine's own processes in the pool go with their instances: a language server a
+          // retained winner's instance started works in its worktree until the next send.
+          yield* Effect.forEach(
+            entries.filter((name) => name !== TRASH_DIRNAME && hostedWorktree(name) === undefined),
+            (name) => instances.disposeDirectory(join(pool, name)),
+            { discard: true },
+          )
+          const inPool = (listed: readonly WorkingProcess[]) =>
+            listed.some((entry) => identities.some((identity) => entry.directory.startsWith(`${identity}/`)))
+          let listed = yield* Effect.promise(() => processDirectories())
+          if (listed && inPool(listed)) {
+            // A disposed instance's language server can still be exiting.
+            yield* Effect.sleep(Duration.millis(SLOT_PROCESS_RELIST_MS))
+            listed = yield* Effect.promise(() => processDirectories())
+          }
+          if (!listed) return kept("its processes could not be listed")
+          // Something no run started and no terminal holds, such as a process in a free worktree.
+          if (inPool(listed)) return kept("a process is still working in one of its worktrees")
+          // Past here the worktrees go; a chat wanted now keeps them and starts its instances again.
+          const reached = wanted()
+          if (reached) return kept(reached)
+
+          // A spare still being built or a worktree still being released would race the removals.
+          yield* endSlotWork(chat._id)
+          const runs = yield* promise(() => store.runsForChat(chat._id))
+          for (const run of runs.filter((candidate) => !candidate.worktreeRemovedAt)) {
+            const stopped = yield* stopRunServices(store, run)
+            if (stopped.some((record) => record.status === "failed" || !record.verified)) {
+              return kept("its services could not be stopped")
+            }
+            yield* removeStoppedRun(store, chat, run)
+          }
+          const records = warmRecordsOf(chat, turns)
+          for (const { generation } of records) {
+            distrustWarmPair(store, chat._id, generation)
+            warmMarks.delete(warmPairKey(chat._id, generation))
+          }
+          const warmSlots = unusedWarmSlots(records, runs)
+          yield* withRepositoryMutation(
+            chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
+            Effect.forEach(
+              new Set(warmSlots.map((slot) => slot.directory)),
+              (directory) =>
+                forgetSlot(directory).pipe(
+                  Effect.andThen(inDirectory(chat.repository.root, worktrees.remove({ directory, keepBranch: false }))),
+                  Effect.mapError(error),
+                ),
+              { concurrency: 1, discard: true },
+            ),
+          )
+          yield* disposeWarmSessions(warmSlots.map((slot) => slot.forkedSessionID))
+          // The records name directories that are gone; the environment report shows none.
+          for (const turn of turns.filter((candidate) => candidate.warmPreparation)) {
+            yield* writeWarmRecord(store, { kind: "turn", turn }, undefined)
+          }
+          if (chat.initialWarmPreparation) yield* writeWarmRecord(store, { kind: "chat", chatID: chat._id }, undefined)
+          yield* vacateSlotPool(chat)
+          // `updatedAt` stays: after a restart the chat updated last is the one whose pair is
+          // prepared again (`rewarmLatestPair`), and a release is no sign the user is working there.
+          yield* promise(() =>
+            store.updateChat(
+              { _id: chat._id },
+              { $unset: { retainedWinner: "", warmGeneration: "", initialWarmPreparation: "" } },
+            ),
+          )
+          return { kind: "released", chat } as EnvironmentRelease
+        }),
+      )
+      if (outcome.kind !== "released") return outcome
+      // The worktrees are already given up; what is not deleted now, startup deletes.
+      yield* drainReleasedPool(store, outcome.chat).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not delete a released chat's worktrees", { chatID, cause }),
+        ),
+      )
+      return outcome
+    })
+
+    /**
+     * Keep contestant worktrees for the `keep` chats with the latest battle activity and release
+     * every other chat's, oldest first. The worktrees are what makes the next send start warm;
+     * an older chat is more likely to hold disk than to be sent to. A chat that cannot release
+     * them now (`releaseChatEnvironments`) keeps them until a later trim.
+     *
+     * With `volumeOf`, only chats whose worktrees are on that path's volume count: a full disk is
+     * freed only by releasing what is on it.
+     */
+    const trimEnvironments = Effect.fn("Arena.trimEnvironments")(function* (keep: number, volumeOf?: string) {
+      const store = yield* available()
+      const chats = (yield* promise(() => store.chats.find({}).toArray())).filter(
+        (chat) => chat.status !== "archived" && !chat.checkoutEvicted,
+      )
+      const deviceOf = (path: string) =>
+        Effect.promise(() =>
+          realpath(path)
+            .then((real) => lstat(real))
+            .then((stats) => stats.dev)
+            .catch(() => undefined),
+        )
+      const device = volumeOf === undefined ? undefined : yield* deviceOf(volumeOf)
+      if (volumeOf !== undefined && device === undefined) return { chats: 0, released: 0, kept: 0 }
+      const holding: Array<{ readonly chat: ChatDocument; readonly activity: number }> = []
+      for (const chat of chats) {
+        const entries = yield* Effect.promise(() => readdir(slotPool(chat)).catch(() => [] as string[]))
+        if (!entries.some((name) => name !== TRASH_DIRNAME)) continue
+        if (device !== undefined && (yield* deviceOf(slotPool(chat))) !== device) continue
+        const turns = yield* promise(() => store.turnsForChat(chat._id))
+        const runs = yield* promise(() => store.runsForChat(chat._id))
+        const activity = latestArenaChatActivity(turns, runs) ?? chat.createdAt
+        holding.push({ chat, activity: activity.getTime() })
+      }
+      holding.sort((left, right) => right.activity - left.activity || left.chat._id.localeCompare(right.chat._id))
+      let released = 0
+      let kept = 0
+      for (const { chat } of holding.slice(Math.max(0, keep)).reverse()) {
+        const outcome = yield* releaseChatEnvironments(store, chat._id).pipe(
+          Effect.catchCause((cause) =>
+            Effect.succeed<EnvironmentRelease>({ kind: "kept", reason: `its release failed: ${Cause.pretty(cause)}` }),
+          ),
+        )
+        if (outcome.kind === "released") released += 1
+        if (outcome.kind !== "kept") continue
+        kept += 1
+        yield* Effect.logInfo("Arena kept a chat's worktrees past the limit", {
+          chatID: chat._id,
+          reason: outcome.reason,
+        })
+      }
+      if (released > 0) {
+        yield* Effect.logInfo("Arena released idle chats' worktrees", {
+          released,
+          kept,
+          keep,
+          ...(volumeOf ? { volumeOf } : {}),
+        })
+      }
+      return { chats: holding.length, released, kept } satisfies ArenaEnvironmentTrim
     })
 
     /** Whether the retained winner still accepts connections on a port it was given or opened. */
@@ -6766,6 +7141,8 @@ export const layer: Layer.Layer<
         durationMs: Math.round(performance.now() - startedAt),
         sides: JSON.stringify({ a: outcome.value.a.sync, b: outcome.value.b.sync }),
       })
+      // The pair moved the previous turn's worktrees to new paths.
+      yield* discardSnapshotRepositories(store, chat._id)
     })
 
     /**
@@ -7457,7 +7834,7 @@ export const layer: Layer.Layer<
             // An archive the previous process did not finish leaves worktrees or trash in the pool.
             // In the background: nothing waits on an archived chat, and recovery gates every call.
             if (chat.status === "archived") {
-              yield* retireSlotPool(chat).pipe(
+              yield* retireSlotPool(store, chat).pipe(
                 Effect.catchCause((cause) =>
                   Effect.logWarning("Arena could not clear an archived chat's worktrees", { chatID: chat._id, cause }),
                 ),
@@ -7695,6 +8072,8 @@ export const layer: Layer.Layer<
         ),
         Effect.forkIn(scope),
       )
+      // Every chat's, including those released before this was cleaned up after each turn.
+      yield* discardSnapshotRepositories(store)
       // Last: the chats above may have just resolved turns of their own.
       yield* reconcileBattleMetrics(store)
       if (idleUnloadStarted) return
@@ -9081,7 +9460,7 @@ export const layer: Layer.Layer<
       yield* disposeWarmSessions(warmSlots.map((slot) => slot.forkedSessionID))
       // Released worktrees nobody adopted yet, the spare, and anything else under the chat, deleted
       // before the archive answers: the engine can stop right after, taking a background delete with it.
-      yield* retireSlotPool(chat, { wait: true })
+      yield* retireSlotPool(store, chat, { wait: true })
       yield* promise(() =>
         store.updateChat(
           { _id: chat._id },
@@ -9191,6 +9570,7 @@ export const layer: Layer.Layer<
       inspectCheckout,
       prepareCheckout,
       releaseCheckout,
+      trimEnvironments,
       snapshot,
       turn: turnSnapshot,
       diff: comparisonDiff,

@@ -14,7 +14,11 @@ import { lstat, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { basename, resolve, sep } from "path";
 import { homedir } from "node:os";
 import { CLIENT_CAPS, type ClientCapability } from "@getpaseo/protocol/client-capabilities";
-import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import type {
+  ArenaEnvironmentStatus,
+  ArenaEnvironmentTrim,
+  ArenaSnapshot,
+} from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   normalizeAgentAttachments,
   serializeAgentStreamEvent,
@@ -483,6 +487,8 @@ export interface SessionOptions {
   onLifecycleIntent?: (intent: SessionLifecycleIntent) => void;
   onWorkspaceRecovered?: (workspace: PersistedWorkspaceRecord) => Promise<void>;
   restoreCleanedWorkspace?: (workspaceId: string) => Promise<void>;
+  trimArenaEnvironments?: (keep: number) => Promise<ArenaEnvironmentTrim>;
+  getArenaEnvironmentStatus?: () => Promise<ArenaEnvironmentStatus>;
   waitForWorkspaceCleanupReady?: () => Promise<void>;
   logger: pino.Logger;
   downloadTokenStore: DownloadTokenStore;
@@ -668,6 +674,8 @@ export class Session {
   private agentManager: AgentManager;
   private readonly agentStorage: AgentStorage;
   private readonly arenaActivity: ArenaActivityService | undefined;
+  private readonly trimArenaEnvironments: SessionOptions["trimArenaEnvironments"];
+  private readonly getArenaEnvironmentStatus: SessionOptions["getArenaEnvironmentStatus"];
   private readonly arenaByok: ArenaByokService | null;
   private arenaActivitySubscribed = false;
   private readonly projectRegistry: ProjectRegistry;
@@ -788,6 +796,8 @@ export class Session {
       getWebSocketRuntimeMetrics,
     } = options;
     this.arenaActivity = options.arenaActivity;
+    this.trimArenaEnvironments = options.trimArenaEnvironments;
+    this.getArenaEnvironmentStatus = options.getArenaEnvironmentStatus;
     this.arenaByok = options.arenaByok ?? null;
     this.clientId = clientId;
     this.remoteAddress = options.remoteAddress;
@@ -1947,6 +1957,7 @@ export class Session {
       this.dispatchAgentTimelineMessage(msg, source) ??
       this.dispatchArenaStreamMessage(msg, source) ??
       this.dispatchArenaMessage(msg) ??
+      this.dispatchArenaEnvironmentsMessage(msg) ??
       this.dispatchArenaByokMessage(msg) ??
       this.dispatchAgentLifecycleMessage(msg) ??
       this.dispatchAgentConfigMessage(msg) ??
@@ -2126,6 +2137,39 @@ export class Session {
         return this.runArenaRequest(msg);
       default:
         return undefined;
+    }
+  }
+
+  private dispatchArenaEnvironmentsMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    switch (msg.type) {
+      case "arena.environments.trim.request":
+        return this.handleArenaEnvironmentsTrimRequest(msg);
+      case "arena.environments.get_status.request":
+        return this.handleArenaEnvironmentsStatusRequest(msg);
+      default:
+        return undefined;
+    }
+  }
+
+  private async handleArenaEnvironmentsStatusRequest(
+    msg: Extract<SessionInboundMessage, { type: "arena.environments.get_status.request" }>,
+  ): Promise<void> {
+    try {
+      if (!this.getArenaEnvironmentStatus) throw new Error("Battle environments are not available");
+      const status = await this.getArenaEnvironmentStatus();
+      this.emit({
+        type: "arena.environments.get_status.response",
+        payload: { requestId: msg.requestId, status, error: null },
+      });
+    } catch (error) {
+      this.emit({
+        type: "arena.environments.get_status.response",
+        payload: {
+          requestId: msg.requestId,
+          status: null,
+          error: getErrorMessageOr(error, "Storage status is unavailable"),
+        },
+      });
     }
   }
 
@@ -3860,6 +3904,32 @@ export class Session {
       type: "arena.byok.key.set.response",
       payload: { requestId: msg.requestId, configured: byok.isConfigured() },
     });
+  }
+
+  private async handleArenaEnvironmentsTrimRequest(
+    msg: Extract<SessionInboundMessage, { type: "arena.environments.trim.request" }>,
+  ): Promise<void> {
+    try {
+      if (!this.trimArenaEnvironments) throw new Error("Battle environments are not available");
+      const result = await this.trimArenaEnvironments(msg.keep);
+      this.emit({
+        type: "arena.environments.trim.response",
+        payload: { requestId: msg.requestId, result, error: null },
+      });
+    } catch (error) {
+      this.sessionLogger.warn(
+        { err: error, requestId: msg.requestId },
+        "session: arena.environments.trim.request failed",
+      );
+      this.emit({
+        type: "arena.environments.trim.response",
+        payload: {
+          requestId: msg.requestId,
+          result: null,
+          error: getErrorMessageOr(error, "Battle environments could not be freed"),
+        },
+      });
+    }
   }
 
   private runArenaRequest(

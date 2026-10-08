@@ -313,6 +313,8 @@ function makeConfig(providers: MutableDaemonConfig["providers"] = {}): MutableDa
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
     appendSystemPrompt: "",
+    arenaEnvironmentRetention: 5,
+    worktreeRetention: 15,
   };
 }
 

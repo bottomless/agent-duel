@@ -1,9 +1,9 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Text, TextInput, View, type PressableStateCallbackType } from "react-native";
+import { Text, TextInput, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { ChevronDown, Monitor, Moon, Sun } from "lucide-react-native";
+import { Monitor, Moon, Sun } from "lucide-react-native";
 import {
   SYNTAX_THEME_OPTIONS,
   type SyntaxThemeId,
@@ -14,13 +14,13 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { toErrorMessage } from "@/utils/error-messages";
 import { Switch } from "@/components/ui/switch";
 import { SettingsSection } from "@/screens/settings/settings-section";
+import { SettingsSelectTrigger } from "@/screens/settings/settings-select-trigger";
 import {
   MAX_CODE_FONT_SIZE,
   MAX_UI_FONT_SIZE,
@@ -52,7 +52,6 @@ import { AppearancePreview } from "./appearance-preview";
 const ThemedSun = withUnistyles(Sun);
 const ThemedMoon = withUnistyles(Moon);
 const ThemedMonitor = withUnistyles(Monitor);
-const ThemedChevronDown = withUnistyles(ChevronDown);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
@@ -76,10 +75,6 @@ function sizeDraftToOverride(value: string): number | undefined {
   return /^\d+$/.test(value) && parsed >= MIN_CODE_FONT_SIZE && parsed <= MAX_CODE_FONT_SIZE
     ? parsed
     : undefined;
-}
-
-function dropdownTriggerStyle({ pressed }: PressableStateCallbackType) {
-  return [styles.trigger, pressed ? styles.triggerPressed : null];
 }
 
 // ---------------------------------------------------------------------------
@@ -145,16 +140,14 @@ function ThemeRow({ value, onChange }: ThemeRowProps) {
         <Text style={settingsStyles.rowTitle}>{t("settings.appearance.theme.title")}</Text>
       </View>
       <DropdownMenu>
-        <DropdownMenuTrigger
-          style={dropdownTriggerStyle}
+        <SettingsSelectTrigger
+          label={selectedLabel}
           accessibilityLabel={t("settings.appearance.theme.accessibilityLabel", {
             value: selectedLabel,
           })}
         >
           <ThemeLeading themeValue={value} />
-          <Text style={styles.triggerText}>{selectedLabel}</Text>
-          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
-        </DropdownMenuTrigger>
+        </SettingsSelectTrigger>
         <DropdownMenuContent side="bottom" align="end" width={200}>
           {THEME_OPTIONS.map((option, index) => {
             const previousOption = THEME_OPTIONS[index - 1];
@@ -197,15 +190,12 @@ function SidePanelPlacementRow({ value, onChange }: SidePanelPlacementRowProps) 
         <Text style={settingsStyles.rowTitle}>{t("settings.appearance.sidePanel.placement")}</Text>
       </View>
       <DropdownMenu>
-        <DropdownMenuTrigger
-          style={dropdownTriggerStyle}
+        <SettingsSelectTrigger
+          label={selectedLabel}
           accessibilityLabel={t("settings.appearance.sidePanel.accessibilityLabel", {
             value: selectedLabel,
           })}
-        >
-          <Text style={styles.triggerText}>{selectedLabel}</Text>
-          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
-        </DropdownMenuTrigger>
+        />
         <DropdownMenuContent side="bottom" align="end" width={200}>
           <DropdownMenuItem selected={value === "right"} showSelectedCheck onSelect={dockRight}>
             {t("settings.appearance.sidePanel.options.right")}
@@ -314,15 +304,12 @@ function ToolCallDetailRow({ value, onChange }: ToolCallDetailRowProps) {
         </Text>
       </View>
       <DropdownMenu>
-        <DropdownMenuTrigger
-          style={dropdownTriggerStyle}
+        <SettingsSelectTrigger
+          label={selectedLabel}
           accessibilityLabel={t("settings.general.toolCallDetail.accessibilityLabel", {
             value: selectedLabel,
           })}
-        >
-          <Text style={styles.triggerText}>{selectedLabel}</Text>
-          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
-        </DropdownMenuTrigger>
+        />
         <DropdownMenuContent side="bottom" align="end" width={200}>
           {TOOL_CALL_DETAIL_LEVELS.map((option) => (
             <ToolCallDetailMenuItem
@@ -426,12 +413,10 @@ function FontFamilyRow({
       </View>
       <View style={styles.fontPicker}>
         <DropdownMenu>
-          <DropdownMenuTrigger style={dropdownTriggerStyle} accessibilityLabel={accessibilityLabel}>
-            <Text style={styles.triggerText}>
-              {custom ? "Custom font" : (preset?.label ?? "Custom font")}
-            </Text>
-            <ThemedChevronDown size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
-          </DropdownMenuTrigger>
+          <SettingsSelectTrigger
+            label={custom ? "Custom font" : (preset?.label ?? "Custom font")}
+            accessibilityLabel={accessibilityLabel}
+          />
           <DropdownMenuContent side="bottom" align="end" width={220}>
             {presets.map((option) => (
               <FontPresetItem
@@ -570,15 +555,12 @@ function SyntaxRow({ value, onChange }: SyntaxRowProps) {
         </Text>
       </View>
       <DropdownMenu>
-        <DropdownMenuTrigger
-          style={dropdownTriggerStyle}
+        <SettingsSelectTrigger
+          label={selectedLabel}
           accessibilityLabel={t("settings.appearance.syntax.highlightThemeAccessibility", {
             value: selectedLabel,
           })}
-        >
-          <Text style={styles.triggerText}>{selectedLabel}</Text>
-          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
-        </DropdownMenuTrigger>
+        />
         <DropdownMenuContent side="bottom" align="end" width={200}>
           {SYNTAX_THEME_OPTIONS.map((option) => (
             <SyntaxMenuItem
@@ -939,23 +921,6 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[4],
     borderTopWidth: theme.borderWidth[1],
     borderTopColor: theme.colors.border,
-  },
-  trigger: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1],
-    paddingVertical: theme.spacing[1],
-    paddingHorizontal: theme.spacing[2],
-    borderRadius: theme.borderRadius.md,
-    borderWidth: theme.borderWidth[1],
-    borderColor: theme.colors.border,
-  },
-  triggerPressed: {
-    opacity: 0.85,
-  },
-  triggerText: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
   },
   swatch: {
     width: ICON_SIZE.md,

@@ -545,6 +545,8 @@ function createSessionForWorkspaceTests(
     appVersion?: string | null;
     onMessage?: (message: SessionOutboundMessage) => void;
     onWorkspaceRecovered?: SessionOptions["onWorkspaceRecovered"];
+    trimArenaEnvironments?: SessionOptions["trimArenaEnvironments"];
+    getArenaEnvironmentStatus?: SessionOptions["getArenaEnvironmentStatus"];
     workspaceGitService?: ReturnType<typeof createNoopWorkspaceGitService>;
     terminalManager?: TerminalManager | null;
     agentManager?: { [K in keyof SessionOptions["agentManager"]]?: unknown };
@@ -637,6 +639,8 @@ function createSessionForWorkspaceTests(
       appVersion: options.appVersion ?? null,
       onMessage: options.onMessage ?? vi.fn(),
       onWorkspaceRecovered: options.onWorkspaceRecovered,
+      trimArenaEnvironments: options.trimArenaEnvironments,
+      getArenaEnvironmentStatus: options.getArenaEnvironmentStatus,
       logger: asSessionLogger(logger),
       downloadTokenStore: asDownloadTokenStore(),
       pushNotifications: asPushNotifications(),
@@ -9548,5 +9552,83 @@ test("workspace.create.request reports an archived explicit project", async () =
     requestId: "req-archived-project",
     workspace: null,
     errorCode: "archived_project",
+  });
+});
+
+test("arena.environments.trim.request answers with what the trim released", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const trims: number[] = [];
+  const session = createSessionForWorkspaceTests({
+    onMessage: (message) => emitted.push(message),
+    trimArenaEnvironments: async (keep) => {
+      trims.push(keep);
+      return { chats: 3, released: 2, kept: 1 };
+    },
+  });
+
+  await session.handleMessage({
+    type: "arena.environments.trim.request",
+    requestId: "req-trim",
+    keep: 0,
+  });
+
+  expect(trims).toEqual([0]);
+  expect(findByType(emitted, "arena.environments.trim.response")?.payload).toEqual({
+    requestId: "req-trim",
+    result: { chats: 3, released: 2, kept: 1 },
+    error: null,
+  });
+});
+
+test("arena.environments.trim.request reports a failed trim instead of throwing", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const session = createSessionForWorkspaceTests({
+    onMessage: (message) => emitted.push(message),
+    trimArenaEnvironments: async () => {
+      throw new Error("The Agent Duel backend is unavailable");
+    },
+  });
+
+  await session.handleMessage({
+    type: "arena.environments.trim.request",
+    requestId: "req-fail",
+    keep: 0,
+  });
+
+  expect(findByType(emitted, "arena.environments.trim.response")?.payload).toEqual({
+    requestId: "req-fail",
+    result: null,
+    error: "The Agent Duel backend is unavailable",
+  });
+});
+
+test("arena.environments.get_status.request answers with free space, or an error without a host", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const withStatus = createSessionForWorkspaceTests({
+    onMessage: (message) => emitted.push(message),
+    getArenaEnvironmentStatus: async () => ({
+      freeBytes: 42_000_000_000,
+      lowDiskBytes: 10_000_000_000,
+    }),
+  });
+  await withStatus.handleMessage({
+    type: "arena.environments.get_status.request",
+    requestId: "req-status",
+  });
+  expect(findByType(emitted, "arena.environments.get_status.response")?.payload).toEqual({
+    requestId: "req-status",
+    status: { freeBytes: 42_000_000_000, lowDiskBytes: 10_000_000_000 },
+    error: null,
+  });
+
+  const missing: SessionOutboundMessage[] = [];
+  const without = createSessionForWorkspaceTests({ onMessage: (message) => missing.push(message) });
+  await without.handleMessage({
+    type: "arena.environments.get_status.request",
+    requestId: "req-none",
+  });
+  expect(findByType(missing, "arena.environments.get_status.response")?.payload).toMatchObject({
+    requestId: "req-none",
+    status: null,
   });
 });

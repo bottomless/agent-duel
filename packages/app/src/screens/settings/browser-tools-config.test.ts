@@ -17,6 +17,8 @@ function makeConfig(browserToolsEnabled = false): MutableDaemonConfig {
     autoArchiveAfterMerge: false,
     enableTerminalAgentHooks: false,
     appendSystemPrompt: "",
+    arenaEnvironmentRetention: 5,
+    worktreeRetention: 15,
   };
 }
 

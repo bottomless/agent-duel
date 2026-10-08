@@ -1,11 +1,14 @@
 import { $ } from "bun"
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
+import { spawn as spawnProcess } from "node:child_process"
+import { createHash } from "node:crypto"
 import { chmod, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises"
 import path from "node:path"
 import { Global } from "@opencode-ai/core/global"
 import type { Store } from "@/arena/mongo"
 import type { TurnDocument } from "@/arena/records"
 import * as CopySnapshot from "@/arena/copy-snapshot"
+import { ArenaContestant } from "@/arena/contestant"
 import { hostRepoPath, isolatedRoot } from "@/worktree"
 import { registry, setStoreForTest } from "@/arena/runtime"
 import { resetDatabase } from "../fixture/db"
@@ -55,6 +58,26 @@ async function waitForInitialWarmPair(store: Store, chatID: string, timeoutMs = 
 async function poolWorktrees(pool: string) {
   const entries = await readdir(pool).catch(() => [] as string[])
   return entries.filter((name) => name !== ".trash" && !name.endsWith(".git") && !name.endsWith(".git.partial")).sort()
+}
+
+/** OpenCode's snapshot repositories for a worktree path, under whichever project it was keyed to. */
+async function snapshotRepositories(worktree: string) {
+  const root = path.join(Global.Path.data, "snapshot")
+  const name = createHash("sha1").update(worktree).digest("hex")
+  const projects = await readdir(root).catch(() => [] as string[])
+  const found = await Promise.all(projects.map((project) => exists(path.join(root, project, name))))
+  return projects.filter((_, index) => found[index])
+}
+
+/** Kill a process group a test started, if anything in it is still running. */
+function killQuietly(pid: number) {
+  for (const target of [-pid, pid]) {
+    try {
+      process.kill(target, "SIGKILL")
+    } catch {
+      // Already gone, which is what the test wanted.
+    }
+  }
 }
 
 async function inode(directory: string) {
@@ -975,6 +998,7 @@ describe("persistent contestant worktrees", () => {
       const turn1 = await battle({ store: memory.store, directory: root, chatID, prompt: "evict turn one" })
       const warm = await waitForWarmPair(memory.store, turn1, 1)
       const pool = path.dirname(warm.warmPreparation!.worktrees.a!.directory)
+      const updatedAt = (await memory.store.chat(chatID))!.updatedAt
       const prepared = await arenaRequest("/arena/checkout/prepare", {
         method: "POST",
         headers: headers(root),
@@ -982,7 +1006,20 @@ describe("persistent contestant worktrees", () => {
       })
       expect(prepared.status).toBe(204)
       expect((await readdir(pool).catch(() => [] as string[])).filter((name) => name !== ".trash")).toEqual([])
-      expect((await memory.store.chat(chatID))?.checkoutEvicted).toBe(true)
+      const evicted = await memory.store.chat(chatID)
+      expect(evicted?.checkoutEvicted).toBe(true)
+      // Eviction is no work in the chat: a restart re-warms the chat updated last.
+      expect(evicted?.updatedAt).toEqual(updatedAt)
+
+      const released = await arenaRequest("/arena/checkout/release", {
+        method: "POST",
+        headers: headers(root),
+        body: JSON.stringify({ root }),
+      })
+      expect(released.status).toBe(204)
+      const restored = await memory.store.chat(chatID)
+      expect(restored?.checkoutEvicted).toBeUndefined()
+      expect(restored?.updatedAt).toEqual(updatedAt)
     } finally {
       await archive?.()
       router.restore()
@@ -1096,6 +1133,316 @@ describe("persistent contestant worktrees", () => {
     }
   }, 120_000)
 
+  test("removes the snapshot repository of a worktree that moved to the next turn's path", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      let worktrees: { a: string; b: string } | undefined
+      const turn1 = await battle({
+        store: memory.store,
+        directory: root,
+        chatID: chat.chatID,
+        prompt: "snapshot turn one",
+        beforeVote: async (turnID) => {
+          const runs = await memory.store.runsForTurn(turnID)
+          const side = (name: "a" | "b") => runs.find((run) => run.side === name)!.worktree
+          worktrees = { a: side("a"), b: side("b") }
+          for (const worktree of Object.values(worktrees)) {
+            expect(await snapshotRepositories(worktree)).toHaveLength(1)
+          }
+        },
+      })
+      await waitForWarmPair(memory.store, turn1, 1)
+      // The loser's worktree became one of the next pair; the retained winner keeps its path.
+      await waitForCondition(
+        async () => (await snapshotRepositories(worktrees!.b)).length === 0,
+        "the released side's snapshot repository was not removed",
+      )
+      expect(await exists(worktrees!.b)).toBe(false)
+      expect(await snapshotRepositories(worktrees!.a)).toHaveLength(1)
+    } finally {
+      await archive?.()
+      router.restore()
+    }
+  }, 120_000)
+
+  test("releases the worktrees of chats past the limit, and such a chat's next send builds a pair", async () => {
+    await using older = await fixture()
+    await using newer = await fixture()
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key"
+    setStoreForTest(memory.store)
+    const archives: Array<() => Promise<unknown>> = []
+    try {
+      const pools: string[] = []
+      const chats: string[] = []
+      for (const directory of [older, newer]) {
+        const chat = await openChat(directory.path)
+        archives.push(chat.archive)
+        chats.push(chat.chatID)
+        const turn = await battle({
+          store: memory.store,
+          directory: directory.path,
+          chatID: chat.chatID,
+          prompt: "trim",
+        })
+        const warm = await waitForWarmPair(memory.store, turn, 1)
+        pools.push(path.dirname(warm.warmPreparation!.worktrees.a!.directory))
+      }
+
+      // A full disk elsewhere is not freed by releasing these: `/dev` is its own volume.
+      const elsewhere = await json<{ chats: number; released: number; kept: number }>(
+        await arenaRequest("/arena/environments/trim", {
+          method: "POST",
+          headers: headers(newer.path),
+          body: JSON.stringify({ keep: 0, volumeOf: "/dev" }),
+        }),
+      )
+      expect(elsewhere).toEqual({ chats: 0, released: 0, kept: 0 })
+      expect((await poolWorktrees(pools[0]!)).length).toBeGreaterThanOrEqual(3)
+      const updatedAt = (await memory.store.chat(chats[0]!))!.updatedAt
+      // What the retained winner's shell left in its temp directory goes with its worktree.
+      const winner = await memory.store.run((await memory.store.chat(chats[0]!))!.retainedWinner!.runID)
+      const tmp = ArenaContestant.tmpDirectory(winner!.rootSessionID)
+      await mkdir(tmp, { recursive: true })
+      await writeFile(path.join(tmp, "scratch.txt"), "left by the winner\n")
+
+      const trimmed = await json<{ chats: number; released: number; kept: number }>(
+        await arenaRequest("/arena/environments/trim", {
+          method: "POST",
+          headers: headers(newer.path),
+          body: JSON.stringify({ keep: 1, volumeOf: older.path }),
+        }),
+      )
+
+      expect(trimmed).toEqual({ chats: 2, released: 1, kept: 0 })
+      expect(await exists(pools[0]!)).toBe(false)
+      expect((await poolWorktrees(pools[1]!)).length).toBeGreaterThanOrEqual(3)
+      const released = await memory.store.chat(chats[0]!)
+      expect(released?.status).toBe("ready")
+      expect(released?.retainedWinner).toBeUndefined()
+      expect(released?.warmGeneration).toBeUndefined()
+      // A release is no work in the chat: a restart re-warms the chat updated last.
+      expect(released?.updatedAt).toEqual(updatedAt)
+      expect(await exists(tmp)).toBe(false)
+      expect((await memory.store.turnsForChat(chats[0]!)).some((turn) => turn.warmPreparation)).toBe(false)
+      expect((await memory.store.runsForChat(chats[0]!)).every((run) => run.worktreeRemovedAt)).toBe(true)
+
+      await battle({ store: memory.store, directory: older.path, chatID: chats[0]!, prompt: "after release" })
+      expect(await poolWorktrees(pools[0]!)).toEqual(expect.arrayContaining(["generation-2-a", "generation-2-b"]))
+    } finally {
+      for (const archive of archives) await archive()
+      router.restore()
+    }
+  }, 180_000)
+
+  test("keeps a chat whole while a terminal is open in one of its worktrees, servers included", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    const spawned: number[] = []
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "protected" })
+      await waitForWarmPair(memory.store, turn, 1)
+      const retained = await memory.store.run((await memory.store.chat(chat.chatID))!.retainedWinner!.runID)
+      const worktree = retained!.worktree
+      // `script` gives its child a terminal of its own: the shape of a shell someone opened there.
+      const session = spawnProcess("script", ["-q", "/dev/null", "sleep", "60"], {
+        cwd: worktree,
+        detached: true,
+        stdio: "ignore",
+      })
+      const server = spawnProcess("sleep", ["61"], { cwd: worktree, detached: true, stdio: "ignore" })
+      spawned.push(session.pid!, server.pid!)
+      let shell = ""
+      await waitForCondition(async () => {
+        shell = (await $`pgrep -P ${String(session.pid)}`.quiet().nothrow().text()).trim()
+        return shell !== ""
+      }, "the terminal session did not start")
+      spawned.push(Number(shell))
+
+      const trimmed = await json<{ chats: number; released: number; kept: number }>(
+        await arenaRequest("/arena/environments/trim", {
+          method: "POST",
+          headers: headers(root),
+          body: JSON.stringify({ keep: 0 }),
+        }),
+      )
+
+      expect(trimmed).toEqual({ chats: 1, released: 0, kept: 1 })
+      expect(await exists(worktree)).toBe(true)
+      // Checked before anything was stopped: the server beside the terminal still runs.
+      expect(() => process.kill(server.pid!, 0)).not.toThrow()
+      expect((await memory.store.chat(chat.chatID))?.retainedWinner).toBeDefined()
+    } finally {
+      for (const pid of spawned) killQuietly(pid)
+      await archive?.()
+      router.restore()
+    }
+  }, 120_000)
+
+  test("keeps the worktrees of the chat the app shows, and releases them once it stops", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "watched" })
+      const warm = await waitForWarmPair(memory.store, turn, 1)
+      const pool = path.dirname(warm.warmPreparation!.worktrees.a!.directory)
+      const trim = () =>
+        arenaRequest("/arena/environments/trim", {
+          method: "POST",
+          headers: headers(root),
+          body: JSON.stringify({ keep: 0 }),
+        }).then((response) => json<{ chats: number; released: number; kept: number }>(response))
+      // The app streams the chat it shows; the first frame means the stream has started.
+      const stream = await arenaRequest(`/arena/sessions/${chat.sessionID}/stream`, { headers: headers(root) })
+      reader = stream.body!.getReader()
+      await reader.read()
+
+      expect(await trim()).toEqual({ chats: 1, released: 0, kept: 1 })
+      expect((await poolWorktrees(pool)).length).toBeGreaterThanOrEqual(3)
+      expect((await memory.store.chat(chat.chatID))?.retainedWinner).toBeDefined()
+
+      await reader.cancel()
+      reader = undefined
+      await waitForCondition(
+        async () => (await trim()).released === 1,
+        "the chat kept its worktrees after the app stopped showing it",
+      )
+      expect(await exists(pool)).toBe(false)
+    } finally {
+      await reader?.cancel()
+      await archive?.()
+      router.restore()
+    }
+  }, 120_000)
+
+  test("lets a send start while a released chat's worktrees are still being deleted", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    let stuck: string | undefined
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "slow delete" })
+      const warm = await waitForWarmPair(memory.store, turn, 1)
+      const pool = path.dirname(warm.warmPreparation!.worktrees.a!.directory)
+      // A tree in the trash that cannot be deleted keeps the release waiting for the trash to empty.
+      stuck = path.join(pool, ".trash", "stuck", "locked")
+      await mkdir(stuck, { recursive: true })
+      await writeFile(path.join(stuck, "file"), "locked\n")
+      await chmod(stuck, 0o555)
+
+      let trimDone = false
+      const trimming = arenaRequest("/arena/environments/trim", {
+        method: "POST",
+        headers: headers(root),
+        body: JSON.stringify({ keep: 0 }),
+      })
+        .then((response) => json<{ chats: number; released: number; kept: number }>(response))
+        .finally(() => {
+          trimDone = true
+        })
+      await waitForCondition(
+        async () => (await memory.store.chat(chat.chatID))?.retainedWinner === undefined,
+        "the chat's worktrees were not released",
+      )
+
+      const admitted = await json<PublicSnapshot>(
+        await arenaRequest(`/arena/chats/${chat.chatID}/turns`, {
+          method: "POST",
+          headers: headers(root),
+          body: JSON.stringify({ prompt: "during the delete" }),
+        }),
+      )
+
+      expect(admitted.turn?.id).toBeDefined()
+      expect(trimDone).toBe(false)
+      expect(await trimming).toEqual({ chats: 1, released: 1, kept: 0 })
+      await waitForTurn(memory.store, admitted.turn!.id, "awaiting_vote")
+    } finally {
+      if (stuck) await chmod(stuck, 0o755).catch(() => undefined)
+      await archive?.()
+      router.restore()
+    }
+  }, 120_000)
+
+  test("stops a server the retained winner left running and releases the chat", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    let server: ReturnType<typeof spawnProcess> | undefined
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "preview" })
+      await waitForWarmPair(memory.store, turn, 1)
+      const retained = await memory.store.run((await memory.store.chat(chat.chatID))!.retainedWinner!.runID)
+      // A preview the winner started in the background, in a process group of its own.
+      server = spawnProcess("sleep", ["60"], { cwd: retained!.worktree, detached: true, stdio: "ignore" })
+
+      const trimmed = await json<{ chats: number; released: number; kept: number }>(
+        await arenaRequest("/arena/environments/trim", {
+          method: "POST",
+          headers: headers(root),
+          body: JSON.stringify({ keep: 0 }),
+        }),
+      )
+
+      expect(trimmed).toEqual({ chats: 1, released: 1, kept: 0 })
+      expect(await exists(retained!.worktree)).toBe(false)
+      await waitForCondition(async () => {
+        try {
+          process.kill(server!.pid!, 0)
+          return false
+        } catch {
+          return true
+        }
+      }, "the winner's server is still running")
+    } finally {
+      if (server?.pid) killQuietly(server.pid)
+      await archive?.()
+      router.restore()
+    }
+  }, 120_000)
+
   test("archiving a chat deletes its worktrees before it responds", async () => {
     await using directory = await fixture()
     const root = directory.path
@@ -1121,8 +1468,7 @@ describe("persistent contestant worktrees", () => {
 
       await chat.archive()
 
-      expect((await readdir(pool).catch(() => [] as string[])).filter((name) => name !== ".trash")).toEqual([])
-      expect(await readdir(path.join(pool, ".trash")).catch(() => [] as string[])).toEqual([])
+      expect(await exists(pool)).toBe(false)
     } finally {
       router.restore()
     }

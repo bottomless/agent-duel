@@ -7,6 +7,7 @@ import {
   persistedProxyRoutes,
   serviceOwnerID,
   stopOwnedServices,
+  terminalOpenUnder,
   type ProcessSnapshot,
   type ServiceAdapter,
 } from "@/arena/services"
@@ -476,4 +477,27 @@ test("a real kill of a vanished group does not throw out of the default adapter"
   const { defaultServiceAdapter } = await import("@/arena/services")
   // A group id that cannot exist: killing it is the exact ESRCH the race produces.
   expect(() => defaultServiceAdapter.stopProcessGroup?.(2_147_483_646, "SIGTERM")).not.toThrow()
+})
+
+test("a terminal shell under a chat's worktrees counts as open; its servers and shells elsewhere do not", async () => {
+  const adapter = {
+    listProcesses: () => [
+      { pid: 10, processGroupID: 10, cwd: "/repo/.agent-duel/worktrees/chat/generation-1-a", command: "node" },
+      { pid: 11, processGroupID: 11, cwd: "/elsewhere", command: "zsh", sessionShell: true },
+    ],
+  }
+  expect(await terminalOpenUnder(["/repo/.agent-duel/worktrees/chat"], adapter)).toBe(false)
+  const withShell = {
+    listProcesses: () => [
+      ...adapter.listProcesses(),
+      {
+        pid: 12,
+        processGroupID: 12,
+        cwd: "/repo/.agent-duel/worktrees/chat/generation-1-a/src",
+        command: "zsh",
+        sessionShell: true,
+      },
+    ],
+  }
+  expect(await terminalOpenUnder(["/repo/.agent-duel/worktrees/chat"], withShell)).toBe(true)
 })

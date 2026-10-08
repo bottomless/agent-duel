@@ -656,6 +656,19 @@ async function realListeners(processGroupID: number) {
   })
 }
 
+/**
+ * Whether a terminal session's shell works under any of `roots`: someone has a terminal open
+ * there, the user's own or a contestant seat's. Its shell is never a service, and what runs in it
+ * is theirs.
+ */
+export async function terminalOpenUnder(roots: readonly string[], adapter: ServiceAdapter = defaultServiceAdapter) {
+  const processes = adapter.listProcesses ? await resolved(adapter.listProcesses()) : []
+  return processes.some(
+    (item) =>
+      item.sessionShell && item.cwd !== undefined && roots.some((root) => inside(path.resolve(root), item.cwd!)),
+  )
+}
+
 export const defaultServiceAdapter: ServiceAdapter = {
   listProcesses: listRealProcesses,
   listTerminals: () => [],

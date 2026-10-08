@@ -170,7 +170,13 @@ import type { PushNotificationSender } from "./push/index.js";
 import { getOrCreateServerId } from "./server-id.js";
 import { resolveDaemonVersion } from "./daemon-version.js";
 import type { AgentClient, AgentProvider } from "./agent/agent-sdk-types.js";
-import type { AgentProfile, FirstAgentContext, TerminalProfile } from "@getpaseo/protocol/messages";
+import {
+  DEFAULT_ARENA_ENVIRONMENT_RETENTION,
+  DEFAULT_WORKTREE_RETENTION,
+  type AgentProfile,
+  type FirstAgentContext,
+  type TerminalProfile,
+} from "@getpaseo/protocol/messages";
 import type {
   AgentProviderRuntimeSettingsMap,
   ProviderOverride,
@@ -392,6 +398,8 @@ export interface PaseoDaemonConfig {
   };
   autoArchiveAfterMerge?: boolean;
   enableTerminalAgentHooks?: boolean;
+  arenaEnvironmentRetention?: number | null;
+  worktreeRetention?: number | null;
   appendSystemPrompt?: string;
   terminalProfiles?: TerminalProfile[];
   agentProfiles?: AgentProfile[];
@@ -524,6 +532,14 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     autoArchiveAfterMerge: config.autoArchiveAfterMerge ?? false,
     enableTerminalAgentHooks: config.enableTerminalAgentHooks ?? false,
     appendSystemPrompt: config.appendSystemPrompt ?? "",
+    arenaEnvironmentRetention:
+      config.arenaEnvironmentRetention === undefined
+        ? DEFAULT_ARENA_ENVIRONMENT_RETENTION
+        : config.arenaEnvironmentRetention,
+    worktreeRetention:
+      config.worktreeRetention === undefined
+        ? DEFAULT_WORKTREE_RETENTION
+        : config.worktreeRetention,
   };
 
   if (config.terminalProfiles !== undefined) {

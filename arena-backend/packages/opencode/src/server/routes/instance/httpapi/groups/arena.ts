@@ -134,6 +134,15 @@ export const CheckoutCleanupResult = Schema.Struct({
   lastActivityAt: Schema.NullOr(Schema.String),
   reason: Schema.optional(Schema.String),
 })
+export const EnvironmentTrimPayload = Schema.Struct({
+  keep: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  volumeOf: Schema.optional(Schema.String),
+})
+export const EnvironmentTrimResult = Schema.Struct({
+  chats: Schema.Number,
+  released: Schema.Number,
+  kept: Schema.Number,
+})
 export const QuestionReplyPayload = Question.Reply
 export const ForkSessionPayload = Schema.Struct({
   destination: Schema.String,
@@ -533,6 +542,21 @@ const group = HttpApiGroup.make("arena")
       error: ArenaApiError,
     }).annotateMerge(
       OpenApi.annotations({ identifier: "arena.checkout.release", summary: "Release Arena checkout eviction" }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("trimEnvironments", "/arena/environments/trim", {
+      query: WorkspaceRoutingQuery,
+      payload: EnvironmentTrimPayload,
+      success: EnvironmentTrimResult,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.environments.trim",
+        summary: "Release idle chats' contestant worktrees",
+        description:
+          "Keep contestant worktrees for the chats with the latest battle activity and release the others' while they are idle. Covers every chat, whichever directory routes the request, or with `volumeOf` only the chats whose worktrees are on that path's volume.",
+      }),
     ),
   )
   .add(

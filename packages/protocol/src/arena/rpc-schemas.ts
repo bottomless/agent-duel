@@ -860,7 +860,52 @@ export const ArenaRunPermissionReplyResponseSchema = z.object({
   payload: ArenaSnapshotResponsePayloadSchema,
 });
 
+/** What a trim of idle chats' battle environments did (`arena.environments.trim`). */
+export const ArenaEnvironmentTrimSchema = z.object({
+  /** Chats that held battle environments before the trim. */
+  chats: z.number(),
+  /** Chats whose environments were released. */
+  released: z.number(),
+  /** Chats past the limit that could not give theirs up yet, such as one with a battle open. */
+  kept: z.number(),
+});
+/** Keeps the `keep` most recently active chats' environments; 0 releases every idle chat's. */
+export const ArenaEnvironmentsTrimRequestSchema = z.object({
+  type: z.literal("arena.environments.trim.request"),
+  requestId: z.string(),
+  keep: z.number().int().min(0),
+});
+export const ArenaEnvironmentsTrimResponseSchema = z.object({
+  type: z.literal("arena.environments.trim.response"),
+  payload: z.object({
+    requestId: z.string(),
+    result: ArenaEnvironmentTrimSchema.nullable(),
+    error: z.string().nullable(),
+  }),
+});
+/** Free space where battle environments live, for the Storage settings. */
+export const ArenaEnvironmentStatusSchema = z.object({
+  /** The least free space among the open projects' volumes, or null when unknown. */
+  freeBytes: z.number().nullable(),
+  /** Below this, only the latest chat keeps its battle environments, whatever the limit says. */
+  lowDiskBytes: z.number(),
+});
+export const ArenaEnvironmentsGetStatusRequestSchema = z.object({
+  type: z.literal("arena.environments.get_status.request"),
+  requestId: z.string(),
+});
+export const ArenaEnvironmentsGetStatusResponseSchema = z.object({
+  type: z.literal("arena.environments.get_status.response"),
+  payload: z.object({
+    requestId: z.string(),
+    status: ArenaEnvironmentStatusSchema.nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
 export type ArenaSnapshot = z.infer<typeof ArenaSnapshotSchema>;
+export type ArenaEnvironmentStatus = z.infer<typeof ArenaEnvironmentStatusSchema>;
+export type ArenaEnvironmentTrim = z.infer<typeof ArenaEnvironmentTrimSchema>;
 export type ArenaRun = z.infer<typeof ArenaRunSchema>;
 export type ArenaHistoryItem = z.infer<typeof ArenaHistoryItemSchema>;
 export type ArenaComparisonDiff = z.infer<typeof ArenaComparisonDiffSchema>;

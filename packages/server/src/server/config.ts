@@ -18,6 +18,10 @@ import type {
   ProviderOverride,
 } from "./agent/provider-launch-config.js";
 import { ProviderOverrideSchema } from "./agent/provider-launch-config.js";
+import {
+  DEFAULT_ARENA_ENVIRONMENT_RETENTION,
+  DEFAULT_WORKTREE_RETENTION,
+} from "@getpaseo/protocol/messages";
 import { AgentProviderSchema } from "@getpaseo/protocol/provider-manifest";
 import { hashDaemonPassword } from "./auth.js";
 import { resolveSpeechConfig } from "./speech/speech-config-resolver.js";
@@ -531,6 +535,14 @@ export function loadConfig(
     git: resolveGitProcessConfig(env, persisted),
     autoArchiveAfterMerge,
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
+    arenaEnvironmentRetention:
+      persisted.daemon?.arenaEnvironmentRetention === undefined
+        ? DEFAULT_ARENA_ENVIRONMENT_RETENTION
+        : persisted.daemon.arenaEnvironmentRetention,
+    worktreeRetention:
+      persisted.daemon?.worktreeRetention === undefined
+        ? DEFAULT_WORKTREE_RETENTION
+        : persisted.daemon.worktreeRetention,
     appendSystemPrompt,
     terminalProfiles,
     agentProfiles,

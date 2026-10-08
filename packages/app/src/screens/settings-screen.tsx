@@ -15,7 +15,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ArrowLeft, Settings, Palette, Keyboard, Bell, FolderGit2 } from "lucide-react-native";
+import {
+  ArrowLeft,
+  Settings,
+  Palette,
+  Keyboard,
+  Bell,
+  FolderGit2,
+  HardDrive,
+} from "lucide-react-native";
 import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { ScreenTitle } from "@/components/headers/screen-title";
@@ -38,6 +46,7 @@ import { WindowChromeRegion, WindowChromeSafeArea } from "@/utils/desktop-window
 import { BackHeader } from "@/components/headers/back-header";
 import { ScreenHeader } from "@/components/headers/screen-header";
 import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-section";
+import { StorageSection } from "@/screens/settings/storage-section";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DesktopNotificationsSection } from "@/desktop/components/desktop-notifications-section";
 import { BrowserDataSection } from "@/desktop/browser/settings/browser-data-section";
@@ -95,6 +104,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     icon: Bell,
     desktopOnly: true,
   },
+  { id: "storage", labelKey: "settings.sections.storage", icon: HardDrive },
 ];
 
 function matchesSectionSearch(query: string, item: SidebarSectionItem, t: TFunction): boolean {
@@ -685,6 +695,8 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
         return isDesktopApp ? <KeyboardShortcutsSection /> : null;
       case "notifications":
         return isDesktopApp ? <DesktopNotificationsSection /> : null;
+      case "storage":
+        return <StorageSection serverId={activeHostServerId} />;
     }
     return null;
   };

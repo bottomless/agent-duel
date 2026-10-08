@@ -1725,6 +1725,7 @@ export const fr: TranslationResources = {
       shortcuts: "Raccourcis",
       integrations: "Intégrations",
       notifications: "Notifications",
+      storage: "Stockage",
       permissions: "Autorisations",
       about: "À propos",
     },
@@ -1793,6 +1794,43 @@ export const fr: TranslationResources = {
       fallbackHint: "S’il est indisponible, Agent Duel utilise un autre modèle disponible",
       docs: "Documentation",
       saveError: "Impossible de mettre à jour la génération de métadonnées",
+    },
+    storage: {
+      title: "Environnements de duel",
+      saveError: "Mise à jour impossible : {{message}}",
+      worktrees: {
+        title: "Worktrees",
+        label: "Conserver les worktrees",
+        description:
+          "Les worktrees que vous créez avec New worktree. C'est là que se trouve votre propre travail. Au-delà de ce nombre, les plus anciens inactifs sont nettoyés avec leur code sauvegardé, et Restaurer les fichiers les récupère.",
+        accessibilityLabel: "Choisir combien de worktrees conservent leurs fichiers ({{value}})",
+        recent: "Les {{limit}} plus récents",
+        all: "Tous les worktrees",
+      },
+      retention: {
+        label: "Conserver les environnements de",
+        description:
+          "Des copies temporaires de votre projet dans lesquelles les duels s'exécutent, une par agent. Le résultat choisi est appliqué à votre projet : elles ne contiennent donc rien de votre travail. Les conserver permet au prochain duel d'une discussion de démarrer plus vite.",
+        accessibilityLabel:
+          "Choisir les discussions qui conservent leurs environnements de duel ({{value}})",
+        recent: "Les {{limit}} plus récentes",
+        all: "Toutes les discussions",
+      },
+      free: {
+        label: "Libérer les environnements inutilisés",
+        description:
+          "Supprime maintenant les copies des discussions inactives. Leur historique est conservé et leur prochain duel mettra plus de temps à démarrer.",
+        action: "Libérer",
+        pending: "Libération...",
+        space: "{{size}} libres sur ce disque",
+        result: "Libérés : {{released}} · En cours d'utilisation : {{kept}}",
+        error: "Impossible de libérer les environnements : {{message}}",
+      },
+      lowDisk: {
+        title: "Disque presque plein",
+        description:
+          "Il reste moins de {{size}} : seule la discussion la plus récente sur ce disque conserve ses environnements de duel.",
+      },
     },
     general: {
       title: "Général",

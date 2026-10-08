@@ -39,7 +39,7 @@ function git(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-async function setup() {
+async function setup(options: { worktreeRetention?: () => number | null } = {}) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "workspace-cleanup-")));
   directories.push(directory);
   const repo = join(directory, "repo");
@@ -84,6 +84,7 @@ async function setup() {
     release: async (root) => {
       released.push(root);
     },
+    trimEnvironments: async () => ({ chats: 0, released: 0, kept: 0 }),
     close: async () => {},
   };
   const seeded: Array<{ sourceCwd: string; worktreePath: string }> = [];
@@ -97,6 +98,7 @@ async function setup() {
     seedIgnoredContent: async (input) => {
       seeded.push(input);
     },
+    ...options,
   });
   services.push(service);
   return { directory, repo, registry, roots, service, prepared, released, seeded, source };
@@ -326,4 +328,202 @@ test("an in-flight use prevents a cleanup claim, including use through a subdire
     "Restore the workspace",
   );
   access.release("/repo/worktree");
+});
+
+async function environmentSetup(
+  retention: { keep: number | null },
+  disk: { free: number | null; byPath?: Record<string, number> } = { free: null },
+  backend: { available: boolean; gate?: Promise<void> } = { available: true },
+) {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "workspace-environments-")));
+  directories.push(directory);
+  const logger = pino({ level: "silent" });
+  const registry = new FileBackedWorkspaceRegistry(join(directory, "workspaces.json"), logger);
+  const projects = ["older", "newer", "archived"].map((name) => {
+    const root = join(directory, name);
+    mkdirSync(root);
+    return root;
+  });
+  const record = (index: number, overrides: { lastChatActivityAt?: string; archivedAt?: string }) =>
+    createPersistedWorkspaceRecord({
+      workspaceId: `workspace-${index}`,
+      projectId: "project",
+      cwd: projects[index]!,
+      kind: "local_checkout",
+      displayName: `Project ${index}`,
+      worktreeRoot: projects[index]!,
+      mainRepoRoot: projects[index]!,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      ...overrides,
+    });
+  await registry.upsert(record(0, { lastChatActivityAt: "2026-02-01T00:00:00.000Z" }));
+  await registry.upsert(record(1, { lastChatActivityAt: "2026-03-01T00:00:00.000Z" }));
+  await registry.archive("workspace-1", "2026-03-02T00:00:00.000Z");
+  await registry.upsert(record(2, { lastChatActivityAt: "2026-02-15T00:00:00.000Z" }));
+  const trims: Array<{ anchor: string; keep: number; volumeOf?: string }> = [];
+  const service = new WorkspaceCleanupService({
+    paseoHome: directory,
+    registry,
+    logger,
+    openSource: async (anchor) =>
+      backend.available
+        ? {
+            inspect: async () => ({ eligible: false, lastActivityAt: null }),
+            prepare: async () => {},
+            release: async () => {},
+            trimEnvironments: async (keep, volumeOf) => {
+              trims.push({ anchor, keep, ...(volumeOf ? { volumeOf } : {}) });
+              await backend.gate;
+              return { chats: 3, released: 1, kept: 0 };
+            },
+            close: async () => {},
+          }
+        : null,
+    isProtected: async () => false,
+    stopTerminals: async () => {},
+    environmentRetention: () => retention.keep,
+    freeBytes: async (path) => disk.byPath?.[path] ?? disk.free,
+  });
+  services.push(service);
+  return { projects, service, trims, logger };
+}
+
+test("trims battle environments to the configured limit through the latest open workspace", async () => {
+  const retention = { keep: 5 as number | null };
+  const { projects, service, trims } = await environmentSetup(retention);
+  await service.initialize();
+  await vi.waitFor(() => expect(trims).toHaveLength(1));
+  // The archived workspace has the newest activity; the request goes through the latest open one.
+  expect(trims[0]).toEqual({ anchor: projects[2], keep: 5 });
+
+  // Activity schedules sweeps all the time; one trim a minute is enough until the limit changes.
+  service.schedule();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(trims).toHaveLength(1);
+  retention.keep = 3;
+  service.retentionChanged();
+  await vi.waitFor(() => expect(trims).toHaveLength(2));
+  expect(trims[1]?.keep).toBe(3);
+
+  expect(await service.trimEnvironments(0)).toEqual({ chats: 3, released: 1, kept: 0 });
+  expect(trims[2]?.keep).toBe(0);
+});
+
+test("a sweep inside the trim interval trims once the interval ends", async () => {
+  const { service, trims } = await environmentSetup({ keep: 3 });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    await service.initialize();
+    await vi.waitFor(() => expect(trims).toHaveLength(1));
+    // A battle ends 40 seconds later, and nothing happens after it.
+    await vi.advanceTimersByTimeAsync(40_000);
+    service.schedule();
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(trims).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(trims).toHaveLength(2));
+    expect(trims[1]?.keep).toBe(3);
+    // With nothing new to sweep, no further trim follows.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(trims).toHaveLength(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("leaves every chat's battle environments when the limit is off", async () => {
+  const { service, trims } = await environmentSetup({ keep: null });
+  await service.initialize();
+  service.schedule();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(trims).toEqual([]);
+});
+
+test("follows the configured worktree limit, and keeping every worktree removes none", async () => {
+  const limit = { value: null as number | null };
+  const { roots, service, prepared } = await setup({ worktreeRetention: () => limit.value });
+  await service.initialize();
+  service.schedule();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(prepared).toEqual([]);
+  expect(roots.filter(existsSync)).toHaveLength(16);
+
+  // Fourteen of the sixteen are pinned, so a limit of fourteen removes both unpinned ones.
+  limit.value = 14;
+  service.retentionChanged();
+  await vi.waitFor(() => expect(roots.filter(existsSync)).toHaveLength(14), { timeout: 30_000 });
+  expect(prepared.toSorted()).toEqual([roots[0], roots[1]].toSorted());
+}, 45_000);
+
+test("keeps only the latest chat's battle environments while the disk is low, whatever the limit", async () => {
+  const retention = { keep: null as number | null };
+  const disk = { free: 4_000_000_000 as number | null };
+  const { projects, service, trims } = await environmentSetup(retention, disk);
+  await service.initialize();
+  await vi.waitFor(() => expect(trims).toHaveLength(1));
+  // Both open projects share the test's volume, which is trimmed once, through the latest of them.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(trims).toEqual([{ anchor: projects[2], keep: 1, volumeOf: projects[2] }]);
+
+  retention.keep = 5;
+  disk.free = 200_000_000_000;
+  service.retentionChanged();
+  await vi.waitFor(() => expect(trims).toHaveLength(2));
+  expect(trims[1]).toEqual({ anchor: projects[2], keep: 5 });
+
+  expect(await service.environmentStatus()).toEqual({
+    freeBytes: 200_000_000_000,
+    lowDiskBytes: 10_000_000_000,
+  });
+});
+
+test("a full volume keeps only its own latest chat's environments, and others keep the limit", async () => {
+  const disk = { free: 500_000_000_000 as number | null, byPath: {} as Record<string, number> };
+  const { projects, service, trims } = await environmentSetup({ keep: 5 }, disk);
+  // The latest project has room; an older one's volume is almost full.
+  disk.byPath[projects[0]!] = 3_000_000_000;
+  await service.initialize();
+  await vi.waitFor(() => expect(trims).toHaveLength(2));
+  expect(trims).toEqual([
+    { anchor: projects[2], keep: 5 },
+    { anchor: projects[2], keep: 1, volumeOf: projects[0] },
+  ]);
+  // Storage reports the fullest volume.
+  expect((await service.environmentStatus()).freeBytes).toBe(3_000_000_000);
+});
+
+test("a sweep stays quiet without the Arena backend, while Free up reports it", async () => {
+  const { service, logger } = await environmentSetup(
+    { keep: 5 },
+    { free: null },
+    { available: false },
+  );
+  const warn = vi.spyOn(logger, "warn");
+  await service.initialize();
+  service.retentionChanged();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(warn).not.toHaveBeenCalled();
+  await expect(service.trimEnvironments(0)).rejects.toThrow("backend is unavailable");
+});
+
+test("a limit changed during a sweep is applied by another sweep right after it", async () => {
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const retention = { keep: 5 as number | null };
+  const { service, trims } = await environmentSetup(
+    retention,
+    { free: null },
+    { available: true, gate },
+  );
+  await service.initialize();
+  await vi.waitFor(() => expect(trims).toHaveLength(1));
+  // The first trim is still running when the limit drops.
+  retention.keep = 2;
+  service.retentionChanged();
+  open();
+  await vi.waitFor(() => expect(trims).toHaveLength(2));
+  expect(trims[1]?.keep).toBe(2);
 });

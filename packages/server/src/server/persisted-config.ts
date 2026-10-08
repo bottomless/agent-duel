@@ -258,6 +258,8 @@ export const PersistedConfigSchema = z
         autoArchiveAfterMerge: z.boolean().optional(),
         enableTerminalAgentHooks: z.boolean().optional(),
         appendSystemPrompt: z.string().optional(),
+        arenaEnvironmentRetention: z.number().int().min(1).max(100).nullable().optional(),
+        worktreeRetention: z.number().int().min(1).max(200).nullable().optional(),
         terminalProfiles: z.array(TerminalProfileSchema).optional(),
         agentProfiles: z.array(AgentProfileSchema).optional(),
         cors: z

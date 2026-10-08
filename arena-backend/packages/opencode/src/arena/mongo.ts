@@ -1513,7 +1513,13 @@ export class Store {
           0,
         )
       : 0
-    const limited = bound({ data: input.data, runStoredBytes: totals })
+    const limited = bound({
+      data: input.data,
+      // The transcript is written when the run ends and is its record. The run budget bounds the
+      // per-call artifacts written before it, which a long run can fill on its own.
+      runStoredBytes: input.kind === "transcript" ? 0 : totals,
+      whole: input.compression === "gzip",
+    })
     return insertIdempotent(this.artifacts, {
       ...input,
       ...limited,

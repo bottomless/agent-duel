@@ -8,6 +8,11 @@ export type BoundInput = {
   readonly runStoredBytes: number
   readonly artifactLimit?: number
   readonly runLimit?: number
+  /**
+   * Store all of `data` or none of it. A gzip stream cut at the limit does not decode, so a
+   * prefix of compressed bytes is only disk spent on an artifact nothing can read.
+   */
+  readonly whole?: boolean
 }
 
 export type BoundResult = {
@@ -39,7 +44,8 @@ export function bound(input: BoundInput): BoundResult {
 
   const source = Buffer.from(input.data)
   const remaining = Math.max(0, runLimit - input.runStoredBytes)
-  const storedSize = Math.min(source.byteLength, artifactLimit, remaining)
+  const fits = Math.min(source.byteLength, artifactLimit, remaining)
+  const storedSize = input.whole && fits < source.byteLength ? 0 : fits
   const data = source.subarray(0, storedSize)
   const truncated = storedSize < source.byteLength
   const truncationReason = !truncated

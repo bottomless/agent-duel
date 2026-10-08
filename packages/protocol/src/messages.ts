@@ -90,6 +90,10 @@ import {
   ArenaRunQuestionRejectResponseSchema,
   ArenaRunPermissionReplyRequestSchema,
   ArenaRunPermissionReplyResponseSchema,
+  ArenaEnvironmentsTrimRequestSchema,
+  ArenaEnvironmentsTrimResponseSchema,
+  ArenaEnvironmentsGetStatusRequestSchema,
+  ArenaEnvironmentsGetStatusResponseSchema,
 } from "./arena/rpc-schemas.js";
 import { BrowserAutomationHostCapabilitySchema } from "./browser-automation/capabilities.js";
 import {
@@ -207,6 +211,19 @@ const MutableRelayConfigSchema = z
     enabled: z.boolean(),
   })
   .passthrough();
+/**
+ * How many chats keep their battle environments, most recently active first. `null` keeps every
+ * chat's until the chat is archived.
+ */
+export const DEFAULT_ARENA_ENVIRONMENT_RETENTION = 5;
+const ArenaEnvironmentRetentionSchema = z.number().int().min(1).max(100).nullable();
+/**
+ * How many worktrees made with New worktree keep their files, most recently active first. Past it
+ * the oldest idle ones are removed with their code saved for restore. `null` keeps them all.
+ */
+export const DEFAULT_WORKTREE_RETENTION = 15;
+const WorktreeRetentionSchema = z.number().int().min(1).max(200).nullable();
+
 export const MutableDaemonConfigSchema = z
   .object({
     // COMPAT(relayConfig): added in v0.2.6, remove after 2027-01-31 when old daemons are unsupported.
@@ -224,6 +241,10 @@ export const MutableDaemonConfigSchema = z
     autoArchiveAfterMerge: z.boolean().default(false),
     enableTerminalAgentHooks: z.boolean().default(false),
     appendSystemPrompt: z.string().default(""),
+    arenaEnvironmentRetention: ArenaEnvironmentRetentionSchema.default(
+      DEFAULT_ARENA_ENVIRONMENT_RETENTION,
+    ),
+    worktreeRetention: WorktreeRetentionSchema.default(DEFAULT_WORKTREE_RETENTION),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
   })
@@ -242,6 +263,8 @@ export const MutableDaemonConfigPatchSchema = z
     autoArchiveAfterMerge: z.boolean().optional(),
     enableTerminalAgentHooks: z.boolean().optional(),
     appendSystemPrompt: z.string().optional(),
+    arenaEnvironmentRetention: ArenaEnvironmentRetentionSchema.optional(),
+    worktreeRetention: WorktreeRetentionSchema.optional(),
     terminalProfiles: z.array(TerminalProfileSchema).optional(),
     agentProfiles: z.array(AgentProfileSchema).optional(),
   })
@@ -2755,6 +2778,8 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ArenaRunQuestionReplyRequestSchema,
   ArenaRunQuestionRejectRequestSchema,
   ArenaRunPermissionReplyRequestSchema,
+  ArenaEnvironmentsTrimRequestSchema,
+  ArenaEnvironmentsGetStatusRequestSchema,
   VoiceAudioChunkMessageSchema,
   AbortRequestMessageSchema,
   AudioPlayedMessageSchema,
@@ -5636,6 +5661,8 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ArenaRunQuestionReplyResponseSchema,
   ArenaRunQuestionRejectResponseSchema,
   ArenaRunPermissionReplyResponseSchema,
+  ArenaEnvironmentsTrimResponseSchema,
+  ArenaEnvironmentsGetStatusResponseSchema,
   ActivityLogMessageSchema,
   AssistantChunkMessageSchema,
   AudioOutputMessageSchema,

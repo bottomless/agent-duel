@@ -7,6 +7,11 @@ import { z } from "zod";
 import { normalizePathForIdentity } from "../../utils/path.js";
 import { runGitCommand, runWithGitCommandPriority } from "../../utils/run-git-command.js";
 import { isPaseoOwnedWorktreeCwd, type WorktreeSeedFn } from "../../utils/worktree.js";
+import type {
+  ArenaEnvironmentStatus,
+  ArenaEnvironmentTrim,
+} from "@getpaseo/protocol/arena/rpc-schemas";
+import { DEFAULT_WORKTREE_RETENTION } from "@getpaseo/protocol/messages";
 import type { ArenaCheckoutCleanupSource } from "../agent/agent-sdk-types.js";
 import { writeJsonFileAtomic } from "../atomic-file.js";
 import type { PersistedWorkspaceRecord, WorkspaceRegistry } from "../workspace-registry.js";
@@ -18,7 +23,18 @@ import {
 } from "./code-snapshot.js";
 import { workspaceAccess } from "./workspace-access.js";
 
-export const WORKSPACE_KEEP_COUNT = 15;
+/**
+ * Below this much free space on a project's volume, only the latest chat on that volume keeps its
+ * battle environments, whatever the limit says: they can be built again, and a full disk fails the
+ * git writes every battle and vote depends on.
+ */
+export const LOW_DISK_BYTES = 10_000_000_000;
+/**
+ * A trim reads every chat's battle history and lists processes, and the sweep is scheduled on
+ * every bit of activity, so it trims at most this often unless the limit changed. A sweep inside
+ * the interval defers its trim to the end of it rather than dropping it.
+ */
+const ENVIRONMENT_TRIM_INTERVAL_MS = 60_000;
 
 export interface WorkspaceParent {
   root: string;
@@ -61,6 +77,12 @@ interface CleanupDeps {
   isProtected(parent: WorkspaceParent): Promise<boolean>;
   stopTerminals(parent: WorkspaceParent): Promise<void>;
   seedIgnoredContent?: WorktreeSeedFn;
+  /** How many chats keep their battle environments; `null` keeps every chat's. */
+  environmentRetention?(): number | null;
+  /** How many worktrees made with New worktree keep their files; `null` keeps them all. */
+  worktreeRetention?(): number | null;
+  /** Free bytes on the volume holding `path`, or null when unknown. */
+  freeBytes?(path: string): Promise<number | null>;
 }
 
 export class WorkspaceCleanupService {
@@ -68,6 +90,9 @@ export class WorkspaceCleanupService {
   private running: Promise<void> | null = null;
   private closed = false;
   private readonly restoring = new Set<string>();
+  private lastEnvironmentTrim = 0;
+  private deferredTrim: NodeJS.Timeout | null = null;
+  private sweepAgain = false;
 
   constructor(private readonly deps: CleanupDeps) {}
 
@@ -115,6 +140,9 @@ export class WorkspaceCleanupService {
         .catch((err) => this.deps.logger.warn({ err }, "Workspace cleanup failed"))
         .finally(() => {
           this.running = null;
+          if (!this.sweepAgain) return;
+          this.sweepAgain = false;
+          this.schedule();
         });
     });
   }
@@ -123,16 +151,162 @@ export class WorkspaceCleanupService {
     this.closed = true;
     if (this.pending) clearImmediate(this.pending);
     this.pending = null;
+    this.cancelDeferredTrim();
     await this.running;
   }
 
+  /** Sweep again now, trimming environments even if a trim ran recently: a limit changed. */
+  retentionChanged(): void {
+    this.lastEnvironmentTrim = 0;
+    // A sweep in progress may already have read the old limits; another follows it.
+    if (this.running) this.sweepAgain = true;
+    this.schedule();
+  }
+
   private async sweep(): Promise<void> {
+    await this.sweepParents();
+    await this.sweepEnvironments();
+  }
+
+  private async sweepEnvironments(): Promise<void> {
+    if (this.closed) return;
+    const wait = this.lastEnvironmentTrim + ENVIRONMENT_TRIM_INTERVAL_MS - Date.now();
+    if (wait > 0) {
+      // A battle's last event often lands inside the interval, and nothing may follow it.
+      this.deferTrim(wait);
+      return;
+    }
+    // This trim sees everything a deferred one would have.
+    this.cancelDeferredTrim();
+    this.lastEnvironmentTrim = Date.now();
+    const limit = this.deps.environmentRetention?.() ?? null;
+    // A daemon without the Arena backend has no environments to trim.
+    if (limit !== null && (await this.trimThroughBackend(limit)) === "unavailable") return;
+    // Environments live inside their projects, so a full volume is freed only by its own chats.
+    for (const { root, freeBytes } of await this.lowVolumes()) {
+      this.deps.logger.info(
+        { root, freeBytes, limit },
+        "Disk is low; only the latest chat on it keeps its battle environments",
+      );
+      if ((await this.trimThroughBackend(1, root)) === "unavailable") return;
+    }
+  }
+
+  private deferTrim(wait: number): void {
+    if (this.closed || this.deferredTrim) return;
+    this.deferredTrim = setTimeout(() => {
+      this.deferredTrim = null;
+      // A sweep in progress may have passed its trim already; another follows it.
+      if (this.running) this.sweepAgain = true;
+      this.schedule();
+    }, wait);
+    this.deferredTrim.unref();
+  }
+
+  private cancelDeferredTrim(): void {
+    if (this.deferredTrim) clearTimeout(this.deferredTrim);
+    this.deferredTrim = null;
+  }
+
+  /** Free space where battle environments live, for the Storage settings. */
+  async environmentStatus(): Promise<ArenaEnvironmentStatus> {
+    return { freeBytes: await this.lowestFreeBytes(), lowDiskBytes: LOW_DISK_BYTES };
+  }
+
+  /**
+   * The least free space on the volumes the open projects live on. Each chat's environments sit
+   * inside its project, so the fullest of those volumes is the one a battle can run out of.
+   */
+  private async lowestFreeBytes(): Promise<number | null> {
+    let lowest: number | null = null;
+    for (const root of await this.projectRoots()) {
+      const free = await this.freeBytesAt(root);
+      if (free !== null && (lowest === null || free < lowest)) lowest = free;
+    }
+    return lowest;
+  }
+
+  /** The latest open project on each volume with less than `LOW_DISK_BYTES` free. */
+  private async lowVolumes(): Promise<Array<{ root: string; freeBytes: number }>> {
+    const devices = new Set<number>();
+    const low: Array<{ root: string; freeBytes: number }> = [];
+    for (const root of await this.projectRoots()) {
+      const freeBytes = await this.freeBytesAt(root);
+      if (freeBytes === null || freeBytes >= LOW_DISK_BYTES) continue;
+      const device = await fs.stat(root).then(
+        (stats) => stats.dev,
+        () => null,
+      );
+      if (device !== null && devices.has(device)) continue;
+      if (device !== null) devices.add(device);
+      low.push({ root, freeBytes });
+    }
+    return low;
+  }
+
+  private async freeBytesAt(path: string): Promise<number | null> {
+    if (this.deps.freeBytes) return this.deps.freeBytes(path);
+    return fs.statfs(path).then(
+      (stats) => stats.bavail * stats.bsize,
+      () => null,
+    );
+  }
+
+  /**
+   * Release idle chats' battle environments past the `keep` most recently active. The backend
+   * covers every chat, so any existing workspace's checkout can carry the request.
+   */
+  async trimEnvironments(keep: number): Promise<ArenaEnvironmentTrim> {
+    const trimmed = await this.trimThroughBackend(keep);
+    if (trimmed === "unavailable") throw new Error("The Agent Duel backend is unavailable");
+    return trimmed;
+  }
+
+  /** `unavailable` when no backend serves Arena, as in a daemon running without it. */
+  private async trimThroughBackend(
+    keep: number,
+    volumeOf?: string,
+  ): Promise<ArenaEnvironmentTrim | "unavailable"> {
+    const [anchor] = await this.projectRoots();
+    if (!anchor) return { chats: 0, released: 0, kept: 0 };
+    const source = await this.deps.openSource(anchor);
+    if (!source) return "unavailable";
+    try {
+      return await source.trimEnvironments(keep, volumeOf);
+    } finally {
+      await source.close();
+    }
+  }
+
+  /** The open workspaces' project roots that exist, most recently active first. */
+  private async projectRoots(): Promise<string[]> {
+    const workspaces = (await this.deps.registry.list())
+      .filter((workspace) => !workspace.archivedAt && !workspace.cleanup)
+      .sort((left, right) =>
+        (right.lastChatActivityAt ?? right.createdAt).localeCompare(
+          left.lastChatActivityAt ?? left.createdAt,
+        ),
+      );
+    const roots: string[] = [];
+    for (const workspace of workspaces) {
+      const root = workspace.mainRepoRoot ?? workspace.worktreeRoot ?? workspace.cwd;
+      if (roots.includes(root) || !(await pathExists(root).catch(() => false))) continue;
+      roots.push(root);
+    }
+    return roots;
+  }
+
+  private async sweepParents(): Promise<void> {
     const parents = groupWorkspaceParents(await this.deps.registry.list());
     const materialized: WorkspaceParent[] = [];
     for (const parent of parents) {
       if (await pathExists(parent.root)) materialized.push(parent);
     }
-    let excess = materialized.length - WORKSPACE_KEEP_COUNT;
+    const limit = this.deps.worktreeRetention
+      ? this.deps.worktreeRetention()
+      : DEFAULT_WORKTREE_RETENTION;
+    if (limit === null) return;
+    let excess = materialized.length - limit;
     if (excess <= 0) return;
     const candidates: Array<{ parent: WorkspaceParent; activity: number }> = [];
     for (const parent of materialized) {

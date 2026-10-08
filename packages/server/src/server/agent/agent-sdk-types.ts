@@ -1,4 +1,5 @@
 import type { ArenaSessionActivity } from "@getpaseo/protocol/arena/activity";
+import type { ArenaEnvironmentTrim } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ArenaStreamFrame, ArenaStreamTarget } from "@getpaseo/protocol/arena/stream";
 import type {
   AgentProviderNotice,
@@ -815,6 +816,12 @@ export interface ArenaCheckoutCleanupSource {
   }>;
   prepare(worktreeRoot: string): Promise<void>;
   release(worktreeRoot: string): Promise<void>;
+  /**
+   * Release every idle chat's battle environments past the `keep` most recently active. Covers
+   * all chats, whichever checkout the source was opened for, or with `volumeOf` only the chats
+   * whose environments are on that path's volume.
+   */
+  trimEnvironments(keep: number, volumeOf?: string): Promise<ArenaEnvironmentTrim>;
   close(): Promise<void>;
 }
 

@@ -1687,6 +1687,7 @@ export const ko: TranslationResources = {
       shortcuts: "단축키",
       integrations: "통합",
       notifications: "알림",
+      storage: "저장 공간",
       permissions: "권한",
       about: "정보",
     },
@@ -1754,6 +1755,42 @@ export const ko: TranslationResources = {
       fallbackHint: "사용할 수 없으면 Agent Duel가 다른 사용 가능한 모델을 사용합니다",
       docs: "문서",
       saveError: "메타데이터 생성을 업데이트할 수 없습니다",
+    },
+    storage: {
+      title: "배틀 환경",
+      saveError: "업데이트할 수 없습니다: {{message}}",
+      worktrees: {
+        title: "워크트리",
+        label: "유지할 워크트리",
+        description:
+          "New worktree로 만든 워크트리입니다. 직접 한 작업이 여기에 있습니다. 이 개수를 넘으면 오래된 유휴 워크트리는 코드를 저장한 뒤 정리되며, 파일 복원으로 되돌릴 수 있습니다.",
+        accessibilityLabel: "파일을 유지할 워크트리 수 선택 ({{value}})",
+        recent: "최근 {{limit}}개",
+        all: "모든 워크트리",
+      },
+      retention: {
+        label: "환경을 유지할 채팅",
+        description:
+          "배틀이 실행되는 프로젝트의 임시 복사본으로, 에이전트마다 하나씩 있습니다. 선택한 결과가 프로젝트에 적용되므로 여기에는 내 작업이 없습니다. 유지하면 채팅의 다음 배틀이 더 빨리 시작됩니다.",
+        accessibilityLabel: "배틀 환경을 유지할 채팅 선택 ({{value}})",
+        recent: "최근 {{limit}}개",
+        all: "모든 채팅",
+      },
+      free: {
+        label: "사용하지 않는 환경 정리",
+        description:
+          "유휴 채팅이 가진 복사본을 지금 삭제합니다. 기록은 유지되며 다음 배틀은 시작하는 데 더 오래 걸립니다.",
+        action: "정리",
+        pending: "정리하는 중...",
+        space: "이 디스크의 여유 공간: {{size}}",
+        result: "정리됨: {{released}} · 사용 중: {{kept}}",
+        error: "환경을 정리할 수 없습니다: {{message}}",
+      },
+      lowDisk: {
+        title: "디스크 공간 부족",
+        description:
+          "여유 공간이 {{size}} 미만이므로 이 디스크의 가장 최근 채팅만 배틀 환경을 유지합니다.",
+      },
     },
     general: {
       title: "일반",

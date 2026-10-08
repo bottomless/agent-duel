@@ -356,6 +356,8 @@ function mergeMutableConfigIntoPersistedConfig(params: {
       autoArchiveAfterMerge: mutable.autoArchiveAfterMerge,
       enableTerminalAgentHooks: mutable.enableTerminalAgentHooks,
       appendSystemPrompt: mutable.appendSystemPrompt,
+      arenaEnvironmentRetention: mutable.arenaEnvironmentRetention,
+      worktreeRetention: mutable.worktreeRetention,
       ...(mutable.terminalProfiles !== undefined
         ? { terminalProfiles: mutable.terminalProfiles }
         : {}),

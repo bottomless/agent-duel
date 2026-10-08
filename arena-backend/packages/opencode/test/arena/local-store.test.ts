@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto"
-import { access, mkdtemp, rm, unlink } from "node:fs/promises"
+import { access, chmod, mkdir, mkdtemp, readdir, rm, unlink, utimes, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
 import { connectLocalStore } from "@/arena/local-store"
+import { MAX_RUN_ARTIFACT_BYTES } from "@/arena/artifact"
+import { ArenaTranscriptArtifact } from "@/arena/transcript-artifact"
 import type { ArenaRecord } from "@agent-duel/arena-service/collection"
 import type { ChatDocument, GenerationDocument } from "@/arena/records"
 
@@ -296,6 +298,49 @@ describe("local Arena store", () => {
     }
   })
 
+  test("opens while a scrubbed telemetry file cannot be deleted, and deletes it at a later start", async () => {
+    const directory = await temporaryDirectory()
+    const root = path.join(directory, "artifacts", "sha256")
+    try {
+      const store = await connectLocalStore({ directory })
+      await store.db.collection<ArenaRecord>("turns").insertOne({ _id: "turn", state: "awaiting_vote" })
+      await store.db.collection<ArenaRecord>("runs").insertOne({ _id: "run", turnID: "turn" })
+      await store.db
+        .collection<ArenaRecord>("generations")
+        .insertOne({ _id: "generation", runID: "run", responseArtifactID: "generation|response" })
+      const response = Buffer.from('{"format":"anthropic-claude-v1"}')
+      await store.storeArtifact({
+        _id: "generation|response",
+        runID: "run",
+        kind: "generation_response",
+        mimeType: "application/json",
+        encoding: "utf8",
+        compression: "none",
+        data: response,
+        createdAt: now,
+      })
+      await store.close()
+      const database = new Database(path.join(directory, "arena.sqlite"))
+      database.query("DELETE FROM arena_metadata WHERE key = 'privacy.blinded-generation-telemetry'").run()
+      database.close()
+      const file = createHash("sha256").update(response).digest("hex")
+      // A directory nobody may write to refuses the delete, as a locked file does.
+      await chmod(root, 0o555)
+
+      const reopened = await connectLocalStore({ directory })
+      expect(await reopened.artifacts.findOne({ _id: "generation|response" })).toBeNull()
+      await reopened.close()
+      expect(await readdir(root)).toEqual([file])
+
+      await chmod(root, 0o755)
+      await (await connectLocalStore({ directory })).close()
+      expect(await readdir(root)).toEqual([])
+    } finally {
+      await chmod(root, 0o755).catch(() => undefined)
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("does not hydrate artifact bytes for metadata projections", async () => {
     const directory = await temporaryDirectory()
     try {
@@ -328,6 +373,153 @@ describe("local Arena store", () => {
       database.close()
       await store.close()
     } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+  test("reclaims artifact files no record names on the next start", async () => {
+    const directory = await temporaryDirectory()
+    try {
+      const store = await connectLocalStore({ directory })
+      const artifact = (_id: string, text: string) =>
+        store.storeArtifact({
+          _id,
+          runID: "run",
+          kind: "other",
+          mimeType: "text/plain",
+          encoding: "binary",
+          compression: "none",
+          data: Buffer.from(text),
+          createdAt: now,
+        })
+      await artifact("kept", "shared bytes")
+      await artifact("deleted-shared", "shared bytes")
+      await artifact("deleted", "only this record")
+      await store.artifacts.deleteMany({ _id: { $in: ["deleted-shared", "deleted"] } })
+      await store.close()
+
+      const root = path.join(directory, "artifacts", "sha256")
+      const hash = (text: string) => createHash("sha256").update(text).digest("hex")
+      const fresh = path.join(root, "fresh-orphan")
+      await writeFile(fresh, "written by another handle a moment ago")
+      const hourAgo = new Date(Date.now() - 60 * 60_000)
+      for (const name of [hash("shared bytes"), hash("only this record")]) {
+        await utimes(path.join(root, name), hourAgo, hourAgo)
+      }
+
+      const reopened = await connectLocalStore({ directory })
+      expect((await readdir(root)).sort()).toEqual([hash("shared bytes"), "fresh-orphan"].sort())
+      expect((await reopened.artifacts.findOne({ _id: "kept" }))?.data.toString()).toBe("shared bytes")
+      await reopened.close()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("keeps a long run's transcript whole after its other artifacts used the run budget", async () => {
+    const directory = await temporaryDirectory()
+    try {
+      const store = await connectLocalStore({ directory })
+      await store.storeArtifact({
+        _id: "requests",
+        runID: "run",
+        kind: "generation_request",
+        mimeType: "application/json",
+        encoding: "binary",
+        compression: "none",
+        data: Buffer.alloc(MAX_RUN_ARTIFACT_BYTES - 10),
+        createdAt: now,
+      })
+      const transcript = [{ sessionID: "root", messages: [{ text: "x".repeat(10_000) }] }]
+      const encoded = ArenaTranscriptArtifact.encode(transcript)
+      const stored = await store.storeArtifact({
+        _id: "run|transcript",
+        runID: "run",
+        kind: "transcript",
+        mimeType: "application/json",
+        encoding: "json",
+        compression: encoded.compression,
+        data: encoded.data,
+        createdAt: now,
+      })
+      expect(stored.truncated).toBe(false)
+      expect(ArenaTranscriptArtifact.decode((await store.artifacts.findOne({ _id: "run|transcript" }))!)).toEqual(
+        transcript,
+      )
+      await store.close()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("looks for unshared artifact files only after records were deleted", async () => {
+    const directory = await temporaryDirectory()
+    try {
+      const root = path.join(directory, "artifacts", "sha256")
+      const store = await connectLocalStore({ directory })
+      await store.close()
+      // A file no record names, but no record was deleted since the last pass: it stays.
+      const stray = path.join(root, "stray")
+      await mkdir(root, { recursive: true })
+      await writeFile(stray, "left by something else")
+      const hourAgo = new Date(Date.now() - 60 * 60_000)
+      await utimes(stray, hourAgo, hourAgo)
+      await (await connectLocalStore({ directory })).close()
+      expect(await readdir(root)).toEqual(["stray"])
+
+      // Deleting a record asks the next start to look again.
+      const writer = await connectLocalStore({ directory })
+      await writer.storeArtifact({
+        _id: "gone",
+        runID: "run",
+        kind: "other",
+        mimeType: "text/plain",
+        encoding: "binary",
+        compression: "none",
+        data: Buffer.from("gone"),
+        createdAt: now,
+      })
+      await writer.artifacts.deleteOne({ _id: "gone" })
+      await writer.close()
+      const gone = path.join(root, createHash("sha256").update("gone").digest("hex"))
+      await utimes(gone, hourAgo, hourAgo)
+      await (await connectLocalStore({ directory })).close()
+      expect(await readdir(root)).toEqual([])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("opens with an artifact file it cannot delete, and deletes it at a later start", async () => {
+    const directory = await temporaryDirectory()
+    const root = path.join(directory, "artifacts", "sha256")
+    try {
+      const writer = await connectLocalStore({ directory })
+      await writer.storeArtifact({
+        _id: "gone",
+        runID: "run",
+        kind: "other",
+        mimeType: "text/plain",
+        encoding: "binary",
+        compression: "none",
+        data: Buffer.from("locked"),
+        createdAt: now,
+      })
+      await writer.artifacts.deleteOne({ _id: "gone" })
+      await writer.close()
+      const locked = createHash("sha256").update("locked").digest("hex")
+      const hourAgo = new Date(Date.now() - 60 * 60_000)
+      await utimes(path.join(root, locked), hourAgo, hourAgo)
+      // A directory nobody may write to refuses the delete, as a locked file does.
+      await chmod(root, 0o555)
+
+      await (await connectLocalStore({ directory })).close()
+      expect(await readdir(root)).toEqual([locked])
+
+      await chmod(root, 0o755)
+      await (await connectLocalStore({ directory })).close()
+      expect(await readdir(root)).toEqual([])
+    } finally {
+      await chmod(root, 0o755).catch(() => undefined)
       await rm(directory, { recursive: true, force: true })
     }
   })

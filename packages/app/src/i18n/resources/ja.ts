@@ -1690,6 +1690,7 @@ export const ja: TranslationResources = {
       shortcuts: "ショートカット",
       integrations: "連携",
       notifications: "通知",
+      storage: "ストレージ",
       permissions: "権限",
       about: "アプリ情報",
     },
@@ -1758,6 +1759,42 @@ export const ja: TranslationResources = {
       fallbackHint: "利用できない場合、Agent Duel は別の利用可能なモデルを使用します",
       docs: "ドキュメント",
       saveError: "メタデータ生成を更新できません",
+    },
+    storage: {
+      title: "バトル環境",
+      saveError: "更新できません: {{message}}",
+      worktrees: {
+        title: "ワークツリー",
+        label: "保持するワークツリー",
+        description:
+          "New worktree で作成したワークツリーです。あなた自身の作業はここにあります。この数を超えると、古いアイドル状態のものはコードを保存したうえで整理され、「ファイルを復元」で戻せます。",
+        accessibilityLabel: "ファイルを保持するワークツリーの数を選択 ({{value}})",
+        recent: "最近の {{limit}} 件",
+        all: "すべてのワークツリー",
+      },
+      retention: {
+        label: "環境を保持するチャット",
+        description:
+          "バトルを実行するための、プロジェクトの一時的なコピーです（エージェントごとに 1 つ）。選んだ結果はプロジェクトに適用されるため、あなたの作業は含まれません。保持しておくと、チャットの次のバトルが早く始まります。",
+        accessibilityLabel: "バトル環境を保持するチャットを選択 ({{value}})",
+        recent: "最近の {{limit}} 件",
+        all: "すべてのチャット",
+      },
+      free: {
+        label: "未使用の環境を解放",
+        description:
+          "アイドル状態のチャットが持つコピーを今すぐ削除します。履歴は残り、次のバトルの開始に時間がかかります。",
+        action: "解放",
+        pending: "解放中...",
+        space: "このディスクの空き容量: {{size}}",
+        result: "解放: {{released}} · 使用中: {{kept}}",
+        error: "環境を解放できません: {{message}}",
+      },
+      lowDisk: {
+        title: "ディスクの空きがほとんどありません",
+        description:
+          "空き容量が {{size}} 未満のため、このディスク上の最新のチャットだけがバトル環境を保持します。",
+      },
     },
     general: {
       title: "一般",

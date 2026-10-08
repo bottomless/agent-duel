@@ -1,7 +1,7 @@
 import { gunzipSync, gzipSync } from "node:zlib"
 import type { ArtifactDocument } from "./records"
 
-type TranscriptArtifact = Pick<ArtifactDocument, "compression" | "data">
+type TranscriptArtifact = Pick<ArtifactDocument, "compression" | "data"> & { readonly truncated?: boolean }
 
 function bytes(data: Buffer) {
   if (Buffer.isBuffer(data)) return data
@@ -20,6 +20,9 @@ export function encode(value: unknown) {
 }
 
 export function decode(artifact: TranscriptArtifact): unknown {
+  // A gzip stream is stored whole or not at all; one cut short by an older build does not decode either.
+  if (artifact.truncated)
+    throw new Error("Arena transcript archive was larger than the artifact limit and was not kept")
   const data = bytes(artifact.data)
   const decoded = artifact.compression === "gzip" ? gunzipSync(data) : data
   return JSON.parse(decoded.toString("utf8")) as unknown
