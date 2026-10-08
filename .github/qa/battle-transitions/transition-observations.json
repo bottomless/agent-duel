@@ -1,0 +1,193 @@
+{
+  "setup": [
+    {
+      "at": 1791240041199,
+      "text": "",
+      "battle": false,
+      "choices": false,
+      "working": false
+    },
+    {
+      "at": 1791240042364,
+      "text": "Setting up battleIn progressPreparing workspacesIn progressAgents ready",
+      "battle": false,
+      "choices": false,
+      "working": false
+    },
+    {
+      "at": 1791240045989,
+      "text": "Setting up battleIn progressPreparing workspacesIn progress \u00b7 <1sAgents ready",
+      "battle": false,
+      "choices": false,
+      "working": false
+    },
+    {
+      "at": 1791240046938,
+      "text": "Setting up battleIn progressPreparing workspacesIn progress \u00b7 1sAgents ready",
+      "battle": false,
+      "choices": false,
+      "working": false
+    },
+    {
+      "at": 1791240047938,
+      "text": "Setting up battleIn progressPreparing workspacesIn progress \u00b7 2sAgents ready",
+      "battle": false,
+      "choices": false,
+      "working": false
+    },
+    {
+      "at": 1791240048241,
+      "text": "Setting up battleIn progressWorkspaces prepared2sCopying files and dependenciesIn progress \u00b7 <1sAgents ready",
+      "battle": false,
+      "choices": false,
+      "working": false
+    },
+    {
+      "at": 1791240048641,
+      "text": "",
+      "battle": true,
+      "choices": true,
+      "working": true
+    }
+  ],
+  "vote": {
+    "electron": {
+      "phases": ["battle", "applying", "result"],
+      "check": "PASS: timeline below battle without choice overlay, dismissed on completion",
+      "events": [
+        {
+          "at": 1791240078085,
+          "text": "",
+          "battle": true,
+          "choices": true,
+          "below": false
+        },
+        {
+          "at": 1791240078237,
+          "text": "Applying selected resultIn progressPreparing the selected resultIn progressReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240078300,
+          "text": "Applying selected resultIn progressBattle results saved<1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240078762,
+          "text": "Applying selected resultIn progressBattle results saved<1sChecking workspace changesIn progress \u00b7 <1sConversation updated<1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240079582,
+          "text": "Applying selected resultIn progressBattle results saved<1sChecking workspace changesIn progress \u00b7 <1sConversation updated<1sReleasing the other environmentIn progress \u00b7 <1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240079678,
+          "text": "Applying selected resultIn progressBattle results saved<1sWorkspace changes checked<1sConversation updated<1sReleasing the other environmentIn progress \u00b7 <1sApplying changes to your workspaceIn progress \u00b7 <1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240080810,
+          "text": "Applying selected resultIn progressBattle results saved<1sWorkspace changes checked<1sConversation updated<1sReleasing the other environmentIn progress \u00b7 <1sChanges applied to your workspace<1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240081239,
+          "text": "Applying selected resultIn progressBattle results saved<1sWorkspace changes checked<1sConversation updated<1sReleasing the other environmentIn progress \u00b7 1sChanges applied to your workspace<1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240081454,
+          "text": "Applying selected resultIn progressBattle results saved<1sWorkspace changes checked<1sConversation updated<1sOther environment released1sChanges applied to your workspace<1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240081694,
+          "text": "",
+          "battle": false,
+          "choices": false,
+          "below": false
+        }
+      ]
+    },
+    "browser": {
+      "phases": ["battle", "applying", "result"],
+      "check": "PASS: timeline below battle without choice overlay, dismissed on completion",
+      "events": [
+        {
+          "at": 1791240078218,
+          "text": "Applying selected resultIn progressPreparing the selected resultIn progressReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240079276,
+          "text": "Applying selected resultIn progressBattle results saved<1sChecking workspace changesIn progress \u00b7 <1sConversation updated<1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240079581,
+          "text": "Applying selected resultIn progressBattle results saved<1sChecking workspace changesIn progress \u00b7 <1sConversation updated<1sReleasing the other environmentIn progress \u00b7 <1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240079675,
+          "text": "Applying selected resultIn progressBattle results saved<1sWorkspace changes checked<1sConversation updated<1sReleasing the other environmentIn progress \u00b7 <1sApplying changes to your workspaceIn progress \u00b7 <1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240080809,
+          "text": "Applying selected resultIn progressBattle results saved<1sWorkspace changes checked<1sConversation updated<1sReleasing the other environmentIn progress \u00b7 <1sChanges applied to your workspace<1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240081220,
+          "text": "Applying selected resultIn progressBattle results saved<1sWorkspace changes checked<1sConversation updated<1sReleasing the other environmentIn progress \u00b7 1sChanges applied to your workspace<1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240081453,
+          "text": "Applying selected resultIn progressBattle results saved<1sWorkspace changes checked<1sConversation updated<1sOther environment released1sChanges applied to your workspace<1sReady for your next prompt",
+          "battle": true,
+          "choices": false,
+          "below": true
+        },
+        {
+          "at": 1791240081686,
+          "text": "",
+          "battle": false,
+          "choices": false,
+          "below": false
+        }
+      ]
+    }
+  }
+}

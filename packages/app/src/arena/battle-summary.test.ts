@@ -11,9 +11,7 @@ import {
   gitApplicationNotice,
   isResolvingBattleState,
   resolutionRetryDetail,
-  resolvingBattleLabels,
   RESOLVING_BATTLE_STATES,
-  RESOLVING_BUTTON_LABEL,
 } from "./battle-result";
 import { canRequestBattleDiff, hasBattleDiff } from "./comparison-visibility";
 import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
@@ -85,6 +83,34 @@ describe("partitionArenaSummaries", () => {
       live: null,
     });
   });
+
+  it.each(["early_selected", "applying", "canonicalizing", "cleanup_pending"] as const)(
+    "keeps the selected %s battle out of history while its progress is visible",
+    (state) => {
+      const applying = { ...latest, state };
+      // The graft can expose the canonical prompt anchor before application finishes.
+      expect(arenaSummaryAnchor(applying, [{ id: "user-1", kind: "user_message" }])).toBe("user-1");
+      expect(partitionArenaSummaries([older, applying], true)).toEqual({
+        inline: [older],
+        live: null,
+      });
+      expect(partitionArenaSummaries([older, latest], false)).toEqual({
+        inline: [older],
+        live: latest,
+      });
+    },
+  );
+
+  it.each(["application_failed", "canonicalization_failed"] as const)(
+    "shows the selected battle when %s requires recovery",
+    (state) => {
+      const failed = { ...latest, state };
+      expect(partitionArenaSummaries([older, failed], false)).toEqual({
+        inline: [older],
+        live: failed,
+      });
+    },
+  );
 });
 
 describe("isArenaBattleUnresolved", () => {
@@ -138,48 +164,7 @@ describe("isArenaBattleOnScreen", () => {
     expect(isArenaBattleOnScreen(snapshot("canonicalization_failed", true))).toBe(false);
   });
 
-  it("labels only the side the user chose", () => {
-    const applying = {
-      state: "applying",
-      appliedSide: "b",
-      resolution: { kind: "vote", vote: "b", appliedSide: "b" },
-    } as unknown as ArenaSnapshot["turn"];
-    expect(resolvingBattleLabels(applying)).toEqual({ a: null, b: RESOLVING_BUTTON_LABEL });
-
-    const canonicalizing = {
-      state: "canonicalizing",
-      appliedSide: "a",
-      resolution: { kind: "vote", vote: "a", appliedSide: "a" },
-    } as unknown as ArenaSnapshot["turn"];
-    expect(resolvingBattleLabels(canonicalizing)).toEqual({ a: RESOLVING_BUTTON_LABEL, b: null });
-  });
-
-  it("says the same thing for every state it covers", () => {
-    // The button changing copy mid-resolution reads as flicker, not as progress. One label,
-    // start to finish, however many phases the daemon moves through underneath it.
-    const labels = [...RESOLVING_BATTLE_STATES].map(
-      (state) =>
-        resolvingBattleLabels({
-          state,
-          appliedSide: "a",
-          resolution: { kind: "vote", vote: "a", appliedSide: "a" },
-        } as unknown as ArenaSnapshot["turn"]).a,
-    );
-    expect(new Set(labels)).toEqual(new Set([RESOLVING_BUTTON_LABEL]));
-  });
-
-  it("labels neither side before a vote or after it completes", () => {
-    const voting = { state: "awaiting_vote" } as unknown as ArenaSnapshot["turn"];
-    const done = {
-      state: "complete",
-      appliedSide: "a",
-    } as unknown as ArenaSnapshot["turn"];
-    expect(resolvingBattleLabels(voting)).toEqual({ a: null, b: null });
-    expect(resolvingBattleLabels(done)).toEqual({ a: null, b: null });
-    expect(resolvingBattleLabels(undefined)).toEqual({ a: null, b: null });
-  });
-
-  it("agrees with the states that have button copy", () => {
+  it("holds the battle on screen while resolution progress is shown", () => {
     for (const state of RESOLVING_BATTLE_STATES) {
       expect(isResolvingBattleState(state)).toBe(true);
       expect(isArenaBattleOnScreen(snapshot(state, true))).toBe(true);

@@ -24,6 +24,49 @@ export const ArenaBattleStateSchema = z.enum([
   "canonicalization_failed",
   "interrupted_recovery",
 ]);
+export const ArenaActiveOperationSchema = z.enum([
+  "preparing_workspaces",
+  "copying_environment",
+  "checking_workspace",
+  "releasing_environment",
+  "preserving_results",
+  "applying_changes",
+  "updating_conversation",
+  "releasing_loser",
+]);
+export const ArenaOperationProgressSchema = z.discriminatedUnion("state", [
+  z
+    .object({
+      operation: ArenaActiveOperationSchema,
+      startedAt: z.number(),
+      state: z.literal("running"),
+    })
+    .passthrough(),
+  z
+    .object({
+      operation: ArenaActiveOperationSchema,
+      startedAt: z.number(),
+      finishedAt: z.number(),
+      state: z.literal("completed"),
+    })
+    .passthrough(),
+  z
+    .object({
+      operation: ArenaActiveOperationSchema,
+      startedAt: z.number(),
+      finishedAt: z.number(),
+      state: z.literal("failed"),
+    })
+    .passthrough(),
+  z
+    .object({
+      operation: ArenaActiveOperationSchema,
+      startedAt: z.number(),
+      finishedAt: z.number(),
+      state: z.literal("interrupted"),
+    })
+    .passthrough(),
+]);
 
 const ArenaIdentitySchema = z.object({ name: z.string() }).passthrough();
 const ArenaIdentitiesSchema = z
@@ -397,6 +440,8 @@ export const ArenaSnapshotSchema = z
         .optional(),
       baseSHA: z.string(),
       comparisonState: z.enum(["pending", "running", "complete", "skipped", "failed"]),
+      activeOperations: z.array(ArenaActiveOperationSchema).optional(),
+      operationProgress: z.array(ArenaOperationProgressSchema).optional(),
       canVote: z.boolean(),
       canRetryResolution: z.boolean(),
       canDiscardWinner: z.boolean().optional(),

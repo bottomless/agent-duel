@@ -142,7 +142,8 @@ import {
   deriveArenaComposerQueueState,
   resolveArenaComposerSubmit,
 } from "@/arena/composer-state";
-import { ArenaDecisionBar, ArenaStartingBattleBar } from "@/arena/decision-bar";
+import { ArenaDecisionBar } from "@/arena/decision-bar";
+import { arenaSetupStatus } from "@/arena/transition-progress";
 import { ArenaDecisionPill } from "@/arena/decision-pill";
 import { useArenaBattleActions } from "@/arena/use-battle-actions";
 import { showsArenaDecisionBar } from "@/arena/decision-state";
@@ -1631,9 +1632,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
     );
   }, [agent.id, serverId, streamItems, summaryPlacement.inline, workspaceId]);
 
-  // One view across the handover from "sent" to "running". Rendering a separate preview until
-  // the turn arrives puts a different element type in this slot, and React answers that by
-  // tearing the panes down and building them again — the blink this is here to avoid.
+  // The active battle owns setup progress and the contestant panes in the stream.
   const activeBattle = useMemo(() => {
     const snapshot = arenaSession.data;
     if (!snapshot || !arenaBattleOnScreen) return null;
@@ -1928,10 +1927,16 @@ const AgentComposerSection = memo(function AgentComposerSection({
     const replyState = deriveArenaReplyState(arenaSession.data);
     return Boolean(
       supportsArenaBattleReplies &&
+      arenaSetupStatus(arenaSession.data?.turn) === null &&
       replyState.replyableBattleTurn &&
       replyState.replyActions.length > 0,
     );
   }, [arenaSession.data, supportsArenaBattleReplies]);
+  useEffect(() => {
+    if (!startingBattle) return;
+    onComposerHeightChange(0);
+    onDecisionPillHeightChange(0);
+  }, [onComposerHeightChange, onDecisionPillHeightChange, startingBattle]);
   if (!agentId) {
     return null;
   }
@@ -1941,11 +1946,9 @@ const AgentComposerSection = memo(function AgentComposerSection({
   if (isArchivingCurrentAgent) {
     return null;
   }
-  // A sent battle takes the slot before the snapshot knows about it. Until the start lands,
-  // the chat still holds the finished turn, and waiting for it left the composer under panes
-  // that were already preparing — then dropped it seconds later, for the one send.
+  // Setup progress is in the stream; there is no reply target until setup finishes.
   if (startingBattle) {
-    return <ArenaStartingBattleBar onHeightChange={onComposerHeightChange} />;
+    return null;
   }
   // A replyable battle keeps the composer. Battle actions float above the slot;
   // transitions and recovery use the fallback bar.

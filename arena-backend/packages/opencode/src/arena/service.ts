@@ -167,6 +167,12 @@ import { waitForInitialDispatch } from "./dispatch"
 import { create as createTelemetry } from "./telemetry"
 import { Recorder } from "./events"
 import {
+  createArenaOperationTracker,
+  mergeOperationProgress,
+  type ArenaActiveOperation,
+  type ArenaOperationProgress,
+} from "./operation-tracker"
+import {
   allocatePreview,
   endOwnership,
   environment as previewEnvironment,
@@ -1049,6 +1055,35 @@ export const layer: Layer.Layer<
     const mover = yield* MoveSession.Service
     const skills = yield* Skill.Service
     const scope = yield* Scope.Scope
+    const operationTrackers = new WeakMap<Store, ReturnType<typeof createArenaOperationTracker>>()
+    const operationTrackerFor = (store: Store) => {
+      const existing = operationTrackers.get(store)
+      if (existing) return existing
+      const created = createArenaOperationTracker({
+        publish: (turnID, activeOperations, progress) =>
+          promise(async () => {
+            const patch: {
+              activeOperations: readonly ArenaActiveOperation[]
+              operationProgress?: readonly ArenaOperationProgress[]
+            } = { activeOperations: [...activeOperations] }
+            if (progress) {
+              const current = await store.turn(turnID)
+              patch.operationProgress = mergeOperationProgress(current?.operationProgress ?? [], progress)
+            }
+            await store.updateTurn(turnID, patch)
+          }).pipe(Effect.asVoid),
+        log: ({ turnID, operation, durationMs }) =>
+          Effect.logDebug("Arena transition operation completed", { turnID, operation, durationMs }),
+      })
+      operationTrackers.set(store, created)
+      return created
+    }
+    const trackOperation = <A, E, R>(
+      store: Store,
+      turnID: string,
+      operation: ArenaActiveOperation,
+      effect: Effect.Effect<A, E, R>,
+    ) => operationTrackerFor(store).track(turnID, operation, effect)
     let telemetryStore: Store | undefined
     let telemetry: ReturnType<typeof createTelemetry> | undefined
     let recorder: Recorder | undefined
@@ -4184,7 +4219,7 @@ export const layer: Layer.Layer<
       // A background release from the previous send may still be running; read the chat after it so
       // this send does not stop and remove the same run again.
       const inFlight = retainedReleases.get(chat._id)
-      if (inFlight) yield* Fiber.await(inFlight)
+      if (inFlight) yield* trackOperation(store, turn._id, "releasing_environment", Fiber.await(inFlight))
       const releaseChat = inFlight ? ((yield* promise(() => store.chat(chat._id))) ?? chat) : chat
       const retainedServing = yield* retainedWinnerServing(store, releaseChat)
       const releaseRetained = consumeRetainedWinner(store, releaseChat, turn, copyOmissions(copyManifest.entries)).pipe(
@@ -4642,22 +4677,29 @@ export const layer: Layer.Layer<
       // the exclude and config-boundary writes are serialized per file. The whole setup still runs under
       // the repository lock so canonical snapshot mutations wait.
       const sides = yield* Effect.exit(
-        withRepositoryMutation(
-          repositoryLock,
-          Effect.all(
-            [
-              makeSide("a").pipe(preparationPhase("prepare-side", { chatID: chat._id, turnID: turn._id, side: "a" })),
-              makeSide("b").pipe(preparationPhase("prepare-side", { chatID: chat._id, turnID: turn._id, side: "b" })),
-            ],
-            {
-              concurrency: 2,
-            },
-          ).pipe(Effect.onError(() => discardSetup)),
+        trackOperation(
+          store,
+          turn._id,
+          "preparing_workspaces",
+          withRepositoryMutation(
+            repositoryLock,
+            Effect.all(
+              [
+                makeSide("a").pipe(preparationPhase("prepare-side", { chatID: chat._id, turnID: turn._id, side: "a" })),
+                makeSide("b").pipe(preparationPhase("prepare-side", { chatID: chat._id, turnID: turn._id, side: "b" })),
+              ],
+              {
+                concurrency: 2,
+              },
+            ).pipe(Effect.onError(() => discardSetup)),
+          ),
         ),
       )
       // Awaited outside the lock, which its worktree removal needs, and even when a side failed:
       // interrupting it midway would leave the retained winner marked as stopping.
-      const released = retainedRelease ? yield* Fiber.await(retainedRelease) : Exit.void
+      const released = retainedRelease
+        ? yield* trackOperation(store, turn._id, "releasing_environment", Fiber.await(retainedRelease))
+        : Exit.void
       if (Exit.isFailure(sides)) return yield* Effect.failCause(sides.cause)
       if (Exit.isFailure(released)) {
         yield* withRepositoryMutation(repositoryLock, discardSetup)
@@ -4738,114 +4780,112 @@ export const layer: Layer.Layer<
           )
         }
       })
-      const finishEnvironments = yield* Effect.cached(
-        Effect.gen(function* () {
-          const results = yield* Effect.forEach(
-            [runA, runB],
-            (run) =>
-              Effect.gen(function* () {
-                const setup = environmentSetups.get(run.side)
-                if (!setup) {
-                  yield* settleEnvironment(run, Exit.void)
-                  return { side: run.side, outcome: Exit.void }
-                }
-                const outcome = yield* Effect.exit(
-                  setup.complete.pipe(
-                    preparationPhase("prepare-worktree-environment", {
-                      chatID: chat._id,
-                      turnID: turn._id,
-                      side: run.side,
-                      directory: run.worktree.directory,
-                    }),
-                    Effect.tap((sync) =>
-                      Effect.sync(() => {
-                        const timing = sideTimings.get(run.side)
-                        if (timing) sideTimings.set(run.side, { ...timing, ...sync })
-                        const state = slotStates.get(slotKey(run.worktree.directory))
-                        if (state) {
-                          const { stoppedAt: _stoppedAt, ...running } = state
-                          slotStates.set(slotKey(run.worktree.directory), running)
-                        }
-                      }),
-                    ),
-                    Effect.asVoid,
-                  ),
-                )
-                if (!refreshing) yield* settleEnvironment(run, outcome)
-                return { side: run.side, outcome }
-              }),
-            { concurrency: 2 },
-          )
-          const outcomes = new Map(results.map((result) => [result.side, result.outcome]))
-          if (refreshing) {
-            yield* sweepSlotTrash(chat)
-            const refreshed = yield* Effect.exit(
-              Effect.gen(function* () {
-                for (const { outcome } of results) {
-                  if (Exit.isFailure(outcome)) return yield* Effect.failCause(outcome.cause)
-                }
-                const records = yield* Effect.forEach(
-                  [runA, runB],
-                  (run) =>
-                    Effect.gen(function* () {
-                      const contentFingerprint = yield* promise(() =>
-                        fingerprintCopiedContent({ targetRoot: run.worktree.directory, manifest: copyManifest }),
-                      )
-                      return {
-                        ...turn.warmPreparation?.worktrees[run.side],
-                        side: run.side,
-                        name: run.worktree.name,
-                        directory: run.worktree.directory,
-                        branch: run.worktree.branch,
-                        sourceHead: contestantSnapshot.frozenHead,
-                        sourceCommit: turn.frozenBaseSHA,
-                        sourceIndexTree: contestantSnapshot.indexTree,
-                        sourceWorkingTree: contestantSnapshot.workingTree,
-                        copyManifestID: copyManifest.manifestID,
-                        contentFingerprint,
-                        ready: true,
-                        refsMirrored: true,
-                        sync: sideTimings.get(run.side),
-                      } satisfies WarmWorktreeRecord
-                    }),
-                  { concurrency: 2 },
-                )
-                const [a, b] = records
-                if (!a || !b || a.contentFingerprint !== b.contentFingerprint) {
-                  return yield* Effect.fail(new Error("Refreshed warm pair copied content differs between sides"))
-                }
-                yield* promise(() =>
-                  store.updateTurn(turn._id, {
-                    warmPreparation: { generation: turn.turnIndex, state: "ready", worktrees: { a, b } },
+      const finishEnvironmentsWork = Effect.gen(function* () {
+        const results = yield* Effect.forEach(
+          [runA, runB],
+          (run) =>
+            Effect.gen(function* () {
+              const setup = environmentSetups.get(run.side)
+              if (!setup) {
+                yield* settleEnvironment(run, Exit.void)
+                return { side: run.side, outcome: Exit.void }
+              }
+              const complete = setup.complete.pipe(
+                preparationPhase("prepare-worktree-environment", {
+                  chatID: chat._id,
+                  turnID: turn._id,
+                  side: run.side,
+                  directory: run.worktree.directory,
+                }),
+                Effect.tap((sync) =>
+                  Effect.sync(() => {
+                    const timing = sideTimings.get(run.side)
+                    if (timing) sideTimings.set(run.side, { ...timing, ...sync })
+                    const state = slotStates.get(slotKey(run.worktree.directory))
+                    if (state) {
+                      const { stoppedAt: _stoppedAt, ...running } = state
+                      slotStates.set(slotKey(run.worktree.directory), running)
+                    }
                   }),
-                )
-              }),
-            )
-            if (Exit.isFailure(refreshed) && turn.warmPreparation) {
+                ),
+                Effect.asVoid,
+              )
+              const outcome = yield* Effect.exit(trackOperation(store, turn._id, "copying_environment", complete))
+              if (!refreshing) yield* settleEnvironment(run, outcome)
+              return { side: run.side, outcome }
+            }),
+          { concurrency: 2 },
+        )
+        const outcomes = new Map(results.map((result) => [result.side, result.outcome]))
+        if (refreshing) {
+          yield* sweepSlotTrash(chat)
+          const refreshed = yield* Effect.exit(
+            Effect.gen(function* () {
+              for (const { outcome } of results) {
+                if (Exit.isFailure(outcome)) return yield* Effect.failCause(outcome.cause)
+              }
+              const records = yield* Effect.forEach(
+                [runA, runB],
+                (run) =>
+                  Effect.gen(function* () {
+                    const contentFingerprint = yield* promise(() =>
+                      fingerprintCopiedContent({ targetRoot: run.worktree.directory, manifest: copyManifest }),
+                    )
+                    return {
+                      ...turn.warmPreparation?.worktrees[run.side],
+                      side: run.side,
+                      name: run.worktree.name,
+                      directory: run.worktree.directory,
+                      branch: run.worktree.branch,
+                      sourceHead: contestantSnapshot.frozenHead,
+                      sourceCommit: turn.frozenBaseSHA,
+                      sourceIndexTree: contestantSnapshot.indexTree,
+                      sourceWorkingTree: contestantSnapshot.workingTree,
+                      copyManifestID: copyManifest.manifestID,
+                      contentFingerprint,
+                      ready: true,
+                      refsMirrored: true,
+                      sync: sideTimings.get(run.side),
+                    } satisfies WarmWorktreeRecord
+                  }),
+                { concurrency: 2 },
+              )
+              const [a, b] = records
+              if (!a || !b || a.contentFingerprint !== b.contentFingerprint) {
+                return yield* Effect.fail(new Error("Refreshed warm pair copied content differs between sides"))
+              }
               yield* promise(() =>
                 store.updateTurn(turn._id, {
-                  warmPreparation: {
-                    ...turn.warmPreparation!,
-                    state: "failed",
-                    error: Cause.pretty(refreshed.cause),
-                  },
+                  warmPreparation: { generation: turn.turnIndex, state: "ready", worktrees: { a, b } },
                 }),
               )
-            }
-            for (const run of [runA, runB]) outcomes.set(run.side, refreshed)
-            yield* Effect.forEach([runA, runB], (run) => settleEnvironment(run, refreshed), {
-              concurrency: 2,
-              discard: true,
-            })
-          }
-          yield* promise(() =>
-            store.updateTurn(turn._id, {
-              setupTimings: { ...setupTimings, sides: Object.fromEntries(sideTimings) },
             }),
-          ).pipe(Effect.ignore)
-          return outcomes
-        }),
-      )
+          )
+          if (Exit.isFailure(refreshed) && turn.warmPreparation) {
+            yield* promise(() =>
+              store.updateTurn(turn._id, {
+                warmPreparation: {
+                  ...turn.warmPreparation!,
+                  state: "failed",
+                  error: Cause.pretty(refreshed.cause),
+                },
+              }),
+            )
+          }
+          for (const run of [runA, runB]) outcomes.set(run.side, refreshed)
+          yield* Effect.forEach([runA, runB], (run) => settleEnvironment(run, refreshed), {
+            concurrency: 2,
+            discard: true,
+          })
+        }
+        yield* promise(() =>
+          store.updateTurn(turn._id, {
+            setupTimings: { ...setupTimings, sides: Object.fromEntries(sideTimings) },
+          }),
+        ).pipe(Effect.ignore)
+        return outcomes
+      })
+      const finishEnvironments = yield* Effect.cached(finishEnvironmentsWork)
       const settlePreparedSide = Effect.fnUntraced(function* (side: typeof preparedA) {
         const run = side.run
         const settled = Deferred.await(environmentSettled[run.side])
@@ -6903,35 +6943,41 @@ export const layer: Layer.Layer<
       // The loser's run is over, so its instance and its services are all that can still write
       // into the worktree. Stopping them here starts the settle window of the worktree's watch
       // while the winner is still being applied, instead of when the warm-up adopts it.
-      yield* stopPreparation(loser.worktree)
-      yield* instances.disposeDirectory(loser.worktree)
-      const instanceStoppedAt = Date.now()
       // Stopping the loser's services stays inline: its port is the next turn's side-B port,
       // so a server still holding it has to be gone before anything dispatches. Unlinking its
       // worktree does not — that is a 5 GB tree nobody is waiting on, and it used to sit
       // between the vote and the chat becoming ready.
-      const stop = yield* Effect.exit(
-        Effect.gen(function* () {
-          const stopped = yield* stopRunServices(store, loser)
-          const failures = stopped.filter((record) => record.status === "failed" || !record.verified)
-          if (failures.length > 0) {
-            yield* promise(() => store.updateRun(loser._id, { retention: "cleanup_failed" }))
-            return yield* Effect.fail(
-              new Error(`Arena could not stop ${failures.length} losing service${failures.length === 1 ? "" : "s"}`),
-            )
-          }
-          return stopped.length
-        }),
+      const loserCleanup = yield* Effect.exit(
+        trackOperation(
+          store,
+          turn._id,
+          "releasing_loser",
+          Effect.gen(function* () {
+            yield* stopPreparation(loser.worktree)
+            yield* instances.disposeDirectory(loser.worktree)
+            const instanceStoppedAt = Date.now()
+            const stopped = yield* stopRunServices(store, loser)
+            const failures = stopped.filter((record) => record.status === "failed" || !record.verified)
+            if (failures.length > 0) {
+              yield* promise(() => store.updateRun(loser._id, { retention: "cleanup_failed" }))
+              return yield* Effect.fail(
+                new Error(`Arena could not stop ${failures.length} losing service${failures.length === 1 ? "" : "s"}`),
+              )
+            }
+            return { instanceStoppedAt, stoppedCount: stopped.length }
+          }),
+        ),
       )
-      if (Exit.isFailure(stop)) {
+      if (Exit.isFailure(loserCleanup)) {
         yield* promise(() =>
-          store.updateTurn(turn._id, { cleanup: { state: "failed", error: Cause.pretty(stop.cause) } }),
+          store.updateTurn(turn._id, { cleanup: { state: "failed", error: Cause.pretty(loserCleanup.cause) } }),
         )
         return
       }
+      const { instanceStoppedAt, stoppedCount } = loserCleanup.value
       // With no service to stop, the instance was the last writer; the scan that found nothing
       // does not have to count against the settle window.
-      markSlotStopped(loser.worktree, stop.value === 0 ? instanceStoppedAt : Date.now())
+      markSlotStopped(loser.worktree, stoppedCount === 0 ? instanceStoppedAt : Date.now())
       // Left `pending` for `removeLoserWorktree`, which runs once the chat is `ready`.
       yield* promise(() => store.updateTurn(turn._id, { cleanup: { state: "pending" } }))
       return loser
@@ -8082,7 +8128,7 @@ export const layer: Layer.Layer<
           return acknowledged
         }
       }
-      const runs = yield* ensureArchives(store, turn)
+      const runs = yield* trackOperation(store, turn._id, "preserving_results", ensureArchives(store, turn))
       // Analytics only. Forked and swallowed so a metrics failure can never
       // block or fail a vote.
       yield* recordBattleMetrics(store, turn._id).pipe(
@@ -8185,7 +8231,7 @@ export const layer: Layer.Layer<
       // and the retry already handle. Retaining early does mean a failed apply leaves the
       // loser's services stopped and the winner marked retained; the retry re-runs both.
       const grafting = yield* Effect.forkChild(
-        graft(store, chat, turn, winner).pipe(
+        trackOperation(store, turn._id, "updating_conversation", graft(store, chat, turn, winner)).pipe(
           Effect.tapError(() =>
             promise(() => store.transitionTurn(turn._id, "canonicalization_failed")).pipe(Effect.ignore),
           ),
@@ -8278,9 +8324,14 @@ export const layer: Layer.Layer<
         }
         // Decide everything before writing anything. A plan with open items parks on them; the
         // developer's answers come back through `retryResolution` and the next plan uses them.
-        const plan = yield* withRepositoryMutation(
-          chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
-          planWinner(chat, turn, winner, { branch: promotionSourceBranch, detached: promotionSourceDetached }),
+        const plan = yield* trackOperation(
+          store,
+          turn._id,
+          "checking_workspace",
+          withRepositoryMutation(
+            chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
+            planWinner(chat, turn, winner, { branch: promotionSourceBranch, detached: promotionSourceDetached }),
+          ),
         ).pipe(Effect.tapError(recordApplicationFailure))
         if (plan.kind === "review") {
           yield* promise(() =>
@@ -8325,65 +8376,70 @@ export const layer: Layer.Layer<
           ...(promotionSourceDetached ? { expectedDetached: true } : {}),
           ...(targetBranch ? { targetBranch } : {}),
         }
-        const written = yield* withRepositoryMutation(
-          chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
-          Effect.acquireUseRelease(
-            withGit(
-              holdWinnerRefs({
-                canonical: chat.repository.root,
-                writes: plan.writes,
-                backupPrefix: `${refRoot(turn)}/replaced`,
-              }),
-            ),
-            (held) =>
-              Effect.gen(function* () {
-                const promoted = yield* withGit(
-                  promoteWinnerState({
-                    canonical: chat.repository.root,
-                    ...(promotionSourceBranch ? { expectedBranch: promotionSourceBranch } : {}),
-                    ...(promotionSourceDetached ? { expectedDetached: true } : {}),
-                    ...(targetBranch ? { targetBranch } : {}),
-                    frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
-                    baseWorkingTree: turn.baseSnapshot?.tree ?? turn.frozenBaseSHA,
-                    baseIndexTree: turn.baseSnapshot?.indexTree ?? turn.frozenBaseSHA,
-                    resultCommit,
-                    finalIndexTree: winner.finalIndexTree!,
-                    ...(plan.checkoutAction ? { checkoutAction: plan.checkoutAction } : {}),
-                    ...(plan.takeTargetFrom ? { takeTargetFrom: plan.takeTargetFrom } : {}),
-                    ...(plan.publicChoice ? { publicChoice: plan.publicChoice } : {}),
-                    safetyRef,
-                    retainSafetyRef: true,
-                  }),
-                )
-                const refs = yield* held.commit.pipe(
-                  Effect.catch((refused) =>
-                    withGit(
-                      recoverFailedPromotion({
-                        canonical: chat.repository.root,
-                        safetyRef,
-                        ...partial,
-                      }),
-                    ).pipe(
-                      Effect.matchEffect({
-                        onSuccess: () => Effect.fail(refused),
-                        onFailure: (undo) => Effect.fail(new PartialApplyError(refused, undo, partial)),
-                      }),
+        const written = yield* trackOperation(
+          store,
+          turn._id,
+          "applying_changes",
+          withRepositoryMutation(
+            chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
+            Effect.acquireUseRelease(
+              withGit(
+                holdWinnerRefs({
+                  canonical: chat.repository.root,
+                  writes: plan.writes,
+                  backupPrefix: `${refRoot(turn)}/replaced`,
+                }),
+              ),
+              (held) =>
+                Effect.gen(function* () {
+                  const promoted = yield* withGit(
+                    promoteWinnerState({
+                      canonical: chat.repository.root,
+                      ...(promotionSourceBranch ? { expectedBranch: promotionSourceBranch } : {}),
+                      ...(promotionSourceDetached ? { expectedDetached: true } : {}),
+                      ...(targetBranch ? { targetBranch } : {}),
+                      frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
+                      baseWorkingTree: turn.baseSnapshot?.tree ?? turn.frozenBaseSHA,
+                      baseIndexTree: turn.baseSnapshot?.indexTree ?? turn.frozenBaseSHA,
+                      resultCommit,
+                      finalIndexTree: winner.finalIndexTree!,
+                      ...(plan.checkoutAction ? { checkoutAction: plan.checkoutAction } : {}),
+                      ...(plan.takeTargetFrom ? { takeTargetFrom: plan.takeTargetFrom } : {}),
+                      ...(plan.publicChoice ? { publicChoice: plan.publicChoice } : {}),
+                      safetyRef,
+                      retainSafetyRef: true,
+                    }),
+                  )
+                  const refs = yield* held.commit.pipe(
+                    Effect.catch((refused) =>
+                      withGit(
+                        recoverFailedPromotion({
+                          canonical: chat.repository.root,
+                          safetyRef,
+                          ...partial,
+                        }),
+                      ).pipe(
+                        Effect.matchEffect({
+                          onSuccess: () => Effect.fail(refused),
+                          onFailure: (undo) => Effect.fail(new PartialApplyError(refused, undo, partial)),
+                        }),
+                      ),
                     ),
-                  ),
-                )
-                const moved = plan.checkoutMove
-                  ? yield* withGit(
-                      reportCheckoutMove({
-                        canonical: chat.repository.root,
-                        move: plan.checkoutMove,
-                        after: promoted.resultingHead,
-                        backupPrefix: `${refRoot(turn)}/replaced`,
-                      }),
-                    )
-                  : undefined
-                return { promoted, refs: moved ? [moved, ...refs] : refs }
-              }),
-            (held) => held.abort,
+                  )
+                  const moved = plan.checkoutMove
+                    ? yield* withGit(
+                        reportCheckoutMove({
+                          canonical: chat.repository.root,
+                          move: plan.checkoutMove,
+                          after: promoted.resultingHead,
+                          backupPrefix: `${refRoot(turn)}/replaced`,
+                        }),
+                      )
+                    : undefined
+                  return { promoted, refs: moved ? [moved, ...refs] : refs }
+                }),
+              (held) => held.abort,
+            ),
           ),
         ).pipe(Effect.mapError(error), Effect.tapError(recordApplicationFailure))
         applied = written.promoted
@@ -8434,14 +8490,19 @@ export const layer: Layer.Layer<
         yield* promise(() => store.transitionTurn(turn._id, "canonicalizing"))
       }
 
-      yield* withRepositoryMutation(
-        chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
-        withGit(
-          finishWinnerPromotion({
-            canonical: chat.repository.root,
-            safetyRef,
-            ...(setAside ? { retainSafetyRef: true } : {}),
-          }),
+      yield* trackOperation(
+        store,
+        turn._id,
+        "applying_changes",
+        withRepositoryMutation(
+          chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
+          withGit(
+            finishWinnerPromotion({
+              canonical: chat.repository.root,
+              safetyRef,
+              ...(setAside ? { retainSafetyRef: true } : {}),
+            }),
+          ),
         ),
       ).pipe(
         Effect.mapError(error),

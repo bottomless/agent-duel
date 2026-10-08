@@ -1,4 +1,5 @@
 import type { ArenaRun, ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import { arenaSetupStatus } from "./transition-progress";
 import { resolutionRetryDetail } from "./battle-result";
 import { arenaParkedPromotion } from "./conflict-guard";
 import { isArenaBattleUnresolved } from "./summary-anchor";
@@ -61,27 +62,14 @@ export function arenaRunningDecisionOrder({
   return canPickB ? ["stop", "b"] : ["stop"];
 }
 
-/** The line the slot holds while a battle's workspaces are being prepared. */
-export const ARENA_PREPARING_WORKSPACES = "Preparing workspaces";
+/**
+ * Setup reports its steps in the conversation and the bar stays hidden until it is done
+ * (`decision-bar.tsx`), so this phase never reaches the screen and needs no step names.
+ */
+const PREPARING_WORKSPACES = "Preparing workspaces";
 
 function transitional(label: string, busy: boolean): ArenaDecisionPhase {
   return { kind: "transitional", label, busy };
-}
-
-/**
- * What the next battle is waiting on before its contestants exist. The
- * previous winner's environment is stopped first, then the warm pair is
- * seeded; both used to be a card of their own after the vote, and now they
- * are this one line in the bar.
- */
-function preparingLabel(snapshot: ArenaSnapshot): string {
-  if (snapshot.environment.retainedWinner?.state === "stopping") {
-    return "Stopping the previous preview";
-  }
-  if (snapshot.environment.warmPair?.state === "failed") {
-    return "Preparing workspaces again";
-  }
-  return ARENA_PREPARING_WORKSPACES;
 }
 
 function settled(run: ArenaRun | undefined): boolean {
@@ -103,20 +91,23 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
   if (turn?.canRetryResolution) {
     return { kind: "retry_resolution", detail: resolutionRetryDetail(turn.gitApplication) };
   }
-  if (!turn) return transitional(preparingLabel(snapshot), true);
+  if (!turn) return transitional(PREPARING_WORKSPACES, true);
   switch (turn.state) {
     case "creating":
     case "worktrees_ready":
-      return transitional(preparingLabel(snapshot), true);
+      return transitional(PREPARING_WORKSPACES, true);
     case "running": {
+      // The panes stay hidden while files are still copying, so a result cannot be judged yet.
+      // Stop stays: the engine aborts the copy instead of waiting for it.
+      const settingUp = arenaSetupStatus(turn) !== null;
       return {
         kind: "running",
         a: { side: "a", run: runA },
         b: { side: "b", run: runB },
         waitingFor: waitingFor(runA, runB),
         canStop: canStopArenaBattle(turn.state),
-        canPickA: canChooseArenaRun(turn.state, runA),
-        canPickB: canChooseArenaRun(turn.state, runB),
+        canPickA: !settingUp && canChooseArenaRun(turn.state, runA),
+        canPickB: !settingUp && canChooseArenaRun(turn.state, runB),
       };
     }
     case "finalizing":

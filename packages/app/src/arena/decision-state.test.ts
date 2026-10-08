@@ -125,6 +125,18 @@ describe("arenaDecisionPhase", () => {
     expect(phase).toMatchObject({ kind: "running", canPickA: false, canPickB: true });
   });
 
+  it("offers only stop while files are still copying", () => {
+    const phase = arenaDecisionPhase(
+      snapshot({ state: "running", turn: { activeOperations: ["copying_environment"] } }),
+    );
+    expect(phase).toMatchObject({
+      kind: "running",
+      canStop: true,
+      canPickA: false,
+      canPickB: false,
+    });
+  });
+
   it("names the side still working once the other has settled", () => {
     const phase = arenaDecisionPhase(
       snapshot({
@@ -243,7 +255,7 @@ describe("arenaDecisionPhase", () => {
 });
 
 describe("arenaDecisionPhase while the next battle is prepared", () => {
-  it("says what the preparation is waiting on", () => {
+  it("does not infer activity from retained services or an earlier warm-up failure", () => {
     expect(arenaDecisionPhase(snapshot({ state: "creating" }))).toEqual({
       kind: "transitional",
       label: "Preparing workspaces",
@@ -263,7 +275,7 @@ describe("arenaDecisionPhase while the next battle is prepared", () => {
           },
         }),
       ),
-    ).toMatchObject({ kind: "transitional", label: "Stopping the previous preview" });
+    ).toMatchObject({ kind: "transitional", label: "Preparing workspaces" });
     expect(
       arenaDecisionPhase(
         snapshot({
@@ -271,7 +283,7 @@ describe("arenaDecisionPhase while the next battle is prepared", () => {
           environment: { warmPair: { generation: 2, state: "failed", sides: [] } },
         }),
       ),
-    ).toMatchObject({ kind: "transitional", label: "Preparing workspaces again" });
+    ).toMatchObject({ kind: "transitional", label: "Preparing workspaces" });
   });
 });
 
