@@ -1393,6 +1393,7 @@ function WorkspaceScreenContent({
 
   const activeTabId = focusedPaneTabState.activeTabId;
   const activeTab = focusedPaneTabState.activeTab;
+  const isSidePanelFocused = sidePaneId !== null && focusedPaneTabState.pane?.id === sidePaneId;
 
   const tabs = useMemo<WorkspaceTabDescriptor[]>(
     () => focusedPaneTabState.tabs.map((tab) => tab.descriptor),
@@ -2216,7 +2217,7 @@ function WorkspaceScreenContent({
           handleCreateBrowserTab();
           return true;
         case "workspace.tab.close-current":
-          if (activeTabId) {
+          if (isSidePanelFocused && activeTabId) {
             void handleCloseTabById(activeTabId);
           }
           return true;
@@ -2248,6 +2249,7 @@ function WorkspaceScreenContent({
       handleCloseTabById,
       handleCreateBrowserTab,
       handleCreateTerminal,
+      isSidePanelFocused,
       navigateToTabId,
       tabs,
     ],
@@ -2308,6 +2310,9 @@ function WorkspaceScreenContent({
       }
 
       if (action.id === "workspace.pane.close") {
+        if (!isSidePanelFocused) {
+          return true;
+        }
         const tabsToClose = focusedPane.tabIds.flatMap((tabId) => {
           const tab = allTabDescriptorsById.get(tabId);
           return tab ? [tab] : [];
@@ -2326,6 +2331,7 @@ function WorkspaceScreenContent({
       allTabDescriptorsById,
       focusWorkspacePane,
       handleBulkCloseTabs,
+      isSidePanelFocused,
       moveWorkspaceTabToPane,
       persistenceKey,
       focusedPaneTabState.activeTabId,
