@@ -2294,7 +2294,7 @@ export const verifyContestantState = Effect.fn("ArenaGit.verifyContestantState")
         git.run(["ls-tree", "-r", "-z", "--name-only", probe.indexTree], { cwd: root }),
         git.run(["ls-tree", "-r", "-z", probe.workingTree], { cwd: root }),
         Effect.exit(read(git, root, "verify_contestant_index", ["write-tree"])),
-        Effect.exit(readWorkingTreeState(git, root, probe.gitDir)),
+        Effect.exit(readWorkingTreeState(git, root, { gitDir: probe.gitDir })),
         git.run(["worktree", "list", "--porcelain"], { cwd: root }),
         git.run(["for-each-ref", "--format=%(refname)", ...MIRROR_EXCLUDED_PREFIXES], { cwd: root }),
         Effect.promise(() =>
@@ -2442,6 +2442,19 @@ export const selectResult = Effect.fn("ArenaGit.selectResult")(function* (input:
   return input.resultCommit
 })
 
+interface WorkingTreeSnapshotOptions {
+  readonly gitDir?: string
+  readonly trackedTree?: string
+  /** A tree whose files stay in the snapshot while they are on disk, even once ignored. */
+  readonly keepFilesOf?: string
+}
+
+interface SnapshotIndexInput extends WorkingTreeSnapshotOptions {
+  readonly git: Git.Interface
+  readonly root: string
+  readonly index: string
+}
+
 /**
  * Seed the scratch index the working-tree snapshot is staged into.
  *
@@ -2459,21 +2472,20 @@ export const selectResult = Effect.fn("ArenaGit.selectResult")(function* (input:
  * seed silently overwrites.
  *
  * Reading the gitlinks back out of the seeded index doubles as the check that git can load
- * it, so the copy costs no more subprocesses than the `read-tree` it replaces. They are the
- * checkout's own gitlinks either way: the copy is the checkout's own index.
+ * it, so the copy costs no more subprocesses than the `read-tree` it replaces. Verification
+ * overlays its planned tree with `read-tree -m`, preserving stat data for unchanged entries.
  */
-const seedSnapshotIndex = Effect.fnUntraced(function* (
-  git: Git.Interface,
-  root: string,
-  index: string,
-  knownGitDir?: string,
-) {
+const seedSnapshotIndex = Effect.fnUntraced(function* (input: SnapshotIndexInput) {
+  const { git, root, index, trackedTree } = input
   const env = { GIT_INDEX_FILE: index }
-  const gitDir = knownGitDir ?? (yield* read(git, root, "find_canonical_git_dir", ["rev-parse", "--absolute-git-dir"]))
+  const gitDir = input.gitDir ?? (yield* read(git, root, "find_canonical_git_dir", ["rev-parse", "--absolute-git-dir"]))
   const copied = yield* Effect.tryPromise({
     try: () => copyFile(join(gitDir, "index"), index),
     catch: (cause) => new OperationError("copy_canonical_index", String(cause)),
   }).pipe(
+    Effect.andThen(
+      trackedTree ? run(git, root, "seed_verification_tree", ["read-tree", "-m", trackedTree], { env }) : Effect.void,
+    ),
     Effect.andThen(run(git, root, "read_canonical_gitlinks", ["ls-files", "--stage", "-z"], { env })),
     Effect.map((listed) => indexListing(listed.text())),
     Effect.catch(() => Effect.succeed(undefined)),
@@ -2484,7 +2496,12 @@ const seedSnapshotIndex = Effect.fnUntraced(function* (
   )
   // A copy that failed partway leaves bytes `read-tree` would refuse to load over.
   yield* Effect.promise(() => unlink(index).catch(() => undefined))
-  yield* run(git, root, "initialize_snapshot_index", ["read-tree", "HEAD"], { env })
+  yield* run(git, root, "initialize_snapshot_index", ["read-tree", trackedTree ?? "HEAD"], { env })
+  if (trackedTree) {
+    return indexListing(
+      (yield* run(git, root, "read_verification_gitlinks", ["ls-files", "--stage", "-z"], { env })).text(),
+    )
+  }
   return canonical
 })
 
@@ -2532,19 +2549,73 @@ const excludeSyncConflictCopies = Effect.fnUntraced(function* (
 })
 
 /**
+ * Stage the files of `tree` that `add -A` left out only because they are ignored now. A contestant
+ * that writes a `.gitignore` hides public files it never touched, such as a Finder `.DS_Store`
+ * already in the battle base. Left out, they read as the winner's deletions and the vote removes
+ * them from the developer's checkout. A file the contestant deleted is gone from disk and stays out.
+ */
+const stageNewlyIgnoredFiles = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  tree: string,
+  env: Record<string, string>,
+) {
+  const listed = yield* run(
+    git,
+    root,
+    "read_snapshot_missing_files",
+    ["diff-index", "--cached", "--no-renames", "--diff-filter=D", "--name-only", "-z", tree],
+    { env },
+  )
+  const missing = listed.text().split("\0").filter(Boolean)
+  if (missing.length === 0) return
+  // A path that became a directory would stage everything under it, ignored setup output included.
+  const onDisk = (yield* Effect.promise(() =>
+    Promise.all(
+      missing.map((path) =>
+        lstat(join(root, path)).then(
+          (stat) => (stat.isDirectory() ? undefined : path),
+          () => undefined,
+        ),
+      ),
+    ),
+  )).filter((path): path is string => path !== undefined)
+  if (onDisk.length === 0) return
+  const checked = yield* git.run(["check-ignore", "--no-index", "--stdin", "-z"], {
+    cwd: root,
+    env,
+    stdin: Stream.make(new TextEncoder().encode(`${onDisk.join("\0")}\0`)),
+  })
+  // 1 is "none of them is ignored": what `add -A` left out is a nested repository, not an ignored file.
+  if (checked.exitCode === 1) return
+  if (checked.exitCode !== 0) {
+    yield* Effect.fail(new OperationError("check_snapshot_ignored_files", checked.stderr.toString("utf8").trim()))
+  }
+  const ignored = checked.text().split("\0").filter(Boolean)
+  yield* run(
+    git,
+    root,
+    "stage_newly_ignored_files",
+    ["--literal-pathspecs", "add", "--force", "--pathspec-from-file=-", "--pathspec-file-nul"],
+    { env, stdin: Stream.make(new TextEncoder().encode(`${ignored.join("\0")}\0`)) },
+  )
+})
+
+/**
  * The working tree as a tree object, and the untracked nested repositories it leaves out: `add -A`
  * stages one as a gitlink, which a snapshot must not carry.
  */
 const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function* (
   git: Git.Interface,
   root: string,
-  gitDir?: string,
+  options?: WorkingTreeSnapshotOptions,
 ) {
   const index = join(tmpdir(), `opencode-arena-index-${randomUUID()}`)
   return yield* Effect.gen(function* () {
     const env = { GIT_INDEX_FILE: index }
-    const seeded = yield* seedSnapshotIndex(git, root, index, gitDir)
+    const seeded = yield* seedSnapshotIndex({ git, root, index, ...options })
     yield* run(git, root, "stage_snapshot", ["add", "-A", "--", "."], { env })
+    if (options?.keepFilesOf) yield* stageNewlyIgnoredFiles(git, root, options.keepFilesOf, env)
     const snapshot = indexListing(
       (yield* run(git, root, "read_snapshot_gitlinks", ["ls-files", "--stage", "-z"], { env })).text(),
     )
@@ -2574,8 +2645,12 @@ const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function
   )
 })
 
-const readWorkingTree = Effect.fn("ArenaGit.readWorkingTree")(function* (git: Git.Interface, root: string) {
-  return (yield* readWorkingTreeState(git, root)).tree
+const readWorkingTree = Effect.fn("ArenaGit.readWorkingTree")(function* (
+  git: Git.Interface,
+  root: string,
+  options?: WorkingTreeSnapshotOptions,
+) {
+  return (yield* readWorkingTreeState(git, root, options)).tree
 })
 
 /** List ignored setup output as collapsed copy roots for the second contestant. */
@@ -2707,7 +2782,7 @@ export const finalize = Effect.fn("ArenaGit.finalize")(function* (input: Finaliz
   // latter uses a temporary index and therefore does not disturb the staged/unstaged
   // presentation that remains visible in the retained contestant worktree.
   const finalIndexTree = yield* read(git, root, "read_final_index", ["write-tree"])
-  const finalTree = yield* readWorkingTree(git, root)
+  const finalTree = yield* readWorkingTree(git, root, { keepFilesOf: input.baseSHA })
   const rawTree = yield* read(git, root, "read_raw_tree", ["rev-parse", `${rawHead}^{tree}`])
   const frozenHead = input.frozenHead ?? input.baseSHA
   const rawHeadDescendsFromBase = yield* isAncestor(git, root, frozenHead, rawHead)
@@ -3834,7 +3909,9 @@ export const promoteWinnerState = Effect.fn("ArenaGit.promoteWinnerState")(funct
   yield* git.run(["update-index", "-q", "--refresh"], { cwd: root })
 
   const verifiedHead = yield* read(git, root, "verify_winner_promotion_head", ["rev-parse", "HEAD"])
-  const verifiedTree = yield* readWorkingTree(git, root)
+  // The winner's .gitignore may hide public files that the merged tree still preserves.
+  // Track that tree in the scratch index so verification reads those bytes as well.
+  const verifiedTree = yield* readWorkingTree(git, root, { trackedTree: worktreeTree })
   if (verifiedHead !== resultingHead || verifiedTree !== worktreeTree) {
     return yield* Effect.fail(new OperationError("verify_winner_promotion", "Promoted winner state could not be verified"))
   }

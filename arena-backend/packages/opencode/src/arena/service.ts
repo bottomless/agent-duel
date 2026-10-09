@@ -8727,7 +8727,7 @@ export const layer: Layer.Layer<
                 ...(interruptedTarget ? { targetBranch: interruptedTarget } : {}),
               }),
             ),
-          ).pipe(Effect.mapError(error))
+          ).pipe(Effect.mapError(error), Effect.tapError(recordApplicationFailure))
         }
         // Decide everything before writing anything. A plan with open items parks on them; the
         // developer's answers come back through `retryResolution` and the next plan uses them.

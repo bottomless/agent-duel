@@ -68,6 +68,52 @@ const scopedTmpdir = (options?: Parameters<typeof tmpdir>[0]) =>
     (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
   )
 
+const finderMetadata = Buffer.from([0, 0, 0, 1, 66, 117, 100, 49, 255])
+
+/**
+ * A battle whose base holds untracked public files and a committed `config.local`, and whose
+ * contestant writes a `.gitignore` that hides all of them, deletes `old.log`, and adds `winner.txt`.
+ */
+const newlyIgnoredBattle = Effect.gen(function* () {
+  const canonical = yield* scopedTmpdir({ git: true })
+  const candidate = yield* scopedTmpdir()
+  // A global excludes file commonly lists .DS_Store; this case is a checkout without one.
+  yield* Effect.promise(() => $`git config core.excludesFile /dev/null`.cwd(canonical.path).quiet())
+  yield* Effect.promise(() => fs.writeFile(`${canonical.path}/config.local`, "developer config\n"))
+  yield* Effect.promise(() => $`git add config.local && git commit -m config`.cwd(canonical.path).quiet())
+  yield* Effect.promise(() => fs.writeFile(`${canonical.path}/.DS_Store`, finderMetadata))
+  yield* Effect.promise(() => fs.mkdir(`${canonical.path}/local`))
+  yield* Effect.promise(() => fs.writeFile(`${canonical.path}/local/notes.txt`, "developer notes\n"))
+  yield* Effect.promise(() => fs.writeFile(`${canonical.path}/old.log`, "stale\n"))
+  const base = yield* snapshotBase({ canonical: canonical.path })
+  expect(base.clean).toBe(false)
+  yield* Effect.promise(() => $`git worktree add --detach ${candidate.path} ${base.frozenHead}`.cwd(canonical.path).quiet())
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(() => $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow()).pipe(
+      Effect.ignore,
+    ),
+  )
+  yield* prepareContestantState({
+    worktree: candidate.path,
+    frozenHead: base.frozenHead,
+    indexTree: base.indexTree,
+    workingTree: base.baseTree,
+  })
+  yield* Effect.promise(() => fs.writeFile(`${candidate.path}/.gitignore`, ".DS_Store\nlocal/\n*.log\nconfig.local\n"))
+  yield* Effect.promise(() => fs.writeFile(`${candidate.path}/winner.txt`, "winner\n"))
+  yield* Effect.promise(() => fs.rm(`${candidate.path}/old.log`))
+  return { canonical, candidate, base }
+})
+
+const expectNewlyIgnoredFilesKept = (root: string) =>
+  Effect.promise(async () => {
+    expect(await fs.readFile(`${root}/.DS_Store`)).toEqual(finderMetadata)
+    expect(await fs.readFile(`${root}/local/notes.txt`, "utf8")).toBe("developer notes\n")
+    expect(await fs.readFile(`${root}/config.local`, "utf8")).toBe("developer config\n")
+    expect(await fs.readFile(`${root}/winner.txt`, "utf8")).toBe("winner\n")
+    expect(await fs.access(`${root}/old.log`).then(() => true, () => false)).toBe(false)
+  })
+
 for (const scenario of [
   {
     name: "executable script",
@@ -169,6 +215,157 @@ for (const scenario of [
 }
 
 describe("ArenaGit", () => {
+  it.live("preserves public untracked files newly ignored by the winner", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const candidate = yield* scopedTmpdir()
+      const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      const originalIndex = (yield* Effect.promise(() => $`git write-tree`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() =>
+        $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet(),
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() =>
+          $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow(),
+        ).pipe(Effect.ignore),
+      )
+      yield* Effect.promise(() => fs.writeFile(`${candidate.path}/.gitignore`, ".DS_Store\nlocal/\n"))
+      yield* Effect.promise(() => fs.writeFile(`${candidate.path}/winner.txt`, "winner\n"))
+      const winner = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: frozenHead,
+        permanentRef: "refs/battles/new-ignore/a",
+      })
+      const metadata = Buffer.from([0, 1, 2, 255])
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/.DS_Store`, metadata))
+      yield* Effect.promise(() => fs.mkdir(`${canonical.path}/local`))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/local/notes.txt`, "developer notes\n"))
+
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead,
+        baseWorkingTree: frozenHead,
+        baseIndexTree: originalIndex,
+        resultCommit: winner.finalCommit,
+        finalIndexTree: winner.finalIndexTree,
+        safetyRef: "refs/battles/new-ignore/public-safety",
+      })
+
+      expect(promoted.conflicts).toEqual([])
+      expect(promoted.resultingHead).toBe(frozenHead)
+      expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/.DS_Store`))).toEqual(metadata)
+      expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/local/notes.txt`, "utf8"))).toBe(
+        "developer notes\n",
+      )
+      expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/winner.txt`, "utf8"))).toBe("winner\n")
+      expect((yield* Effect.promise(() => $`git write-tree`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        originalIndex,
+      )
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        "?? .gitignore\n?? winner.txt",
+      )
+    }),
+  )
+
+  it.live("keeps base files a winner newly ignores without touching them", () =>
+    Effect.gen(function* () {
+      const { canonical, candidate, base } = yield* newlyIgnoredBattle
+      const winner = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: base.baseCommit,
+        frozenHead: base.frozenHead,
+        permanentRef: "refs/battles/base-ignore/a",
+      })
+      // The comparison reads this commit: only the winner's own edits differ from the base.
+      expect(
+        (yield* Effect.promise(() =>
+          $`git diff --name-status ${base.baseCommit} ${winner.finalCommit}`.cwd(canonical.path).quiet().text(),
+        )).trim(),
+      ).toBe("A\t.gitignore\nD\told.log\nA\twinner.txt")
+
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead: base.frozenHead,
+        baseWorkingTree: base.baseCommit,
+        baseIndexTree: base.indexTree,
+        resultCommit: winner.finalCommit,
+        finalIndexTree: winner.finalIndexTree,
+        safetyRef: "refs/battles/base-ignore/public-safety",
+      })
+
+      expect(promoted.conflicts).toEqual([])
+      yield* expectNewlyIgnoredFilesKept(canonical.path)
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        "?? .gitignore\n?? winner.txt",
+      )
+    }),
+  )
+
+  it.live("keeps base files a committing winner newly ignores", () =>
+    Effect.gen(function* () {
+      const { canonical, candidate, base } = yield* newlyIgnoredBattle
+      yield* Effect.promise(() => $`git add -A && git commit -m winner`.cwd(candidate.path).quiet())
+      const agentCommit = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(candidate.path).quiet().text())).trim()
+      const winner = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: base.baseCommit,
+        frozenHead: base.frozenHead,
+        permanentRef: "refs/battles/base-ignore-commit/a",
+      })
+      expect(
+        (yield* Effect.promise(() =>
+          $`git diff --name-status ${base.baseCommit} ${winner.finalCommit}`.cwd(canonical.path).quiet().text(),
+        )).trim(),
+      ).toBe("A\t.gitignore\nD\told.log\nA\twinner.txt")
+
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead: base.frozenHead,
+        baseWorkingTree: base.baseCommit,
+        baseIndexTree: base.indexTree,
+        resultCommit: winner.finalCommit,
+        finalIndexTree: winner.finalIndexTree,
+        checkoutAction: { action: "agent", start: base.frozenHead, agent: winner.rawHead },
+        safetyRef: "refs/battles/base-ignore-commit/public-safety",
+      })
+
+      expect(promoted.conflicts).toEqual([])
+      expect(promoted.resultingHead).toBe(agentCommit)
+      yield* expectNewlyIgnoredFilesKept(canonical.path)
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(canonical.path).quiet().text())).trim()).toBe("")
+    }),
+  )
+
+  it.live("keeps a file on disk when the winner stops tracking and ignores it", () =>
+    Effect.gen(function* () {
+      const { canonical, candidate, base } = yield* newlyIgnoredBattle
+      yield* Effect.promise(() => $`git rm --cached --quiet config.local`.cwd(candidate.path).quiet())
+      const winner = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: base.baseCommit,
+        frozenHead: base.frozenHead,
+        permanentRef: "refs/battles/base-untrack/a",
+      })
+
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead: base.frozenHead,
+        baseWorkingTree: base.baseCommit,
+        baseIndexTree: base.indexTree,
+        resultCommit: winner.finalCommit,
+        finalIndexTree: winner.finalIndexTree,
+        safetyRef: "refs/battles/base-untrack/public-safety",
+      })
+
+      expect(promoted.conflicts).toEqual([])
+      yield* expectNewlyIgnoredFilesKept(canonical.path)
+      // The winner's untracking lands in the index; the developer's copy stays on disk.
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        "D  config.local\n?? .gitignore\n?? winner.txt",
+      )
+    }),
+  )
+
   it.live("prepares staged, unstaged, deleted, and untracked contestant state without changing identity", () =>
     Effect.gen(function* () {
       const canonical = yield* scopedTmpdir({ git: true })
