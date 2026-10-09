@@ -20,7 +20,13 @@ export function arenaToolOutput(state: unknown): unknown {
 
 export function arenaQueuedSteering(run: ArenaRun): QueuedArenaSteer[] {
   if (run.runState !== "pending") return [];
-  const messages = arenaThreadMessages(run).filter(isRecord);
+  // Subagent transcripts share the run's message list. Their task prompts and replies are not
+  // steering, and a subagent reply must not mark the contestant's own steer as received.
+  const messages = arenaThreadMessages(run)
+    .filter(isRecord)
+    .filter(
+      (message) => typeof message.sessionID !== "string" || message.sessionID === run.sessionID,
+    );
   const indices = new Map(messages.map((message, index) => [message.id, index]));
   let consumedThrough = -1;
   for (const message of messages) {

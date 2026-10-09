@@ -93,6 +93,16 @@ describe("queued Arena steering", () => {
     expect(arenaQueuedSteering(run)).toEqual([]);
   });
 
+  it("ignores a subagent's task prompt and does not count its replies as delivery", () => {
+    const run = running();
+    run.messages?.push(
+      { id: "child-prompt", role: "user", sessionID: "child" },
+      { id: "child-answer", role: "assistant", parentID: "child-prompt", sessionID: "child" },
+    );
+    run.parts = { ...run.parts, "child-prompt": [{ type: "text", text: "Find the config." }] };
+    expect(arenaQueuedSteering(run).map((message) => message.id)).toEqual(["steer"]);
+  });
+
   it("leaves ended runs with transcript history instead of a live queue", () => {
     const run = { ...running(), runState: "stopped" as const };
     expect(arenaQueuedSteering(run)).toEqual([]);
