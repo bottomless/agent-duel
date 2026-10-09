@@ -930,15 +930,34 @@ permanent errors stay terminal. A broken response stream or transient OpenRouter
 restarts the request under the same retry budget. The budget stops scheduling new retries, not a
 request already in flight.
 
+A stream that ends without a finish reason or `[DONE]` is broken too (`endsResponse` in
+`arena/proxy.ts`). The control plane's function time limit ends a response cleanly, mid-thought;
+accepted as a finish, the step has no tool call and the run completes with no answer. The retried
+request's own time counts toward the two-minute window, so a response cut at the limit gets one
+retry, and a second cut fails the run visibly.
+
 A restart resends the request the failed attempt started from, so it removes that attempt's parts
 before the retry wait; otherwise the pane and the transcript show a half answer above the new one.
 Never restart once the attempt has started a local tool: the resent request does not contain that
 call, and the model can repeat its side effect. That failure ends the step instead, and the next
 step continues from the stored tool call and result (`session/processor.ts`).
 
-An Arena model response that emits no new event for two minutes fails and enters the same retry
-policy. The deadline pauses while a local tool runs or waits for approval; a long tool call must not
-be mistaken for a silent model stream.
+An Arena model response that sends no provider chunk for two minutes fails and enters the same retry
+policy. Arena streams request raw chunks (`session/llm.ts`) because some models reason for minutes in
+chunks that carry only OpenRouter `reasoning_details`, which produce no AI SDK part; counting only
+parts kills those streams mid-thought. Keep-alive comments are not chunks, so a stalled model still
+times out. The deadline pauses while a local tool runs or waits for approval; a long tool call must
+not be mistaken for a silent model stream. When the runtime abandons a request, the daemon's Arena
+proxy aborts its control-plane request too; otherwise the hosted function keeps streaming, and
+billing, until its own time limit.
+
+The contestant sees only a neutral error, so diagnose a deadline from the engine log,
+`~/.local/share/opencode/log/opencode.log` for the packaged app too. Each timeout writes
+`arena model response idle` with the last part types the model produced and the proxy's record of
+that stream: when it last received a chunk, ended, started and finished saving the response, and
+closed. A stream that ended but never closed stalled inside the engine, not upstream. Compare it
+with the control plane's `arenaAssignmentGenerationMetrics` record for the same `generationID`,
+whose `createdAt` is when the hosted function reached the end of the response.
 
 `No recent activity` means the run has emitted no event for 90 seconds; it is not proof of a
 stalled process. Explicit retry and user-input waits take precedence. That UI label alone must not

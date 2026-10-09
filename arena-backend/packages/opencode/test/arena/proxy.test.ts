@@ -5,7 +5,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { streamText } from "ai"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Effect } from "effect"
-import { AssignmentRegistry, proxy, rewriteBody, sanitizePayload } from "../../src/arena/proxy"
+import { AssignmentRegistry, proxy, rewriteBody, sanitizePayload, streamProgress } from "../../src/arena/proxy"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionRetry } from "../../src/session/retry"
 import { createArenaService } from "@agent-duel/arena-service"
@@ -61,6 +61,31 @@ describe("ArenaProxy", () => {
       })
       expect(recorded).toBe(1)
     }
+  })
+
+  test("records that a stream ended while its response is still being saved", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        new Response('data: {"choices":[]}\n\ndata: [DONE]\n\n', { headers: { "Content-Type": "text/event-stream" } }),
+      telemetry: { complete: () => new Promise<void>(() => {}) },
+    })
+    const reader = response.body!.getReader()
+    void (async () => {
+      while (!(await reader.read()).done) {
+        // Drain until the stream waits on the save.
+      }
+    })()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    const progress = streamProgress("session-root")
+    expect(progress).toMatchObject({ chunks: 1 })
+    expect(progress).toHaveProperty("endedMsAgo")
+    expect(progress).toHaveProperty("savingMsAgo")
+    expect(progress).not.toHaveProperty("savedMsAgo")
+    expect(progress).not.toHaveProperty("closedMsAgo")
   })
 
   test("classifies a real socket reset before response headers", async () => {
@@ -516,8 +541,8 @@ describe("ArenaProxy", () => {
     await expect(response.text()).rejects.toThrow("Arena contestant stream failed")
   })
 
-  test("restarts a request after a mid-answer connection break or transient OpenRouter error", async () => {
-    for (const failure of ["transport", "openrouter"] as const) {
+  test("restarts a request after a mid-answer connection break, transient OpenRouter error, or cut-off", async () => {
+    for (const failure of ["transport", "openrouter", "cut-off"] as const) {
       const registry = new AssignmentRegistry()
       registry.assign("session-root", assignment)
       let calls = 0
@@ -584,6 +609,8 @@ describe("ArenaProxy", () => {
                               return
                             }
                             if (failure === "transport") controller.error(new Error("private network failure"))
+                            // A hosting time limit ends the response cleanly, without a finish or [DONE].
+                            else if (failure === "cut-off") controller.close()
                             else {
                               controller.enqueue(
                                 new TextEncoder().encode(
@@ -628,7 +655,8 @@ describe("ArenaProxy", () => {
       expect(answer).toBe("complete")
       expect(calls).toBe(2)
     }
-  })
+    // Each case waits out the real first retry backoff.
+  }, 15_000)
 
   test("does not retry permanent errors received mid-answer", () => {
     for (const code of [400, 401, 402, 403, "insufficient_quota", "context_length_exceeded"]) {

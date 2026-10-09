@@ -48,6 +48,57 @@ export type ProxyOptions = {
   readonly onDispatch?: (metadata: RequestMetadata) => void
 }
 
+type StreamProgress = {
+  readonly generationID: string
+  readonly headersAt: number
+  chunks: number
+  bytes: number
+  lastChunkAt?: number
+  endedAt?: number
+  savingAt?: number
+  savedAt?: number
+  closedAt?: number
+  cancelledAt?: number
+  failedAt?: number
+  failure?: "read" | "read-aborted" | "save" | "forward" | "cut-off"
+}
+
+// Each session's latest contestant stream, sizes and times only. When the idle deadline fires, it
+// tells a response that never ended apart from one that ended but never reached the model call.
+const progress = new Map<string, StreamProgress>()
+const PROGRESS_SESSIONS = 256
+
+function trackProgress(sessionID: string, generationID: string) {
+  const record: StreamProgress = { generationID, headersAt: Date.now(), chunks: 0, bytes: 0 }
+  progress.delete(sessionID)
+  progress.set(sessionID, record)
+  if (progress.size > PROGRESS_SESSIONS) progress.delete(progress.keys().next().value!)
+  return record
+}
+
+/** How long ago each step of the session's latest contestant stream happened. */
+export function streamProgress(sessionID: string, now = Date.now()) {
+  const record = progress.get(sessionID)
+  if (!record) return undefined
+  const ago = (at: number | undefined) => (at === undefined ? undefined : now - at)
+  return Object.fromEntries(
+    Object.entries({
+      generationID: record.generationID,
+      chunks: record.chunks,
+      bytes: record.bytes,
+      headersMsAgo: ago(record.headersAt),
+      lastChunkMsAgo: ago(record.lastChunkAt),
+      endedMsAgo: ago(record.endedAt),
+      savingMsAgo: ago(record.savingAt),
+      savedMsAgo: ago(record.savedAt),
+      closedMsAgo: ago(record.closedAt),
+      cancelledMsAgo: ago(record.cancelledAt),
+      failedMsAgo: ago(record.failedAt),
+      failure: record.failure,
+    }).filter(([, value]) => value !== undefined),
+  )
+}
+
 export class AssignmentRegistry {
   readonly assignments = new Map<string, Assignment>()
 
@@ -212,6 +263,27 @@ function sanitizeLine(line: string, generationID: string) {
   }
 }
 
+const terminalEventTypes = new Set(["response.completed", "response.incomplete", "response.failed", "error"])
+
+/** Whether an SSE line is one a provider sends only at the end of a response. */
+function endsResponse(line: string) {
+  if (!line.startsWith("data:")) return false
+  const raw = line.slice("data:".length).trim()
+  if (raw === "[DONE]") return true
+  if (!raw.includes('"finish_reason":"') && !raw.includes('"type":"') && !raw.includes('"error"')) return false
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>
+    if (value.error !== undefined) return true
+    if (typeof value.type === "string" && terminalEventTypes.has(value.type)) return true
+    return (
+      Array.isArray(value.choices) &&
+      value.choices.some((choice) => typeof (choice as Record<string, unknown> | null)?.finish_reason === "string")
+    )
+  } catch {
+    return false
+  }
+}
+
 function sanitizeStream(
   stream: ReadableStream<Uint8Array>,
   generationID: string,
@@ -222,8 +294,10 @@ function sanitizeStream(
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
+  const tracked = trackProgress(metadata.sessionID, generationID)
   let pending = ""
   let settled = false
+  let finished = false
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       let reading = false
@@ -233,24 +307,49 @@ function sanitizeStream(
         reading = false
         if (settled) return
         if (next.done) {
+          tracked.endedAt = Date.now()
           const tail = decoder.decode()
           pending += tail
           if (pending) {
+            finished ||= endsResponse(pending)
             const line = sanitizeLine(pending, generationID)
             telemetry?.rawChunk?.(metadata, line)
             controller.enqueue(encoder.encode(line))
           }
+          if (!finished) {
+            // A hosting time limit or dropped connection ends the body cleanly. Without a finish or
+            // [DONE] the response was cut off, and accepting it would end the run as complete.
+            settled = true
+            tracked.failedAt = Date.now()
+            tracked.failure = "cut-off"
+            try {
+              await telemetry?.error?.(metadata, new Error("Arena contestant stream was cut off"), new Date())
+            } catch {
+              controller.error(new Error("Arena telemetry persistence failed"))
+              return
+            }
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(retryableStreamPayload())}\n\n`))
+            controller.close()
+            return
+          }
+          tracked.savingAt = Date.now()
           await telemetry?.complete?.(metadata, new Date())
+          tracked.savedAt = Date.now()
           settled = true
           controller.close()
+          tracked.closedAt = Date.now()
           return
         }
         const chunk = next.value
+        tracked.chunks++
+        tracked.bytes += chunk.byteLength
+        tracked.lastChunkAt = Date.now()
         const raw = decoder.decode(chunk, { stream: true })
         pending += raw
         const lines = pending.split("\n")
         pending = lines.pop() ?? ""
         for (const line of lines) {
+          finished ||= endsResponse(line)
           const sanitized = `${sanitizeLine(line, generationID)}\n`
           telemetry?.rawChunk?.(metadata, sanitized)
           controller.enqueue(encoder.encode(sanitized))
@@ -258,6 +357,14 @@ function sanitizeStream(
       } catch {
         if (settled) return
         settled = true
+        tracked.failedAt = Date.now()
+        tracked.failure = reading
+          ? signal?.aborted
+            ? "read-aborted"
+            : "read"
+          : tracked.savingAt !== undefined && tracked.savedAt === undefined
+            ? "save"
+            : "forward"
         try {
           await telemetry?.error?.(metadata, new Error("Arena contestant stream failed"), new Date())
         } catch {
@@ -275,6 +382,7 @@ function sanitizeStream(
     async cancel(reason) {
       if (settled) return
       settled = true
+      tracked.cancelledAt = Date.now()
       try {
         await reader.cancel(reason)
       } finally {

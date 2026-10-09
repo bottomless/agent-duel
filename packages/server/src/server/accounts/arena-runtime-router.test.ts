@@ -95,6 +95,53 @@ describe("Arena runtime proxy", () => {
     );
   });
 
+  it("stops the control-plane request when the Arena runtime disconnects mid-stream", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    let upstreamSignal: AbortSignal | undefined;
+    let upstreamCancelled = false;
+    upstream.mockImplementation(async (_input, init) => {
+      upstreamSignal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: {"ok":true}\n\n'));
+          },
+          cancel() {
+            upstreamCancelled = true;
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      );
+    });
+    const client = new AbortController();
+
+    const response = await fetch(
+      `${baseUrl}/api/arena-runtime/api/openrouter/api/v1/chat/completions`,
+      {
+        method: "POST",
+        signal: client.signal,
+        headers: {
+          Authorization: `Bearer ${runtime.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model: "contestant", stream: true }),
+      },
+    );
+    const reader = response.body!.getReader();
+    await reader.read();
+    client.abort();
+
+    await vi.waitFor(() => {
+      expect(upstreamSignal?.aborted).toBe(true);
+      expect(upstreamCancelled).toBe(true);
+    });
+  });
+
   it("preserves neutral payment errors and Retry-After across the desktop proxy", async () => {
     installArenaCredentials({
       mode: "hosted",

@@ -38,8 +38,15 @@ export function createArenaRuntimeRouter(options: {
       return;
     }
 
+    // A contestant stream the runtime abandons would otherwise run, and bill, until the control
+    // plane's own deadline.
+    const disconnected = new AbortController();
+    res.on("close", () => {
+      if (!res.writableFinished) disconnected.abort();
+    });
     try {
       const upstream = await execute(`${credentials.controlPlaneUrl}${req.path}`, {
+        signal: disconnected.signal,
         method: "POST",
         headers: {
           Accept: req.header("accept") ?? "application/json",
@@ -67,17 +74,21 @@ export function createArenaRuntimeRouter(options: {
         return;
       }
       const reader = upstream.body.getReader();
+      const cancel = () => void reader.cancel().catch(() => undefined);
+      disconnected.signal.addEventListener("abort", cancel, { once: true });
       try {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (!res.write(value)) await once(res, "drain");
+          if (!res.write(value)) await once(res, "drain", { signal: disconnected.signal });
         }
         res.end();
       } finally {
+        disconnected.signal.removeEventListener("abort", cancel);
         reader.releaseLock();
       }
     } catch (error) {
+      if (disconnected.signal.aborted) return;
       options.logger.warn({ err: error, path: req.path }, "Arena runtime proxy request failed");
       if (!res.headersSent) {
         res.status(502).json({ error: "Arena control plane is unavailable" });

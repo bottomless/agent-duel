@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test"
 import { streamText, tool } from "ai"
 import { MockLanguageModelV3 } from "ai/test"
+import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import z from "zod"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { timeoutModelIdle } from "@/arena/model-idle"
+import { timeoutModelIdle, type ModelIdleActivity } from "@/arena/model-idle"
 import { ProviderError } from "@/provider/error"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionRetry } from "@/session/retry"
+import { LLM } from "@/session/llm"
 import { Effect, Fiber, Stream } from "effect"
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -93,6 +95,25 @@ test("a silent model stream fails and aborts its request", async () => {
   }).toThrow(ProviderError.ResponseStreamError)
   expect(events).toEqual(["start"])
   expect(abort.signal.aborted).toBe(true)
+})
+
+test("an idle deadline reports the latest part types the model produced", async () => {
+  const abort = new AbortController()
+  async function* stream() {
+    yield { type: "start" }
+    yield { type: "reasoning-delta" }
+    yield { type: "reasoning-delta" }
+    yield { type: "raw" }
+    await new Promise<void>((resolve) => abort.signal.addEventListener("abort", () => resolve(), { once: true }))
+  }
+
+  let activity: ModelIdleActivity | undefined
+  await expect(async () => {
+    for await (const _ of timeoutModelIdle(stream(), abort, 30, (reported) => (activity = reported))) {
+      // Consume until the deadline fires.
+    }
+  }).toThrow(ProviderError.ResponseStreamError)
+  expect(activity).toMatchObject({ parts: 4, recentParts: "start*1 reasoning-delta*2 raw*1" })
 })
 
 test("a model idle error enters the Arena retry policy", () => {
@@ -217,4 +238,76 @@ test("model silence after a tool result is bounded even if the model stream rema
   }).toThrow(ProviderError.ResponseStreamError)
   expect(events).toContain("tool-call")
   expect(events).toContain("tool-result")
+})
+
+// OpenRouter can stream minutes of contestant reasoning only as `reasoning_details`, with no text.
+function reasoningDetailsOnlyModel() {
+  const encoder = new TextEncoder()
+  const chunk = (delta: Record<string, unknown>, finishReason: string | null = null) =>
+    encoder.encode(
+      `data: ${JSON.stringify({
+        id: "gen-1",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "contestant",
+        choices: [{ index: 0, delta, finish_reason: finishReason }],
+      })}\n\n`,
+    )
+  return createOpenRouter({
+    apiKey: "test-key",
+    fetch: async () =>
+      new Response(
+        new ReadableStream({
+          async start(controller) {
+            controller.enqueue(chunk({ role: "assistant", content: "", reasoning: "Planning" }))
+            for (let index = 0; index < 8; index++) {
+              await sleep(40)
+              controller.enqueue(encoder.encode(": OPENROUTER PROCESSING\n\n"))
+              controller.enqueue(
+                chunk({
+                  role: "assistant",
+                  content: "",
+                  reasoning: null,
+                  reasoning_details: [{ type: "reasoning.encrypted", data: "opaque", index: 0 }],
+                }),
+              )
+            }
+            controller.enqueue(chunk({ role: "assistant", content: "Done" }))
+            controller.enqueue(chunk({}, "stop"))
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"))
+            controller.close()
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      ),
+  }).chat("contestant")
+}
+
+test("reasoning sent only as provider details keeps an Arena stream alive", async () => {
+  const abort = new AbortController()
+  const result = streamText({
+    model: reasoningDetailsOnlyModel(),
+    abortSignal: abort.signal,
+    messages: [{ role: "user", content: "Think hard" }],
+    ...LLM.arenaStreamOptions,
+  })
+  const events: string[] = []
+  for await (const event of timeoutModelIdle(result.fullStream, abort, 150)) events.push(event.type)
+  expect(events).toContain("text-delta")
+  expect(events.at(-1)).toBe("finish")
+  expect(abort.signal.aborted).toBe(false)
+})
+
+test("without raw chunks, reasoning sent only as provider details looks idle", async () => {
+  const abort = new AbortController()
+  const result = streamText({
+    model: reasoningDetailsOnlyModel(),
+    abortSignal: abort.signal,
+    messages: [{ role: "user", content: "Think hard" }],
+  })
+  await expect(async () => {
+    for await (const _ of timeoutModelIdle(result.fullStream, abort, 150)) {
+      // Consume until the deadline fires.
+    }
+  }).toThrow(ProviderError.ResponseStreamError)
 })
