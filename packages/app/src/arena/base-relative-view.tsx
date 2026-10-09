@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Text, View, type ViewStyle } from "react-native";
+import { Pressable, Text, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { Maximize2, Minimize2, X } from "lucide-react-native";
+import { ChevronDown, Maximize2, Minimize2 } from "lucide-react-native";
 import type { HighlightToken } from "@getpaseo/highlight";
 import type { ArenaFileContent, ArenaThreeWayFile } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
@@ -74,40 +74,89 @@ function sideTokens(
 
 const ThemedMaximize2 = withUnistyles(Maximize2);
 const ThemedMinimize2 = withUnistyles(Minimize2);
-const ThemedX = withUnistyles(X);
+const ThemedChevronDown = withUnistyles(ChevronDown);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
+const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const EXPANDED = { expanded: true };
 const sideColorMappings: Record<Side, (theme: Theme) => { color: string }> = {
   a: (theme) => ({ color: theme.colors.statusDotRunning }),
   b: (theme) => ({ color: theme.colors.statusDotWarning }),
 };
 
 /**
- * Expand, Back and Close are the pane header's icon action, so the diff and the panes share one
+ * Expand and Back are the pane header's icon action, so the diff and the panes share one
  * affordance. In the one-column layout the two Expand icons carry their side's colour, since
  * without a column heading beside them nothing else says which side each opens.
  */
 function Action({
   label,
   onPress,
-  icon = "expand",
+  back = false,
   side,
   testID,
 }: {
   label: string;
   onPress: () => void;
-  icon?: "expand" | "back" | "close";
+  back?: boolean;
   side?: Side;
   testID: string;
 }) {
   const mapping = side ? sideColorMappings[side] : foregroundColorMapping;
-  let glyph = <ThemedMaximize2 size={ICON_SIZE.xs} uniProps={mapping} />;
-  if (icon === "back")
-    glyph = <ThemedMinimize2 size={ICON_SIZE.xs} uniProps={foregroundColorMapping} />;
-  if (icon === "close") glyph = <ThemedX size={ICON_SIZE.xs} uniProps={foregroundColorMapping} />;
   return (
     <PaneIconAction accessibilityLabel={label} onPress={onPress} testID={testID}>
-      {glyph}
+      {back ? (
+        <ThemedMinimize2 size={ICON_SIZE.xs} uniProps={foregroundColorMapping} />
+      ) : (
+        <ThemedMaximize2 size={ICON_SIZE.xs} uniProps={mapping} />
+      )}
     </PaneIconAction>
+  );
+}
+
+/**
+ * The diff's heading when the caller can close it: the open file behind the same chevron as its
+ * row in the Changes list, and pressing it closes the diff the way the row does. The header stays
+ * pinned while the diff scrolls, so the file being read and the way out stay in view without a
+ * close button of their own. Hover follows docs/hover.md.
+ */
+function CloseHeading({
+  file,
+  caption,
+  onClose,
+}: {
+  file: string;
+  caption: string;
+  onClose: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const handlePointerEnter = useCallback(() => setHovered(true), []);
+  const handlePointerLeave = useCallback(() => setHovered(false), []);
+  return (
+    <View
+      style={styles.headingContainer}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+    >
+      <Pressable
+        onPress={onClose}
+        style={styles.heading}
+        accessibilityRole="button"
+        accessibilityState={EXPANDED}
+        accessibilityLabel={`Hide the diff of ${file}`}
+        testID="arena-diff-close"
+      >
+        <ThemedChevronDown
+          size={ICON_SIZE.sm}
+          uniProps={hovered ? foregroundColorMapping : mutedColorMapping}
+        />
+        <Text style={styles.headingFile} numberOfLines={1}>
+          {file}
+        </Text>
+        <Text style={styles.headingCaption} numberOfLines={1}>
+          {caption}
+        </Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -330,6 +379,7 @@ function ReadyDiff({
     return Math.max(20, String(largest).length * 8);
   }, [diff]);
   const stacked = layout === "single" || mode !== null;
+  const caption = mode ? `${labelFor(mode)} · Changes from original` : "Changes from original";
   const sides = mode ? [mode] : SIDES;
   const viewportData = useMemo(() => ({ detailSide: mode ?? "both", pmono: "true" }), [mode]);
 
@@ -337,39 +387,30 @@ function ReadyDiff({
     <View ref={viewportRef} style={styles.viewer} testID="arena-inline-diff" dataSet={viewportData}>
       <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA}>
         <View style={styles.toolbar}>
-          <Text style={styles.caption}>
-            {mode ? `${labelFor(mode)} · Changes from original` : "Changes from original"}
-          </Text>
-          <View style={styles.actions}>
-            {mode ? (
+          {onClose ? (
+            <CloseHeading file={file.file} caption={caption} onClose={onClose} />
+          ) : (
+            <Text style={styles.caption}>{caption}</Text>
+          )}
+          {mode ? (
+            <Action label="Back to comparison" onPress={back} back testID="arena-diff-back" />
+          ) : null}
+          {!mode && layout === "single" ? (
+            <View style={styles.actions}>
               <Action
-                label="Back to comparison"
-                onPress={back}
-                icon="back"
-                testID="arena-diff-back"
+                label="Expand Agent A"
+                onPress={expandA}
+                side="a"
+                testID="arena-diff-expand-a"
               />
-            ) : null}
-            {!mode && layout === "single" ? (
-              <>
-                <Action
-                  label="Expand Agent A"
-                  onPress={expandA}
-                  side="a"
-                  testID="arena-diff-expand-a"
-                />
-                <Action
-                  label="Expand Agent B"
-                  onPress={expandB}
-                  side="b"
-                  testID="arena-diff-expand-b"
-                />
-              </>
-            ) : null}
-            {/* The header stays pinned while the diff scrolls, so the way out is always here. */}
-            {onClose ? (
-              <Action label="Close diff" onPress={onClose} icon="close" testID="arena-diff-close" />
-            ) : null}
-          </View>
+              <Action
+                label="Expand Agent B"
+                onPress={expandB}
+                side="b"
+                testID="arena-diff-expand-b"
+              />
+            </View>
+          ) : null}
         </View>
         {!mode && layout === "split" ? (
           <View style={styles.pair}>
@@ -511,6 +552,38 @@ const styles = StyleSheet.create((theme) => ({
   },
   actions: { flexDirection: "row", gap: theme.spacing[1] },
   caption: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
+  // The toolbar's inset plus this lands the chevron and the name on the Changes rows' rail, so the
+  // heading reads as the open row continued.
+  headingContainer: {
+    position: "relative",
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    marginLeft: theme.spacing[1],
+  },
+  // As tall as a pane icon action, so Back arriving in the one-side view does not move the header.
+  heading: {
+    minHeight: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    minWidth: 0,
+  },
+  // The UI font, as the row shows the name: the viewer is marked monospace for its code, and the
+  // name would otherwise be set differently from the row it continues.
+  headingFile: {
+    flexShrink: 1,
+    minWidth: 0,
+    color: theme.colors.foreground,
+    fontFamily: theme.fontFamily.ui,
+    fontSize: theme.fontSize.xs,
+  },
+  headingCaption: {
+    flexShrink: 1,
+    minWidth: 0,
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
+  },
   pair: { flexDirection: "row", minWidth: 0 },
   column: { flex: 1, minWidth: 0 },
   columnHeader: {

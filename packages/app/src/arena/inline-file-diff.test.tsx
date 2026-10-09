@@ -162,7 +162,7 @@ describe("InlineFileDiff", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Expand Agent B");
   });
 
-  it("offers Close only when the caller can close the diff", () => {
+  it("closes from a heading that names the file, only when the caller can close the diff", () => {
     const diff = shortConflict();
     act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" />));
     expect(byTestId("arena-diff-close")).toBeNull();
@@ -170,10 +170,14 @@ describe("InlineFileDiff", () => {
     act(() =>
       root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" onClose={onClose} />),
     );
-    // Close sits beside Back in the one-side view too, so the diff can go from either.
+    const heading = () => byTestId("arena-diff-close")!;
+    expect(heading().textContent).toContain("main.py");
+    expect(heading().getAttribute("aria-label")).toBe("Hide the diff of main.py");
+    // The heading stays in the one-side view too, so the diff can close from either.
     act(() => container.querySelector<HTMLElement>('[aria-label="Expand Agent A"]')!.click());
     expect(byTestId("arena-diff-back")).not.toBeNull();
-    act(() => byTestId("arena-diff-close")!.click());
+    expect(heading().textContent).toContain("Agent A · Changes from original");
+    act(() => heading().click());
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
