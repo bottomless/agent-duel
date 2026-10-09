@@ -2402,6 +2402,8 @@ export const selectResult = Effect.fn("ArenaGit.selectResult")(function* (input:
 interface WorkingTreeSnapshotOptions {
   readonly gitDir?: string
   readonly trackedTree?: string
+  /** A tree whose files stay in the snapshot while they are on disk, even once ignored. */
+  readonly keepFilesOf?: string
 }
 
 interface SnapshotIndexInput extends WorkingTreeSnapshotOptions {
@@ -2504,6 +2506,59 @@ const excludeSyncConflictCopies = Effect.fnUntraced(function* (
 })
 
 /**
+ * Stage the files of `tree` that `add -A` left out only because they are ignored now. A contestant
+ * that writes a `.gitignore` hides public files it never touched, such as a Finder `.DS_Store`
+ * already in the battle base. Left out, they read as the winner's deletions and the vote removes
+ * them from the developer's checkout. A file the contestant deleted is gone from disk and stays out.
+ */
+const stageNewlyIgnoredFiles = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  tree: string,
+  env: Record<string, string>,
+) {
+  const listed = yield* run(
+    git,
+    root,
+    "read_snapshot_missing_files",
+    ["diff-index", "--cached", "--no-renames", "--diff-filter=D", "--name-only", "-z", tree],
+    { env },
+  )
+  const missing = listed.text().split("\0").filter(Boolean)
+  if (missing.length === 0) return
+  // A path that became a directory would stage everything under it, ignored setup output included.
+  const onDisk = (yield* Effect.promise(() =>
+    Promise.all(
+      missing.map((path) =>
+        lstat(join(root, path)).then(
+          (stat) => (stat.isDirectory() ? undefined : path),
+          () => undefined,
+        ),
+      ),
+    ),
+  )).filter((path): path is string => path !== undefined)
+  if (onDisk.length === 0) return
+  const checked = yield* git.run(["check-ignore", "--no-index", "--stdin", "-z"], {
+    cwd: root,
+    env,
+    stdin: Stream.make(new TextEncoder().encode(`${onDisk.join("\0")}\0`)),
+  })
+  // 1 is "none of them is ignored": what `add -A` left out is a nested repository, not an ignored file.
+  if (checked.exitCode === 1) return
+  if (checked.exitCode !== 0) {
+    yield* Effect.fail(new OperationError("check_snapshot_ignored_files", checked.stderr.toString("utf8").trim()))
+  }
+  const ignored = checked.text().split("\0").filter(Boolean)
+  yield* run(
+    git,
+    root,
+    "stage_newly_ignored_files",
+    ["--literal-pathspecs", "add", "--force", "--pathspec-from-file=-", "--pathspec-file-nul"],
+    { env, stdin: Stream.make(new TextEncoder().encode(`${ignored.join("\0")}\0`)) },
+  )
+})
+
+/**
  * The working tree as a tree object, and the untracked nested repositories it leaves out: `add -A`
  * stages one as a gitlink, which a snapshot must not carry.
  */
@@ -2517,6 +2572,7 @@ const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function
     const env = { GIT_INDEX_FILE: index }
     const seeded = yield* seedSnapshotIndex({ git, root, index, ...options })
     yield* run(git, root, "stage_snapshot", ["add", "-A", "--", "."], { env })
+    if (options?.keepFilesOf) yield* stageNewlyIgnoredFiles(git, root, options.keepFilesOf, env)
     const snapshot = indexListing(
       (yield* run(git, root, "read_snapshot_gitlinks", ["ls-files", "--stage", "-z"], { env })).text(),
     )
@@ -2683,7 +2739,7 @@ export const finalize = Effect.fn("ArenaGit.finalize")(function* (input: Finaliz
   // latter uses a temporary index and therefore does not disturb the staged/unstaged
   // presentation that remains visible in the retained contestant worktree.
   const finalIndexTree = yield* read(git, root, "read_final_index", ["write-tree"])
-  const finalTree = yield* readWorkingTree(git, root)
+  const finalTree = yield* readWorkingTree(git, root, { keepFilesOf: input.baseSHA })
   const rawTree = yield* read(git, root, "read_raw_tree", ["rev-parse", `${rawHead}^{tree}`])
   const frozenHead = input.frozenHead ?? input.baseSHA
   const rawHeadDescendsFromBase = yield* isAncestor(git, root, frozenHead, rawHead)
