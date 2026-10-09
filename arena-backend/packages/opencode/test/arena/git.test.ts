@@ -851,6 +851,61 @@ describe("ArenaGit", () => {
     }),
   )
 
+  it.live("sees a same-size edit saved in the second Git last recorded the file", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const candidate = yield* scopedTmpdir()
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/shared.txt`, "base\n", "utf8"))
+      yield* Effect.promise(() => $`git add . && git commit -m base`.cwd(canonical.path).quiet())
+      const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      const baseTree = (yield* Effect.promise(() => $`git rev-parse HEAD^{tree}`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() => $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet())
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow()).pipe(
+          Effect.ignore,
+        ),
+      )
+      yield* Effect.promise(() => fs.writeFile(`${candidate.path}/shared.txt`, "winner\n", "utf8"))
+      const winner = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: frozenHead,
+        permanentRef: "refs/battles/high-level/racy",
+      })
+
+      // An editor saves, its Git integration records the file, and a formatter saves again at the
+      // same size, all within one second. The vote lands in a later second.
+      yield* Effect.promise(async () => {
+        while (Date.now() % 1000 > 50) await Bun.sleep(1)
+        const second = Math.floor(Date.now() / 1000)
+        await fs.writeFile(`${canonical.path}/shared.txt`, "base\n", "utf8")
+        await $`git status --porcelain`.cwd(canonical.path).quiet()
+        await fs.writeFile(`${canonical.path}/shared.txt`, "mine\n", "utf8")
+        if (Math.floor(Date.now() / 1000) !== second) throw new Error("setup crossed a second")
+        while (Math.floor(Date.now() / 1000) === second) await Bun.sleep(5)
+      })
+
+      const safetyRef = "refs/battles/high-level/racy-safety"
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead,
+        baseWorkingTree: baseTree,
+        baseIndexTree: baseTree,
+        resultCommit: winner.finalCommit,
+        finalIndexTree: winner.finalIndexTree,
+        safetyRef,
+        retainSafetyRef: true,
+      })
+
+      // Both sides changed the file: the developer's edit must survive as a conflict, not be
+      // replaced by the winner's copy.
+      expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/shared.txt`, "utf8"))).toContain("mine\n")
+      expect(promoted.conflicts).toEqual(["shared.txt"])
+      expect(
+        yield* Effect.promise(() => $`git show ${safetyRef}:shared.txt`.cwd(canonical.path).quiet().text()),
+      ).toBe("mine\n")
+    }),
+  )
+
   it.live("preserves real commit OIDs and keeps residual state separate", () =>
     Effect.gen(function* () {
       const canonical = yield* scopedTmpdir({ git: true })
