@@ -68,12 +68,16 @@ describe("ArenaProxy", () => {
     registry.assign("session-root", assignment)
     const response = await proxy(request(), registry, {
       upstream: "https://unit.invalid",
-      fetch: async () => new Response('data: {"choices":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } }),
+      fetch: async () =>
+        new Response('data: {"choices":[]}\n\ndata: [DONE]\n\n', { headers: { "Content-Type": "text/event-stream" } }),
       telemetry: { complete: () => new Promise<void>(() => {}) },
     })
     const reader = response.body!.getReader()
-    await reader.read()
-    void reader.read()
+    void (async () => {
+      while (!(await reader.read()).done) {
+        // Drain until the stream waits on the save.
+      }
+    })()
     await new Promise((resolve) => setTimeout(resolve, 10))
 
     const progress = streamProgress("session-root")
@@ -537,8 +541,8 @@ describe("ArenaProxy", () => {
     await expect(response.text()).rejects.toThrow("Arena contestant stream failed")
   })
 
-  test("restarts a request after a mid-answer connection break or transient OpenRouter error", async () => {
-    for (const failure of ["transport", "openrouter"] as const) {
+  test("restarts a request after a mid-answer connection break, transient OpenRouter error, or cut-off", async () => {
+    for (const failure of ["transport", "openrouter", "cut-off"] as const) {
       const registry = new AssignmentRegistry()
       registry.assign("session-root", assignment)
       let calls = 0
@@ -605,6 +609,8 @@ describe("ArenaProxy", () => {
                               return
                             }
                             if (failure === "transport") controller.error(new Error("private network failure"))
+                            // A hosting time limit ends the response cleanly, without a finish or [DONE].
+                            else if (failure === "cut-off") controller.close()
                             else {
                               controller.enqueue(
                                 new TextEncoder().encode(
@@ -649,7 +655,8 @@ describe("ArenaProxy", () => {
       expect(answer).toBe("complete")
       expect(calls).toBe(2)
     }
-  })
+    // Each case waits out the real first retry backoff.
+  }, 15_000)
 
   test("does not retry permanent errors received mid-answer", () => {
     for (const code of [400, 401, 402, 403, "insufficient_quota", "context_length_exceeded"]) {
