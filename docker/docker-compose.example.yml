@@ -1,4 +1,5 @@
-# Minimal Paseo daemon + web UI deployment.
+# Upstream Paseo daemon + web UI example.
+# This image does not include Agent Duel; use the desktop build for Agent Duel.
 #
 # Open http://localhost:6767 after `docker compose up -d`.
 # For any network-reachable deployment, change PASEO_PASSWORD first.

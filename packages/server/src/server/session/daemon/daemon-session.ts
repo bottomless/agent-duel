@@ -205,7 +205,7 @@ export class DaemonSession {
         type: "diagnostics.response",
         payload: {
           requestId: msg.requestId,
-          diagnostic: `Paseo diagnostics\n  Error: ${
+          diagnostic: `Agent Duel diagnostics\n  Error: ${
             error instanceof Error ? error.message : String(error)
           }`,
         },

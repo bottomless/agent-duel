@@ -75,7 +75,7 @@ function planOwnedDaemon({ expectedServerId, configuredListen, explicitListen, p
     return {
       action: "refuse",
       expectedServerId,
-      reason: `Paseo home already has daemon ${expectedServerId} at ${configuredListen}; refusing PASEO_LISTEN=${explicitListen}`,
+      reason: `Agent Duel home already has daemon ${expectedServerId} at ${configuredListen}; refusing PASEO_LISTEN=${explicitListen}`,
     };
   }
   if (byokRefused) {
@@ -109,7 +109,7 @@ export function planDesktopDaemon(
     return {
       action: "refuse",
       expectedServerId,
-      reason: "Desktop dev could not resolve the server ID for its Paseo home",
+      reason: "Desktop dev could not resolve the server ID for its Agent Duel home",
     };
   }
 

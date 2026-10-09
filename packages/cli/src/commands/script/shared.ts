@@ -60,8 +60,8 @@ export async function resolveWorkspaceScriptWorkspaceId(
   }
   throw {
     code: "WORKSPACE_NOT_FOUND",
-    message: `No Paseo workspace found for ${cwd}`,
-    details: "Open the directory in Paseo first, or pass --workspace <workspace-id>.",
+    message: `No Agent Duel workspace found for ${cwd}`,
+    details: "Open the directory in Agent Duel first, or pass --workspace <workspace-id>.",
   } satisfies CommandError;
 }
 

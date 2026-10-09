@@ -1,7 +1,7 @@
 {
   "name": "@getpaseo/cli",
   "version": "0.4.0-beta.3",
-  "description": "Paseo CLI - control your AI coding agents from the command line",
+  "description": "Agent Duel CLI - control your AI coding agents from the command line",
   "license": "AGPL-3.0-or-later",
   "bin": {
     "paseo": "bin/paseo"

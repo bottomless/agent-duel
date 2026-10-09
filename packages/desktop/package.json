@@ -3,15 +3,15 @@
   "version": "0.4.0-beta.3",
   "private": true,
   "description": "Agent Duel desktop app (Electron wrapper)",
-  "homepage": "https://paseo.sh",
+  "homepage": "https://github.com/bottomless/agent-duel",
   "license": "AGPL-3.0-or-later",
   "author": {
-    "name": "Mohamed Boudra",
-    "email": "hello@moboudra.com"
+    "name": "Bottomless",
+    "url": "https://github.com/bottomless/agent-duel"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/getpaseo/paseo.git"
+    "url": "https://github.com/bottomless/agent-duel.git"
   },
   "main": "dist/main.js",
   "scripts": {

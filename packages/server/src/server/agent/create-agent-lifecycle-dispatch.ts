@@ -204,7 +204,7 @@ export class CreateAgentLifecycleDispatch {
       worktreesRoot: this.dependencies.worktreesRoot,
     });
     if (!ownership.allowed) {
-      throw new Error("Auto-created worktree is not a Paseo-owned worktree");
+      throw new Error("Auto-created worktree is not an Agent Duel-owned worktree");
     }
 
     await archiveByScope(

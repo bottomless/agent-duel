@@ -5,7 +5,7 @@ user-invocable: true
 argument-hint: "[--profile <name>] <question or topic>"
 ---
 
-# Paseo Advisor
+# Agent Duel Advisor
 
 Single agent. Reads the situation you're in. Gives a judgment. You decide what to do — the advisor doesn't drive the work.
 
@@ -21,7 +21,7 @@ Read the **paseo** skill. Call `list_profiles` before choosing the advisor. Do n
 2. **Otherwise** choose the profile whose `notes` best fit the question. Match the actual work: design and approach, audit and review, or research and root-cause analysis.
 3. **Contrast helps.** When several profiles fit, prefer a different provider family from your own so the second opinion is genuinely fresh.
 
-Materialize the selected profile into `create_agent` as described by the **paseo** skill. If no profile fits, use Paseo's provider discovery fallback.
+Materialize the selected profile into `create_agent` as described by the **paseo** skill. If no profile fits, use Agent Duel's provider discovery fallback.
 
 ## The briefing
 
@@ -56,7 +56,7 @@ Pass through any remaining arguments after the skill name as the skill's own inp
 
 ## Launch and synthesize
 
-Create the advisor agent via Paseo with a `[Advisor] <topic>` title and the briefing as the initial prompt. Wait for it to finish. Read its response. Synthesize for the user — the advisor's verdict + your recommendation.
+Create the advisor agent via Agent Duel with a `[Advisor] <topic>` title and the briefing as the initial prompt. Wait for it to finish. Read its response. Synthesize for the user — the advisor's verdict + your recommendation.
 
 ## Persistent advisor
 

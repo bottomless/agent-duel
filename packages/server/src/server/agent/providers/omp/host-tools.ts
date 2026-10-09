@@ -132,7 +132,7 @@ function sendMissingCatalogResult(
   runtimeSession.sendHostToolResult(
     toOmpHostToolErrorResult(
       request.id,
-      `Host tool "${request.toolName}" was called before Paseo tools were registered`,
+      `Host tool "${request.toolName}" was called before Agent Duel tools were registered`,
     ),
   );
 }

@@ -107,7 +107,7 @@ function parseCliOptions(args: string[]): CliOptions {
 function printHelp(): void {
   process.stdout.write(`Usage: npm run measure:agent-tools -- [options]
 
-Measures the MCP tools/list payload for Paseo agent tools.
+Measures the MCP tools/list payload for Agent Duel agent tools.
 
 Options:
   --scope=agent|top-level  Catalog shape to measure. Defaults to agent.
@@ -233,7 +233,7 @@ function formatMarkdown(measurements: CatalogMeasurement[], top: number): string
         }
       : null;
   const lines: string[] = [];
-  lines.push("# Paseo Agent Tool Catalog Context");
+  lines.push("# Agent Duel Agent Tool Catalog Context");
   lines.push("");
   lines.push("Token counts are estimates from compact JSON bytes / 4.");
   lines.push("");

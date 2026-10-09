@@ -95,7 +95,7 @@ describe("desktop dev daemon planning", () => {
     });
   });
 
-  test("reuses a daemon only when its live server ID matches the Paseo home", async () => {
+  test("reuses a daemon only when its live server ID matches the Agent Duel home", async () => {
     const listen = await startStatusServer("srv-owned");
 
     await expect(
@@ -198,7 +198,7 @@ describe("desktop dev daemon planning", () => {
       action: "refuse",
       expectedServerId: "srv-owned",
       reason:
-        "Paseo home already has daemon srv-owned at 127.0.0.1:6768; refusing PASEO_LISTEN=127.0.0.1:6774",
+        "Agent Duel home already has daemon srv-owned at 127.0.0.1:6768; refusing PASEO_LISTEN=127.0.0.1:6774",
     });
   });
 });

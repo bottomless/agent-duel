@@ -18,7 +18,7 @@ import type {
 } from "./worker-protocol.js";
 import { bufferToWorkerBytes, workerBytesToBuffer } from "./worker-bytes.js";
 
-process.title = "Paseo Voice";
+process.title = "Agent Duel Voice";
 
 type LocalSttEngine = SherpaOfflineRecognizerEngine;
 

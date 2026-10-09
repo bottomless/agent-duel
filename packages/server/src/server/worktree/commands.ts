@@ -70,7 +70,7 @@ export async function createPaseoWorktreeCommand<Result extends CreatePaseoWorkt
 ): Promise<CreatePaseoWorktreeCommandResult<Result>> {
   try {
     if (!dependencies.createPaseoWorktreeWorkflow) {
-      throw new Error("Paseo worktree service is not configured");
+      throw new Error("Agent Duel worktree service is not configured");
     }
 
     const createdWorktree = await dependencies.createPaseoWorktreeWorkflow({
@@ -134,7 +134,7 @@ export async function archiveCommand(
       return {
         ok: false,
         code: "NOT_ALLOWED",
-        message: "Worktree is not a Paseo-owned worktree",
+        message: "Worktree is not an Agent Duel-owned worktree",
         removedAgents: [],
       };
     }
@@ -195,7 +195,7 @@ async function resolveArchiveTarget(
     const worktrees = await dependencies.workspaceGitService.listWorktrees(repoRoot);
     const match = worktrees.find((entry) => entry.branchName === input.branchName);
     if (!match) {
-      throw new Error(`Paseo worktree not found for branch ${input.branchName}`);
+      throw new Error(`Agent Duel worktree not found for branch ${input.branchName}`);
     }
     return match.path;
   }

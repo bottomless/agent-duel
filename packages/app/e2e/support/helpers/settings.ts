@@ -291,7 +291,7 @@ export async function expectHostConnectionsCard(page: Page, port: string): Promi
 export async function expectHostInjectMcpCard(page: Page): Promise<void> {
   const card = page.getByTestId("host-page-inject-mcp-card");
   await expect(card).toBeVisible();
-  await expect(card.getByRole("switch", { name: "Inject Paseo tools" })).toBeVisible();
+  await expect(card.getByRole("switch", { name: "Inject Agent Duel tools" })).toBeVisible();
 }
 
 export async function openHostSection(
