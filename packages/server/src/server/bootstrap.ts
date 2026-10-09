@@ -739,6 +739,8 @@ export async function createPaseoDaemon(
           providerSnapshots: {
             refreshSettingsSnapshot: (options) =>
               providerSnapshotManager.refreshSettingsSnapshot(options),
+            warmUpWorkspaceSnapshots: (options) =>
+              providerSnapshotManager.warmUpWorkspaceSnapshots(options),
           },
         })
       : null;

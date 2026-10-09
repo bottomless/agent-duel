@@ -262,6 +262,19 @@ export class ProviderSnapshotManager {
     await this.warmUp(target, providersToWarm);
   }
 
+  /**
+   * Loads what is still loading in every workspace snapshot. A settings refresh resets them and
+   * reloads only the global one, leaving each workspace to the client that asked for the refresh.
+   */
+  async warmUpWorkspaceSnapshots(
+    options: Omit<ProviderSnapshotWarmUpOptions, "cwd"> = {},
+  ): Promise<void> {
+    const workspaceCwds = Array.from(this.snapshots.keys()).filter(
+      (cwd) => !isGlobalProviderSnapshotKey(cwd),
+    );
+    await Promise.all(workspaceCwds.map((cwd) => this.warmUpSnapshotForCwd({ ...options, cwd })));
+  }
+
   async refresh(options: ProviderSnapshotRefreshOptions): Promise<void> {
     await this.refreshSnapshotForCwd(options);
   }
