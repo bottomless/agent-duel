@@ -412,18 +412,6 @@ export function buildHostOpenProjectRoute(serverId: string) {
   return `${base}/open-project` as const;
 }
 
-export function buildHostSessionsRoute(serverId: string) {
-  const base = buildHostRootRoute(serverId);
-  if (base === "/") {
-    return "/" as const;
-  }
-  return `${base}/sessions` as const;
-}
-
-export function buildSessionsRoute() {
-  return "/sessions" as const;
-}
-
 export function buildOpenProjectRoute() {
   return "/open-project" as const;
 }

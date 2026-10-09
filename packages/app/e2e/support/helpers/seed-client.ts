@@ -142,9 +142,12 @@ export interface SeedDaemonClient {
       workspaceRecovery?: boolean;
     } | null;
   } | null;
-  fetchAgentHistory(options?: {
-    page?: { limit: number };
-  }): Promise<{ entries: Array<{ agent: { id: string } }> }>;
+  fetchAgentHistory(options?: { page?: { limit: number }; archivedOnly?: boolean }): Promise<{
+    entries: Array<{
+      agent: { id: string };
+      project: { workspaceName?: string | null; checkout: { currentBranch?: string | null } };
+    }>;
+  }>;
   subscribeTerminal(
     terminalId: string,
   ): Promise<{ terminalId: string; slot: number; error: null } | { error: string }>;

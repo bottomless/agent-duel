@@ -4302,6 +4302,32 @@ test("fetches paginated agent history separately from active agents", async () =
   });
 });
 
+test("sends archivedOnly on an agent history request", async () => {
+  const logger = createMockLogger();
+  const mock = createMockTransport();
+
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "clsk_unit_test",
+    logger,
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+
+  const connectPromise = client.connect();
+  mock.triggerOpen();
+  await connectPromise;
+
+  void client.fetchAgentHistory({ archivedOnly: true, search: "stripe" }).catch(() => undefined);
+
+  expect(mock.sent).toHaveLength(1);
+  const request = parseSentFrame(mock.sent[0]);
+  expect(request.type).toBe("fetch_agent_history_request");
+  expect(request.archivedOnly).toBe(true);
+  expect(request.search).toBe("stripe");
+});
+
 test("fetches scoped recent provider sessions", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();

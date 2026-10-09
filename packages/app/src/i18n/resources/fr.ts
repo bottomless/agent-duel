@@ -235,22 +235,6 @@ export const fr: TranslationResources = {
       unarchive: "Désarchiver",
     },
   },
-  sessions: {
-    interruptedForks: "Forks interrompus",
-    recoveryLoadFailed: "{{host}} : Impossible de charger les forks interrompus",
-    forkFilesPreserved: "Le fork a été interrompu. Les fichiers locaux ont été conservés.",
-    restoreWorkspace: "Restaurer l’espace de travail",
-    title: "Historique",
-    empty: "Aucune séance pour l'instant",
-    noMatches: "Aucune séance correspondante",
-    tooManyMatches: "Trop de résultats — affinez la recherche",
-    hostLoadFailed: "{{host}} : Impossible de charger l'historique",
-    searchPlaceholder: "Rechercher dans l'historique",
-    actions: {
-      loadMore: "Charger plus",
-      clearSearch: "Effacer la recherche",
-    },
-  },
   agentList: {
     fallbackTitle: "Nouvelle séance",
     dateSections: {
@@ -267,16 +251,6 @@ export const fr: TranslationResources = {
       running: "En cours d'exécution",
       error: "Erreur",
       closed: "Fermé",
-    },
-    badges: {
-      archived: "Archivé",
-      pending: "{{count}}en attente",
-      attention: "Attention",
-    },
-    archiveSheet: {
-      hostOffline: "Hosthors ligne",
-      runningAgent: "Cet agent est toujours en cours d'exécution. L’archiver arrêtera l’agent.",
-      archive: "Archive",
     },
   },
   message: {
@@ -1022,7 +996,24 @@ export const fr: TranslationResources = {
       appName: "Agent Duel",
     },
     sections: {
-      sessions: "Historique",
+      chats: "Discussions",
+    },
+    archived: {
+      title: "Archivées",
+      open: "Discussions archivées",
+      close: "Retour aux discussions",
+      searchPlaceholder: "Rechercher dans les discussions archivées",
+      clearSearch: "Effacer la recherche",
+      empty: "Aucune discussion archivée",
+      noMatches: "Aucune discussion archivée ne correspond",
+      tooManyMatches: "Trop de résultats — affinez la recherche",
+      loadFailed: "Impossible de charger les discussions archivées",
+      hostLoadFailed: "{{host}} : Impossible de charger les discussions archivées",
+      loadMore: "Charger plus",
+      interruptedForks: "Forks interrompus",
+      recoveryLoadFailed: "{{host}} : Impossible de charger les forks interrompus",
+      forkFilesPreserved: "Fichiers conservés",
+      restore: "Restaurer",
     },
     project: {
       actions: {

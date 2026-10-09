@@ -33,8 +33,8 @@ Hierarchy is conveyed through weight and color, not size. Most labels, titles, a
 Weight has three tiers, applied by role:
 
 - **Screen titles** — the title at the top of a screen — use `<ScreenTitle>` (`packages/app/src/components/headers/screen-title.tsx`), which renders `fontSize.base` at weight `400` on compact and `300` on desktop. Top-of-screen titles are lighter on desktop, not heavier. The workspace screen header follows the same rule (`packages/app/src/screens/workspace/workspace-screen.tsx`).
-- **Structural labels** use `fontWeight.medium`. This applies to section labels above a stack of rows (`packages/app/src/components/agent-list.tsx:519-523`, `packages/app/src/components/keyboard-shortcuts-dialog.tsx:63-67`), form field labels above an input inside a modal (`packages/app/src/components/add-host-modal.tsx:19-23`, `packages/app/src/components/pair-link-modal.tsx:24-28`), the title at the top of a modal/sheet/dialog (`packages/app/src/components/adaptive-modal-sheet.tsx:90-94`, `packages/app/src/components/ui/combobox.tsx:1607-1611`, `packages/app/src/components/welcome-screen.tsx:48-53`), action button labels in tight components such as the sidebar callout actions (`packages/app/src/components/sidebar-callout.tsx:218-221`), and inline data emphasis on dense metadata rows (`packages/app/src/components/git-diff-pane.tsx:2322-2327`, `packages/app/src/components/file-explorer-pane.tsx:1115-1122`).
-- **Content** uses `fontWeight.normal`. This applies to settings rows (`packages/app/src/styles/settings.ts`), sidebar primary list-item titles (`packages/app/src/components/sidebar-workspace-list.tsx:2680-2686`, `packages/app/src/components/agent-list.tsx:572-578`), `<Button>` text (`packages/app/src/components/ui/button.tsx:80-84`), `<StatusBadge>` text (`packages/app/src/components/ui/status-badge.tsx:56-60`), and `<SidebarCallout>` titles (`packages/app/src/components/sidebar-callout.tsx:175-180`).
+- **Structural labels** use `fontWeight.medium`. This applies to section labels above a stack of rows (`packages/app/src/components/sidebar/archived-chats.tsx:358-365`, `packages/app/src/components/keyboard-shortcuts-dialog.tsx:63-67`), form field labels above an input inside a modal (`packages/app/src/components/add-host-modal.tsx:19-23`, `packages/app/src/components/pair-link-modal.tsx:24-28`), the title at the top of a modal/sheet/dialog (`packages/app/src/components/adaptive-modal-sheet.tsx:90-94`, `packages/app/src/components/ui/combobox.tsx:1607-1611`, `packages/app/src/components/welcome-screen.tsx:48-53`), action button labels in tight components such as the sidebar callout actions (`packages/app/src/components/sidebar-callout.tsx:218-221`), and inline data emphasis on dense metadata rows (`packages/app/src/components/git-diff-pane.tsx:2322-2327`, `packages/app/src/components/file-explorer-pane.tsx:1115-1122`).
+- **Content** uses `fontWeight.normal`. This applies to settings rows (`packages/app/src/styles/settings.ts`), sidebar primary list-item titles (`packages/app/src/components/sidebar-workspace-list.tsx:2680-2686`, `packages/app/src/components/sidebar/archived-chats.tsx:392-396`), `<Button>` text (`packages/app/src/components/ui/button.tsx:80-84`), `<StatusBadge>` text (`packages/app/src/components/ui/status-badge.tsx:56-60`), and `<SidebarCallout>` titles (`packages/app/src/components/sidebar-callout.tsx:175-180`).
 
 The rule, condensed: text that _names_ a surface or a group is `medium`. Text that lives _inside_ a surface or a group is `normal`. Top-of-screen titles are `<ScreenTitle>`, which is lighter still.
 
@@ -58,7 +58,7 @@ The button is `<Button>` (`packages/app/src/components/ui/button.tsx`). It has f
 
 `outline` is the low-frequency action that lives on a row — transparent with `borderAccent`. Restart, Remove, Update on host detail (`packages/app/src/screens/settings/host-page.tsx:585-594`).
 
-`ghost` is structural and non-committal — no border, no fill. Back arrows, header toggles, "Load more" footers (`packages/app/src/screens/sessions-screen.tsx:54-63`), more-affordances. Ghost is used when the affordance is part of the chrome, not a decision.
+`ghost` is structural and non-committal — no border, no fill. Back arrows, header toggles, "Load more" footers (`packages/app/src/components/sidebar/archived-chats.tsx:186`), more-affordances. Ghost is used when the affordance is part of the chrome, not a decision.
 
 `destructive` is filled with `destructive`. It only appears inside a confirm. The button on the page is `outline`; the destructive button is the confirm button inside the dialog.
 
@@ -78,7 +78,7 @@ A logical block of related rows lives inside a card — one border around the wh
 
 Rows after the first inside a card carry `settingsStyles.rowBorder` — a single top border. The first row never has one. The same divider pattern appears in the keyboard-shortcuts dialog rows (`packages/app/src/components/keyboard-shortcuts-dialog.tsx:74-83`). Rows do not need their own background to feel separated.
 
-A list that is itself the page content — sidebar items in `sidebar-workspace-list.tsx`, the workspace list, the agent list (`packages/app/src/components/agent-list.tsx`) — uses spacing and surface, not borders, to separate items. Rows-in-a-card is an interior pattern; lists-as-pages are not.
+A list that is itself the page content — sidebar items in `sidebar-workspace-list.tsx`, the workspace list, the archived chats (`packages/app/src/components/sidebar/archived-chats.tsx`) — uses spacing and surface, not borders, to separate items. Rows-in-a-card is an interior pattern; lists-as-pages are not.
 
 Pane chrome — the workspace pane header, the file-explorer header, the diff pane header — uses a single bottom border to separate the header from the content (`packages/app/src/components/git-diff-pane.tsx:2328-2331`). One border, no shadow.
 
@@ -112,7 +112,7 @@ Settings detail pages, the projects detail page, and any list+detail content sit
 
 Workspace and chat surfaces use the full width — these are working surfaces, not reading surfaces. The composer carries `MAX_CONTENT_WIDTH` from `packages/app/src/constants/layout.ts` to keep lines readable while letting the workspace pane fill the rest.
 
-Sections sit apart. `<SettingsSection>` owns its own bottom margin; the next thing is wrapped in another `<SettingsSection>`. The agent-list `sectionHeading` carries the same `marginTop`/`marginBottom` rhythm (`packages/app/src/components/agent-list.tsx:511-517`). Adding `marginBottom` to a section is wrong.
+Sections sit apart. `<SettingsSection>` owns its own bottom margin; the next thing is wrapped in another `<SettingsSection>`. Adding `marginBottom` to a section is wrong.
 
 Cards inside a section sit closer than sections. Rows inside a card touch — only the divider separates them. The rhythm is page → spacious; section → spacious; card → tight.
 
@@ -159,11 +159,11 @@ A new list+detail feature copies the settings shell. A new workspace-shaped feat
 
 ## 10. Copy and voice
 
-Sentence case. "Pair a device", "Danger zone", "Restart daemon", "Inject Agent Duel tools", "No sessions yet", "Load more". Proper nouns retain casing — Agent Duel, Beta, Stable, Local. Title case is wrong.
+Sentence case. "Pair a device", "Danger zone", "Restart daemon", "Inject Agent Duel tools", "No archived chats", "Load more". Proper nouns retain casing — Agent Duel, Beta, Stable, Local. Title case is wrong.
 
 No trailing periods on row titles, labels, or buttons. No trailing period on a single-clause hint: "What happens when you press Enter while the agent is running" (`packages/app/src/screens/settings-screen.tsx:271-272`). Periods exist inside multi-sentence prose: "Restarts the daemon process. The app will reconnect automatically."
 
-Empty-state strings are short noun phrases or short sentences: "No projects yet", "Select a project", "No sessions yet" (`packages/app/src/screens/sessions-screen.tsx:74-76`), "Host not found".
+Empty-state strings are short noun phrases or short sentences: "No projects yet", "Select a project", "No archived chats" (`packages/app/src/components/sidebar/archived-chats.tsx:215`), "Host not found".
 
 Buttons are imperative: Save, Cancel, Restart, Remove, Update, Install update, Load more. In-flight labels are present-participle with a literal three-dot ellipsis: "Saving...", "Restarting...", "Removing...", "Loading...".
 
@@ -175,7 +175,7 @@ Terminology:
 - Host, except where the user-facing concept is the daemon process itself ("Restart daemon").
 - Project, not "repo" or "repository".
 - Provider, not "model provider".
-- Session and agent are distinct: a session is a historical entry in `sessions-screen.tsx`; an agent is a live entity in the workspace.
+- Chat, not "session" or "history", for what the sidebar lists. An archived chat is still a chat; it is listed in the sidebar's Archived view.
 
 ---
 
@@ -189,9 +189,9 @@ several `index` files, so the directory stays.
 
 ## 11. States
 
-Loading is inline by default. `<LoadingSpinner size={14} color={foregroundMuted} />` sits next to the thing it relates to (`packages/app/src/screens/settings/providers-section.tsx:227-231`). Page-level loading is a centered `<LoadingSpinner size="large">` (`packages/app/src/screens/sessions-screen.tsx:69-72`). Card-level loading is a single short line, not a spinner. In-row dropdown items use `<DropdownMenuItem status="pending" pendingLabel="Removing...">`; the menu item handles its own pending state.
+Loading is inline by default. `<LoadingSpinner size={14} color={foregroundMuted} />` sits next to the thing it relates to (`packages/app/src/screens/settings/providers-section.tsx:227-231`). Page-level loading is a centered `<LoadingSpinner size="large">` (`packages/app/src/panels/agent-panel.tsx:360`). Card-level loading is a single short line, not a spinner. In-row dropdown items use `<DropdownMenuItem status="pending" pendingLabel="Removing...">`; the menu item handles its own pending state.
 
-Empty states are short noun phrases. Centered, muted, one or two lines. Sessions screen pairs the empty noun with a single ghost button to navigate back (`packages/app/src/screens/sessions-screen.tsx:74-81`); that pairing is the maximum elaboration. Illustrations and CTAs disguised as empty states are wrong.
+Empty states are short noun phrases. Centered, muted, one or two lines. The sidebar's Archived view pairs a no-match noun with a single ghost button that clears the search (`packages/app/src/components/sidebar/archived-chats.tsx:215-223`); that pairing is the maximum elaboration. Illustrations and CTAs disguised as empty states are wrong.
 
 Inline errors are a single sentence in `palette.red[300]` `xs`, sitting under the field or inside the card it relates to (`packages/app/src/screens/settings/providers-section.tsx:115-119`).
 
@@ -223,7 +223,7 @@ A row may carry both a chevron and a kebab when both navigation and row-level ac
 
 Switches and segmented controls also sit in the trailing slot. A row that both navigates and toggles is a `<Pressable>` with a `<Switch>` in the trailing slot — the switch calls `event.stopPropagation()` so the row press does not fire (`packages/app/src/screens/settings/providers-section.tsx:92-132`). Sidebar items that hold a status dot, a count, and a kebab follow the same rule (`packages/app/src/components/sidebar-workspace-list.tsx`).
 
-Selected state on rows in a desktop list+detail uses `surfaceSidebarHover` as the background (`packages/app/src/screens/projects-screen.tsx`). Selected state on rows in the sidebar list uses `surface2` (`packages/app/src/components/agent-list.tsx:563-571`).
+Selected state on rows in a desktop list+detail uses `surfaceSidebarHover` as the background (`packages/app/src/screens/projects-screen.tsx`). Selected state on rows in the sidebar list uses `surfaceSidebarHover` (`sidebarRowSelected` in `packages/app/src/components/sidebar-workspace-list.tsx`, `rowSelected` in `packages/app/src/components/sidebar/archived-chats.tsx`).
 
 ---
 
@@ -253,7 +253,7 @@ restore the comparison's reading position and return keyboard focus to the initi
 the narrow comparison, group A and B by changed region, rather than showing one agent's entire
 file before the other.
 
-The bespoke pills in `packages/app/src/screens/settings/host-page.tsx:97-116`, `packages/app/src/components/agent-list.tsx:607-632`, and `packages/app/src/components/sidebar-workspace-list.tsx:2889-2894` are drift to be removed. New code uses `<StatusBadge>`.
+The bespoke pills in `packages/app/src/screens/settings/host-page.tsx:97-116` and `packages/app/src/components/sidebar-workspace-list.tsx:2889-2894` are drift to be removed. New code uses `<StatusBadge>`.
 
 ---
 
@@ -288,8 +288,7 @@ The bespoke pills in `packages/app/src/screens/settings/host-page.tsx:97-116`, `
 | Destructive confirmation                            | `confirmDialog` invoked from `packages/app/src/screens/settings/host-page.tsx:541-547`                                                                                                                                                  |
 | Centered hero / first-run                           | `packages/app/src/components/welcome-screen.tsx`                                                                                                                                                                                        |
 | Sidebar list (workspaces, hosts)                    | `packages/app/src/components/sidebar-workspace-list.tsx`, `packages/app/src/components/left-sidebar.tsx`                                                                                                                                |
-| Live list of items with sections (agents)           | `packages/app/src/components/agent-list.tsx`                                                                                                                                                                                            |
-| Historical list (sessions)                          | `packages/app/src/screens/sessions-screen.tsx`                                                                                                                                                                                          |
+| Sidebar list with day sections (archived chats)     | `packages/app/src/components/sidebar/archived-chats.tsx`                                                                                                                                                                                |
 | Workspace panes (main pane + side panel)            | `packages/app/src/screens/workspace/workspace-screen.tsx`                                                                                                                                                                               |
 | Composer / message input                            | `packages/app/src/composer/index.tsx`, `packages/app/src/composer/input/input.tsx`                                                                                                                                                      |
 | Pane chrome with single bottom border               | `packages/app/src/components/git-diff-pane.tsx`, `packages/app/src/components/file-explorer-pane.tsx`, `packages/app/src/components/terminal-pane.tsx`                                                                                  |

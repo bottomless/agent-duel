@@ -65,6 +65,7 @@ export function useWorkspaceRecoveryHistory(serverId: string | null, search: str
   };
 }
 
+/** Interrupted forks, at the top of the sidebar's Archived view: they are archived workspaces too. */
 export function WorkspaceRecoveryHistory({
   entries,
   failedHosts,
@@ -78,16 +79,18 @@ export function WorkspaceRecoveryHistory({
   if (entries.length === 0 && failedHosts.length === 0) return null;
   return (
     <View style={styles.section} testID="workspace-recovery-history">
-      <Text style={styles.heading}>{t("sessions.interruptedForks")}</Text>
+      <Text style={styles.heading}>{t("sidebar.archived.interruptedForks")}</Text>
       {failedHosts.map((host) => (
-        <Text key={host} style={styles.secondary}>
-          {t("sessions.recoveryLoadFailed", { host })}
+        <Text key={host} style={styles.hostError}>
+          {t("sidebar.archived.recoveryLoadFailed", { host })}
         </Text>
       ))}
       {failedHosts.length > 0 ? (
-        <Button variant="ghost" onPress={onRefresh}>
-          {t("common.actions.retry")}
-        </Button>
+        <View style={styles.retry}>
+          <Button variant="ghost" size="xs" onPress={onRefresh}>
+            {t("common.actions.retry")}
+          </Button>
+        </View>
       ) : null}
       {entries.map((entry) => (
         <RecoveryHistoryRow key={`${entry.serverId}:${entry.workspaceId}`} entry={entry} />
@@ -116,31 +119,48 @@ function RecoveryHistoryRow({ entry }: { entry: RecoveryRow }) {
   return (
     <View style={styles.row} testID={`workspace-recovery-${entry.workspaceId}`}>
       <View style={styles.details}>
-        <Text style={styles.name}>{entry.name}</Text>
-        <Text style={styles.secondary} numberOfLines={2}>
-          {entry.hostName} · {entry.cwd}
+        <Text style={styles.name} numberOfLines={1}>
+          {entry.name}
         </Text>
-        <Text style={styles.secondary}>{t("sessions.forkFilesPreserved")}</Text>
+        <Text style={styles.secondary} numberOfLines={1}>
+          {t("sidebar.archived.forkFilesPreserved")}
+        </Text>
         {restore.isError ? <Text style={styles.error}>{toErrorMessage(restore.error)}</Text> : null}
       </View>
-      <Button variant="secondary" disabled={restore.isPending} onPress={handleRestore}>
-        {restore.isPending ? t("common.loading") : t("sessions.restoreWorkspace")}
+      <Button variant="outline" size="xs" disabled={restore.isPending} onPress={handleRestore}>
+        {restore.isPending ? t("common.loading") : t("sidebar.archived.restore")}
       </Button>
     </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  section: { gap: theme.spacing[3], paddingVertical: theme.spacing[4] },
-  heading: { color: theme.colors.foreground, fontSize: theme.fontSize.base, fontWeight: "600" },
+  section: { paddingBottom: theme.spacing[2] },
+  heading: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
+    fontWeight: theme.fontWeight.medium,
+    paddingHorizontal: theme.spacing[2],
+    paddingTop: theme.spacing[3],
+    paddingBottom: theme.spacing[1],
+  },
+  retry: { alignItems: "flex-start" },
   row: {
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[3],
-    paddingVertical: theme.spacing[2],
+    gap: theme.spacing[2],
+    paddingVertical: theme.spacing[1.5],
+    paddingLeft: theme.spacing[2],
+    paddingRight: theme.spacing[1],
   },
-  details: { flex: 1, gap: theme.spacing[1], minWidth: 0 },
-  name: { color: theme.colors.foreground, fontSize: theme.fontSize.base },
-  secondary: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
-  error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
+  details: { flex: 1, gap: 2, minWidth: 0 },
+  name: { color: theme.colors.foreground, fontSize: theme.fontSize.sm, opacity: 0.76 },
+  secondary: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
+  hostError: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
+    paddingHorizontal: theme.spacing[2],
+  },
+  error: { color: theme.colors.destructive, fontSize: theme.fontSize.xs },
 }));

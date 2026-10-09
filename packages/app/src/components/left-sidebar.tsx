@@ -1,8 +1,8 @@
 import { router, usePathname } from "expo-router";
 import {
+  Archive,
   FolderPlus,
   GitBranch,
-  History,
   Home,
   MessageSquareText,
   Search,
@@ -31,7 +31,7 @@ import {
   SIDEBAR_RESIZE_ACTIVATION_OFFSET,
   SIDEBAR_RESIZE_FAIL_OFFSET,
 } from "@/components/sidebar-resize-handle-layout";
-import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
+import { SidebarArchivedChats } from "@/components/sidebar/archived-chats";
 import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/display-preferences/menu";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { Shortcut } from "@/components/ui/shortcut";
@@ -59,7 +59,7 @@ import { useOwnsWindowChromeCorner, WindowChromeSafeArea } from "@/utils/desktop
 import { useCloseAgentListGesture } from "@/mobile-panels/gestures";
 import { MobilePanelOverlay } from "@/mobile-panels/presentation";
 import { useIsMobilePanelPresented } from "@/mobile-panels/provider";
-import { buildOpenProjectRoute, buildSessionsRoute, buildSettingsRoute } from "@/utils/host-routes";
+import { buildOpenProjectRoute, buildSettingsRoute } from "@/utils/host-routes";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
@@ -70,6 +70,7 @@ type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
 // hover color could belong to the other theme and turn the icon white on white (or black on black).
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const ThemedArchive = withUnistyles(Archive);
 const ThemedFolderPlus = withUnistyles(FolderPlus);
 const ThemedMessageSquareText = withUnistyles(MessageSquareText);
 const ThemedSearch = withUnistyles(Search);
@@ -104,7 +105,6 @@ interface SidebarLabels {
   home: string;
   settings: string;
   feedback: string;
-  sessions: string;
   closeSidebar: string;
 }
 
@@ -112,13 +112,11 @@ interface MobileSidebarProps extends SidebarSharedProps {
   insetsTop: number;
   insetsBottom: number;
   closeSidebar: () => void;
-  handleViewMoreNavigate: () => void;
 }
 
 interface DesktopSidebarProps extends SidebarSharedProps {
   insetsTop: number;
   active: boolean;
-  handleViewMore: () => void;
 }
 
 export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boolean }) {
@@ -199,17 +197,12 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     router.push(buildOpenProjectRoute());
   }, []);
 
-  const handleViewMoreNavigate = useCallback(() => {
-    router.push(buildSessionsRoute());
-  }, []);
-
   const labels = useMemo(
     (): SidebarLabels => ({
       addProject: t("sidebar.actions.addProject"),
       home: t("sidebar.actions.home"),
       settings: t("sidebar.actions.settings"),
       feedback: t("feedback.sidebarAction"),
-      sessions: t("sidebar.sections.sessions"),
       closeSidebar: t("sidebar.actions.closeSidebar"),
     }),
     [t],
@@ -243,7 +236,6 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
         handleOpenProject={handleOpenProjectMobile}
         handleHome={handleHomeMobile}
         handleSettings={handleSettingsMobile}
-        handleViewMoreNavigate={handleViewMoreNavigate}
       />
     </RetainedPanelActivity>
   ) : (
@@ -255,7 +247,6 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
         handleOpenProject={handleOpenProjectDesktop}
         handleHome={handleHomeDesktop}
         handleSettings={handleSettingsDesktop}
-        handleViewMore={handleViewMoreNavigate}
       />
     </RetainedPanelActivity>
   );
@@ -518,18 +509,11 @@ function MobileSidebar({
   insetsTop,
   insetsBottom,
   closeSidebar,
-  handleViewMoreNavigate,
 }: MobileSidebarProps) {
-  const pathname = usePathname();
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
-  const isSessionsActive = pathname.includes("/sessions");
+  const listView = useSidebarViewStore((state) => state.listView);
   const { gesture: closeGesture, gestureRef: closeGestureRef } = useCloseAgentListGesture();
   const dragGestureHostPresented = useIsMobilePanelPresented("agent-list");
-
-  const handleViewMore = useCallback(() => {
-    closeSidebar();
-    handleViewMoreNavigate();
-  }, [closeSidebar, handleViewMoreNavigate]);
 
   const handleWorkspacePress = useCallback(() => {
     closeSidebar();
@@ -550,17 +534,11 @@ function MobileSidebar({
       closeGesture={closeGesture}
       panelStyle={mobileSidebarInsetStyle}
     >
-      <View style={styles.sidebarContent} pointerEvents="auto">
+      <View style={styles.sidebarContent} pointerEvents="auto" testID="left-sidebar">
         <WindowChromeSafeArea placement="below" />
+        {/* Holds the overlay's close button, which sits over it. */}
         <View style={styles.sidebarHeaderGroup}>
-          <SidebarHeaderRow
-            icon={History}
-            label={labels.sessions}
-            onPress={handleViewMore}
-            isActive={isSessionsActive}
-            testID="sidebar-sessions"
-            variant="compact"
-          />
+          <View style={styles.mobileCloseButtonSlot} />
         </View>
         <WindowChromeSafeArea placement="inline" style={styles.mobileCloseButtonRow}>
           <Pressable
@@ -582,9 +560,11 @@ function MobileSidebar({
           </Pressable>
         </WindowChromeSafeArea>
 
-        {isInitialLoad && !hasActiveHostFilter ? (
+        {listView === "archived" ? <SidebarArchivedView onChatPress={closeSidebar} /> : null}
+        {listView === "chats" && isInitialLoad && !hasActiveHostFilter ? (
           <SidebarAgentListSkeleton />
-        ) : (
+        ) : null}
+        {listView === "chats" && !(isInitialLoad && !hasActiveHostFilter) ? (
           <SidebarWorkspaceList
             collapsedProjectKeys={collapsedProjectKeys}
             onToggleProjectCollapsed={toggleProjectCollapsed}
@@ -602,7 +582,7 @@ function MobileSidebar({
             dragGestureHostPresented={dragGestureHostPresented}
             listHeaderComponent={workspaceListActionsElement}
           />
-        )}
+        ) : null}
 
         <SidebarFooter
           theme={theme}
@@ -638,12 +618,10 @@ function DesktopSidebar({
   labels,
   insetsTop,
   active,
-  handleViewMore,
 }: DesktopSidebarProps) {
   const ownsTopLeft = useOwnsWindowChromeCorner("top-left");
-  const pathname = usePathname();
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
-  const isSessionsActive = pathname.includes("/sessions");
+  const listView = useSidebarViewStore((state) => state.listView);
   const sidebarWidth = usePanelStore((state) => state.sidebarWidth);
   const setSidebarWidth = usePanelStore((state) => state.setSidebarWidth);
   const { width: viewportWidth } = useWindowDimensions();
@@ -724,10 +702,6 @@ function DesktopSidebar({
     () => [styles.desktopSidebarBorder, { flex: 1, paddingTop: insetsTop }],
     [insetsTop],
   );
-  const sidebarHeaderGroupStyle = useMemo(
-    () => [styles.sidebarHeaderGroup, ownsTopLeft && styles.sidebarHeaderGroupBelowChrome],
-    [ownsTopLeft],
-  );
   return (
     <Animated.View
       accessibilityElementsHidden={!active}
@@ -735,7 +709,7 @@ function DesktopSidebar({
       pointerEvents={active ? "auto" : "none"}
       style={desktopSidebarStyle}
     >
-      <View style={desktopSidebarBorderStyle}>
+      <View style={desktopSidebarBorderStyle} testID="left-sidebar">
         <View style={styles.sidebarDragArea}>
           {ownsTopLeft || DEV_BUILD_LABEL ? (
             <View style={styles.desktopChromeRow}>
@@ -755,23 +729,17 @@ function DesktopSidebar({
               ) : null}
             </View>
           ) : (
-            <TitlebarDragRegion />
+            <View style={styles.sidebarTopInset}>
+              <TitlebarDragRegion />
+            </View>
           )}
-          <View style={sidebarHeaderGroupStyle}>
-            <SidebarHeaderRow
-              icon={History}
-              label={labels.sessions}
-              onPress={handleViewMore}
-              isActive={isSessionsActive}
-              testID="sidebar-sessions"
-              variant="compact"
-            />
-          </View>
         </View>
 
-        {isInitialLoad && !hasActiveHostFilter ? (
+        {listView === "archived" ? <SidebarArchivedView /> : null}
+        {listView === "chats" && isInitialLoad && !hasActiveHostFilter ? (
           <SidebarAgentListSkeleton />
-        ) : (
+        ) : null}
+        {listView === "chats" && !(isInitialLoad && !hasActiveHostFilter) ? (
           <SidebarWorkspaceList
             collapsedProjectKeys={collapsedProjectKeys}
             onToggleProjectCollapsed={toggleProjectCollapsed}
@@ -786,7 +754,7 @@ function DesktopSidebar({
             onAddProject={handleOpenProject}
             listHeaderComponent={workspaceListActionsElement}
           />
-        )}
+        ) : null}
 
         <SidebarCalloutSlot />
 
@@ -812,20 +780,30 @@ function DesktopSidebar({
   );
 }
 
+function sidebarHeaderIconButtonStyle({
+  hovered = false,
+  pressed,
+}: PressableStateCallbackType & { hovered?: boolean }) {
+  return [
+    styles.workspacesHeaderIconButton,
+    (hovered || pressed) && styles.workspacesHeaderIconButtonHovered,
+  ];
+}
+
+/** Names the list and holds its tools; the Archived view swaps it for its own header. */
 function WorkspaceListActions() {
+  const { t } = useTranslation();
   const setCommandCenterOpen = useKeyboardShortcutsStore((state) => state.setCommandCenterOpen);
+  const setListView = useSidebarViewStore((state) => state.setListView);
   const commandCenterKeys = useShortcutKeys("toggle-command-center");
   const handleSearchPress = useCallback(() => setCommandCenterOpen(true), [setCommandCenterOpen]);
-  const searchButtonStyle = useCallback(
-    ({ hovered = false, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
-      styles.workspacesHeaderIconButton,
-      (hovered || pressed) && styles.workspacesHeaderIconButtonHovered,
-    ],
-    [],
-  );
+  const handleArchivedPress = useCallback(() => setListView("archived"), [setListView]);
 
   return (
     <View style={styles.workspaceListActionsHeader}>
+      <Text style={styles.sidebarListTitle} numberOfLines={1}>
+        {t("sidebar.sections.chats")}
+      </Text>
       <View style={styles.workspacesSectionActions}>
         <Tooltip delayDuration={300}>
           <TooltipTrigger asChild>
@@ -833,7 +811,7 @@ function WorkspaceListActions() {
               accessibilityRole="button"
               accessibilityLabel="Open command center"
               testID="sidebar-command-center-search"
-              style={searchButtonStyle}
+              style={sidebarHeaderIconButtonStyle}
               onPress={handleSearchPress}
             >
               {({ hovered, pressed }) => (
@@ -852,6 +830,29 @@ function WorkspaceListActions() {
         </Tooltip>
         <Tooltip delayDuration={300}>
           <TooltipTrigger asChild>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("sidebar.archived.open")}
+              testID="sidebar-archived-open"
+              style={sidebarHeaderIconButtonStyle}
+              onPress={handleArchivedPress}
+            >
+              {({ hovered, pressed }) => (
+                <ThemedArchive
+                  size={14}
+                  uniProps={
+                    hovered || pressed ? foregroundColorMapping : foregroundMutedColorMapping
+                  }
+                />
+              )}
+            </Pressable>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="center" offset={8}>
+            <IconTooltipContent label={t("sidebar.archived.open")} />
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip delayDuration={300}>
+          <TooltipTrigger asChild>
             <View>
               <SidebarDisplayPreferencesMenu />
             </View>
@@ -861,6 +862,55 @@ function WorkspaceListActions() {
           </TooltipContent>
         </Tooltip>
       </View>
+    </View>
+  );
+}
+
+/**
+ * The sidebar's list swapped for the archived chats. The title says which list this is,
+ * because the rows alone look like the active ones.
+ */
+function SidebarArchivedView({ onChatPress }: { onChatPress?: () => void }) {
+  const { t } = useTranslation();
+  const setListView = useSidebarViewStore((state) => state.setListView);
+  const handleClose = useCallback(() => setListView("chats"), [setListView]);
+
+  return (
+    <View style={styles.archivedView}>
+      <View style={styles.archivedHeaderRail}>
+        <View style={styles.workspaceListActionsHeader}>
+          <View style={styles.archivedTitleGroup}>
+            <ThemedArchive size={14} uniProps={foregroundMutedColorMapping} />
+            <Text style={styles.archivedTitle} numberOfLines={1}>
+              {t("sidebar.archived.title")}
+            </Text>
+          </View>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("sidebar.archived.close")}
+                testID="sidebar-archived-close"
+                style={sidebarHeaderIconButtonStyle}
+                onPress={handleClose}
+              >
+                {({ hovered, pressed }) => (
+                  <ThemedX
+                    size={14}
+                    uniProps={
+                      hovered || pressed ? foregroundColorMapping : foregroundMutedColorMapping
+                    }
+                  />
+                )}
+              </Pressable>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="center" offset={8}>
+              <IconTooltipContent label={t("sidebar.archived.close")} />
+            </TooltipContent>
+          </Tooltip>
+        </View>
+      </View>
+      <SidebarArchivedChats onChatPress={onChatPress} />
     </View>
   );
 }
@@ -889,14 +939,19 @@ const styles = StyleSheet.create((theme) => ({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
-  sidebarHeaderGroupBelowChrome: {
-    paddingTop: 0,
+  mobileCloseButtonSlot: {
+    height: 36,
+  },
+  sidebarTopInset: {
+    paddingTop: theme.spacing[2],
   },
   workspaceListActionsHeader: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "flex-end",
+    justifyContent: "space-between",
     gap: theme.spacing[2],
+    // Lines the title up with the rows' text, which sits inside their own padding.
+    paddingLeft: theme.spacing[2],
     // Rendered inside the scroll's listContent (paddingHorizontal spacing[2]). Settings2's
     // painted path stops inside its 14px SVG, so 4px aligns the ink to the row rail.
     paddingRight: 4,
@@ -907,6 +962,34 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[1],
+  },
+  sidebarListTitle: {
+    flexShrink: 1,
+    minWidth: 0,
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+  },
+  archivedView: {
+    flex: 1,
+    minHeight: 0,
+  },
+  archivedHeaderRail: {
+    paddingHorizontal: theme.spacing[2],
+  },
+  archivedTitleGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  archivedTitle: {
+    flexShrink: 1,
+    minWidth: 0,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
   },
   workspacesHeaderIconButton: {
     width: 28,
