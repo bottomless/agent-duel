@@ -83,6 +83,27 @@ describe("startingPromptImages", () => {
 });
 
 describe("arenaUserMessageContent", () => {
+  it("hides synthetic continuation text while retaining real words and labeled attachments", () => {
+    const continuation =
+      "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.";
+    expect(
+      arenaUserMessageContent("reply", [
+        { type: "text", text: continuation, synthetic: true },
+        { type: "text", text: continuation },
+        {
+          type: "text",
+          text: "Internal file instructions",
+          synthetic: true,
+          metadata: { arenaAttachment: { label: "notes.txt", kind: "file" } },
+        },
+      ]),
+    ).toEqual({
+      text: continuation,
+      images: [],
+      attachments: [{ label: "notes.txt", kind: "file" }],
+    });
+  });
+
   it("separates a reply's words, images, and attachments", () => {
     const content = arenaUserMessageContent("msg_reply", [
       { type: "text", text: "What color is the image?" },

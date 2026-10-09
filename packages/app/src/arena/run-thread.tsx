@@ -195,16 +195,57 @@ function messageCreatedAt(message: unknown): number | null {
 // spans several transport messages.
 type RenderGroup =
   | { kind: "user"; message: unknown }
+  | CompactionGroup
   | { kind: "assistant"; key: string; messageIds: string[] };
 
-function buildRenderGroups(messages: readonly unknown[], runId: string): RenderGroup[] {
+interface CompactionGroup {
+  kind: "compaction";
+  key: string;
+  summary?: UnknownRecord;
+}
+
+function isCompactionSummary(message: unknown): boolean {
+  const info = asRecord(message);
+  return info?.summary === true || info?.agent === "compaction" || info?.mode === "compaction";
+}
+
+function compactionPresentation(group: CompactionGroup, runState: ArenaRun["runState"]) {
+  if (group.summary?.error)
+    return { label: "Context compaction failed", active: false, failed: true };
+  if (numberField(group.summary?.time, "completed") !== null) {
+    return { label: "Context compacted", active: false, failed: false };
+  }
+  if (runState !== "pending") {
+    return { label: "Context compaction interrupted", active: false, failed: false };
+  }
+  return { label: "Compacting context…", active: true, failed: false };
+}
+
+function buildRenderGroups(run: Pick<ArenaRun, "messages" | "parts" | "id">): RenderGroup[] {
   const groups: RenderGroup[] = [];
-  for (const message of messages) {
+  const compactions = new Map<string, CompactionGroup>();
+  for (const message of run.messages ?? []) {
+    const id = messageId(message) ?? fallbackMessageId(run.id, message);
+    if (isCompactionSummary(message)) {
+      const parentID = stringField(message, "parentID");
+      const group = parentID ? compactions.get(parentID) : undefined;
+      if (group) group.summary = asRecord(message) ?? undefined;
+      continue;
+    }
     if (messageRole(message) === "user") {
+      const parts = run.parts?.[id] ?? [];
+      if (parts.some((part) => stringField(part, "type") === "compaction")) {
+        const group: CompactionGroup = { kind: "compaction", key: id };
+        compactions.set(id, group);
+        groups.push(group);
+        continue;
+      }
+      const content = arenaUserMessageContent(id, parts);
+      if (!content.text && content.images.length === 0 && content.attachments.length === 0)
+        continue;
       groups.push({ kind: "user", message });
       continue;
     }
-    const id = messageId(message) ?? fallbackMessageId(runId, message);
     const last = groups.at(-1);
     if (last?.kind === "assistant") {
       last.messageIds.push(id);
@@ -450,14 +491,14 @@ function ArenaSubagent({
     [context, session],
   );
   const work = session.messages.flatMap((message) => {
-    if (messageRole(message) !== "assistant") return [];
+    if (messageRole(message) !== "assistant" || isCompactionSummary(message)) return [];
     const id = messageId(message);
     return id ? (context.run.parts?.[id] ?? []).filter(arenaPartIsWork) : [];
   });
   const awaitingResponse = arenaRunIsAwaitingResponse(childContext.run);
   const responding = arenaRunIsResponding(childContext.run);
   const needsInput = sessionNeedsInput(session, context);
-  const latest = presentArenaWork({
+  const workPresentation = presentArenaWork({
     parts: work,
     runState: childContext.run.runState,
     isLatest: true,
@@ -474,7 +515,14 @@ function ArenaSubagent({
   };
   const status = statusLabels[childContext.run.runState];
   const pending = childContext.run.runState === "pending";
-  const hasActivity = pending && (work.length > 0 || awaitingResponse || responding);
+  const lastGroup = buildRenderGroups(childContext.run).at(-1);
+  const compaction =
+    lastGroup?.kind === "compaction"
+      ? compactionPresentation(lastGroup, childContext.run.runState)
+      : null;
+  const latest = compaction ? { kind: "reasoning" as const, ...compaction } : workPresentation;
+  const hasActivity =
+    pending && (work.length > 0 || awaitingResponse || responding || latest.active);
   const activityLabel = hasActivity ? latest.label : status;
   const showTool = hasActivity && latest.kind === "tool";
   let activityIcon =
@@ -545,10 +593,27 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
   const { run } = context;
   const isSubagent = context.sessionPath.length > 1;
   const renderGroups = useMemo(
-    () => buildRenderGroups(run.messages ?? [], run.id),
-    [run.messages, run.id],
+    () => buildRenderGroups({ messages: run.messages, parts: run.parts, id: run.id }),
+    [run.messages, run.parts, run.id],
   );
   return renderGroups.map((group) => {
+    if (group.kind === "compaction") {
+      const presentation = compactionPresentation(group, run.runState);
+      return (
+        <ExpandableBadge
+          key={group.key}
+          testID="arena-compaction"
+          label={presentation.label}
+          icon={FileText}
+          isLoading={presentation.active}
+          isError={presentation.failed}
+          isExpanded={false}
+          disableOuterSpacing
+          compactLabel
+          flushRow
+        />
+      );
+    }
     if (group.kind === "user") {
       const message = group.message;
       const id = messageId(message) ?? fallbackMessageId(run.id, message);
