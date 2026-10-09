@@ -40,7 +40,7 @@ import { Button } from "@/components/ui/button";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { Alert } from "@/components/ui/alert";
 import { ArenaServicesStrip } from "./services-strip";
-import { ArenaSteeringPanel } from "./steering-panel";
+import { ArenaQueuedSteers } from "./queued-steers";
 import { ArenaTransitionRow, arenaTransitionRowVisible } from "./transition-row";
 import { ArenaTransitionTimeline } from "./transition-timeline";
 import { arenaResolutionStatus, arenaSetupStatus } from "./transition-progress";
@@ -256,6 +256,13 @@ function BattlePane({
   // conversation it inherited. `startedAt` is written with the prompt boundary, so it means
   // dispatched rather than merely existing.
   const dispatched = run?.startedAt ? run : undefined;
+  const queuedSteers = useMemo(
+    () =>
+      dispatched ? (
+        <ArenaQueuedSteers run={dispatched} serverId={serverId} agentId={agentId} />
+      ) : null,
+    [dispatched, serverId, agentId],
+  );
   const openChanges = useOpenRunChanges({ serverId, workspaceId, side, run });
   const expanded = paneView === side;
   const handleExpand = useCallback(() => {
@@ -326,6 +333,7 @@ function BattlePane({
               <ArenaRunThread
                 run={dispatched}
                 stoppedByEarlyPick={stoppedByEarlyPick}
+                queuedSteers={queuedSteers}
                 respondingQuestionId={respondingQuestionId}
                 respondingPermissionId={respondingPermissionId}
                 onQuestionResponse={handleQuestionResponse}
@@ -348,10 +356,7 @@ function BattlePane({
           ) : null}
         </View>
         {run?.runState === "pending" ? (
-          <>
-            <ArenaSteeringPanel run={run} serverId={serverId} agentId={agentId} />
-            <ArenaRunTaskFooter run={run} paneMaxHeight={maxHeight} />
-          </>
+          <ArenaRunTaskFooter run={run} paneMaxHeight={maxHeight} />
         ) : null}
         {run ? <ArenaServicesStrip turnId={turnId} run={run} /> : null}
       </View>
