@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { Pressable } from "react-native";
+import { Text } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { MenuTriggerState } from "@/components/ui/menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * An icon-only action in a contestant pane's header: the workspace header's icon-action
@@ -27,16 +28,23 @@ export function PaneIconAction({
   testID: string;
   children: ReactNode;
 }) {
+  // An icon alone does not say what it does, so the label shows on hover too. The trigger is
+  // the button itself, as the message copy button does, so hover and press stay on one element.
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      onPress={onPress}
-      style={paneIconActionStyle}
-      testID={testID}
-    >
-      {children}
-    </Pressable>
+    <Tooltip delayDuration={250} enabledOnDesktop enabledOnMobile={false}>
+      <TooltipTrigger
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        onPress={onPress}
+        style={paneIconActionStyle}
+        testID={testID}
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent side="top" align="center" offset={8}>
+        <Text style={styles.tooltipText}>{accessibilityLabel}</Text>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -60,5 +68,9 @@ const styles = StyleSheet.create((theme) => ({
   },
   actionActive: {
     backgroundColor: theme.colors.surface2,
+  },
+  tooltipText: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.xs,
   },
 }));
