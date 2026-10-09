@@ -13,8 +13,10 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   symlink,
   unlink,
+  utimes,
   writeFile,
 } from "fs/promises"
 import { tmpdir } from "os"
@@ -2479,8 +2481,18 @@ const seedSnapshotIndex = Effect.fnUntraced(function* (input: SnapshotIndexInput
   const { git, root, index, trackedTree } = input
   const env = { GIT_INDEX_FILE: index }
   const gitDir = input.gitDir ?? (yield* read(git, root, "find_canonical_git_dir", ["rev-parse", "--absolute-git-dir"]))
+  const source = join(gitDir, "index")
   const copied = yield* Effect.tryPromise({
-    try: () => copyFile(join(gitDir, "index"), index),
+    try: async () => {
+      // Git trusts an entry's cached stat data only when the file last changed before the index
+      // was written, and takes that moment from the index file's mtime. A copy stamped now would
+      // pass a same-size edit saved in that second as unchanged, so the copy keeps the original's
+      // times. Read before the copy, they can only be older than the bytes, which only makes Git
+      // re-hash more.
+      const { atime, mtime } = await stat(source)
+      await copyFile(source, index)
+      await utimes(index, atime, mtime)
+    },
     catch: (cause) => new OperationError("copy_canonical_index", String(cause)),
   }).pipe(
     Effect.andThen(
