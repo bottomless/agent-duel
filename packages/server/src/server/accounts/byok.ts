@@ -19,12 +19,25 @@ export interface ArenaByokService {
 
 export interface CreateArenaByokServiceOptions {
   readonly restartArena?: () => Promise<void>;
-  readonly providerSnapshots?: Pick<ProviderSnapshotManager, "refreshSettingsSnapshot">;
+  readonly providerSnapshots?: Pick<
+    ProviderSnapshotManager,
+    "refreshSettingsSnapshot" | "warmUpWorkspaceSnapshots"
+  >;
 }
 
 function heldKey(): string | null {
   const credentials = readArenaCredentials()?.credentials;
   return credentials?.mode === "byok" ? credentials.openRouterApiKey : null;
+}
+
+async function reloadOpenCode(
+  providerSnapshots: NonNullable<CreateArenaByokServiceOptions["providerSnapshots"]>,
+): Promise<void> {
+  await providerSnapshots.refreshSettingsSnapshot({ providers: ["opencode"] });
+  // The refresh leaves each project loading for a client to refetch, but no client refetches after
+  // a key change, and a draft waits for its project to load before it sends. Load them once the
+  // refresh is done and without forcing: a forced opencode load starts another Arena server.
+  await providerSnapshots.warmUpWorkspaceSnapshots({ providers: ["opencode"] });
 }
 
 export function createArenaByokService(
@@ -43,9 +56,9 @@ export function createArenaByokService(
         else installArenaCredentials({ mode: "byok", openRouterApiKey: key });
         await restartArena();
         // The app runs before it has a key, so opening a project can cache the opencode provider
-        // as failed. Drop that for every project now; the reload starts Arena, so it runs in the
+        // as failed. Reload it for every project now; the reload starts Arena, so it runs in the
         // background rather than holding up the save.
-        void options.providerSnapshots?.refreshSettingsSnapshot({ providers: ["opencode"] });
+        if (options.providerSnapshots) void reloadOpenCode(options.providerSnapshots);
       }
       const next = transition.then(apply);
       transition = next.catch(() => undefined);
