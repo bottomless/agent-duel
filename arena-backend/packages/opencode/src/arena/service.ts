@@ -3971,15 +3971,14 @@ export const layer: Layer.Layer<
         const steer = interruptingSteers.get(run.runID)
         if (!steer) break
         interruptingSteers.delete(run.runID)
-        const interrupted =
-          (Exit.isFailure(result) && Cause.hasInterrupts(result.cause)) ||
-          (Exit.isSuccess(result) &&
-            result.value?.info.role === "assistant" &&
-            result.value.info.error?.name === "MessageAbortedError")
         const current = yield* promise(() => store.turn(run.turnID))
         // Stop and early vote own cancellation. Let the normal stopped-side path settle instead of
         // reviving a queued message after the battle has left the running state.
-        if (!interrupted || current?.state !== "running") break
+        if (current?.state !== "running") break
+        // Resume even when this result does not look aborted. The cancel leaves the session idle
+        // at once, so the steer's own reply can start the next loop first, and this result is then
+        // that loop's unfinished message. prompts.loop joins a running loop and returns at once
+        // when nothing is left to answer.
         promptHosts.set(run.sessionID, steer.hostDirectory)
         result = yield* Effect.exit(
           inDirectory(
