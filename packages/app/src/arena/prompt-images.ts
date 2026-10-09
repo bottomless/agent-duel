@@ -42,8 +42,8 @@ export function arenaUserMessageContent(
     const part = record(value);
     if (part?.type === "text" && typeof part.text === "string") {
       const attachment = labeledAttachment(part);
-      if (attachment === undefined) text.push(part.text);
-      else attachments.push(attachment);
+      if (attachment !== undefined) attachments.push(attachment);
+      else if (part.synthetic !== true) text.push(part.text);
       return;
     }
     if (

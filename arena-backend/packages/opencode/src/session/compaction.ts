@@ -25,6 +25,7 @@ import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-e
 import { ArenaRuntime } from "@/arena/runtime"
 import { contestant as arenaContestant } from "@/arena/model-profile"
 import type { Assignment } from "@/arena/proxy"
+import type { ModelMessage } from "ai"
 
 export const Event = SessionCompactionEvent
 
@@ -35,6 +36,9 @@ const PRUNE_PROTECTED_TOOLS = ["skill"]
 const DEFAULT_TAIL_TURNS = 2
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 8_000
+// Arena cannot use a provider tokenizer without exposing the contestant model. Reserve a bounded
+// allowance for each media item and omit its encoded bytes from the text estimate instead.
+const ARENA_MEDIA_TOKEN_ALLOWANCE = 4_000
 type Turn = {
   start: number
   end: number
@@ -60,6 +64,46 @@ function summaryText(message: SessionV1.WithParts) {
     .join("\n\n")
     .trim()
   return text || undefined
+}
+
+function estimateArenaModelMessages(messages: ModelMessage[]) {
+  let mediaCount = 0
+  const stripMediaField = (value: unknown, field: "data" | "image", types: string[]) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value
+    const record = value as Record<string, unknown>
+    if (!types.includes(String(record.type)) || !(field in record)) return value
+    mediaCount++
+    return Object.fromEntries(Object.entries(record).filter(([key]) => key !== field))
+  }
+
+  const withoutMedia = messages.map((message) => {
+    if (message.role === "user" && Array.isArray(message.content)) {
+      return {
+        ...message,
+        content: message.content.map((part) =>
+          stripMediaField(part, part.type === "image" ? "image" : "data", ["file", "image"]),
+        ),
+      }
+    }
+    if (message.role === "tool") {
+      return {
+        ...message,
+        content: message.content.map((part) => {
+          if (part.type !== "tool-result" || part.output.type !== "content") return part
+          return {
+            ...part,
+            output: {
+              ...part.output,
+              value: part.output.value.map((item) => stripMediaField(item, "data", ["media", "file-data"])),
+            },
+          }
+        }),
+      }
+    }
+    return message
+  })
+
+  return Token.estimate(JSON.stringify(withoutMedia)) + mediaCount * ARENA_MEDIA_TOKEN_ALLOWANCE
 }
 
 function completedCompactions(messages: SessionV1.WithParts[]) {
@@ -175,7 +219,7 @@ const layer = Layer.effect(
       model: Provider.Model
     }) {
       const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
-      return Token.estimate(JSON.stringify(msgs))
+      return ArenaRuntime.enabled() ? estimateArenaModelMessages(msgs) : Token.estimate(JSON.stringify(msgs))
     })
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {

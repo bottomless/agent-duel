@@ -112,6 +112,93 @@ function createUserMessage(sessionID: SessionID, text: string) {
   })
 }
 
+function imageReadHistory(
+  count: number,
+  encodedImage: string,
+  input: Record<string, unknown> = { filePath: "/tmp/screenshots" },
+): SessionV1.WithParts[] {
+  const sessionID = SessionID.descending()
+  const userID = MessageID.ascending()
+  const assistantID = MessageID.ascending()
+  return [
+    {
+      info: { id: userID, sessionID, role: "user", agent: "build", model: ref, time: { created: 1 } },
+      parts: [
+        {
+          id: PartID.ascending(),
+          sessionID,
+          messageID: userID,
+          type: "text",
+          text: "Read the screenshots",
+        },
+      ],
+    },
+    {
+      info: {
+        id: assistantID,
+        sessionID,
+        role: "assistant",
+        mode: "build",
+        agent: "build",
+        parentID: userID,
+        path: { cwd: "/tmp", root: "/tmp" },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: 2 },
+        finish: "end_turn",
+      },
+      parts: [
+        {
+          id: PartID.ascending(),
+          sessionID,
+          messageID: assistantID,
+          type: "tool",
+          callID: "read-images",
+          tool: "read",
+          state: {
+            status: "completed",
+            input,
+            output: "Read screenshots",
+            title: "Read",
+            metadata: {},
+            time: { start: 1, end: 2 },
+            attachments: Array.from({ length: count }, (_, index) => ({
+              id: PartID.ascending(),
+              sessionID,
+              messageID: assistantID,
+              type: "file" as const,
+              mime: "image/png",
+              filename: `screenshot-${index + 1}.png`,
+              url: `data:image/png;base64,${encodedImage}`,
+            })),
+          },
+        },
+      ],
+    },
+  ]
+}
+
+function userImageHistory(count: number, encodedImage: string): SessionV1.WithParts[] {
+  const sessionID = SessionID.descending()
+  const messageID = MessageID.ascending()
+  return [
+    {
+      info: { id: messageID, sessionID, role: "user", agent: "build", model: ref, time: { created: 1 } },
+      parts: Array.from({ length: count }, (_, index) => ({
+        id: PartID.ascending(),
+        sessionID,
+        messageID,
+        type: "file" as const,
+        mime: "image/png",
+        filename: `upload-${index + 1}.png`,
+        url: `data:image/png;base64,${encodedImage}`,
+      })),
+    },
+  ]
+}
+
 function createAssistantMessage(sessionID: SessionID, parentID: MessageID, root: string) {
   return SessionNs.Service.use((ssn) =>
     ssn.updateMessage({
@@ -468,6 +555,46 @@ describe("session.compaction.isOverflow", () => {
           ),
         )
         expect(arena).toEqual([true, false])
+      }),
+    ),
+  )
+
+  it.live(
+    "estimates Arena media by item count without mutating request data",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = createModel({ context: 100_000, output: 32_000 })
+        const blinded = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+        const encodedImage = "A".repeat(460_000)
+        const history = imageReadHistory(5, encodedImage)
+        const uploads = userImageHistory(5, encodedImage)
+        const toolInput = imageReadHistory(0, "", { type: "file", data: encodedImage })
+        const previous = process.env.OPENCODE_ARENA
+        delete process.env.OPENCODE_ARENA
+        const normal = yield* compact.isOverflow({ tokens: blinded, model, messages: history })
+        process.env.OPENCODE_ARENA = "1"
+        const result = yield* Effect.all([
+          compact.isOverflow({ tokens: blinded, model, messages: history }),
+          compact.isOverflow({ tokens: blinded, model, messages: uploads }),
+          compact.isOverflow({ tokens: blinded, model, messages: imageReadHistory(17, "A") }),
+          compact.isOverflow({ tokens: blinded, model, messages: toolInput }),
+          Effect.promise(() => MessageV2.toModelMessages(uploads, model)),
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (previous === undefined) delete process.env.OPENCODE_ARENA
+              else process.env.OPENCODE_ARENA = previous
+            }),
+          ),
+        )
+
+        expect(normal).toBe(false)
+        expect(result[0]).toBe(false)
+        expect(result[1]).toBe(false)
+        expect(result[2]).toBe(true)
+        expect(result[3]).toBe(true)
+        expect(JSON.stringify(result[4])).toContain(encodedImage)
       }),
     ),
   )
@@ -1120,6 +1247,47 @@ describe("session.compaction.process", () => {
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBe(keep.id)
     }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }) })),
+  )
+
+  itCompaction.instance(
+    "retains a recent media turn using the bounded Arena estimate",
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      yield* createUserMessage(session.id, "first")
+      const keep = yield* createUserMessage(session.id, "second")
+      yield* ssn.updatePart({
+        id: PartID.ascending(),
+        messageID: keep.id,
+        sessionID: session.id,
+        type: "file",
+        mime: "image/png",
+        filename: "screenshot.png",
+        url: `data:image/png;base64,${"A".repeat(460_000)}`,
+      })
+      yield* createUserMessage(session.id, "third")
+      yield* createSummaryCompaction(session.id)
+
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+      const parent = msgs.at(-1)?.info.id
+      expect(parent).toBeTruthy()
+      const previous = process.env.OPENCODE_ARENA
+      process.env.OPENCODE_ARENA = "1"
+      yield* SessionCompaction.use
+        .process({ parentID: parent!, messages: msgs, sessionID: session.id, auto: false })
+        .pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (previous === undefined) delete process.env.OPENCODE_ARENA
+              else process.env.OPENCODE_ARENA = previous
+            }),
+          ),
+        )
+
+      const part = yield* readCompactionPart(session.id)
+      expect(part?.type).toBe("compaction")
+      expect(part?.tail_start_id).toBe(keep.id)
+    }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 30_000 }) })),
   )
 
   itCompaction.instance(

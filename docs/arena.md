@@ -250,6 +250,9 @@ Product decisions that are settled, so they do not get relitigated per feature:
   concurrent agents cannot replace each other's current tool.
   Use the activity row for thinking and the pane heading for elapsed time, without a second
   thinking control or timer below the transcript.
+- Show automatic context compaction as an inline status, including inside subagents. Keep its
+  internal summary and synthetic continuation prompt out of the conversation; they are not
+  messages from the voter. Resume the contestant's visible work after the status.
 - Questions stay in the conversation after submission, with each answer beneath its prompt.
   Keep the exchange outside folded activity and between the work before and after it, including
   in archived battles and the applied winner's conversation. Interrupted questions remain visible

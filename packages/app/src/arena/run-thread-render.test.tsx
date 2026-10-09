@@ -33,7 +33,7 @@ vi.mock("@/components/message", () => ({
     </div>
   ),
   ToolCall: () => null,
-  UserMessage: () => null,
+  UserMessage: ({ message }: { message: string }) => <p data-testid="user-message">{message}</p>,
 }));
 
 vi.mock("@/components/question-form-card", () => ({
@@ -185,7 +185,116 @@ function promptedSubagentRun(): ArenaRun {
   };
 }
 
+const CONTINUATION =
+  "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.";
+const COMPACTING_RUN: ArenaRun = {
+  ...PENDING_REASONING_RUN,
+  messages: [
+    { id: "prompt", role: "user" },
+    { id: "compact", role: "user" },
+    { id: "summary", role: "assistant", parentID: "compact", summary: true },
+  ],
+  parts: {
+    compact: [{ type: "compaction", auto: true }],
+    summary: [{ type: "text", text: "Internal summary of the task" }],
+  },
+};
+
+const RESUMED_RUN: ArenaRun = {
+  ...COMPACTING_RUN,
+  messages: [
+    { id: "prompt", role: "user" },
+    { id: "compact", role: "user" },
+    {
+      id: "summary",
+      role: "assistant",
+      parentID: "compact",
+      summary: true,
+      time: { completed: 2 },
+    },
+    { id: "continue", role: "user" },
+    { id: "answer", role: "assistant" },
+  ],
+  parts: {
+    ...COMPACTING_RUN.parts,
+    continue: [{ type: "text", text: CONTINUATION, synthetic: true }],
+    answer: [{ type: "text", text: "I fixed the map labels." }],
+  },
+};
+
+function endedCompactionRun(input: { state: ArenaRun["runState"]; error?: unknown }): ArenaRun {
+  return {
+    ...PENDING_REASONING_RUN,
+    runState: input.state,
+    messages: [
+      { id: "prompt", role: "user" },
+      { id: "compact", role: "user" },
+      { id: "summary", role: "assistant", parentID: "compact", summary: true, error: input.error },
+    ],
+    parts: { compact: [{ type: "compaction", auto: true }] },
+  };
+}
+
+function compactingSubagentRun(): ArenaRun {
+  const run = subagentRun();
+  return {
+    ...run,
+    messages: [
+      ...(run.messages ?? []),
+      { id: "child-compact", role: "user", sessionID: "child" },
+      {
+        id: "child-summary",
+        role: "assistant",
+        sessionID: "child",
+        parentID: "child-compact",
+        summary: true,
+      },
+    ],
+    parts: {
+      ...run.parts,
+      "child-compact": [{ type: "compaction", auto: true }],
+      "child-summary": [{ type: "text", text: "Internal child summary" }],
+    },
+  };
+}
+
 describe("ArenaRunThread", () => {
+  it.each([
+    { state: "error", error: { name: "APIError" }, label: "Context compaction failed" },
+    { state: "stopped", error: undefined, label: "Context compaction interrupted" },
+  ] as const)("does not keep compaction animated after $state", ({ state, error, label }) => {
+    const run = endedCompactionRun({ state, error });
+    const view = render(<ArenaRunThread run={run} />);
+    expect(view.getByTestId("arena-compaction").textContent).toBe(label);
+    expect(view.getByTestId("arena-compaction").getAttribute("data-loading")).toBe("false");
+  });
+
+  it("shows a subagent compacting without exposing its summary or interrupting its parent", () => {
+    const run = compactingSubagentRun();
+    const view = render(<ArenaRunThread run={run} />);
+    const child = within(view.getByTestId("arena-subagent"));
+    expect(child.getByTestId("arena-subagent-latest").textContent).toBe("Compacting context…");
+    expect(child.getByTestId("arena-subagent-latest").getAttribute("data-loading")).toBe("true");
+    fireEvent.click(within(child.getByTestId("arena-subagent-heading")).getByRole("button"));
+    expect(child.getByTestId("arena-compaction").textContent).toBe("Compacting context…");
+    expect(view.queryByText("Internal child summary")).toBeNull();
+    expect(view.getAllByTestId("arena-compaction")).toHaveLength(1);
+  });
+
+  it("shows compaction progress, hides internal messages, and resumes the contestant thread", () => {
+    const view = render(<ArenaRunThread run={COMPACTING_RUN} />);
+    expect(view.getByTestId("arena-compaction").textContent).toBe("Compacting context…");
+    expect(view.getByTestId("arena-compaction").getAttribute("data-loading")).toBe("true");
+    expect(view.queryByText("Internal summary of the task")).toBeNull();
+
+    view.rerender(<ArenaRunThread run={RESUMED_RUN} />);
+    expect(view.getByTestId("arena-compaction").textContent).toBe("Context compacted");
+    expect(view.getByTestId("arena-compaction").getAttribute("data-loading")).toBe("false");
+    expect(view.queryByText(CONTINUATION)).toBeNull();
+    expect(view.queryByText("Internal summary of the task")).toBeNull();
+    expect(view.getByText("I fixed the map labels.").textContent).toBe("I fixed the map labels.");
+  });
+
   it("reveals reasoning inside activity details without a second thinking row", () => {
     const view = render(<ArenaRunThread run={PENDING_REASONING_RUN} />);
     fireEvent.click(view.getByRole("button", { name: "Reasoning…" }));
