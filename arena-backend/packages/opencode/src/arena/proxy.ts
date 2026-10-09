@@ -48,6 +48,57 @@ export type ProxyOptions = {
   readonly onDispatch?: (metadata: RequestMetadata) => void
 }
 
+type StreamProgress = {
+  readonly generationID: string
+  readonly headersAt: number
+  chunks: number
+  bytes: number
+  lastChunkAt?: number
+  endedAt?: number
+  savingAt?: number
+  savedAt?: number
+  closedAt?: number
+  cancelledAt?: number
+  failedAt?: number
+  failure?: "read" | "read-aborted" | "save" | "forward"
+}
+
+// Each session's latest contestant stream, sizes and times only. When the idle deadline fires, it
+// tells a response that never ended apart from one that ended but never reached the model call.
+const progress = new Map<string, StreamProgress>()
+const PROGRESS_SESSIONS = 256
+
+function trackProgress(sessionID: string, generationID: string) {
+  const record: StreamProgress = { generationID, headersAt: Date.now(), chunks: 0, bytes: 0 }
+  progress.delete(sessionID)
+  progress.set(sessionID, record)
+  if (progress.size > PROGRESS_SESSIONS) progress.delete(progress.keys().next().value!)
+  return record
+}
+
+/** How long ago each step of the session's latest contestant stream happened. */
+export function streamProgress(sessionID: string, now = Date.now()) {
+  const record = progress.get(sessionID)
+  if (!record) return undefined
+  const ago = (at: number | undefined) => (at === undefined ? undefined : now - at)
+  return Object.fromEntries(
+    Object.entries({
+      generationID: record.generationID,
+      chunks: record.chunks,
+      bytes: record.bytes,
+      headersMsAgo: ago(record.headersAt),
+      lastChunkMsAgo: ago(record.lastChunkAt),
+      endedMsAgo: ago(record.endedAt),
+      savingMsAgo: ago(record.savingAt),
+      savedMsAgo: ago(record.savedAt),
+      closedMsAgo: ago(record.closedAt),
+      cancelledMsAgo: ago(record.cancelledAt),
+      failedMsAgo: ago(record.failedAt),
+      failure: record.failure,
+    }).filter(([, value]) => value !== undefined),
+  )
+}
+
 export class AssignmentRegistry {
   readonly assignments = new Map<string, Assignment>()
 
@@ -222,6 +273,7 @@ function sanitizeStream(
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
+  const tracked = trackProgress(metadata.sessionID, generationID)
   let pending = ""
   let settled = false
   return new ReadableStream<Uint8Array>({
@@ -233,6 +285,7 @@ function sanitizeStream(
         reading = false
         if (settled) return
         if (next.done) {
+          tracked.endedAt = Date.now()
           const tail = decoder.decode()
           pending += tail
           if (pending) {
@@ -240,12 +293,18 @@ function sanitizeStream(
             telemetry?.rawChunk?.(metadata, line)
             controller.enqueue(encoder.encode(line))
           }
+          tracked.savingAt = Date.now()
           await telemetry?.complete?.(metadata, new Date())
+          tracked.savedAt = Date.now()
           settled = true
           controller.close()
+          tracked.closedAt = Date.now()
           return
         }
         const chunk = next.value
+        tracked.chunks++
+        tracked.bytes += chunk.byteLength
+        tracked.lastChunkAt = Date.now()
         const raw = decoder.decode(chunk, { stream: true })
         pending += raw
         const lines = pending.split("\n")
@@ -258,6 +317,14 @@ function sanitizeStream(
       } catch {
         if (settled) return
         settled = true
+        tracked.failedAt = Date.now()
+        tracked.failure = reading
+          ? signal?.aborted
+            ? "read-aborted"
+            : "read"
+          : tracked.savingAt !== undefined && tracked.savedAt === undefined
+            ? "save"
+            : "forward"
         try {
           await telemetry?.error?.(metadata, new Error("Arena contestant stream failed"), new Date())
         } catch {
@@ -275,6 +342,7 @@ function sanitizeStream(
     async cancel(reason) {
       if (settled) return
       settled = true
+      tracked.cancelledAt = Date.now()
       try {
         await reader.cancel(reason)
       } finally {

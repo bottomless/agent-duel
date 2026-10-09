@@ -945,6 +945,14 @@ not be mistaken for a silent model stream. When the runtime abandons a request, 
 proxy aborts its control-plane request too; otherwise the hosted function keeps streaming, and
 billing, until its own 300-second limit.
 
+The contestant sees only a neutral error, so diagnose a deadline from the engine log,
+`~/.local/share/opencode/log/opencode.log` for the packaged app too. Each timeout writes
+`arena model response idle` with the last part types the model produced and the proxy's record of
+that stream: when it last received a chunk, ended, started and finished saving the response, and
+closed. A stream that ended but never closed stalled inside the engine, not upstream. Compare it
+with the control plane's `arenaAssignmentGenerationMetrics` record for the same `generationID`,
+whose `createdAt` is when the hosted function reached the end of the response.
+
 `No recent activity` means the run has emitted no event for 90 seconds; it is not proof of a
 stalled process. Explicit retry and user-input waits take precedence. That UI label alone must not
 stop or restart a contestant.

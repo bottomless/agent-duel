@@ -4,7 +4,7 @@ import { MockLanguageModelV3 } from "ai/test"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import z from "zod"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { timeoutModelIdle } from "@/arena/model-idle"
+import { timeoutModelIdle, type ModelIdleActivity } from "@/arena/model-idle"
 import { ProviderError } from "@/provider/error"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionRetry } from "@/session/retry"
@@ -95,6 +95,25 @@ test("a silent model stream fails and aborts its request", async () => {
   }).toThrow(ProviderError.ResponseStreamError)
   expect(events).toEqual(["start"])
   expect(abort.signal.aborted).toBe(true)
+})
+
+test("an idle deadline reports the latest part types the model produced", async () => {
+  const abort = new AbortController()
+  async function* stream() {
+    yield { type: "start" }
+    yield { type: "reasoning-delta" }
+    yield { type: "reasoning-delta" }
+    yield { type: "raw" }
+    await new Promise<void>((resolve) => abort.signal.addEventListener("abort", () => resolve(), { once: true }))
+  }
+
+  let activity: ModelIdleActivity | undefined
+  await expect(async () => {
+    for await (const _ of timeoutModelIdle(stream(), abort, 30, (reported) => (activity = reported))) {
+      // Consume until the deadline fires.
+    }
+  }).toThrow(ProviderError.ResponseStreamError)
+  expect(activity).toMatchObject({ parts: 4, recentParts: "start*1 reasoning-delta*2 raw*1" })
 })
 
 test("a model idle error enters the Arena retry policy", () => {

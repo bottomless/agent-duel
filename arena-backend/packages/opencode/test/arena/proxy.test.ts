@@ -5,7 +5,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { streamText } from "ai"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Effect } from "effect"
-import { AssignmentRegistry, proxy, rewriteBody, sanitizePayload } from "../../src/arena/proxy"
+import { AssignmentRegistry, proxy, rewriteBody, sanitizePayload, streamProgress } from "../../src/arena/proxy"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionRetry } from "../../src/session/retry"
 import { createArenaService } from "@agent-duel/arena-service"
@@ -61,6 +61,27 @@ describe("ArenaProxy", () => {
       })
       expect(recorded).toBe(1)
     }
+  })
+
+  test("records that a stream ended while its response is still being saved", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () => new Response('data: {"choices":[]}\n\n', { headers: { "Content-Type": "text/event-stream" } }),
+      telemetry: { complete: () => new Promise<void>(() => {}) },
+    })
+    const reader = response.body!.getReader()
+    await reader.read()
+    void reader.read()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    const progress = streamProgress("session-root")
+    expect(progress).toMatchObject({ chunks: 1 })
+    expect(progress).toHaveProperty("endedMsAgo")
+    expect(progress).toHaveProperty("savingMsAgo")
+    expect(progress).not.toHaveProperty("savedMsAgo")
+    expect(progress).not.toHaveProperty("closedMsAgo")
   })
 
   test("classifies a real socket reset before response headers", async () => {
