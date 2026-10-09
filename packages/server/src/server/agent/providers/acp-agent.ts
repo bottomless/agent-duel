@@ -1177,7 +1177,7 @@ export class ACPAgentClient implements AgentClient {
               this.clientCapabilityMeta,
               this.clientCapabilities,
             ),
-            clientInfo: { name: "Paseo", version: "dev" },
+            clientInfo: { name: "Agent Duel", version: "dev" },
           }),
           transport.spawnError,
           ...(initializeTimeoutPromise ? [initializeTimeoutPromise] : []),
@@ -2509,7 +2509,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
           this.clientCapabilityMeta,
           this.clientCapabilities,
         ),
-        clientInfo: { name: "Paseo", version: "dev" },
+        clientInfo: { name: "Agent Duel", version: "dev" },
       }),
     );
 

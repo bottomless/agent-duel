@@ -1,4 +1,4 @@
-# Paseo Client SDK Examples
+# Agent Duel Client SDK Examples
 
 These examples use only the public SDK root:
 
@@ -14,7 +14,7 @@ use the URL for that daemon.
 - `workspaces.ts` covers creating a fresh workspace, opening by directory, refreshing, and archiving.
 - `agents-and-providers.ts` covers provider discovery, creating agents, and waiting for turns.
 - `events-and-timeline.ts` covers subscribing to workspace, agent, and timeline events, plus refetching a timeline page.
-- `issue-to-agent.ts` turns an issue record into a visible Paseo workspace and agent.
+- `issue-to-agent.ts` turns an issue record into a visible Agent Duel workspace and agent.
 - `parallel-review.ts` launches several reviewers concurrently and cleans them up.
 - `provider-settings.ts` covers provider settings that are currently daemon config-backed.
 

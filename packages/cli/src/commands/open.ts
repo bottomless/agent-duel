@@ -6,9 +6,15 @@ import { buildAgentDeepLink, type AgentDeepLinkTarget } from "@getpaseo/protocol
 
 export interface DesktopAppDiscoveryInput {
   platform?: NodeJS.Platform;
+  arch?: NodeJS.Architecture;
   homeDirectory?: string;
   localAppData?: string;
   systemCandidates?: string[];
+}
+
+// electron-builder names the x64 AppImage with "x86_64" (getArtifactArchName in app-builder-lib).
+function appImageArchName(arch: NodeJS.Architecture): string {
+  return arch === "x64" ? "x86_64" : arch;
 }
 
 export function findDesktopApp(input: DesktopAppDiscoveryInput = {}): string | null {
@@ -33,7 +39,11 @@ export function findDesktopApp(input: DesktopAppDiscoveryInput = {}): string | n
   if (platform === "linux") {
     const candidates = [
       ...(input.systemCandidates ?? ["/usr/bin/Agent Duel", "/opt/Agent Duel/Agent Duel"]),
-      path.join(homeDirectory, "Applications", `Agent-Duel-${process.arch}.AppImage`),
+      path.join(
+        homeDirectory,
+        "Applications",
+        `Agent-Duel-${appImageArchName(input.arch ?? process.arch)}.AppImage`,
+      ),
     ];
 
     for (const candidate of candidates) {

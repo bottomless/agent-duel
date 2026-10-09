@@ -159,7 +159,7 @@ A new list+detail feature copies the settings shell. A new workspace-shaped feat
 
 ## 10. Copy and voice
 
-Sentence case. "Pair a device", "Danger zone", "Restart daemon", "Inject Paseo tools", "No sessions yet", "Load more". Proper nouns retain casing — Paseo, Beta, Stable, Local. Title case is wrong.
+Sentence case. "Pair a device", "Danger zone", "Restart daemon", "Inject Agent Duel tools", "No sessions yet", "Load more". Proper nouns retain casing — Agent Duel, Beta, Stable, Local. Title case is wrong.
 
 No trailing periods on row titles, labels, or buttons. No trailing period on a single-clause hint: "What happens when you press Enter while the agent is running" (`packages/app/src/screens/settings-screen.tsx:271-272`). Periods exist inside multi-sentence prose: "Restarts the daemon process. The app will reconnect automatically."
 

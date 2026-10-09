@@ -16,10 +16,21 @@ describe("findDesktopApp", () => {
       }),
     },
     {
-      platform: "linux" as const,
-      relativePath: path.join("Applications", `Agent-Duel-${process.arch}.AppImage`),
+      platform: "linux x64" as const,
+      relativePath: path.join("Applications", "Agent-Duel-x86_64.AppImage"),
       input: (root: string) => ({
         platform: "linux" as const,
+        arch: "x64" as const,
+        homeDirectory: root,
+        systemCandidates: [],
+      }),
+    },
+    {
+      platform: "linux arm64" as const,
+      relativePath: path.join("Applications", "Agent-Duel-arm64.AppImage"),
+      input: (root: string) => ({
+        platform: "linux" as const,
+        arch: "arm64" as const,
         homeDirectory: root,
         systemCandidates: [],
       }),
