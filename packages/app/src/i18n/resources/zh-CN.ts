@@ -228,22 +228,6 @@ export const zhCN: TranslationResources = {
       unarchive: "取消归档",
     },
   },
-  sessions: {
-    interruptedForks: "已中断的分叉",
-    recoveryLoadFailed: "{{host}}：无法加载已中断的分叉",
-    forkFilesPreserved: "分叉已中断。本地文件已保留。",
-    restoreWorkspace: "恢复工作区",
-    title: "历史",
-    empty: "还没有会话",
-    noMatches: "没有匹配的会话",
-    tooManyMatches: "匹配过多 — 请缩小搜索范围",
-    hostLoadFailed: "{{host}}：无法加载历史",
-    searchPlaceholder: "搜索历史",
-    actions: {
-      loadMore: "加载更多",
-      clearSearch: "清除搜索",
-    },
-  },
   agentList: {
     fallbackTitle: "新会话",
     dateSections: {
@@ -260,16 +244,6 @@ export const zhCN: TranslationResources = {
       running: "运行中",
       error: "错误",
       closed: "已关闭",
-    },
-    badges: {
-      archived: "已归档",
-      pending: "{{count}} 个待处理",
-      attention: "需要注意",
-    },
-    archiveSheet: {
-      hostOffline: "Host 离线",
-      runningAgent: "此 Agent 仍在运行。归档会停止该 Agent。",
-      archive: "归档",
     },
   },
   message: {
@@ -979,7 +953,24 @@ export const zhCN: TranslationResources = {
       appName: "Agent Duel",
     },
     sections: {
-      sessions: "历史",
+      chats: "聊天",
+    },
+    archived: {
+      title: "已归档",
+      open: "已归档的聊天",
+      close: "返回聊天",
+      searchPlaceholder: "搜索已归档的聊天",
+      clearSearch: "清除搜索",
+      empty: "没有已归档的聊天",
+      noMatches: "没有匹配的已归档聊天",
+      tooManyMatches: "匹配过多 — 请缩小搜索范围",
+      loadFailed: "无法加载已归档的聊天",
+      hostLoadFailed: "{{host}}：无法加载已归档的聊天",
+      loadMore: "加载更多",
+      interruptedForks: "已中断的分叉",
+      recoveryLoadFailed: "{{host}}：无法加载已中断的分叉",
+      forkFilesPreserved: "文件已保留",
+      restore: "恢复",
     },
     project: {
       actions: {

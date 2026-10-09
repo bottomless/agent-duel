@@ -99,9 +99,11 @@ export async function fetchAgentHistoryPage(input: {
   serverId: string;
   cursor: string | null;
   search?: string;
+  archivedOnly?: boolean;
 }): Promise<AgentHistoryPage> {
   const payload = await input.client.fetchAgentHistory({
     ...(input.search ? { search: input.search } : {}),
+    ...(input.archivedOnly ? { archivedOnly: true } : {}),
     sort: AGENT_HISTORY_SORT,
     page: input.cursor
       ? { limit: AGENT_HISTORY_PAGE_LIMIT, cursor: input.cursor }
@@ -221,6 +223,7 @@ export async function fetchAgentHistoryBatch(input: {
   hosts: readonly AgentHistoryHost[];
   cursorByServerId: AgentHistoryCursorByServerId | null;
   search?: string;
+  archivedOnly?: boolean;
 }): Promise<AgentHistoryBatchPage> {
   const cursorByServerId = input.cursorByServerId ?? {};
   const hasCursorFilter = Object.keys(cursorByServerId).length > 0;
@@ -235,6 +238,7 @@ export async function fetchAgentHistoryBatch(input: {
         serverId: host.serverId,
         cursor: cursorByServerId[host.serverId] ?? null,
         ...(input.search ? { search: input.search } : {}),
+        ...(input.archivedOnly ? { archivedOnly: true } : {}),
       });
       return { host, page };
     }),
@@ -295,6 +299,7 @@ export function useAgentHistory(options: {
   serverId?: string | null;
   enabled?: boolean;
   search?: string;
+  archivedOnly?: boolean;
 }): AgentHistoryResult {
   const { t } = useTranslation();
   const daemons = useHosts();
@@ -351,12 +356,14 @@ export function useAgentHistory(options: {
     const trimmed = options.search?.trim() ?? "";
     return isSearchSupported ? trimmed : "";
   }, [isSearchSupported, options.search]);
+  const archivedOnly = options.archivedOnly === true;
   const queryKey = useMemo(
     () => [
       ...(serverId ? agentHistoryQueryKey(serverId) : allAgentHistoryQueryKey(targetServerIds)),
       search,
+      archivedOnly ? "archived" : "all",
     ],
-    [search, serverId, targetServerIds],
+    [archivedOnly, search, serverId, targetServerIds],
   );
   const serverLabelById = useMemo(
     () => new Map(daemons.map((daemon) => [daemon.serverId, daemon.label])),
@@ -373,6 +380,10 @@ export function useAgentHistory(options: {
     queryKey,
     enabled: Boolean(enabled && targetHosts.length > 0),
     staleTime: 30_000,
+    // Chats are archived and unarchived from places that never touch this cache —
+    // another window, the CLI, auto-archive after a merge — so opening the list
+    // always asks again.
+    refetchOnMount: "always",
     initialPageParam: null,
     getNextPageParam: getNextAgentHistoryPageParam,
     queryFn: async ({ pageParam }) => {
@@ -383,6 +394,7 @@ export function useAgentHistory(options: {
         hosts: targetHosts,
         cursorByServerId: pageParam,
         ...(search ? { search } : {}),
+        ...(archivedOnly ? { archivedOnly: true } : {}),
       });
     },
   });

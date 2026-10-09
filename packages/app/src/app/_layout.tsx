@@ -899,11 +899,7 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
   const routeHasKnownHost =
     routeServerId !== null && hosts.some((host) => host.serverId === routeServerId);
   const shouldShowAppChrome =
-    storeReady &&
-    (pathname === "/open-project" ||
-      pathname === "/new" ||
-      pathname === "/sessions" ||
-      routeHasKnownHost);
+    storeReady && (pathname === "/open-project" || pathname === "/new" || routeHasKnownHost);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
 }
@@ -929,7 +925,6 @@ function RootStack() {
         <Stack.Screen name="settings/[section]" />
         <Stack.Screen name="new" />
         <Stack.Screen name="open-project" />
-        <Stack.Screen name="sessions" />
       </Stack.Protected>
       <Stack.Screen name="h/[serverId]" />
       <Stack.Screen name="settings/hosts/[serverId]/index" />

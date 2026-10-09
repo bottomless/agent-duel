@@ -394,6 +394,20 @@ function agentDirectorySearchQuery(request: AgentDirectoryRequestMessage): strin
   return request.search?.trim() ?? "";
 }
 type FetchAgentsRequestFilter = NonNullable<FetchAgentsRequestMessage["filter"]>;
+
+/**
+ * History includes archived sessions unless the caller excludes them, and an
+ * archived-only request always needs them.
+ */
+function agentDirectoryFilter(
+  request: AgentDirectoryRequestMessage,
+): FetchAgentsRequestFilter | undefined {
+  if (request.type !== "fetch_agent_history_request") return request.filter;
+  if (request.archivedOnly === true || request.filter?.includeArchived === undefined) {
+    return { ...request.filter, includeArchived: true };
+  }
+  return request.filter;
+}
 type FetchAgentsRequestSort = NonNullable<FetchAgentsRequestMessage["sort"]>[number];
 type FetchAgentsResponsePayload = Extract<
   SessionOutboundMessage,
@@ -4974,11 +4988,7 @@ export class Session {
     pageInfo: FetchAgentsResponsePageInfo;
     searchTruncated?: boolean;
   }> {
-    const filter =
-      request.type === "fetch_agent_history_request" &&
-      request.filter?.includeArchived === undefined
-        ? { ...request.filter, includeArchived: true }
-        : request.filter;
+    const filter = agentDirectoryFilter(request);
     const scope = request.type === "fetch_agents_request" ? request.scope : undefined;
     const sort = this.agentsPager.normalizeSort(request.sort);
 
@@ -4987,6 +4997,9 @@ export class Session {
       includeArchived: filter?.includeArchived,
       includeUnavailablePersisted: request.type === "fetch_agent_history_request",
     });
+    if (request.type === "fetch_agent_history_request" && request.archivedOnly === true) {
+      agents = await this.keepArchivedChats(agents);
+    }
     const activePlacementsByWorkspaceId =
       scope === "active" ? await this.buildActiveProjectPlacementsByWorkspaceId() : null;
     if (activePlacementsByWorkspaceId) {
@@ -5063,6 +5076,24 @@ export class Session {
         hasMore,
       },
     };
+  }
+
+  /**
+   * A chat is archived when its agent is, or when its workspace is: an agent
+   * unarchived on its own still has no sidebar row while its workspace stays
+   * archived, so it belongs in the archived list or nowhere.
+   */
+  private async keepArchivedChats(agents: AgentSnapshotPayload[]): Promise<AgentSnapshotPayload[]> {
+    const archivedWorkspaceIds = new Set(
+      (await this.workspaceRegistry.list())
+        .filter((workspace) => workspace.archivedAt)
+        .map((workspace) => workspace.workspaceId),
+    );
+    return agents.filter(
+      (agent) =>
+        agent.archivedAt ||
+        (agent.workspaceId != null && archivedWorkspaceIds.has(agent.workspaceId)),
+    );
   }
 
   /**

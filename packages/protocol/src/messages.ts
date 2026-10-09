@@ -1251,6 +1251,10 @@ export const FetchAgentHistoryRequestMessageSchema = z.object({
   // project name. Present only on history: agent subscriptions filter on
   // structure, not on relevance. Ranking replaces `sort` when it is set.
   search: z.string().optional(),
+  // Only archived chats, for the sidebar's Archived view: an archived agent, or
+  // any agent in an archived workspace. Filtered before paging and ranking, so
+  // pages stay full and a search ranks only archived chats.
+  archivedOnly: z.boolean().optional(),
   sort: z
     .array(
       z.object({

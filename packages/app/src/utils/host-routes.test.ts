@@ -7,7 +7,6 @@ import {
   buildNewWorkspaceRoute,
   buildOpenProjectRoute,
   resolveKnownHostRoute,
-  buildSessionsRoute,
   buildProjectSettingsRoute,
   buildProjectsSettingsRoute,
   decodeFilePathFromPathSegment,
@@ -200,10 +199,6 @@ describe("projects settings routes", () => {
 });
 
 describe("global routes", () => {
-  it("buildSessionsRoute returns the all-host Sessions route", () => {
-    expect(buildSessionsRoute()).toBe("/sessions");
-  });
-
   it("buildNewWorkspaceRoute returns the all-host New Workspace route", () => {
     expect(buildNewWorkspaceRoute()).toBe("/new");
   });

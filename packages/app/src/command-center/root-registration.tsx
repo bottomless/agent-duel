@@ -1,27 +1,29 @@
 import { useMemo } from "react";
-import { router, type Href } from "expo-router";
+import { router, usePathname, type Href } from "expo-router";
 import { useTranslation } from "react-i18next";
 import {
+  Archive,
   CircleDashed,
   Folder,
   FolderPlus,
-  History,
   Home,
   Keyboard,
   Plus,
   Settings,
 } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
-import { getIsElectronRuntime } from "@/constants/layout";
+import { getIsElectronRuntime, useIsCompactFormFactor } from "@/constants/layout";
 import { useKeyboardShortcutOverrides } from "@/hooks/use-keyboard-shortcut-overrides";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
 import { keyboardActionDispatcher } from "@/keyboard/keyboard-action-dispatcher";
 import { useKeyboardShortcutsAvailable } from "@/keyboard/availability";
 import { resolveShortcutKeysForAction } from "@/keyboard/keyboard-shortcuts";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
+import { navigateToLastWorkspace } from "@/stores/navigation-active-workspace-store";
+import { usePanelStore } from "@/stores/panel-store";
 import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { clearCommandCenterFocusRestoreElement } from "@/utils/command-center-focus-restore";
-import { buildOpenProjectRoute, buildSessionsRoute, buildSettingsRoute } from "@/utils/host-routes";
+import { buildOpenProjectRoute, buildSettingsRoute } from "@/utils/host-routes";
 import { getShortcutOs } from "@/utils/shortcut-platform";
 import type { CommandCenterContribution, CommandCenterIconProps } from "./contributions";
 import { useCommandCenterActions } from "./provider";
@@ -31,7 +33,7 @@ const ThemedPlus = withUnistyles(Plus, (theme) => ({ color: theme.colors.foregro
 const ThemedFolderPlus = withUnistyles(FolderPlus, (theme) => ({
   color: theme.colors.foregroundMuted,
 }));
-const ThemedHistory = withUnistyles(History, (theme) => ({
+const ThemedArchive = withUnistyles(Archive, (theme) => ({
   color: theme.colors.foregroundMuted,
 }));
 const ThemedKeyboard = withUnistyles(Keyboard, (theme) => ({
@@ -58,8 +60,8 @@ function SettingsIcon({ size }: CommandCenterIconProps) {
   return <ThemedSettings size={size} strokeWidth={2.2} />;
 }
 
-function HistoryIcon({ size }: CommandCenterIconProps) {
-  return <ThemedHistory size={size} strokeWidth={2.2} />;
+function ArchiveIcon({ size }: CommandCenterIconProps) {
+  return <ThemedArchive size={size} strokeWidth={2.2} />;
 }
 
 function KeyboardIcon({ size }: CommandCenterIconProps) {
@@ -78,6 +80,10 @@ function CircleDashedIcon({ size }: CommandCenterIconProps) {
   return <ThemedCircleDashed size={size} strokeWidth={2.2} />;
 }
 
+function hasSidebar(pathname: string): boolean {
+  return pathname.startsWith("/h/") || pathname === "/open-project" || pathname === "/new";
+}
+
 export function CommandCenterRootActions() {
   const { t } = useTranslation();
   const { overrides } = useKeyboardShortcutOverrides();
@@ -85,12 +91,15 @@ export function CommandCenterRootActions() {
   const openAddProject = useOpenAddProject();
   const settingsRoute = useMemo<Href>(() => buildSettingsRoute(), []);
   const homeRoute = useMemo<Href>(() => buildOpenProjectRoute(), []);
-  const sessionsRoute = useMemo<Href>(() => buildSessionsRoute(), []);
+  const pathname = usePathname();
+  const isCompact = useIsCompactFormFactor();
   const setShortcutsDialogOpen = useKeyboardShortcutsStore((state) => state.setShortcutsDialogOpen);
   // Narrow selector on purpose: a whole-store subscription would re-register every root action
   // each time host filters are reconciled.
   const groupMode = useSidebarViewStore((state) => state.groupMode);
   const setGroupMode = useSidebarViewStore((state) => state.setGroupMode);
+  const setListView = useSidebarViewStore((state) => state.setListView);
+  const openAgentListForLayout = usePanelStore((state) => state.openAgentListForLayout);
   const shortcutPlatform = useMemo(
     () => ({ isMac: getShortcutOs() === "mac", isDesktop: getIsElectronRuntime() }),
     [],
@@ -156,21 +165,26 @@ export function CommandCenterRootActions() {
         },
       },
       {
-        id: "history",
+        id: "archived-chats",
         group: "actions",
         groupRank: 0,
         rank: 3,
-        keywords: ["history", "sessions", "recent"],
+        keywords: ["archived", "archive", "history", "recent"],
         visibility: "always",
         run: () => {
           clearCommandCenterFocusRestoreElement();
-          router.push(sessionsRoute);
+          // Settings and the welcome screen draw no sidebar, so leave them for a screen that does.
+          if (!hasSidebar(pathname) && !navigateToLastWorkspace()) {
+            router.push(homeRoute);
+          }
+          setListView("archived");
+          openAgentListForLayout({ isCompact });
         },
         presentation: {
           kind: "action",
-          title: t("sidebar.sections.sessions"),
+          title: t("sidebar.archived.open"),
           sectionTitle: t("shell.commandCenter.actions"),
-          icon: HistoryIcon,
+          icon: ArchiveIcon,
         },
       },
       {
@@ -234,10 +248,13 @@ export function CommandCenterRootActions() {
   }, [
     groupMode,
     homeRoute,
+    isCompact,
     openAddProject,
+    openAgentListForLayout,
     overrides,
-    sessionsRoute,
+    pathname,
     setGroupMode,
+    setListView,
     setShortcutsDialogOpen,
     settingsRoute,
     shortcutPlatform,

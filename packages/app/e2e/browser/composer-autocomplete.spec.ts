@@ -5,7 +5,7 @@ import {
   seedMockAgentWorkspace,
   type MockAgentWorkspace,
 } from "../support/helpers/mock-agent";
-import { expectWorkspaceTabVisible, openSessions } from "../support/helpers/archive-tab";
+import { expectWorkspaceTabVisible } from "../support/helpers/archive-tab";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { getServerId } from "../support/helpers/server-id";
 import { switchWorkspaceViaSidebar } from "../support/helpers/workspace-ui";
@@ -405,7 +405,6 @@ test.describe("Composer autocomplete", () => {
         workspaceId: second.workspaceId,
       });
 
-      await openSessions(page);
       await switchWorkspaceViaSidebar({ page, serverId, workspaceId: third.workspaceId });
       await expectComposerVisible(page, { timeout: 30_000 });
       await expectSingleCurrentWorkspaceDeckEntry(page, {
@@ -549,7 +548,9 @@ test.describe("Composer autocomplete", () => {
     const agent = await openReadyMockAgent(page);
 
     try {
-      await expect(page.getByTestId("sidebar-sessions")).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId("left-sidebar").filter({ visible: true })).toBeVisible({
+        timeout: 30_000,
+      });
       const input = composerLocator(page);
       await expect(input).toBeEditable({ timeout: 30_000 });
 
@@ -589,7 +590,7 @@ test.describe("Composer autocomplete", () => {
         });
 
         await page.getByRole("button", { name: "Open menu" }).click();
-        await expect(page.getByTestId("sidebar-sessions")).toBeInViewport({ timeout: 5_000 });
+        await expect(page.getByTestId("sidebar-close")).toBeInViewport({ timeout: 5_000 });
 
         const popoverBox = await popover.boundingBox();
         expect(popoverBox).not.toBeNull();

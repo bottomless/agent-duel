@@ -233,22 +233,6 @@ export const ru: TranslationResources = {
       unarchive: "Разархивировать",
     },
   },
-  sessions: {
-    interruptedForks: "Прерванные форки",
-    recoveryLoadFailed: "{{host}}: Не удалось загрузить прерванные форки",
-    forkFilesPreserved: "Форк был прерван. Локальные файлы сохранены.",
-    restoreWorkspace: "Восстановить рабочую область",
-    title: "История",
-    empty: "Сеансов пока нет",
-    noMatches: "Нет подходящих сеансов",
-    tooManyMatches: "Слишком много совпадений — уточните запрос",
-    hostLoadFailed: "{{host}}: Не удалось загрузить историю",
-    searchPlaceholder: "Поиск по истории",
-    actions: {
-      loadMore: "Загрузить больше",
-      clearSearch: "Очистить поиск",
-    },
-  },
   agentList: {
     fallbackTitle: "Новая сессия",
     dateSections: {
@@ -265,16 +249,6 @@ export const ru: TranslationResources = {
       running: "Бег",
       error: "Ошибка",
       closed: "Закрыто",
-    },
-    badges: {
-      archived: "В архиве",
-      pending: "{{count}}на рассмотрении",
-      attention: "Внимание",
-    },
-    archiveSheet: {
-      hostOffline: "Host оффлайн",
-      runningAgent: "Этот агент все еще работает. Архивирование остановит агент.",
-      archive: "Архив",
     },
   },
   message: {
@@ -1013,7 +987,24 @@ export const ru: TranslationResources = {
       appName: "Agent Duel",
     },
     sections: {
-      sessions: "История",
+      chats: "Чаты",
+    },
+    archived: {
+      title: "Архив",
+      open: "Чаты в архиве",
+      close: "Назад к чатам",
+      searchPlaceholder: "Поиск по архиву чатов",
+      clearSearch: "Очистить поиск",
+      empty: "В архиве нет чатов",
+      noMatches: "Нет подходящих чатов в архиве",
+      tooManyMatches: "Слишком много совпадений — уточните запрос",
+      loadFailed: "Не удалось загрузить архив чатов",
+      hostLoadFailed: "{{host}}: Не удалось загрузить архив чатов",
+      loadMore: "Загрузить больше",
+      interruptedForks: "Прерванные форки",
+      recoveryLoadFailed: "{{host}}: Не удалось загрузить прерванные форки",
+      forkFilesPreserved: "Файлы сохранены",
+      restore: "Восстановить",
     },
     project: {
       actions: {

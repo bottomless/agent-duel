@@ -234,22 +234,6 @@ export const es: TranslationResources = {
       unarchive: "Desarchivar",
     },
   },
-  sessions: {
-    interruptedForks: "Forks interrumpidos",
-    recoveryLoadFailed: "{{host}}: No se pudieron cargar los forks interrumpidos",
-    forkFilesPreserved: "El fork se interrumpió. Se conservaron los archivos locales.",
-    restoreWorkspace: "Restaurar espacio de trabajo",
-    title: "Historial",
-    empty: "Aún no hay sesiones",
-    noMatches: "No hay sesiones que coincidan",
-    tooManyMatches: "Demasiadas coincidencias: acota la búsqueda",
-    hostLoadFailed: "{{host}}: No se pudo cargar el historial",
-    searchPlaceholder: "Buscar en el historial",
-    actions: {
-      loadMore: "Cargar más",
-      clearSearch: "Borrar búsqueda",
-    },
-  },
   agentList: {
     fallbackTitle: "Nueva sesión",
     dateSections: {
@@ -266,16 +250,6 @@ export const es: TranslationResources = {
       running: "Correr",
       error: "Error",
       closed: "Cerrado",
-    },
-    badges: {
-      archived: "Archivado",
-      pending: "{{count}}pendiente",
-      attention: "Atención",
-    },
-    archiveSheet: {
-      hostOffline: "Hostfuera de línea",
-      runningAgent: "Este agente todavía está ejecutándose. Archivarlo detendrá al agente.",
-      archive: "Archivo",
     },
   },
   message: {
@@ -1023,7 +997,24 @@ export const es: TranslationResources = {
       appName: "Agent Duel",
     },
     sections: {
-      sessions: "Historial",
+      chats: "Chats",
+    },
+    archived: {
+      title: "Archivados",
+      open: "Chats archivados",
+      close: "Volver a los chats",
+      searchPlaceholder: "Buscar chats archivados",
+      clearSearch: "Borrar búsqueda",
+      empty: "No hay chats archivados",
+      noMatches: "Ningún chat archivado coincide",
+      tooManyMatches: "Demasiadas coincidencias: acota la búsqueda",
+      loadFailed: "No se pudieron cargar los chats archivados",
+      hostLoadFailed: "{{host}}: No se pudieron cargar los chats archivados",
+      loadMore: "Cargar más",
+      interruptedForks: "Forks interrumpidos",
+      recoveryLoadFailed: "{{host}}: No se pudieron cargar los forks interrumpidos",
+      forkFilesPreserved: "Archivos conservados",
+      restore: "Restaurar",
     },
     project: {
       actions: {

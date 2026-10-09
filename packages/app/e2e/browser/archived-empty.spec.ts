@@ -1,19 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { metroTest as test } from "../support/fixtures";
-import { expectSessionsEmptyState, openSessions } from "../support/helpers/archive-tab";
+import { expectArchivedEmptyState, openArchived } from "../support/helpers/archive-tab";
 import { gotoAppShell } from "../support/helpers/app";
 import { buildCreateAgentPreferences, buildSeededHost } from "../support/helpers/daemon-registry";
 import { startIsolatedHostDaemon } from "../support/helpers/isolated-host-daemon";
 import { seedWorkspace } from "../support/helpers/seed-client";
 
-test("Sessions shows an empty placeholder when the host has no history", async ({ page }) => {
-  const serverId = `srv_sessions_empty_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+test("Archived shows an empty placeholder when the host has no archived chats", async ({
+  page,
+}) => {
+  const serverId = `srv_archived_empty_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const daemon = await startIsolatedHostDaemon(serverId);
   let workspace: Awaited<ReturnType<typeof seedWorkspace>> | null = null;
 
   try {
     workspace = await seedWorkspace({
-      repoPrefix: "sessions-empty-",
+      repoPrefix: "archived-empty-",
       port: daemon.port,
     });
     const host = buildSeededHost({
@@ -35,8 +37,8 @@ test("Sessions shows an empty placeholder when the host has no history", async (
     );
 
     await gotoAppShell(page);
-    await openSessions(page);
-    await expectSessionsEmptyState(page);
+    await openArchived(page);
+    await expectArchivedEmptyState(page);
   } finally {
     await workspace?.cleanup();
     await daemon.close();
