@@ -36,7 +36,7 @@ import { BattleReview } from "./battle-review";
 import { useArenaReviewStore } from "./review-state";
 import { verdictFolds } from "./verdict-body";
 import { arenaChangesRows } from "./changes-rows";
-import { shortConflict } from "./review-fixtures.test-helpers";
+import { comparisonDiff, shortConflict, threeWayFile } from "./review-fixtures.test-helpers";
 
 const NOOP = () => {};
 const COMPARISON = { state: "completed", output: "The judge's report" } as never;
@@ -73,11 +73,21 @@ function layoutProse(height: number) {
   });
 }
 
+/** A battle where both sides changed `count` files, all diverging. */
+function manyFiles(count: number) {
+  const files = Array.from({ length: count }, (_, index) => `src/f${index}.py`);
+  return comparisonDiff({
+    files: files.map((file) => threeWayFile({ file, base: "x = 1\n", a: "x = 2\n", b: "x = 3\n" })),
+    divergence: files.map((file) => ({ file, status: "diverging" as const })),
+  });
+}
+
 function render(input: {
   summaryAvailable: boolean;
   onOpenInPanel?: (file: string | null) => void;
+  diff?: ReturnType<typeof shortConflict>;
 }) {
-  const diff = shortConflict();
+  const diff = input.diff ?? shortConflict();
   act(() => {
     root.render(
       <BattleReview
@@ -168,7 +178,7 @@ describe("BattleReview", () => {
     expect(opened?.shownFile).toBe("main.py");
     expect(opened?.shownIndex).toBe(0);
     // Nothing was clicked, so the reader has still chosen no file of their own.
-    expect(opened?.file).toBeUndefined();
+    expect(opened?.files).toBeUndefined();
   });
 
   it("closes the open diff from its row and opens it again", () => {
@@ -188,11 +198,51 @@ describe("BattleReview", () => {
     expect(byTestId("arena-inline-diff")).not.toBeNull();
   });
 
-  it("closes the diff from its pinned header", () => {
-    render({ summaryAvailable: false });
-    act(() => fireEvent.click(byTestId("arena-diff-close") as HTMLElement));
-    expect(byTestId("arena-inline-diff")).toBeNull();
-    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.file).toBeNull();
+  it("keeps several diffs open at once, each under its own row", () => {
+    render({ summaryAvailable: false, diff: manyFiles(3) });
+    const row = (file: string) => byTestId(`arena-changes-row-${file}`) as HTMLElement;
+    act(() => fireEvent.click(row("src/f2.py")));
+    expect(byTestId("arena-changes-diff-src/f0.py")).not.toBeNull();
+    expect(byTestId("arena-changes-diff-src/f1.py")).toBeNull();
+    expect(byTestId("arena-changes-diff-src/f2.py")).not.toBeNull();
+    // The diff sits between its own row and the next one, not under the list.
+    const band = byTestId("arena-changes-diff-src/f0.py") as HTMLElement;
+    expect(band.previousElementSibling?.contains(row("src/f0.py"))).toBe(true);
+    expect(band.nextElementSibling?.contains(row("src/f1.py"))).toBe(true);
+    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.files).toEqual([
+      "src/f0.py",
+      "src/f2.py",
+    ]);
+  });
+
+  it("records each file the reader opens, and nothing when one closes", () => {
+    render({ summaryAvailable: false, diff: manyFiles(3) });
+    const row = (file: string) => byTestId(`arena-changes-row-${file}`) as HTMLElement;
+    const shown = () => useArenaReviewStore.getState().byTurn["turn-1"];
+    expect(shown()?.shownFile).toBe("src/f0.py");
+    act(() => fireEvent.click(row("src/f1.py")));
+    expect(shown()?.shownFile).toBe("src/f1.py");
+    expect(shown()?.shownIndex).toBe(1);
+    // Closing the newest diff leaves the earlier one open but is not a new read of it.
+    act(() => fireEvent.click(row("src/f1.py")));
+    expect(shown()?.shownFile).toBe("src/f1.py");
+  });
+
+  it("shows eight rows and keeps the rest behind Show more, never hiding an open one", () => {
+    render({ summaryAvailable: false, diff: manyFiles(12) });
+    const rows = () => container.querySelectorAll('[data-testid^="arena-changes-row-"]');
+    const more = () => byTestId("arena-changes-more") as HTMLElement;
+    expect(rows()).toHaveLength(8);
+    expect(more().textContent).toContain("Show 4 more files");
+
+    act(() => fireEvent.click(more()));
+    expect(rows()).toHaveLength(12);
+    act(() => fireEvent.click(byTestId("arena-changes-row-src/f10.py") as HTMLElement));
+    act(() => fireEvent.click(more()));
+    // f10 is open, so the list stops after it rather than at eight.
+    expect(rows()).toHaveLength(11);
+    expect(byTestId("arena-changes-diff-src/f10.py")).not.toBeNull();
+    expect(more().textContent).toContain("Show 1 more file");
   });
 
   it("folds the whole section away and opens it again from a tab", () => {

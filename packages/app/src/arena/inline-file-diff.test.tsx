@@ -19,7 +19,7 @@ vi.mock("@/components/ui/tooltip", async () => {
   };
 });
 
-import { InlineFileDiff, openChangesFile } from "./inline-file-diff";
+import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { arenaChangesRows } from "./changes-rows";
 import {
   rewrite,
@@ -162,23 +162,9 @@ describe("InlineFileDiff", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Expand Agent B");
   });
 
-  it("closes from a heading that names the file, only when the caller can close the diff", () => {
-    const diff = shortConflict();
-    act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" />));
-    expect(byTestId("arena-diff-close")).toBeNull();
-    const onClose = vi.fn();
-    act(() =>
-      root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" onClose={onClose} />),
-    );
-    const heading = () => byTestId("arena-diff-close")!;
-    expect(heading().textContent).toContain("main.py");
-    expect(heading().getAttribute("aria-label")).toBe("Hide the diff of main.py");
-    // The heading stays in the one-side view too, so the diff can close from either.
-    act(() => container.querySelector<HTMLElement>('[aria-label="Expand Agent A"]')!.click());
-    expect(byTestId("arena-diff-back")).not.toBeNull();
-    expect(heading().textContent).toContain("Agent A · Changes from original");
-    act(() => heading().click());
-    expect(onClose).toHaveBeenCalledTimes(1);
+  it("names its file on the viewer, so a scroll is credited to the right diff", () => {
+    act(() => root.render(<InlineFileDiff diff={shortConflict()} file="main.py" layout="split" />));
+    expect(byTestId("arena-inline-diff")?.getAttribute("data-diff-file")).toBe("main.py");
   });
 
   it("resets detail mode when the layout or turn changes", () => {
@@ -194,19 +180,27 @@ describe("InlineFileDiff", () => {
   });
 });
 
-describe("openChangesFile", () => {
+describe("openChangesFiles", () => {
   const rows = arenaChangesRows(shortConflict());
 
   it("opens the default file until the reader chooses", () => {
-    expect(openChangesFile(rows, undefined)).toBe("main.py");
+    expect(openChangesFiles(rows, undefined)).toEqual(["main.py"]);
   });
 
-  it("keeps a closed diff closed", () => {
-    expect(openChangesFile(rows, null)).toBeNull();
+  it("keeps every diff closed once the reader closed them", () => {
+    expect(openChangesFiles(rows, [])).toEqual([]);
   });
 
-  it("falls back to the default when the chosen file is gone", () => {
-    expect(openChangesFile(rows, "deleted.py")).toBe("main.py");
-    expect(openChangesFile(rows, "main.py")).toBe("main.py");
+  it("drops chosen files that are gone, and falls back to the default when none are left", () => {
+    expect(openChangesFiles(rows, ["deleted.py", "main.py"])).toEqual(["main.py"]);
+    expect(openChangesFiles(rows, ["deleted.py"])).toEqual(["main.py"]);
+  });
+});
+
+describe("toggleChangesFile", () => {
+  it("opens a closed file after the ones already open and closes an open one", () => {
+    expect(toggleChangesFile(["a.py"], "b.py")).toEqual(["a.py", "b.py"]);
+    expect(toggleChangesFile(["a.py", "b.py"], "a.py")).toEqual(["b.py"]);
+    expect(toggleChangesFile(["a.py"], "a.py")).toEqual([]);
   });
 });

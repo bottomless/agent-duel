@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Pressable, Text, View, type ViewStyle } from "react-native";
+import { Text, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { ChevronDown, Maximize2, Minimize2 } from "lucide-react-native";
+import { Maximize2, Minimize2 } from "lucide-react-native";
 import type { HighlightToken } from "@getpaseo/highlight";
 import type { ArenaFileContent, ArenaThreeWayFile } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
@@ -74,10 +74,7 @@ function sideTokens(
 
 const ThemedMaximize2 = withUnistyles(Maximize2);
 const ThemedMinimize2 = withUnistyles(Minimize2);
-const ThemedChevronDown = withUnistyles(ChevronDown);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
-const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const EXPANDED = { expanded: true };
 const sideColorMappings: Record<Side, (theme: Theme) => { color: string }> = {
   a: (theme) => ({ color: theme.colors.statusDotRunning }),
   b: (theme) => ({ color: theme.colors.statusDotWarning }),
@@ -110,53 +107,6 @@ function Action({
         <ThemedMaximize2 size={ICON_SIZE.xs} uniProps={mapping} />
       )}
     </PaneIconAction>
-  );
-}
-
-/**
- * The diff's heading when the caller can close it: the open file behind the same chevron as its
- * row in the Changes list, and pressing it closes the diff the way the row does. The header stays
- * pinned while the diff scrolls, so the file being read and the way out stay in view without a
- * close button of their own. Hover follows docs/hover.md.
- */
-function CloseHeading({
-  file,
-  caption,
-  onClose,
-}: {
-  file: string;
-  caption: string;
-  onClose: () => void;
-}) {
-  const [hovered, setHovered] = useState(false);
-  const handlePointerEnter = useCallback(() => setHovered(true), []);
-  const handlePointerLeave = useCallback(() => setHovered(false), []);
-  return (
-    <View
-      style={styles.headingContainer}
-      onPointerEnter={handlePointerEnter}
-      onPointerLeave={handlePointerLeave}
-    >
-      <Pressable
-        onPress={onClose}
-        style={styles.heading}
-        accessibilityRole="button"
-        accessibilityState={EXPANDED}
-        accessibilityLabel={`Hide the diff of ${file}`}
-        testID="arena-diff-close"
-      >
-        <ThemedChevronDown
-          size={ICON_SIZE.sm}
-          uniProps={hovered ? foregroundColorMapping : mutedColorMapping}
-        />
-        <Text style={styles.headingFile} numberOfLines={1}>
-          {file}
-        </Text>
-        <Text style={styles.headingCaption} numberOfLines={1}>
-          {caption}
-        </Text>
-      </Pressable>
-    </View>
   );
 }
 
@@ -263,13 +213,13 @@ function ReadyDiff({
   diff,
   truncated,
   layout,
-  onClose,
+  embedded,
 }: {
   file: ArenaThreeWayFile;
   diff: ThreeWayWindowedDiff;
   truncated: boolean;
   layout: ArenaDiffLayout;
-  onClose?: () => void;
+  embedded: boolean;
 }) {
   const viewportRef = useRef<View>(null);
   const [mode, setMode] = useState<Side | null>(null);
@@ -379,19 +329,26 @@ function ReadyDiff({
     return Math.max(20, String(largest).length * 8);
   }, [diff]);
   const stacked = layout === "single" || mode !== null;
-  const caption = mode ? `${labelFor(mode)} · Changes from original` : "Changes from original";
   const sides = mode ? [mode] : SIDES;
-  const viewportData = useMemo(() => ({ detailSide: mode ?? "both", pmono: "true" }), [mode]);
+  // Several diffs can be open at once, so each viewer names its file for review telemetry to
+  // credit a scroll to the diff that scrolled.
+  const viewportData = useMemo(
+    () => ({ detailSide: mode ?? "both", pmono: "true", diffFile: file.file }),
+    [file.file, mode],
+  );
 
   return (
-    <View ref={viewportRef} style={styles.viewer} testID="arena-inline-diff" dataSet={viewportData}>
+    <View
+      ref={viewportRef}
+      style={[styles.viewer, embedded && styles.viewerEmbedded]}
+      testID="arena-inline-diff"
+      dataSet={viewportData}
+    >
       <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA}>
         <View style={styles.toolbar}>
-          {onClose ? (
-            <CloseHeading file={file.file} caption={caption} onClose={onClose} />
-          ) : (
-            <Text style={styles.caption}>{caption}</Text>
-          )}
+          <Text style={styles.caption}>
+            {mode ? `${labelFor(mode)} · Changes from original` : "Changes from original"}
+          </Text>
           {mode ? (
             <Action label="Back to comparison" onPress={back} back testID="arena-diff-back" />
           ) : null}
@@ -499,12 +456,12 @@ function ReadyDiff({
 export function BaseRelativeFileView({
   file,
   layout,
-  onClose,
+  embedded = false,
 }: {
   file: ArenaThreeWayFile;
   layout: ArenaDiffLayout;
-  /** Closes the file's diff; the row above it reopens it. */
-  onClose?: () => void;
+  /** Drawn under its row in the Changes list, which supplies the edges around it. */
+  embedded?: boolean;
 }) {
   const comparison = useMemo<BaseRelativeDiff>(() => buildBaseRelativeDiff(file), [file]);
   if (comparison.kind === "unavailable")
@@ -519,7 +476,7 @@ export function BaseRelativeFileView({
       diff={comparison.diff}
       truncated={comparison.truncated}
       layout={layout}
-      onClose={onClose}
+      embedded={embedded}
     />
   );
 }
@@ -535,6 +492,11 @@ const styles = StyleSheet.create((theme) => ({
     ...(isWeb
       ? { overflowY: "auto" as const, overflowX: "hidden" as const }
       : { overflow: "hidden" as const }),
+  },
+  // One band of the Changes list rather than a box of its own, so no card nests in the list.
+  viewerEmbedded: {
+    borderWidth: 0,
+    borderRadius: 0,
   },
   header: {
     backgroundColor: theme.colors.surface1,
@@ -552,38 +514,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   actions: { flexDirection: "row", gap: theme.spacing[1] },
   caption: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
-  // The toolbar's inset plus this lands the chevron and the name on the Changes rows' rail, so the
-  // heading reads as the open row continued.
-  headingContainer: {
-    position: "relative",
-    flexGrow: 1,
-    flexShrink: 1,
-    minWidth: 0,
-    marginLeft: theme.spacing[1],
-  },
-  // As tall as a pane icon action, so Back arriving in the one-side view does not move the header.
-  heading: {
-    minHeight: 28,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
-    minWidth: 0,
-  },
-  // The UI font, as the row shows the name: the viewer is marked monospace for its code, and the
-  // name would otherwise be set differently from the row it continues.
-  headingFile: {
-    flexShrink: 1,
-    minWidth: 0,
-    color: theme.colors.foreground,
-    fontFamily: theme.fontFamily.ui,
-    fontSize: theme.fontSize.xs,
-  },
-  headingCaption: {
-    flexShrink: 1,
-    minWidth: 0,
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
-  },
   pair: { flexDirection: "row", minWidth: 0 },
   column: { flex: 1, minWidth: 0 },
   columnHeader: {

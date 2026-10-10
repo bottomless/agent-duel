@@ -20,14 +20,15 @@ export interface ArenaReviewState {
    */
   readonly shownTab?: ArenaReviewTab;
   /**
-   * The file the reader picked. Absent means the card's default is standing; null means the
-   * reader closed the open diff, which the default must not reopen.
+   * The files whose diffs the reader has open, in the order they opened them. Absent means the
+   * card's default is standing; empty means the reader closed every diff, which the default must
+   * not reopen.
    */
-  readonly file?: string | null;
+  readonly files?: readonly string[];
   /**
-   * The file whose diff is actually on screen, default included. Telemetry
-   * counts this rather than `file`: a reader who opens Changes and reads the
-   * file already showing has read it, whether or not they clicked anything.
+   * The file whose diff the reader most recently opened, default included. Telemetry counts this
+   * rather than `files`: a reader who opens Changes and reads the file already showing has read
+   * it, whether or not they clicked anything.
    */
   readonly shownFile?: string;
   /** Row position of `shownFile`, which says whether the reader went in order. */
@@ -48,7 +49,7 @@ interface ArenaReviewStore {
   /** Per turn, not per chat: a chat holds many battles and each is reviewed on its own. */
   byTurn: Record<string, ArenaReviewState>;
   setTab: (turnId: string, tab: ArenaReviewTab) => void;
-  setFile: (turnId: string, file: string | null) => void;
+  setFiles: (turnId: string, files: readonly string[]) => void;
   setShownTab: (turnId: string, shownTab: ArenaReviewTab) => void;
   setShownFile: (turnId: string, shownFile: string, shownIndex: number) => void;
   setVerdictExpanded: (turnId: string, expanded: boolean) => void;
@@ -68,7 +69,7 @@ function patch(turnId: string, next: ArenaReviewState) {
 export const useArenaReviewStore = create<ArenaReviewStore>((set) => ({
   byTurn: {},
   setTab: (turnId, tab) => set(patch(turnId, { tab })),
-  setFile: (turnId, file) => set(patch(turnId, { file })),
+  setFiles: (turnId, files) => set(patch(turnId, { files })),
   setShownTab: (turnId, shownTab) =>
     set((state) => {
       if (state.byTurn[turnId]?.shownTab === shownTab) return state;

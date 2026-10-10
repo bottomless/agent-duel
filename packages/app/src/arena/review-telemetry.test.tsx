@@ -75,7 +75,7 @@ describe("useArenaReviewTelemetry", () => {
       useArenaReviewStore.getState().setShownFile(TURN, "src/a.ts", 0);
     });
     act(() => {
-      useArenaReviewStore.getState().setFile(TURN, "src/b.ts");
+      useArenaReviewStore.getState().setFiles(TURN, ["src/a.ts", "src/b.ts"]);
       useArenaReviewStore.getState().setShownFile(TURN, "src/b.ts", 1);
     });
     act(() => {
@@ -86,6 +86,28 @@ describe("useArenaReviewTelemetry", () => {
     expect(files).toHaveLength(2);
     expect(files.map((event) => "file" in event && event.file)).toEqual(["src/a.ts", "src/b.ts"]);
     expect(files.map((event) => "index" in event && event.index)).toEqual([0, 1]);
+  });
+
+  it("credits a scroll to the diff that scrolled, not the file opened last", () => {
+    // Several diffs can be open at once. Reading the first one after opening a
+    // second must not be booked against the second.
+    mount();
+    act(() => {
+      useArenaReviewStore.getState().setShownFile(TURN, "src/a.ts", 0);
+      useArenaReviewStore.getState().setShownFile(TURN, "src/b.ts", 1);
+    });
+    const viewer = document.createElement("div");
+    viewer.setAttribute("data-testid", "arena-inline-diff");
+    viewer.setAttribute("data-diff-file", "src/a.ts");
+    container.appendChild(viewer);
+    act(() => {
+      viewer.dispatchEvent(new Event("scroll"));
+    });
+    act(() => {
+      root.unmount();
+    });
+    const scrolled = sent.filter((event) => event.type === "diff.scrolled");
+    expect(scrolled.map((event) => "file" in event && event.file)).toEqual(["src/a.ts"]);
   });
 
   it("does not emit for a file that is merely re-shown", () => {

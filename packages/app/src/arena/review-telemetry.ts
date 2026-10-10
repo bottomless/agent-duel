@@ -182,12 +182,15 @@ export function useArenaReviewTelemetry({
 
     // How far down a diff the reader actually got. Reported as new ground only, in
     // 5% steps, so a long read is bounded at twenty events per file rather than one
-    // per frame. Scroll does not bubble, hence the capture listener.
+    // per frame. Scroll does not bubble, hence the capture listener. Several diffs
+    // can be open at once, so the scroll belongs to the file its viewer names.
     const deepest = new Map<string, number>();
     const onScroll = (event: Event) => {
       const el = event.target as HTMLElement | null;
       if (el?.getAttribute?.("data-testid") !== "arena-inline-diff") return;
-      const file = reviewState(useArenaReviewStore.getState().byTurn, turnId).shownFile;
+      const file =
+        el.getAttribute("data-diff-file") ??
+        reviewState(useArenaReviewStore.getState().byTurn, turnId).shownFile;
       if (!file) return;
       const travel = el.scrollHeight - el.clientHeight;
       const depth = travel <= 0 ? 1 : Math.min(1, Math.max(0, el.scrollTop / travel));
