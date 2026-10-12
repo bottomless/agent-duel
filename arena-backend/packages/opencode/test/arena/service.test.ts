@@ -1,6 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { OperationError, TRUNK_CONFLICT_OPERATION } from "@/arena/git"
+import { clearForTest, hostname, register } from "@/arena/preview"
 import {
+  contestantSystemInstruction,
   isGitLockContention,
   normalTurnReservations,
   trunkConflictList,
@@ -78,5 +80,36 @@ describe("unappliedWinnerNote", () => {
     expect(unappliedWinnerNote({ gitApplication: { state: "applied" } })).toBeUndefined()
     expect(unappliedWinnerNote({ gitApplication: { state: "conflicted" } })).toBeUndefined()
     expect(unappliedWinnerNote({})).toBeUndefined()
+  })
+})
+
+describe("contestantSystemInstruction", () => {
+  afterEach(clearForTest)
+
+  test("hands over the expanded preview URL but asks for it only from a listening service", () => {
+    register("/worktrees/turn-0-a", {
+      hostname: hostname("chat-a", 0, "a"),
+      port: 43121,
+      portAliases: { PASEO_PORT: 43121, PASEO_PORT2: 43122, PASEO_PORT3: 43123 },
+    })
+    const instruction = contestantSystemInstruction("/worktrees/turn-0-a", false, {
+      PASEO_LISTEN: "127.0.0.1:6771",
+    })
+
+    expect(instruction).toContain("ARENA_PREVIEW_URL=http://turn1-a--6b6e7f77.localhost:6771")
+    expect(instruction).toContain(
+      "If you started a service and verified it is listening, give its expanded http(s) URL in your final response",
+    )
+    expect(instruction).toContain("Otherwise do not write about preview URLs at all, not even to say there is none.")
+    expect(instruction).not.toContain("In your final response, report the expanded")
+  })
+
+  test("lists no preview URLs for a worktree without a live route", () => {
+    const instruction = contestantSystemInstruction("/worktrees/turn-0-b", false, {
+      PASEO_LISTEN: "127.0.0.1:6771",
+    })
+
+    expect(instruction).not.toContain("Current public preview URLs")
+    expect(instruction).not.toContain("http://")
   })
 })

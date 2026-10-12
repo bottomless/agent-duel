@@ -222,8 +222,10 @@ finish the contestant's battle run. Paseo's ordinary queue waits for an entire r
 owns delivery. The toolbar stays on one row.
 When its own available width is narrow, shorten the target labels, show tool permissions as a
 status icon, and use the send arrow; retain the target-specific placeholder and accessible labels. Tool permissions use a quiet
-status menu: `Auto Accept` or `Ask before tools`. Its description names the scope and explains
-that enabling Auto Accept also accepts pending requests; explicit deny rules still apply.
+status menu: `Auto Accept` or `Ask before tools`. The choice applies to the chat, or to both
+contestants during a battle, and becomes the default for new chats; other chats keep their own. The
+carry-over is intended, so the menu says so. Its descriptions also explain that enabling Auto
+Accept accepts pending requests; explicit deny rules still apply.
 
 The vote lives in a centered sticky pill above the composer: `Choose A`, `Tie`, and `Choose B`.
 Anchor it over the transcript above the composer, with a gray surface inside the pill and a

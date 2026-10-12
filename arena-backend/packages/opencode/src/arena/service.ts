@@ -271,15 +271,21 @@ function sameConflicts(left: readonly string[], right: readonly string[]) {
  * contestant: nothing about the environment is part of a prompt, and keeping it out is what lets
  * the send prompt without waiting for the release.
  */
-function contestantSystemInstruction(worktree?: string, environmentPending = false) {
-  const env = worktree ? previewEnvironment(worktree) : {}
+export function contestantSystemInstruction(
+  worktree?: string,
+  environmentPending = false,
+  processEnv: Record<string, string | undefined> = process.env,
+) {
+  const env = worktree ? previewEnvironment(worktree, processEnv) : {}
   const previewUrls = PORT_ALIASES.flatMap((alias) => {
     const suffix = alias === "PASEO_PORT" ? "" : alias.slice("PASEO_PORT".length)
     const name = `ARENA_PREVIEW_URL${suffix}`
     return env[name] ? [`${name}=${env[name]}`] : []
   })
+  // Every worktree has these URLs whether or not anything listens on them. An unconditional
+  // "report the URL" made contestants that never started a server end with a dead link.
   const currentPreview = previewUrls.length
-    ? `Current public preview URLs:\n${previewUrls.join("\n")}\nIn your final response, report the expanded http(s) URL, never the variable name.`
+    ? `Current public preview URLs, live only while a service listens on the matching port:\n${previewUrls.join("\n")}\nIf you started a service and verified it is listening, give its expanded http(s) URL in your final response, never the variable name. Otherwise do not write about preview URLs at all, not even to say there is none.`
     : ""
   const pendingEnvironment =
     environmentPending && worktree
