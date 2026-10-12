@@ -1,0 +1,49 @@
+macOS Electron dev app (npm run dev:desktop, BYOK), 2026-10-12. Raw CDP output.
+Fixture: a git repo whose `npm run check` stays silent for 150 s, then prints
+"check passed: 3 pages, 0 broken links". Prompt to both contestants: "Run npm run check
+(it takes a couple of minutes, wait for it in the foreground) and then add a footer line
+to index.html with its output." Auto Accept.
+
+1. While both ran `npm run check`, two messages were sent to Both:
+   "Also put the current year in the footer." and "And link the footer to /about.html."
+   Queued bubbles: 4 (2 per side), each with a visible delete. (desktop-queued.png)
+
+2. Delete on B's first message, 1.5 s later:
+{
+  "b": [
+    "And link the footer to /about.html."
+  ],
+  "a": [
+    "Also put the current year in the footer.",
+    "And link the footer to /about.html."
+  ]
+}
+
+3. Send now on A, 6 s later (desktop-delete-and-send-now.png):
+{
+  "queueA": null,
+  "queueB": "And link the footer to /about.html. | Sends when the current command finishes | Send now",
+  "paneA": "Agent A | Working | · | 1m 40s | Read 3 files · Ran 3 commands | Also put the current year in the footer. | And link the footer to /about.html. | Reasoning… | Reasoning…"
+}
+
+4. B after its command finished; A reran its command and stayed silent past 90 s
+   (desktop-running-a-command.png):
+{
+  "bMentionsYear": false,
+  "bHasLinkSteer": true,
+  "bQueue": false
+}
+[
+  "Agent A Running a command · 3m 32s",
+  "Agent B Finished · 3m 2s"
+]
+
+5. Final run states from arena.sqlite, and the footer each side committed (desktop-finished.png):
+b|complete|182085|refs/battles/b9eaa8ba718b9446/turn-0/b
+a|complete|307395|refs/battles/b9eaa8ba718b9446/turn-0/a
+
+A: <footer><a href="/about.html">check passed: 3 pages, 0 broken links · 2026</a></footer>
+B: <footer><a href="/about.html">check passed: 3 pages, 0 broken links</a></footer>
+
+A received both messages after Send now and finished complete, not error. B never received the
+deleted message: its transcript and its footer have no year.
