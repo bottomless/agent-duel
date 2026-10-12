@@ -57,6 +57,7 @@ const ReviewEvent = Schema.Union([
     type: Schema.Literal("tab.viewed"),
     tab: Schema.Literals(["verdict", "changes"]),
   }),
+  Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("review.collapsed"), on: Schema.Boolean }),
   Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("verdict.expanded") }),
   Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("verdict.folded") }),
   Schema.Struct({

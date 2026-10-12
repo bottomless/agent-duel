@@ -2086,6 +2086,14 @@ export type ArenaReviewEvent =
       mountId: string
       offsetMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       clientAtMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      type: "review.collapsed"
+      on: boolean
+    }
+  | {
+      id: string
+      mountId: string
+      offsetMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      clientAtMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       type: "verdict.expanded"
     }
   | {

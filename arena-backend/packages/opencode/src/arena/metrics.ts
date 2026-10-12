@@ -158,6 +158,9 @@ export function reviewEffort(events: readonly ReviewEventDocument[]): ReviewEffo
     // The pane does not carry across a remount: the card opens on its default
     // again and says so.
     let pane: ReviewTab | undefined
+    // Folding hides the pane without changing it, and opening the review again
+    // brings back the same tab without a new `tab.viewed`.
+    let collapsed = false
 
     for (const [index, event] of ordered.entries()) {
       if (isInteraction(event)) {
@@ -178,6 +181,7 @@ export function reviewEffort(events: readonly ReviewEventDocument[]): ReviewEffo
       // The pane opens before the time that follows it is spent in it. Attributing
       // the gap first would credit every tab's reading time to the tab before it.
       if (event.type === "tab.viewed") pane = event.tab
+      if (event.type === "review.collapsed") collapsed = event.on
 
       const next = ordered[index + 1]
       if (!next) continue
@@ -187,7 +191,8 @@ export function reviewEffort(events: readonly ReviewEventDocument[]): ReviewEffo
       // Only time with a pane on screen is time spent reading. The gap before the
       // card has shown anything is the battle running, not the voter working, and
       // counting it made a vote cast without a glance score higher than a studied one.
-      if (!pane) continue
+      // A folded review is the voter reading the threads instead.
+      if (!pane || collapsed) continue
       activeMs += focused
       dwellMsByPane[pane] = (dwellMsByPane[pane] ?? 0) + focused
     }

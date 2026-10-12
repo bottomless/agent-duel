@@ -119,6 +119,7 @@ export function useArenaReviewTelemetry({
     // Seed from what is there rather than waiting for a change that never fires.
     const initial = reviewState(useArenaReviewStore.getState().byTurn, turnId);
     if (initial.shownTab) current.push({ type: "tab.viewed", tab: initial.shownTab });
+    if (initial.collapsed === true) current.push({ type: "review.collapsed", on: true });
     if (initial.shownFile) {
       current.push({
         type: "file.selected",
@@ -137,9 +138,18 @@ export function useArenaReviewTelemetry({
       previousReview = next;
       if (next.shownTab && next.shownTab !== previous.shownTab)
         current.push({ type: "tab.viewed", tab: next.shownTab });
-      // `shownFile`, not `file`: the diff on arrival is the card's default and
-      // the reader reads it without clicking anything.
-      if (next.shownFile && next.shownFile !== previous.shownFile) {
+      // Folding leaves `shownTab` alone, so the rollup needs this to stop counting
+      // the folded time as time on that tab.
+      if ((next.collapsed === true) !== (previous.collapsed === true)) {
+        current.push({ type: "review.collapsed", on: next.collapsed === true });
+      }
+      // `shownFile`, not `files`: the diff on arrival is the card's default and
+      // the reader reads it without clicking anything. `fileOpens` catches the
+      // reader opening the file they opened last once more.
+      if (
+        next.shownFile &&
+        (next.shownFile !== previous.shownFile || next.fileOpens !== previous.fileOpens)
+      ) {
         current.push({ type: "file.selected", file: next.shownFile, index: next.shownIndex ?? 0 });
       }
       if (next.verdictFolded === true && previous.verdictFolded !== true) {
@@ -183,14 +193,15 @@ export function useArenaReviewTelemetry({
     // How far down a diff the reader actually got. Reported as new ground only, in
     // 5% steps, so a long read is bounded at twenty events per file rather than one
     // per frame. Scroll does not bubble, hence the capture listener. Several diffs
-    // can be open at once, so the scroll belongs to the file its viewer names.
+    // can be open at once, so the scroll belongs to the file its viewer names, and
+    // only a diff inside this battle's review counts: an archived battle's diff in
+    // the side panel is the same viewer.
     const deepest = new Map<string, number>();
     const onScroll = (event: Event) => {
       const el = event.target as HTMLElement | null;
       if (el?.getAttribute?.("data-testid") !== "arena-inline-diff") return;
-      const file =
-        el.getAttribute("data-diff-file") ??
-        reviewState(useArenaReviewStore.getState().byTurn, turnId).shownFile;
+      if (el.closest("[data-review-turn]")?.getAttribute("data-review-turn") !== turnId) return;
+      const file = el.getAttribute("data-diff-file");
       if (!file) return;
       const travel = el.scrollHeight - el.clientHeight;
       const depth = travel <= 0 ? 1 : Math.min(1, Math.max(0, el.scrollTop / travel));

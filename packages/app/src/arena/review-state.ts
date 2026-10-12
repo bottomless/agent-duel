@@ -33,6 +33,11 @@ export interface ArenaReviewState {
   readonly shownFile?: string;
   /** Row position of `shownFile`, which says whether the reader went in order. */
   readonly shownIndex?: number;
+  /**
+   * How many diffs the reader has opened. Closing the diff opened last leaves `shownFile` on it,
+   * so this is what tells telemetry the reader opened that same file again.
+   */
+  readonly fileOpens?: number;
   readonly verdictExpanded?: boolean;
   /** The reader folded the difference summary and changes away. Absent means open. */
   readonly collapsed?: boolean;
@@ -52,6 +57,7 @@ interface ArenaReviewStore {
   setFiles: (turnId: string, files: readonly string[]) => void;
   setShownTab: (turnId: string, shownTab: ArenaReviewTab) => void;
   setShownFile: (turnId: string, shownFile: string, shownIndex: number) => void;
+  openFile: (turnId: string, file: string, index: number) => void;
   setVerdictExpanded: (turnId: string, expanded: boolean) => void;
   setCollapsed: (turnId: string, collapsed: boolean) => void;
   setVerdictFolded: (turnId: string) => void;
@@ -84,6 +90,15 @@ export const useArenaReviewStore = create<ArenaReviewStore>((set) => ({
         byTurn: { ...state.byTurn, [turnId]: { ...state.byTurn[turnId], shownFile, shownIndex } },
       };
     }),
+  // Unlike `setShownFile`, every call is a new opening, the same file included.
+  openFile: (turnId, shownFile, shownIndex) =>
+    set((state) =>
+      patch(turnId, {
+        shownFile,
+        shownIndex,
+        fileOpens: (state.byTurn[turnId]?.fileOpens ?? 0) + 1,
+      })(state),
+    ),
   setVerdictExpanded: (turnId, verdictExpanded) => set(patch(turnId, { verdictExpanded })),
   setCollapsed: (turnId, collapsed) => set(patch(turnId, { collapsed })),
   addPreviewOpened: (turnId, side) =>

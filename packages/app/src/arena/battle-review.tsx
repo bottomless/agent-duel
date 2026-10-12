@@ -288,6 +288,7 @@ export function BattleReview({
   const setStoreTab = useArenaReviewStore((state) => state.setTab);
   const setStoreFiles = useArenaReviewStore((state) => state.setFiles);
   const setShownFile = useArenaReviewStore((state) => state.setShownFile);
+  const openStoreFile = useArenaReviewStore((state) => state.openFile);
   const setShownTab = useArenaReviewStore((state) => state.setShownTab);
   const setStoreCollapsed = useArenaReviewStore((state) => state.setCollapsed);
   const collapsed = chosen.collapsed === true;
@@ -317,20 +318,21 @@ export function BattleReview({
     () => setStoreCollapsed(turnId, !collapsed),
     [collapsed, setStoreCollapsed, turnId],
   );
-  // A file the reader opens is the one they are reading now; closing one records nothing.
+  // A file the reader opens is the one they are reading now, even when they opened it before;
+  // closing one records nothing.
   const onToggleFile = useCallback(
     (file: string) => {
       const opening = !openFiles.includes(file);
       setStoreFiles(turnId, toggleChangesFile(openFiles, file));
       if (opening) {
-        setShownFile(
+        openStoreFile(
           turnId,
           file,
           rows.findIndex((row) => row.file === file),
         );
       }
     },
-    [openFiles, rows, setShownFile, setStoreFiles, turnId],
+    [openFiles, openStoreFile, rows, setStoreFiles, turnId],
   );
   const { onLayout, width } = useContainerWidth();
   const measured = width > 0 ? width : null;
@@ -357,9 +359,17 @@ export function BattleReview({
     }
   }, [arrivalFile, rows, setShownFile, showLayoutControl, turnId]);
   const changesLabel = rows.length > 0 ? `Changes (${rows.length})` : "Changes";
+  // Review telemetry listens to scrolls on the whole document; this tells it which diffs are
+  // this battle's.
+  const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);
 
   return (
-    <View style={styles.review} onLayout={onLayout} testID="arena-battle-comparison">
+    <View
+      style={styles.review}
+      onLayout={onLayout}
+      testID="arena-battle-comparison"
+      dataSet={reviewData}
+    >
       <ReviewHeader
         summaryAvailable={summaryAvailable}
         tab={tab}

@@ -712,6 +712,7 @@ export const ArenaReviewEventSchema = z.discriminatedUnion("type", [
     type: z.literal("tab.viewed"),
     tab: z.enum(["verdict", "changes"]),
   }),
+  z.object({ ...ArenaReviewEventFields, type: z.literal("review.collapsed"), on: z.boolean() }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("verdict.expanded") }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("verdict.folded") }),
   z.object({

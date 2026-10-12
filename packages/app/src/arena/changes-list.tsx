@@ -15,7 +15,9 @@ const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMut
 /**
  * Rows shown before the rest wait behind "Show more". A battle that touched hundreds of files
  * otherwise grows the list past the screen and pushes both agents' messages away. The list does
- * not scroll inside itself, because the diffs it holds scroll inside themselves.
+ * not scroll inside itself, because the diffs it holds scroll inside themselves. An open row
+ * past these, such as a default file deep in the list, shows after them on its own rather than
+ * pulling in every row above it.
  */
 const VISIBLE_ROWS = 8;
 
@@ -45,13 +47,20 @@ export const ArenaChangesList = memo(function ArenaChangesList({
   renderDiff: (file: string) => ReactNode;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const toggleShowAll = useCallback(() => setShowAll((shown) => !shown), []);
-  // An open row stays in view however far down it sits.
-  const lastOpen = rows.reduce(
-    (last, row, index) => (openFiles.includes(row.file) ? index : last),
-    -1,
-  );
-  const visible = showAll ? rows : rows.slice(0, Math.max(VISIBLE_ROWS, lastOpen + 1));
+  // Rows past the first ones that have been open while the rest were hidden. Closing one leaves
+  // it where it is, so the row the reader just pressed does not vanish from under the pointer.
+  const [kept, setKept] = useState<readonly string[]>([]);
+  const toggleShowAll = useCallback(() => {
+    setShowAll((shown) => !shown);
+    setKept([]);
+  }, []);
+  const beyond = showAll ? [] : rows.slice(VISIBLE_ROWS);
+  const newlyOpen = beyond
+    .filter((row) => openFiles.includes(row.file) && !kept.includes(row.file))
+    .map((row) => row.file);
+  if (newlyOpen.length > 0) setKept([...kept, ...newlyOpen]);
+  const pinned = beyond.filter((row) => openFiles.includes(row.file) || kept.includes(row.file));
+  const visible = showAll ? rows : [...rows.slice(0, VISIBLE_ROWS), ...pinned];
   const hidden = rows.length - visible.length;
   const footer = hidden > 0 || (showAll && rows.length > VISIBLE_ROWS);
   return (

@@ -682,6 +682,8 @@ export type ReviewEvent =
   | { readonly type: "window.blur" }
   | { readonly type: "focus.toggled"; readonly on: boolean }
   | { readonly type: "tab.viewed"; readonly tab: ReviewTab }
+  /** The voter folded the review away (`on`) or opened it again. While folded no tab is on screen. */
+  | { readonly type: "review.collapsed"; readonly on: boolean }
   | { readonly type: "verdict.expanded" }
   /** The report was long enough to clip, so `Show full verdict` was on offer. */
   | { readonly type: "verdict.folded" }

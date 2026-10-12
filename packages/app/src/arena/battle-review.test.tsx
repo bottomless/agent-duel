@@ -73,12 +73,21 @@ function layoutProse(height: number) {
   });
 }
 
-/** A battle where both sides changed `count` files, all diverging. */
-function manyFiles(count: number) {
+/**
+ * A battle where both sides changed `count` files, all diverging, or only the one at
+ * `firstDiverging` when it is given, which is then the file Changes opens on.
+ */
+function manyFiles(count: number, firstDiverging?: number) {
   const files = Array.from({ length: count }, (_, index) => `src/f${index}.py`);
   return comparisonDiff({
     files: files.map((file) => threeWayFile({ file, base: "x = 1\n", a: "x = 2\n", b: "x = 3\n" })),
-    divergence: files.map((file) => ({ file, status: "diverging" as const })),
+    divergence: files.map((file, index) => ({
+      file,
+      status:
+        firstDiverging === undefined || index >= firstDiverging
+          ? ("diverging" as const)
+          : ("identical" as const),
+    })),
   });
 }
 
@@ -198,6 +207,12 @@ describe("BattleReview", () => {
     expect(byTestId("arena-inline-diff")).not.toBeNull();
   });
 
+  it("marks its diffs as this battle's, so review telemetry can tell them from another's", () => {
+    render({ summaryAvailable: false });
+    const viewer = byTestId("arena-inline-diff") as HTMLElement;
+    expect(viewer.closest("[data-review-turn]")?.getAttribute("data-review-turn")).toBe("turn-1");
+  });
+
   it("keeps several diffs open at once, each under its own row", () => {
     render({ summaryAvailable: false, diff: manyFiles(3) });
     const row = (file: string) => byTestId(`arena-changes-row-${file}`) as HTMLElement;
@@ -226,6 +241,11 @@ describe("BattleReview", () => {
     // Closing the newest diff leaves the earlier one open but is not a new read of it.
     act(() => fireEvent.click(row("src/f1.py")));
     expect(shown()?.shownFile).toBe("src/f1.py");
+    // Opening the same file again is a new opening, though the shown file does not change.
+    const opens = shown()?.fileOpens;
+    act(() => fireEvent.click(row("src/f1.py")));
+    expect(shown()?.shownFile).toBe("src/f1.py");
+    expect(shown()?.fileOpens).toBe((opens ?? 0) + 1);
   });
 
   it("shows eight rows and keeps the rest behind Show more, never hiding an open one", () => {
@@ -237,12 +257,32 @@ describe("BattleReview", () => {
 
     act(() => fireEvent.click(more()));
     expect(rows()).toHaveLength(12);
-    act(() => fireEvent.click(byTestId("arena-changes-row-src/f10.py") as HTMLElement));
+    act(() => fireEvent.click(byTestId("arena-changes-row-src/f11.py") as HTMLElement));
     act(() => fireEvent.click(more()));
-    // f10 is open, so the list stops after it rather than at eight.
-    expect(rows()).toHaveLength(11);
-    expect(byTestId("arena-changes-diff-src/f10.py")).not.toBeNull();
-    expect(more().textContent).toContain("Show 1 more file");
+    // f11 is open, so it stays after the first eight on its own.
+    expect(rows()).toHaveLength(9);
+    expect(byTestId("arena-changes-diff-src/f11.py")).not.toBeNull();
+    expect(more().textContent).toContain("Show 3 more files");
+  });
+
+  it("opens on a diverging file deep in the list without showing every row above it", () => {
+    render({ summaryAvailable: false, diff: manyFiles(30, 20) });
+    const rows = () =>
+      Array.from(container.querySelectorAll('[data-testid^="arena-changes-row-"]')).map((row) =>
+        row.getAttribute("data-testid"),
+      );
+    expect(rows()).toHaveLength(9);
+    expect(rows()[8]).toBe("arena-changes-row-src/f20.py");
+    expect(byTestId("arena-changes-diff-src/f20.py")).not.toBeNull();
+    expect((byTestId("arena-changes-more") as HTMLElement).textContent).toContain(
+      "Show 21 more files",
+    );
+
+    // Closing it leaves the row where it was, under the pointer that pressed it.
+    act(() => fireEvent.click(byTestId("arena-changes-row-src/f20.py") as HTMLElement));
+    expect(byTestId("arena-changes-diff-src/f20.py")).toBeNull();
+    expect(rows()).toHaveLength(9);
+    expect(rows()[8]).toBe("arena-changes-row-src/f20.py");
   });
 
   it("folds the whole section away and opens it again from a tab", () => {
