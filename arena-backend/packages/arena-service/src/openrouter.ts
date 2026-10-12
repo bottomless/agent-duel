@@ -2,7 +2,7 @@ import { randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment } from "./assignments"
 import { authorize, type ArenaContext } from "./context"
 import type { GenerationMetrics, UsageTotals } from "./metrics"
-import { classifyPaymentError, retryableStreamError } from "./request-error"
+import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -333,7 +333,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         console.error("[arena-service] Arena generation metrics could not be recorded")
       }
     })
-  } catch {
+  } catch (error) {
+    if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")
     return Response.json({ error: { message: "OpenRouter request failed" } }, { status: 502 })
   }

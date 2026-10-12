@@ -945,6 +945,15 @@ permanent errors stay terminal. A broken response stream or transient OpenRouter
 restarts the request under the same retry budget. The budget stops scheduling new retries, not a
 request already in flight.
 
+An offline machine spends no retry. When a contestant request cannot reach the network at all (DNS
+fails or there is no route), the daemon's runtime proxy in a hosted build, or the in-process service
+in a BYOK build, answers 503 `arena_network_unavailable`. The contestant then waits with backoff
+capped at 10 seconds for as long as the network is gone, shows **Waiting for network**, and the next
+real failure gets a fresh two-minute window. A closed lid is the common case: macOS wakes briefly for
+Power Nap before Wi-Fi reconnects, and the window's monotonic clock stops during sleep, so without
+this each wake spent one retry until the run failed. The control plane never sends this answer; its
+own outbound failures are not the user's network.
+
 A stream that ends without a finish reason or `[DONE]` is broken too (`endsResponse` in
 `arena/proxy.ts`). The control plane's function time limit ends a response cleanly, mid-thought;
 accepted as a finish, the step has no tool call and the run completes with no answer. The retried

@@ -117,6 +117,22 @@ describe("arenaRunStatusLabel", () => {
     ).toBe("Waiting for your answer");
   });
 
+  it("names the engine's offline wait instead of a retry", () => {
+    const quiet = run({ startedAt: STARTED_AT, lastEventAt: STARTED_AT });
+    expect(
+      arenaRunStatusLabel(
+        { ...quiet, status: { type: "retry", message: "Waiting for network", next: NOW } },
+        Date.parse(STARTED_AT) + POSSIBLY_STALLED_AFTER_MS,
+      ),
+    ).toBe("Waiting for network");
+    expect(
+      arenaRunStatusLabel(
+        { ...quiet, status: { type: "retry", message: "Arena contestant is retrying" } },
+        NOW,
+      ),
+    ).toBe("Retrying");
+  });
+
   it("lets terminal states override stale waits and restores Working on new activity", () => {
     const waiting = run({ status: { type: "retry" }, questions: [{}], lastEventAt: STARTED_AT });
     expect(arenaRunStatusLabel({ ...waiting, runState: "error" }, NOW)).toBe("Failed");

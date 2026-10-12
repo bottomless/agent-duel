@@ -4,7 +4,7 @@ import { Cause, Clock, Duration, Effect, Schedule } from "effect"
 import { MessageV2 } from "./message-v2"
 import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
-import { readPaymentError } from "@agent-duel/arena-service/request-error"
+import { readNetworkUnavailable, readPaymentError } from "@agent-duel/arena-service/request-error"
 
 export type Err = ReturnType<NamedError["toObject"]>
 
@@ -30,6 +30,10 @@ export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
 export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
 const ARENA_RETRY_MAX_ATTEMPTS = 8
 const ARENA_RETRY_WINDOW_MS = 120_000
+// Short enough that a contestant resumes within seconds of Wi-Fi reconnecting after sleep.
+const ARENA_OFFLINE_MAX_DELAY_MS = 10_000
+/** The retry status while an Arena contestant waits for the network. The app labels it by this text. */
+export const ARENA_OFFLINE_MESSAGE = "Waiting for network"
 
 function cap(ms: number) {
   return Math.min(ms, RETRY_MAX_DELAY)
@@ -88,9 +92,19 @@ function arenaDelay(attempt: number, error: SessionV1.APIError | undefined, now:
   return fallback
 }
 
+/** Whether an Arena request failed because this machine is offline (`arena_network_unavailable`). */
+function networkUnavailable(error: Err) {
+  return (
+    SessionV1.APIError.isInstance(error) &&
+    error.data.statusCode === 503 &&
+    readNetworkUnavailable(error.data.responseBody)
+  )
+}
+
 export function retryable(error: Err, provider: string) {
   // context overflow errors should not be retried
   if (SessionV1.ContextOverflowError.isInstance(error)) return undefined
+  if (provider === "arena" && networkUnavailable(error)) return { message: ARENA_OFFLINE_MESSAGE }
   if (SessionV1.APIError.isInstance(error)) {
     const status = error.data.statusCode
     if (provider === "arena" && status === 402) {
@@ -215,12 +229,32 @@ export function policy(opts: {
       let paymentAttempts = 0
       let paymentWaitMs = 0
       let arenaAttempts = 0
+      let offlineAttempts = 0
       let firstArenaFailure: bigint | undefined
       return (meta: Schedule.InputMetadata<unknown>) => {
         const error = opts.parse(meta.input)
         const retry = retryable(error, opts.provider)
         if (!retry) return Cause.done(meta.attempt)
         if (opts.provider === "arena" && opts.canRestart?.() === false) return Cause.done(meta.attempt)
+        // Offline is not a failure of the request: it waits for as long as the network is gone,
+        // spends no retry, and gives the next real failure a fresh window once the network is back.
+        if (opts.provider === "arena" && networkUnavailable(error)) {
+          return Effect.gen(function* () {
+            offlineAttempts += 1
+            firstArenaFailure = undefined
+            const wait = Math.min(
+              RETRY_INITIAL_DELAY * RETRY_BACKOFF_FACTOR ** (offlineAttempts - 1),
+              ARENA_OFFLINE_MAX_DELAY_MS,
+            )
+            yield* opts.set({
+              attempt: meta.attempt,
+              message: retry.message,
+              next: (yield* Clock.currentTimeMillis) + wait,
+            })
+            return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
+          })
+        }
+        offlineAttempts = 0
         return Effect.gen(function* () {
           const apiError = SessionV1.APIError.isInstance(error) ? error : undefined
           const payment = opts.provider === "arena" && apiError?.data.statusCode === 402

@@ -2,6 +2,7 @@ import { once } from "node:events";
 import express from "express";
 import type { Logger } from "pino";
 import { resolveArenaRuntimeCredentials } from "./credentials.js";
+import { isNetworkUnavailable, networkUnavailableBody } from "./network-unavailable.js";
 
 const allowedRoutes = new Set([
   "/api/arena/assignments",
@@ -12,6 +13,15 @@ const allowedRoutes = new Set([
 ]);
 
 type Fetch = typeof fetch;
+
+// A contestant waits out an offline machine; every other failure answers 502.
+function sendFailure(res: express.Response, path: string, error: unknown): void {
+  if (path.startsWith("/api/openrouter/") && isNetworkUnavailable(error)) {
+    res.status(503).json(networkUnavailableBody);
+    return;
+  }
+  res.status(502).json({ error: "Arena control plane is unavailable" });
+}
 
 export function createArenaRuntimeRouter(options: {
   readonly logger: Pick<Logger, "warn">;
@@ -91,7 +101,7 @@ export function createArenaRuntimeRouter(options: {
       if (disconnected.signal.aborted) return;
       options.logger.warn({ err: error, path: req.path }, "Arena runtime proxy request failed");
       if (!res.headersSent) {
-        res.status(502).json({ error: "Arena control plane is unavailable" });
+        sendFailure(res, req.path, error);
       } else {
         res.destroy();
       }

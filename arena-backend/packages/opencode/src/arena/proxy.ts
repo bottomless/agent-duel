@@ -1,7 +1,13 @@
 import { randomUUID } from "crypto"
 import { contestant } from "./model-profile"
 import type { GenerationMetrics } from "./records"
-import { paymentError, readPaymentError, retryableStreamError } from "@agent-duel/arena-service/request-error"
+import {
+  networkUnavailableError,
+  paymentError,
+  readNetworkUnavailable,
+  readPaymentError,
+  retryableStreamError,
+} from "@agent-duel/arena-service/request-error"
 
 export type Assignment = {
   readonly runID: string
@@ -463,11 +469,15 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const generationID = metadata.generationID
     const type = response.headers.get("content-type") ?? ""
     if (!response.ok) {
+      // Only these two bodies carry a neutral code the engine acts on; every other body is dropped.
+      const body = response.status === 402 || response.status === 503 ? await response.text() : undefined
       const payload =
         response.status === 402
-          ? paymentError(readPaymentError(await response.text()) ?? "arena_payment_required")
-          : { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
-      if (response.status !== 402) await response.body?.cancel().catch(() => undefined)
+          ? paymentError(readPaymentError(body) ?? "arena_payment_required")
+          : readNetworkUnavailable(body)
+            ? networkUnavailableError()
+            : { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
+      if (body === undefined) await response.body?.cancel().catch(() => undefined)
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
       await telemetry?.complete?.(metadata, new Date())
       headers.set("content-type", "application/json")

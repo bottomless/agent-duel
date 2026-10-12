@@ -9,6 +9,7 @@ import { AssignmentRegistry, proxy, rewriteBody, sanitizePayload, streamProgress
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionRetry } from "../../src/session/retry"
 import { createArenaService } from "@agent-duel/arena-service"
+import { isNetworkUnavailable } from "@agent-duel/arena-service/network"
 import type { ArenaDb } from "@agent-duel/arena-service/collection"
 
 const assignment = {
@@ -657,6 +658,118 @@ describe("ArenaProxy", () => {
     }
     // Each case waits out the real first retry backoff.
   }, 15_000)
+
+  test("waits out an offline machine and resumes the same request once the network is back", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    let calls = 0
+    const assignmentSet = {
+      userId: "user-1",
+      scopeID: "turn-a",
+      assignments: [
+        {
+          assignmentID: "opaque-assignment",
+          model: {
+            displayName: "Hidden Model",
+            slug: "provider/hidden-model",
+            canonicalSlug: "provider/hidden-model-version",
+            routing: { sort: "throughput" },
+          },
+        },
+      ],
+    }
+    const db = {
+      collection: () => ({ find: () => ({ toArray: async () => [assignmentSet] }), replaceOne: async () => ({}) }),
+    } as unknown as ArenaDb
+    const service = createArenaService({
+      resolveCaller: async () => ({ id: "user-1" }),
+      db: async () => db,
+      pool: [],
+      openRouterApiKey: "server-secret",
+      networkUnavailable: (error) => isNetworkUnavailable(error, "openrouter.ai"),
+      fetch: async () => {
+        calls++
+        if (calls === 1) {
+          throw new TypeError("fetch failed", {
+            cause: Object.assign(new Error("getaddrinfo ENOTFOUND openrouter.ai"), { code: "ENOTFOUND" }),
+          })
+        }
+        return new Response('data: {"choices":[{"index":0,"delta":{"content":"complete"}}]}\n\ndata: [DONE]\n\n', {
+          headers: { "content-type": "text/event-stream" },
+        })
+      },
+    })
+    const model = createOpenRouter({
+      apiKey: "test-key",
+      fetch: async (_input, init) =>
+        proxy(
+          new Request("http://localhost/arena/openrouter/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Session-Id": "session-root",
+              "x-arena-request-id": requestID,
+            },
+            body: init?.body,
+          }),
+          registry,
+          {
+            upstream: "https://control.test/api/openrouter",
+            fetch: (input, init) => service.openrouter(new Request(input, init)),
+          },
+        ),
+    }).chat("contestant")
+
+    const messages: string[] = []
+    const answer = await Effect.runPromise(
+      Effect.tryPromise({
+        try: async () => {
+          const result = streamText({ model, prompt: "test", maxRetries: 0 })
+          let answer = ""
+          for await (const event of result.fullStream) {
+            if (event.type === "text-delta") answer += event.text
+            if (event.type === "error") throw event.error
+          }
+          return answer
+        },
+        catch: (error) => error,
+      }).pipe(
+        Effect.retry(
+          SessionRetry.policy({
+            provider: "arena",
+            parse: (error) => MessageV2.fromError(error, { providerID: ProviderV2.ID.make("arena") }),
+            set: (info) =>
+              Effect.sync(() => {
+                messages.push(info.message)
+              }),
+          }),
+        ),
+      ),
+    )
+    expect(answer).toBe("complete")
+    expect(calls).toBe(2)
+    expect(messages).toEqual([SessionRetry.ARENA_OFFLINE_MESSAGE])
+  }, 15_000)
+
+  test("passes the daemon's offline answer through and drops every other 503 body", async () => {
+    const offline = { error: { message: "Arena network is unavailable", type: "arena_network_unavailable" } }
+    for (const [upstream, expected] of [
+      [offline, offline],
+      [
+        { error: { message: "provider/hidden-model is down", type: "arena_network_unavailable_soon" } },
+        { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } },
+      ],
+    ] as const) {
+      const registry = new AssignmentRegistry()
+      registry.assign("session-root", assignment)
+      const response = await proxy(request(), registry, {
+        upstream: "https://unit.invalid",
+        fetch: async () => Response.json(upstream, { status: 503 }),
+      })
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual(expected)
+    }
+  })
 
   test("does not retry permanent errors received mid-answer", () => {
     for (const code of [400, 401, 402, 403, "insufficient_quota", "context_length_exceeded"]) {

@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test"
-import { paymentError, classifyPaymentError, readPaymentError } from "./request-error"
+import {
+  paymentError,
+  classifyPaymentError,
+  networkUnavailableError,
+  readNetworkUnavailable,
+  readPaymentError,
+} from "./request-error"
 
 test("classifies only documented payment limit sources and discards upstream identity", () => {
   for (const [source, code] of [
@@ -30,4 +36,17 @@ test("reads only the closed set of sanitized payment codes", () => {
   expect(readPaymentError(JSON.stringify(paymentError("arena_temporary_budget")))).toBe("arena_temporary_budget")
   expect(readPaymentError('{"error":{"code":"secret-provider"}}')).toBeUndefined()
   expect(readPaymentError("not JSON")).toBeUndefined()
+})
+
+test("recognizes only the offline body", () => {
+  expect(readNetworkUnavailable(JSON.stringify(networkUnavailableError()))).toBe(true)
+  for (const body of [
+    undefined,
+    "",
+    "not json",
+    JSON.stringify({ error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }),
+    JSON.stringify({ error: "Arena control plane is unavailable" }),
+  ]) {
+    expect(readNetworkUnavailable(body)).toBe(false)
+  }
 })

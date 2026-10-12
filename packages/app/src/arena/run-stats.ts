@@ -1,6 +1,8 @@
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { arenaRunningTool, isArenaRunPossiblyStalled } from "./run-liveness";
 
+const OFFLINE_MESSAGE = "Waiting for network";
+
 type ArenaRunTiming = Pick<ArenaRun, "runState" | "startedAt" | "completedAt" | "durationMs">;
 
 function parseTime(value: string | undefined): number | null {
@@ -36,7 +38,10 @@ export function arenaRunStatusLabel(run: ArenaRun, now: number): string {
         "type" in run.status &&
         run.status.type === "retry"
       )
-        return "Retrying";
+        // The engine's offline wait (`ARENA_OFFLINE_MESSAGE` in arena-backend `session/retry.ts`).
+        return "message" in run.status && run.status.message === OFFLINE_MESSAGE
+          ? OFFLINE_MESSAGE
+          : "Retrying";
       if (isArenaRunPossiblyStalled(run, now)) {
         const tool = arenaRunningTool(run);
         if (tool === "command") return "Running a command";

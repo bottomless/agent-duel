@@ -1,6 +1,7 @@
 import { createArenaService, type Fetch } from "@agent-duel/arena-service"
 import type { ArenaDb } from "@agent-duel/arena-service/collection"
 import { defaultPool } from "@agent-duel/arena-service/default-pool"
+import { isNetworkUnavailable } from "@agent-duel/arena-service/network"
 import type { ArenaCredentials } from "./credentials"
 
 /**
@@ -34,6 +35,7 @@ export function createArenaBackend(credentials: ArenaCredentials, db: () => Prom
     db,
     pool: defaultPool,
     openRouterApiKey: credentials.openRouterApiKey,
+    networkUnavailable: (error) => isNetworkUnavailable(error, "openrouter.ai"),
   })
   return {
     url: inProcessUrl,
