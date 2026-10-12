@@ -56,6 +56,7 @@ import {
   unresolvedConflictPaths,
 } from "../../src/arena/git"
 import { decideRef, type BranchAction } from "../../src/arena/branch-review"
+import { prepareEvidence } from "../../src/arena/comparison-evidence"
 import { Git } from "../../src/git"
 import { tmpdir } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -1628,6 +1629,75 @@ describe("ArenaGit", () => {
       // Every side reports the same windows, in base line numbers where they agree.
       expect(lock?.base?.regions?.[0]?.start).toBe(lock?.b?.regions?.[0]?.start)
       expect(lock?.a?.regions?.[1]?.start).toBe(lock?.base?.regions?.[1]?.start)
+    }),
+  )
+
+  it.live("returns a partial comparison when a generated file exceeds the diff output limit", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const generated = (value: string) => JSON.stringify({ data: value.repeat(9 * 1024 * 1024) })
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/data.json`, generated("a")))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/z-small.txt`, "before\n"))
+      yield* Effect.promise(() => $`git add . && git commit -m base`.cwd(canonical.path).quiet())
+      const base = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/data.json`, generated("b")))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/z-small.txt`, "after\n"))
+      yield* Effect.promise(() => $`git add . && git commit -m result`.cwd(canonical.path).quiet())
+      const result = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+
+      const evidence = yield* compare({
+        canonical: canonical.path,
+        baseCommit: base,
+        aCommit: result,
+        bCommit: base,
+      })
+      expect(evidence.baseToATruncated).toBe(true)
+      expect(evidence.truncated).toBe(true)
+      expect(evidence.stats.map((file) => file.file)).toEqual(["data.json", "z-small.txt"])
+      const large = evidence.files.find((file) => file.file === "data.json")!
+      for (const side of [large.base!, large.a!, large.b!]) {
+        expect(side.truncated).toBe(true)
+        expect(side.missing).toBe(false)
+        expect(side.content.length).toBeLessThanOrEqual(256 * 1024)
+      }
+      const small = evidence.files.find((file) => file.file === "z-small.txt")!
+      expect(small.base).toEqual({ content: "before\n", missing: false, truncated: false })
+      expect(small.a).toEqual({ content: "after\n", missing: false, truncated: false })
+      expect(small.b).toEqual(small.base)
+      expect(evidence.divergence?.files.map((file) => file.status)).toEqual(["only_a", "only_a"])
+
+      const prepared = prepareEvidence({
+        baseToA: evidence.baseToA,
+        baseToB: evidence.baseToB,
+        aToB: evidence.patch,
+        baseToATruncated: evidence.baseToATruncated,
+        baseToBTruncated: evidence.baseToBTruncated,
+        aToBTruncated: evidence.truncated,
+        files: evidence.fileFacts,
+      })
+      expect(prepared.partial).toBe(true)
+      expect(prepared.text.length).toBeLessThanOrEqual(64_000)
+      expect(prepared.text).toContain('File: "data.json"')
+      expect(prepared.text).toContain("Contents unavailable")
+
+      const reversed = yield* compare({
+        canonical: canonical.path,
+        baseCommit: base,
+        aCommit: base,
+        bCommit: result,
+      })
+      expect(reversed.baseToBTruncated).toBe(true)
+      expect(reversed.files.find((file) => file.file === "data.json")).toEqual({
+        ...large,
+        additionsA: large.additionsB,
+        deletionsA: large.deletionsB,
+        additionsB: large.additionsA,
+        deletionsB: large.deletionsA,
+        a: large.b,
+        b: large.a,
+      })
+      expect(reversed.files.find((file) => file.file === "z-small.txt")?.b).toEqual(small.a)
+      expect(reversed.divergence?.files.map((file) => file.status)).toEqual(["only_b", "only_b"])
     }),
   )
 

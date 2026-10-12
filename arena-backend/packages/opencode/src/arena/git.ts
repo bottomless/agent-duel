@@ -5045,33 +5045,31 @@ export const compare = Effect.fn("ArenaGit.compare")(
             }
           }
           const [patchA, patchB] = yield* Effect.all([
-            readDiffMetadata("read_file_hunks_a", [
-              "diff",
-              "--no-ext-diff",
-              "--no-renames",
-              "--unified=0",
-              input.baseCommit,
-              input.aCommit,
-              "--",
-              file,
-            ]),
-            readDiffMetadata("read_file_hunks_b", [
-              "diff",
-              "--no-ext-diff",
-              "--no-renames",
-              "--unified=0",
-              input.baseCommit,
-              input.bCommit,
-              "--",
-              file,
-            ]),
+            run(
+              git,
+              root,
+              "read_file_hunks_a",
+              ["diff", "--no-ext-diff", "--no-renames", "--unified=0", input.baseCommit, input.aCommit, "--", file],
+              { maxOutputBytes: 16 * 1024 * 1024 },
+            ),
+            run(
+              git,
+              root,
+              "read_file_hunks_b",
+              ["diff", "--no-ext-diff", "--no-renames", "--unified=0", input.baseCommit, input.bCommit, "--", file],
+              { maxOutputBytes: 16 * 1024 * 1024 },
+            ),
           ])
+          // These reads include changed lines, so a generated file can exhaust the cap.
+          // Incomplete hunk positions cannot align windows safely. Reuse the bounded-head
+          // fallback and mark every present side partial instead of failing the comparison.
+          const incomplete = patchA.truncated || patchB.truncated
           const windowed = windowFile({
-            base,
-            a,
-            b,
-            hunksA: parseHunks(patchA),
-            hunksB: parseHunks(patchB),
+            base: { ...base, truncated: base.truncated || (incomplete && !base.missing) },
+            a: { ...a, truncated: a.truncated || (incomplete && !a.missing) },
+            b: { ...b, truncated: b.truncated || (incomplete && !b.missing) },
+            hunksA: incomplete ? [] : parseHunks(patchA.text()),
+            hunksB: incomplete ? [] : parseHunks(patchB.text()),
           })
           return {
             file: { file, binary: false, ...entry, ...windowed } satisfies ThreeWayFile,
