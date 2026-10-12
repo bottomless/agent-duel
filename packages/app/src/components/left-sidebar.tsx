@@ -1,6 +1,7 @@
 import { router, usePathname } from "expo-router";
 import {
   Archive,
+  ArrowLeft,
   FolderPlus,
   GitBranch,
   Home,
@@ -71,6 +72,7 @@ type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const ThemedArchive = withUnistyles(Archive);
+const ThemedArrowLeft = withUnistyles(ArrowLeft);
 const ThemedFolderPlus = withUnistyles(FolderPlus);
 const ThemedMessageSquareText = withUnistyles(MessageSquareText);
 const ThemedSearch = withUnistyles(Search);
@@ -868,23 +870,19 @@ function WorkspaceListActions() {
 
 /**
  * The sidebar's list swapped for the archived chats. The title says which list this is,
- * because the rows alone look like the active ones.
+ * because the rows alone look like the active ones. Back sits before the title, the way
+ * settings leads with "Back to workspace": an X here would sit under the compact overlay's
+ * own close button and mean something else.
  */
 function SidebarArchivedView({ onChatPress }: { onChatPress?: () => void }) {
   const { t } = useTranslation();
   const setListView = useSidebarViewStore((state) => state.setListView);
-  const handleClose = useCallback(() => setListView("chats"), [setListView]);
+  const handleBack = useCallback(() => setListView("chats"), [setListView]);
 
   return (
     <View style={styles.archivedView}>
       <View style={styles.archivedHeaderRail}>
-        <View style={styles.workspaceListActionsHeader}>
-          <View style={styles.archivedTitleGroup}>
-            <ThemedArchive size={14} uniProps={foregroundMutedColorMapping} />
-            <Text style={styles.archivedTitle} numberOfLines={1}>
-              {t("sidebar.archived.title")}
-            </Text>
-          </View>
+        <View style={styles.archivedHeader}>
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <Pressable
@@ -892,10 +890,10 @@ function SidebarArchivedView({ onChatPress }: { onChatPress?: () => void }) {
                 accessibilityLabel={t("sidebar.archived.close")}
                 testID="sidebar-archived-close"
                 style={sidebarHeaderIconButtonStyle}
-                onPress={handleClose}
+                onPress={handleBack}
               >
                 {({ hovered, pressed }) => (
-                  <ThemedX
+                  <ThemedArrowLeft
                     size={14}
                     uniProps={
                       hovered || pressed ? foregroundColorMapping : foregroundMutedColorMapping
@@ -904,10 +902,13 @@ function SidebarArchivedView({ onChatPress }: { onChatPress?: () => void }) {
                 )}
               </Pressable>
             </TooltipTrigger>
-            <TooltipContent side="bottom" align="center" offset={8}>
+            <TooltipContent side="bottom" align="start" offset={8}>
               <IconTooltipContent label={t("sidebar.archived.close")} />
             </TooltipContent>
           </Tooltip>
+          <Text style={styles.archivedTitle} numberOfLines={1}>
+            {t("sidebar.archived.title")}
+          </Text>
         </View>
       </View>
       <SidebarArchivedChats onChatPress={onChatPress} />
@@ -977,12 +978,16 @@ const styles = StyleSheet.create((theme) => ({
   archivedHeaderRail: {
     paddingHorizontal: theme.spacing[2],
   },
-  archivedTitleGroup: {
+  archivedHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[2],
-    flexShrink: 1,
-    minWidth: 0,
+    gap: theme.spacing[1],
+    // Same height as the Chats header, so swapping lists leaves the search field and rows
+    // where the eye expects them. The arrow's ink sits 7px inside its 28px button; 1px more
+    // puts it on the rows' text rail.
+    marginLeft: 1,
+    paddingTop: theme.spacing[1],
+    paddingBottom: theme.spacing[1],
   },
   archivedTitle: {
     flexShrink: 1,

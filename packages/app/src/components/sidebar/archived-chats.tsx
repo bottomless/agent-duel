@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import {
   FlatList,
   Pressable,
@@ -11,6 +19,7 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { AgentSearchMatch } from "@getpaseo/protocol/messages";
+import type { MatchRange } from "@getpaseo/protocol/search/text-match";
 import { Button } from "@/components/ui/button";
 import { HighlightedText } from "@/components/ui/highlighted-text";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -18,14 +27,20 @@ import { SearchField } from "@/components/ui/search-field";
 import { useAgentHistory } from "@/hooks/use-agent-history";
 import type { AggregatedAgent } from "@/hooks/use-aggregated-agents";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { resolveSidebarServerIds } from "@/hooks/use-sidebar-workspaces-list";
+import { useHostRegistryLoaded, useHosts } from "@/runtime/host-runtime";
 import {
   type ActiveWorkspaceSelection,
   useActiveWorkspaceSelection,
 } from "@/stores/navigation-active-workspace-store";
 import { useSessionStore } from "@/stores/session-store";
+import { useSidebarViewStore } from "@/stores/sidebar-view-store";
+import { getFocusedAgentId } from "@/stores/workspace-layout-actions";
+import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import type { Theme } from "@/styles/theme";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { formatCompactTimeAgo } from "@/utils/time";
+import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import {
   useWorkspaceRecoveryHistory,
   WorkspaceRecoveryHistory,
@@ -72,21 +87,78 @@ function selectActiveAgentKeys(state: ReturnType<typeof useSessionStore.getState
  * Asks again when a chat is archived or unarchived while the list is open — from the
  * workspace menu, the CLI, or auto-archive after a merge. Opening the list already asks.
  */
-function useRefetchOnArchiveChange(refetch: () => Promise<void>) {
+function useRefetchOnArchiveChange(refetch: () => void) {
   const activeAgentKeys = useSessionStore(selectActiveAgentKeys);
   const previousKeys = useRef(activeAgentKeys);
   useEffect(() => {
     if (previousKeys.current === activeAgentKeys) return;
     previousKeys.current = activeAgentKeys;
-    void refetch();
+    refetch();
   }, [activeAgentKeys, refetch]);
 }
 
-function isChatSelected(agent: AggregatedAgent, selection: ActiveWorkspaceSelection | null) {
+/**
+ * When the open chat leaves this list under the same query, it was unarchived or restored
+ * and its row is back in Chats, so the sidebar goes there instead of showing nothing selected.
+ */
+function useReturnToChatsWhenOpenChatLeaves(input: {
+  items: readonly ArchivedChatListItem[];
+  selectedKeys: readonly string[];
+  search: string;
+  /** False while a first page loads: an empty list then says nothing about the open chat. */
+  settled: boolean;
+}) {
+  const setListView = useSidebarViewStore((state) => state.setListView);
+  const previous = useRef({ search: input.search, selectedKeys: input.selectedKeys });
+  useEffect(() => {
+    if (!input.settled) return;
+    const before = previous.current;
+    previous.current = { search: input.search, selectedKeys: input.selectedKeys };
+    if (before.search !== input.search || before.selectedKeys.length === 0) return;
+    const listedKeys = new Set(input.items.map((item) => item.key));
+    if (before.selectedKeys.some((key) => !listedKeys.has(key))) {
+      setListView("chats");
+    }
+  }, [input.items, input.search, input.selectedKeys, input.settled, setListView]);
+}
+
+/**
+ * The row for the chat on screen. A workspace can hold several archived agents, so the
+ * focused tab picks one; with no agent tab focused, every row of that workspace qualifies.
+ */
+function isChatSelected(
+  agent: AggregatedAgent,
+  selection: ActiveWorkspaceSelection | null,
+  focusedAgentId: string | null,
+) {
   return (
     selection !== null &&
     selection.serverId === agent.serverId &&
-    selection.workspaceId === agent.workspaceId
+    selection.workspaceId === agent.workspaceId &&
+    (focusedAgentId === null || focusedAgentId === agent.id)
+  );
+}
+
+function useFocusedAgentId(selection: ActiveWorkspaceSelection | null): string | null {
+  const workspaceKey = selection ? buildWorkspaceTabPersistenceKey(selection) : null;
+  return useWorkspaceLayoutStore((state) =>
+    workspaceKey ? getFocusedAgentId(state.layoutByWorkspace[workspaceKey]) : null,
+  );
+}
+
+/** The hosts the sidebar lists, so Archived follows the same host filter as Chats. */
+function useSidebarServerIds(): string[] {
+  const hosts = useHosts();
+  const hostRegistryLoaded = useHostRegistryLoaded();
+  const hostFilters = useSidebarViewStore((state) => state.hostFilters);
+  return useMemo(
+    () =>
+      resolveSidebarServerIds({
+        allServerIds: hosts.map((host) => host.serverId),
+        hostFilters,
+        hostRegistryLoaded,
+      }),
+    [hostFilters, hostRegistryLoaded, hosts],
   );
 }
 
@@ -103,6 +175,7 @@ export function SidebarArchivedChats({
   const { t } = useTranslation();
   const [searchInput, setSearchInput] = useState("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
+  const serverIds = useSidebarServerIds();
   const {
     agents,
     hasMore,
@@ -115,21 +188,33 @@ export function SidebarArchivedChats({
     hostErrors,
     loadMore,
     refreshAll,
-  } = useAgentHistory({ serverId: null, search, archivedOnly: true });
+  } = useAgentHistory({ serverIds, search, archivedOnly: true });
   const isSearching = isSearchSupported && search.length > 0;
-  const recoveries = useWorkspaceRecoveryHistory(null, search);
+  const recoveries = useWorkspaceRecoveryHistory(serverIds, search);
   const refreshRecoveries = recoveries.refresh;
   const selection = useActiveWorkspaceSelection();
+  const focusedAgentId = useFocusedAgentId(selection);
+  const showHost = serverIds.length > 1;
 
   const items = useMemo(
     () => buildArchivedChatListItems({ agents, grouped: !isSearching }),
     [agents, isSearching],
   );
+  const selectedKeys = useMemo(
+    () =>
+      items.flatMap((item) =>
+        item.kind === "chat" && isChatSelected(item.agent, selection, focusedAgentId)
+          ? [item.key]
+          : [],
+      ),
+    [focusedAgentId, items, selection],
+  );
+  useReturnToChatsWhenOpenChatLeaves({ items, selectedKeys, search, settled: !isInitialLoad });
 
   const handleRefresh = useCallback(() => {
     void Promise.all([refreshAll(), refreshRecoveries()]);
   }, [refreshAll, refreshRecoveries]);
-  useRefetchOnArchiveChange(refreshAll);
+  useRefetchOnArchiveChange(handleRefresh);
   const handleClearSearch = useCallback(() => setSearchInput(""), []);
   const handleChatPress = useCallback(
     (agent: AggregatedAgent) => {
@@ -152,13 +237,14 @@ export function SidebarArchivedChats({
       return (
         <ArchivedChatRow
           agent={item.agent}
-          selected={isChatSelected(item.agent, selection)}
+          selected={selectedKeys.includes(item.key)}
+          showHost={showHost}
           searchMatches={isSearching ? searchMatchesByAgentKey[item.key] : undefined}
           onPress={handleChatPress}
         />
       );
     },
-    [handleChatPress, isSearching, searchMatchesByAgentKey, selection, t],
+    [handleChatPress, isSearching, searchMatchesByAgentKey, selectedKeys, showHost, t],
   );
 
   const listHeader = useMemo(
@@ -267,14 +353,53 @@ function archivedChatKey(item: ArchivedChatListItem): string {
   return item.key;
 }
 
+interface ArchivedChatDetail {
+  key: string;
+  text: string;
+  ranges?: readonly MatchRange[];
+}
+
+/**
+ * Where the chat lived, after its title: project, workspace, branch, and the host when the
+ * list spans several. Search matches all four, so each one shown carries its own marks.
+ */
+function buildArchivedChatDetails(input: {
+  agent: AggregatedAgent;
+  showHost: boolean;
+  rangesFor: (field: AgentSearchMatch["field"]) => readonly MatchRange[] | undefined;
+}): ArchivedChatDetail[] {
+  const { agent, rangesFor } = input;
+  const projectName = agent.projectPlacement?.projectName ?? "";
+  const workspaceName = agent.projectPlacement?.workspaceName ?? "";
+  const branch = agent.projectPlacement?.checkout.currentBranch ?? "";
+  const details: ArchivedChatDetail[] = [];
+  if (projectName) {
+    details.push({ key: "project", text: projectName, ranges: rangesFor("project") });
+  }
+  // Most workspaces are named after their chat or their branch, and an untitled chat
+  // already shows its workspace as the title; only a name that adds something is shown.
+  if (agent.title && workspaceName && workspaceName !== agent.title && workspaceName !== branch) {
+    details.push({ key: "workspace", text: workspaceName, ranges: rangesFor("workspace") });
+  }
+  if (branch) {
+    details.push({ key: "branch", text: branch, ranges: rangesFor("branch") });
+  }
+  if (input.showHost && agent.serverLabel) {
+    details.push({ key: "host", text: agent.serverLabel });
+  }
+  return details;
+}
+
 function ArchivedChatRow({
   agent,
   selected,
+  showHost,
   searchMatches,
   onPress,
 }: {
   agent: AggregatedAgent;
   selected: boolean;
+  showHost: boolean;
   searchMatches?: readonly AgentSearchMatch[];
   onPress: (agent: AggregatedAgent) => void;
 }): ReactElement {
@@ -292,7 +417,6 @@ function ArchivedChatRow({
   const rangesFor = (field: AgentSearchMatch["field"]) =>
     searchMatches?.find((match) => match.field === field)?.ranges;
   const workspaceName = agent.projectPlacement?.workspaceName ?? "";
-  const projectName = agent.projectPlacement?.projectName ?? "";
   // The agent's title is what the chat was called; an untitled one falls back to its workspace.
   const title = agent.title || workspaceName || t("agentList.fallbackTitle");
   let titleRanges = undefined;
@@ -301,13 +425,15 @@ function ArchivedChatRow({
   } else if (workspaceName) {
     titleRanges = rangesFor("workspace");
   }
+  const details = buildArchivedChatDetails({ agent, showHost, rangesFor });
+  const accessibilityLabel = [title, ...details.map((detail) => detail.text)].join(", ");
 
   return (
     <Pressable
       style={rowStyle}
       onPress={handlePress}
       accessibilityRole="button"
-      accessibilityLabel={projectName ? `${title}, ${projectName}` : title}
+      accessibilityLabel={accessibilityLabel}
       testID={`archived-chat-${agent.serverId}-${agent.id}`}
     >
       <View style={styles.rowText}>
@@ -317,13 +443,15 @@ function ArchivedChatRow({
           numberOfLines={1}
           style={selected ? styles.titleSelected : styles.title}
         />
-        {projectName ? (
-          <HighlightedText
-            text={projectName}
-            ranges={rangesFor("project")}
-            numberOfLines={1}
-            style={styles.project}
-          />
+        {details.length > 0 ? (
+          <Text numberOfLines={1} style={styles.details}>
+            {details.map((detail, index) => (
+              <Fragment key={detail.key}>
+                {index > 0 ? " · " : null}
+                <HighlightedText text={detail.text} ranges={detail.ranges} />
+              </Fragment>
+            ))}
+          </Text>
         ) : null}
       </View>
       <Text style={styles.time}>{formatCompactTimeAgo(agent.lastActivityAt)}</Text>
@@ -398,7 +526,7 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
   },
-  project: {
+  details: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.xs,
   },

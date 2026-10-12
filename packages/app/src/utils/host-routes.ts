@@ -264,6 +264,19 @@ export function parseServerIdFromPathname(pathname: string): string | null {
   return trimNonEmpty(decodeSegment(raw));
 }
 
+/**
+ * Whether the route draws the app chrome, sidebar included: the global new-chat and
+ * open-project screens, and any route on a host this app knows.
+ */
+export function routeShowsAppChrome(pathname: string, knownServerIds: readonly string[]): boolean {
+  const pathOnly = stripSearchAndHash(pathname);
+  if (pathOnly === "/open-project" || pathOnly === "/new") {
+    return true;
+  }
+  const serverId = parseServerIdFromPathname(pathOnly);
+  return serverId !== null && knownServerIds.includes(serverId);
+}
+
 export function parseHostAgentRouteFromPathname(
   pathname: string,
 ): { serverId: string; agentId: string } | null {

@@ -30,6 +30,18 @@ describe("deriveArchivedChatSection", () => {
     expect(deriveArchivedChatSection(new Date(2026, 8, 20, 12, 0), NOW)).toBe("thisMonth");
     expect(deriveArchivedChatSection(new Date(2026, 6, 1, 12, 0), NOW)).toBe("older");
   });
+
+  it("keeps yesterday after a night the clock fell back", () => {
+    const originalTz = process.env.TZ;
+    // Daylight saving ends on November 1, 2026 here, so that day lasts 25 hours.
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      const now = new Date(2026, 10, 2, 10, 0);
+      expect(deriveArchivedChatSection(new Date(2026, 10, 1, 0, 30), now)).toBe("yesterday");
+    } finally {
+      process.env.TZ = originalTz;
+    }
+  });
 });
 
 describe("buildArchivedChatListItems", () => {

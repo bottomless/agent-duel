@@ -14,20 +14,20 @@ const SECTION_ORDER = [
   "older",
 ] as const satisfies readonly ArchivedChatSection[];
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function startOfLocalDay(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+/**
+ * Midnight `daysBefore` calendar days before `date`. Days are counted on the calendar, not
+ * in 24-hour steps, because a day that changes the clock lasts 23 or 25 hours.
+ */
+function startOfLocalDay(date: Date, daysBefore = 0): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() - daysBefore).getTime();
 }
 
 export function deriveArchivedChatSection(lastActivityAt: Date, now: Date): ArchivedChatSection {
-  const today = startOfLocalDay(now);
   const day = startOfLocalDay(lastActivityAt);
-  if (day >= today) return "today";
-  if (day >= today - DAY_MS) return "yesterday";
-  const daysAgo = Math.floor((today - day) / DAY_MS);
-  if (daysAgo <= 7) return "thisWeek";
-  if (daysAgo <= 30) return "thisMonth";
+  if (day >= startOfLocalDay(now)) return "today";
+  if (day >= startOfLocalDay(now, 1)) return "yesterday";
+  if (day >= startOfLocalDay(now, 7)) return "thisWeek";
+  if (day >= startOfLocalDay(now, 30)) return "thisMonth";
   return "older";
 }
 

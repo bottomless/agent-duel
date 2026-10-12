@@ -297,6 +297,8 @@ export async function fetchAgentHistoryBatch(input: {
 
 export function useAgentHistory(options: {
   serverId?: string | null;
+  /** The hosts to ask when `serverId` is not set; every host when this is absent too. */
+  serverIds?: readonly string[];
   enabled?: boolean;
   search?: string;
   archivedOnly?: boolean;
@@ -321,7 +323,12 @@ export function useAgentHistory(options: {
   const { targetHosts, unreachableHosts } = useMemo(() => {
     void runtimeVersion;
     const serverLabelById = new Map(daemons.map((daemon) => [daemon.serverId, daemon.label]));
-    const serverIds = serverId ? [serverId] : daemons.map((daemon) => daemon.serverId);
+    let serverIds: readonly string[] = daemons.map((daemon) => daemon.serverId);
+    if (serverId) {
+      serverIds = [serverId];
+    } else if (options.serverIds) {
+      serverIds = options.serverIds;
+    }
     const hosts: AgentHistoryHost[] = [];
     const unreachable: AgentHistoryHostError[] = [];
 
@@ -337,7 +344,7 @@ export function useAgentHistory(options: {
     }
 
     return { targetHosts: hosts, unreachableHosts: unreachable };
-  }, [daemons, runtime, runtimeVersion, serverId]);
+  }, [daemons, options.serverIds, runtime, runtimeVersion, serverId]);
   const targetServerIds = useMemo(() => targetHosts.map((host) => host.serverId), [targetHosts]);
   // One gate, checked before the field is offered: a fleet where any host
   // predates search has no search, rather than a list that silently omits that

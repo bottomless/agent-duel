@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { router, usePathname, type Href } from "expo-router";
 import { useTranslation } from "react-i18next";
 import {
@@ -16,6 +16,7 @@ import { getIsElectronRuntime, useIsCompactFormFactor } from "@/constants/layout
 import { useKeyboardShortcutOverrides } from "@/hooks/use-keyboard-shortcut-overrides";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
 import { keyboardActionDispatcher } from "@/keyboard/keyboard-action-dispatcher";
+import { useHosts } from "@/runtime/host-runtime";
 import { useKeyboardShortcutsAvailable } from "@/keyboard/availability";
 import { resolveShortcutKeysForAction } from "@/keyboard/keyboard-shortcuts";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
@@ -23,7 +24,11 @@ import { navigateToLastWorkspace } from "@/stores/navigation-active-workspace-st
 import { usePanelStore } from "@/stores/panel-store";
 import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { clearCommandCenterFocusRestoreElement } from "@/utils/command-center-focus-restore";
-import { buildOpenProjectRoute, buildSettingsRoute } from "@/utils/host-routes";
+import {
+  buildOpenProjectRoute,
+  buildSettingsRoute,
+  routeShowsAppChrome,
+} from "@/utils/host-routes";
 import { getShortcutOs } from "@/utils/shortcut-platform";
 import type { CommandCenterContribution, CommandCenterIconProps } from "./contributions";
 import { useCommandCenterActions } from "./provider";
@@ -80,10 +85,6 @@ function CircleDashedIcon({ size }: CommandCenterIconProps) {
   return <ThemedCircleDashed size={size} strokeWidth={2.2} />;
 }
 
-function hasSidebar(pathname: string): boolean {
-  return pathname.startsWith("/h/") || pathname === "/open-project" || pathname === "/new";
-}
-
 export function CommandCenterRootActions() {
   const { t } = useTranslation();
   const { overrides } = useKeyboardShortcutOverrides();
@@ -93,6 +94,13 @@ export function CommandCenterRootActions() {
   const homeRoute = useMemo<Href>(() => buildOpenProjectRoute(), []);
   const pathname = usePathname();
   const isCompact = useIsCompactFormFactor();
+  const hosts = useHosts();
+  // Read when "Archived chats" runs, so moving between routes does not re-register every
+  // root action.
+  const placementRef = useRef({ pathname, isCompact, hosts });
+  useEffect(() => {
+    placementRef.current = { pathname, isCompact, hosts };
+  }, [hosts, isCompact, pathname]);
   const setShortcutsDialogOpen = useKeyboardShortcutsStore((state) => state.setShortcutsDialogOpen);
   // Narrow selector on purpose: a whole-store subscription would re-register every root action
   // each time host filters are reconciled.
@@ -173,12 +181,17 @@ export function CommandCenterRootActions() {
         visibility: "always",
         run: () => {
           clearCommandCenterFocusRestoreElement();
+          const placement = placementRef.current;
+          const knownServerIds = placement.hosts.map((host) => host.serverId);
           // Settings and the welcome screen draw no sidebar, so leave them for a screen that does.
-          if (!hasSidebar(pathname) && !navigateToLastWorkspace()) {
+          if (
+            !routeShowsAppChrome(placement.pathname, knownServerIds) &&
+            !navigateToLastWorkspace()
+          ) {
             router.push(homeRoute);
           }
           setListView("archived");
-          openAgentListForLayout({ isCompact });
+          openAgentListForLayout({ isCompact: placement.isCompact });
         },
         presentation: {
           kind: "action",
@@ -248,11 +261,9 @@ export function CommandCenterRootActions() {
   }, [
     groupMode,
     homeRoute,
-    isCompact,
     openAddProject,
     openAgentListForLayout,
     overrides,
-    pathname,
     setGroupMode,
     setListView,
     setShortcutsDialogOpen,

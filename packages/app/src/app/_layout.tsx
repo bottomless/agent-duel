@@ -119,7 +119,7 @@ import {
 import {
   buildOpenProjectRoute,
   parseHostWorkspaceRouteFromPathname,
-  parseServerIdFromPathname,
+  routeShowsAppChrome,
 } from "@/utils/host-routes";
 import { buildNotificationRoute, resolveNotificationTarget } from "@/utils/notification-routing";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
@@ -895,11 +895,8 @@ function AppWithSidebar({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const hosts = useHosts();
   const storeReady = useStoreReady();
-  const routeServerId = useMemo(() => parseServerIdFromPathname(pathname), [pathname]);
-  const routeHasKnownHost =
-    routeServerId !== null && hosts.some((host) => host.serverId === routeServerId);
-  const shouldShowAppChrome =
-    storeReady && (pathname === "/open-project" || pathname === "/new" || routeHasKnownHost);
+  const knownServerIds = useMemo(() => hosts.map((host) => host.serverId), [hosts]);
+  const shouldShowAppChrome = storeReady && routeShowsAppChrome(pathname, knownServerIds);
 
   return <AppContainer chromeEnabled={shouldShowAppChrome}>{children}</AppContainer>;
 }

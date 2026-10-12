@@ -20,6 +20,7 @@ import {
   parseHostWorkspaceOpenIntentFromPathname,
   parseHostWorkspaceRouteFromPathname,
   parseWorkspaceOpenIntent,
+  routeShowsAppChrome,
   stripHostWorkspaceRouteEchoSearch,
 } from "./host-routes";
 
@@ -195,6 +196,23 @@ describe("projects settings routes", () => {
 
   it("keeps route ids opaque", () => {
     expect(normalizeProjectSettingsRouteId("project%2F1")).toBe("project%2F1");
+  });
+});
+
+describe("routeShowsAppChrome", () => {
+  it("draws the chrome on the global new-chat and open-project screens", () => {
+    expect(routeShowsAppChrome("/new", [])).toBe(true);
+    expect(routeShowsAppChrome("/open-project", [])).toBe(true);
+  });
+
+  it("draws the chrome on a known host's routes only", () => {
+    expect(routeShowsAppChrome("/h/local/workspace/ws-1", ["local"])).toBe(true);
+    expect(routeShowsAppChrome("/h/remote/workspace/ws-1", ["local"])).toBe(false);
+  });
+
+  it("leaves settings and the welcome screen without it", () => {
+    expect(routeShowsAppChrome("/settings/general", ["local"])).toBe(false);
+    expect(routeShowsAppChrome("/welcome", ["local"])).toBe(false);
   });
 });
 

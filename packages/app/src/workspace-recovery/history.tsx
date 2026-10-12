@@ -14,7 +14,8 @@ import { toErrorMessage } from "@/utils/error-messages";
 type Recovery = Awaited<ReturnType<DaemonClient["listWorkspaceRecoveries"]>>[number];
 type RecoveryRow = Recovery & { serverId: string; hostName: string };
 
-export function useWorkspaceRecoveryHistory(serverId: string | null, search: string) {
+/** Interrupted forks on the given hosts, or on every host when `serverIds` is null. */
+export function useWorkspaceRecoveryHistory(serverIds: readonly string[] | null, search: string) {
   const hosts = useHosts();
   const runtime = getHostRuntimeStore();
   useSyncExternalStore(
@@ -22,7 +23,7 @@ export function useWorkspaceRecoveryHistory(serverId: string | null, search: str
     () => runtime.getVersion(),
     () => runtime.getVersion(),
   );
-  const targets = hosts.filter((host) => !serverId || host.serverId === serverId);
+  const targets = hosts.filter((host) => !serverIds || serverIds.includes(host.serverId));
   const queries = useFetchQueries<Recovery[]>(
     targets.map((host) => {
       const snapshot = runtime.getSnapshot(host.serverId);
