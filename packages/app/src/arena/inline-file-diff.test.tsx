@@ -8,7 +8,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.stubGlobal("React", React);
 vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 
-import { InlineFileDiff } from "./inline-file-diff";
+// The tooltip animates with reanimated, which jsdom cannot host. Its trigger is the button
+// itself, so the stand-in keeps that button and drops the hover label.
+vi.mock("@/components/ui/tooltip", async () => {
+  const { Pressable } = await import("react-native");
+  return {
+    Tooltip: ({ children }: { children: React.ReactElement }) => children,
+    TooltipTrigger: (props: React.ComponentProps<typeof Pressable>) => <Pressable {...props} />,
+    TooltipContent: () => null,
+  };
+});
+
+import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
+import { arenaChangesRows } from "./changes-rows";
 import {
   rewrite,
   sameResult,
@@ -150,6 +162,11 @@ describe("InlineFileDiff", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Expand Agent B");
   });
 
+  it("names its file on the viewer, so a scroll is credited to the right diff", () => {
+    act(() => root.render(<InlineFileDiff diff={shortConflict()} file="main.py" layout="split" />));
+    expect(byTestId("arena-inline-diff")?.getAttribute("data-diff-file")).toBe("main.py");
+  });
+
   it("resets detail mode when the layout or turn changes", () => {
     const diff = shortConflict();
     act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" />));
@@ -160,5 +177,30 @@ describe("InlineFileDiff", () => {
     diff.turnID = "next-turn";
     act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="single" />));
     expect(byTestId("arena-inline-diff")?.getAttribute("data-detail-side")).toBe("both");
+  });
+});
+
+describe("openChangesFiles", () => {
+  const rows = arenaChangesRows(shortConflict());
+
+  it("opens the default file until the reader chooses", () => {
+    expect(openChangesFiles(rows, undefined)).toEqual(["main.py"]);
+  });
+
+  it("keeps every diff closed once the reader closed them", () => {
+    expect(openChangesFiles(rows, [])).toEqual([]);
+  });
+
+  it("drops chosen files that are gone, and falls back to the default when none are left", () => {
+    expect(openChangesFiles(rows, ["deleted.py", "main.py"])).toEqual(["main.py"]);
+    expect(openChangesFiles(rows, ["deleted.py"])).toEqual(["main.py"]);
+  });
+});
+
+describe("toggleChangesFile", () => {
+  it("opens a closed file after the ones already open and closes an open one", () => {
+    expect(toggleChangesFile(["a.py"], "b.py")).toEqual(["a.py", "b.py"]);
+    expect(toggleChangesFile(["a.py", "b.py"], "a.py")).toEqual(["b.py"]);
+    expect(toggleChangesFile(["a.py"], "a.py")).toEqual([]);
   });
 });

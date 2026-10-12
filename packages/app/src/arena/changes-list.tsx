@@ -1,38 +1,101 @@
-import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
-import { StyleSheet } from "react-native-unistyles";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react-native";
 import { DiffStat } from "@/components/diff-stat";
+import { Button } from "@/components/ui/button";
+import { ICON_SIZE, type Theme } from "@/styles/theme";
 import type { ArenaChangesRow } from "./changes-rows";
 import { divergenceStatusLabel } from "./divergence";
+
+const ThemedChevronDown = withUnistyles(ChevronDown);
+const ThemedChevronRight = withUnistyles(ChevronRight);
+const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+
+/**
+ * Rows shown before the rest wait behind "Show more". A battle that touched hundreds of files
+ * otherwise grows the list past the screen and pushes both agents' messages away. The list does
+ * not scroll inside itself, because the diffs it holds scroll inside themselves. An open row
+ * past these, such as a default file deep in the list, shows after them on its own rather than
+ * pulling in every row above it.
+ */
+const VISIBLE_ROWS = 8;
 
 /**
  * The files a battle touched, one row each, with what A and B did to them.
  *
- * Pressing a row shows that file's diff under the list; the row is the only
- * control here. git's verdict and the per-side counts are words, not pills,
- * so nothing on the row reads as a tab. Hover follows docs/hover.md: a plain
- * View tracks the pointer, the Pressable inside it takes the press.
+ * Pressing a row opens that file's diff right under it, and pressing it again
+ * closes it, the way a file header toggles its diff in a code review; several
+ * can be open at once, and the chevron says which state each row is in. The
+ * open row is the diff's header, so the diff carries no close control of its
+ * own. git's verdict and the per-side counts are words, not pills, so nothing
+ * on the row reads as a tab. Hover follows docs/hover.md: a plain View tracks
+ * the pointer, the Pressable inside it takes the press.
  */
 export const ArenaChangesList = memo(function ArenaChangesList({
   rows,
-  onSelect,
-  selectedFile,
+  openFiles,
+  onToggle,
+  renderDiff,
 }: {
   rows: readonly ArenaChangesRow[];
-  onSelect: (file: string) => void;
-  /** The row the side panel is showing, when the list sits inside it. */
-  selectedFile?: string;
+  /** The rows whose diffs are open. */
+  openFiles: readonly string[];
+  /** Opens a closed row's diff or closes an open one. */
+  onToggle: (file: string) => void;
+  /** The diff that opens under a row. */
+  renderDiff: (file: string) => ReactNode;
 }) {
+  const [showAll, setShowAll] = useState(false);
+  // Rows past the first ones that have been open while the rest were hidden. Closing one leaves
+  // it where it is, so the row the reader just pressed does not vanish from under the pointer.
+  const [kept, setKept] = useState<readonly string[]>([]);
+  const toggleShowAll = useCallback(() => {
+    setShowAll((shown) => !shown);
+    setKept([]);
+  }, []);
+  const beyond = showAll ? [] : rows.slice(VISIBLE_ROWS);
+  const newlyOpen = beyond
+    .filter((row) => openFiles.includes(row.file) && !kept.includes(row.file))
+    .map((row) => row.file);
+  if (newlyOpen.length > 0) setKept([...kept, ...newlyOpen]);
+  const pinned = beyond.filter((row) => openFiles.includes(row.file) || kept.includes(row.file));
+  const visible = showAll ? rows : [...rows.slice(0, VISIBLE_ROWS), ...pinned];
+  const hidden = rows.length - visible.length;
+  const footer = hidden > 0 || (showAll && rows.length > VISIBLE_ROWS);
   return (
     <View style={styles.list} testID="arena-changes-list">
-      {rows.map((row) => (
-        <ChangesRow
-          key={row.file}
-          row={row}
-          onSelect={onSelect}
-          selected={row.file === selectedFile}
-        />
-      ))}
+      {visible.map((row, index) => {
+        const open = openFiles.includes(row.file);
+        const lastItem = index === visible.length - 1 && !footer;
+        return (
+          <Fragment key={row.file}>
+            <ChangesRow row={row} onToggle={onToggle} open={open} />
+            {open ? (
+              <View
+                style={[styles.diffBand, lastItem && styles.diffBandLast]}
+                testID={`arena-changes-diff-${row.file}`}
+              >
+                {renderDiff(row.file)}
+              </View>
+            ) : null}
+          </Fragment>
+        );
+      })}
+      {footer ? (
+        <Button
+          variant="ghost"
+          size="xs"
+          leftIcon={hidden > 0 ? ChevronDown : ChevronUp}
+          onPress={toggleShowAll}
+          style={styles.more}
+          testID="arena-changes-more"
+        >
+          {hidden > 0
+            ? `Show ${hidden} more ${hidden === 1 ? "file" : "files"}`
+            : "Show fewer files"}
+        </Button>
+      ) : null}
     </View>
   );
 });
@@ -45,18 +108,18 @@ function statusStyle(status: NonNullable<ArenaChangesRow["status"]>) {
 
 function ChangesRow({
   row,
-  onSelect,
-  selected,
+  onToggle,
+  open,
 }: {
   row: ArenaChangesRow;
-  onSelect: (file: string) => void;
-  selected: boolean;
+  onToggle: (file: string) => void;
+  open: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const handlePointerEnter = useCallback(() => setHovered(true), []);
   const handlePointerLeave = useCallback(() => setHovered(false), []);
-  const handlePress = useCallback(() => onSelect(row.file), [onSelect, row.file]);
-  const accessibilityState = useMemo(() => ({ selected }), [selected]);
+  const handlePress = useCallback(() => onToggle(row.file), [onToggle, row.file]);
+  const accessibilityState = useMemo(() => ({ expanded: open }), [open]);
   return (
     <View
       style={styles.rowContainer}
@@ -65,12 +128,17 @@ function ChangesRow({
     >
       <Pressable
         onPress={handlePress}
-        style={[styles.row, hovered && styles.rowHovered, selected && styles.rowSelected]}
+        style={[styles.row, hovered && styles.rowHovered, open && styles.rowOpen]}
         accessibilityRole="button"
         accessibilityState={accessibilityState}
-        accessibilityLabel={`Show the diff of ${row.file}`}
+        accessibilityLabel={`${open ? "Hide" : "Show"} the diff of ${row.file}`}
         testID={`arena-changes-row-${row.file}`}
       >
+        {open ? (
+          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
+        ) : (
+          <ThemedChevronRight size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
+        )}
         <Text style={styles.file} numberOfLines={1}>
           {row.file}
         </Text>
@@ -116,6 +184,20 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface0,
     overflow: "hidden",
   },
+  // An open diff is a band between its row and the next, one hairline above and below.
+  diffBand: {
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  // The list's own border already closes the last band.
+  diffBandLast: {
+    borderBottomWidth: 0,
+  },
+  // The button's padding matches the rows', so its chevron sits on the rows' chevron rail.
+  more: {
+    alignSelf: "flex-start",
+  },
   rowContainer: {
     position: "relative",
   },
@@ -133,7 +215,7 @@ const styles = StyleSheet.create((theme) => ({
   rowHovered: {
     backgroundColor: theme.colors.surface2,
   },
-  rowSelected: {
+  rowOpen: {
     backgroundColor: theme.colors.surface2,
   },
   file: {

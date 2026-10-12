@@ -402,6 +402,7 @@ function contestantResponse(
 function installOpenRouterStub(options?: {
   readonly delayedOrdinal?: number
   readonly delayMs?: number
+  readonly delayAllMs?: number
   readonly assignmentError?: string
   readonly questionOrdinals?: ReadonlyArray<number>
   readonly emptyOrdinals?: ReadonlyArray<number>
@@ -513,7 +514,8 @@ function installOpenRouterStub(options?: {
     calls.set(body.model, count)
     const number = ordinal.get(body.model) ?? ordinal.size + 1
     ordinal.set(body.model, number)
-    if (options?.delayedOrdinal === number) await Bun.sleep(options.delayMs ?? 0)
+    if (options?.delayAllMs !== undefined) await Bun.sleep(options.delayAllMs)
+    else if (options?.delayedOrdinal === number) await Bun.sleep(options.delayMs ?? 0)
     const latestUserMessage = body.messages?.findLast((message) => message.role === "user")
     const requestText = JSON.stringify(latestUserMessage?.content ?? "")
     const normalFixture = requestText.includes("canonical normal turn") || requestText.includes("without a battle")
@@ -2618,6 +2620,302 @@ describe("Arena service vertical slice", () => {
       router.restore()
     }
   }, 30_000)
+
+  test("interrupts a queued steer and resumes the same contestant session", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure interrupt steer fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ delayAllMs: 5_000 })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Interrupt queued steer",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Run a tool before answering." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted interrupt turn")
+
+      const deadline = Date.now() + 60_000
+      let target: RunDocument | undefined
+      while (Date.now() < deadline) {
+        const turn = await memory.store.turn(turnID)
+        const runs = await memory.store.runsForTurn(turnID)
+        target = turn?.state === "running" ? runs.find((run) => run.runState === "pending") : undefined
+        if (target && router.contestantRequests.length >= 2) break
+        await Bun.sleep(10)
+      }
+      if (!target) throw new Error("Arena did not keep a contestant running for interruption")
+
+      expect(
+        (
+          await request(`/arena/turns/${turnID}/reply`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ prompt: "Use the queued steer.", target: target.side }),
+          })
+        ).status,
+      ).toBe(200)
+
+      let pendingMessageID: string | undefined
+      while (Date.now() < deadline) {
+        const messages = await json<Array<{ info: { id: string; role: string }; parts: readonly unknown[] }>>(
+          await request(`/session/${target.rootSessionID}/message`, { headers }),
+        )
+        pendingMessageID = messages.findLast(
+          (message) => message.info.role === "user" && message.info.id !== target!.promptMessageID,
+        )?.info.id
+        if (pendingMessageID) break
+        await Bun.sleep(10)
+      }
+      if (!pendingMessageID) throw new Error("Arena did not persist the queued steer")
+
+      const requestBoundary = router.contestantRequests.length
+      const interrupted = await request(
+        `/arena/runs/${target._id}/steer/${encodeURIComponent(pendingMessageID)}/interrupt`,
+        { method: "POST", headers },
+      )
+      expect(interrupted.status).toBe(200)
+
+      while (Date.now() < deadline) {
+        const turn = await memory.store.turn(turnID)
+        const runs = await memory.store.runsForTurn(turnID)
+        if (
+          turn?.state === "running" &&
+          runs.some((run) => run._id === target!._id && run.runState === "pending") &&
+          router.contestantRequests.length > requestBoundary
+        )
+          break
+        await Bun.sleep(10)
+      }
+      const resumedTurn = await memory.store.turn(turnID)
+      const resumedRun = (await memory.store.runsForTurn(turnID)).find((run) => run._id === target!._id)
+      if (resumedTurn?.state !== "running" || resumedRun?.runState !== "pending") {
+        throw new Error("Arena did not keep the resumed contestant running for a second interruption")
+      }
+      expect(
+        (
+          await request(`/arena/turns/${turnID}/reply`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ prompt: "Use the second queued steer.", target: target.side }),
+          })
+        ).status,
+      ).toBe(200)
+      let secondPendingMessageID: string | undefined
+      while (Date.now() < deadline) {
+        const messages = await json<Array<{ info: { id: string; role: string } }>>(
+          await request(`/session/${target.rootSessionID}/message`, { headers }),
+        )
+        secondPendingMessageID = messages.findLast(
+          (message) => message.info.role === "user" && message.info.id !== target!.promptMessageID,
+        )?.info.id
+        if (secondPendingMessageID && secondPendingMessageID !== pendingMessageID) break
+        await Bun.sleep(10)
+      }
+      if (!secondPendingMessageID || secondPendingMessageID === pendingMessageID) {
+        throw new Error("Arena did not persist the second queued steer")
+      }
+      const interruptedAgain = await request(
+        `/arena/runs/${target._id}/steer/${encodeURIComponent(secondPendingMessageID)}/interrupt`,
+        { method: "POST", headers },
+      )
+      expect(interruptedAgain.status).toBe(200)
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const finalRun = (await memory.store.runsForTurn(turnID)).find((run) => run._id === target!._id)
+      expect(finalRun?.runState).toBe("complete")
+      const messages = await json<Array<{ info: { id: string; role: string; parentID?: string } }>>(
+        await request(`/session/${target.rootSessionID}/message`, { headers }),
+      )
+      expect(messages.filter((message) => message.info.id === pendingMessageID)).toHaveLength(1)
+      expect(
+        messages.filter((message) => message.info.role === "assistant" && message.info.parentID === pendingMessageID),
+      ).toHaveLength(1)
+      expect(messages.filter((message) => message.info.id === secondPendingMessageID)).toHaveLength(1)
+      expect(
+        messages.filter(
+          (message) => message.info.role === "assistant" && message.info.parentID === secondPendingMessageID,
+        ),
+      ).toHaveLength(1)
+      expect(router.contestantRequests.length).toBeGreaterThanOrEqual(4)
+      const stale = await request(
+        `/arena/runs/${target._id}/steer/${encodeURIComponent(pendingMessageID)}/interrupt`,
+        { method: "POST", headers },
+      )
+      expect(stale.status).toBe(400)
+    } finally {
+      router.restore()
+    }
+  }, 90_000)
+
+  test("discards multiple queued steers without interrupting active work", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure discard steer fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ delayAllMs: 5_000 })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Discard queued steers",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Run a long command before answering." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted discard turn")
+
+      const deadline = Date.now() + 60_000
+      let target: RunDocument | undefined
+      while (Date.now() < deadline) {
+        const turn = await memory.store.turn(turnID)
+        const runs = await memory.store.runsForTurn(turnID)
+        target = turn?.state === "running" ? runs.find((run) => run.runState === "pending") : undefined
+        if (target && router.contestantRequests.length >= 2) break
+        await Bun.sleep(10)
+      }
+      if (!target) throw new Error("Arena did not keep a contestant running for discard")
+      const activeRequestBoundary = router.contestantRequests.length
+
+      for (const prompt of ["Discard this first queued steer.", "Discard this second queued steer."]) {
+        expect(
+          (
+            await request(`/arena/turns/${turnID}/reply`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ prompt, target: target.side }),
+            })
+          ).status,
+        ).toBe(200)
+      }
+
+      type Message = { info: { id: string; role: string; parentID?: string }; parts: Array<{ text?: string }> }
+      const readMessages = async () =>
+        json<Message[]>(await request(`/session/${target!.rootSessionID}/message`, { headers }))
+      let queuedIDs: string[] = []
+      while (Date.now() < deadline) {
+        const messages = await readMessages()
+        queuedIDs = messages
+          .filter((message) => message.info.role === "user" && message.info.id !== target!.promptMessageID)
+          .map((message) => message.info.id)
+        if (queuedIDs.length >= 2) break
+        await Bun.sleep(10)
+      }
+      if (queuedIDs.length < 2) throw new Error("Arena did not persist both queued steers")
+
+      const discarded = await request(`/arena/runs/${target._id}/steer/discard`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ messageIDs: queuedIDs }),
+      })
+      expect(discarded.status).toBe(200)
+      expect(router.contestantRequests.length).toBe(activeRequestBoundary)
+      expect((await readMessages()).some((message) => queuedIDs.includes(message.info.id))).toBe(false)
+
+      const original = await request(`/arena/runs/${target._id}/steer/discard`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ messageIDs: [target.promptMessageID] }),
+      })
+      expect(original.status).toBe(400)
+      const invalid = await request(`/arena/runs/${target._id}/steer/discard`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ messageIDs: ["missing-steer-message"] }),
+      })
+      expect(invalid.status).toBe(400)
+      const duplicate = await request(`/arena/runs/${target._id}/steer/discard`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ messageIDs: [queuedIDs[0], queuedIDs[0]] }),
+      })
+      expect(duplicate.status).toBe(400)
+
+      expect(
+        (
+          await request(`/arena/turns/${turnID}/reply`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ prompt: "Keep this consumed steer.", target: target.side }),
+          })
+        ).status,
+      ).toBe(200)
+      let consumedID: string | undefined
+      while (Date.now() < deadline) {
+        const messages = await readMessages()
+        const consumed = messages.find(
+          (message) => message.info.role === "user" && message.info.id !== target!.promptMessageID,
+        )
+        consumedID = consumed?.info.id
+        if (consumedID && messages.some((message) => message.info.parentID === consumedID)) break
+        await Bun.sleep(10)
+      }
+      if (!consumedID) throw new Error("Arena did not persist the consumed steer")
+      const consumed = await request(`/arena/runs/${target._id}/steer/discard`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ messageIDs: [consumedID] }),
+      })
+      expect(consumed.status).toBe(400)
+      expect((await readMessages()).some((message) => message.info.id === consumedID)).toBe(true)
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      expect(router.contestantRequests.length).toBeGreaterThan(activeRequestBoundary)
+      expect(router.contestantRequests.some((request) => JSON.stringify(request).includes("Discard this first"))).toBe(
+        false,
+      )
+      expect(
+        router.contestantRequests.some((request) => JSON.stringify(request).includes("Discard this second")),
+      ).toBe(false)
+    } finally {
+      router.restore()
+    }
+  }, 90_000)
 
   test("a reply to both resumes the finished contestant and steers the one still working", async () => {
     await using directory = await tmpdir({

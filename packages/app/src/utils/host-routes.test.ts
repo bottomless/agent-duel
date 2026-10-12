@@ -7,7 +7,6 @@ import {
   buildNewWorkspaceRoute,
   buildOpenProjectRoute,
   resolveKnownHostRoute,
-  buildSessionsRoute,
   buildProjectSettingsRoute,
   buildProjectsSettingsRoute,
   decodeFilePathFromPathSegment,
@@ -21,6 +20,7 @@ import {
   parseHostWorkspaceOpenIntentFromPathname,
   parseHostWorkspaceRouteFromPathname,
   parseWorkspaceOpenIntent,
+  routeShowsAppChrome,
   stripHostWorkspaceRouteEchoSearch,
 } from "./host-routes";
 
@@ -199,11 +199,24 @@ describe("projects settings routes", () => {
   });
 });
 
-describe("global routes", () => {
-  it("buildSessionsRoute returns the all-host Sessions route", () => {
-    expect(buildSessionsRoute()).toBe("/sessions");
+describe("routeShowsAppChrome", () => {
+  it("draws the chrome on the global new-chat and open-project screens", () => {
+    expect(routeShowsAppChrome("/new", [])).toBe(true);
+    expect(routeShowsAppChrome("/open-project", [])).toBe(true);
   });
 
+  it("draws the chrome on a known host's routes only", () => {
+    expect(routeShowsAppChrome("/h/local/workspace/ws-1", ["local"])).toBe(true);
+    expect(routeShowsAppChrome("/h/remote/workspace/ws-1", ["local"])).toBe(false);
+  });
+
+  it("leaves settings and the welcome screen without it", () => {
+    expect(routeShowsAppChrome("/settings/general", ["local"])).toBe(false);
+    expect(routeShowsAppChrome("/welcome", ["local"])).toBe(false);
+  });
+});
+
+describe("global routes", () => {
   it("buildNewWorkspaceRoute returns the all-host New Workspace route", () => {
     expect(buildNewWorkspaceRoute()).toBe("/new");
   });

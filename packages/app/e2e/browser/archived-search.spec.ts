@@ -4,17 +4,18 @@ import { test } from "../support/fixtures";
 import { connectSeedClient } from "../support/helpers/seed-client";
 import { createTempGitRepo } from "../support/helpers/workspace";
 import {
+  archiveAgentFromDaemon,
   createIdleAgent,
-  openSessions,
+  openArchived,
   resetSeededPageState,
 } from "../support/helpers/archive-tab";
 
-const AGENT_ROW = '[data-testid^="agent-row-"]';
+const ARCHIVED_CHAT_ROW = '[data-testid^="archived-chat-"]';
 
 /**
  * Every seeded title opens with the same nonce, so a query of "<nonce> term"
- * can only reach this spec's sessions. The daemon is shared with the rest of
- * the browser suite and its history is whatever those specs left behind.
+ * can only reach this spec's chats. The daemon is shared with the rest of
+ * the browser suite and its archive is whatever those specs left behind.
  */
 const NONCE = `hsq${randomUUID().replaceAll("-", "").slice(0, 8)}`;
 
@@ -25,11 +26,11 @@ const TITLES = {
 } as const;
 
 async function search(page: Page, query: string): Promise<void> {
-  await page.getByTestId("sessions-search-input").fill(query);
+  await page.getByTestId("sidebar-archived-search-input").fill(query);
 }
 
 function rowTitles(page: Page) {
-  return page.locator(AGENT_ROW);
+  return page.locator(ARCHIVED_CHAT_ROW);
 }
 
 async function expectVisibleTitles(page: Page, titles: string[]): Promise<void> {
@@ -40,7 +41,7 @@ async function expectVisibleTitles(page: Page, titles: string[]): Promise<void> 
   }
 }
 
-test.describe("History search", () => {
+test.describe("Archived search", () => {
   let client: Awaited<ReturnType<typeof connectSeedClient>>;
   let tempRepo: { path: string; cleanup: () => Promise<void> };
   let projectId: string;
@@ -48,7 +49,7 @@ test.describe("History search", () => {
   test.describe.configure({ timeout: 300_000 });
 
   test.beforeAll(async () => {
-    tempRepo = await createTempGitRepo("sessions-search-");
+    tempRepo = await createTempGitRepo("archived-search-");
     client = await connectSeedClient();
     const created = await client.createWorkspace({
       source: { kind: "directory", path: tempRepo.path },
@@ -59,8 +60,10 @@ test.describe("History search", () => {
     projectId = created.workspace.projectId;
     const workspaceId = created.workspace.id;
 
+    // Archived in creation order, so the newest chat is still the newest archived one.
     for (const title of [TITLES.terminal, TITLES.unbilled, TITLES.billing]) {
-      await createIdleAgent(client, { cwd: tempRepo.path, workspaceId, title });
+      const agent = await createIdleAgent(client, { cwd: tempRepo.path, workspaceId, title });
+      await archiveAgentFromDaemon(client, agent.id);
     }
   });
 
@@ -70,13 +73,13 @@ test.describe("History search", () => {
     await tempRepo?.cleanup();
   });
 
-  test("typing narrows history to matching sessions and clearing restores them", async ({
+  test("typing narrows archived chats to the matches and clearing restores them", async ({
     page,
   }) => {
     await resetSeededPageState(page);
-    await openSessions(page);
+    await openArchived(page);
 
-    // Seeded newest-first, and at rest history is chronological.
+    // Seeded newest-first, and at rest the archive is chronological.
     await expectVisibleTitles(page, [TITLES.billing, TITLES.unbilled, TITLES.terminal]);
     await expect(page.getByText("Today", { exact: true })).toHaveCount(1, { timeout: 30_000 });
 
@@ -87,54 +90,54 @@ test.describe("History search", () => {
     // the list no longer has.
     await expect(page.getByText("Today", { exact: true })).toHaveCount(0, { timeout: 30_000 });
 
-    await page.getByTestId("sessions-search-clear").click();
-    await expect(page.getByTestId("sessions-search-input")).toHaveValue("");
+    await page.getByTestId("sidebar-archived-search-clear").click();
+    await expect(page.getByTestId("sidebar-archived-search-input")).toHaveValue("");
     await expectVisibleTitles(page, [TITLES.billing, TITLES.unbilled, TITLES.terminal]);
     await expect(page.getByText("Today", { exact: true })).toHaveCount(1, { timeout: 30_000 });
   });
 
   test("ranks a whole-word hit above one buried inside a word", async ({ page }) => {
     await resetSeededPageState(page);
-    await openSessions(page);
+    await openArchived(page);
 
     // "bill" starts a word in "billing" and hides inside "unbilled", so the
-    // stronger match leads even though both sessions are equally recent.
+    // stronger match leads even though both chats are equally recent.
     await search(page, `${NONCE} bill`);
     await expectVisibleTitles(page, [TITLES.billing, TITLES.unbilled]);
   });
 
   test("marks the characters each result matched on", async ({ page }) => {
     await resetSeededPageState(page);
-    await openSessions(page);
+    await openArchived(page);
 
     // The mark is a nested Text run, so the matched slice is its own element.
     await search(page, `${NONCE} billing`);
-    const row = page.locator(AGENT_ROW).filter({ hasText: NONCE }).first();
+    const row = page.locator(ARCHIVED_CHAT_ROW).filter({ hasText: NONCE }).first();
     await expect(row).toBeVisible({ timeout: 30_000 });
     await expect(row.getByText("billing", { exact: true })).toBeVisible({ timeout: 30_000 });
 
     // A typo has no characters in the text to point at, so the whole word it
     // resolved to is marked.
     await search(page, `${NONCE} bulling`);
-    const typoRow = page.locator(AGENT_ROW).filter({ hasText: NONCE }).first();
+    const typoRow = page.locator(ARCHIVED_CHAT_ROW).filter({ hasText: NONCE }).first();
     await expect(typoRow.getByText("billing", { exact: true })).toBeVisible({ timeout: 30_000 });
   });
 
-  test("finds a session through a typo", async ({ page }) => {
+  test("finds an archived chat through a typo", async ({ page }) => {
     await resetSeededPageState(page);
-    await openSessions(page);
+    await openArchived(page);
 
     await search(page, `${NONCE} bulling`);
     await expectVisibleTitles(page, [TITLES.billing]);
   });
 
-  test("says the query found nothing, not that history is empty", async ({ page }) => {
+  test("says the query found nothing, not that the archive is empty", async ({ page }) => {
     await resetSeededPageState(page);
-    await openSessions(page);
+    await openArchived(page);
 
     await search(page, `${NONCE} kubernetes`);
-    await expect(page.getByTestId("sessions-empty")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText("No sessions match")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("sidebar-archived-empty")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("No archived chats match")).toBeVisible({ timeout: 30_000 });
 
     await page.getByText("Clear search").click();
     await expectVisibleTitles(page, [TITLES.billing, TITLES.unbilled, TITLES.terminal]);

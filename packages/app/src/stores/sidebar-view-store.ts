@@ -3,6 +3,8 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 export type SidebarGroupMode = "project" | "status";
+/** Which list the sidebar shows: the active chats, or the archived ones in their place. */
+export type SidebarListView = "chats" | "archived";
 
 const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
 const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
@@ -12,7 +14,10 @@ interface SidebarViewStoreState {
   groupMode: SidebarGroupMode;
   // Empty means "all hosts". A non-empty list pins the sidebar to those hosts.
   hostFilters: string[];
+  // Not persisted: a relaunch opens on the active chats.
+  listView: SidebarListView;
   setGroupMode: (mode: SidebarGroupMode) => void;
+  setListView: (view: SidebarListView) => void;
   toggleHostFilter: (serverId: string) => void;
   clearHostFilters: () => void;
   reconcileHostFilters: (serverIds: readonly string[]) => void;
@@ -92,7 +97,9 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
     (set) => ({
       groupMode: "project",
       hostFilters: [],
+      listView: "chats",
       setGroupMode: (mode) => set({ groupMode: mode }),
+      setListView: (view) => set({ listView: view }),
       toggleHostFilter: (serverId) =>
         set((state) => ({
           hostFilters: state.hostFilters.includes(serverId)

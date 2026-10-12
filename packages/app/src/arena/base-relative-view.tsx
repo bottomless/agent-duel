@@ -213,11 +213,13 @@ function ReadyDiff({
   diff,
   truncated,
   layout,
+  embedded,
 }: {
   file: ArenaThreeWayFile;
   diff: ThreeWayWindowedDiff;
   truncated: boolean;
   layout: ArenaDiffLayout;
+  embedded: boolean;
 }) {
   const viewportRef = useRef<View>(null);
   const [mode, setMode] = useState<Side | null>(null);
@@ -328,10 +330,20 @@ function ReadyDiff({
   }, [diff]);
   const stacked = layout === "single" || mode !== null;
   const sides = mode ? [mode] : SIDES;
-  const viewportData = useMemo(() => ({ detailSide: mode ?? "both", pmono: "true" }), [mode]);
+  // Several diffs can be open at once, so each viewer names its file for review telemetry to
+  // credit a scroll to the diff that scrolled.
+  const viewportData = useMemo(
+    () => ({ detailSide: mode ?? "both", pmono: "true", diffFile: file.file }),
+    [file.file, mode],
+  );
 
   return (
-    <View ref={viewportRef} style={styles.viewer} testID="arena-inline-diff" dataSet={viewportData}>
+    <View
+      ref={viewportRef}
+      style={[styles.viewer, embedded && styles.viewerEmbedded]}
+      testID="arena-inline-diff"
+      dataSet={viewportData}
+    >
       <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA}>
         <View style={styles.toolbar}>
           <Text style={styles.caption}>
@@ -444,9 +456,12 @@ function ReadyDiff({
 export function BaseRelativeFileView({
   file,
   layout,
+  embedded = false,
 }: {
   file: ArenaThreeWayFile;
   layout: ArenaDiffLayout;
+  /** Drawn under its row in the Changes list, which supplies the edges around it. */
+  embedded?: boolean;
 }) {
   const comparison = useMemo<BaseRelativeDiff>(() => buildBaseRelativeDiff(file), [file]);
   if (comparison.kind === "unavailable")
@@ -461,6 +476,7 @@ export function BaseRelativeFileView({
       diff={comparison.diff}
       truncated={comparison.truncated}
       layout={layout}
+      embedded={embedded}
     />
   );
 }
@@ -476,6 +492,11 @@ const styles = StyleSheet.create((theme) => ({
     ...(isWeb
       ? { overflowY: "auto" as const, overflowX: "hidden" as const }
       : { overflow: "hidden" as const }),
+  },
+  // One band of the Changes list rather than a box of its own, so no card nests in the list.
+  viewerEmbedded: {
+    borderWidth: 0,
+    borderRadius: 0,
   },
   header: {
     backgroundColor: theme.colors.surface1,

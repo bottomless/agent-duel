@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -29,6 +29,7 @@ import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
+import { arenaQueuedSteering, arenaToolOutput } from "./steering";
 import { arenaSubagentRunState, projectArenaSessions, type ArenaSessionThread } from "./subagents";
 import {
   arenaPartIsWork,
@@ -71,7 +72,7 @@ function ArenaToolPart({ part, cwd }: { part: UnknownRecord; cwd?: string }) {
   const state = asRecord(part.state);
   const tool = typeof part.tool === "string" ? part.tool : "tool";
   const input = state?.input;
-  const output = state?.output;
+  const output = arenaToolOutput(state);
   const error = state?.error;
   const status = useMemo(
     () => normalizeArenaToolCallStatus(state?.status, error, output),
@@ -653,6 +654,7 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
 export function ArenaRunThread({
   run,
   stoppedByEarlyPick = false,
+  queuedSteers,
   respondingQuestionId = null,
   respondingPermissionId = null,
   onQuestionResponse,
@@ -661,6 +663,8 @@ export function ArenaRunThread({
   run: ArenaRun;
   /** This side was cancelled by an early pick of the other, so its end is not a failure. */
   stoppedByEarlyPick?: boolean;
+  /** Steers the model has not received yet; they show after everything the run has done. */
+  queuedSteers?: ReactNode;
   respondingQuestionId?: string | null;
   respondingPermissionId?: string | null;
   onQuestionResponse?: (question: ArenaPendingQuestion, response: AgentPermissionResponse) => void;
@@ -669,7 +673,14 @@ export function ArenaRunThread({
     response: ArenaPermissionReply,
   ) => void;
 }) {
-  const visibleMessages = arenaThreadMessages(run);
+  // A steer the model has not received yet shows as queued at the end, not as sent.
+  const visibleMessages = useMemo(() => {
+    const queued = new Set(arenaQueuedSteering(run).map((message) => message.id));
+    return arenaThreadMessages(run).filter((message) => {
+      const id = messageId(message);
+      return id === null || !queued.has(id);
+    });
+  }, [run]);
   const pendingQuestions = useMemo(() => arenaPendingQuestions(run), [run]);
   const pendingPermissions = useMemo(() => arenaPendingPermissions(run), [run]);
   const pending = run.runState === "pending";
@@ -709,6 +720,7 @@ export function ArenaRunThread({
       {sessions.unattached.map((session) => (
         <ArenaSubagent key={session.id} session={session} context={assistantPartsContext} />
       ))}
+      {queuedSteers}
       {tasks.length > 0 ? <ArenaTaskProgressCard key={run.id} tasks={tasks} state="ended" /> : null}
       {/* The note reports the pick; anything the run recorded for its own reasons still shows
           under it. */}

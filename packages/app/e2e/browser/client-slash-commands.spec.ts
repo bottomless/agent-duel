@@ -2,10 +2,10 @@ import { expect, test, type Page } from "../support/fixtures";
 import { composerLocator, expectComposerVisible, submitMessage } from "../support/helpers/composer";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 import {
-  expectSessionRowArchived,
+  expectArchivedChatVisible,
   expectWorkspaceTabHidden,
   expectWorkspaceTabVisible,
-  openSessions,
+  openArchived,
 } from "../support/helpers/archive-tab";
 
 interface SlashCommandScenario {
@@ -59,9 +59,9 @@ async function selectClientSlashCommand(page: Page, query: string, label: string
   await input.press("Enter");
 }
 
-async function expectAgentArchivedInSessions(page: Page, title: string): Promise<void> {
-  await openSessions(page);
-  await expectSessionRowArchived(page, title);
+async function expectAgentListedAsArchived(page: Page, title: string): Promise<void> {
+  await openArchived(page);
+  await expectArchivedChatVisible(page, title);
 }
 
 async function expectReplacementDraftMatchesPreviousSetup(page: Page): Promise<void> {
@@ -115,7 +115,7 @@ test.describe("Client slash commands", () => {
     await withOpenReadyMockAgent(page, { title: "Slash quit e2e" }, async ({ agentId, title }) => {
       await runClientSlashCommand(page, "/quit");
       await expectWorkspaceTabHidden(page, agentId);
-      await expectAgentArchivedInSessions(page, title);
+      await expectAgentListedAsArchived(page, title);
     });
   });
 
@@ -126,7 +126,7 @@ test.describe("Client slash commands", () => {
       async ({ agentId, title }) => {
         await selectClientSlashCommand(page, "/qu", "/exit");
         await expectWorkspaceTabHidden(page, agentId);
-        await expectAgentArchivedInSessions(page, title);
+        await expectAgentListedAsArchived(page, title);
       },
     );
   });
@@ -141,7 +141,7 @@ test.describe("Client slash commands", () => {
         await expectReplacementDraftMatchesPreviousSetup(page);
         await createAgentFromReplacementDraft(page);
         await waitForReplacementAgentId(page, agentId);
-        await expectAgentArchivedInSessions(page, title);
+        await expectAgentListedAsArchived(page, title);
       },
     );
   });

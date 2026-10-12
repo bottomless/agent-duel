@@ -228,22 +228,6 @@ export const en = {
       unarchive: "Unarchive",
     },
   },
-  sessions: {
-    interruptedForks: "Interrupted forks",
-    recoveryLoadFailed: "{{host}}: Could not load interrupted forks",
-    forkFilesPreserved: "The fork was interrupted. Local files were preserved.",
-    restoreWorkspace: "Restore workspace",
-    title: "History",
-    empty: "No sessions yet",
-    noMatches: "No sessions match",
-    tooManyMatches: "Too many matches — narrow your search",
-    hostLoadFailed: "{{host}}: Could not load history",
-    searchPlaceholder: "Search history",
-    actions: {
-      loadMore: "Load more",
-      clearSearch: "Clear search",
-    },
-  },
   agentList: {
     fallbackTitle: "New session",
     dateSections: {
@@ -260,16 +244,6 @@ export const en = {
       running: "Running",
       error: "Error",
       closed: "Closed",
-    },
-    badges: {
-      archived: "Archived",
-      pending: "{{count}} pending",
-      attention: "Attention",
-    },
-    archiveSheet: {
-      hostOffline: "Host offline",
-      runningAgent: "This agent is still running. Archiving it will stop the agent.",
-      archive: "Archive",
     },
   },
   message: {
@@ -999,7 +973,24 @@ export const en = {
       appName: "Agent Duel",
     },
     sections: {
-      sessions: "History",
+      chats: "Chats",
+    },
+    archived: {
+      title: "Archived",
+      open: "Archived chats",
+      close: "Back to chats",
+      searchPlaceholder: "Search archived chats",
+      clearSearch: "Clear search",
+      empty: "No archived chats",
+      noMatches: "No archived chats match",
+      tooManyMatches: "Too many matches — narrow your search",
+      loadFailed: "Couldn't load archived chats",
+      hostLoadFailed: "{{host}}: Couldn't load archived chats",
+      loadMore: "Load more",
+      interruptedForks: "Interrupted forks",
+      recoveryLoadFailed: "{{host}}: Could not load interrupted forks",
+      forkFilesPreserved: "Files preserved",
+      restore: "Restore",
     },
     project: {
       actions: {

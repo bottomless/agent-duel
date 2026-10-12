@@ -234,22 +234,6 @@ export const ja: TranslationResources = {
       unarchive: "アーカイブ解除",
     },
   },
-  sessions: {
-    interruptedForks: "中断されたフォーク",
-    recoveryLoadFailed: "{{host}}: 中断されたフォークを読み込めませんでした",
-    forkFilesPreserved: "フォークが中断されました。ローカルファイルは保持されています。",
-    restoreWorkspace: "ワークスペースを復元",
-    title: "履歴",
-    empty: "セッションがまだありません",
-    noMatches: "一致するセッションはありません",
-    tooManyMatches: "一致が多すぎます — 検索条件を絞ってください",
-    hostLoadFailed: "{{host}}: 履歴を読み込めませんでした",
-    searchPlaceholder: "履歴を検索",
-    actions: {
-      loadMore: "さらに読み込む",
-      clearSearch: "検索をクリア",
-    },
-  },
   agentList: {
     fallbackTitle: "新しいセッション",
     dateSections: {
@@ -266,16 +250,6 @@ export const ja: TranslationResources = {
       running: "実行中",
       error: "エラー",
       closed: "クローズ",
-    },
-    badges: {
-      archived: "アーカイブ済み",
-      pending: "{{count}}件保留中",
-      attention: "注意",
-    },
-    archiveSheet: {
-      hostOffline: "ホストオフライン",
-      runningAgent: "このエージェントはまだ実行中です。アーカイブするとエージェントが停止します。",
-      archive: "アーカイブ",
     },
   },
   message: {
@@ -1003,7 +977,24 @@ export const ja: TranslationResources = {
       appName: "Agent Duel",
     },
     sections: {
-      sessions: "履歴",
+      chats: "チャット",
+    },
+    archived: {
+      title: "アーカイブ済み",
+      open: "アーカイブ済みのチャット",
+      close: "チャットに戻る",
+      searchPlaceholder: "アーカイブ済みのチャットを検索",
+      clearSearch: "検索をクリア",
+      empty: "アーカイブ済みのチャットはありません",
+      noMatches: "一致するアーカイブ済みのチャットはありません",
+      tooManyMatches: "一致が多すぎます — 検索条件を絞ってください",
+      loadFailed: "アーカイブ済みのチャットを読み込めませんでした",
+      hostLoadFailed: "{{host}}: アーカイブ済みのチャットを読み込めませんでした",
+      loadMore: "さらに読み込む",
+      interruptedForks: "中断されたフォーク",
+      recoveryLoadFailed: "{{host}}: 中断されたフォークを読み込めませんでした",
+      forkFilesPreserved: "ファイルは保持されています",
+      restore: "復元",
     },
     project: {
       actions: {

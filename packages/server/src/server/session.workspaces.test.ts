@@ -2882,6 +2882,150 @@ test("fetch_agent_history_request ranks a search across the whole history, not o
   expect(whole.payload.pageInfo.hasMore).toBe(false);
 });
 
+test("fetch_agent_history_request with archivedOnly pages and ranks only archived chats", async () => {
+  const emitted: SessionOutboundMessage[] = [];
+  const session = createSessionForWorkspaceTests();
+  const historyCwd = path.resolve("/tmp/history-archived-only");
+  const project = createPersistedProjectRecord({
+    projectId: "proj-archived-only",
+    rootPath: historyCwd,
+    kind: "non_git",
+    displayName: "history-archived-only",
+    createdAt: "2026-03-01T12:00:00.000Z",
+    updatedAt: "2026-03-01T12:00:00.000Z",
+  });
+  const workspace = createPersistedWorkspaceRecord({
+    workspaceId: "ws-archived-only",
+    projectId: project.projectId,
+    cwd: historyCwd,
+    kind: "directory",
+    displayName: "history-archived-only",
+    createdAt: "2026-03-01T12:00:00.000Z",
+    updatedAt: "2026-03-01T12:00:00.000Z",
+  });
+  const archivedWorkspace = createPersistedWorkspaceRecord({
+    workspaceId: "ws-archived-workspace",
+    projectId: project.projectId,
+    cwd: historyCwd,
+    kind: "directory",
+    displayName: "history-archived-workspace",
+    createdAt: "2026-03-01T12:00:00.000Z",
+    updatedAt: "2026-03-01T12:00:00.000Z",
+    archivedAt: "2026-03-01T14:00:00.000Z",
+  });
+  const workspaces = [workspace, archivedWorkspace];
+  const listFilters: unknown[] = [];
+
+  session.emit = (message) => {
+    if (isSessionOutboundMessage(message)) emitted.push(message);
+  };
+  session.projectRegistry.get = async () => project;
+  session.workspaceRegistry.list = async () => workspaces;
+  session.workspaceRegistry.get = async (workspaceId: string) =>
+    workspaces.find((candidate) => candidate.workspaceId === workspaceId) ?? null;
+  session.listAgentPayloads = async (filter?: unknown) => {
+    listFilters.push(filter);
+    return [
+      // The active row is the newest and the best match; archivedOnly must drop
+      // it before paging and ranking, not after.
+      {
+        ...makeAgent({
+          id: "active",
+          cwd: historyCwd,
+          workspaceId: "ws-archived-only",
+          status: "idle",
+          updatedAt: "2026-03-03T12:00:00.000Z",
+        }),
+        title: "Add Stripe billing",
+      },
+      {
+        ...makeAgent({
+          id: "archived-newer",
+          cwd: historyCwd,
+          workspaceId: "ws-archived-only",
+          status: "idle",
+          updatedAt: "2026-03-02T12:00:00.000Z",
+        }),
+        title: "Unbilled usage report",
+        archivedAt: "2026-03-02T13:00:00.000Z",
+      },
+      {
+        ...makeAgent({
+          id: "archived-older",
+          cwd: historyCwd,
+          workspaceId: "ws-archived-only",
+          status: "idle",
+          updatedAt: "2026-03-01T12:00:00.000Z",
+        }),
+        title: "Terminal resize fix",
+        archivedAt: "2026-03-01T13:00:00.000Z",
+      },
+      // Unarchived on its own, but its workspace is still archived: no sidebar
+      // row shows it, so the archived list has to.
+      {
+        ...makeAgent({
+          id: "in-archived-workspace",
+          cwd: historyCwd,
+          workspaceId: "ws-archived-workspace",
+          status: "idle",
+          updatedAt: "2026-02-28T12:00:00.000Z",
+        }),
+        title: "Hero image swap",
+      },
+    ];
+  };
+
+  await session.handleMessage({
+    type: "fetch_agent_history_request",
+    requestId: "req-archived-page",
+    archivedOnly: true,
+    // A caller cannot ask for archived sessions while excluding them.
+    filter: { includeArchived: false },
+    sort: [{ key: "updated_at", direction: "desc" }],
+    page: { limit: 1 },
+  });
+
+  const firstPage = emitted[0];
+  if (firstPage?.type !== "fetch_agent_history_response") {
+    throw new Error(`Expected a history response, got ${firstPage?.type}`);
+  }
+  expect(listFilters[0]).toEqual(expect.objectContaining({ includeArchived: true }));
+  expect(firstPage.payload.entries.map((entry) => entry.agent.id)).toEqual(["archived-newer"]);
+  expect(firstPage.payload.pageInfo.hasMore).toBe(true);
+
+  await session.handleMessage({
+    type: "fetch_agent_history_request",
+    requestId: "req-archived-all",
+    archivedOnly: true,
+    sort: [{ key: "updated_at", direction: "desc" }],
+    page: { limit: 25 },
+  });
+
+  const allArchived = emitted[1];
+  if (allArchived?.type !== "fetch_agent_history_response") {
+    throw new Error(`Expected a history response, got ${allArchived?.type}`);
+  }
+  expect(allArchived.payload.entries.map((entry) => entry.agent.id)).toEqual([
+    "archived-newer",
+    "archived-older",
+    "in-archived-workspace",
+  ]);
+
+  await session.handleMessage({
+    type: "fetch_agent_history_request",
+    requestId: "req-archived-search",
+    archivedOnly: true,
+    search: "bill",
+    page: { limit: 25 },
+  });
+
+  const searched = emitted[2];
+  if (searched?.type !== "fetch_agent_history_response") {
+    throw new Error(`Expected a history response, got ${searched?.type}`);
+  }
+  expect(searched.payload.entries.map((entry) => entry.agent.id)).toEqual(["archived-newer"]);
+});
+
 test("fetch_agent_history_request rejects a cursor on a searched request", async () => {
   const emitted: SessionOutboundMessage[] = [];
   const session = createSessionForWorkspaceTests();

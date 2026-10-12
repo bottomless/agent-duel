@@ -42,6 +42,18 @@ function types() {
   return sent.map((event) => event.type);
 }
 
+/** A diff viewer for `file`, inside the review of `turn`, or outside any review for null. */
+function diffViewer(turn: string | null, file: string) {
+  const review = document.createElement("div");
+  if (turn) review.setAttribute("data-review-turn", turn);
+  const viewer = document.createElement("div");
+  viewer.setAttribute("data-testid", "arena-inline-diff");
+  viewer.setAttribute("data-diff-file", file);
+  review.appendChild(viewer);
+  container.appendChild(review);
+  return viewer;
+}
+
 beforeEach(() => {
   sent = [];
   container = document.createElement("div");
@@ -75,7 +87,7 @@ describe("useArenaReviewTelemetry", () => {
       useArenaReviewStore.getState().setShownFile(TURN, "src/a.ts", 0);
     });
     act(() => {
-      useArenaReviewStore.getState().setFile(TURN, "src/b.ts");
+      useArenaReviewStore.getState().setFiles(TURN, ["src/a.ts", "src/b.ts"]);
       useArenaReviewStore.getState().setShownFile(TURN, "src/b.ts", 1);
     });
     act(() => {
@@ -86,6 +98,89 @@ describe("useArenaReviewTelemetry", () => {
     expect(files).toHaveLength(2);
     expect(files.map((event) => "file" in event && event.file)).toEqual(["src/a.ts", "src/b.ts"]);
     expect(files.map((event) => "index" in event && event.index)).toEqual([0, 1]);
+  });
+
+  it("credits a scroll to the diff that scrolled, not the file opened last", () => {
+    // Several diffs can be open at once. Reading the first one after opening a
+    // second must not be booked against the second.
+    mount();
+    act(() => {
+      useArenaReviewStore.getState().setShownFile(TURN, "src/a.ts", 0);
+      useArenaReviewStore.getState().setShownFile(TURN, "src/b.ts", 1);
+    });
+    const viewer = diffViewer(TURN, "src/a.ts");
+    act(() => {
+      viewer.dispatchEvent(new Event("scroll"));
+    });
+    act(() => {
+      root.unmount();
+    });
+    const scrolled = sent.filter((event) => event.type === "diff.scrolled");
+    expect(scrolled.map((event) => "file" in event && event.file)).toEqual(["src/a.ts"]);
+  });
+
+  it("ignores a scroll in another battle's diff", () => {
+    // An archived battle in the side panel draws its diffs with the same viewer.
+    mount();
+    const other = diffViewer("turn-2", "src/a.ts");
+    const loose = diffViewer(null, "src/b.ts");
+    act(() => {
+      other.dispatchEvent(new Event("scroll"));
+      loose.dispatchEvent(new Event("scroll"));
+    });
+    act(() => {
+      root.unmount();
+    });
+    expect(types()).not.toContain("diff.scrolled");
+  });
+
+  it("reports folding the review away and opening it again", () => {
+    // Folding leaves the shown tab alone, so without this the rollup would count
+    // the folded time as reading that tab.
+    mount();
+    act(() => {
+      useArenaReviewStore.getState().setShownTab(TURN, "changes");
+    });
+    act(() => {
+      useArenaReviewStore.getState().setCollapsed(TURN, true);
+    });
+    act(() => {
+      useArenaReviewStore.getState().setCollapsed(TURN, false);
+    });
+    act(() => {
+      root.unmount();
+    });
+    const folds = sent.filter((event) => event.type === "review.collapsed");
+    expect(folds.map((event) => "on" in event && event.on)).toEqual([true, false]);
+  });
+
+  it("seeds a review that is already folded", () => {
+    useArenaReviewStore.getState().setShownTab(TURN, "changes");
+    useArenaReviewStore.getState().setCollapsed(TURN, true);
+    mount();
+    act(() => {
+      root.unmount();
+    });
+    expect(types()).toEqual(["battle.opened", "tab.viewed", "review.collapsed"]);
+  });
+
+  it("records the reader opening the file they opened last once more", () => {
+    // Closing a diff records nothing and leaves the shown file on it, so opening
+    // it again would otherwise look like no change at all.
+    mount();
+    act(() => {
+      useArenaReviewStore.getState().openFile(TURN, "src/a.ts", 0);
+    });
+    act(() => {
+      useArenaReviewStore.getState().setFiles(TURN, []);
+    });
+    act(() => {
+      useArenaReviewStore.getState().openFile(TURN, "src/a.ts", 0);
+    });
+    act(() => {
+      root.unmount();
+    });
+    expect(sent.filter((event) => event.type === "file.selected")).toHaveLength(2);
   });
 
   it("does not emit for a file that is merely re-shown", () => {

@@ -232,22 +232,6 @@ export const ko: TranslationResources = {
       unarchive: "보관 해제",
     },
   },
-  sessions: {
-    interruptedForks: "중단된 포크",
-    recoveryLoadFailed: "{{host}}: 중단된 포크를 불러올 수 없습니다",
-    forkFilesPreserved: "포크가 중단되었습니다. 로컬 파일은 보존되었습니다.",
-    restoreWorkspace: "작업 공간 복원",
-    title: "기록",
-    empty: "아직 세션이 없습니다",
-    noMatches: "일치하는 세션이 없습니다",
-    tooManyMatches: "일치 항목이 너무 많습니다 — 검색 범위를 좁히세요",
-    hostLoadFailed: "{{host}}: 기록을 불러오지 못했습니다",
-    searchPlaceholder: "기록 검색",
-    actions: {
-      loadMore: "더 불러오기",
-      clearSearch: "검색 지우기",
-    },
-  },
   agentList: {
     fallbackTitle: "새 세션",
     dateSections: {
@@ -264,16 +248,6 @@ export const ko: TranslationResources = {
       running: "실행 중",
       error: "오류",
       closed: "종료됨",
-    },
-    badges: {
-      archived: "보관됨",
-      pending: "대기 {{count}}개",
-      attention: "주의",
-    },
-    archiveSheet: {
-      hostOffline: "호스트 오프라인",
-      runningAgent: "이 에이전트는 아직 실행 중입니다. 보관하면 에이전트가 중지됩니다.",
-      archive: "보관",
     },
   },
   message: {
@@ -998,7 +972,24 @@ export const ko: TranslationResources = {
       appName: "Agent Duel",
     },
     sections: {
-      sessions: "기록",
+      chats: "채팅",
+    },
+    archived: {
+      title: "보관됨",
+      open: "보관된 채팅",
+      close: "채팅으로 돌아가기",
+      searchPlaceholder: "보관된 채팅 검색",
+      clearSearch: "검색 지우기",
+      empty: "보관된 채팅이 없습니다",
+      noMatches: "일치하는 보관된 채팅이 없습니다",
+      tooManyMatches: "일치 항목이 너무 많습니다 — 검색 범위를 좁히세요",
+      loadFailed: "보관된 채팅을 불러오지 못했습니다",
+      hostLoadFailed: "{{host}}: 보관된 채팅을 불러오지 못했습니다",
+      loadMore: "더 불러오기",
+      interruptedForks: "중단된 포크",
+      recoveryLoadFailed: "{{host}}: 중단된 포크를 불러올 수 없습니다",
+      forkFilesPreserved: "파일이 보존됨",
+      restore: "복원",
     },
     project: {
       actions: {

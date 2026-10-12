@@ -130,9 +130,12 @@ test.describe("Assistant fork menu", () => {
       "Forked from previous chat",
     );
 
-    await page.getByTestId("sidebar-sessions").click();
+    // The fork is an active chat, so the sidebar lists it under the source's name.
     await expect(
-      page.getByTestId(/^agent-row-/).filter({ hasText: "Assistant fork workspace (2)" }),
+      page
+        .getByTestId("left-sidebar")
+        .filter({ visible: true })
+        .getByText("Assistant fork workspace (2)", { exact: true }),
     ).toBeVisible();
   });
 });

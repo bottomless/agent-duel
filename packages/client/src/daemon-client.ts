@@ -2136,6 +2136,30 @@ export class DaemonClient {
     return payload.snapshot;
   }
 
+  async arenaInterruptSteer(
+    agentId: string,
+    runId: string,
+    messageId: string,
+  ): Promise<ArenaSnapshot> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"arena.run.steer.interrupt.response">({
+        message: { type: "arena.run.steer.interrupt.request", agentId, runId, messageId },
+      });
+    return payload.snapshot;
+  }
+
+  async arenaDiscardSteer(
+    agentId: string,
+    runId: string,
+    messageIds: string[],
+  ): Promise<ArenaSnapshot> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"arena.run.steer.discard.response">({
+        message: { type: "arena.run.steer.discard.request", agentId, runId, messageIds },
+      });
+    return payload.snapshot;
+  }
+
   /**
    * Append review activity for a turn. Idempotent on event id, so a caller that
    * cannot confirm a flush should resend it rather than drop it.
@@ -2315,6 +2339,7 @@ export class DaemonClient {
       requestId: resolvedRequestId,
       ...(options?.filter ? { filter: options.filter } : {}),
       ...(options?.search ? { search: options.search } : {}),
+      ...(options?.archivedOnly ? { archivedOnly: true } : {}),
       ...(options?.sort ? { sort: options.sort } : {}),
       ...(options?.page ? { page: options.page } : {}),
     });

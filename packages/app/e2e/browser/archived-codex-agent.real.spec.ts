@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test, expect } from "../support/fixtures";
-import { openSessions } from "../support/helpers/archive-tab";
+import { openArchived } from "../support/helpers/archive-tab";
 import {
   assertChatTranscript,
   cleanupRewindFlow,
@@ -79,8 +79,8 @@ test.describe("archived Codex agent recovery", () => {
 
       await page.reload();
       await waitForSidebarHydration(page);
-      await openSessions(page);
-      await page.getByTestId(`agent-row-${getServerId()}-${handle.agentId}`).click();
+      await openArchived(page);
+      await page.getByTestId(`archived-chat-${getServerId()}-${handle.agentId}`).click();
 
       await expect(
         page.getByTestId(`workspace-tab-agent_${handle.agentId}`).filter({ visible: true }).first(),

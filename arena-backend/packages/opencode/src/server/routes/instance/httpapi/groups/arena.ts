@@ -57,6 +57,7 @@ const ReviewEvent = Schema.Union([
     type: Schema.Literal("tab.viewed"),
     tab: Schema.Literals(["verdict", "changes"]),
   }),
+  Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("review.collapsed"), on: Schema.Boolean }),
   Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("verdict.expanded") }),
   Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("verdict.folded") }),
   Schema.Struct({
@@ -406,6 +407,35 @@ const group = HttpApiGroup.make("arena")
         identifier: "arena.turn.start",
         summary: "Start an Arena battle",
         description: "Admit one prompt and start two distinct hidden contestants in parallel.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("interruptSteer", "/arena/runs/:runID/steer/:messageID/interrupt", {
+      params: { runID: Schema.String, messageID: Schema.String },
+      query: WorkspaceRoutingQuery,
+      success: ArenaSchema.Snapshot,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.run.steer.interrupt",
+        summary: "Interrupt a contestant and run a queued steer",
+        description: "Cancel the active contestant request and resume the expected pending user message.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("discardSteer", "/arena/runs/:runID/steer/discard", {
+      params: { runID: Schema.String },
+      query: WorkspaceRoutingQuery,
+      payload: Schema.Struct({ messageIDs: Schema.Array(Schema.String) }),
+      success: ArenaSchema.Snapshot,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.run.steer.discard",
+        summary: "Discard queued steers",
+        description: "Remove queued contestant messages without interrupting active work.",
       }),
     ),
   )

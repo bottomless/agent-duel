@@ -697,6 +697,26 @@ export const ArenaTurnReplyResponseSchema = z.object({
   type: z.literal("arena.turn.reply.response"),
   payload: ArenaSnapshotResponsePayloadSchema,
 });
+export const ArenaRunSteerInterruptRequestSchema = z.object({
+  type: z.literal("arena.run.steer.interrupt.request"),
+  ...ArenaAgentRequestFields,
+  runId: z.string(),
+  messageId: z.string(),
+});
+export const ArenaRunSteerInterruptResponseSchema = z.object({
+  type: z.literal("arena.run.steer.interrupt.response"),
+  payload: ArenaSnapshotResponsePayloadSchema,
+});
+export const ArenaRunSteerDiscardRequestSchema = z.object({
+  type: z.literal("arena.run.steer.discard.request"),
+  ...ArenaAgentRequestFields,
+  runId: z.string(),
+  messageIds: z.array(z.string()).min(1),
+});
+export const ArenaRunSteerDiscardResponseSchema = z.object({
+  type: z.literal("arena.run.steer.discard.response"),
+  payload: ArenaSnapshotResponsePayloadSchema,
+});
 /**
  * What a voter did while reviewing a battle. Every variant carries `side` at
  * most: the app does not know which model it is drawing, and this stream must
@@ -712,6 +732,7 @@ export const ArenaReviewEventSchema = z.discriminatedUnion("type", [
     type: z.literal("tab.viewed"),
     tab: z.enum(["verdict", "changes"]),
   }),
+  z.object({ ...ArenaReviewEventFields, type: z.literal("review.collapsed"), on: z.boolean() }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("verdict.expanded") }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("verdict.folded") }),
   z.object({

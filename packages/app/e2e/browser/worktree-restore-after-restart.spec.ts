@@ -5,8 +5,8 @@ import { metroTest as test } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import {
   createIdleAgent,
-  expectSessionRowArchived,
-  openSessions,
+  expectArchivedChatVisible,
+  openArchived,
 } from "../support/helpers/archive-tab";
 import { buildCreateAgentPreferences, buildSeededHost } from "../support/helpers/daemon-registry";
 import {
@@ -22,6 +22,18 @@ import {
 import { connectSeedClient } from "../support/helpers/seed-client";
 import { createTempGitRepo } from "../support/helpers/workspace";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
+
+async function readArchivedPlacement(
+  client: Awaited<ReturnType<typeof connectSeedClient>>,
+  agentId: string,
+): Promise<{ branch: string | null; workspace: string | null }> {
+  const history = await client.fetchAgentHistory({ archivedOnly: true, page: { limit: 200 } });
+  const entry = history.entries.find((candidate) => candidate.agent.id === agentId);
+  return {
+    branch: entry?.project.checkout.currentBranch ?? null,
+    workspace: entry?.project.workspaceName ?? null,
+  };
+}
 
 test.describe("Worktree restore after daemon restart", () => {
   const serverId = `srv_worktree_restart_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -80,12 +92,12 @@ test.describe("Worktree restore after daemon restart", () => {
     );
   }
 
-  test("after archiving a worktree and restarting the daemon, History shows the worktree branch (not main) before any restore", async ({
+  test("after archiving a worktree and restarting the daemon, the archived chat keeps the worktree branch (not main) before any restore", async ({
     page,
   }) => {
     // A paseo worktree is cut on its own branch named after the slug, and the
     // worktree workspace is displayed under the same name. These are the values
-    // the History table cells must show after restore — never "main".
+    // the archived chat's placement must carry after the restart — never "main".
     const worktreeSlug = `restart-restore-${randomUUID().slice(0, 8)}`;
 
     const project = await openProjectViaDaemon(worktreeClient, tempRepo.path);
@@ -125,18 +137,15 @@ test.describe("Worktree restore after daemon restart", () => {
     await seedBrowser(page);
     await gotoAppShell(page);
     await waitForSidebarHydration(page);
-    await openSessions(page);
-    await expectSessionRowArchived(page, agent.title);
+    await openArchived(page);
+    await expectArchivedChatVisible(page, agent.title);
 
-    // KEY ASSERTION: reproduce the screenshot state. Right after the daemon
-    // restart, with NO restore and NO row click, the rendered History table cells
-    // (fed by each agent row's projectPlacement via fetch_agent_history) must read
-    // the worktree branch and the worktree workspace name — never "main".
-    const branchCell = page.getByTestId(`agent-row-branch-${serverId}-${agent.id}`);
-    const workspaceCell = page.getByTestId(`agent-row-workspace-${serverId}-${agent.id}`);
-
-    await expect(branchCell).toBeVisible({ timeout: 60_000 });
-    await expect(branchCell).toHaveText(worktreeSlug, { timeout: 60_000 });
-    await expect(workspaceCell).toHaveText(worktree.workspaceName, { timeout: 60_000 });
+    // KEY ASSERTION: right after the daemon restart, with NO restore and NO row
+    // click, the placement the Archived row and its search read from
+    // fetch_agent_history must be the worktree branch and the worktree workspace
+    // name — never "main".
+    await expect
+      .poll(() => readArchivedPlacement(client, agent.id), { timeout: 60_000 })
+      .toEqual({ branch: worktreeSlug, workspace: worktree.workspaceName });
   });
 });

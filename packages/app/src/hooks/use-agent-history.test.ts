@@ -314,6 +314,31 @@ describe("fetchAgentHistoryPage", () => {
     expect(page.searchScoreByAgentKey).toEqual({ "server-1:match": 1000 });
   });
 
+  it("asks every host for archived sessions only, on every page", async () => {
+    const serverAClient = createClient([historyPayload({ entries: [] })]);
+    const serverBClient = createClient([historyPayload({ entries: [] })]);
+    const hosts = [
+      { serverId: "server-a", serverLabel: "MacBook", client: serverAClient },
+      { serverId: "server-b", serverLabel: "Linux box", client: serverBClient },
+    ] satisfies AgentHistoryHost[];
+
+    await fetchAgentHistoryBatch({ hosts, cursorByServerId: null, archivedOnly: true });
+    await fetchAgentHistoryBatch({
+      hosts,
+      cursorByServerId: { "server-b": "cursor-b" },
+      archivedOnly: true,
+    });
+
+    expect(serverAClient.calls).toEqual([
+      {
+        archivedOnly: true,
+        sort: [{ key: "updated_at", direction: "desc" }],
+        page: { limit: 200 },
+      } satisfies FetchAgentHistoryOptions,
+    ]);
+    expect(serverBClient.calls.map((call) => call.archivedOnly)).toEqual([true, true]);
+  });
+
   it("keeps per-host scores apart when two hosts issue the same agent id", async () => {
     const sharedId = "collision";
     const serverAClient = createClient([

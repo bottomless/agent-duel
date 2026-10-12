@@ -46,7 +46,7 @@ import { ArenaPathList } from "./path-list";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { useArenaDiffLayout } from "./diff-layout";
 import { DiffLayoutControl } from "./diff-layout-control";
-import { defaultChangesFile, InlineFileDiff } from "./inline-file-diff";
+import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { VerdictBody } from "./verdict-body";
 import { ArenaChangesList } from "./changes-list";
 import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
@@ -89,17 +89,24 @@ function chosenLabel(item: ArenaHistoryItem): string {
 }
 
 /**
- * The files an archived battle touched, with the selected one's diff.
+ * The files an archived battle touched, each opening its diff under its row.
  */
 function ArchivedChanges({ agentId, diff }: { agentId: string; diff: ArenaComparisonDiff }) {
   const rows = useMemo(() => arenaChangesRows(diff), [diff]);
   const { onLayout, width } = useContainerWidth();
   const measured = width > 0 ? width : null;
   const layout = useArenaDiffLayout(agentId, measured);
-  const [chosenFile, setChosenFile] = useState<string | null>(null);
-  const selectedFile = rows.some((row) => row.file === chosenFile)
-    ? chosenFile
-    : defaultChangesFile(rows);
+  // Undefined until the reader picks a row; empty once they close every diff.
+  const [chosenFiles, setChosenFiles] = useState<readonly string[] | undefined>(undefined);
+  const openFiles = useMemo(() => openChangesFiles(rows, chosenFiles), [rows, chosenFiles]);
+  const toggleFile = useCallback(
+    (file: string) => setChosenFiles(toggleChangesFile(openFiles, file)),
+    [openFiles],
+  );
+  const renderDiff = useCallback(
+    (file: string) => <InlineFileDiff diff={diff} file={file} layout={layout} embedded />,
+    [diff, layout],
+  );
   return (
     <View style={styles.section} onLayout={onLayout}>
       <View style={styles.sectionHeader}>
@@ -111,10 +118,10 @@ function ArchivedChanges({ agentId, diff }: { agentId: string; diff: ArenaCompar
       </View>
       <ArenaChangesList
         rows={rows}
-        onSelect={setChosenFile}
-        selectedFile={selectedFile ?? undefined}
+        openFiles={openFiles}
+        onToggle={toggleFile}
+        renderDiff={renderDiff}
       />
-      {selectedFile ? <InlineFileDiff diff={diff} file={selectedFile} layout={layout} /> : null}
       {diff.filesTruncated ? (
         <Text style={styles.warning}>
           This battle touched more files than the comparison view can show at once; the rest are

@@ -134,6 +134,7 @@ import {
   type AgentPermissionResponse,
   type AgentRunOptions,
   type AgentSessionConfig,
+  type AgentSession,
 } from "./agent/agent-sdk-types.js";
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
@@ -394,6 +395,20 @@ function agentDirectorySearchQuery(request: AgentDirectoryRequestMessage): strin
   return request.search?.trim() ?? "";
 }
 type FetchAgentsRequestFilter = NonNullable<FetchAgentsRequestMessage["filter"]>;
+
+/**
+ * History includes archived sessions unless the caller excludes them, and an
+ * archived-only request always needs them.
+ */
+function agentDirectoryFilter(
+  request: AgentDirectoryRequestMessage,
+): FetchAgentsRequestFilter | undefined {
+  if (request.type !== "fetch_agent_history_request") return request.filter;
+  if (request.archivedOnly === true || request.filter?.includeArchived === undefined) {
+    return { ...request.filter, includeArchived: true };
+  }
+  return request.filter;
+}
 type FetchAgentsRequestSort = NonNullable<FetchAgentsRequestMessage["sort"]>[number];
 type FetchAgentsResponsePayload = Extract<
   SessionOutboundMessage,
@@ -2112,18 +2127,15 @@ export class Session {
   private dispatchArenaMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "arena.activity.subscribe.request":
-        this.arenaActivitySubscribed = true;
-        this.emit({
-          type: "arena.activity.subscribe.response",
-          payload: { requestId: msg.requestId, activities: this.arenaActivity?.snapshot() ?? [] },
-        });
-        return Promise.resolve();
+        return this.subscribeArenaActivity(msg.requestId);
       case "arena.session.resolve.request":
       case "arena.single_agent.vote.request":
       case "arena.snapshot.get.request":
       case "arena.turn.get.request":
       case "arena.turn.start.request":
       case "arena.turn.reply.request":
+      case "arena.run.steer.discard.request":
+      case "arena.run.steer.interrupt.request":
       case "arena.turn.record_review.request":
       case "arena.turn.vote.request":
       case "arena.turn.stop.request":
@@ -2171,6 +2183,15 @@ export class Session {
         },
       });
     }
+  }
+
+  private subscribeArenaActivity(requestId: string): Promise<void> {
+    this.arenaActivitySubscribed = true;
+    this.emit({
+      type: "arena.activity.subscribe.response",
+      payload: { requestId, activities: this.arenaActivity?.snapshot() ?? [] },
+    });
+    return Promise.resolve();
   }
 
   private dispatchAgentLifecycleMessage(msg: SessionInboundMessage): Promise<void> | undefined {
@@ -4054,13 +4075,8 @@ export class Session {
     });
   }
 
-  private async handleArenaRequest(
-    msg: Exclude<
-      Extract<SessionInboundMessage, { type: `arena.${string}.request`; agentId: string }>,
-      { type: `arena.stream.${string}.request` }
-    >,
-  ): Promise<void> {
-    const snapshot = await ensureAgentLoaded(msg.agentId, {
+  private async loadArenaAgent(agentId: string) {
+    const snapshot = await ensureAgentLoaded(agentId, {
       agentManager: this.agentManager,
       agentStorage: this.agentStorage,
       logger: this.sessionLogger,
@@ -4068,7 +4084,16 @@ export class Session {
     if (!snapshot.session?.arena) {
       throw new Error("This OpenCode runtime does not support Arena battles");
     }
-    const arena = snapshot.session.arena;
+    return { snapshot, arena: snapshot.session.arena };
+  }
+
+  private async handleArenaRequest(
+    msg: Exclude<
+      Extract<SessionInboundMessage, { type: `arena.${string}.request`; agentId: string }>,
+      { type: `arena.stream.${string}.request` }
+    >,
+  ): Promise<void> {
+    const { snapshot, arena } = await this.loadArenaAgent(msg.agentId);
 
     try {
       switch (msg.type) {
@@ -4083,15 +4108,7 @@ export class Session {
           return;
         }
         case "arena.single_agent.vote.request": {
-          // COMPAT(singleAgentPassRating): added in v0.4.0, remove after 2027-02-25.
-          if (!msg.ratingId) {
-            throw new Error("Update Agent Duel before revealing a single-agent pass");
-          }
-          const result = await arena.singleAgentVote(msg.ratingId, msg.vote, this.clientId);
-          this.emit({
-            type: "arena.single_agent.vote.response",
-            payload: { requestId: msg.requestId, snapshot: result },
-          });
+          await this.handleArenaSingleAgentVote(msg, arena);
           return;
         }
         case "arena.snapshot.get.request": {
@@ -4148,6 +4165,24 @@ export class Session {
           this.syncArenaPreviewRoutes(result);
           this.emit({
             type: "arena.turn.reply.response",
+            payload: { requestId: msg.requestId, snapshot: result },
+          });
+          return;
+        }
+        case "arena.run.steer.discard.request": {
+          const result = await arena.discardSteer(msg.runId, msg.messageIds);
+          this.syncArenaPreviewRoutes(result);
+          this.emit({
+            type: "arena.run.steer.discard.response",
+            payload: { requestId: msg.requestId, snapshot: result },
+          });
+          return;
+        }
+        case "arena.run.steer.interrupt.request": {
+          const result = await arena.interruptSteer(msg.runId, msg.messageId);
+          this.syncArenaPreviewRoutes(result);
+          this.emit({
+            type: "arena.run.steer.interrupt.response",
             payload: { requestId: msg.requestId, snapshot: result },
           });
           return;
@@ -4260,6 +4295,21 @@ export class Session {
     } finally {
       this.invalidateArenaStreamAfterRequest(arena.streamKey, msg.type);
     }
+  }
+
+  private async handleArenaSingleAgentVote(
+    msg: Extract<SessionInboundMessage, { type: "arena.single_agent.vote.request" }>,
+    arena: NonNullable<AgentSession["arena"]>,
+  ): Promise<void> {
+    // COMPAT(singleAgentPassRating): added in v0.4.0, remove after 2027-02-25.
+    if (!msg.ratingId) {
+      throw new Error("Update Agent Duel before revealing a single-agent pass");
+    }
+    const result = await arena.singleAgentVote(msg.ratingId, msg.vote, this.clientId);
+    this.emit({
+      type: "arena.single_agent.vote.response",
+      payload: { requestId: msg.requestId, snapshot: result },
+    });
   }
 
   private invalidateArenaStreamAfterRequest(
@@ -4974,11 +5024,7 @@ export class Session {
     pageInfo: FetchAgentsResponsePageInfo;
     searchTruncated?: boolean;
   }> {
-    const filter =
-      request.type === "fetch_agent_history_request" &&
-      request.filter?.includeArchived === undefined
-        ? { ...request.filter, includeArchived: true }
-        : request.filter;
+    const filter = agentDirectoryFilter(request);
     const scope = request.type === "fetch_agents_request" ? request.scope : undefined;
     const sort = this.agentsPager.normalizeSort(request.sort);
 
@@ -4987,6 +5033,9 @@ export class Session {
       includeArchived: filter?.includeArchived,
       includeUnavailablePersisted: request.type === "fetch_agent_history_request",
     });
+    if (request.type === "fetch_agent_history_request" && request.archivedOnly === true) {
+      agents = await this.keepArchivedChats(agents);
+    }
     const activePlacementsByWorkspaceId =
       scope === "active" ? await this.buildActiveProjectPlacementsByWorkspaceId() : null;
     if (activePlacementsByWorkspaceId) {
@@ -5063,6 +5112,24 @@ export class Session {
         hasMore,
       },
     };
+  }
+
+  /**
+   * A chat is archived when its agent is, or when its workspace is: an agent
+   * unarchived on its own still has no sidebar row while its workspace stays
+   * archived, so it belongs in the archived list or nowhere.
+   */
+  private async keepArchivedChats(agents: AgentSnapshotPayload[]): Promise<AgentSnapshotPayload[]> {
+    const archivedWorkspaceIds = new Set(
+      (await this.workspaceRegistry.list())
+        .filter((workspace) => workspace.archivedAt)
+        .map((workspace) => workspace.workspaceId),
+    );
+    return agents.filter(
+      (agent) =>
+        agent.archivedAt ||
+        (agent.workspaceId != null && archivedWorkspaceIds.has(agent.workspaceId)),
+    );
   }
 
   /**

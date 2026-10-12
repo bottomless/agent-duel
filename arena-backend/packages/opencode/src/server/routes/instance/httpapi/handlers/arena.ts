@@ -108,6 +108,8 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
       .handle("setAutoAccept", (ctx) =>
         map(arena.setAutoAccept(ctx.params.sessionID, ctx.payload.enabled).pipe(Effect.as(null))),
       )
+      .handle("interruptSteer", (ctx) => map(arena.interruptSteer(ctx.params.runID, ctx.params.messageID)))
+      .handle("discardSteer", (ctx) => map(arena.discardSteer(ctx.params.runID, ctx.payload.messageIDs)))
       .handle("reply", (ctx) =>
         map(arena.reply(ctx.params.turnID, ctx.payload.prompt, ctx.payload.target, ctx.payload.attachments)),
       )

@@ -13,9 +13,9 @@ import {
 } from "../support/helpers/branch-switcher";
 import {
   createIdleAgent,
-  expectSessionRowNotArchived,
+  expectArchivedChatVisible,
   fetchAgentArchivedAt,
-  openSessions,
+  openArchived,
 } from "../support/helpers/archive-tab";
 import {
   archiveWorkspaceFromDaemon,
@@ -98,13 +98,14 @@ test.describe("Worktree restore", () => {
     return { agent, agents, worktree };
   }
 
-  async function openArchivedWorkspaceFromHistory(page: Page, prefix: string) {
+  // The agent is not archived but its workspace is, so it is listed only under Archived.
+  async function openArchivedWorkspaceFromSidebar(page: Page, prefix: string) {
     const seeded = await createArchivedMissingWorktree(prefix);
     await gotoAppShell(page);
     await waitForSidebarHydration(page);
-    await openSessions(page);
-    await expectSessionRowNotArchived(page, seeded.agent.title);
-    await page.getByTestId(`agent-row-${getServerId()}-${seeded.agent.id}`).click();
+    await openArchived(page);
+    await expectArchivedChatVisible(page, seeded.agent.title);
+    await page.getByTestId(`archived-chat-${getServerId()}-${seeded.agent.id}`).click();
     await expect(page.getByText("Workspace archived", { exact: true })).toBeVisible({
       timeout: 30_000,
     });
@@ -139,55 +140,6 @@ test.describe("Worktree restore", () => {
     await tempRepo?.cleanup().catch(() => undefined);
   });
 
-  test("opening an active History agent navigates without restoring or unarchiving", async ({
-    page,
-  }) => {
-    const serverId = getServerId();
-    const project = await openProjectViaDaemon(worktreeClient, tempRepo.path);
-    createdProjectIds.add(project.projectKey);
-    const worktree = await createWorktreeViaDaemon(worktreeClient, {
-      cwd: tempRepo.path,
-      slug: `restore-inplace-${randomUUID().slice(0, 8)}`,
-    });
-    createdProjectIds.add(worktree.projectKey);
-    createdWorktreeDirectories.add(worktree.workspaceDirectory);
-
-    const agent = await createIdleAgent(client, {
-      cwd: worktree.workspaceDirectory,
-      workspaceId: worktree.workspaceId,
-      title: `restore-inplace-${randomUUID().slice(0, 8)}`,
-    });
-    expect(existsSync(worktree.workspaceDirectory)).toBe(true);
-
-    expect(await fetchAgentArchivedAt(client, agent.id)).toBeNull();
-
-    await gotoAppShell(page);
-    await waitForSidebarHydration(page);
-    await openSessions(page);
-    await expectSessionRowNotArchived(page, agent.title);
-
-    await page.getByTestId(`agent-row-${serverId}-${agent.id}`).click();
-
-    await expect(
-      page.getByTestId(`workspace-tab-agent_${agent.id}`).filter({ visible: true }).first(),
-    ).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole("button", { name: "Unarchive" })).toHaveCount(0);
-    expect(await fetchAgentArchivedAt(client, agent.id)).toBeNull();
-    expect(existsSync(worktree.workspaceDirectory)).toBe(true);
-
-    await openSessions(page);
-    await expectSessionRowNotArchived(page, agent.title);
-    await page.getByTestId(`agent-row-${serverId}-${agent.id}`).click();
-
-    await expect(
-      page.getByTestId(`workspace-tab-agent_${agent.id}`).filter({ visible: true }).first(),
-    ).toBeVisible({ timeout: 30_000 });
-    await expect(
-      page.getByTestId(`workspace-deck-entry-${serverId}:${worktree.workspaceId}`),
-    ).toHaveCount(1);
-    expect(await fetchAgentArchivedAt(client, agent.id)).toBeNull();
-  });
-
   test("reads an archived local workspace without unarchiving it", async ({ page }) => {
     const workspace = await openProjectViaDaemon(worktreeClient, tempRepo.path);
     createdProjectIds.add(workspace.projectKey);
@@ -201,8 +153,8 @@ test.describe("Worktree restore", () => {
     expect(archivedAt).not.toBeNull();
     await gotoAppShell(page);
     await waitForSidebarHydration(page);
-    await openSessions(page);
-    await page.getByTestId(`agent-row-${getServerId()}-${agent.id}`).click();
+    await openArchived(page);
+    await page.getByTestId(`archived-chat-${getServerId()}-${agent.id}`).click();
     await page.getByRole("button", { name: "Read transcript", exact: true }).click();
     await expect(page.getByTestId("archived-transcript")).toBeVisible();
     await expect(page.getByText("Loading transcript…", { exact: true })).toHaveCount(0, {
@@ -229,8 +181,8 @@ test.describe("Worktree restore", () => {
     expect(archivedAt).not.toBeNull();
     await gotoAppShell(page);
     await waitForSidebarHydration(page);
-    await openSessions(page);
-    await page.getByTestId(`agent-row-${getServerId()}-${agent.id}`).click();
+    await openArchived(page);
+    await page.getByTestId(`archived-chat-${getServerId()}-${agent.id}`).click();
     await expect(page.getByTestId("workspace-recovery-action")).toHaveText("Restore");
     expect(existsSync(worktree.workspaceDirectory)).toBe(false);
     await expect(
@@ -330,8 +282,8 @@ test.describe("Worktree restore", () => {
 
     await gotoAppShell(page);
     await waitForSidebarHydration(page);
-    await openSessions(page);
-    await page.getByTestId(`agent-row-${getServerId()}-${firstAgent.id}`).click();
+    await openArchived(page);
+    await page.getByTestId(`archived-chat-${getServerId()}-${firstAgent.id}`).click();
 
     await expect(page.getByText("Workspace archived", { exact: true })).toBeVisible({
       timeout: 30_000,
@@ -350,8 +302,8 @@ test.describe("Worktree restore", () => {
       timeout: 30_000,
     });
 
-    await openSessions(page);
-    await page.getByTestId(`agent-row-${getServerId()}-${secondAgent.id}`).click();
+    await openArchived(page);
+    await page.getByTestId(`archived-chat-${getServerId()}-${secondAgent.id}`).click();
     await expect(
       page.getByTestId(`workspace-tab-agent_${secondAgent.id}`).filter({ visible: true }).first(),
     ).toBeVisible({ timeout: 30_000 });
@@ -365,7 +317,7 @@ test.describe("Worktree restore", () => {
   });
 
   test("restore failure stays visible and permits a successful retry", async ({ page }) => {
-    const { agent, worktree } = await openArchivedWorkspaceFromHistory(page, "restore-retry");
+    const { agent, worktree } = await openArchivedWorkspaceFromSidebar(page, "restore-retry");
     const displacedProjectPath = `${tempRepo.path}-temporarily-unavailable`;
     await rename(tempRepo.path, displacedProjectPath);
 
@@ -412,9 +364,9 @@ test.describe("Worktree restore", () => {
     try {
       await gotoAppShell(page);
       await waitForSidebarHydration(page);
-      await openSessions(page);
-      await expectSessionRowNotArchived(page, agent.title);
-      await page.getByTestId(`agent-row-${getServerId()}-${agent.id}`).click();
+      await openArchived(page);
+      await expectArchivedChatVisible(page, agent.title);
+      await page.getByTestId(`archived-chat-${getServerId()}-${agent.id}`).click();
 
       await expect(page.getByText("Workspace unavailable", { exact: true })).toBeVisible({
         timeout: 30_000,

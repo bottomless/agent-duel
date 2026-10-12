@@ -2,22 +2,27 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Text, View } from "react-native";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { ChevronDown, ChevronUp } from "lucide-react-native";
 import type { ArenaComparisonDiff, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import type { Theme } from "@/styles/theme";
+import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { toErrorMessage } from "@/utils/error-messages";
 import { IdenticalBattleResult, SummaryOmissionNotice } from "./battle-summary";
 import { ArenaChangesList } from "./changes-list";
 import type { ArenaChangesRow } from "./changes-rows";
 import { useArenaDiffLayout, type ArenaDiffLayout } from "./diff-layout";
 import { DiffLayoutControl } from "./diff-layout-control";
-import { defaultChangesFile, InlineFileDiff } from "./inline-file-diff";
+import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
+import { PaneIconAction } from "./pane-icon-action";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
 import { VerdictBody } from "./verdict-body";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+const ThemedChevronDown = withUnistyles(ChevronDown);
+const ThemedChevronUp = withUnistyles(ChevronUp);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 
 function Verdict({
   turnId,
@@ -66,21 +71,26 @@ function ChangesTab({
   diff,
   error,
   rows,
-  selectedFile,
+  openFiles,
   layout,
-  onSelectFile,
+  onToggleFile,
   onRetry,
   retrying,
 }: {
   diff: ArenaComparisonDiff | undefined;
   error: Error | null;
   rows: readonly ArenaChangesRow[];
-  selectedFile: string | null;
+  openFiles: readonly string[];
   layout: ArenaDiffLayout;
-  onSelectFile: (file: string) => void;
+  onToggleFile: (file: string) => void;
   onRetry: () => void;
   retrying: boolean;
 }) {
+  const renderDiff = useCallback(
+    (file: string) =>
+      diff ? <InlineFileDiff diff={diff} file={file} layout={layout} embedded /> : null,
+    [diff, layout],
+  );
   if (diff === undefined && !error) {
     return (
       <View style={styles.loading}>
@@ -107,10 +117,10 @@ function ChangesTab({
       {diff.treesEqual ? <IdenticalBattleResult hasChanges /> : null}
       <ArenaChangesList
         rows={rows}
-        onSelect={onSelectFile}
-        selectedFile={selectedFile ?? undefined}
+        openFiles={openFiles}
+        onToggle={onToggleFile}
+        renderDiff={renderDiff}
       />
-      {selectedFile ? <InlineFileDiff diff={diff} file={selectedFile} layout={layout} /> : null}
     </View>
   );
 }
@@ -187,9 +197,60 @@ function ReviewTabs({
 }
 
 /**
+ * The section's heading row: its tabs, the diff layout control, and the fold. Folding hands the
+ * screen back to both agents' messages without losing the tab.
+ */
+function ReviewHeader({
+  summaryAvailable,
+  tab,
+  changesLabel,
+  onTabChange,
+  layoutControl,
+  agentId,
+  width,
+  collapsed,
+  onToggleCollapsed,
+}: {
+  summaryAvailable: boolean;
+  tab: ArenaReviewTab;
+  changesLabel: string;
+  onTabChange: (tab: ArenaReviewTab) => void;
+  /** Whether the diff layout control belongs in the row; it has nothing to lay out otherwise. */
+  layoutControl: boolean;
+  agentId: string;
+  width: number | null;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+}) {
+  const sectionName = summaryAvailable ? "the difference summary and changes" : "the changes";
+  return (
+    <View style={styles.header} testID="arena-review-header">
+      {summaryAvailable ? (
+        <ReviewTabs tab={tab} changesLabel={changesLabel} onChange={onTabChange} />
+      ) : (
+        <Text style={styles.title}>{changesLabel}</Text>
+      )}
+      <View style={styles.spacer} />
+      {layoutControl ? <DiffLayoutControl agentId={agentId} width={width} /> : null}
+      <PaneIconAction
+        accessibilityLabel={`${collapsed ? "Show" : "Hide"} ${sectionName}`}
+        onPress={onToggleCollapsed}
+        testID="arena-review-collapse"
+      >
+        {collapsed ? (
+          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={foregroundColorMapping} />
+        ) : (
+          <ThemedChevronUp size={ICON_SIZE.sm} uniProps={foregroundColorMapping} />
+        )}
+      </PaneIconAction>
+    </View>
+  );
+}
+
+/**
  * The review region of the card once both results are in. Two tabs share it,
- * as they did in PR #46: the judge's verdict, and the changed files with the
- * selected one's diff right here, beside or below.
+ * as they did in PR #46: the judge's verdict, and the changed files, each
+ * opening its diff right under its row.
  */
 export function BattleReview({
   agentId,
@@ -225,9 +286,12 @@ export function BattleReview({
   // no choice yet and the default below stands.
   const chosen = useArenaReviewState(turnId);
   const setStoreTab = useArenaReviewStore((state) => state.setTab);
-  const setStoreFile = useArenaReviewStore((state) => state.setFile);
+  const setStoreFiles = useArenaReviewStore((state) => state.setFiles);
   const setShownFile = useArenaReviewStore((state) => state.setShownFile);
+  const openStoreFile = useArenaReviewStore((state) => state.openFile);
   const setShownTab = useArenaReviewStore((state) => state.setShownTab);
+  const setStoreCollapsed = useArenaReviewStore((state) => state.setCollapsed);
+  const collapsed = chosen.collapsed === true;
   // Keep the view that was on screen when this turn's review mounted. A verdict that is already
   // available still opens first, but one that finishes later must not replace Changes mid-read.
   const initialTabRef = useRef({
@@ -241,16 +305,34 @@ export function BattleReview({
     };
   }
   const tab: ArenaReviewTab = chosen.tab ?? initialTabRef.current.tab;
-  const selectedFile = rows.some((row) => row.file === chosen.file)
-    ? (chosen.file ?? null)
-    : defaultChangesFile(rows);
+  const openFiles = useMemo(() => openChangesFiles(rows, chosen.files), [rows, chosen.files]);
+  // Picking a tab on a folded section opens it on that tab.
   const setTab = useCallback(
-    (next: ArenaReviewTab) => setStoreTab(turnId, next),
-    [setStoreTab, turnId],
+    (next: ArenaReviewTab) => {
+      setStoreTab(turnId, next);
+      if (collapsed) setStoreCollapsed(turnId, false);
+    },
+    [collapsed, setStoreCollapsed, setStoreTab, turnId],
   );
-  const onSelectFile = useCallback(
-    (file: string) => setStoreFile(turnId, file),
-    [setStoreFile, turnId],
+  const toggleCollapsed = useCallback(
+    () => setStoreCollapsed(turnId, !collapsed),
+    [collapsed, setStoreCollapsed, turnId],
+  );
+  // A file the reader opens is the one they are reading now, even when they opened it before;
+  // closing one records nothing.
+  const onToggleFile = useCallback(
+    (file: string) => {
+      const opening = !openFiles.includes(file);
+      setStoreFiles(turnId, toggleChangesFile(openFiles, file));
+      if (opening) {
+        openStoreFile(
+          turnId,
+          file,
+          rows.findIndex((row) => row.file === file),
+        );
+      }
+    },
+    [openFiles, openStoreFile, rows, setStoreFiles, turnId],
   );
   const { onLayout, width } = useContainerWidth();
   const measured = width > 0 ? width : null;
@@ -259,58 +341,72 @@ export function BattleReview({
   // rather than anything the reader picked. Telemetry counts these, so a reader
   // who never touches a control is still recorded as having read something.
   const shownTab: ArenaReviewTab = tab === "verdict" && summaryAvailable ? "verdict" : "changes";
-  const showLayoutControl = shownTab === "changes";
+  // A folded section shows nothing, so telemetry records nothing as read while it is folded.
+  const showLayoutControl = shownTab === "changes" && !collapsed;
   useEffect(() => {
-    setShownTab(turnId, shownTab);
-  }, [setShownTab, shownTab, turnId]);
+    if (!collapsed) setShownTab(turnId, shownTab);
+  }, [collapsed, setShownTab, shownTab, turnId]);
+  // The default diff counts as read the first time Changes shows it. Files the reader opens
+  // afterwards are recorded by the toggle above.
+  const arrivalFile = chosen.shownFile === undefined ? openFiles[openFiles.length - 1] : undefined;
   useEffect(() => {
-    if (showLayoutControl && selectedFile) {
+    if (showLayoutControl && arrivalFile) {
       setShownFile(
         turnId,
-        selectedFile,
-        rows.findIndex((row) => row.file === selectedFile),
+        arrivalFile,
+        rows.findIndex((row) => row.file === arrivalFile),
       );
     }
-  }, [rows, selectedFile, setShownFile, showLayoutControl, turnId]);
+  }, [arrivalFile, rows, setShownFile, showLayoutControl, turnId]);
   const changesLabel = rows.length > 0 ? `Changes (${rows.length})` : "Changes";
+  // Review telemetry listens to scrolls on the whole document; this tells it which diffs are
+  // this battle's.
+  const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);
 
   return (
-    <View style={styles.review} onLayout={onLayout} testID="arena-battle-comparison">
-      <View style={styles.header} testID="arena-review-header">
-        {summaryAvailable ? (
-          <ReviewTabs tab={tab} changesLabel={changesLabel} onChange={setTab} />
-        ) : (
-          <Text style={styles.title}>{changesLabel}</Text>
-        )}
-        <View style={styles.spacer} />
-        {showLayoutControl && rows.length > 0 ? (
-          <DiffLayoutControl agentId={agentId} width={measured} />
-        ) : null}
-      </View>
-      <View style={styles.content}>
-        {tab === "verdict" && summaryAvailable ? (
-          <Verdict
-            turnId={turnId}
-            pending={summaryPending}
-            output={comparison?.output ?? null}
-            comparison={comparison}
-            failed={summaryFailed}
-            retrying={retrying}
-            onRetry={onRetry}
-          />
-        ) : (
-          <ChangesTab
-            diff={diff}
-            error={diffError}
-            rows={rows}
-            selectedFile={selectedFile}
-            layout={layout}
-            onSelectFile={onSelectFile}
-            onRetry={onRetryDiff}
-            retrying={retryingDiff}
-          />
-        )}
-      </View>
+    <View
+      style={styles.review}
+      onLayout={onLayout}
+      testID="arena-battle-comparison"
+      dataSet={reviewData}
+    >
+      <ReviewHeader
+        summaryAvailable={summaryAvailable}
+        tab={tab}
+        changesLabel={changesLabel}
+        onTabChange={setTab}
+        layoutControl={showLayoutControl && rows.length > 0}
+        agentId={agentId}
+        width={measured}
+        collapsed={collapsed}
+        onToggleCollapsed={toggleCollapsed}
+      />
+      {collapsed ? null : (
+        <View style={styles.content}>
+          {tab === "verdict" && summaryAvailable ? (
+            <Verdict
+              turnId={turnId}
+              pending={summaryPending}
+              output={comparison?.output ?? null}
+              comparison={comparison}
+              failed={summaryFailed}
+              retrying={retrying}
+              onRetry={onRetry}
+            />
+          ) : (
+            <ChangesTab
+              diff={diff}
+              error={diffError}
+              rows={rows}
+              openFiles={openFiles}
+              layout={layout}
+              onToggleFile={onToggleFile}
+              onRetry={onRetryDiff}
+              retrying={retryingDiff}
+            />
+          )}
+        </View>
+      )}
     </View>
   );
 }

@@ -334,23 +334,15 @@ describe("translation resources", () => {
     );
   });
 
-  it("includes sessions and agent list keys for the Batch 4H migration", () => {
-    expect(en.sessions.title).toBe("History");
-    expect(en.sessions.empty).toBe("No sessions yet");
-    expect(en.sessions.actions.loadMore).toBe("Load more");
+  it("includes archived chat and agent list keys for the Batch 4H migration", () => {
+    expect(en.sidebar.archived.title).toBe("Archived");
+    expect(en.sidebar.archived.empty).toBe("No archived chats");
+    expect(en.sidebar.archived.loadMore).toBe("Load more");
     expect(en.agentList.fallbackTitle).toBe("New session");
     expect(en.agentList.dateSections.today).toBe("Today");
     expect(en.agentList.dateSections.older).toBe("Older");
     expect(en.agentList.status.initializing).toBe("Starting");
     expect(en.agentList.status.running).toBe("Running");
-    expect(en.agentList.badges.archived).toBe("Archived");
-    expect(en.agentList.badges.pending).toBe("{{count}} pending");
-    expect(en.agentList.badges.attention).toBe("Attention");
-    expect(en.agentList.archiveSheet.hostOffline).toBe("Host offline");
-    expect(en.agentList.archiveSheet.runningAgent).toBe(
-      "This agent is still running. Archiving it will stop the agent.",
-    );
-    expect(en.agentList.archiveSheet.archive).toBe("Archive");
   });
 
   it("includes message utility keys for the Batch 4I migration", () => {
@@ -404,7 +396,7 @@ describe("translation resources", () => {
     expect(en.sidebar.actions.home).toBe("Home");
     expect(en.sidebar.actions.settings).toBe("Settings");
     expect(en.sidebar.actions.closeSidebar).toBe("Close sidebar");
-    expect(en.sidebar.sections.sessions).toBe("History");
+    expect(en.sidebar.sections.chats).toBe("Chats");
     expect(en.sidebar.workspace.actions.newChat).toBe("New chat");
     expect(en.sidebar.workspace.actions.startChatFor).toBe("Start a new chat in {{projectName}}");
     expect(en.sidebar.project.empty.title).toBe("No projects yet");

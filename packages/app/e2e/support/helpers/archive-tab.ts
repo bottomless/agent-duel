@@ -3,13 +3,8 @@ import { expect, type Page } from "@playwright/test";
 import { buildCreateAgentPreferences, buildSeededHost } from "./daemon-registry";
 import { getE2EDaemonPort } from "./daemon-port";
 import { getServerId } from "./server-id";
-import { expectAppRoute } from "./route-assertions";
 import { waitForWorkspaceTabsVisible } from "./workspace-tabs";
-import {
-  buildHostAgentDetailRoute,
-  buildHostWorkspaceRoute,
-  buildSessionsRoute,
-} from "@/utils/host-routes";
+import { buildHostAgentDetailRoute, buildHostWorkspaceRoute } from "@/utils/host-routes";
 
 export interface ArchiveTabAgent {
   id: string;
@@ -217,73 +212,50 @@ export async function reloadWorkspace(page: Page, workspaceId: string): Promise<
   await waitForWorkspaceTabsVisible(page);
 }
 
-export async function openSessions(page: Page): Promise<void> {
-  const sessionsButton = page.getByTestId("sidebar-sessions");
-  await expect(sessionsButton).toBeVisible({ timeout: 30_000 });
-  await sessionsButton.click();
-  await expectAppRoute(page, buildSessionsRoute(), { timeout: 30_000 });
-  await expect(page.getByText("History", { exact: true }).last()).toBeVisible({
+/**
+ * Swaps the sidebar's list for the archived chats. The route stays where it was, and
+ * the view stays open across navigation, so a second call finds it already open.
+ */
+export async function openArchived(page: Page): Promise<void> {
+  const archivedView = page.getByTestId("sidebar-archived").filter({ visible: true }).first();
+  const archivedButton = page
+    .getByTestId("sidebar-archived-open")
+    .filter({ visible: true })
+    .first();
+  await expect(archivedView.or(archivedButton)).toBeVisible({ timeout: 30_000 });
+  if (!(await archivedView.isVisible())) {
+    await archivedButton.click();
+  }
+  await expect(archivedView).toBeVisible({ timeout: 30_000 });
+}
+
+const ARCHIVED_CHAT_SELECTOR = '[data-testid^="archived-chat-"]';
+
+function getArchivedChatByTitle(page: Page, title: string) {
+  return page.locator(ARCHIVED_CHAT_SELECTOR).filter({ hasText: title }).first();
+}
+
+export async function expectArchivedChatVisible(page: Page, title: string): Promise<void> {
+  await expect(getArchivedChatByTitle(page, title)).toBeVisible({ timeout: 30_000 });
+}
+
+export async function expectArchivedChatAbsent(page: Page, title: string): Promise<void> {
+  await expect(page.locator(ARCHIVED_CHAT_SELECTOR).filter({ hasText: title })).toHaveCount(0, {
     timeout: 30_000,
   });
 }
 
-const AGENT_ROW_SELECTOR = '[data-testid^="agent-row-"]';
-
-function getSessionRowByTitle(page: Page, title: string) {
-  return page.locator(AGENT_ROW_SELECTOR).filter({ hasText: title }).first();
-}
-
-export async function expectSessionRowVisible(page: Page, title: string): Promise<void> {
-  await expect(getSessionRowByTitle(page, title)).toBeVisible({ timeout: 30_000 });
-}
-
-export async function expectSessionRowArchived(page: Page, title: string): Promise<void> {
-  await expect(getSessionRowByTitle(page, title)).toContainText("Archived", { timeout: 30_000 });
-}
-
-export async function expectSessionRowNotArchived(page: Page, title: string): Promise<void> {
-  await expect(getSessionRowByTitle(page, title)).not.toContainText("Archived", {
-    timeout: 30_000,
-  });
-}
-
-export async function clickSessionRow(page: Page, title: string): Promise<void> {
-  const row = getSessionRowByTitle(page, title);
+export async function clickArchivedChat(page: Page, title: string): Promise<void> {
+  const row = getArchivedChatByTitle(page, title);
   await expect(row).toBeVisible({ timeout: 30_000 });
   await row.click();
 }
 
-export async function expectSessionsEmptyState(page: Page): Promise<void> {
-  // Guard: the sessions-empty spec owns a pristine daemon, so this helper only
+export async function expectArchivedEmptyState(page: Page): Promise<void> {
+  // Guard: the archived-empty spec owns a pristine daemon, so this helper only
   // needs to distinguish an empty result from the expected seeded rows.
-  await expect(page.locator(AGENT_ROW_SELECTOR)).toHaveCount(0, { timeout: 5_000 });
-  await expect(page.getByText("No sessions yet")).toBeVisible({ timeout: 30_000 });
-}
-
-export async function archiveAgentFromSessions(
-  page: Page,
-  input: { agentId: string; title: string },
-): Promise<void> {
-  const row = getSessionRowByTitle(page, input.title);
-  await expect(row).toBeVisible({ timeout: 30_000 });
-  const box = await row.boundingBox();
-  if (!box) {
-    throw new Error(`Could not read bounding box for session row ${input.agentId}.`);
-  }
-
-  // Long-press the row. Idle agents are archived immediately (no modal).
-  // Running/initializing agents show a confirmation modal instead.
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.waitForTimeout(900);
-  await page.mouse.up();
-
-  // If a confirmation modal appears (running agent), click the archive button.
-  const archiveButton = page.getByTestId("agent-action-archive").first();
-  const modalVisible = await archiveButton.isVisible().catch(() => false);
-  if (modalVisible) {
-    await archiveButton.click();
-  }
-
-  await expectSessionRowArchived(page, input.title);
+  await expect(page.locator(ARCHIVED_CHAT_SELECTOR)).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.getByText("No archived chats", { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
 }

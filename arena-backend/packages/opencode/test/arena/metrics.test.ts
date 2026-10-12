@@ -74,6 +74,23 @@ describe("ArenaMetrics review effort", () => {
     expect(effort?.dwellMsByPane.changes).toBeUndefined()
   })
 
+  test("does not count time with the review folded away", () => {
+    // Folding hands the screen back to the threads. Opening the review again
+    // brings back the same tab without a new tab.viewed, so its time resumes.
+    const effort = reviewEffort(
+      [
+        event(0, { type: "battle.opened" }),
+        event(1000, { type: "tab.viewed", tab: "changes" }),
+        event(3000, { type: "review.collapsed", on: true }),
+        event(60_000, { type: "review.collapsed", on: false }),
+        event(64_000, { type: "file.selected", file: "a.ts", index: 0 }),
+      ],
+    )
+    expect(effort?.dwellMsByPane).toEqual({ changes: 6000 })
+    expect(effort?.activeMs).toBe(6000)
+    expect(effort?.interactionCount).toBe(4)
+  })
+
   test("closes a review that ends while blurred", () => {
     const effort = reviewEffort(
       [

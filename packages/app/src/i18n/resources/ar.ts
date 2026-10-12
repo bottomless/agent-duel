@@ -229,22 +229,6 @@ export const ar: TranslationResources = {
       unarchive: "إلغاء الأرشفة",
     },
   },
-  sessions: {
-    interruptedForks: "عمليات التفريع المتوقفة",
-    recoveryLoadFailed: "{{host}}: تعذر تحميل عمليات التفريع المتوقفة",
-    forkFilesPreserved: "توقفت عملية التفريع. تم الاحتفاظ بالملفات المحلية.",
-    restoreWorkspace: "استعادة مساحة العمل",
-    title: "السجل",
-    empty: "لا توجد جلسات بعد",
-    noMatches: "لا توجد جلسات مطابقة",
-    tooManyMatches: "نتائج كثيرة جدًا — ضيّق نطاق البحث",
-    hostLoadFailed: "{{host}}: تعذر تحميل السجل",
-    searchPlaceholder: "البحث في السجل",
-    actions: {
-      loadMore: "تحميل المزيد",
-      clearSearch: "مسح البحث",
-    },
-  },
   agentList: {
     fallbackTitle: "جلسة جديدة",
     dateSections: {
@@ -261,16 +245,6 @@ export const ar: TranslationResources = {
       running: "جري",
       error: "خطأ",
       closed: "مغلق",
-    },
-    badges: {
-      archived: "مؤرشف",
-      pending: "{{count}}معلق",
-      attention: "انتباه",
-    },
-    archiveSheet: {
-      hostOffline: "Host غير متصل",
-      runningAgent: "هذا الوكيل لا يزال قيد التشغيل. ستؤدي أرشفته إلى إيقاف الوكيل.",
-      archive: "أرشيف",
     },
   },
   message: {
@@ -989,7 +963,24 @@ export const ar: TranslationResources = {
       appName: "Agent Duel",
     },
     sections: {
-      sessions: "السجل",
+      chats: "الدردشات",
+    },
+    archived: {
+      title: "المؤرشفة",
+      open: "الدردشات المؤرشفة",
+      close: "العودة إلى الدردشات",
+      searchPlaceholder: "البحث في الدردشات المؤرشفة",
+      clearSearch: "مسح البحث",
+      empty: "لا توجد دردشات مؤرشفة",
+      noMatches: "لا توجد دردشات مؤرشفة مطابقة",
+      tooManyMatches: "نتائج كثيرة جدًا — ضيّق نطاق البحث",
+      loadFailed: "تعذر تحميل الدردشات المؤرشفة",
+      hostLoadFailed: "{{host}}: تعذر تحميل الدردشات المؤرشفة",
+      loadMore: "تحميل المزيد",
+      interruptedForks: "عمليات التفريع المتوقفة",
+      recoveryLoadFailed: "{{host}}: تعذر تحميل عمليات التفريع المتوقفة",
+      forkFilesPreserved: "تم الاحتفاظ بالملفات",
+      restore: "استعادة",
     },
     project: {
       actions: {

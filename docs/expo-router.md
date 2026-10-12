@@ -17,7 +17,7 @@ Each layout owns only the routes directly inside its directory.
   `h/[serverId]/index`.
 - `packages/app/src/app/h/[serverId]/_layout.tsx` owns the host leaves with
   relative screen names: `index`, `workspace/[workspaceId]/index`,
-  `agent/[agentId]`, `sessions`, `open-project`, and `settings`.
+  `agent/[agentId]`, `open-project`, and `settings`.
 
 Expo Router warns with `[Layout children]: No route named ...` when a layout
 registers grandchildren. Treat that warning as a route-tree bug. On native, that
@@ -47,7 +47,7 @@ dynamic params exist before any nested workspace leaf is selected.
 
 ## App-Wide Route Hops
 
-When app-wide routes such as `/new`, `/settings`, or `/sessions` navigate back
+When app-wide routes such as `/new` or `/settings` navigate back
 into a host workspace, use `navigateToWorkspace()`. Do not make the caller
 branch on its current route.
 
@@ -70,8 +70,8 @@ against the wrong deck and disappear offscreen.
 Hidden host routes may keep their local params while an app-wide route is
 foregrounded. Active-workspace observers must prefer the current pathname and
 only use local param fallback during cold mount (`/` or empty pathname), or a
-hidden workspace can overwrite the remembered workspace before Settings or
-History returns.
+hidden workspace can overwrite the remembered workspace before Settings
+returns.
 
 ## Agent Targets
 

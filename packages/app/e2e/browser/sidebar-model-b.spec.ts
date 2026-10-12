@@ -100,7 +100,7 @@ test.describe("Model B sidebar shape", () => {
 
       // The deepest level inside the sidebar is the workspace row: no tab,
       // agent, or terminal element appears as a sidebar descendant.
-      const sidebar = page.getByTestId("sidebar-sessions").filter({ visible: true }).first();
+      const sidebar = page.getByTestId("left-sidebar").filter({ visible: true }).first();
       await expect(workspaceRow(page, mock.workspaceId).first()).toBeVisible({ timeout: 30_000 });
       await expect(sidebar.locator('[data-testid^="workspace-tab-"]')).toHaveCount(0);
       await expect(sidebar.locator('[data-testid^="sidebar-agent-row-"]')).toHaveCount(0);
@@ -129,7 +129,7 @@ test.describe("Model B sidebar shape", () => {
       // Switch to status grouping.
       await selectSidebarStatusGrouping(page);
 
-      const sidebar = page.getByTestId("sidebar-sessions").filter({ visible: true }).first();
+      const sidebar = page.getByTestId("left-sidebar").filter({ visible: true }).first();
 
       // The idle workspace lands in the Done bucket; the busy mock-agent workspace
       // lands in the Working bucket. Each workspace is bucketed independently.

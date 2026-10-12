@@ -234,22 +234,6 @@ export const ptBR: TranslationResources = {
       unarchive: "Desarquivar",
     },
   },
-  sessions: {
-    interruptedForks: "Forks interrompidos",
-    recoveryLoadFailed: "{{host}}: Não foi possível carregar os forks interrompidos",
-    forkFilesPreserved: "O fork foi interrompido. Os arquivos locais foram preservados.",
-    restoreWorkspace: "Restaurar espaço de trabalho",
-    title: "Histórico de agentes",
-    empty: "Nenhuma sessão ainda",
-    noMatches: "Nenhuma sessão corresponde",
-    tooManyMatches: "Muitos resultados — refine a busca",
-    hostLoadFailed: "{{host}}: Não foi possível carregar o histórico",
-    searchPlaceholder: "Buscar no histórico",
-    actions: {
-      loadMore: "Carregar mais",
-      clearSearch: "Limpar busca",
-    },
-  },
   agentList: {
     fallbackTitle: "Nova sessão",
     dateSections: {
@@ -266,16 +250,6 @@ export const ptBR: TranslationResources = {
       running: "Em execução",
       error: "Erro",
       closed: "Fechada",
-    },
-    badges: {
-      archived: "Arquivado",
-      pending: "{{count}} pendente(s)",
-      attention: "Atenção",
-    },
-    archiveSheet: {
-      hostOffline: "Host offline",
-      runningAgent: "Este agente ainda está em execução. Arquivá-lo interromperá o agente.",
-      archive: "Arquivar",
     },
   },
   message: {
@@ -1013,7 +987,24 @@ export const ptBR: TranslationResources = {
       appName: "Agent Duel",
     },
     sections: {
-      sessions: "Histórico",
+      chats: "Chats",
+    },
+    archived: {
+      title: "Arquivados",
+      open: "Chats arquivados",
+      close: "Voltar aos chats",
+      searchPlaceholder: "Buscar chats arquivados",
+      clearSearch: "Limpar busca",
+      empty: "Nenhum chat arquivado",
+      noMatches: "Nenhum chat arquivado corresponde",
+      tooManyMatches: "Muitos resultados — refine a busca",
+      loadFailed: "Não foi possível carregar os chats arquivados",
+      hostLoadFailed: "{{host}}: Não foi possível carregar os chats arquivados",
+      loadMore: "Carregar mais",
+      interruptedForks: "Forks interrompidos",
+      recoveryLoadFailed: "{{host}}: Não foi possível carregar os forks interrompidos",
+      forkFilesPreserved: "Arquivos preservados",
+      restore: "Restaurar",
     },
     project: {
       actions: {

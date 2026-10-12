@@ -189,12 +189,12 @@ export async function closeMobileAgentSidebar(page: Page): Promise<void> {
   await closeButton.click();
 }
 
-// The mobile sidebar panel animates via translateX. Waiting for its header to be fully visible
-// prevents a close click from targeting a button while the panel is still moving.
+// The mobile sidebar panel animates via translateX. Waiting for its close button to be fully
+// visible prevents a close click from targeting a button while the panel is still moving.
 export async function expectMobileAgentSidebarVisible(page: Page): Promise<void> {
-  await expect(page.getByTestId("sidebar-sessions")).toBeInViewport({ ratio: 1, timeout: 5_000 });
+  await expect(page.getByTestId("sidebar-close")).toBeInViewport({ ratio: 1, timeout: 5_000 });
 }
 
 export async function expectMobileAgentSidebarHidden(page: Page): Promise<void> {
-  await expect(page.getByTestId("sidebar-sessions")).not.toBeInViewport({ timeout: 5_000 });
+  await expect(page.getByTestId("sidebar-close")).not.toBeInViewport({ timeout: 5_000 });
 }
