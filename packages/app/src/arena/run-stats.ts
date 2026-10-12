@@ -36,8 +36,10 @@ export function arenaRunStatusLabel(run: ArenaRun, now: number): string {
         "type" in run.status &&
         run.status.type === "retry"
       )
-        return "message" in run.status && run.status.message === "Continuing after response limit"
-          ? "Continuing after response limit"
+        return "message" in run.status &&
+          (run.status.message === "Continuing after response limit" ||
+            run.status.message === "Continuing after model timeout")
+          ? run.status.message
           : "Retrying";
       if (isArenaRunPossiblyStalled(run, now)) {
         const tool = arenaRunningTool(run);

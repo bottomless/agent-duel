@@ -27,7 +27,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { ArenaRuntime } from "@/arena/runtime"
-import { timeoutModelIdle, type ModelIdleActivity } from "@/arena/model-idle"
+import { MODEL_IDLE_TIMEOUT_MS, timeoutModelIdle, type ModelIdleActivity } from "@/arena/model-idle"
 import { streamProgress } from "@/arena/proxy"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
@@ -384,13 +384,11 @@ const live: Layer.Layer<
             let idle: ModelIdleActivity | undefined
             const source =
               input.model.providerID === ArenaRuntime.providerID
-                ? timeoutModelIdle(result.result.fullStream, ctrl, 120_000, (activity) => {
+                ? timeoutModelIdle(result.result.fullStream, ctrl, MODEL_IDLE_TIMEOUT_MS, (activity) => {
                     idle = activity
                   })
                 : result.result.fullStream
-            return Stream.fromAsyncIterable(source, (e) =>
-              e instanceof Error ? e : new Error(String(e)),
-            ).pipe(
+            return Stream.fromAsyncIterable(source, (e) => (e instanceof Error ? e : new Error(String(e)))).pipe(
               // The contestant sees only a neutral error, so this line is how a stall is diagnosed.
               Stream.tapError(() =>
                 idle

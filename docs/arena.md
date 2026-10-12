@@ -941,10 +941,14 @@ or replay a partially received response to recover a payment failure.
 An output-token cap continues from the saved response and tool results, under the same assignment.
 Never replay that response: completed tools may already have changed files. Unfinished tool calls
 must stay unexecuted; ask the model to replace them with smaller writes or patches. Allow three
-additional responses per user turn, including across compaction and loop restarts, then report the
-response limit visibly and preserve completed work. This budget is separate from transport retries.
-OpenRouter can report a truncated tool call as `tool_calls`; normalize its native length reason
-before the SDK parses arguments, or it can turn incomplete JSON into an executable empty object.
+additional responses for each recovery sequence, including across compaction and loop restarts,
+then report the recovery failure visibly and preserve completed work. A successful complete response
+resets the budget so later cutoffs do not penalize a long run; failed tools and compaction summaries
+do not reset it. This budget is separate from transport retries.
+OpenRouter can report a truncated tool call as `tool_calls`, even in its native finish reason.
+Treat incomplete arguments at the requested output cap as a cutoff too, including when usage arrives
+after the finish chunk. A complete call at the cap remains valid. Normalize before the SDK flushes
+arguments, or it can turn incomplete JSON into an executable empty object.
 
 Other retryable Arena failures share an eight-retry, two-minute budget per execution. A missing or
 malformed retry hint uses bounded backoff so a persistent 5xx cannot spin indefinitely. A known
@@ -965,8 +969,11 @@ Never restart once the attempt has started a local tool: the resent request does
 call, and the model can repeat its side effect. That failure ends the step instead, and the next
 step continues from the stored tool call and result (`session/processor.ts`).
 
-An Arena model response that sends no provider chunk for two minutes fails and enters the same retry
-policy. Arena streams request raw chunks (`session/llm.ts`) because some models reason for minutes in
+An Arena model response that sends no provider chunk for 150 seconds cancels its request and
+continues from its partial response with instructions to use smaller writes. Idle failures and
+output cutoffs share the three-attempt recovery budget above, so alternating failures cannot
+reset it. Completed tools stay in history; unfinished calls are marked interrupted. Exhaustion
+ends the run with a neutral explanation and preserves completed work. Arena streams request raw chunks (`session/llm.ts`) because some models reason for minutes in
 chunks that carry only OpenRouter `reasoning_details`, which produce no AI SDK part; counting only
 parts kills those streams mid-thought. Keep-alive comments are not chunks, so a stalled model still
 times out. The deadline pauses while a local tool runs or waits for approval; a long tool call must

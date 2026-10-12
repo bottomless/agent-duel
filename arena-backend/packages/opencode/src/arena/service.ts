@@ -41,7 +41,7 @@ import { Image } from "@/image/image"
 import { SessionPrompt } from "@/session/prompt"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
-import { ArenaOutputLimit } from "./output-limit"
+import { ArenaResponseRecovery } from "./response-recovery"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { clearToolExecutionEnvironment, gateToolExecution, isToolExecutionGated } from "@/session/tool-execution-gate"
 import { Permission } from "@/permission"
@@ -53,11 +53,7 @@ import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { generate as generateComparison } from "./comparison"
-import {
-  canonicalizeArenaEnvironment,
-  canonicalizeTranscriptPaths,
-  localizeArenaEnvironment,
-} from "./canonical-path"
+import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
 import { comparisonTimeline } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
 import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
@@ -286,7 +282,7 @@ function contestantSystemInstruction(worktree?: string, environmentPending = fal
     environmentPending && worktree
       ? `The initial model call is running while the environment is still being prepared at ${worktree}. This is your worktree path. You may reason immediately. Tools that do not need the filesystem can run before the base checkout is ready. Once it is ready, safe reads can run while ignored content finishes copying. A tool that could observe or change incomplete state will wait until its required setup phase completes.`
       : ""
-  return [contestantWorktreeInstruction, ArenaOutputLimit.INSTRUCTION, pendingEnvironment, currentPreview]
+  return [contestantWorktreeInstruction, ArenaResponseRecovery.INSTRUCTION, pendingEnvironment, currentPreview]
     .filter(Boolean)
     .join("\n\n")
 }
@@ -737,7 +733,8 @@ async function hostMetadataFingerprint(commonGitDir: string) {
   }
   // Refs the mirror leaves alone: the stash, whose older entries live only in its reflog, notes
   // and replacements. A reftable checkout keeps them in its tables, which this does not read.
-  for (const name of ["refs/stash", "logs/refs/stash"]) add(name, await readFile(join(commonGitDir, name)).catch(() => undefined))
+  for (const name of ["refs/stash", "logs/refs/stash"])
+    add(name, await readFile(join(commonGitDir, name)).catch(() => undefined))
   for (const namespace of ["refs/notes", "refs/replace"]) {
     const names = await readdir(join(commonGitDir, namespace), { recursive: true }).catch(() => [] as string[])
     for (const name of names.toSorted()) {
@@ -2241,8 +2238,7 @@ export const layer: Layer.Layer<
         // would show one branch and battle on another. Only the name moves here: a head that
         // moved is a different checkout than the chat's history was built on, and completeTurn
         // and the blocked-restore path below own that transition.
-        const renamed =
-          state.head === chat.canonicalCheckout?.head && state.branch !== chat.canonicalCheckout.branch
+        const renamed = state.head === chat.canonicalCheckout?.head && state.branch !== chat.canonicalCheckout.branch
         if (!renamed && sameConflicts(chat.trunkConflicts ?? [], state.conflicts)) return chat
         const refreshed = yield* recordTrunkState(store, chat._id, {
           conflicts: state.conflicts,
@@ -3548,10 +3544,7 @@ export const layer: Layer.Layer<
      * so an agent running there races nothing -- and the prompt is how the developer gets help
      * with the thing Arena is parked on. Every other unresolved turn still owns the checkout.
      */
-    const parkedPromotionTurn = Effect.fn("Arena.parkedPromotionTurn")(function* (
-      store: Store,
-      chat: ChatDocument,
-    ) {
+    const parkedPromotionTurn = Effect.fn("Arena.parkedPromotionTurn")(function* (store: Store, chat: ChatDocument) {
       if (chat.status !== "battle_active" || !chat.activeTurnID) return undefined
       const turn = yield* promise(() => store.turn(chat.activeTurnID!))
       // `isParkedPromotion` is shared with the HTTP mutation guard, which runs first and would
@@ -3757,7 +3750,7 @@ export const layer: Layer.Layer<
       if (assistant?.error && !isStopAbort({ stopped, error: assistant.error })) {
         unsettled.push(
           assistant.error.name === "MessageOutputLengthError"
-            ? ArenaOutputLimit.EXHAUSTED
+            ? ArenaResponseRecovery.EXHAUSTED
             : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
         )
       }
@@ -4851,7 +4844,10 @@ export const layer: Layer.Layer<
             Effect.tap(() => Effect.sync(() => dispatch.cancel(new Error("Arena prompt stopped before dispatch")))),
           )
           // Staging starts once the request has left, so it cannot compete with the dispatch.
-          yield* Effect.raceFirst(promise(() => dispatch.promise), settledBeforeDispatch).pipe(
+          yield* Effect.raceFirst(
+            promise(() => dispatch.promise),
+            settledBeforeDispatch,
+          ).pipe(
             Effect.tapError((dispatchError) => Effect.sync(() => dispatch.cancel(dispatchError))),
             preparationPhase("dispatch-initial-request", context),
           )
@@ -4945,10 +4941,7 @@ export const layer: Layer.Layer<
               ...(turn.baseSnapshot?.permanentRef ? { requiredRefs: [turn.baseSnapshot.permanentRef] } : {}),
               fetchChangedOnly: reused && warm?.refsMirrored === true,
             }),
-          ).pipe(
-            Effect.mapError(error),
-            preparationPhase("mirror-refs", { chatID: chat._id, turnID: turn._id, side }),
-          )
+          ).pipe(Effect.mapError(error), preparationPhase("mirror-refs", { chatID: chat._id, turnID: turn._id, side }))
           yield* withGit(snapshotHostRefs({ host: info.host })).pipe(
             Effect.mapError(error),
             preparationPhase("snapshot-host-refs", { chatID: chat._id, turnID: turn._id, side }),
@@ -8425,7 +8418,12 @@ export const layer: Layer.Layer<
       const operation = yield* withGit(repositoryOperation(root)).pipe(Effect.mapError(error))
       if (operation) {
         const items: ReviewItem[] = [{ kind: "busy", key: "@busy", fingerprint: operation, operation }]
-        return { kind: "review" as const, items, planned: [] as PlannedRef[], switchTo: undefined as string | undefined }
+        return {
+          kind: "review" as const,
+          items,
+          planned: [] as PlannedRef[],
+          switchTo: undefined as string | undefined,
+        }
       }
       const frozenHead = turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA
       const permanentRef = winner.permanentRef ?? `${refRoot(turn)}/${winner.side}`
@@ -8462,7 +8460,9 @@ export const layer: Layer.Layer<
       if (winner.branchChanged && !winner.finalBranch && rawHead && rawHead !== frozenHead) {
         for (let attempt = 1; !targetBranch; attempt++) {
           const name = `arena/turn-${turn.turnIndex + 1}${attempt > 1 ? `-${attempt}` : ""}`
-          const target = yield* withGit(inspectBranchTarget({ canonical: root, branch: name })).pipe(Effect.mapError(error))
+          const target = yield* withGit(inspectBranchTarget({ canonical: root, branch: name })).pipe(
+            Effect.mapError(error),
+          )
           if (target.valid && !target.tip) targetBranch = name
         }
         checkoutAction = { action: "agent", agent: rawHead }
@@ -8801,11 +8801,11 @@ export const layer: Layer.Layer<
         const manual =
           partial !== undefined ||
           (applicationError instanceof OperationError &&
-          (applicationError.operation === "verify_canonical_branch" ||
-            applicationError.operation === "target_branch_checked_out" ||
-            applicationError.operation === "promote_checkout_branch" ||
-            applicationError.operation === "winner_head_missing" ||
-            applicationError.operation === "write_winner_refs"))
+            (applicationError.operation === "verify_canonical_branch" ||
+              applicationError.operation === "target_branch_checked_out" ||
+              applicationError.operation === "promote_checkout_branch" ||
+              applicationError.operation === "winner_head_missing" ||
+              applicationError.operation === "write_winner_refs"))
         return promise(() =>
           store.updateTurn(turn._id, {
             gitApplication: {
@@ -9302,7 +9302,8 @@ export const layer: Layer.Layer<
           store.updateTurn(turn._id, {
             gitApplication: {
               ...application,
-              reason: "Arena put your workspace back the way it was before the apply. The winning changes are not applied.",
+              reason:
+                "Arena put your workspace back the way it was before the apply. The winning changes are not applied.",
             },
           }),
         )

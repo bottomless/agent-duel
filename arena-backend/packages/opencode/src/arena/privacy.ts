@@ -6,7 +6,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import type { Provider } from "@/provider/provider"
 import type { ProviderAuth } from "@/provider/auth"
 import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
-import { ArenaOutputLimit } from "./output-limit"
+import { ArenaResponseRecovery } from "./response-recovery"
 import { DateTime, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { ArenaAttachments } from "./attachments"
@@ -280,7 +280,10 @@ function apiError(input: ApiError): ApiError {
   return {
     name: "APIError",
     data: {
-      message: paymentMessage(input.data.statusCode, input.data.responseBody) ?? errorMessage,
+      message:
+        input.data.message === ArenaResponseRecovery.IDLE_EXHAUSTED
+          ? ArenaResponseRecovery.IDLE_EXHAUSTED
+          : (paymentMessage(input.data.statusCode, input.data.responseBody) ?? errorMessage),
       isRetryable: input.data.isRetryable,
       ...(input.data.statusCode === undefined ? {} : { statusCode: input.data.statusCode }),
     },
@@ -313,10 +316,12 @@ function unknownError(input: unknown) {
       name: input.name,
       data: {
         message:
-          paymentMessage(
-            typeof input.data.statusCode === "number" ? input.data.statusCode : undefined,
-            typeof input.data.responseBody === "string" ? input.data.responseBody : undefined,
-          ) ?? errorMessage,
+          input.data.message === ArenaResponseRecovery.IDLE_EXHAUSTED
+            ? ArenaResponseRecovery.IDLE_EXHAUSTED
+            : (paymentMessage(
+                typeof input.data.statusCode === "number" ? input.data.statusCode : undefined,
+                typeof input.data.responseBody === "string" ? input.data.responseBody : undefined,
+              ) ?? errorMessage),
         isRetryable: input.data.isRetryable === true,
         ...(typeof input.data.statusCode === "number" ? { statusCode: input.data.statusCode } : {}),
       },
@@ -545,7 +550,9 @@ export function status(input: SessionStatusEvent.Info): SessionStatusEvent.Info 
   if (!ArenaRuntime.enabled() || input.type !== "retry") return input
   return {
     ...input,
-    message: input.message === ArenaOutputLimit.RECOVERING ? ArenaOutputLimit.RECOVERING : retryMessage,
+    message: [ArenaResponseRecovery.RECOVERING, ArenaResponseRecovery.IDLE_RECOVERING].includes(input.message)
+      ? input.message
+      : retryMessage,
     action: undefined,
   }
 }

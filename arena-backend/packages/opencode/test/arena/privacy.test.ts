@@ -9,6 +9,7 @@ import { SessionEvent } from "@opencode-ai/schema/session-event"
 import { hashArenaControlToken, setArenaCredentials } from "@/arena/credentials"
 import type { Store } from "@/arena/mongo"
 import { ArenaAttachments } from "@/arena/attachments"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { ArenaPrivacy } from "@/arena/privacy"
 import { setStoreForTest } from "@/arena/runtime"
 import { GlobalBus } from "@/bus/global"
@@ -171,6 +172,25 @@ afterEach(async () => {
 })
 
 describe("ArenaPrivacy", () => {
+  test("keeps neutral idle recovery status and exhaustion while stripping provider details", () => {
+    enableArenaControl()
+    expect(
+      ArenaPrivacy.status({ type: "retry", attempt: 2, message: ArenaResponseRecovery.IDLE_RECOVERING, next: 0 }),
+    ).toMatchObject({ message: ArenaResponseRecovery.IDLE_RECOVERING, attempt: 2 })
+    const message = contestantMessage()
+    if (message.info.role !== "assistant") throw new Error("Expected assistant fixture")
+    message.info.error = new SessionV1.APIError({
+      message: ArenaResponseRecovery.IDLE_EXHAUSTED,
+      isRetryable: false,
+      responseBody: hiddenSlug,
+    }).toObject()
+    const result = ArenaPrivacy.messages([message])[0]!
+    expect(result.info).toMatchObject({
+      error: { data: { message: ArenaResponseRecovery.IDLE_EXHAUSTED, isRetryable: false } },
+    })
+    expect(JSON.stringify(result)).not.toContain(hiddenSlug)
+  })
+
   test("keeps only the synthetic replay marker needed by the durable output-limit budget", () => {
     enableArenaControl()
     const part = contestantMessage().parts.find((part) => part.type === "text")!

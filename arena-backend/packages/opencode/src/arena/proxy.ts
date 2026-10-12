@@ -151,7 +151,7 @@ function sessionHeaders(headers: Headers) {
   return { requestID, sessionID, parentSessionID }
 }
 
-export function rewriteBody(body: unknown, assignment: Assignment) {
+export function rewriteBody(body: unknown, assignment: Assignment): Record<string, unknown> {
   if (!record(body)) throw new Error("Arena proxy request body must be an object")
   if (body.model !== contestant.id) {
     throw new Error("Arena proxy request used an unexpected contestant transport model")
@@ -228,6 +228,54 @@ export function sanitizePayload(value: unknown, generationID: string, stream = f
   return sanitized
 }
 
+// Some routes report tool_calls for truncated JSON even in native_finish_reason. Usage can
+// arrive after that finish chunk. Correct the final reason before the SDK flushes pending calls
+// as {}, while continuing to forward complete tools and partial output immediately.
+function normalizeToolCutoff(limit: unknown) {
+  const choices = new Map<number, { finish?: string; arguments: Map<number, string> }>()
+  let tokens = 0
+  return (value: unknown): unknown => {
+    if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) return value
+    if (!record(value) || !Array.isArray(value.choices)) return value
+    if (record(value.usage) && typeof value.usage.completion_tokens === "number") {
+      tokens = value.usage.completion_tokens
+    }
+    for (const choice of value.choices) {
+      if (!record(choice)) continue
+      const index = typeof choice.index === "number" ? choice.index : 0
+      const state = choices.get(index) ?? { arguments: new Map<number, string>() }
+      choices.set(index, state)
+      if (typeof choice.finish_reason === "string") state.finish = choice.finish_reason
+      const delta = choice.delta
+      if (!record(delta) || !Array.isArray(delta.tool_calls)) continue
+      for (const call of delta.tool_calls) {
+        if (!record(call) || typeof call.index !== "number") continue
+        const args = record(call.function) && typeof call.function.arguments === "string" ? call.function.arguments : ""
+        state.arguments.set(call.index, (state.arguments.get(call.index) ?? "") + args)
+      }
+    }
+    if (!Number.isFinite(tokens) || tokens < limit) return value
+    const normalized = [...value.choices]
+    for (const [index, state] of choices) {
+      if (state.finish !== "tool_calls") continue
+      const incomplete = [...state.arguments.values()].some((args) => {
+        try {
+          JSON.parse(args)
+          return false
+        } catch {
+          return true
+        }
+      })
+      if (!incomplete) continue
+      state.finish = "length"
+      const position = normalized.findIndex((choice) => record(choice) && (choice.index ?? 0) === index)
+      if (position === -1) normalized.push({ index, delta: {}, finish_reason: "length" })
+      else normalized[position] = { ...normalized[position], finish_reason: "length" }
+    }
+    return { ...value, choices: normalized }
+  }
+}
+
 function responseHeaders(source: Headers) {
   const headers = new Headers()
   for (const name of ["content-type", "cache-control", "retry-after"]) {
@@ -262,12 +310,12 @@ function researchHeaders(source: Headers) {
   )
 }
 
-function sanitizeLine(line: string, generationID: string) {
+function sanitizeLine(line: string, generationID: string, normalize: (value: unknown) => unknown) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
   if (!raw || raw === "[DONE]") return line
   try {
-    return `data: ${JSON.stringify(sanitizePayload(JSON.parse(raw), generationID, true))}`
+    return `data: ${JSON.stringify(normalize(sanitizePayload(JSON.parse(raw), generationID, true)))}`
   } catch {
     return (
       "data: " + JSON.stringify({ error: { message: "Arena contestant stream failed", type: "arena_stream_error" } })
@@ -300,9 +348,11 @@ function sanitizeStream(
   stream: ReadableStream<Uint8Array>,
   generationID: string,
   metadata: RequestMetadata,
+  maxTokens: unknown,
   telemetry?: Telemetry,
   signal?: AbortSignal,
 ) {
+  const normalize = normalizeToolCutoff(maxTokens)
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
@@ -324,7 +374,7 @@ function sanitizeStream(
           pending += tail
           if (pending) {
             finished ||= endsResponse(pending)
-            const line = sanitizeLine(pending, generationID)
+            const line = sanitizeLine(pending, generationID, normalize)
             telemetry?.rawChunk?.(metadata, line)
             controller.enqueue(encoder.encode(line))
           }
@@ -362,7 +412,7 @@ function sanitizeStream(
         pending = lines.pop() ?? ""
         for (const line of lines) {
           finished ||= endsResponse(line)
-          const sanitized = `${sanitizeLine(line, generationID)}\n`
+          const sanitized = `${sanitizeLine(line, generationID, normalize)}\n`
           telemetry?.rawChunk?.(metadata, sanitized)
           controller.enqueue(encoder.encode(sanitized))
         }
@@ -487,7 +537,14 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     }
 
     if (type.includes("text/event-stream") && response.body) {
-      const body = sanitizeStream(response.body, generationID, metadata, telemetry, request.signal)
+      const body = sanitizeStream(
+        response.body,
+        generationID,
+        metadata,
+        rewritten.max_tokens,
+        telemetry,
+        request.signal,
+      )
       return new Response(body, { status: response.status, headers })
     }
 
