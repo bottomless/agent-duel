@@ -302,57 +302,62 @@ function sanitizeStream(
     async pull(controller) {
       let reading = false
       try {
-        reading = true
-        const next = await reader.read()
-        reading = false
-        if (settled) return
-        if (next.done) {
-          tracked.endedAt = Date.now()
-          const tail = decoder.decode()
-          pending += tail
-          if (pending) {
-            finished ||= endsResponse(pending)
-            const line = sanitizeLine(pending, generationID)
-            telemetry?.rawChunk?.(metadata, line)
-            controller.enqueue(encoder.encode(line))
-          }
-          if (!finished) {
-            // A hosting time limit or dropped connection ends the body cleanly. Without a finish or
-            // [DONE] the response was cut off, and accepting it would end the run as complete.
-            settled = true
-            tracked.failedAt = Date.now()
-            tracked.failure = "cut-off"
-            try {
-              await telemetry?.error?.(metadata, new Error("Arena contestant stream was cut off"), new Date())
-            } catch {
-              controller.error(new Error("Arena telemetry persistence failed"))
+        // A pull that emits nothing may never be called again. Keep reading a fragmented SSE line.
+        while (true) {
+          reading = true
+          const next = await reader.read()
+          reading = false
+          if (settled) return
+          if (next.done) {
+            tracked.endedAt = Date.now()
+            const tail = decoder.decode()
+            pending += tail
+            if (pending) {
+              finished ||= endsResponse(pending)
+              const line = sanitizeLine(pending, generationID)
+              telemetry?.rawChunk?.(metadata, line)
+              controller.enqueue(encoder.encode(line))
+            }
+            if (!finished) {
+              // A hosting time limit or dropped connection ends the body cleanly. Without a finish or
+              // [DONE] the response was cut off, and accepting it would end the run as complete.
+              settled = true
+              tracked.failedAt = Date.now()
+              tracked.failure = "cut-off"
+              try {
+                await telemetry?.error?.(metadata, new Error("Arena contestant stream was cut off"), new Date())
+              } catch {
+                controller.error(new Error("Arena telemetry persistence failed"))
+                return
+              }
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(retryableStreamPayload())}\n\n`))
+              controller.close()
               return
             }
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(retryableStreamPayload())}\n\n`))
+            tracked.savingAt = Date.now()
+            await telemetry?.complete?.(metadata, new Date())
+            tracked.savedAt = Date.now()
+            settled = true
             controller.close()
+            tracked.closedAt = Date.now()
             return
           }
-          tracked.savingAt = Date.now()
-          await telemetry?.complete?.(metadata, new Date())
-          tracked.savedAt = Date.now()
-          settled = true
-          controller.close()
-          tracked.closedAt = Date.now()
+          const chunk = next.value
+          tracked.chunks++
+          tracked.bytes += chunk.byteLength
+          tracked.lastChunkAt = Date.now()
+          const raw = decoder.decode(chunk, { stream: true })
+          pending += raw
+          const lines = pending.split("\n")
+          pending = lines.pop() ?? ""
+          if (!lines.length) continue
+          for (const line of lines) {
+            finished ||= endsResponse(line)
+            const sanitized = `${sanitizeLine(line, generationID)}\n`
+            telemetry?.rawChunk?.(metadata, sanitized)
+            controller.enqueue(encoder.encode(sanitized))
+          }
           return
-        }
-        const chunk = next.value
-        tracked.chunks++
-        tracked.bytes += chunk.byteLength
-        tracked.lastChunkAt = Date.now()
-        const raw = decoder.decode(chunk, { stream: true })
-        pending += raw
-        const lines = pending.split("\n")
-        pending = lines.pop() ?? ""
-        for (const line of lines) {
-          finished ||= endsResponse(line)
-          const sanitized = `${sanitizeLine(line, generationID)}\n`
-          telemetry?.rawChunk?.(metadata, sanitized)
-          controller.enqueue(encoder.encode(sanitized))
         }
       } catch {
         if (settled) return
