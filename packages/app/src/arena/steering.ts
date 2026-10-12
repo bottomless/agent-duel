@@ -57,6 +57,14 @@ export function arenaQueuedSteerDelivery(run: ArenaRun): string {
   return "Sends after the current reply";
 }
 
+/** Send now cuts the running work short but, unlike Stop, keeps the contestant going. */
+export function arenaSendNowHint(run: ArenaRun): string {
+  const tool = arenaRunningTool(run);
+  if (tool === "command") return "Interrupts the current command";
+  if (tool === "tool") return "Interrupts the current tool";
+  return "Interrupts the current reply";
+}
+
 /** What a queued steer attaches, as one line under its text: `2 images · notes.md`. */
 export function arenaQueuedSteerAttachments(
   steer: Pick<QueuedArenaSteer, "images" | "attachments">,

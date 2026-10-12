@@ -1,19 +1,18 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { Text, View } from "react-native";
 import { Clock, X } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useIsCompactFormFactor } from "@/constants/layout";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import {
   arenaQueuedSteerAttachments,
   arenaQueuedSteerDelivery,
   arenaQueuedSteering,
+  arenaSendNowHint,
   type QueuedArenaSteer,
 } from "./steering";
-import { arenaRunningTool } from "./run-liveness";
 import { useArenaTurnMutation, useArenaTurnPending } from "./use-arena-session";
 
 const ThemedClock = withUnistyles(Clock);
@@ -91,7 +90,7 @@ export function ArenaQueuedSteers({
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">
-            <Text style={styles.tooltipText}>{sendNowHint(run)}</Text>
+            <Text style={styles.tooltipText}>{arenaSendNowHint(run)}</Text>
           </TooltipContent>
         </Tooltip>
       </View>
@@ -110,14 +109,6 @@ export function ArenaQueuedSteers({
   );
 }
 
-/** Send now cuts the running work short but, unlike Stop, keeps the contestant going. */
-function sendNowHint(run: ArenaRun): string {
-  const tool = arenaRunningTool(run);
-  if (tool === "command") return "Interrupts the current command";
-  if (tool === "tool") return "Interrupts the current tool";
-  return "Interrupts the current reply";
-}
-
 function QueuedSteer({
   message,
   deleting,
@@ -129,48 +120,32 @@ function QueuedSteer({
   disabled: boolean;
   onDelete: (messageId: string) => void;
 }) {
-  const compact = useIsCompactFormFactor();
-  const [hovered, setHovered] = useState(false);
-  const handlePointerEnter = useCallback(() => setHovered(true), []);
-  const handlePointerLeave = useCallback(() => setHovered(false), []);
   const handleDelete = useCallback(() => onDelete(message.id), [message.id, onDelete]);
-  const showDelete = compact || hovered || deleting;
   const attached = arenaQueuedSteerAttachments(message);
+  // Always visible: a delete that appears only on hover reads as no delete at all.
   return (
-    <View
-      style={styles.entry}
-      onPointerEnter={handlePointerEnter}
-      onPointerLeave={handlePointerLeave}
-      testID="arena-queued-steer"
-    >
-      <View style={styles.entryRow}>
-        <View
-          style={showDelete ? styles.deleteVisible : styles.deleteHidden}
-          pointerEvents={showDelete ? "auto" : "none"}
-        >
-          <Button
-            size="xs"
-            variant="ghost"
-            leftIcon={X}
-            accessibilityLabel="Delete queued message"
-            onPress={handleDelete}
-            disabled={disabled}
-            loading={deleting}
-            testID="arena-queued-steer-delete"
-          />
-        </View>
-        <View style={styles.bubble}>
-          {message.text ? (
-            <Text style={styles.text} numberOfLines={1}>
-              {message.text}
-            </Text>
-          ) : null}
-          {attached ? (
-            <Text style={styles.attached} numberOfLines={1}>
-              {attached}
-            </Text>
-          ) : null}
-        </View>
+    <View style={styles.entry} testID="arena-queued-steer">
+      <Button
+        size="xs"
+        variant="ghost"
+        leftIcon={X}
+        accessibilityLabel="Delete queued message"
+        onPress={handleDelete}
+        disabled={disabled}
+        loading={deleting}
+        testID="arena-queued-steer-delete"
+      />
+      <View style={styles.bubble}>
+        {message.text ? (
+          <Text style={styles.text} numberOfLines={1}>
+            {message.text}
+          </Text>
+        ) : null}
+        {attached ? (
+          <Text style={styles.attached} numberOfLines={1}>
+            {attached}
+          </Text>
+        ) : null}
       </View>
     </View>
   );
@@ -181,9 +156,6 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[1],
   },
   entry: {
-    position: "relative",
-  },
-  entryRow: {
     flexDirection: "row",
     justifyContent: "flex-end",
     alignItems: "center",
@@ -205,12 +177,6 @@ const styles = StyleSheet.create((theme) => ({
   attached: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.xs,
-  },
-  deleteVisible: {
-    opacity: 1,
-  },
-  deleteHidden: {
-    opacity: 0,
   },
   status: {
     flexDirection: "row",

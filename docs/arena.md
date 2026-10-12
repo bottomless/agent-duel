@@ -208,15 +208,15 @@ and the verb (`Steer Agent A`, `Ask both a follow-up before choosing`) and the s
 the verb. If the selected target stops being valid, keep the draft, clear the selection, and
 require another pick instead of rerouting it. Prompts and replies carry attachments (see
 **Attachments** under [A turn](#a-turn)). Steering waits for
-the current tool call or response to finish. Keep pending messages in a panel below that
-contestant's scrolling thread until the next model request includes them. Show only what the
-queue waits for (`Sends when the current command finishes`), the queued message text, a line naming
-its images and files, **Interrupt and send**, and a trash button; tool activity stays in the thread
-above. A file's contents never show in the queue.
-The trash button discards that contestant's queued messages without interrupting its current work.
-**Interrupt and send** resumes those stored messages immediately;
-it must not submit them again or finish the contestant's battle run. Paseo's ordinary queue waits
-for an entire run, so the battle owns delivery while reusing the shared controls. The toolbar stays on one row.
+the current tool call or response to finish, so until the next model request includes a message,
+show it as queued at the end of that contestant's thread, never as sent: a one-line bubble, a line
+naming its images and files, and under the queue one muted line with what it waits for
+(`Sends when the current command finishes`) and **Send now**. A file's contents never show in the
+queue. Each queued message has its own delete, always visible because a hover-only one went
+unnoticed; it removes that message without interrupting the current work. **Send now** interrupts
+the running work and resumes the stored messages; unlike Stop, it must not submit them again or
+finish the contestant's battle run. Paseo's ordinary queue waits for an entire run, so the battle
+owns delivery. The toolbar stays on one row.
 When its own available width is narrow, shorten the target labels, show tool permissions as a
 status icon, and use the send arrow; retain the target-specific placeholder and accessible labels. Tool permissions use a quiet
 status menu: `Auto Accept` or `Ask before tools`. Its description names the scope and explains

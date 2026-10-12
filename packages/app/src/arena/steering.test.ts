@@ -4,6 +4,7 @@ import {
   arenaQueuedSteerAttachments,
   arenaQueuedSteerDelivery,
   arenaQueuedSteering,
+  arenaSendNowHint,
   arenaToolOutput,
 } from "./steering";
 
@@ -118,6 +119,18 @@ describe("queued Arena steering", () => {
     expect(arenaQueuedSteerDelivery(run)).toBe("Sends when the current tool finishes");
     run.parts = { ...run.parts, working: [{ type: "text", text: "Thinking it through" }] };
     expect(arenaQueuedSteerDelivery(run)).toBe("Sends after the current reply");
+  });
+
+  it("says Send now interrupts the running command, tool, or reply", () => {
+    const run = running();
+    expect(arenaSendNowHint(run)).toBe("Interrupts the current command");
+    run.parts = {
+      ...run.parts,
+      working: [{ type: "tool", tool: "read", state: { status: "running", input: {} } }],
+    };
+    expect(arenaSendNowHint(run)).toBe("Interrupts the current tool");
+    run.parts = { ...run.parts, working: [{ type: "text", text: "Thinking it through" }] };
+    expect(arenaSendNowHint(run)).toBe("Interrupts the current reply");
   });
 
   it("prefers final output over running tool output", () => {
