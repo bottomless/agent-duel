@@ -54,12 +54,15 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Format } from "../../src/format"
 import { TestInstance } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
-import { reply, TestLLMServer } from "../lib/llm-server"
+import { raw, reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { ArenaModelProfile } from "@/arena/model-profile"
+import { ArenaOutputLimit } from "@/arena/output-limit"
+import { ArenaRuntime } from "@/arena/runtime"
+import { arenaCredentials, setArenaCredentials } from "@/arena/credentials"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -243,6 +246,236 @@ function makeHttpNoLLMServer(input?: { mcpInstructions?: MCP.ServerInstructions[
 }
 
 const it = testEffect(makeHttp())
+
+const outputLimitSession = Effect.fn("test.outputLimitSession")(function* () {
+  const previous = process.env.OPENCODE_ARENA
+  const credentials = arenaCredentials()
+  process.env.OPENCODE_ARENA = "1"
+  const llm = yield* TestLLMServer
+  setArenaCredentials({
+    mode: "hosted",
+    token: "test",
+    controlTokenHash: "0".repeat(64),
+    controlPlaneUrl: new URL(llm.url).origin,
+  })
+  const session = yield* Session.Service
+  const chat = yield* session.create({
+    title: "Pinned",
+    permission: [{ permission: "*", pattern: "*", action: "allow" }],
+  })
+  ArenaRuntime.registry.assign(chat.id, {
+    runID: chat.id,
+    rootSessionID: chat.id,
+    scopeID: chat.id,
+    assignmentID: chat.id,
+    telemetry: false,
+  })
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      if (previous === undefined) delete process.env.OPENCODE_ARENA
+      else process.env.OPENCODE_ARENA = previous
+      setArenaCredentials(credentials)
+      ArenaRuntime.registry.assignments.delete(chat.id)
+    }),
+  )
+  return { chat, llm, session }
+})
+
+it.instance("Arena continues truncated text without losing the partial answer", () =>
+  Effect.gen(function* () {
+    const { chat, llm, session } = yield* outputLimitSession()
+    const prompt = yield* SessionPrompt.Service
+    yield* llm.push(reply().text("First half.").length(), reply().text("Second half.").stop())
+    const result = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Explain the task" }] })
+    expect(result.info).toMatchObject({ role: "assistant", finish: "stop" })
+    expect(yield* llm.hits).toHaveLength(2)
+    const messages = yield* session.messages({ sessionID: chat.id })
+    expect(
+      messages
+        .flatMap((m) => m.parts)
+        .filter((p) => p.type === "text")
+        .map((p) => p.text),
+    ).toContain("First half.")
+    expect(JSON.stringify((yield* llm.inputs)[1])).toContain("Continue from the partial response")
+  }),
+)
+
+it.instance("Arena bounds output recovery and does not reset it when the loop restarts", () =>
+  Effect.gen(function* () {
+    const { chat, llm } = yield* outputLimitSession()
+    const prompt = yield* SessionPrompt.Service
+    const events = yield* EventV2Bridge.Service
+    const recovery: unknown[] = []
+    const off = yield* events.listen((event) => {
+      if (event.type === SessionStatus.Event.Status.type) {
+        const data = event.data as typeof SessionStatus.Event.Status.data.Type
+        if (data.sessionID === chat.id && data.status.type === "retry")
+          recovery.push({ attempt: data.status.attempt, message: data.status.message })
+      }
+      return Effect.void
+    })
+    yield* llm.push(
+      reply().text("one").length(),
+      reply().text("two").length(),
+      reply().text("three").length(),
+      reply().tool("bash", { command: "true", description: "Complete a tool before the limit" }).length(),
+    )
+    const result = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Long answer" }] })
+    yield* off
+    expect(result.info).toMatchObject({ finish: "length", error: { name: "MessageOutputLengthError", data: {} } })
+    expect(recovery).toEqual([
+      { attempt: 1, message: "Continuing after response limit" },
+      { attempt: 2, message: "Continuing after response limit" },
+      { attempt: 3, message: "Continuing after response limit" },
+    ])
+    expect(yield* llm.hits).toHaveLength(4)
+    const restarted = yield* prompt.loop({ sessionID: chat.id })
+    expect(restarted.info.id).toBe(result.info.id)
+    expect(yield* llm.hits).toHaveLength(4)
+    yield* llm.push(reply().text("New partial").length(), reply().text("done").stop())
+    const next = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "A new smaller task" }] })
+    expect(next.info).toMatchObject({ finish: "stop" })
+    expect(yield* llm.hits).toHaveLength(6)
+  }),
+)
+
+it.instance("Arena rejects incomplete arguments and preserves tools already executed in the response", () =>
+  Effect.gen(function* () {
+    const { chat, llm, session } = yield* outputLimitSession()
+    const { directory } = yield* TestInstance
+    const prompt = yield* SessionPrompt.Service
+    const rejected = path.join(directory, "rejected.txt")
+    const saved = path.join(directory, "saved.txt")
+    const chunk = (delta: Record<string, unknown>, finish?: string) => ({
+      choices: [{ index: 0, delta, ...(finish ? { finish_reason: "tool_calls", native_finish_reason: finish } : {}) }],
+    })
+    yield* llm.push(
+      raw({
+        chunks: [
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "first",
+                type: "function",
+                function: {
+                  name: "bash",
+                  arguments: JSON.stringify({
+                    command: `printf done >> '${path.join(directory, "once.txt")}'`,
+                    description: "Record one execution",
+                  }),
+                },
+              },
+            ],
+          }),
+          chunk({
+            tool_calls: [{ index: 1, id: "second", type: "function", function: { name: "write", arguments: "" } }],
+          }),
+          chunk({
+            tool_calls: [
+              {
+                index: 1,
+                function: { arguments: JSON.stringify({ filePath: rejected, content: "unfinished" }).slice(0, -3) },
+              },
+            ],
+          }),
+          chunk({}, "max_output_tokens"),
+        ],
+      }),
+      reply().tool("write", { filePath: saved, content: "small complete file" }),
+      reply().text("done").stop(),
+    )
+    const result = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Create the files" }] })
+    expect(result.info).toMatchObject({ finish: "stop" })
+    expect(yield* Effect.promise(() => Bun.file(path.join(directory, "once.txt")).text())).toBe("done")
+    expect(yield* Effect.promise(() => Bun.file(rejected).exists())).toBe(false)
+    expect(yield* Effect.promise(() => Bun.file(saved).text())).toBe("small complete file")
+    const messages = yield* session.messages({ sessionID: chat.id })
+    const tools = messages.flatMap((m) => m.parts).filter((p) => p.type === "tool")
+    expect(tools.map((p) => [p.tool, p.state.status])).toEqual([
+      ["bash", "completed"],
+      ["write", "error"],
+      ["write", "completed"],
+    ])
+    expect(JSON.stringify((yield* llm.inputs)[1])).toContain("This call was not executed")
+    expect(yield* llm.hits).toHaveLength(3)
+  }),
+)
+it.instance("Arena retains the recovery budget across compaction markers and synthetic continuations", () =>
+  Effect.gen(function* () {
+    const { chat, llm, session } = yield* outputLimitSession()
+    const prompt = yield* SessionPrompt.Service
+    yield* llm.push(reply().reason("Thinking").length(), reply().text("done").stop())
+    yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Work" }] })
+    const messages = yield* session.messages({ sessionID: chat.id })
+    const user = messages.find((m) => m.info.role === "user")!
+    const marker = MessageID.ascending()
+    const continued = MessageID.ascending()
+    expect(
+      ArenaOutputLimit.count([
+        ...messages,
+        {
+          info: { ...user.info, id: marker },
+          parts: [{ type: "compaction", auto: true, id: PartID.ascending(), messageID: marker, sessionID: chat.id }],
+        },
+        {
+          info: { ...user.info, id: continued },
+          parts: [
+            {
+              type: "text",
+              synthetic: true,
+              text: "Continue",
+              id: PartID.ascending(),
+              messageID: continued,
+              sessionID: chat.id,
+            },
+          ],
+        },
+      ]),
+    ).toBe(1)
+    const replay = MessageID.ascending()
+    expect(
+      ArenaOutputLimit.count([
+        ...messages,
+        {
+          info: { ...user.info, id: replay },
+          parts: [
+            ...user.parts,
+            {
+              type: "text",
+              synthetic: true,
+              metadata: { arena_compaction_replay: true },
+              text: "Continue",
+              id: PartID.ascending(),
+              messageID: replay,
+              sessionID: chat.id,
+            },
+          ],
+        },
+      ]),
+    ).toBe(1)
+    expect(yield* llm.hits).toHaveLength(2)
+  }),
+)
+
+it.instance("Arena cancellation stops an output-limit recovery", () =>
+  Effect.gen(function* () {
+    const { chat, llm, session } = yield* outputLimitSession()
+    const prompt = yield* SessionPrompt.Service
+    yield* llm.push(reply().text("Partial answer").length(), reply().text("Continuing").hang())
+    const fiber = yield* prompt
+      .prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Work" }] })
+      .pipe(Effect.forkChild)
+    yield* llm.wait(2)
+    yield* prompt.cancel(chat.id)
+    const exit = yield* Fiber.await(fiber)
+    expect(Exit.isSuccess(exit)).toBe(true)
+    const messages = yield* session.messages({ sessionID: chat.id })
+    expect(messages.at(-1)?.info).toMatchObject({ role: "assistant", error: { name: "MessageAbortedError" } })
+    expect(yield* llm.hits).toHaveLength(2)
+  }),
+)
+
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
 const withMcpInstructions = testEffect(

@@ -171,6 +171,17 @@ afterEach(async () => {
 })
 
 describe("ArenaPrivacy", () => {
+  test("keeps only the synthetic replay marker needed by the durable output-limit budget", () => {
+    enableArenaControl()
+    const part = contestantMessage().parts.find((part) => part.type === "text")!
+    expect(
+      ArenaPrivacy.part({ ...part, synthetic: true, metadata: { arena_compaction_replay: true, model: hiddenSlug } }),
+    ).toMatchObject({ metadata: { arena_compaction_replay: true } })
+    expect(ArenaPrivacy.part({ ...part, metadata: { arena_compaction_replay: true } })).toMatchObject({
+      metadata: undefined,
+    })
+  })
+
   test("leaves non-Arena values and mutation behavior unchanged", () => {
     delete process.env.OPENCODE_ARENA
     const config = { model: `${hiddenProvider}/${hiddenAlias}`, provider: { [hiddenProvider]: {} } }

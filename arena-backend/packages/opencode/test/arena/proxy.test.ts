@@ -39,6 +39,27 @@ function transportError(code: string) {
 }
 
 describe("ArenaProxy", () => {
+  test("preserves output exhaustion when OpenRouter labels an unfinished call as tool_calls", () => {
+    for (const reason of ["length", "max_tokens", "max_output_tokens"]) {
+      expect(
+        sanitizePayload(
+          { choices: [{ finish_reason: "tool_calls", native_finish_reason: reason, delta: {} }] },
+          "generation",
+        ),
+      ).toEqual({
+        choices: [{ finish_reason: "length", delta: {} }],
+      })
+    }
+    expect(
+      sanitizePayload(
+        { choices: [{ finish_reason: "tool_calls", native_finish_reason: "tool_use", delta: {} }] },
+        "generation",
+      ),
+    ).toEqual({
+      choices: [{ finish_reason: "tool_calls", delta: {} }],
+    })
+  })
+
   test("maps only known pre-header connection failures to a neutral retryable response", async () => {
     for (const code of ["ConnectionRefused", "ECONNREFUSED", "ECONNRESET"]) {
       const registry = new AssignmentRegistry()

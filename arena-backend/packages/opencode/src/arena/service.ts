@@ -41,6 +41,7 @@ import { Image } from "@/image/image"
 import { SessionPrompt } from "@/session/prompt"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
+import { ArenaOutputLimit } from "./output-limit"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { clearToolExecutionEnvironment, gateToolExecution, isToolExecutionGated } from "@/session/tool-execution-gate"
 import { Permission } from "@/permission"
@@ -285,7 +286,9 @@ function contestantSystemInstruction(worktree?: string, environmentPending = fal
     environmentPending && worktree
       ? `The initial model call is running while the environment is still being prepared at ${worktree}. This is your worktree path. You may reason immediately. Tools that do not need the filesystem can run before the base checkout is ready. Once it is ready, safe reads can run while ignored content finishes copying. A tool that could observe or change incomplete state will wait until its required setup phase completes.`
       : ""
-  return [contestantWorktreeInstruction, pendingEnvironment, currentPreview].filter(Boolean).join("\n\n")
+  return [contestantWorktreeInstruction, ArenaOutputLimit.INSTRUCTION, pendingEnvironment, currentPreview]
+    .filter(Boolean)
+    .join("\n\n")
 }
 function error(value: unknown) {
   return value instanceof Error ? value : new Error(String(value))
@@ -469,7 +472,12 @@ function assignment(value: { readonly assignmentID: string }): HiddenAssignment 
   }
 }
 
-function assignmentDecision(resolution: ReturnType<typeof voteResolution> | ReturnType<typeof stoppedResolution> | ReturnType<typeof earlyResolution>): BattleAssignmentDecision {
+function assignmentDecision(
+  resolution:
+    | ReturnType<typeof voteResolution>
+    | ReturnType<typeof stoppedResolution>
+    | ReturnType<typeof earlyResolution>,
+): BattleAssignmentDecision {
   if (resolution.kind === "vote") return resolution.vote === "tie" ? "tie" : `select:${resolution.vote}`
   if (resolution.kind === "early") return `select:${resolution.vote}`
   if (resolution.appliedSide) return `select:${resolution.appliedSide}`
@@ -1537,7 +1545,11 @@ export const layer: Layer.Layer<
                         Effect.mapError(error),
                       ),
                     ),
-                status: bestEffort(statuses.get(sessionID).pipe(Effect.map(ArenaPrivacy.status))),
+                status: bestEffort(
+                  inDirectory(promptHosts.get(sessionID) ?? run.worktree, statuses.get(sessionID)).pipe(
+                    Effect.map(ArenaPrivacy.status),
+                  ),
+                ),
                 permissions: bestEffort(
                   permissions
                     .list()
@@ -3729,7 +3741,11 @@ export const layer: Layer.Layer<
       }
       // The panes say why a stopped run stopped, so the abort that ends it is not reported here.
       if (assistant?.error && !isStopAbort({ stopped, error: assistant.error })) {
-        unsettled.push(`Contestant assistant error: ${JSON.stringify(assistant.error)}`)
+        unsettled.push(
+          assistant.error.name === "MessageOutputLengthError"
+            ? ArenaOutputLimit.EXHAUSTED
+            : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
+        )
       }
       if (Exit.isFailure(promptExit)) unsettled.push(Cause.pretty(promptExit.cause))
       const runState: RunDocument["runState"] =

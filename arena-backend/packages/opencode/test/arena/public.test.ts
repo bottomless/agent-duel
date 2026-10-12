@@ -1,3 +1,4 @@
+import { ArenaOutputLimit } from "@/arena/output-limit"
 import { describe, expect, test } from "bun:test"
 import type { ArenaActiveOperation } from "../../src/arena/operation-tracker"
 import { jsonValue, project } from "../../src/arena/public"
@@ -170,6 +171,18 @@ describe("ArenaPublic", () => {
       { operation: "applying_changes", startedAt: 20, state: "running" },
     ])
   })
+
+  test.each([false, true])(
+    "explains exhausted output recovery without revealing the contestant, revealed=%s",
+    (revealed) => {
+      const input = snapshot(revealed)
+      input.runs[0]!.runState = "error"
+      input.runs[0]!.error = `${ArenaOutputLimit.EXHAUSTED}\nprivate-provider detail`
+      const output = project(input)
+      expect(output.runs[0]?.error).toBe(ArenaOutputLimit.EXHAUSTED)
+      expect(output.runs[0]?.error).not.toContain("private-provider")
+    },
+  )
 
   test.each([false, true])("hides billing details in payment errors, revealed=%s", (revealed) => {
     const input = snapshot(revealed)

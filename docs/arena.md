@@ -926,6 +926,14 @@ credit-limit and unknown payment failures need service-side attention. Keep bill
 of user-facing messages. Never change contestants
 or replay a partially received response to recover a payment failure.
 
+An output-token cap continues from the saved response and tool results, under the same assignment.
+Never replay that response: completed tools may already have changed files. Unfinished tool calls
+must stay unexecuted; ask the model to replace them with smaller writes or patches. Allow three
+additional responses per user turn, including across compaction and loop restarts, then report the
+response limit visibly and preserve completed work. This budget is separate from transport retries.
+OpenRouter can report a truncated tool call as `tool_calls`; normalize its native length reason
+before the SDK parses arguments, or it can turn incomplete JSON into an executable empty object.
+
 Other retryable Arena failures share an eight-retry, two-minute budget per execution. A missing or
 malformed retry hint uses bounded backoff so a persistent 5xx cannot spin indefinitely. A known
 connection failure before response headers becomes a retryable upstream error; cancellation and

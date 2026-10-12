@@ -6,6 +6,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import type { Provider } from "@/provider/provider"
 import type { ProviderAuth } from "@/provider/auth"
 import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
+import { ArenaOutputLimit } from "./output-limit"
 import { DateTime, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { ArenaAttachments } from "./attachments"
@@ -437,7 +438,14 @@ export function messageInfo(input: MessageInfo): MessageInfo {
 
 export function part(input: MessagePart): MessagePart {
   if (!ArenaRuntime.enabled()) return input
-  if (input.type === "text") return { ...input, metadata: attachmentMetadata(input.metadata) }
+  if (input.type === "text")
+    return {
+      ...input,
+      metadata:
+        input.synthetic && input.metadata?.arena_compaction_replay === true
+          ? { ...attachmentMetadata(input.metadata), arena_compaction_replay: true }
+          : attachmentMetadata(input.metadata),
+    }
   if (input.type === "reasoning") return { ...input, metadata: undefined }
   if (input.type === "tool") {
     const state =
@@ -484,7 +492,11 @@ export function messages(input: ReadonlyArray<WithParts>): ReadonlyArray<WithPar
 
 export function status(input: SessionStatusEvent.Info): SessionStatusEvent.Info {
   if (!ArenaRuntime.enabled() || input.type !== "retry") return input
-  return { ...input, message: retryMessage, action: undefined }
+  return {
+    ...input,
+    message: input.message === ArenaOutputLimit.RECOVERING ? ArenaOutputLimit.RECOVERING : retryMessage,
+    action: undefined,
+  }
 }
 
 export function event(input: unknown): unknown {

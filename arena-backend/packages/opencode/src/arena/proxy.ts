@@ -197,6 +197,18 @@ export function sanitizePayload(value: unknown, generationID: string, stream = f
   }
 
   const sanitized = { ...value }
+  if (Array.isArray(sanitized.choices)) {
+    sanitized.choices = sanitized.choices.map((choice) => {
+      if (!record(choice)) return choice
+      const { native_finish_reason, ...safe } = choice
+      // OpenRouter can label a truncated tool call as tool_calls. Normalize before the SDK
+      // flushes it as an executable call with {} in place of its incomplete arguments.
+      if (["length", "max_tokens", "max_output_tokens"].includes(String(native_finish_reason))) {
+        safe.finish_reason = "length"
+      }
+      return safe
+    })
+  }
   if ("id" in sanitized) sanitized.id = generationID
   delete sanitized.model
   delete sanitized.model_id

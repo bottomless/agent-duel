@@ -36,7 +36,9 @@ export function arenaRunStatusLabel(run: ArenaRun, now: number): string {
         "type" in run.status &&
         run.status.type === "retry"
       )
-        return "Retrying";
+        return "message" in run.status && run.status.message === "Continuing after response limit"
+          ? "Continuing after response limit"
+          : "Retrying";
       if (isArenaRunPossiblyStalled(run, now)) return "No recent activity";
       return "Working";
     case "complete":

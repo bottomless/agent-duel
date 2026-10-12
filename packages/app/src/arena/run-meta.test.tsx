@@ -93,6 +93,21 @@ describe("ArenaRunMeta", () => {
     expect(label()).not.toMatch(/Retrying|Waiting|No recent/);
   });
 
+  it("shows response-limit recovery and clears it when the run settles", () => {
+    const run = {
+      ...FINISHED_RUN,
+      runState: "pending" as const,
+      status: { type: "retry", attempt: 1, message: "Continuing after response limit" },
+    };
+    const view = render(<ArenaRunMeta run={run} side="a" active />);
+    expect(view.getByTestId("arena-run-meta-a").textContent).toContain(
+      "Continuing after response limit",
+    );
+    view.rerender(<ArenaRunMeta run={{ ...run, runState: "error" }} side="a" active />);
+    expect(view.getByTestId("arena-run-meta-a").textContent).toContain("Failed");
+    expect(view.getByTestId("arena-run-meta-a").textContent).not.toContain("Continuing");
+  });
+
   it("refreshes the clock and activity when a retained chat becomes active again", () => {
     vi.useFakeTimers();
     const start = new Date("2026-09-25T10:00:00Z");

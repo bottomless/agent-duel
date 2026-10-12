@@ -501,6 +501,11 @@ export class Reply {
     return this
   }
 
+  length() {
+    this.#finish = "length"
+    return this
+  }
+
   toolCalls() {
     this.#finish = "tool_calls"
     this.#hang = false
@@ -700,6 +705,7 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
       })
 
       yield* router.add("POST", "/v1/chat/completions", handle("chat"))
+      yield* router.add("POST", "/api/openrouter/api/v1/chat/completions", handle("chat"))
       yield* router.add("POST", "/v1/responses", handle("responses"))
 
       yield* server.serve(router.asHttpEffect())

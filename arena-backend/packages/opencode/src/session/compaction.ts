@@ -527,6 +527,17 @@ const layer = Layer.effect(
               sessionID: input.sessionID,
             })
           }
+          if (assignment) {
+            yield* session.updatePart({
+              id: PartID.ascending(),
+              messageID: replayMsg.id,
+              sessionID: input.sessionID,
+              type: "text",
+              synthetic: true,
+              metadata: { arena_compaction_replay: true },
+              text: "Continue the request above after compaction.",
+            })
+          }
         }
 
         if (!replay) {

@@ -17,6 +17,7 @@ import { PartID } from "./schema"
 import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
+import { ArenaOutputLimit } from "@/arena/output-limit"
 import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
 import { Question } from "@/question"
@@ -55,6 +56,7 @@ type Input = {
   model: Provider.Model
   deferInitialSnapshot?: boolean
   snapshotProvider?: ToolExecutionProvider
+  outputLimitRecovery?: number
 }
 
 export interface Interface {
@@ -602,7 +604,12 @@ const layer = Layer.effect(
             state: {
               ...part.state,
               status: "error",
-              error: "Tool execution aborted",
+              error:
+                ctx.model.providerID === "arena" &&
+                ctx.assistantMessage.finish === "length" &&
+                part.state.status === "pending"
+                  ? ArenaOutputLimit.TOOL_INTERRUPTED
+                  : "Tool execution aborted",
               metadata: { ...metadata, interrupted: true },
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
@@ -687,7 +694,12 @@ const layer = Layer.effect(
             attemptStart = PartID.ascending()
             attemptCost = ctx.assistantMessage.cost
             toolStarted = false
-            yield* status.set(ctx.sessionID, { type: "busy" })
+            yield* status.set(
+              ctx.sessionID,
+              input.outputLimitRecovery === undefined
+                ? { type: "busy" }
+                : ArenaOutputLimit.status(input.outputLimitRecovery),
+            )
             const stream = llm.stream(streamInput)
 
             yield* stream.pipe(

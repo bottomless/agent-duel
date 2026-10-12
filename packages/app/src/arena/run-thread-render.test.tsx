@@ -258,7 +258,24 @@ function compactingSubagentRun(): ArenaRun {
   };
 }
 
+const OUTPUT_LIMIT_ERROR =
+  "Response limit reached after three recovery attempts. Completed work has been preserved. Continue with a smaller request.";
+const OUTPUT_LIMIT_RUN: ArenaRun = {
+  ...PENDING_REASONING_RUN,
+  runState: "error",
+  error: OUTPUT_LIMIT_ERROR,
+  parts: { assistant: [{ type: "text", text: "Saved progress before the limit." }] },
+};
+
 describe("ArenaRunThread", () => {
+  it("shows output-limit exhaustion while retaining partial text", () => {
+    const view = render(<ArenaRunThread run={OUTPUT_LIMIT_RUN} />);
+    expect(view.getByText(OUTPUT_LIMIT_ERROR).textContent).toBe(OUTPUT_LIMIT_ERROR);
+    expect(view.getByText("Saved progress before the limit.").textContent).toBe(
+      "Saved progress before the limit.",
+    );
+  });
+
   it.each([
     { state: "error", error: { name: "APIError" }, label: "Context compaction failed" },
     { state: "stopped", error: undefined, label: "Context compaction interrupted" },
