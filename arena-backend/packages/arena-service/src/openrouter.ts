@@ -36,7 +36,7 @@ function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
     reasoningTokens: number(completionDetails?.reasoning_tokens ?? source.reasoning_tokens),
     totalTokens: number(source.total_tokens) || promptTokens + completionTokens,
     cacheReadTokens: number(promptDetails?.cached_tokens ?? cacheDetails?.read ?? source.cache_read_tokens),
-    cacheWriteTokens: number(cacheDetails?.write ?? source.cache_write_tokens),
+    cacheWriteTokens: number(promptDetails?.cache_write_tokens ?? cacheDetails?.write ?? source.cache_write_tokens),
     cost: number(source.cost ?? value.cost),
     attempts: 1,
     latencyMs,
@@ -185,6 +185,13 @@ function assignedHeaders(source: Headers) {
   return headers
 }
 
+// Anthropic caches a prompt only when the request asks, and the blinded engine cannot tell it is
+// talking to Claude, so without this every contestant step pays full input price for the whole
+// conversation. OpenRouter puts the breakpoint on the last cacheable block of each request.
+function promptCache(slug: string) {
+  return slug.startsWith("anthropic/") ? { cache_control: { type: "ephemeral" } } : {}
+}
+
 const alternateSelectors = new Set(["model_id", "models", "preset", "presets", "provider", "provider_name", "route"])
 
 const unsupportedServerFeatures = new Set(["plugin", "plugins", "server_tools", "web_search_options"])
@@ -314,6 +321,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         model: routeAssignment.model.slug,
         reasoning: { effort: "high" },
         provider: routeAssignment.model.routing,
+        ...promptCache(routeAssignment.model.slug),
         stream_options: record(input.stream_options)
           ? { ...input.stream_options, include_usage: true }
           : { include_usage: true },

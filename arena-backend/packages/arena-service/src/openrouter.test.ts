@@ -377,6 +377,64 @@ describe("OpenRouter proxy", () => {
     expect(await (await invoke()).text()).toContain("arena_payment_required")
   })
 
+  test("asks OpenRouter to cache Anthropic prompts and records the cache use", async () => {
+    let slug = "anthropic/hidden-model"
+    const upstreamBodies: Record<string, unknown>[] = []
+    let recordedMetrics: Record<string, unknown> | undefined
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn-1",
+          assignments: [
+            {
+              assignmentID: "opaque-id",
+              model: { displayName: "Hidden Model", slug, canonicalSlug: slug, routing: { sort: "throughput" } },
+            },
+          ],
+        },
+      ],
+      recordMetrics: (document) => {
+        recordedMetrics = document
+      },
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async (_input, init) => {
+        upstreamBodies.push(JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>)
+        return Response.json({
+          choices: [{ message: { content: "done" } }],
+          usage: {
+            prompt_tokens: 1000,
+            completion_tokens: 5,
+            prompt_tokens_details: { cached_tokens: 900, cache_write_tokens: 80 },
+          },
+        })
+      },
+    })
+    const invoke = (route: string) =>
+      proxy(
+        new Request(`https://control.test/api/openrouter/api/v1/${route}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_00000000000000000000000000000001",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: false }),
+        }),
+      )
+
+    for (const route of ["chat/completions", "responses"]) expect((await invoke(route)).status).toBe(200)
+    expect(upstreamBodies.map((body) => body.cache_control)).toEqual([{ type: "ephemeral" }, { type: "ephemeral" }])
+    expect(recordedMetrics).toMatchObject({ usage: { promptTokens: 1000, cacheReadTokens: 900, cacheWriteTokens: 80 } })
+
+    slug = "openai/hidden-model"
+    await invoke("chat/completions")
+    expect(upstreamBodies.at(-1)).not.toHaveProperty("cache_control")
+  })
+
   test("does not limit assigned request size", async () => {
     const content = "x".repeat(2 * 1024 * 1024 + 1)
     let upstreamContentLength = 0
