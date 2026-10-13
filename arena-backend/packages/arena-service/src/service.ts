@@ -22,6 +22,12 @@ export type ArenaServiceOptions = {
   readonly now?: () => Date
   /** Defaults to checking the pool against the key's OpenRouter catalog once per service. */
   readonly validateModels?: (apiKey: string) => Promise<void>
+  /**
+   * Set where the service runs on the user's machine: whether a failed OpenRouter fetch means the
+   * machine is offline, which answers 503 `arena_network_unavailable` so the contestant waits for
+   * the network. The control plane leaves it unset; its own outbound failures are not the user's.
+   */
+  readonly networkUnavailable?: (error: unknown) => Promise<boolean>
 }
 
 export type ArenaService = {
@@ -51,6 +57,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
           validation = undefined
           throw error
         }))),
+    networkUnavailable: options.networkUnavailable,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)

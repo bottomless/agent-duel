@@ -655,6 +655,7 @@ export function ArenaRunThread({
   run,
   stoppedByEarlyPick = false,
   queuedSteers,
+  retry,
   respondingQuestionId = null,
   respondingPermissionId = null,
   onQuestionResponse,
@@ -665,6 +666,8 @@ export function ArenaRunThread({
   stoppedByEarlyPick?: boolean;
   /** Steers the model has not received yet; they show after everything the run has done. */
   queuedSteers?: ReactNode;
+  /** Retry for a failed run, under its error. */
+  retry?: ReactNode;
   respondingQuestionId?: string | null;
   respondingPermissionId?: string | null;
   onQuestionResponse?: (question: ArenaPendingQuestion, response: AgentPermissionResponse) => void;
@@ -730,6 +733,7 @@ export function ArenaRunThread({
         </Text>
       ) : null}
       {errorToShow ? <Text style={styles.error}>{errorToShow}</Text> : null}
+      {retry}
     </View>
   );
 }

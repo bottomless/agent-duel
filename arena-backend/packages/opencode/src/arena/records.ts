@@ -466,6 +466,10 @@ export type RunDocument = {
   durationMs: number | null
   runState: "pending" | "complete" | "stopped" | "error" | "interrupted"
   error?: string
+  /** The error is a failed model request the engine itself would retry, so the voter may retry it. */
+  errorRetryable?: boolean
+  /** How many times the voter retried this run after it failed. */
+  manualRetries?: number
   retries: ReadonlyArray<GenerationRetry>
   resolvedProviders?: string[]
   permissionOutcomes: ReadonlyArray<Readonly<Record<string, unknown>>>

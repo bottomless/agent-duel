@@ -70,6 +70,7 @@ const PENDING_REASONING_RUN = {
   durationMs: 10,
   selectable: true,
   applicable: true,
+  canRetry: false,
   startedAt: "2026-09-14T12:00:00.000Z",
   promptMessageID: "prompt",
   messages: [

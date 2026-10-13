@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { basename } from "path"
-import type { Resolution, Side } from "./domain"
+import { canRetryRun, type Resolution, type Side } from "./domain"
 import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument } from "./records"
 import { ArenaSchema } from "./schema"
@@ -77,6 +77,8 @@ export type PublicRun = {
   readonly permanentRef?: string
   readonly selectable: boolean
   readonly applicable: boolean
+  /** The voter may retry this failed run; see `canRetryRun`. */
+  readonly canRetry: boolean
   readonly identity?: PublicIdentity
   readonly messages?: readonly unknown[]
   readonly parts?: Readonly<Record<string, readonly unknown[]>>
@@ -401,6 +403,7 @@ export function project(snapshot: BattleSnapshot) {
         ...(run.permanentRef ? { permanentRef: run.permanentRef } : {}),
         selectable: run.selectable === true,
         applicable: run.applicability === "applicable",
+        canRetry: turn !== undefined && canRetryRun(turn, run),
         ...(revealed && turn ? { identity: identity(turn.placement[run.side]) } : {}),
       }),
     ),

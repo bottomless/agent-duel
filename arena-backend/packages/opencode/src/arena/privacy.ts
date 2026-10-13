@@ -12,6 +12,7 @@ import { createHash } from "node:crypto"
 import { ArenaAttachments } from "./attachments"
 import { ArenaRuntime } from "./runtime"
 import { paymentMessage } from "@agent-duel/arena-service/request-error"
+import { ARENA_OFFLINE_MESSAGE } from "@/session/retry"
 
 const providerID = ProviderV2.ID.make("arena")
 const modelID = ModelV2.ID.make("contestant")
@@ -548,9 +549,12 @@ export function messages(input: ReadonlyArray<WithParts>): ReadonlyArray<WithPar
 
 export function status(input: SessionStatusEvent.Info): SessionStatusEvent.Info {
   if (!ArenaRuntime.enabled() || input.type !== "retry") return input
+  // Both sides share the machine's network, so waiting for it reveals nothing about either model.
   return {
     ...input,
-    message: [ArenaResponseRecovery.RECOVERING, ArenaResponseRecovery.IDLE_RECOVERING].includes(input.message)
+    message: [ArenaResponseRecovery.RECOVERING, ArenaResponseRecovery.IDLE_RECOVERING, ARENA_OFFLINE_MESSAGE].includes(
+      input.message,
+    )
       ? input.message
       : retryMessage,
     action: undefined,

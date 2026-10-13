@@ -19,6 +19,7 @@ function run(input: Partial<ArenaRun> = {}): ArenaRun {
     durationMs: null,
     selectable: false,
     applicable: false,
+    canRetry: false,
     ...input,
     worktreeName: input.worktreeName ?? "a",
     worktreeActive: input.worktreeActive ?? true,

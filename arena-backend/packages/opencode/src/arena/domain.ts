@@ -198,3 +198,38 @@ export function isStopAbort(input: {
 }): boolean {
   return input.stopped && input.error?.name === "MessageAbortedError"
 }
+
+/**
+ * How many times the voter may retry one failed contestant run. Each retry spends on the model
+ * again, and a failure that keeps repeating is better answered by picking the other side or
+ * sending the prompt again.
+ */
+export const MAX_MANUAL_RUN_RETRIES = 2
+
+/**
+ * May the voter retry this failed run?
+ *
+ * Only while the battle is undecided, only for a model request that failed the way the engine
+ * retries on its own (`errorRetryable`), and only once the failure is committed and the run still
+ * has its worktree. The service refuses what this refuses, and the app shows Retry from it.
+ */
+export function canRetryRun(
+  turn: { readonly state: BattleState; readonly resolution?: unknown },
+  run: {
+    readonly runState: string
+    readonly errorRetryable?: boolean
+    readonly manualRetries?: number
+    readonly finalizedAt?: Date
+    readonly worktreeRemovedAt?: Date
+  },
+): boolean {
+  return (
+    (turn.state === "running" || turn.state === "awaiting_vote") &&
+    turn.resolution === undefined &&
+    run.runState === "error" &&
+    run.errorRetryable === true &&
+    (run.manualRetries ?? 0) < MAX_MANUAL_RUN_RETRIES &&
+    run.finalizedAt !== undefined &&
+    run.worktreeRemovedAt === undefined
+  )
+}

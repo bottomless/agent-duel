@@ -170,6 +170,42 @@ describe("Arena runtime proxy", () => {
     expect(upstream).toHaveBeenCalledOnce();
   });
 
+  it("tells a contestant the machine is offline only when the network is gone", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    const offline = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("getaddrinfo ENOTFOUND control.agentduel.test"), {
+        code: "ENOTFOUND",
+      }),
+    });
+    const refused = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    });
+    const send = (path: string) =>
+      fetch(`${baseUrl}/api/arena-runtime${path}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${runtime.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "contestant" }),
+      });
+
+    upstream.mockRejectedValueOnce(offline);
+    const contestant = await send("/api/openrouter/api/v1/chat/completions");
+    expect(contestant.status).toBe(503);
+    expect(await contestant.json()).toEqual({
+      error: { message: "Arena network is unavailable", type: "arena_network_unavailable" },
+    });
+
+    upstream.mockRejectedValueOnce(refused);
+    expect((await send("/api/openrouter/api/v1/chat/completions")).status).toBe(502);
+
+    upstream.mockRejectedValueOnce(offline);
+    expect((await send("/api/arena/assignments")).status).toBe(502);
+  });
+
   it("rejects routes outside the Arena allowlist", async () => {
     installArenaCredentials({
       mode: "hosted",

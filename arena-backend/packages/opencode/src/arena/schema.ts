@@ -287,6 +287,7 @@ const PublicRun = Schema.Struct({
   permanentRef: Schema.optional(Schema.String),
   selectable: Schema.Boolean,
   applicable: Schema.Boolean,
+  canRetry: Schema.Boolean,
   identity: Schema.optional(Identity),
   messages: Schema.optional(Schema.Array(Schema.Unknown)),
   parts: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.Unknown))),

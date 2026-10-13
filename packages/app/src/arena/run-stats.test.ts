@@ -19,6 +19,7 @@ function run(input: Partial<ArenaRun> = {}): ArenaRun {
     durationMs: null,
     selectable: false,
     applicable: false,
+    canRetry: false,
     ...input,
   };
 }
@@ -107,6 +108,30 @@ describe("arenaRunStatusLabel", () => {
     );
   });
 
+  it("keeps naming a long command after a steer is queued", () => {
+    // Queuing or deleting a steer is a run event, so lastEventAt moves while the command runs on.
+    const commandAt = Date.parse(STARTED_AT);
+    const steerAt = commandAt + POSSIBLY_STALLED_AFTER_MS + 5_000;
+    const steered = (command: string, startedAt: number) =>
+      run({
+        startedAt: STARTED_AT,
+        lastEventAt: new Date(steerAt).toISOString(),
+        parts: {
+          step: [
+            {
+              type: "tool",
+              tool: "bash",
+              state: { status: "running", input: { command }, time: { start: startedAt } },
+            },
+          ],
+        },
+      });
+    expect(arenaRunStatusLabel(steered("sleep 130", commandAt), steerAt + 1_000)).toBe(
+      "Running a command",
+    );
+    expect(arenaRunStatusLabel(steered("ls", steerAt - 1_000), steerAt + 1_000)).toBe("Working");
+  });
+
   it("shows retry before the silence warning", () => {
     const quiet = run({ startedAt: STARTED_AT, lastEventAt: STARTED_AT });
     expect(
@@ -115,6 +140,22 @@ describe("arenaRunStatusLabel", () => {
     expect(
       arenaRunStatusLabel({ ...quiet, status: { type: "retry" }, questions: [{ id: "q1" }] }, NOW),
     ).toBe("Waiting for your answer");
+  });
+
+  it("names the engine's offline wait instead of a retry", () => {
+    const quiet = run({ startedAt: STARTED_AT, lastEventAt: STARTED_AT });
+    expect(
+      arenaRunStatusLabel(
+        { ...quiet, status: { type: "retry", message: "Waiting for network", next: NOW } },
+        Date.parse(STARTED_AT) + POSSIBLY_STALLED_AFTER_MS,
+      ),
+    ).toBe("Waiting for network");
+    expect(
+      arenaRunStatusLabel(
+        { ...quiet, status: { type: "retry", message: "Arena contestant is retrying" } },
+        NOW,
+      ),
+    ).toBe("Retrying");
   });
 
   it("lets terminal states override stale waits and restores Working on new activity", () => {

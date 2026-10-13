@@ -133,6 +133,68 @@ test("Arena stops after eight additional retries even when failures are immediat
   )
 })
 
+function offline() {
+  return new SessionV1.APIError({
+    message: "Arena network is unavailable",
+    statusCode: 503,
+    isRetryable: true,
+    responseBody: JSON.stringify({
+      error: { message: "Arena network is unavailable", type: "arena_network_unavailable" },
+    }),
+  }).toObject()
+}
+
+it.effect("Arena waits out an offline machine without spending the retry budget or window", () =>
+  Effect.gen(function* () {
+    const server = new SessionV1.APIError({ message: "Server error", statusCode: 502, isRetryable: true }).toObject()
+    let error = server
+    const messages: string[] = []
+    const step = yield* Schedule.toStep(
+      SessionRetry.policy({
+        provider: "arena",
+        parse: () => error,
+        set: (info) =>
+          Effect.sync(() => {
+            messages.push(info.message)
+          }),
+      }),
+    )
+    // One real failure opens the two-minute window.
+    yield* step(0, null)
+    error = offline()
+    const waits: number[] = []
+    for (let index = 0; index < 40; index++) {
+      const [, interval] = yield* step(0, null)
+      waits.push(Duration.toMillis(interval))
+      yield* TestClock.adjust("10 minutes")
+    }
+    expect(waits.slice(0, 5)).toEqual([2000, 4000, 8000, 10000, 10000])
+    expect(Math.max(...waits)).toBe(10000)
+    expect(messages.slice(1).every((message) => message === SessionRetry.ARENA_OFFLINE_MESSAGE)).toBe(true)
+
+    // Back online, the next failure gets a fresh window and the seven retries the budget has left.
+    error = server
+    for (let index = 0; index < 7; index++) {
+      expect(Exit.isSuccess(yield* Effect.exit(step(0, null)))).toBe(true)
+    }
+    expect(Exit.isFailure(yield* Effect.exit(step(0, null)))).toBe(true)
+  }),
+)
+
+test("Arena treats only the network body as offline", () => {
+  expect(SessionRetry.retryable(offline(), "arena")).toEqual({ message: SessionRetry.ARENA_OFFLINE_MESSAGE })
+  const upstream = new SessionV1.APIError({
+    message: "Arena contestant request failed",
+    statusCode: 503,
+    isRetryable: true,
+    responseBody: JSON.stringify({
+      error: { message: "Arena contestant request failed", type: "arena_upstream_error" },
+    }),
+  }).toObject()
+  expect(SessionRetry.retryable(upstream, "arena")?.message).toBe("Arena contestant request failed")
+  expect(SessionRetry.retryable(offline(), "openai")?.message).toBe("Arena network is unavailable")
+})
+
 test("Arena does not schedule a retry past the remaining window", async () => {
   const error = new SessionV1.APIError({
     message: "Rate limited",

@@ -596,6 +596,52 @@ describe("OpenRouter proxy", () => {
     expect(body).not.toContain("private")
   })
 
+  test("answers an offline machine with the network body only where the service runs locally", async () => {
+    const assignmentSet = {
+      userId: "user-1",
+      scopeID: "turn-1",
+      assignments: [
+        {
+          assignmentID: "opaque-id",
+          model: {
+            displayName: "Hidden Model",
+            slug: "provider/hidden-model",
+            canonicalSlug: "provider/hidden-model-version",
+            routing: { sort: "throughput" },
+          },
+        },
+      ],
+    }
+    const db = fakeDb({ assignmentSets: () => [assignmentSet] })
+    const failure = new Error("Unable to connect. Is the computer able to access the url?")
+    const send = (options: Partial<ArenaServiceOptions>) =>
+      openrouter({
+        db: async () => db,
+        fetch: async () => {
+          throw failure
+        },
+        ...options,
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+
+    const local = await send({ networkUnavailable: async (error) => error === failure })
+    expect(local.status).toBe(503)
+    expect(await local.json()).toEqual({
+      error: { message: "Arena network is unavailable", type: "arena_network_unavailable" },
+    })
+    expect((await send({ networkUnavailable: async () => false })).status).toBe(502)
+    expect((await send({})).status).toBe(502)
+  })
+
   test("rejects cross-account, cross-scope, and incomplete assignment credentials", async () => {
     const assignmentSet = {
       userId: "user-1",

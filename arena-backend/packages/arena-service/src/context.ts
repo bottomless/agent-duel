@@ -20,6 +20,7 @@ export type ArenaContext = {
   readonly uuid: () => string
   readonly now: () => Date
   readonly validateModels: (apiKey: string) => Promise<void>
+  readonly networkUnavailable?: (error: unknown) => Promise<boolean>
 }
 
 type Failure = (message: string, status: number) => Response

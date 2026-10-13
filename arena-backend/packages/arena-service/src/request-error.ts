@@ -63,6 +63,26 @@ export function readPaymentError(body: string | undefined): PaymentErrorCode | u
   }
 }
 
+// A contestant request answers 503 with this when the user's machine has no network. The engine
+// waits for the network instead of spending the run's retry budget. The daemon's runtime proxy
+// writes the same body (`packages/server/src/server/accounts/network-unavailable.ts`).
+export const networkUnavailableType = "arena_network_unavailable"
+
+export function networkUnavailableError() {
+  return { error: { message: "Arena network is unavailable", type: networkUnavailableType } }
+}
+
+export function readNetworkUnavailable(body: string | undefined) {
+  if (!body) return false
+  let payload: unknown
+  try {
+    payload = JSON.parse(body)
+  } catch {
+    return false
+  }
+  return isRecord(payload) && isRecord(payload.error) && payload.error.type === networkUnavailableType
+}
+
 export function paymentMessage(status: number | undefined, body: string | undefined) {
   if (status !== 402) return
   return paymentMessages[readPaymentError(body) ?? "arena_payment_required"]

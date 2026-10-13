@@ -97,9 +97,10 @@ export function ArenaAutoAcceptControl({
         >
           Auto Accept
         </DropdownMenuItem>
+        {/* Both composers also save the choice as the provider's default (useDraftAgentFeatures,
+            AgentControls' handleSetFeature): new chats start with it, other chats keep theirs. */}
         <Text style={styles.hint}>
-          {battleActive ? "Applies to both contestants. " : "Applies to this chat. "}
-          Explicit deny rules still apply.
+          {`Applies to ${battleActive ? "both contestants" : "this chat"} and becomes the default for new chats. Explicit deny rules still apply.`}
         </Text>
       </DropdownMenuContent>
     </DropdownMenu>

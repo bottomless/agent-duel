@@ -16,6 +16,7 @@ import { GlobalBus } from "@/bus/global"
 import { AppRuntime } from "@/effect/app-runtime"
 import { Server } from "@/server/server"
 import { Session } from "@/session/session"
+import { SessionRetry } from "@/session/retry"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { eq } from "drizzle-orm"
 import { DateTime, Effect } from "effect"
@@ -322,6 +323,21 @@ describe("ArenaPrivacy", () => {
     expect(sanitized).not.toMatch(/credit|spending|payment|budget/i)
     expect(sanitized).not.toContain(hiddenProvider)
     expect(sanitized).not.toContain("responseBody")
+  })
+
+  test("replaces every retry message except the shared offline wait", () => {
+    process.env.OPENCODE_ARENA = "1"
+    const retry = { type: "retry" as const, attempt: 2, next: 10 }
+    expect(ArenaPrivacy.status({ ...retry, message: `${hiddenProvider} is overloaded` })).toEqual({
+      ...retry,
+      message: "Arena contestant is retrying",
+      action: undefined,
+    })
+    expect(ArenaPrivacy.status({ ...retry, message: SessionRetry.ARENA_OFFLINE_MESSAGE })).toEqual({
+      ...retry,
+      message: "Waiting for network",
+      action: undefined,
+    })
   })
 
   test("rewrites upstream tool call IDs into one contestant-agnostic format", () => {

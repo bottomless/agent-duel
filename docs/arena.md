@@ -222,8 +222,10 @@ finish the contestant's battle run. Paseo's ordinary queue waits for an entire r
 owns delivery. The toolbar stays on one row.
 When its own available width is narrow, shorten the target labels, show tool permissions as a
 status icon, and use the send arrow; retain the target-specific placeholder and accessible labels. Tool permissions use a quiet
-status menu: `Auto Accept` or `Ask before tools`. Its description names the scope and explains
-that enabling Auto Accept also accepts pending requests; explicit deny rules still apply.
+status menu: `Auto Accept` or `Ask before tools`. The choice applies to the chat, or to both
+contestants during a battle, and becomes the default for new chats; other chats keep their own. The
+carry-over is intended, so the menu says so. Its descriptions also explain that enabling Auto
+Accept accepts pending requests; explicit deny rules still apply.
 
 The vote lives in a centered sticky pill above the composer: `Choose A`, `Tie`, and `Choose B`.
 Anchor it over the transcript above the composer, with a gray surface inside the pill and a
@@ -957,6 +959,15 @@ permanent errors stay terminal. A broken response stream or transient OpenRouter
 restarts the request under the same retry budget. The budget stops scheduling new retries, not a
 request already in flight.
 
+An offline machine spends no retry. When a contestant request cannot reach the network at all (DNS
+fails or there is no route), the daemon's runtime proxy in a hosted build, or the in-process service
+in a BYOK build, answers 503 `arena_network_unavailable`. The contestant then waits with backoff
+capped at 10 seconds for as long as the network is gone, shows **Waiting for network**, and the next
+real failure gets a fresh two-minute window. A closed lid is the common case: macOS wakes briefly for
+Power Nap before Wi-Fi reconnects, and the window's monotonic clock stops during sleep, so without
+this each wake spent one retry until the run failed. The control plane never sends this answer; its
+own outbound failures are not the user's network.
+
 A stream that ends without a finish reason or `[DONE]` is broken too (`endsResponse` in
 `arena/proxy.ts`). The control plane's function time limit ends a response cleanly, mid-thought;
 accepted as a finish, the step has no tool call and the run completes with no answer. The retried
@@ -968,6 +979,17 @@ before the retry wait; otherwise the pane and the transcript show a half answer 
 Never restart once the attempt has started a local tool: the resent request does not contain that
 call, and the model can repeat its side effect. That failure ends the step instead, and the next
 step continues from the stored tool call and result (`session/processor.ts`).
+
+A run that fails after the budget can be retried by hand. A failed run cannot be chosen, so without
+a retry the voter is left with the other side alone. When the failure is one the policy above would
+have retried (`errorRetryable`, set in `finalizeSide`), the pane shows **Retry** under its error.
+Retry continues the same session on the same assignment from its last finished step, adding no
+message (`prompts.loop`), so the battle stays blind. It removes the failed step's message first, for
+the same reason a restart drops its parts. The other side keeps working, and the turn finalizes
+again once both have settled, as after a reply. Each run gets two retries
+(`MAX_MANUAL_RUN_RETRIES`): every retry is paid for, and a failure that keeps repeating is answered
+by the other side or a new prompt. `canRetryRun` in `arena/domain.ts` is the one rule; the service
+refuses what it refuses, and the app shows the button from it.
 
 An Arena model response that sends no provider chunk for 150 seconds cancels its request and
 continues from its partial response with instructions to use smaller writes. Idle failures and
@@ -992,8 +1014,11 @@ whose `createdAt` is when the hosted function reached the end of the response.
 `No recent activity` means the run has emitted no event for 90 seconds; it is not proof of a
 stalled process. Explicit retry and user-input waits take precedence. A tool call that is still
 running reads `Running a command` or `Running a tool` instead: a long command emits nothing until it
-ends, the same reason the engine's deadline pauses for it. That UI label alone must not stop or
-restart a contestant.
+ends, the same reason the engine's deadline pauses for it. Time that label from the call's own
+start as well as from the run's last event (`run-liveness.ts`): queuing or deleting a steer is a run
+event too, and must not put a long command back to `Working` for another 90 seconds. A shorter call
+stays `Working` so the label does not flicker from call to call. That UI label alone must not stop
+or restart a contestant.
 
 ## Gotchas
 

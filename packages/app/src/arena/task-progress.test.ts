@@ -21,6 +21,7 @@ function run(
     startedAt: "2026-09-11T10:00:00.000Z",
     selectable: true,
     applicable: true,
+    canRetry: false,
     messages,
     parts,
     ...(promptMessageID ? { promptMessageID } : {}),

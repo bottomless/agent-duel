@@ -15,6 +15,7 @@ function run(messages: unknown[], promptMessageID?: string): ArenaRun {
     durationMs: 10,
     selectable: true,
     applicable: true,
+    canRetry: false,
     // Dispatched: every run here has had its prompt sent. A run without `startedAt` has not,
     // and is covered on its own below.
     startedAt: "2026-09-04T12:00:00.000Z",

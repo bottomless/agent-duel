@@ -21,6 +21,7 @@ function running(): ArenaRun {
     durationMs: null,
     selectable: false,
     applicable: false,
+    canRetry: false,
     startedAt: "2026-10-05T12:00:00Z",
     promptMessageID: "prompt",
     messages: [

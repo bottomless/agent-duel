@@ -407,6 +407,8 @@ function installOpenRouterStub(options?: {
   readonly questionOrdinals?: ReadonlyArray<number>
   readonly emptyOrdinals?: ReadonlyArray<number>
   readonly contestantCommands?: Readonly<Partial<Record<number, string>>>
+  /** Contestants whose first request fails with a retryable 503 the engine will not wait out. */
+  readonly failFirstOrdinals?: ReadonlyArray<number>
 }) {
   const original = globalThis.fetch
   const calls = new Map<string, number>()
@@ -516,6 +518,10 @@ function installOpenRouterStub(options?: {
     ordinal.set(body.model, number)
     if (options?.delayAllMs !== undefined) await Bun.sleep(options.delayAllMs)
     else if (options?.delayedOrdinal === number) await Bun.sleep(options.delayMs ?? 0)
+    // A retry-after past the engine's two-minute retry window ends its own retries at once.
+    if (count === 1 && options?.failFirstOrdinals?.includes(number)) {
+      return Response.json({ error: { message: "Unavailable" } }, { status: 503, headers: { "retry-after": "121" } })
+    }
     const latestUserMessage = body.messages?.findLast((message) => message.role === "user")
     const requestText = JSON.stringify(latestUserMessage?.content ?? "")
     const normalFixture = requestText.includes("canonical normal turn") || requestText.includes("without a battle")
@@ -2620,6 +2626,103 @@ describe("Arena service vertical slice", () => {
       router.restore()
     }
   }, 30_000)
+
+  test("retries a failed contestant on the same assignment while the other is still working", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure retry fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ failFirstOrdinals: [1], delayedOrdinal: 2, delayMs: 3_000 })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Retry a failed contestant",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Fail once on one side." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted retry turn")
+
+      const deadline = Date.now() + 20_000
+      let found: RunDocument | undefined
+      while (Date.now() < deadline && !found) {
+        found = (await memory.store.runsForTurn(turnID)).find((run) => run.runState === "error" && run.finalizedAt)
+        if (!found) await Bun.sleep(10)
+      }
+      if (!found) throw new Error("No contestant failed")
+      // The memory store hands out its live documents, so keep the failure as it was.
+      const failed = structuredClone(found)
+      expect(failed.errorRetryable).toBe(true)
+      const failedModel = router.modelForAssignment(failed.assignment.assignmentID)
+      if (!failedModel) throw new Error("Failed run did not retain an opaque assignment")
+      expect(router.calls.get(failedModel)).toBe(1)
+
+      const before = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
+      expect(before.turn?.state).toBe("running")
+      expect(before.runs.find((run) => run.side === failed.side)?.canRetry).toBe(true)
+      const messageIDs = (snapshot: PublicSnapshot) => {
+        const run = snapshot.runs.find((item) => item.side === failed.side)
+        return ((run?.messages ?? []) as Array<{ readonly id?: string }>).map((message) => message.id)
+      }
+      expect(messageIDs(before)).toContain(failed.terminalAssistantMessageID)
+      expect(before.runs.find((run) => run.side !== failed.side)?.canRetry).toBe(false)
+      const working = before.runs.find((run) => run.side !== failed.side)
+      if (!working) throw new Error("The other contestant is missing")
+      const refused = await request(`/arena/runs/${encodeURIComponent(working.id)}/retry`, { method: "POST", headers })
+      expect(refused.ok).toBe(false)
+
+      const retried = await json<PublicSnapshot>(
+        await request(`/arena/runs/${encodeURIComponent(failed._id)}/retry`, { method: "POST", headers }),
+      )
+      expect(retried.turn?.state).toBe("running")
+      const retriedRun = retried.runs.find((run) => run.side === failed.side)
+      expect(retriedRun?.runState).toBe("pending")
+      expect(retriedRun?.canRetry).toBe(false)
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const finalRuns = await memory.store.runsForTurn(turnID)
+      expect(finalRuns.every((run) => run.runState === "complete" && run.selectable)).toBe(true)
+      const finalRetried = finalRuns.find((run) => run.side === failed.side)
+      expect(finalRetried?.assignment.assignmentID).toBe(failed.assignment.assignmentID)
+      expect(finalRetried?.rootSessionID).toBe(failed.rootSessionID)
+      expect(finalRetried?.manualRetries).toBe(1)
+      expect(finalRetried?.error).toBeUndefined()
+      expect(router.calls.get(failedModel)).toBe(2)
+      // The failed step's message is gone, so the thread shows only the answer that finished.
+      const after = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
+      const messages = (after.runs.find((run) => run.side === failed.side)?.messages ?? []) as Array<{
+        readonly role?: string
+        readonly error?: unknown
+      }>
+      expect(messageIDs(after)).not.toContain(failed.terminalAssistantMessageID)
+      expect(messages.some((message) => message.role === "assistant")).toBe(true)
+      expect(messages.some((message) => message.error !== undefined)).toBe(false)
+    } finally {
+      router.restore()
+    }
+  }, 40_000)
 
   test("interrupts a queued steer and resumes the same contestant session", async () => {
     await using directory = await tmpdir({
