@@ -138,20 +138,25 @@ function sanitizeStream(
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
-        const next = await reader.read()
-        if (cancelled) return
-        if (next.done) {
-          pending += decoder.decode()
-          if (pending) controller.enqueue(encoder.encode(sanitizeLine(pending, generationID, metrics.observe)))
-          await complete(metrics.value())
-          controller.close()
+        // A pull that emits nothing may never be called again. Keep reading a fragmented SSE line.
+        while (true) {
+          const next = await reader.read()
+          if (cancelled) return
+          if (next.done) {
+            pending += decoder.decode()
+            if (pending) controller.enqueue(encoder.encode(sanitizeLine(pending, generationID, metrics.observe)))
+            await complete(metrics.value())
+            controller.close()
+            return
+          }
+          pending += decoder.decode(next.value, { stream: true })
+          const lines = pending.split("\n")
+          pending = lines.pop() ?? ""
+          if (!lines.length) continue
+          for (const line of lines)
+            controller.enqueue(encoder.encode(`${sanitizeLine(line, generationID, metrics.observe)}\n`))
           return
         }
-        pending += decoder.decode(next.value, { stream: true })
-        const lines = pending.split("\n")
-        pending = lines.pop() ?? ""
-        for (const line of lines)
-          controller.enqueue(encoder.encode(`${sanitizeLine(line, generationID, metrics.observe)}\n`))
       } catch {
         if (cancelled) return
         controller.enqueue(

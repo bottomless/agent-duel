@@ -95,58 +95,125 @@ describe("ArenaProxy", () => {
       finish: "tool-calls",
       calls: 1,
     },
-  ])("classifies tool cutoff before the SDK flushes: $name", async ({ args, tokens, limit, finish, calls }) => {
-    const registry = new AssignmentRegistry()
-    registry.assign("session-root", assignment)
-    const chunks = [
-      {
-        choices: [
-          {
-            index: 0,
-            delta: {
-              tool_calls: [{ index: 0, id: "write-1", type: "function", function: { name: "write", arguments: args } }],
+  ])(
+    "classifies fragmented tool cutoff before the SDK flushes: $name",
+    async ({ args, tokens, limit, finish, calls }) => {
+      const registry = new AssignmentRegistry()
+      registry.assign("session-root", assignment)
+      const chunks = [
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  { index: 0, id: "write-1", type: "function", function: { name: "write", arguments: args } },
+                ],
+              },
             },
-          },
-        ],
-      },
-      { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls", native_finish_reason: "tool_calls" }] },
-      {
-        choices: [],
-        ...(tokens === undefined
-          ? {}
-          : { usage: { prompt_tokens: 10, completion_tokens: tokens, total_tokens: tokens + 10 } }),
-      },
-    ]
-    const model = createOpenRouter({
-      apiKey: "test",
-      fetch: async (_input, init) =>
-        proxy(
-          new Request("http://arena.invalid/api/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Session-Id": "session-root",
-              "x-arena-request-id": requestID,
+          ],
+        },
+        { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls", native_finish_reason: "tool_calls" }] },
+        {
+          choices: [],
+          ...(tokens === undefined
+            ? {}
+            : { usage: { prompt_tokens: 10, completion_tokens: tokens, total_tokens: tokens + 10 } }),
+        },
+      ]
+      const model = createOpenRouter({
+        apiKey: "test",
+        fetch: async (_input, init) =>
+          proxy(
+            new Request("http://arena.invalid/api/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Session-Id": "session-root",
+                "x-arena-request-id": requestID,
+              },
+              body: init?.body,
+            }),
+            registry,
+            {
+              upstream: "https://unit.invalid",
+              fetch: async () => {
+                const bytes = new TextEncoder().encode(
+                  chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n",
+                )
+                let offset = 0
+                return new Response(
+                  new ReadableStream<Uint8Array>({
+                    pull(controller) {
+                      if (offset === bytes.length) return controller.close()
+                      controller.enqueue(bytes.slice(offset, offset + 1))
+                      offset++
+                    },
+                  }),
+                  { headers: { "Content-Type": "text/event-stream" } },
+                )
+              },
             },
-            body: init?.body,
-          }),
-          registry,
-          {
-            upstream: "https://unit.invalid",
-            fetch: async () =>
-              new Response(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n", {
-                headers: { "Content-Type": "text/event-stream" },
-              }),
+          ),
+      }).chat("contestant")
+      const result = await model.doStream({ prompt: [], maxOutputTokens: limit })
+      const parts = []
+      for await (const part of result.stream) parts.push(part)
+      expect(parts.filter((part) => part.type === "tool-call")).toHaveLength(calls)
+      expect(parts.find((part) => part.type === "finish")).toMatchObject({ finishReason: { unified: finish } })
+      expect(parts.filter((part) => part.type === "error")).toEqual([])
+    },
+  )
+
+  test.each([1, 4096])(
+    "reads SSE lines split across %i-byte chunks",
+    async (chunkSize) => {
+      const registry = new AssignmentRegistry()
+      registry.assign("session-root", assignment)
+      const content = chunkSize === 1 ? "héllo 🌍" : "code🌍".repeat(8000)
+      const payload = {
+        id: "private-id",
+        model: "private-model",
+        choices: [{ delta: { content }, finish_reason: "stop" }],
+      }
+      const bytes = new TextEncoder().encode(`: keepalive\n\ndata: ${JSON.stringify(payload)}\n\ndata: [DONE]`)
+      let offset = 0
+      let completed = 0
+      const recorded: string[] = []
+      const response = await proxy(request(), registry, {
+        upstream: "https://unit.invalid",
+        fetch: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (offset === bytes.length) {
+                  controller.close()
+                  return
+                }
+                const end = Math.min(offset + chunkSize, bytes.length)
+                controller.enqueue(bytes.slice(offset, end))
+                offset = end
+              },
+            }),
+            { headers: { "Content-Type": "text/event-stream" } },
+          ),
+        telemetry: {
+          rawChunk: (_metadata, chunk) => recorded.push(chunk),
+          complete: () => {
+            completed++
           },
-        ),
-    }).chat("contestant")
-    const result = await model.doStream({ prompt: [], maxOutputTokens: limit })
-    const parts = []
-    for await (const part of result.stream) parts.push(part)
-    expect(parts.filter((part) => part.type === "tool-call")).toHaveLength(calls)
-    expect(parts.find((part) => part.type === "finish")).toMatchObject({ finishReason: { unified: finish } })
-    expect(parts.filter((part) => part.type === "error")).toEqual([])
-  })
+        },
+      })
+
+      const body = await response.text()
+      expect(body).toContain(JSON.stringify(payload.choices))
+      expect(body).toEndWith("data: [DONE]")
+      expect(body).not.toContain("private-")
+      expect(recorded.join("")).toBe(body)
+      expect(completed).toBe(1)
+    },
+    2000,
+  )
 
   test("maps only known pre-header connection failures to a neutral retryable response", async () => {
     for (const code of ["ConnectionRefused", "ECONNREFUSED", "ECONNRESET"]) {

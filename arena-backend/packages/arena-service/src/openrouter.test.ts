@@ -87,6 +87,74 @@ function fakeDb(input: {
 }
 
 describe("OpenRouter proxy", () => {
+  test.each([1, 4096])(
+    "reads SSE lines split across %i-byte chunks",
+    async (chunkSize) => {
+      const content = chunkSize === 1 ? "héllo 🌍" : "code🌍".repeat(8000)
+      const payload = {
+        id: "private-id",
+        model: "private-model",
+        choices: [{ delta: { content }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.123 },
+      }
+      const bytes = new TextEncoder().encode(`: keepalive\n\ndata: ${JSON.stringify(payload)}\n\ndata: [DONE]`)
+      let offset = 0
+      const metrics: Record<string, unknown>[] = []
+      const db = fakeDb({
+        assignmentSets: () => [
+          {
+            userId: "user-1",
+            scopeID: "turn-1",
+            assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+          },
+        ],
+        recordMetrics: (document) => metrics.push(document),
+      })
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (offset === bytes.length) {
+                  controller.close()
+                  return
+                }
+                const end = Math.min(offset + chunkSize, bytes.length)
+                controller.enqueue(bytes.slice(offset, end))
+                offset = end
+              },
+            }),
+            { headers: { "Content-Type": "text/event-stream" } },
+          ),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_00000000000000000000000000000001",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+
+      const body = await response.text()
+      expect(body).toContain(JSON.stringify(payload.choices))
+      expect(body).toEndWith("data: [DONE]")
+      expect(body).not.toContain("private-")
+      expect(body).not.toContain("cost")
+      expect(metrics).toHaveLength(1)
+      expect(metrics[0]).toMatchObject({
+        generationID: "gen_00000000000000000000000000000001",
+        finishReason: "stop",
+        usage: { promptTokens: 10, completionTokens: 5, cost: 0.123 },
+      })
+    },
+    2000,
+  )
+
   test("rejects a request before contacting OpenRouter when the session is invalid", async () => {
     let contacted = false
     const response = await openrouter({
