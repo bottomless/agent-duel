@@ -187,9 +187,20 @@ function assignedHeaders(source: Headers) {
 
 // Anthropic caches a prompt only when the request asks, and the blinded engine cannot tell it is
 // talking to Claude, so without this every contestant step pays full input price for the whole
-// conversation. OpenRouter puts the breakpoint on the last cacheable block of each request.
-function promptCache(slug: string) {
-  return slug.startsWith("anthropic/") ? { cache_control: { type: "ephemeral" } } : {}
+// conversation. OpenRouter puts the breakpoint on the last cacheable block of each request. A body
+// that marks its own breakpoints keeps them alone: one more could exceed Anthropic's four or clash
+// with their TTL, and only Claude requests would fail.
+function promptCache(slug: string, input: Record<string, unknown>) {
+  if (!slug.startsWith("anthropic/") || input.cache_control !== undefined) return {}
+  const messages = Array.isArray(input.messages) ? input.messages : []
+  const marked = messages.some(
+    (message) =>
+      record(message) &&
+      (message.cache_control !== undefined ||
+        (Array.isArray(message.content) &&
+          message.content.some((part) => record(part) && part.cache_control !== undefined))),
+  )
+  return marked ? {} : { cache_control: { type: "ephemeral" } }
 }
 
 const alternateSelectors = new Set(["model_id", "models", "preset", "presets", "provider", "provider_name", "route"])
@@ -321,7 +332,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         model: routeAssignment.model.slug,
         reasoning: { effort: "high" },
         provider: routeAssignment.model.routing,
-        ...promptCache(routeAssignment.model.slug),
+        ...promptCache(routeAssignment.model.slug, input),
         stream_options: record(input.stream_options)
           ? { ...input.stream_options, include_usage: true }
           : { include_usage: true },

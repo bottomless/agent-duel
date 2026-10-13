@@ -737,7 +737,9 @@ field. Each layer has its own file:
   capability-gated Arena proxy; the Arena process never receives the account session. The control
   plane authenticates the account, requires an exact unresolved account/scope/assignment match and
   then inserts the stored OpenRouter slug, price ceiling, provider policy, and `high` reasoning
-  effort. Resolution disables further routing without deleting the assignment.
+  effort. For an `anthropic/` slug it also adds a top-level `cache_control`, because Anthropic
+  caches a prompt only when asked; a body that marks its own cache breakpoints keeps them.
+  Resolution disables further routing without deleting the assignment.
 - **Response** (`arena-service/src/openrouter.ts`) — before bytes return to the desktop, the control
   plane strips model, provider, fingerprint, OpenRouter metadata, and cost, replaces the generation
   id, and collapses upstream failures to a generic error. The local proxy repeats the scrub as a

@@ -378,7 +378,7 @@ describe("OpenRouter proxy", () => {
   })
 
   test("asks OpenRouter to cache Anthropic prompts and records the cache use", async () => {
-    let slug = "anthropic/hidden-model"
+    const slug = "anthropic/hidden-model"
     const upstreamBodies: Record<string, unknown>[] = []
     let recordedMetrics: Record<string, unknown> | undefined
     const db = fakeDb({
@@ -412,7 +412,7 @@ describe("OpenRouter proxy", () => {
         })
       },
     })
-    const invoke = (route: string) =>
+    const invoke = (route: string, fields: Record<string, unknown> = {}) =>
       proxy(
         new Request(`https://control.test/api/openrouter/api/v1/${route}`, {
           method: "POST",
@@ -422,17 +422,23 @@ describe("OpenRouter proxy", () => {
             "X-Arena-Scope-ID": "turn-1",
             "X-Arena-Generation-ID": "gen_00000000000000000000000000000001",
           },
-          body: JSON.stringify({ model: "contestant", messages: [], stream: false }),
+          body: JSON.stringify({ model: "contestant", messages: [], stream: false, ...fields }),
         }),
       )
 
-    for (const route of ["chat/completions", "responses"]) expect((await invoke(route)).status).toBe(200)
-    expect(upstreamBodies.map((body) => body.cache_control)).toEqual([{ type: "ephemeral" }, { type: "ephemeral" }])
+    expect((await invoke("chat/completions")).status).toBe(200)
     expect(recordedMetrics).toMatchObject({ usage: { promptTokens: 1000, cacheReadTokens: 900, cacheWriteTokens: 80 } })
+    expect((await invoke("responses")).status).toBe(200)
+    expect(upstreamBodies.map((body) => body.cache_control)).toEqual([{ type: "ephemeral" }, { type: "ephemeral" }])
 
-    slug = "openai/hidden-model"
-    await invoke("chat/completions")
+    // A body that marks its own breakpoints is forwarded as sent.
+    const marker = { type: "ephemeral", ttl: "1h" }
+    const messages = [{ role: "user", content: [{ type: "text", text: "hi", cache_control: marker }] }]
+    await invoke("chat/completions", { messages })
     expect(upstreamBodies.at(-1)).not.toHaveProperty("cache_control")
+    expect(upstreamBodies.at(-1)?.messages).toEqual(messages)
+    await invoke("chat/completions", { cache_control: marker })
+    expect(upstreamBodies.at(-1)?.cache_control).toEqual(marker)
   })
 
   test("does not limit assigned request size", async () => {
