@@ -204,6 +204,31 @@ export function create(store: Store): Telemetry {
   const revealed = new Set<string>()
   const revealedMetrics = new Map<string, GenerationMetrics>()
   const queues = new Map<string, Promise<void>>()
+  const counterSeeds = new Map<string, Promise<void>>()
+
+  // A run's numbering continues from its stored generations. A reply resumes a finished run after
+  // an engine restart, and restarting at 0 breaks the unique (runID, callIndex) index, which fails
+  // the request before it leaves.
+  const nextCallIndex = async (runID: string) => {
+    if (!counters.has(runID)) {
+      const seed =
+        counterSeeds.get(runID) ??
+        store
+          .generationsForRuns([runID])
+          .then((generations) => {
+            counters.set(
+              runID,
+              generations.reduce((next, generation) => Math.max(next, generation.callIndex + 1), 0),
+            )
+          })
+          .finally(() => counterSeeds.delete(runID))
+      counterSeeds.set(runID, seed)
+      await seed
+    }
+    const callIndex = counters.get(runID)!
+    counters.set(runID, callIndex + 1)
+    return callIndex
+  }
 
   const persist = (metrics: PendingMetrics) => {
     const previous = queues.get(metrics.runID) ?? Promise.resolve()
@@ -240,8 +265,7 @@ export function create(store: Store): Telemetry {
 
   return {
     async start(metadata, _body) {
-      const callIndex = counters.get(metadata.assignment.runID) ?? 0
-      counters.set(metadata.assignment.runID, callIndex + 1)
+      const callIndex = await nextCallIndex(metadata.assignment.runID)
       const id = metadata.generationID
       const runAttempts = attempts.get(metadata.assignment.runID) ?? new Map<string, Attempt>()
       const previous = runAttempts.get(metadata.requestID)

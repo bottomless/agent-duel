@@ -180,6 +180,7 @@ describe("ArenaTelemetry", () => {
         generation = { ...generation!, ...patch }
         return generation
       },
+      generationsForRuns: async () => [],
       accumulateRunUsage: async () => undefined,
       addResolvedProvider: async () => undefined,
       recordGenerationRetry: async () => undefined,
@@ -233,6 +234,7 @@ describe("ArenaTelemetry", () => {
         generations.push(input)
         return input
       },
+      generationsForRuns: async () => generations,
       recordGenerationRetry: async (_runID: string, retry: GenerationRetry) => {
         retries.push(retry)
       },
@@ -283,5 +285,50 @@ describe("ArenaTelemetry", () => {
         observedAt: second.startedAt,
       },
     ])
+  })
+
+  test("continues a run's call numbering from its stored generations after an engine restart", async () => {
+    const generations = [0, 1, 2].map(
+      (callIndex) => ({ _id: `gen_stored_${callIndex}`, runID: "run-resumed", callIndex }) as GenerationDocument,
+    )
+    let reads = 0
+    const arena = store({
+      saveGeneration: async (input: GenerationDocument) => {
+        generations.push(input)
+        return input
+      },
+      generationsForRuns: async (runIDs: readonly string[]) => {
+        reads++
+        return generations.filter((generation) => runIDs.includes(generation.runID))
+      },
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const request = (generation: number, sessionID: string): RequestMetadata => ({
+      assignment: {
+        runID: "run-resumed",
+        rootSessionID: "session-root",
+        scopeID: "turn-resumed",
+        assignmentID: "assignment-resumed",
+        telemetry: true,
+      },
+      generationID: `gen_0000000000000000000000000000001${generation}`,
+      requestID: `00000000-0000-4000-8000-00000000001${generation}`,
+      sessionID,
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      startedAt: new Date(),
+    })
+
+    // A resumed root and a subagent reach the proxy together, before either number is known.
+    await Promise.all([
+      telemetry.start?.(request(0, "session-root"), { model: "contestant", messages: [] }),
+      telemetry.start?.(request(1, "session-child"), { model: "contestant", messages: [] }),
+    ])
+    await telemetry.start?.(request(2, "session-root"), { model: "contestant", messages: [] })
+
+    expect(generations.map((generation) => generation.callIndex)).toEqual([0, 1, 2, 3, 4, 5])
+    expect(reads).toBe(1)
   })
 })
