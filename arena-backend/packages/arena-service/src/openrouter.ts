@@ -187,11 +187,14 @@ function assignedHeaders(source: Headers) {
 
 // Anthropic caches a prompt only when the request asks, and the blinded engine cannot tell it is
 // talking to Claude, so without this every contestant step pays full input price for the whole
-// conversation. OpenRouter puts the breakpoint on the last cacheable block of each request. A body
-// that marks its own breakpoints keeps them alone: one more could exceed Anthropic's four or clash
-// with their TTL, and only Claude requests would fail.
+// conversation. OpenRouter puts the breakpoint on the last cacheable block of each request. The
+// engine sends no tools only for compaction summaries and titles, whose prefix no later request
+// shares, so a write there would cost 25% more and never be read. A body that marks its own
+// breakpoints keeps them alone: one more could exceed Anthropic's four or clash with their TTL, and
+// only Claude requests would fail.
 function promptCache(slug: string, input: Record<string, unknown>) {
-  if (!slug.startsWith("anthropic/") || input.cache_control !== undefined) return {}
+  const tools = Array.isArray(input.tools) ? input.tools : []
+  if (!slug.startsWith("anthropic/") || tools.length === 0 || input.cache_control !== undefined) return {}
   const messages = Array.isArray(input.messages) ? input.messages : []
   const marked = messages.some(
     (message) =>

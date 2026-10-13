@@ -738,7 +738,8 @@ field. Each layer has its own file:
   plane authenticates the account, requires an exact unresolved account/scope/assignment match and
   then inserts the stored OpenRouter slug, price ceiling, provider policy, and `high` reasoning
   effort. For an `anthropic/` slug it also adds a top-level `cache_control`, because Anthropic
-  caches a prompt only when asked; a body that marks its own cache breakpoints keeps them.
+  caches a prompt only when asked. It skips requests without tools (compaction summaries and
+  titles), whose prefix nothing reads back, and bodies that mark their own cache breakpoints.
   Resolution disables further routing without deleting the assignment.
 - **Response** (`arena-service/src/openrouter.ts`) — before bytes return to the desktop, the control
   plane strips model, provider, fingerprint, OpenRouter metadata, and cost, replaces the generation

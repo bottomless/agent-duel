@@ -412,6 +412,7 @@ describe("OpenRouter proxy", () => {
         })
       },
     })
+    const tools = [{ type: "function", function: { name: "read", parameters: { type: "object" } } }]
     const invoke = (route: string, fields: Record<string, unknown> = {}) =>
       proxy(
         new Request(`https://control.test/api/openrouter/api/v1/${route}`, {
@@ -422,7 +423,7 @@ describe("OpenRouter proxy", () => {
             "X-Arena-Scope-ID": "turn-1",
             "X-Arena-Generation-ID": "gen_00000000000000000000000000000001",
           },
-          body: JSON.stringify({ model: "contestant", messages: [], stream: false, ...fields }),
+          body: JSON.stringify({ model: "contestant", messages: [], tools, stream: false, ...fields }),
         }),
       )
 
@@ -439,6 +440,12 @@ describe("OpenRouter proxy", () => {
     expect(upstreamBodies.at(-1)?.messages).toEqual(messages)
     await invoke("chat/completions", { cache_control: marker })
     expect(upstreamBodies.at(-1)?.cache_control).toEqual(marker)
+
+    // Compaction summaries and titles carry no tools, and no later request reads their prefix.
+    for (const fields of [{ tools: undefined }, { tools: [] }]) {
+      await invoke("chat/completions", fields)
+      expect(upstreamBodies.at(-1)).not.toHaveProperty("cache_control")
+    }
   })
 
   test("does not limit assigned request size", async () => {
