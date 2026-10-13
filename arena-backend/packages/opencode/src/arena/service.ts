@@ -3934,7 +3934,7 @@ export const layer: Layer.Layer<
 
     // The proxy routes a contestant's requests, and the recorder keeps its events, only for a run
     // bound in this process. A battle binds each run as it starts it. After an engine restart a
-    // finished run is bound to nothing, so a reply binds it again before resuming it.
+    // settled run is bound to nothing, so resuming it for a reply or a retry binds it again.
     const bindRun = Effect.fnUntraced(function* (run: RunDocument) {
       const assignment = {
         runID: run._id,
@@ -5773,7 +5773,7 @@ export const layer: Layer.Layer<
         if (turn.state === "awaiting_vote") {
           yield* promise(() => store.clearComparison(turn._id, input.comparisonID))
         }
-        return yield* Effect.forEach(runs, input.reset)
+        return yield* Effect.forEach(runs, (run) => input.reset(run).pipe(Effect.tap(bindRun)))
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -5901,7 +5901,7 @@ export const layer: Layer.Layer<
           comparisonID: claimed.comparisonID,
           prompt,
           agent,
-          reset: (run) => promise(() => store.resetRunForReply(run._id)).pipe(Effect.tap(bindRun)),
+          reset: (run) => promise(() => store.resetRunForReply(run._id)),
           failure: { message: "Arena completed-result reply failed", target },
         })
       }
