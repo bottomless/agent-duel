@@ -315,6 +315,20 @@ class NativeArchiveRecordingClient extends TestAgentClient {
       throw this.unarchiveFailure;
     }
   }
+
+  readonly arenaUnarchivedHandles: AgentPersistenceHandle[] = [];
+  archivedAtDuringArenaUnarchive: string | null | undefined;
+  arenaUnarchiveFailure: Error | null = null;
+
+  async unarchiveArenaChat(handle: AgentPersistenceHandle): Promise<void> {
+    this.arenaUnarchivedHandles.push(handle);
+    if (this.readArchivedAtDuringUnarchive) {
+      this.archivedAtDuringArenaUnarchive = await this.readArchivedAtDuringUnarchive();
+    }
+    if (this.arenaUnarchiveFailure) {
+      throw this.arenaUnarchiveFailure;
+    }
+  }
 }
 
 class EnvProbeAgentClient extends TestAgentClient {
@@ -6746,6 +6760,40 @@ test("unarchiveSnapshot keeps the stored record archived when native unarchive f
   const stored = await storage.get(agent.id);
   expect(stored?.archivedAt).toEqual(expect.any(String));
   expect(client.unarchivedHandles).toHaveLength(1);
+});
+
+test("unarchiveSnapshot unarchives the Arena chat once the record reads unarchived", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-arena-unarchive-"));
+  const storagePath = join(workdir, "agents");
+  const storage = new AgentStorage(storagePath, logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+  });
+
+  const agent = await manager.createAgent(
+    {
+      provider: "codex",
+      cwd: workdir,
+      title: "Arena unarchive target",
+    },
+    undefined,
+    { workspaceId: undefined },
+  );
+  await manager.archiveAgent(agent.id);
+  client.readArchivedAtDuringUnarchive = async () => (await storage.get(agent.id))?.archivedAt;
+
+  expect(await manager.unarchiveSnapshot(agent.id)).toBe(true);
+  expect(client.arenaUnarchivedHandles).toEqual(client.unarchivedHandles);
+  expect(client.archivedAtDuringUnarchive).toEqual(expect.any(String));
+  expect(client.archivedAtDuringArenaUnarchive).toBeNull();
+
+  // A chat the engine cannot bring back fails the unarchive, which the caller reports.
+  await manager.archiveSnapshot(agent.id, new Date().toISOString());
+  client.arenaUnarchiveFailure = new Error("Arena chat still archived");
+  await expect(manager.unarchiveSnapshot(agent.id)).rejects.toThrow("Arena chat still archived");
 });
 
 test("archiveAgent cascade archives in-memory children with the full archive contract", async () => {

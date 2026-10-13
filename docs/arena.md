@@ -428,6 +428,15 @@ background delete stops with it; startup finishes what an interrupted eviction, 
 left. Release deletes after it lets go of the chat's start lock, so a send to the chat does not wait
 for the deletes, and leaves the pool to a send that is building in it.
 
+Archive also sets the chat `archived`, and the engine refuses every send to it, battle or single
+agent; the battle refusal reads `Arena chat already has an active battle`. Unarchiving brings the
+chat back as a release leaves one: ready, with no warm record, so its next send builds a pair from
+nothing (`unarchiveSession`). The daemon archives the chat from the workspace archive handler, but
+unarchives it from `AgentManager.unarchiveSnapshot`, which every surface that unarchives an agent
+(the app, the CLI, MCP) goes through. It calls the engine after the agent's record is unarchived:
+the app resumes the agent while the engine answers, and an agent resumed while its record still
+reads archived is removed from the app's lists, which turns the open chat into a blank draft.
+
 OpenCode keeps a snapshot repository per worktree path (`snapshot/<project>/<sha1 of the path>` in
 its data directory), and a slot moves to a new path every turn, so each released side leaves one
 that nothing opens again. The engine deletes a released run's repository once nothing is at its path

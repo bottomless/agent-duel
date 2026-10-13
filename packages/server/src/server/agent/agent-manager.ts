@@ -2046,8 +2046,15 @@ export class AgentManager {
       updatedAt: new Date().toISOString(),
     });
 
-    if (this.getAgent(agentId)) {
-      this.notifyAgentState(agentId);
+    try {
+      // After the record, unlike the native session: the app resumes the agent while the engine
+      // answers, and an agent resumed while its record still reads archived is removed from
+      // clients' lists, which turns its open chat into a draft.
+      await this.unarchiveArenaChat(record.provider, record.persistence);
+    } finally {
+      if (this.getAgent(agentId)) {
+        this.notifyAgentState(agentId);
+      }
     }
     return true;
   }
@@ -4872,6 +4879,16 @@ export class AgentManager {
     const client = this.clients.get(provider);
     if (!client?.unarchiveNativeSession) return;
     await client.unarchiveNativeSession(persistence);
+  }
+
+  private async unarchiveArenaChat(
+    provider: AgentProvider,
+    persistence: AgentPersistenceHandle | null | undefined,
+  ): Promise<void> {
+    if (!persistence) return;
+    const client = this.clients.get(provider);
+    if (!client?.unarchiveArenaChat) return;
+    await client.unarchiveArenaChat(persistence);
   }
 
   private requireAgent(id: string): LiveManagedAgent {

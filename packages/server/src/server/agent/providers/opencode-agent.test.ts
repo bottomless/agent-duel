@@ -761,6 +761,63 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  test("unarchives the Arena chat through the engine route in arena mode only", async () => {
+    const cwd = tmpCwd();
+    const handle = {
+      provider: "opencode" as const,
+      sessionId: "session-1",
+      metadata: { cwd },
+    };
+    const runtime = new TestOpenCodeHarness();
+    const arenaClient = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const plainClient = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: false,
+    });
+    const requests: Array<{ url: string; method?: string; headers: Record<string, string> }> = [];
+    let status = 200;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method,
+        headers: Object.fromEntries(new Headers(init?.headers)),
+      });
+      return status === 200
+        ? new Response("null", { status, headers: { "Content-Type": "application/json" } })
+        : new Response("Arena mode is disabled", { status });
+    });
+
+    try {
+      await plainClient.unarchiveArenaChat(handle);
+      expect(requests).toEqual([]);
+
+      await arenaClient.unarchiveArenaChat(handle);
+      status = 500;
+      await expect(arenaClient.unarchiveArenaChat(handle)).rejects.toThrow(
+        "Failed to unarchive Arena chat (500): Arena mode is disabled",
+      );
+    } finally {
+      fetchMock.mockRestore();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toEqual({
+      url: "http://127.0.0.1:1234/arena/sessions/session-1/unarchive",
+      method: "POST",
+      headers: expect.objectContaining({
+        "x-opencode-directory": cwd,
+        "x-paseo-control-token": "test-opencode-control-token",
+      }),
+    });
+    expect(runtime.acquisitions.every((acquisition) => acquisition.releaseCount === 1)).toBe(true);
+  });
+
   test("single turn completes with streaming deltas", async () => {
     const cwd = tmpCwd();
     const runtime = new TestOpenCodeHarness();

@@ -78,6 +78,7 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
         ),
       )
       .handle("archiveSession", (ctx) => map(arena.archiveSession(ctx.params.sessionID)))
+      .handle("unarchiveSession", (ctx) => map(arena.unarchiveSession(ctx.params.sessionID)))
       .handle("forkSession", (ctx) => map(forkSession(ctx)))
       .handle("snapshot", (ctx) => map(arena.snapshot(ctx.params.chatID, ctx.query.afterSequence)))
       .handle("turn", (ctx) => map(arena.turn(ctx.params.turnID, ctx.query.afterSequence)))

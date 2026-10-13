@@ -2148,6 +2148,39 @@ export class OpenCodeAgentClient implements AgentClient {
     }
   }
 
+  async unarchiveArenaChat(handle: AgentPersistenceHandle): Promise<void> {
+    if (!this.arenaMode) return;
+    const metadata = (handle.metadata ?? {}) as Partial<AgentSessionConfig>;
+    if (!metadata.cwd) {
+      throw new Error("Arena chat unarchive requires the original working directory");
+    }
+    const acquisition = await this.serverManager.acquireCurrent();
+    try {
+      const response = await fetch(
+        new URL(
+          `/arena/sessions/${encodeURIComponent(handle.sessionId)}/unarchive`,
+          acquisition.server.url,
+        ),
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "x-opencode-directory": metadata.cwd,
+            "x-paseo-control-token": acquisition.server.controlToken,
+          },
+        },
+      );
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(
+          `Failed to unarchive Arena chat (${response.status})${body ? `: ${body}` : ""}`,
+        );
+      }
+    } finally {
+      await acquisition.release();
+    }
+  }
+
   async isAvailable(): Promise<boolean> {
     try {
       const launch = await resolveOpenCodeServerLaunch(this.runtimeSettings);
