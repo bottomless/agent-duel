@@ -428,6 +428,38 @@ describe("ArenaMetrics outcome", () => {
     expect([battleFor("b").sides.a?.won, battleFor("b").sides.b?.won]).toEqual([false, true])
   })
 
+  test("carries upstream inference cost into resolved battle research metrics", () => {
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn: turnFor("a"),
+      runs: [
+        {
+          ...runFor("a"),
+          usage: {
+            promptTokens: 10,
+            completionTokens: 5,
+            reasoningTokens: 0,
+            totalTokens: 15,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            cost: 0,
+            upstreamInferenceCost: 0.456,
+            attempts: 1,
+            latencyMs: 100,
+          },
+        } as RunDocument,
+        runFor("b"),
+      ],
+      generations: [],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.sides.a?.cost).toBe(0)
+    expect(battle.sides.a?.upstreamInferenceCost).toBe(0.456)
+    expect(battle.sides.b).not.toHaveProperty("upstreamInferenceCost")
+  })
+
   test("counts only the services the contestant started itself", () => {
     const withServices = computeBattleMetrics({
       chat: { _id: "chat" } as ChatDocument,

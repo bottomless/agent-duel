@@ -17,6 +17,10 @@ function number(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
+function nonNegativeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
 function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
   if (!record(value)) return undefined
   const source = record(value.usage)
@@ -30,6 +34,8 @@ function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
   const cacheDetails = record(source.cache_tokens) ? source.cache_tokens : undefined
   const promptTokens = number(source.prompt_tokens ?? source.input_tokens)
   const completionTokens = number(source.completion_tokens ?? source.output_tokens)
+  const costDetails = record(source.cost_details) ? source.cost_details : undefined
+  const upstreamInferenceCost = nonNegativeNumber(costDetails?.upstream_inference_cost)
   return {
     promptTokens,
     completionTokens,
@@ -38,6 +44,7 @@ function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
     cacheReadTokens: number(promptDetails?.cached_tokens ?? cacheDetails?.read ?? source.cache_read_tokens),
     cacheWriteTokens: number(promptDetails?.cache_write_tokens ?? cacheDetails?.write ?? source.cache_write_tokens),
     cost: number(source.cost ?? value.cost),
+    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
     attempts: 1,
     latencyMs,
   }

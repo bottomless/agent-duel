@@ -751,7 +751,7 @@ export type ReviewEventInput = {
 export const reviewFlushLimit = 500
 
 /** Bump when a derived field changes meaning, then recompute the whole table. */
-export const battleMetricsSchemaVersion = 5
+export const battleMetricsSchemaVersion = 6
 
 export type ReviewEffort = {
   /** From the card opening to the first act of reviewing, ignoring window focus events. */
@@ -810,6 +810,7 @@ export type BattleSideMetrics = {
   readonly cacheReadTokens: number
   readonly cacheWriteTokens: number
   readonly cost: number
+  readonly upstreamInferenceCost?: number
   readonly providerErrors: number
   readonly retries: number
   readonly finishReason?: string

@@ -903,24 +903,44 @@ export class Store {
   }
 
   async accumulateRunUsage(runID: string, usage: NonNullable<GenerationDocument["usage"]>) {
-    const updated = await this.runs.findOneAndUpdate(
-      { _id: runID },
-      {
-        $inc: {
-          "usage.promptTokens": usage.promptTokens,
-          "usage.completionTokens": usage.completionTokens,
-          "usage.reasoningTokens": usage.reasoningTokens,
-          "usage.totalTokens": usage.totalTokens,
-          "usage.cacheReadTokens": usage.cacheReadTokens,
-          "usage.cacheWriteTokens": usage.cacheWriteTokens,
-          "usage.cost": usage.cost,
-          "usage.attempts": usage.attempts,
-          "usage.latencyMs": usage.latencyMs,
-        },
-        $set: { updatedAt: new Date() },
-      },
-      { returnDocument: "after" },
-    )
+    const increments = {
+      "usage.promptTokens": usage.promptTokens,
+      "usage.completionTokens": usage.completionTokens,
+      "usage.reasoningTokens": usage.reasoningTokens,
+      "usage.totalTokens": usage.totalTokens,
+      "usage.cacheReadTokens": usage.cacheReadTokens,
+      "usage.cacheWriteTokens": usage.cacheWriteTokens,
+      "usage.cost": usage.cost,
+      "usage.attempts": usage.attempts,
+      "usage.latencyMs": usage.latencyMs,
+    }
+    const options = { returnDocument: "after" as const }
+    const unknownUpdate: ArenaUpdate<RunDocument> = {
+      $inc: increments,
+      $set: { updatedAt: new Date() },
+      $unset: { "usage.upstreamInferenceCost": "" },
+    }
+    let updated =
+      usage.upstreamInferenceCost === undefined
+        ? await this.runs.findOneAndUpdate({ _id: runID }, unknownUpdate, options)
+        : await this.runs.findOneAndUpdate(
+            {
+              _id: runID,
+              $or: [
+                { usage: { $exists: false } },
+                { "usage.attempts": 0 },
+                { "usage.upstreamInferenceCost": { $exists: true } },
+              ],
+            },
+            {
+              $inc: { ...increments, "usage.upstreamInferenceCost": usage.upstreamInferenceCost },
+              $set: { updatedAt: new Date() },
+            },
+            options,
+          )
+    if (!updated && usage.upstreamInferenceCost !== undefined) {
+      updated = await this.runs.findOneAndUpdate({ _id: runID }, unknownUpdate, options)
+    }
     if (!updated) throw new Error(`Arena run not found: ${runID}`)
     this.changed({ turnID: updated.turnID })
     return updated

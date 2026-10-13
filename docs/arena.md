@@ -750,7 +750,9 @@ field. Each layer has its own file:
   provider-specific reasoning metadata, identity fields, and raw upstream errors from stored
   responses, and rewrites provider-shaped tool-call ids before saving response artifacts. The
   control plane holds generation usage, cost, and finish reason and returns them only with the
-  committed resolution; the desktop then records the research metrics. Local-store startup
+  committed resolution. Usage keeps OpenRouter's account charge in `cost` and, when supplied, the
+  provider's `cost_details.upstream_inference_cost` as `upstreamInferenceCost`; the desktop then
+  records both in the research metrics. Local-store startup
   removes those fields and request/response artifacts from legacy unresolved battles; resolved
   history already exposes the contestants by design.
 - **Session data** (`arena/privacy.ts`) — the event bridge blinds durable payloads before projectors

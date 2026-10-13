@@ -38,6 +38,10 @@ function number(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
+function nonNegativeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
 function usageFromPayload(value: unknown, latencyMs: number): UsageTotals | undefined {
   if (!record(value)) return undefined
   const source = record(value.usage)
@@ -51,6 +55,8 @@ function usageFromPayload(value: unknown, latencyMs: number): UsageTotals | unde
   const cacheDetails = record(source.cache_tokens) ? source.cache_tokens : undefined
   const promptTokens = number(source.prompt_tokens ?? source.input_tokens)
   const completionTokens = number(source.completion_tokens ?? source.output_tokens)
+  const costDetails = record(source.cost_details) ? source.cost_details : undefined
+  const upstreamInferenceCost = nonNegativeNumber(costDetails?.upstream_inference_cost)
   return {
     promptTokens,
     completionTokens,
@@ -59,6 +65,7 @@ function usageFromPayload(value: unknown, latencyMs: number): UsageTotals | unde
     cacheReadTokens: number(promptDetails?.cached_tokens ?? cacheDetails?.read ?? source.cache_read_tokens),
     cacheWriteTokens: number(promptDetails?.cache_write_tokens ?? cacheDetails?.write ?? source.cache_write_tokens),
     cost: number(source.cost ?? value.cost),
+    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
     attempts: 1,
     latencyMs,
   }
@@ -163,6 +170,12 @@ function finishReason(raw: string) {
 }
 
 function addUsage(left: UsageTotals, right: UsageTotals): UsageTotals {
+  const upstreamInferenceCost =
+    left.attempts === 0
+      ? right.upstreamInferenceCost
+      : left.upstreamInferenceCost === undefined || right.upstreamInferenceCost === undefined
+        ? undefined
+        : left.upstreamInferenceCost + right.upstreamInferenceCost
   return {
     promptTokens: left.promptTokens + right.promptTokens,
     completionTokens: left.completionTokens + right.completionTokens,
@@ -171,6 +184,7 @@ function addUsage(left: UsageTotals, right: UsageTotals): UsageTotals {
     cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
     cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
     cost: left.cost + right.cost,
+    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
     attempts: left.attempts + right.attempts,
     latencyMs: left.latencyMs + right.latencyMs,
   }
