@@ -596,6 +596,42 @@ describe("OpenRouter proxy", () => {
     expect(body).not.toContain("private")
   })
 
+  test("answers an unreadable upstream body with a 502", async () => {
+    const assignmentSet = {
+      userId: "user-1",
+      scopeID: "turn-1",
+      assignments: [
+        {
+          assignmentID: "opaque-id",
+          model: {
+            displayName: "Hidden Model",
+            slug: "provider/hidden-model",
+            canonicalSlug: "provider/hidden-model-version",
+            routing: { sort: "throughput" },
+          },
+        },
+      ],
+    }
+    const db = fakeDb({ assignmentSets: () => [assignmentSet] })
+    const response = await openrouter({
+      db: async () => db,
+      fetch: async () => new Response("not JSON", { headers: { "content-type": "application/json" } }),
+    })(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [], stream: false }),
+      }),
+    )
+
+    expect(response.status).toBe(502)
+    expect(await response.json()).toEqual({ error: { message: "OpenRouter request failed" } })
+  })
+
   test("answers an offline machine with the network body only where the service runs locally", async () => {
     const assignmentSet = {
       userId: "user-1",

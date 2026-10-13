@@ -57,7 +57,7 @@ function usageFromPayload(value: unknown, latencyMs: number): UsageTotals | unde
     reasoningTokens: number(completionDetails?.reasoning_tokens ?? source.reasoning_tokens),
     totalTokens: number(source.total_tokens) || promptTokens + completionTokens,
     cacheReadTokens: number(promptDetails?.cached_tokens ?? cacheDetails?.read ?? source.cache_read_tokens),
-    cacheWriteTokens: number(cacheDetails?.write ?? source.cache_write_tokens),
+    cacheWriteTokens: number(promptDetails?.cache_write_tokens ?? cacheDetails?.write ?? source.cache_write_tokens),
     cost: number(source.cost ?? value.cost),
     attempts: 1,
     latencyMs,

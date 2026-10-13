@@ -164,6 +164,52 @@ describe("ArenaTelemetry", () => {
     expect(runUsage).toMatchObject({ cost: 0.25, totalTokens: 120 })
   })
 
+  test("keeps the response's cache counts when the service recorded no metrics", async () => {
+    let generation: GenerationDocument | undefined
+    const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
+      saveGeneration: async (input: GenerationDocument) => {
+        generation = input
+        return input
+      },
+      updateGeneration: async (_id: string, patch: Partial<GenerationDocument>) => {
+        generation = { ...generation!, ...patch }
+        return generation
+      },
+      generationsForRuns: async () => (generation ? [generation] : []),
+      updateRun: async (_id: string, patch: object) => patch,
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const metadata: RequestMetadata = {
+      assignment: {
+        runID: "run-a",
+        rootSessionID: "session-a",
+        scopeID: "turn-a",
+        assignmentID: "assignment-a",
+        telemetry: true,
+      },
+      generationID: "gen_00000000000000000000000000000002",
+      requestID: "00000000-0000-4000-8000-000000000002",
+      sessionID: "session-a",
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      startedAt: new Date(Date.now() - 10),
+    }
+
+    await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+    await telemetry.response?.({ metadata, status: 200, headers: {}, receivedAt: new Date() })
+    telemetry.rawChunk?.(
+      metadata,
+      'data: {"choices":[{"finish_reason":"stop","delta":{"content":"done"}}],"usage":{"prompt_tokens":1000,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":900,"cache_write_tokens":80}}}\n',
+    )
+    await telemetry.complete?.(metadata, new Date())
+    await telemetry.reveal?.({ runIDs: ["run-a"], metrics: [] })
+
+    expect(generation?.usage).toMatchObject({ promptTokens: 1000, cacheReadTokens: 900, cacheWriteTokens: 80 })
+  })
+
   test("persists partial upstream output when a generation is interrupted", async () => {
     let generation: GenerationDocument | undefined
     const artifacts: Array<{ id: string; data: string }> = []

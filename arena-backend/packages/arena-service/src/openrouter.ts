@@ -325,7 +325,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       body,
       signal: request.signal,
     })
-    return sanitizeAssignedResponse(response, generationID, startedAt, async (metrics) => {
+    // Awaited so a body that fails to read or parse still gets the 502 below.
+    return await sanitizeAssignedResponse(response, generationID, startedAt, async (metrics) => {
       if (!metrics || !requestedGenerationID) return
       try {
         await recordAssignmentGenerationMetrics(db, {
