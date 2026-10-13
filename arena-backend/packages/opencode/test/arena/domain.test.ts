@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   abortedResolution,
+  canRetryRun,
   canTransition,
   earlyResolution,
   isFinalState,
@@ -11,6 +12,7 @@ import {
   turnID,
   isParkedPromotion,
   isStopAbort,
+  MAX_MANUAL_RUN_RETRIES,
   voteResolution,
 } from "../../src/arena/domain"
 
@@ -119,5 +121,35 @@ describe("isStopAbort", () => {
 
   test("keeps an abort on a run nobody stopped", () => {
     expect(isStopAbort({ stopped: false, error: { name: "MessageAbortedError" } })).toBe(false)
+  })
+})
+
+describe("canRetryRun", () => {
+  const failed = { runState: "error", errorRetryable: true, finalizedAt: new Date() }
+
+  test("offers a retry for a committed, retryable failure while the battle is undecided", () => {
+    expect(canRetryRun({ state: "running" }, failed)).toBe(true)
+    expect(canRetryRun({ state: "awaiting_vote" }, failed)).toBe(true)
+  })
+
+  test("refuses a failure the engine would not retry on its own", () => {
+    expect(canRetryRun({ state: "running" }, { ...failed, errorRetryable: undefined })).toBe(false)
+  })
+
+  test("refuses a run that did not fail or has not committed its failure", () => {
+    expect(canRetryRun({ state: "running" }, { ...failed, runState: "complete" })).toBe(false)
+    expect(canRetryRun({ state: "running" }, { ...failed, finalizedAt: undefined })).toBe(false)
+  })
+
+  test("refuses once the battle is decided or stopping", () => {
+    expect(canRetryRun({ state: "awaiting_vote", resolution: voteResolution("b") }, failed)).toBe(false)
+    expect(canRetryRun({ state: "stopping" }, failed)).toBe(false)
+    expect(canRetryRun({ state: "applying" }, failed)).toBe(false)
+  })
+
+  test("refuses a run without its worktree or out of retries", () => {
+    expect(canRetryRun({ state: "running" }, { ...failed, worktreeRemovedAt: new Date() })).toBe(false)
+    expect(canRetryRun({ state: "running" }, { ...failed, manualRetries: MAX_MANUAL_RUN_RETRIES - 1 })).toBe(true)
+    expect(canRetryRun({ state: "running" }, { ...failed, manualRetries: MAX_MANUAL_RUN_RETRIES })).toBe(false)
   })
 })

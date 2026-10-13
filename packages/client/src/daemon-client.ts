@@ -2160,6 +2160,13 @@ export class DaemonClient {
     return payload.snapshot;
   }
 
+  async arenaRetryRun(agentId: string, runId: string): Promise<ArenaSnapshot> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"arena.run.retry.response">({
+      message: { type: "arena.run.retry.request", agentId, runId },
+    });
+    return payload.snapshot;
+  }
+
   /**
    * Append review activity for a turn. Idempotent on event id, so a caller that
    * cannot confirm a flush should resend it rather than drop it.

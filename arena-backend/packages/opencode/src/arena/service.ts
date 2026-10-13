@@ -39,6 +39,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { Git } from "@/git"
 import { Image } from "@/image/image"
 import { SessionPrompt } from "@/session/prompt"
+import { SessionRetry } from "@/session/retry"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { MessageID, PartID, SessionID } from "@/session/schema"
@@ -64,6 +65,7 @@ import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignm
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
 import {
+  canRetryRun,
   earlyResolution,
   generationName,
   isFinalState,
@@ -1018,6 +1020,8 @@ export interface Interface {
     runID: string,
     expectedMessageIDs: readonly string[],
   ) => Effect.Effect<ReturnType<typeof project>, Error>
+  /** Run a failed contestant again from its last finished step; see `canRetryRun`. */
+  readonly retryRun: (runID: string) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly vote: (
     turnID: string,
     vote: Vote,
@@ -3749,6 +3753,13 @@ export const layer: Layer.Layer<
       const runState: RunDocument["runState"] =
         runStateOverride ?? (stopped ? "stopped" : unsettled.length === 0 ? "complete" : "error")
       const runError = unsettled.length ? unsettled.join("\n") : undefined
+      // Only a model request that failed on its own, by the same rule the engine retries it, may be
+      // retried by the voter. Anything else about the run being unsettled would fail again.
+      const errorRetryable =
+        runState === "error" &&
+        unsettled.length === 1 &&
+        assistant?.error !== undefined &&
+        SessionRetry.retryable(assistant.error, "arena") !== undefined
       const durationMs =
         runState === "complete" && stored?.startedAt
           ? Math.max(0, completedAt.getTime() - stored.startedAt.getTime())
@@ -3759,6 +3770,7 @@ export const layer: Layer.Layer<
           durationMs,
           ...(assistant ? { terminalAssistantMessageID: assistant.id } : {}),
           ...(runError ? { error: runError } : {}),
+          ...(errorRetryable ? { errorRetryable } : {}),
           completedAt,
         }),
       )
@@ -3923,7 +3935,8 @@ export const layer: Layer.Layer<
     const runPrompt = Effect.fn("Arena.runPrompt")(function* (
       store: Store,
       run: SideRuntime,
-      prompt: ArenaAttachments.ContestantPrompt,
+      /** Absent when retrying a failed run, which continues the session without a new message. */
+      prompt: ArenaAttachments.ContestantPrompt | undefined,
       agent: string,
       preservePromptBoundary = false,
       hostDirectory = run.worktree.directory,
@@ -3942,23 +3955,27 @@ export const layer: Layer.Layer<
       )
       const beforeDispatch = yield* promise(() => store.turn(run.turnID))
       if (beforeDispatch?.state === "stopping" || beforeDispatch?.state === "early_selected") return Exit.void
-      yield* allowReading(run.worktree.directory, run.sessionID, prompt.readable)
+      if (prompt) yield* allowReading(run.worktree.directory, run.sessionID, prompt.readable)
       if (hostDirectory !== run.worktree.directory) promptHosts.set(run.sessionID, hostDirectory)
       let result = yield* Effect.exit(
         inDirectory(
           hostDirectory,
-          prompts.prompt({
-            sessionID: run.sessionID,
-            messageID: promptMessageID,
-            model: {
-              providerID: ProviderV2.ID.make("arena"),
-              modelID: ModelV2.ID.make(contestant.id),
-            },
-            agent,
-            variant: "high",
-            system: contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID)),
-            parts: prompt.parts,
-          }),
+          prompt
+            ? prompts.prompt({
+                sessionID: run.sessionID,
+                messageID: promptMessageID,
+                model: {
+                  providerID: ProviderV2.ID.make("arena"),
+                  modelID: ModelV2.ID.make(contestant.id),
+                },
+                agent,
+                variant: "high",
+                system: contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID)),
+                parts: prompt.parts,
+              })
+            : // A retry adds no message: the loop answers the last user message again, from the
+              // last step that finished.
+              prompts.loop({ sessionID: run.sessionID }),
         ).pipe(
           Effect.ensuring(
             Effect.sync(() => {
@@ -4008,7 +4025,7 @@ export const layer: Layer.Layer<
       store: Store,
       turn: TurnDocument,
       run: SideRuntime,
-      prompt: ArenaAttachments.ContestantPrompt,
+      prompt: ArenaAttachments.ContestantPrompt | undefined,
       agent: string,
       preservePromptBoundary = false,
       environmentSettled: Effect.Effect<void> = Effect.void,
@@ -5725,6 +5742,96 @@ export const layer: Layer.Layer<
       }
     })
 
+    /**
+     * Run contestants that had settled once more, after their sides were claimed back out of the
+     * finalized set: a reply resumes them with its message, and a retry continues a failed run
+     * without one. The turn then finalizes again once every side has settled. A failure after the
+     * claim parks the battle for Stop's resolution rather than leaving it waiting on a side forever.
+     */
+    const resumeSettledRuns = Effect.fn("Arena.resumeSettledRuns")(function* (
+      store: Store,
+      turn: TurnDocument,
+      canonical: string,
+      runs: readonly RunDocument[],
+      input: {
+        readonly comparisonID: string | undefined
+        readonly prompt: ArenaAttachments.ContestantPrompt | undefined
+        readonly agent: string
+        readonly reset: (run: RunDocument) => Effect.Effect<RunDocument, Error>
+        readonly failure: { readonly message: string } & Record<string, unknown>
+      },
+    ) {
+      const { message: failureMessage, ...failureContext } = input.failure
+      const resumedRuns = yield* Effect.gen(function* () {
+        if (turn.state === "awaiting_vote") {
+          yield* promise(() => store.clearComparison(turn._id, input.comparisonID))
+        }
+        return yield* Effect.forEach(runs, input.reset)
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
+            const current = yield* promise(() => store.turn(turn._id))
+            if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
+            yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
+            yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+            return yield* Effect.failCause(cause)
+          }),
+        ),
+      )
+      const continuation = Effect.gen(function* () {
+        const outcomes = yield* Effect.forEach(
+          resumedRuns,
+          (run) =>
+            settleSide(
+              store,
+              turn,
+              {
+                side: run.side,
+                turnID: run.turnID,
+                runID: run._id,
+                sessionID: SessionID.make(run.rootSessionID),
+                worktree: { name: `turn-${turn.turnIndex}-${run.side}`, directory: run.worktree },
+                assignment: run.assignment,
+              },
+              input.prompt,
+              input.agent,
+              true,
+            ),
+          { concurrency: 2 },
+        )
+        const current = yield* promise(() => store.turn(turn._id))
+        if (outcomes.some(Exit.isFailure)) {
+          yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
+          if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
+          yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
+          yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+          return
+        }
+        yield* finalizeReadyTurn(store, turn, canonical)
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            const current = yield* promise(() => store.turn(turn._id))
+            if (current?.state === "running") {
+              yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
+              yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
+              yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+            } else if (current?.state === "finalizing") {
+              yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
+              yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+            } else if (current?.state === "finalization_failed") {
+              yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+            } else if (current?.state === "stopping") {
+              yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+            }
+            yield* Effect.logError(failureMessage, { turnID: turn._id, ...failureContext, cause })
+          }).pipe(Effect.catchCause(() => Effect.logError(failureMessage, { cause }))),
+        ),
+      )
+      yield* continuation.pipe(Effect.forkIn(scope))
+    })
+
     const reply = Effect.fn("Arena.reply")(function* (
       id: string,
       userPrompt: string,
@@ -5783,78 +5890,13 @@ export const layer: Layer.Layer<
       // redirects a working one.
       yield* promise(() => store.countSteer(turn._id))
       if (claimed) {
-        const resumedRuns = yield* Effect.gen(function* () {
-          if (turn.state === "awaiting_vote") {
-            yield* promise(() => store.clearComparison(turn._id, claimed.comparisonID))
-          }
-          return yield* Effect.forEach(finished, (run) => promise(() => store.resetRunForReply(run._id)))
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
-              const current = yield* promise(() => store.turn(turn._id))
-              if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
-              yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
-              yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
-              return yield* Effect.failCause(cause)
-            }),
-          ),
-        )
-        const continuation = Effect.gen(function* () {
-          const outcomes = yield* Effect.forEach(
-            resumedRuns,
-            (run) =>
-              settleSide(
-                store,
-                turn,
-                {
-                  side: run.side,
-                  turnID: run.turnID,
-                  runID: run._id,
-                  sessionID: SessionID.make(run.rootSessionID),
-                  worktree: { name: `turn-${turn.turnIndex}-${run.side}`, directory: run.worktree },
-                  assignment: run.assignment,
-                },
-                prompt,
-                agent,
-                true,
-              ),
-            { concurrency: 2 },
-          )
-          const current = yield* promise(() => store.turn(turn._id))
-          if (outcomes.some(Exit.isFailure)) {
-            yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
-            if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
-            yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
-            yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
-            return
-          }
-          yield* finalizeReadyTurn(store, turn, chat.repository.root)
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              const current = yield* promise(() => store.turn(turn._id))
-              if (current?.state === "running") {
-                yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
-                yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
-                yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
-              } else if (current?.state === "finalizing") {
-                yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
-                yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
-              } else if (current?.state === "finalization_failed") {
-                yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
-              } else if (current?.state === "stopping") {
-                yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
-              }
-              yield* Effect.logError("Arena completed-result reply failed", {
-                turnID: turn._id,
-                target,
-                cause,
-              })
-            }).pipe(Effect.catchCause(() => Effect.logError("Arena completed-result reply failed", { cause }))),
-          ),
-        )
-        yield* continuation.pipe(Effect.forkIn(scope))
+        yield* resumeSettledRuns(store, turn, chat.repository.root, finished, {
+          comparisonID: claimed.comparisonID,
+          prompt,
+          agent,
+          reset: (run) => promise(() => store.resetRunForReply(run._id)),
+          failure: { message: "Arena completed-result reply failed", target },
+        })
       }
       if (working.length === 0) return yield* respond(store, turn.chatID)
       const dispatch = Effect.forEach(
@@ -5883,6 +5925,57 @@ export const layer: Layer.Layer<
         { concurrency: 2, discard: true },
       ).pipe(Effect.catchCause((cause) => Effect.logError("Arena reply failed", { turnID: turn._id, target, cause })))
       yield* dispatch.pipe(Effect.forkIn(scope))
+      return yield* respond(store, turn.chatID)
+    })
+
+    /**
+     * Run a contestant whose model request failed again, on the same assignment and session, from
+     * its last finished step. The other side keeps working meanwhile, and the vote waits for both.
+     * The failed step's message is removed first, like an automatic retry's partial parts, so the
+     * pane does not show a half answer above the new one.
+     */
+    const retryRun = Effect.fn("Arena.retryRun")(function* (runID: string) {
+      const store = yield* available()
+      const stored = yield* runForReply(store, runID)
+      const turn = yield* settledReplyTurn(store, stored.turnID, [stored.side])
+      if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${stored.turnID}`))
+      const run = yield* runForReply(store, runID)
+      if (!canRetryRun(turn, run)) {
+        return yield* Effect.fail(new Error("This contestant run cannot be retried"))
+      }
+      const chat = yield* promise(() => store.chat(turn.chatID))
+      if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
+      const source = yield* sessions.get(SessionID.make(turn.sourceCanonicalSessionID)).pipe(Effect.mapError(error))
+      const claimed = yield* promise(() =>
+        turn.state === "awaiting_vote"
+          ? store.claimReplyContinuation(turn._id, [run.side])
+          : store.claimRunningReplyContinuation(turn._id, [run.side]),
+      )
+      if (!claimed.claimed) {
+        return yield* Effect.fail(new Error("The battle changed before the retry started. Try again."))
+      }
+      yield* resumeSettledRuns(store, turn, chat.repository.root, [run], {
+        comparisonID: claimed.comparisonID,
+        prompt: undefined,
+        agent: source.agent ?? "build",
+        reset: (failed) =>
+          Effect.gen(function* () {
+            if (failed.terminalAssistantMessageID) {
+              yield* inDirectory(
+                failed.worktree,
+                sessions.removeMessage({
+                  sessionID: SessionID.make(failed.rootSessionID),
+                  messageID: MessageID.make(failed.terminalAssistantMessageID),
+                }),
+              )
+            }
+            yield* promise(() => store.resetRunForReply(failed._id))
+            return yield* promise(() =>
+              store.updateRun(failed._id, { manualRetries: (failed.manualRetries ?? 0) + 1 }),
+            )
+          }),
+        failure: { message: "Arena contestant retry failed", runID },
+      })
       return yield* respond(store, turn.chatID)
     })
 
@@ -9769,6 +9862,7 @@ export const layer: Layer.Layer<
       reply,
       interruptSteer,
       discardSteer,
+      retryRun,
       vote,
       recordReview,
       retryResolution,

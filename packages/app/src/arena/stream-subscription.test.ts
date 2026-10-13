@@ -80,6 +80,7 @@ describe("Arena UI subscription", () => {
         durationMs: null,
         selectable: false,
         applicable: false,
+        canRetry: false,
         startedAt: "2026-09-25T10:00:00Z",
         lastEventAt: "2026-09-25T10:00:00Z",
         messages: [],

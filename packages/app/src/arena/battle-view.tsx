@@ -41,6 +41,7 @@ import { useContainerWidth } from "@/hooks/use-container-width";
 import { Alert } from "@/components/ui/alert";
 import { ArenaServicesStrip } from "./services-strip";
 import { ArenaQueuedSteers } from "./queued-steers";
+import { ArenaRunRetry } from "./run-retry";
 import { ArenaTransitionRow, arenaTransitionRowVisible } from "./transition-row";
 import { ArenaTransitionTimeline } from "./transition-timeline";
 import { arenaResolutionStatus, arenaSetupStatus } from "./transition-progress";
@@ -263,6 +264,11 @@ function BattlePane({
       ) : null,
     [dispatched, serverId, agentId],
   );
+  const retry = useMemo(
+    () =>
+      dispatched ? <ArenaRunRetry run={dispatched} serverId={serverId} agentId={agentId} /> : null,
+    [dispatched, serverId, agentId],
+  );
   const openChanges = useOpenRunChanges({ serverId, workspaceId, side, run });
   const expanded = paneView === side;
   const handleExpand = useCallback(() => {
@@ -334,6 +340,7 @@ function BattlePane({
                 run={dispatched}
                 stoppedByEarlyPick={stoppedByEarlyPick}
                 queuedSteers={queuedSteers}
+                retry={retry}
                 respondingQuestionId={respondingQuestionId}
                 respondingPermissionId={respondingPermissionId}
                 onQuestionResponse={handleQuestionResponse}

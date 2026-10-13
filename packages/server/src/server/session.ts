@@ -1972,6 +1972,7 @@ export class Session {
       this.dispatchAgentTimelineMessage(msg, source) ??
       this.dispatchArenaStreamMessage(msg, source) ??
       this.dispatchArenaMessage(msg) ??
+      this.dispatchArenaRunMessage(msg) ??
       this.dispatchArenaEnvironmentsMessage(msg) ??
       this.dispatchArenaByokMessage(msg) ??
       this.dispatchAgentLifecycleMessage(msg) ??
@@ -2134,8 +2135,6 @@ export class Session {
       case "arena.turn.get.request":
       case "arena.turn.start.request":
       case "arena.turn.reply.request":
-      case "arena.run.steer.discard.request":
-      case "arena.run.steer.interrupt.request":
       case "arena.turn.record_review.request":
       case "arena.turn.vote.request":
       case "arena.turn.stop.request":
@@ -2143,6 +2142,17 @@ export class Session {
       case "arena.turn.retry_comparison.request":
       case "arena.turn.retry_resolution.request":
       case "arena.turn.diff.request":
+        return this.runArenaRequest(msg);
+      default:
+        return undefined;
+    }
+  }
+
+  private dispatchArenaRunMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    switch (msg.type) {
+      case "arena.run.steer.discard.request":
+      case "arena.run.steer.interrupt.request":
+      case "arena.run.retry.request":
       case "arena.run.question.reply.request":
       case "arena.run.question.reject.request":
       case "arena.run.permission.reply.request":
@@ -4183,6 +4193,15 @@ export class Session {
           this.syncArenaPreviewRoutes(result);
           this.emit({
             type: "arena.run.steer.interrupt.response",
+            payload: { requestId: msg.requestId, snapshot: result },
+          });
+          return;
+        }
+        case "arena.run.retry.request": {
+          const result = await arena.retryRun(msg.runId);
+          this.syncArenaPreviewRoutes(result);
+          this.emit({
+            type: "arena.run.retry.response",
             payload: { requestId: msg.requestId, snapshot: result },
           });
           return;

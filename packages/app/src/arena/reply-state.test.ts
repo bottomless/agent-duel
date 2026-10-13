@@ -51,6 +51,7 @@ function snapshot(
       durationMs: 1,
       selectable: runStates[side] === "complete",
       applicable: runStates[side] === "complete",
+      canRetry: false,
     })),
     events: [],
   };

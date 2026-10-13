@@ -957,6 +957,17 @@ Never restart once the attempt has started a local tool: the resent request does
 call, and the model can repeat its side effect. That failure ends the step instead, and the next
 step continues from the stored tool call and result (`session/processor.ts`).
 
+A run that fails after the budget can be retried by hand. A failed run cannot be chosen, so without
+a retry the voter is left with the other side alone. When the failure is one the policy above would
+have retried (`errorRetryable`, set in `finalizeSide`), the pane shows **Retry** under its error.
+Retry continues the same session on the same assignment from its last finished step, adding no
+message (`prompts.loop`), so the battle stays blind. It removes the failed step's message first, for
+the same reason a restart drops its parts. The other side keeps working, and the turn finalizes
+again once both have settled, as after a reply. Each run gets two retries
+(`MAX_MANUAL_RUN_RETRIES`): every retry is paid for, and a failure that keeps repeating is answered
+by the other side or a new prompt. `canRetryRun` in `arena/domain.ts` is the one rule; the service
+refuses what it refuses, and the app shows the button from it.
+
 An Arena model response that sends no provider chunk for two minutes fails and enters the same retry
 policy. Arena streams request raw chunks (`session/llm.ts`) because some models reason for minutes in
 chunks that carry only OpenRouter `reasoning_details`, which produce no AI SDK part; counting only

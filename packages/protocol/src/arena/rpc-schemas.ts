@@ -364,6 +364,7 @@ export const ArenaRunSchema = z
     permanentRef: z.string().optional(),
     selectable: z.boolean(),
     applicable: z.boolean(),
+    canRetry: z.boolean(),
     identity: ArenaIdentitySchema.optional(),
     messages: z.array(z.unknown()).optional(),
     parts: z.record(z.string(), z.array(z.unknown())).optional(),
@@ -715,6 +716,15 @@ export const ArenaRunSteerDiscardRequestSchema = z.object({
 });
 export const ArenaRunSteerDiscardResponseSchema = z.object({
   type: z.literal("arena.run.steer.discard.response"),
+  payload: ArenaSnapshotResponsePayloadSchema,
+});
+export const ArenaRunRetryRequestSchema = z.object({
+  type: z.literal("arena.run.retry.request"),
+  ...ArenaAgentRequestFields,
+  runId: z.string(),
+});
+export const ArenaRunRetryResponseSchema = z.object({
+  type: z.literal("arena.run.retry.response"),
   payload: ArenaSnapshotResponsePayloadSchema,
 });
 /**

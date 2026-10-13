@@ -26,6 +26,7 @@ const FINISHED_RUN = {
   durationMs: 1000,
   selectable: true,
   applicable: true,
+  canRetry: false,
   startedAt: "2026-09-14T12:00:00.000Z",
   promptMessageID: "prompt",
   messages: [],

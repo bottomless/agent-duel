@@ -20,6 +20,7 @@ function runWithQuestions(questions: unknown[]): ArenaRun {
     durationMs: 1,
     selectable: false,
     applicable: false,
+    canRetry: false,
     questions,
   };
 }

@@ -816,6 +816,7 @@ export class Store {
         },
         $unset: {
           error: "",
+          errorRetryable: "",
           completedAt: "",
           terminalAssistantMessageID: "",
           archivedAt: "",

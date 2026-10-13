@@ -440,6 +440,20 @@ const group = HttpApiGroup.make("arena")
     ),
   )
   .add(
+    HttpApiEndpoint.post("retryRun", "/arena/runs/:runID/retry", {
+      params: { runID: Schema.String },
+      query: WorkspaceRoutingQuery,
+      success: ArenaSchema.Snapshot,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.run.retry",
+        summary: "Retry a failed contestant",
+        description: "Run a contestant whose model request failed again, from its last finished step.",
+      }),
+    ),
+  )
+  .add(
     HttpApiEndpoint.post("reply", "/arena/turns/:turnID/reply", {
       params: { turnID: Schema.String },
       query: WorkspaceRoutingQuery,
