@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
+  arenaLongRunningTool,
   arenaRunningTool,
   isArenaRunPossiblyStalled,
   POSSIBLY_STALLED_AFTER_MS,
@@ -86,5 +87,41 @@ describe("arenaRunningTool", () => {
         }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("arenaLongRunningTool", () => {
+  const now = Date.parse("2026-08-14T12:05:00.000Z");
+  const fresh = new Date(now - 1_000).toISOString();
+  const call = (name: string, input: unknown, ranMs: number) => ({
+    type: "tool",
+    tool: name,
+    state: { status: "running", input, time: { start: now - ranMs } },
+  });
+
+  it("times a call from its own start, not from the run's last event", () => {
+    const long = { step: [call("bash", { command: "sleep 130" }, POSSIBLY_STALLED_AFTER_MS)] };
+    expect(arenaLongRunningTool(run({ lastEventAt: fresh, parts: long }), now)).toBe("command");
+    const short = { step: [call("bash", { command: "ls" }, POSSIBLY_STALLED_AFTER_MS - 1)] };
+    expect(arenaLongRunningTool(run({ lastEventAt: fresh, parts: short }), now)).toBeNull();
+  });
+
+  it("names only the calls that have run long while the run is active", () => {
+    // A subagent's short command under a long task call must not flip the label back and forth.
+    const parts = {
+      root: [call("task", { prompt: "Audit the site" }, 120_000)],
+      subagent: [call("bash", { command: "ls" }, 2_000)],
+    };
+    expect(arenaLongRunningTool(run({ lastEventAt: fresh, parts }), now)).toBe("tool");
+  });
+
+  it("names any running call once the whole run is quiet", () => {
+    const quiet = new Date(now - POSSIBLY_STALLED_AFTER_MS).toISOString();
+    const recent = { step: [call("bash", { command: "npm test" }, 30_000)] };
+    expect(arenaLongRunningTool(run({ lastEventAt: quiet, parts: recent }), now)).toBe("command");
+    const unstarted = { step: [{ type: "tool", tool: "read", state: { status: "running" } }] };
+    expect(arenaLongRunningTool(run({ lastEventAt: quiet, parts: unstarted }), now)).toBe("tool");
+    expect(arenaLongRunningTool(run({ lastEventAt: fresh, parts: unstarted }), now)).toBeNull();
+    expect(arenaLongRunningTool(run({ lastEventAt: quiet }), now)).toBeNull();
   });
 });

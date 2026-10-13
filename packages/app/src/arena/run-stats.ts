@@ -1,5 +1,5 @@
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
-import { arenaRunningTool, isArenaRunPossiblyStalled } from "./run-liveness";
+import { arenaLongRunningTool, isArenaRunPossiblyStalled } from "./run-liveness";
 
 const OFFLINE_MESSAGE = "Waiting for network";
 
@@ -42,13 +42,13 @@ export function arenaRunStatusLabel(run: ArenaRun, now: number): string {
         return "message" in run.status && run.status.message === OFFLINE_MESSAGE
           ? OFFLINE_MESSAGE
           : "Retrying";
-      if (isArenaRunPossiblyStalled(run, now)) {
-        const tool = arenaRunningTool(run);
-        if (tool === "command") return "Running a command";
-        if (tool === "tool") return "Running a tool";
-        return "No recent activity";
+      switch (arenaLongRunningTool(run, now)) {
+        case "command":
+          return "Running a command";
+        case "tool":
+          return "Running a tool";
       }
-      return "Working";
+      return isArenaRunPossiblyStalled(run, now) ? "No recent activity" : "Working";
     case "complete":
       return "Finished";
     case "stopped":

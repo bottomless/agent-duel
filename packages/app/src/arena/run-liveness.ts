@@ -17,18 +17,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function callStartedAt(state: Record<string, unknown>): number | null {
+  const start = isRecord(state.time) ? state.time.start : undefined;
+  return typeof start === "number" && Number.isFinite(start) ? start : null;
+}
+
 /**
  * The tool call a pending run is still inside, if any. A long command emits no events until it
  * ends, which is why the engine pauses its own silence deadline while a tool runs; its quiet is
- * the command working, not the run stalling.
+ * the command working, not the run stalling. With `startedBy`, only calls that had started by
+ * then count.
  */
-export function arenaRunningTool(run: ArenaRun): ArenaRunningTool | null {
+export function arenaRunningTool(run: ArenaRun, startedBy?: number): ArenaRunningTool | null {
   if (run.runState !== "pending") return null;
   let running: ArenaRunningTool | null = null;
   for (const parts of Object.values(run.parts ?? {})) {
     for (const part of parts) {
       if (!isRecord(part) || part.type !== "tool" || !isRecord(part.state)) continue;
       if (part.state.status !== "running") continue;
+      if (startedBy !== undefined && (callStartedAt(part.state) ?? Infinity) > startedBy) continue;
       const tool = typeof part.tool === "string" ? part.tool : "tool";
       const detail = deriveArenaToolCallDetail(tool, part.state.input, part.state.output);
       if (detail?.type === "shell") return "command";
@@ -36,4 +43,18 @@ export function arenaRunningTool(run: ArenaRun): ArenaRunningTool | null {
     }
   }
   return running;
+}
+
+/**
+ * The tool call to name in a pending run's status. A call counts once it has run for the quiet
+ * window by its own start, not by the run's last event: queuing or deleting a steer is a run event
+ * too, and must not put a long command back to Working. Any running call counts once the whole run
+ * has been quiet that long. A shorter call reads as Working, so the status does not flicker from
+ * call to call.
+ */
+export function arenaLongRunningTool(run: ArenaRun, now: number): ArenaRunningTool | null {
+  return (
+    arenaRunningTool(run, now - POSSIBLY_STALLED_AFTER_MS) ??
+    (isArenaRunPossiblyStalled(run, now) ? arenaRunningTool(run) : null)
+  );
 }

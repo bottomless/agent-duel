@@ -997,8 +997,11 @@ whose `createdAt` is when the hosted function reached the end of the response.
 `No recent activity` means the run has emitted no event for 90 seconds; it is not proof of a
 stalled process. Explicit retry and user-input waits take precedence. A tool call that is still
 running reads `Running a command` or `Running a tool` instead: a long command emits nothing until it
-ends, the same reason the engine's deadline pauses for it. That UI label alone must not stop or
-restart a contestant.
+ends, the same reason the engine's deadline pauses for it. Time that label from the call's own
+start as well as from the run's last event (`run-liveness.ts`): queuing or deleting a steer is a run
+event too, and must not put a long command back to `Working` for another 90 seconds. A shorter call
+stays `Working` so the label does not flicker from call to call. That UI label alone must not stop
+or restart a contestant.
 
 ## Gotchas
 
