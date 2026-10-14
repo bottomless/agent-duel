@@ -4,6 +4,7 @@ import fs from "fs/promises"
 import path from "path"
 import { Cause, Effect, Exit } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import {
   applyFastForward,
   acceptWinnerConflicts,
@@ -565,6 +566,58 @@ describe("ArenaGit", () => {
           ),
         ),
       ).toBe(false)
+    }),
+  )
+
+  it.live("writes a winner's changed symlink, as a plain file where symlinks are not permitted", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const candidate = yield* scopedTmpdir()
+      // Without the privilege a tracked link is checked out the way Git for Windows does it: a plain
+      // file holding the target, which an agent edits like any other file.
+      const link = (root: string, target: string) =>
+        FSUtil.canSymlink()
+          ? fs.rm(`${root}/latest.html`, { force: true }).then(() => fs.symlink(target, `${root}/latest.html`))
+          : fs.writeFile(`${root}/latest.html`, target)
+      yield* Effect.promise(async () => {
+        await fs.writeFile(`${canonical.path}/page.html`, "<p>page</p>\n", "utf8")
+        await fs.writeFile(`${canonical.path}/other.html`, "<p>other</p>\n", "utf8")
+        await $`git add .`.cwd(canonical.path).quiet()
+        await link(canonical.path, "page.html")
+        if (FSUtil.canSymlink()) await $`git add latest.html`.cwd(canonical.path).quiet()
+        else {
+          await $`git config core.symlinks false`.cwd(canonical.path).quiet()
+          const oid = (await $`git hash-object -w latest.html`.cwd(canonical.path).quiet().text()).trim()
+          await $`git update-index --add --cacheinfo 120000,${oid},latest.html`.cwd(canonical.path).quiet()
+        }
+        await $`git commit -m base`.cwd(canonical.path).quiet()
+      })
+      const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() => $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet())
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow()).pipe(
+          Effect.ignore,
+        ),
+      )
+      yield* Effect.promise(() => link(candidate.path, "other.html"))
+      const result = yield* finalize({ worktree: candidate.path, baseSHA: frozenHead, permanentRef: "refs/battles/link/a" })
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead,
+        baseWorkingTree: frozenHead,
+        baseIndexTree: frozenHead,
+        resultCommit: result.finalCommit,
+        finalIndexTree: result.finalIndexTree,
+        safetyRef: "refs/battles/link/safety",
+      })
+      expect(promoted.conflicts).toEqual([])
+      const entry = yield* Effect.promise(() =>
+        $`git ls-tree ${result.finalCommit} latest.html`.cwd(canonical.path).quiet().text(),
+      )
+      expect(entry.startsWith("120000 ")).toBe(true)
+      const written = `${canonical.path}/latest.html`
+      if (FSUtil.canSymlink()) expect(yield* Effect.promise(() => fs.readlink(written))).toBe("other.html")
+      else expect(yield* Effect.promise(() => fs.readFile(written, "utf8"))).toBe("other.html")
     }),
   )
 

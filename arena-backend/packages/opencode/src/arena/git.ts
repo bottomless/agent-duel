@@ -4782,7 +4782,9 @@ const writeTreeToWorktree = Effect.fn("ArenaGit.writeTreeToWorktree")(function* 
       await mkdir(dirname(target), { recursive: true })
       await rm(target, { force: true, recursive: true }).catch(() => undefined)
       if (mode === "120000") {
-        await symlink(blob.toString("utf8"), target)
+        // Without the symlink privilege Git (core.symlinks=false) keeps a link as a file holding its target.
+        if (FSUtil.canSymlink()) await symlink(blob.toString("utf8"), target)
+        else await writeFile(target, blob)
         return
       }
       await writeFile(target, blob, { mode: mode === "100755" ? 0o755 : 0o644 })
