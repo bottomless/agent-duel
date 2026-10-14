@@ -100,21 +100,30 @@ export function projectPendingArenaPrompt(
   return { tail: [...tail, ...head.slice(0, settled), prompt], head: head.slice(settled) };
 }
 
-export function arenaSummaryAnchor(
+interface ArenaAnchorItem {
+  id: string;
+  kind: string;
+  messageId?: string;
+}
+
+function canonicalPromptIndex(
   item: ArenaHistoryItem,
-  streamItems: ReadonlyArray<{
-    id: string;
-    kind: string;
-    messageId?: string;
-  }>,
-): string | null {
-  if (!item.canonicalUserMessageID) return null;
-  const userIndex = streamItems.findIndex(
+  streamItems: ReadonlyArray<ArenaAnchorItem>,
+): number {
+  if (!item.canonicalUserMessageID) return -1;
+  return streamItems.findIndex(
     (streamItem) =>
       streamItem.kind === "user_message" &&
       (streamItem.messageId === item.canonicalUserMessageID ||
         streamItem.id === item.canonicalUserMessageID),
   );
+}
+
+export function arenaSummaryAnchor(
+  item: ArenaHistoryItem,
+  streamItems: ReadonlyArray<ArenaAnchorItem>,
+): string | null {
+  const userIndex = canonicalPromptIndex(item, streamItems);
   if (userIndex < 0) return null;
   const nextUserOffset = streamItems
     .slice(userIndex + 1)
@@ -134,6 +143,19 @@ export function arenaSummaryAnchors(
 ): (string | null)[] {
   const items = [...stream.tail, ...stream.head];
   return history.map((item) => arenaSummaryAnchor(item, items));
+}
+
+/**
+ * Whether the chat has moved past this battle's turn: a later prompt, such as a Battle-off reply,
+ * follows it. Its summary then belongs under its turn rather than below everything after it.
+ */
+export function arenaTurnFollowedUp(item: ArenaHistoryItem, stream: ArenaPresentedStream): boolean {
+  const items = [...stream.tail, ...stream.head];
+  const userIndex = canonicalPromptIndex(item, items);
+  return (
+    userIndex >= 0 &&
+    items.slice(userIndex + 1).some((streamItem) => streamItem.kind === "user_message")
+  );
 }
 
 export function partitionArenaSummaries(

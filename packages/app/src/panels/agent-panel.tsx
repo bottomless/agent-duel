@@ -160,6 +160,7 @@ import {
 import { useArenaReplyComposerControls } from "@/arena/reply-target-control";
 import {
   arenaSummaryAnchors,
+  arenaTurnFollowedUp,
   isArenaBattleOnScreen,
   partitionArenaSummaries,
 } from "@/arena/summary-anchor";
@@ -1576,10 +1577,6 @@ const AgentStreamSection = memo(function AgentStreamSection({
   // previous battle's summary moves inline once instead of vanishing and coming back when the
   // turn finally lands.
   const arenaBattleOnScreen = isArenaBattleOnScreen(arenaSession.data) || startingBattle !== null;
-  const summaryPlacement = useMemo(
-    () => partitionArenaSummaries(arenaSession.data?.history ?? [], arenaBattleOnScreen),
-    [arenaBattleOnScreen, arenaSession.data?.history],
-  );
   const pendingPermissionList = useStoreWithEqualityFn(
     useSessionStore,
     (state) => {
@@ -1618,6 +1615,20 @@ const AgentStreamSection = memo(function AgentStreamSection({
     streamHead: streamHead ?? EMPTY_STREAM_ITEMS,
     hasAppliedAuthoritativeHistory,
   });
+  // The newest summary sits at the end of the chat only while its battle is the last thing there.
+  // Once a later prompt follows, such as a Battle-off reply, it stays under its own turn.
+  const latestSummaryFollowedUp = useMemo(() => {
+    const latest = partitionArenaSummaries(arenaSession.data?.history ?? [], false).live;
+    return latest !== null && arenaTurnFollowedUp(latest, presentedStream);
+  }, [arenaSession.data?.history, presentedStream]);
+  const summaryPlacement = useMemo(
+    () =>
+      partitionArenaSummaries(
+        arenaSession.data?.history ?? [],
+        arenaBattleOnScreen || latestSummaryFollowedUp,
+      ),
+    [arenaBattleOnScreen, arenaSession.data?.history, latestSummaryFollowedUp],
+  );
   // Keyed by the anchors themselves, so a streaming head does not rebuild every row.
   const summaryAnchorKey = useMemo(
     () => JSON.stringify(arenaSummaryAnchors(summaryPlacement.inline, presentedStream)),

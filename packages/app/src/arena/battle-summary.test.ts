@@ -23,6 +23,7 @@ import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
 import {
   arenaSummaryAnchor,
   arenaSummaryAnchors,
+  arenaTurnFollowedUp,
   pendingArenaPrompt,
   projectPendingArenaPrompt,
   isArenaBattleOnScreen,
@@ -105,6 +106,36 @@ describe("arenaSummaryAnchors", () => {
     expect(stream.tail.length).toBeGreaterThan(1);
     expect(stream.head).toHaveLength(1);
     expect(arenaSummaryAnchors([historyItem], stream)).toEqual([stream.head[0].id]);
+  });
+});
+
+describe("arenaTurnFollowedUp", () => {
+  const prompt = createUserMessage({
+    messageId: "user-1",
+    text: "Battle prompt",
+    timestamp: new Date(historyItem.createdAt),
+  });
+  const answer = { id: "answer-1", kind: "assistant_message" } as StreamItem;
+
+  it("is false while the battle's turn is the last thing in the chat", () => {
+    expect(arenaTurnFollowedUp(historyItem, { tail: [prompt, answer], head: [] })).toBe(false);
+  });
+
+  it("is true once a later prompt follows, in the tail or the head", () => {
+    // A Battle-off reply; the summary used to stay below it until the next battle started.
+    const reply = createUserMessage({
+      clientMessageId: "reply",
+      text: "Battle-off follow-up",
+      timestamp: new Date("2026-08-12T00:05:00Z"),
+    });
+    expect(arenaTurnFollowedUp(historyItem, { tail: [prompt, answer, reply], head: [] })).toBe(
+      true,
+    );
+    expect(arenaTurnFollowedUp(historyItem, { tail: [prompt], head: [answer, reply] })).toBe(true);
+  });
+
+  it("is false until the battle's own prompt is in the chat", () => {
+    expect(arenaTurnFollowedUp(historyItem, { tail: [answer], head: [] })).toBe(false);
   });
 });
 
