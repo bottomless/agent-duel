@@ -272,10 +272,11 @@ confirmation. Action failures remain on the battle until another attempt; the no
 action controls provide the retry so a destructive operation is never retried automatically.
 `Choose A` and `Choose B` carry their side's colour as a tint, the blue and amber of the diff's
 column headings, so the vote reads as picking that column; two choices of equal weight mean
-neither can be the accent. `Tie`, `Stop`, `Discard`, and the early pick stay plain; the early
-pick shows its side's colour as a dot. A tinted early pick beside a plain `Stop` read as a switch
-already set to that side, since the reply target fills its selected segment with the same tint,
-and voters felt pushed to take it before the other side finished. Transitional and recovery
+neither can be the accent. `Tie` and `Discard` stay plain. While the battle runs, `Stop` and the
+early pick share one neutral outline, and the early pick takes its side's tint only on hover. An
+uneven pair, one filled or brighter, read as a switch already set to that side, since the reply
+target fills its selected segment with the same tint, and voters felt pushed to take it before
+the other side finished. Transitional and recovery
 states use the **decision bar** (`packages/app/src/arena/decision-bar.tsx`) in the composer's
 slot, except setup and application progress, which stay in the conversation.
 
