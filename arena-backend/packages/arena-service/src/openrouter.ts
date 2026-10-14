@@ -206,6 +206,16 @@ function promptCache(slug: string, input: Record<string, unknown>) {
   return marked ? {} : { cache_control: { type: "ephemeral" } }
 }
 
+// The engine cannot tell which model it is talking to, so any sampling it sends was chosen for no
+// model in particular (the title agent asks for a temperature of 0.5). Claude and OpenAI's reasoning
+// models take none of these, and under the pool's `require_parameters` OpenRouter then finds no
+// endpoint, so only those draws would fail. Every contestant runs on its provider's defaults.
+const samplingParameters = new Set(["temperature", "top_p", "top_k"])
+
+function withoutSampling(input: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(input).filter(([key]) => !samplingParameters.has(key)))
+}
+
 const alternateSelectors = new Set(["model_id", "models", "preset", "presets", "provider", "provider_name", "route"])
 
 const unsupportedServerFeatures = new Set(["plugin", "plugins", "server_tools", "web_search_options"])
@@ -331,7 +341,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     const startedAt = Date.now()
     body = new TextEncoder().encode(
       JSON.stringify({
-        ...input,
+        ...withoutSampling(input),
         model: routeAssignment.model.slug,
         reasoning: { effort: "high" },
         provider: routeAssignment.model.routing,

@@ -2280,6 +2280,48 @@ describe("Arena service vertical slice", () => {
     }
   })
 
+  test("asks the drawn model for no title, because the daemon names Arena chats itself", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure untitled single-agent fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    const headers = {
+      "content-type": "application/json",
+      "x-opencode-directory": directory.path,
+    }
+    try {
+      const source = await json<{ id: string; title: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ permission: [{ permission: "*", pattern: "*", action: "allow" }] }),
+        }),
+      )
+      const pass = await request(`/session/${source.id}/message`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          agent: "build",
+          messageID: MessageID.ascending(),
+          parts: [{ type: "text", text: "Handle this first pass without a battle." }],
+        }),
+      })
+      expect(pass.status).toBe(200)
+      expect(router.contestantRequests.length).toBeGreaterThan(0)
+      expect(JSON.stringify(router.contestantRequests)).not.toContain("Generate a title for this conversation")
+      const session = await json<{ title: string }>(await request(`/session/${source.id}`, { headers }))
+      expect(session.title).toBe(source.title)
+    } finally {
+      router.restore()
+    }
+  })
+
   test("keeps interaction responses hydrated while contestant questions settle", async () => {
     await using directory = await tmpdir({
       git: true,

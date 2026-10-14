@@ -448,6 +448,61 @@ describe("OpenRouter proxy", () => {
     }
   })
 
+  test("leaves sampling to each provider, because the engine cannot choose it for a hidden model", async () => {
+    let upstreamBody: Record<string, unknown> | undefined
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn-1",
+          assignments: [
+            {
+              assignmentID: "opaque-id",
+              model: {
+                displayName: "Hidden Model",
+                slug: "provider/hidden-model",
+                canonicalSlug: "provider/hidden-model",
+                routing: { require_parameters: true },
+              },
+            },
+          ],
+        },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async (_input, init) => {
+        upstreamBody = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+        return Response.json({ choices: [{ message: { content: "A title" } }] })
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+        },
+        body: JSON.stringify({
+          model: "contestant",
+          messages: [],
+          stream: false,
+          temperature: 0.5,
+          top_p: 0.9,
+          top_k: 40,
+          max_tokens: 32_000,
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(upstreamBody).not.toHaveProperty("temperature")
+    expect(upstreamBody).not.toHaveProperty("top_p")
+    expect(upstreamBody).not.toHaveProperty("top_k")
+    expect(upstreamBody).toMatchObject({ model: "provider/hidden-model", max_tokens: 32_000 })
+  })
+
   test("does not limit assigned request size", async () => {
     const content = "x".repeat(2 * 1024 * 1024 + 1)
     let upstreamContentLength = 0

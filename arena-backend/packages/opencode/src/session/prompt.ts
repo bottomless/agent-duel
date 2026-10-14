@@ -64,6 +64,7 @@ import {
 } from "./tool-execution-gate"
 import { LLMEvent } from "@opencode-ai/llm"
 import { ArenaPrivacy } from "@/arena/privacy"
+import { ArenaRuntime } from "@/arena/runtime"
 import { ArenaContestant } from "@/arena/contestant"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 
@@ -213,6 +214,9 @@ const layer = Layer.effect(
       modelID: ModelV2.ID
     }) {
       if (input.session.parentID) return
+      // The daemon names an Arena chat from its first prompt and never reads this title, so making
+      // one would only spend a call on the drawn model.
+      if (input.providerID === ArenaRuntime.providerID) return
       if (!Session.isDefaultTitle(input.session.title)) return
 
       const real = (m: SessionV1.WithParts) =>

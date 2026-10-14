@@ -739,7 +739,10 @@ field. Each layer has its own file:
   then inserts the stored OpenRouter slug, price ceiling, provider policy, and `high` reasoning
   effort. For an `anthropic/` slug it also adds a top-level `cache_control`, because Anthropic
   caches a prompt only when asked. It skips requests without tools (compaction summaries and
-  titles), whose prefix nothing reads back, and bodies that mark their own cache breakpoints.
+  titles), whose prefix nothing reads back, and bodies that mark their own cache breakpoints. It
+  drops `temperature`, `top_p`, and `top_k` from every request: the engine sets them without knowing
+  the model, Claude and OpenAI's reasoning models accept none of them, and under the pool's
+  `require_parameters` OpenRouter would refuse only those draws, which also reveals them.
   Resolution disables further routing without deleting the assignment.
 - **Response** (`arena-service/src/openrouter.ts`) — before bytes return to the desktop, the control
   plane strips model, provider, fingerprint, OpenRouter metadata, and cost, replaces the generation
