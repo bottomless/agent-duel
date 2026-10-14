@@ -67,25 +67,37 @@ export function pendingArenaPrompt({
   return canonicalPromptPresent || promptBeforeLoadedPage ? null : turn;
 }
 
+export interface ArenaPresentedStream {
+  tail: StreamItem[];
+  head: StreamItem[];
+}
+
 /** A presentation-only row: never put this projection back into the session store. */
 export function projectPendingArenaPrompt(
-  tail: StreamItem[],
+  stream: ArenaPresentedStream,
   turn: ArenaSnapshot["turn"] | null,
-): StreamItem[] {
-  if (!turn || turn.state !== "complete") return tail;
+): ArenaPresentedStream {
+  if (!turn || turn.state !== "complete") return stream;
   const timestamp = new Date(turn.createdAt);
   const prompt = createUserMessage({
     id: `arena-prompt:${turn.id}`,
     text: turn.prompt,
     timestamp,
   });
+  const { tail, head } = stream;
   // Assistant timestamps can refresh during replay. Use the next user prompt as
   // the boundary so the previous answer stays with its original turn.
-  const nextItem = tail.findIndex(
+  const nextItem = [...tail, ...head].findIndex(
     (item) => item.kind === "user_message" && item.timestamp > timestamp,
   );
-  const index = nextItem < 0 ? tail.length : nextItem;
-  return [...tail.slice(0, index), prompt, ...tail.slice(index)];
+  const index = nextItem < 0 ? tail.length + head.length : nextItem;
+  if (index <= tail.length) {
+    return { tail: [...tail.slice(0, index), prompt, ...tail.slice(index)], head };
+  }
+  // The head can still hold the end of the previous answer: a grafted winner sends no turn
+  // completion to move it into the tail. Left in the head, it would draw below the prompt.
+  const settled = index - tail.length;
+  return { tail: [...tail, ...head.slice(0, settled), prompt], head: head.slice(settled) };
 }
 
 export function arenaSummaryAnchor(
@@ -109,6 +121,19 @@ export function arenaSummaryAnchor(
     .findIndex((streamItem) => streamItem.kind === "user_message");
   const endIndex = nextUserOffset < 0 ? streamItems.length - 1 : userIndex + nextUserOffset;
   return streamItems[endIndex]?.id ?? null;
+}
+
+/**
+ * Each summary's anchor, searched over tail and head. A grafted winner sends no turn completion,
+ * so its turn can stay in the head until the next canonical event; in a chat whose history has
+ * not loaded yet, the whole turn is there.
+ */
+export function arenaSummaryAnchors(
+  history: readonly ArenaHistoryItem[],
+  stream: ArenaPresentedStream,
+): (string | null)[] {
+  const items = [...stream.tail, ...stream.head];
+  return history.map((item) => arenaSummaryAnchor(item, items));
 }
 
 export function partitionArenaSummaries(

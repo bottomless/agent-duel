@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { appendSubmittedUserMessage, applyStreamEvent, createUserMessage } from "@/types/stream";
+import {
+  appendSubmittedUserMessage,
+  applyStreamEvent,
+  createUserMessage,
+  type StreamItem,
+} from "@/types/stream";
 import type {
   ArenaComparisonDiff,
   ArenaHistoryItem,
@@ -17,6 +22,7 @@ import { canRequestBattleDiff, hasBattleDiff } from "./comparison-visibility";
 import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
 import {
   arenaSummaryAnchor,
+  arenaSummaryAnchors,
   pendingArenaPrompt,
   projectPendingArenaPrompt,
   isArenaBattleOnScreen,
@@ -58,6 +64,47 @@ describe("arenaSummaryAnchor", () => {
     expect(
       arenaSummaryAnchor(historyItem, [{ id: "local-user", kind: "user_message" }]),
     ).toBeNull();
+  });
+});
+
+describe("arenaSummaryAnchors", () => {
+  const prompt = createUserMessage({
+    messageId: "user-1",
+    text: "First battle",
+    timestamp: new Date(historyItem.createdAt),
+  });
+
+  function liveAnswer(tail: StreamItem[], head: StreamItem[], text: string) {
+    return applyStreamEvent({
+      tail,
+      head,
+      event: {
+        type: "timeline",
+        provider: "opencode",
+        item: { type: "assistant_message", messageId: "answer-1", text },
+      },
+      timestamp: new Date("2026-08-12T00:00:30Z"),
+      source: "live",
+    });
+  }
+
+  it("finds a battle whose whole turn is still in the head", () => {
+    // Before a new chat's history loads, the graft's events land in the head, and nothing
+    // completes the turn. Searching the tail alone hid the summary while the next battle ran.
+    // The overlay `session-stream-reducers.ts` builds without an authoritative baseline.
+    const overlay = liveAnswer([prompt], [], "The answer");
+    const stream = { tail: [], head: [...overlay.tail, ...overlay.head] };
+    expect(arenaSummaryAnchors([historyItem], stream)).toEqual([stream.head.at(-1)!.id]);
+    expect(arenaSummaryAnchor(historyItem, stream.tail)).toBeNull();
+  });
+
+  it("anchors after the end of an answer that is still in the head", () => {
+    // Completed blocks move to the tail; the last one stays in the head. Searching the tail
+    // alone put the summary above the answer's last paragraph.
+    const stream = liveAnswer([prompt], [], "First paragraph.\n\nLast paragraph.");
+    expect(stream.tail.length).toBeGreaterThan(1);
+    expect(stream.head).toHaveLength(1);
+    expect(arenaSummaryAnchors([historyItem], stream)).toEqual([stream.head[0].id]);
   });
 });
 
@@ -583,12 +630,13 @@ describe("pendingArenaPrompt", () => {
       text: "Continue in single-agent mode",
       timestamp: new Date("2026-08-12T00:02:00.000Z"),
     });
-    expect(projectPendingArenaPrompt([previous], snapshot.turn!).map((item) => item.id)).toEqual([
-      previous.id,
-      "arena-prompt:turn-1",
-    ]);
+    expect(
+      projectPendingArenaPrompt({ tail: [previous], head: [] }, snapshot.turn!).tail.map(
+        (item) => item.id,
+      ),
+    ).toEqual([previous.id, "arena-prompt:turn-1"]);
     const stream = appendSubmittedUserMessage({ tail: [previous], head: [], message: followUp });
-    expect(projectPendingArenaPrompt(stream.tail, snapshot.turn!).map((item) => item.id)).toEqual([
+    expect(projectPendingArenaPrompt(stream, snapshot.turn!).tail.map((item) => item.id)).toEqual([
       previous.id,
       "arena-prompt:turn-1",
       followUp.id,
@@ -624,10 +672,14 @@ describe("pendingArenaPrompt", () => {
       timestamp: new Date("2026-08-12T00:03:00.000Z"),
     });
     expect(
-      projectPendingArenaPrompt([...items, laterFollowUp], snapshot.turn!).map((item) => item.id),
+      projectPendingArenaPrompt(
+        { tail: [...items, laterFollowUp], head: [] },
+        snapshot.turn!,
+      ).tail.map((item) => item.id),
     ).toEqual([previous.id, "arena-prompt:turn-1", followUp.id, laterFollowUp.id]);
-    expect(projectPendingArenaPrompt(items, null)).toBe(items);
-    expect(projectPendingArenaPrompt(items, active.turn!)).toBe(items);
+    const unprojected = { tail: items, head: [] };
+    expect(projectPendingArenaPrompt(unprojected, null)).toBe(unprojected);
+    expect(projectPendingArenaPrompt(unprojected, active.turn!)).toBe(unprojected);
     expect(pendingArenaPrompt({ snapshot, streamItems: items, pendingTurnId })).toBe(snapshot.turn);
     expect(
       pendingArenaPrompt({ snapshot, streamItems: [...items, canonicalPrompt], pendingTurnId }),
@@ -652,11 +704,56 @@ describe("pendingArenaPrompt", () => {
       source: "live",
     });
     const items = [...stream.tail, ...stream.head];
-    expect(projectPendingArenaPrompt(items, snapshot.turn!).map((item) => item.id)).toEqual([
+    expect(
+      projectPendingArenaPrompt({ tail: items, head: [] }, snapshot.turn!).tail.map(
+        (item) => item.id,
+      ),
+    ).toEqual([previous.id, items[1].id, "arena-prompt:turn-1"]);
+  });
+
+  it("moves the end of the previous answer out of the head and above the prompt", () => {
+    // A grafted winner sends no turn completion, so the last block of its answer stays in the
+    // head through the next battle. Left there, it drew below the next battle's prompt.
+    const previous = createUserMessage({
+      messageId: "previous",
+      text: "Previous prompt",
+      timestamp: new Date("2026-08-11T23:59:00Z"),
+    });
+    const stream = applyStreamEvent({
+      tail: [previous],
+      head: [],
+      event: {
+        type: "timeline",
+        provider: "opencode",
+        item: { type: "assistant_message", messageId: "previous-answer", text: "Previous answer" },
+      },
+      timestamp: new Date("2026-08-11T23:59:30Z"),
+      source: "live",
+    });
+    expect(stream.head.map((item) => item.kind)).toEqual(["assistant_message"]);
+    const projected = projectPendingArenaPrompt(stream, snapshot.turn!);
+    expect(projected.tail.map((item) => item.id)).toEqual([
       previous.id,
-      items[1].id,
+      stream.head[0].id,
       "arena-prompt:turn-1",
     ]);
+    expect(projected.head).toEqual([]);
+    // A follow-up sent after the battle stays below the prompt, in the head.
+    const followUp = createUserMessage({
+      clientMessageId: "follow-up",
+      text: "Continue",
+      timestamp: new Date("2026-08-12T00:02:00.000Z"),
+    });
+    const withFollowUp = projectPendingArenaPrompt(
+      { tail: stream.tail, head: [...stream.head, followUp] },
+      snapshot.turn!,
+    );
+    expect(withFollowUp.tail.map((item) => item.id)).toEqual([
+      previous.id,
+      stream.head[0].id,
+      "arena-prompt:turn-1",
+    ]);
+    expect(withFollowUp.head).toEqual([followUp]);
   });
 
   it("removes the projected prompt on an index-only update without touching the live head", () => {
@@ -681,20 +778,21 @@ describe("pendingArenaPrompt", () => {
       pendingTurnId: observeBattle(),
       timelineRange: { epoch: "winner", startSeq: 10 },
     };
-    const before = projectPendingArenaPrompt(tail, pendingArenaPrompt(input));
-    expect([...before, ...head].map((item) => item.id)).toEqual([
+    const before = projectPendingArenaPrompt({ tail, head }, pendingArenaPrompt(input));
+    expect(before.head).toBe(head);
+    expect([...before.tail, ...before.head].map((item) => item.id)).toEqual([
       "arena-prompt:turn-1",
       "later-winner-reply",
       "follow-up",
     ]);
-    expect(before[0]).toEqual({
+    expect(before.tail[0]).toEqual({
       kind: "user_message",
       id: "arena-prompt:turn-1",
       text: snapshot.turn!.prompt,
       timestamp: new Date(historyItem.createdAt),
     });
     const after = projectPendingArenaPrompt(
-      tail,
+      { tail, head },
       pendingArenaPrompt({
         ...input,
         promptIndex: {
@@ -705,8 +803,12 @@ describe("pendingArenaPrompt", () => {
         },
       }),
     );
-    expect(after).toBe(tail);
-    expect([...after, ...head].map((item) => item.id)).toEqual(["later-winner-reply", "follow-up"]);
+    expect(after.tail).toBe(tail);
+    expect(after.head).toBe(head);
+    expect([...after.tail, ...after.head].map((item) => item.id)).toEqual([
+      "later-winner-reply",
+      "follow-up",
+    ]);
     expect(tail).toHaveLength(1);
     expect(head).toHaveLength(1);
   });
@@ -716,23 +818,23 @@ describe("pendingArenaPrompt", () => {
     const pendingTurnId = observeBattle();
     expect(
       projectPendingArenaPrompt(
-        tail,
+        { tail, head: [] },
         pendingArenaPrompt({ snapshot, streamItems: tail, pendingTurnId }),
-      ),
+      ).tail,
     ).toHaveLength(1);
     expect(tail).toEqual([]);
     const loaded = [canonicalPrompt];
     expect(
       projectPendingArenaPrompt(
-        loaded,
+        { tail: loaded, head: [] },
         pendingArenaPrompt({ snapshot, streamItems: loaded, pendingTurnId }),
-      ),
+      ).tail,
     ).toBe(loaded);
     expect(
       projectPendingArenaPrompt(
-        tail,
+        { tail, head: [] },
         pendingArenaPrompt({ snapshot, streamItems: tail, pendingTurnId: null }),
-      ),
+      ).tail,
     ).toBe(tail);
   });
 

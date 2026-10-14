@@ -66,7 +66,7 @@ export function usePendingArenaPrompt({
     setPendingTurnId(nextPendingTurnId);
   }
   return useMemo(
-    () => projectPendingArenaPrompt(streamItems, pendingPrompt),
-    [streamItems, pendingPrompt],
+    () => projectPendingArenaPrompt({ tail: streamItems, head: streamHead }, pendingPrompt),
+    [streamItems, streamHead, pendingPrompt],
   );
 }

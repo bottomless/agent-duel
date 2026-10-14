@@ -1067,6 +1067,10 @@ or restart a contestant.
 - An early vote cancels the loser, so its transcript stops mid-run and its diff is whatever it had
   reached.
 - Generation-scoped battle refs preserve the contestant results. Nothing prunes them.
+- The winner's hydration sends no turn completion, so the chat's stream keeps the end of that
+  turn in its live head until the next canonical event; before a new chat's history loads, the
+  whole turn is there. Anything placed against the chat's turns, such as summaries and the
+  pending prompt, reads tail and head together (`arena/summary-anchor.ts`).
 - Contestant worktrees are reused across turns. Never assume a run's directory is fresh or that it
   is removed after the vote; `worktreeRemovedAt` means the run released its slot.
 - Never give a host `alternates` to the checkout's objects; see the contestant environments above.

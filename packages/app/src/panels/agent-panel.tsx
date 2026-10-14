@@ -159,7 +159,7 @@ import {
 } from "@/arena/reply-state";
 import { useArenaReplyComposerControls } from "@/arena/reply-target-control";
 import {
-  arenaSummaryAnchor,
+  arenaSummaryAnchors,
   isArenaBattleOnScreen,
   partitionArenaSummaries,
 } from "@/arena/summary-anchor";
@@ -1607,10 +1607,28 @@ const AgentStreamSection = memo(function AgentStreamSection({
     return new Map(pendingPermissionList.map((permission) => [permission.key, permission]));
   }, [pendingPermissionList]);
 
+  const streamHead = useSessionStore((state) =>
+    agentId ? state.sessions[serverId]?.agentStreamHead.get(agentId) : undefined,
+  );
+  const presentedStream = usePendingArenaPrompt({
+    serverId,
+    agentId: agentId ?? "",
+    snapshot: arenaSession.data,
+    streamItems,
+    streamHead: streamHead ?? EMPTY_STREAM_ITEMS,
+    hasAppliedAuthoritativeHistory,
+  });
+  // Keyed by the anchors themselves, so a streaming head does not rebuild every row.
+  const summaryAnchorKey = useMemo(
+    () => JSON.stringify(arenaSummaryAnchors(summaryPlacement.inline, presentedStream)),
+    [presentedStream, summaryPlacement.inline],
+  );
+
   const arenaAfterItems = useMemo(() => {
+    const anchors: (string | null)[] = JSON.parse(summaryAnchorKey);
     const groups = new Map<string, React.ReactNode[]>();
-    for (const historyItem of summaryPlacement.inline) {
-      const anchor = arenaSummaryAnchor(historyItem, streamItems);
+    for (const [index, historyItem] of summaryPlacement.inline.entries()) {
+      const anchor = anchors[index];
       if (!anchor) continue;
       const nodes = groups.get(anchor) ?? [];
       nodes.push(
@@ -1630,7 +1648,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
         <View key={`arena-summaries-${anchor}`}>{nodes}</View>,
       ]),
     );
-  }, [agent.id, serverId, streamItems, summaryPlacement.inline, workspaceId]);
+  }, [agent.id, serverId, summaryAnchorKey, summaryPlacement.inline, workspaceId]);
 
   // The active battle owns setup progress and the contestant panes in the stream.
   const activeBattle = useMemo(() => {
@@ -1649,17 +1667,6 @@ const AgentStreamSection = memo(function AgentStreamSection({
     );
   }, [agent.id, arenaBattleOnScreen, arenaSession.data, serverId, startingBattle, workspaceId]);
 
-  const streamHead = useSessionStore((state) =>
-    agentId ? state.sessions[serverId]?.agentStreamHead.get(agentId) : undefined,
-  );
-  const presentedStreamItems = usePendingArenaPrompt({
-    serverId,
-    agentId: agentId ?? "",
-    snapshot: arenaSession.data,
-    streamItems,
-    streamHead: streamHead ?? EMPTY_STREAM_ITEMS,
-    hasAppliedAuthoritativeHistory,
-  });
   const latestBattleSummary = useMemo(
     () =>
       summaryPlacement.live ? (
@@ -1873,7 +1880,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
       agentId={agent.id}
       serverId={serverId}
       context={agent}
-      streamItems={presentedStreamItems}
+      streamItems={presentedStream.tail}
+      streamHead={presentedStream.head}
       pendingPermissions={pendingPermissions}
       routeBottomAnchorRequest={routeBottomAnchorRequest}
       isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
