@@ -1617,10 +1617,14 @@ const AgentStreamSection = memo(function AgentStreamSection({
   });
   // The newest summary sits at the end of the chat only while its battle is the last thing there.
   // Once a later prompt follows, such as a Battle-off reply, it stays under its own turn.
-  const latestSummaryFollowedUp = useMemo(() => {
-    const latest = partitionArenaSummaries(arenaSession.data?.history ?? [], false).live;
-    return latest !== null && arenaTurnFollowedUp(latest, presentedStream);
-  }, [arenaSession.data?.history, presentedStream]);
+  const latestSummary = useMemo(
+    () => partitionArenaSummaries(arenaSession.data?.history ?? [], false).live,
+    [arenaSession.data?.history],
+  );
+  const latestSummaryFollowedUp = useMemo(
+    () => latestSummary !== null && arenaTurnFollowedUp(latestSummary, presentedStream),
+    [latestSummary, presentedStream],
+  );
   const summaryPlacement = useMemo(
     () =>
       partitionArenaSummaries(
@@ -1651,6 +1655,19 @@ const AgentStreamSection = memo(function AgentStreamSection({
           item={historyItem}
         />,
       );
+      // Its feedback prompt moves with it, as it sat under the summary at the end of the chat.
+      if (latestSummaryFollowedUp && historyItem.id === latestSummary?.id) {
+        nodes.push(
+          <ChatFeedbackCard
+            key={`battle-feedback-${historyItem.id}`}
+            battleId={historyItem.id}
+            agentId={agent.id}
+            workspaceId={workspaceId}
+            promptEligible={feedbackPromptEligible}
+            style={styles.inlineFeedbackCard}
+          />,
+        );
+      }
       groups.set(anchor, nodes);
     }
     return new Map(
@@ -1659,7 +1676,16 @@ const AgentStreamSection = memo(function AgentStreamSection({
         <View key={`arena-summaries-${anchor}`}>{nodes}</View>,
       ]),
     );
-  }, [agent.id, serverId, summaryAnchorKey, summaryPlacement.inline, workspaceId]);
+  }, [
+    agent.id,
+    feedbackPromptEligible,
+    latestSummary?.id,
+    latestSummaryFollowedUp,
+    serverId,
+    summaryAnchorKey,
+    summaryPlacement.inline,
+    workspaceId,
+  ]);
 
   // The active battle owns setup progress and the contestant panes in the stream.
   const activeBattle = useMemo(() => {
@@ -2661,6 +2687,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   arenaReadyContent: {
     gap: theme.spacing[3],
+  },
+  // The space it has under the summary at the end of the chat, and room before the next prompt.
+  inlineFeedbackCard: {
+    marginTop: theme.spacing[3],
+    marginBottom: theme.spacing[2],
   },
   // The conversation's own measure, so the notice lines up with the battle
   // summary above it rather than breaking out of the column.

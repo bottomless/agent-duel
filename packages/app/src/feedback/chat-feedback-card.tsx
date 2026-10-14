@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Text, View } from "react-native";
+import { Text, View, type StyleProp, type ViewStyle } from "react-native";
 import { useTranslation } from "react-i18next";
 import { Check, X } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -22,6 +22,8 @@ export interface ChatFeedbackCardProps {
   agentId: string;
   workspaceId: string;
   promptEligible: boolean;
+  /** Applies only while the card is shown, so a hidden card leaves no gap behind. */
+  style?: StyleProp<ViewStyle>;
 }
 
 export function ChatFeedbackCard({
@@ -29,6 +31,7 @@ export function ChatFeedbackCard({
   agentId,
   workspaceId,
   promptEligible,
+  style,
 }: ChatFeedbackCardProps) {
   const { t, i18n } = useTranslation();
   const available = useFeedbackAvailable();
@@ -105,7 +108,7 @@ export function ChatFeedbackCard({
   if (!available || !shown || (!promptActive && !submitted) || dismissed) return null;
 
   return (
-    <View style={styles.card} testID="chat-feedback-card">
+    <View style={[styles.card, style]} testID="chat-feedback-card">
       {submitted ? (
         <View style={styles.successRow}>
           <View style={styles.successMark}>
