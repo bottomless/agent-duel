@@ -6790,10 +6790,16 @@ test("unarchiveSnapshot unarchives the Arena chat once the record reads unarchiv
   expect(client.archivedAtDuringUnarchive).toEqual(expect.any(String));
   expect(client.archivedAtDuringArenaUnarchive).toBeNull();
 
-  // A chat the engine cannot bring back fails the unarchive, which the caller reports.
-  await manager.archiveSnapshot(agent.id, new Date().toISOString());
+  // A chat the engine cannot bring back leaves the agent archived, so Unarchive can be retried.
+  const archivedAt = new Date().toISOString();
+  await manager.archiveSnapshot(agent.id, archivedAt);
   client.arenaUnarchiveFailure = new Error("Arena chat still archived");
   await expect(manager.unarchiveSnapshot(agent.id)).rejects.toThrow("Arena chat still archived");
+  expect((await storage.get(agent.id))?.archivedAt).toBe(archivedAt);
+
+  client.arenaUnarchiveFailure = null;
+  expect(await manager.unarchiveSnapshot(agent.id)).toBe(true);
+  expect((await storage.get(agent.id))?.archivedAt).toBeNull();
 });
 
 test("archiveAgent cascade archives in-memory children with the full archive contract", async () => {

@@ -2051,10 +2051,14 @@ export class AgentManager {
       // answers, and an agent resumed while its record still reads archived is removed from
       // clients' lists, which turns its open chat into a draft.
       await this.unarchiveArenaChat(record.provider, record.persistence);
-    } finally {
-      if (this.getAgent(agentId)) {
-        this.notifyAgentState(agentId);
-      }
+    } catch (error) {
+      // Archived again rather than left as a chat the engine refuses, so Unarchive can be retried.
+      await this.archiveSnapshot(agentId, record.archivedAt);
+      throw error;
+    }
+
+    if (this.getAgent(agentId)) {
+      this.notifyAgentState(agentId);
     }
     return true;
   }
