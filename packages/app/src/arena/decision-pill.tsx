@@ -6,6 +6,7 @@ import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-sche
 import { ArenaSideChoiceButton, DiscardDecision, VoteDecision } from "./decision-bar";
 import {
   arenaDecisionPhase,
+  arenaRunningDecisionHint,
   arenaRunningDecisionOrder,
   type ArenaDecisionPhase,
 } from "./decision-state";
@@ -132,6 +133,7 @@ export function ArenaDecisionPill({
   const phase = arenaDecisionPhase(snapshot);
   const stopped = phase.kind === "awaiting_stop_resolution";
   const bothFailed = phase.kind === "awaiting_vote" && phase.canDiscard;
+  const runningHint = arenaRunningDecisionHint(phase);
   const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
   const visible = isArenaBattleOnScreen(snapshot) && showChoices;
   const handleLayout = useCallback(
@@ -157,6 +159,7 @@ export function ArenaDecisionPill({
           {phase.canRetry ? "Both agents failed · retry or discard" : "Both agents failed"}
         </Text>
       ) : null}
+      {runningHint ? <Text style={styles.hint}>{runningHint}</Text> : null}
       <View style={styles.pill} testID="arena-battle-choice-row">
         {phase.kind === "running"
           ? arenaRunningDecisionOrder(phase).map((choice) =>

@@ -16,12 +16,22 @@ import {
 } from "./decision-state";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
 
+// The early pick's icon: its side's colour, without the vote's tint.
+function SideDotA() {
+  return <View style={styles.sideDotA} />;
+}
+
+function SideDotB() {
+  return <View style={styles.sideDotB} />;
+}
+
 /**
  * The decision for one side: the vote, the early pick, or keeping that side after a stop.
  *
  * Two choices of equal weight, so neither can be the accent. The tint is the side's colour,
  * the blue and amber the diff's column headings use, so the button reads as picking that
- * column. Both sides share a width so the pair reads as one decision.
+ * column. Both sides share a width so the pair reads as one decision. The early pick, offered
+ * while the other side still works, takes no tint.
  */
 export function ArenaSideChoiceButton({
   side,
@@ -41,10 +51,26 @@ export function ArenaSideChoiceButton({
   testID: string;
 }) {
   const sideLabel = side.toUpperCase();
-  const isEarly = kind === "early";
-  let buttonLabel = `Choose ${sideLabel}`;
-  if (isEarly) buttonLabel = `Choose ${sideLabel} now`;
-  if (kind === "keep") buttonLabel = `Keep ${sideLabel}`;
+  if (kind === "early") {
+    // Not the vote yet: a tinted pick beside a plain Stop read as a switch already set to this
+    // side (the reply target fills its selected segment with the same tint), and voters felt
+    // pushed to take it. Plain, with the side's dot to keep its column.
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        style={styles.pillChoice}
+        leftIcon={side === "a" ? SideDotA : SideDotB}
+        loading={loading}
+        disabled={disabled}
+        onPress={onPress}
+        testID={testID}
+      >
+        {label ?? `Choose ${sideLabel} early`}
+      </Button>
+    );
+  }
+  const buttonLabel = kind === "keep" ? `Keep ${sideLabel}` : `Choose ${sideLabel}`;
   return (
     <Button
       variant="secondary"
@@ -297,6 +323,18 @@ const styles = StyleSheet.create((theme) => ({
   sideB: {
     backgroundColor: tint(theme.colors.statusDotWarning, 24),
     borderColor: tint(theme.colors.statusDotWarning, 50),
+  },
+  sideDotA: {
+    width: theme.spacing[1.5],
+    height: theme.spacing[1.5],
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.statusDotRunning,
+  },
+  sideDotB: {
+    width: theme.spacing[1.5],
+    height: theme.spacing[1.5],
+    borderRadius: theme.borderRadius.full,
+    backgroundColor: theme.colors.statusDotWarning,
   },
   retry: {
     flexDirection: "row",

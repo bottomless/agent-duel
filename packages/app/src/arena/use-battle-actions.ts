@@ -87,7 +87,7 @@ export function useArenaBattleActions(
       const label = sideLabel(side);
       const other = sideLabel(side === "a" ? "b" : "a");
       const confirmed = await confirmDialog({
-        title: `Choose ${label} now?`,
+        title: `Choose ${label} early?`,
         message: `Agent ${other} stops immediately and its work is discarded. Agent ${label}'s work so far becomes this turn's result.`,
         confirmLabel: `Choose ${label}`,
         cancelLabel: "Cancel",

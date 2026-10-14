@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ArenaRun, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   arenaDecisionPhase,
+  arenaRunningDecisionHint,
   arenaRunningDecisionOrder,
   decisionBarShowsPhase,
   showsArenaDecisionBar,
@@ -350,4 +351,29 @@ describe("arenaRunningDecisionOrder", () => {
       expect(arenaRunningDecisionOrder({ canPickA, canPickB })).toEqual(expected);
     },
   );
+});
+
+describe("arenaRunningDecisionHint", () => {
+  const finishedB = run({ id: "run-b", side: "b", runState: "complete", selectable: true });
+
+  it("names the side still working once the other can be picked early", () => {
+    const phase = arenaDecisionPhase(
+      snapshot({ state: "running", runs: [run({ id: "run-a", side: "a" }), finishedB] }),
+    );
+    expect(phase).toMatchObject({ kind: "running", waitingFor: "a", canPickB: true });
+    expect(arenaRunningDecisionHint(phase)).toBe("Agent A is still working");
+  });
+
+  it("says nothing while both run, before a pick is offered, or once the vote is open", () => {
+    expect(arenaRunningDecisionHint(arenaDecisionPhase(snapshot({ state: "running" })))).toBeNull();
+    const copying = snapshot({
+      state: "running",
+      runs: [run({ id: "run-a", side: "a" }), finishedB],
+      turn: { activeOperations: ["copying_environment"] },
+    });
+    expect(arenaRunningDecisionHint(arenaDecisionPhase(copying))).toBeNull();
+    expect(
+      arenaRunningDecisionHint(arenaDecisionPhase(snapshot({ state: "awaiting_vote" }))),
+    ).toBeNull();
+  });
 });
