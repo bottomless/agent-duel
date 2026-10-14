@@ -85,19 +85,20 @@ appImage:
   # version stays discoverable via the release tag and the in-app version.
   artifactName: "Agent-Duel-${arch}.${ext}"
 win:
+  icon: assets/icon.ico
   artifactName: "Agent-Duel-Setup-${version}-${arch}.${ext}"
   extraResources:
     - from: bin/paseo.cmd
       to: bin/paseo.cmd
+  # x64 only: build-arena-runtime.mjs compiles the engine and copies watcher.node for the host
+  # arch, so an arm64 package built on x64 would ship an x64 engine.
   target:
     - target: nsis
       arch:
         - x64
-        - arm64
     - target: zip
       arch:
         - x64
-        - arm64
 nsis:
   oneClick: false
   perMachine: false
