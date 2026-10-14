@@ -892,6 +892,12 @@ export interface AgentClient {
    */
   unarchiveNativeSession?(handle: AgentPersistenceHandle): Promise<void>;
   /**
+   * Make the session's battle chat usable again. Archiving a workspace archives its battle chats
+   * in the engine, which then refuses every send to them.
+   * Called after Paseo clears its archived flag.
+   */
+  unarchiveArenaChat?(handle: AgentPersistenceHandle): Promise<void>;
+  /**
    * Release any provider-owned resources held by this client (background
    * processes, sockets, cached subprocesses, etc.). Called when the daemon
    * shuts down. Must be idempotent.

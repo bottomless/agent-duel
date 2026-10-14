@@ -3,11 +3,14 @@ import { useMutation } from "@tanstack/react-query";
 import { useFetchQuery } from "@/data/query";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useSessionStore } from "@/stores/session-store";
+import { useWorkspace } from "@/stores/session-store-hooks";
 import { toErrorMessage } from "@/utils/error-messages";
+import { prepareWorkspaceTab } from "@/utils/workspace-navigation";
 import {
   recoverWorkspaceSelection,
   resolveWorkspaceRecoveryModel,
   type WorkspaceRecoveryController,
+  type WorkspaceRecoveryAttempt,
 } from "./model";
 
 export type { WorkspaceRecoveryController, WorkspaceRecoveryModel } from "./model";
@@ -37,6 +40,10 @@ export function useWorkspaceRecovery(input: {
 }): WorkspaceRecoveryController {
   const client = useHostRuntimeClient(input.serverId);
   const isConnected = useHostRuntimeIsConnected(input.serverId);
+  const workspace = useWorkspace(input.serverId, input.workspaceId);
+  const hasAvailableFiles =
+    workspace?.filesState === undefined || workspace.filesState === "available";
+  const hasAvailableWorkspace = workspace !== null && hasAvailableFiles;
   const serverInfo = useSessionStore((store) => store.sessions[input.serverId]?.serverInfo ?? null);
   const supportsRecovery = serverInfo?.features?.workspaceRecovery === true;
 
@@ -55,7 +62,7 @@ export function useWorkspaceRecovery(input: {
   });
 
   const restoreMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (attempt: WorkspaceRecoveryAttempt) => {
       if (!client || !isConnected) {
         throw new Error("The host disconnected before the workspace could be recovered.");
       }
@@ -64,8 +71,19 @@ export function useWorkspaceRecovery(input: {
       await recoverWorkspaceSelection({
         client,
         workspaceId: input.workspaceId,
-        agentId: input.agentId,
+        agentId: attempt.agentId,
+        needsWorkspaceRestore: !hasAvailableWorkspace,
       });
+    },
+    onSuccess: (_result, attempt) => {
+      if (attempt.agentId) {
+        prepareWorkspaceTab({
+          serverId: input.serverId,
+          workspaceId: input.workspaceId,
+          target: { kind: "agent", agentId: attempt.agentId },
+          pin: true,
+        });
+      }
     },
   });
 
@@ -85,6 +103,7 @@ export function useWorkspaceRecovery(input: {
         restore: {
           pending: restoreMutation.isPending,
           error: restoreMutation.isError ? toErrorMessage(restoreMutation.error) : null,
+          attempt: restoreMutation.variables ?? null,
         },
       }),
     [
@@ -98,17 +117,22 @@ export function useWorkspaceRecovery(input: {
       restoreMutation.error,
       restoreMutation.isError,
       restoreMutation.isPending,
+      restoreMutation.variables,
       serverInfo,
       supportsRecovery,
     ],
   );
 
+  const recoveryAttempt = restoreMutation.isSuccess ? null : restoreMutation.variables;
+  const agentId = input.agentId ?? recoveryAttempt?.agentId ?? null;
   const restore = useCallback(() => {
-    restoreMutation.mutate();
-  }, [restoreMutation]);
+    if (state.kind === "recoverable") {
+      restoreMutation.mutate({ recovery: state.recovery, agentId });
+    }
+  }, [restoreMutation, state, agentId]);
   const retryInspection = useCallback(() => {
     void inspection.refetch();
   }, [inspection]);
 
-  return { state, restore, retryInspection };
+  return { state, agentId, restore, retryInspection };
 }

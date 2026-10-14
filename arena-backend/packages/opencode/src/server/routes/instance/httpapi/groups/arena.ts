@@ -226,6 +226,20 @@ const group = HttpApiGroup.make("arena")
     ),
   )
   .add(
+    HttpApiEndpoint.post("unarchiveSession", "/arena/sessions/:sessionID/unarchive", {
+      params: { sessionID: Schema.String },
+      query: WorkspaceRoutingQuery,
+      success: Schema.NullOr(ArenaSchema.Snapshot),
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.session.unarchive",
+        summary: "Unarchive an Arena chat",
+        description: "Make an archived chat ready again once its workspace or agent is unarchived.",
+      }),
+    ),
+  )
+  .add(
     HttpApiEndpoint.post("forkSession", "/arena/sessions/:sessionID/fork", {
       params: { sessionID: Schema.String },
       query: WorkspaceRoutingQuery,

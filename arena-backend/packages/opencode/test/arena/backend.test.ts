@@ -41,7 +41,7 @@ function fakeNetwork() {
         data: defaultPool.map((profile) => ({
           canonical_slug: profile.canonicalSlug,
           context_length: profile.contextWindow,
-          architecture: { input_modalities: ["text"], output_modalities: ["text"] },
+          architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] },
           supported_parameters: ["tools", "tool_choice", "reasoning", "reasoning_effort"],
           reasoning: { supported_efforts: ["high"] },
         })),
@@ -52,7 +52,7 @@ function fakeNetwork() {
         id: "provider-generation",
         model: "provider/model-version",
         provider: "hidden-provider",
-        usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.123 },
+        usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0, cost_details: { upstream_inference_cost: 0.456 } },
         choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }],
       })
     }
@@ -125,7 +125,14 @@ describe("Arena backend", () => {
     const names: readonly string[] = defaultPool.map((profile) => profile.displayName)
     expect(resolved.assignments.map((assignment) => names.includes(assignment.model))).toEqual([true, true])
     expect(resolved.assignments[0]?.metrics).toEqual([
-      expect.objectContaining({ usage: expect.objectContaining({ promptTokens: 10, completionTokens: 5 }) }),
+      expect.objectContaining({
+        usage: expect.objectContaining({
+          promptTokens: 10,
+          completionTokens: 5,
+          cost: 0,
+          upstreamInferenceCost: 0.456,
+        }),
+      }),
     ])
 
     const slugs: readonly string[] = defaultPool.map((profile) => profile.slug)

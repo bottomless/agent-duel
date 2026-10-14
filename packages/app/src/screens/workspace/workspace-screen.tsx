@@ -2619,8 +2619,8 @@ function WorkspaceScreenContent({
 
   const workspaceScreenGate = renderWorkspaceRouteGate({
     state: workspaceRouteState,
-    archivedChat: recoveryAgentId
-      ? { serverId: normalizedServerId, agentId: recoveryAgentId }
+    archivedChat: workspaceRecovery.agentId
+      ? { serverId: normalizedServerId, agentId: workspaceRecovery.agentId }
       : null,
     actions: {
       onRetryHost: handleRetryHost,

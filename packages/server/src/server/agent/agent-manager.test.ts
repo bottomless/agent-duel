@@ -315,6 +315,34 @@ class NativeArchiveRecordingClient extends TestAgentClient {
       throw this.unarchiveFailure;
     }
   }
+
+  readonly arenaUnarchivedHandles: AgentPersistenceHandle[] = [];
+  archivedAtDuringArenaUnarchive: string | null | undefined;
+  arenaUnarchiveFailure: Error | null = null;
+
+  async unarchiveArenaChat(handle: AgentPersistenceHandle): Promise<void> {
+    this.arenaUnarchivedHandles.push(handle);
+    if (this.readArchivedAtDuringUnarchive) {
+      this.archivedAtDuringArenaUnarchive = await this.readArchivedAtDuringUnarchive();
+    }
+    if (this.arenaUnarchiveFailure) {
+      throw this.arenaUnarchiveFailure;
+    }
+  }
+}
+
+class GatedArenaUnarchiveClient extends NativeArchiveRecordingClient {
+  readonly firstAttemptStarted = deferred<void>();
+  readonly releaseFirstAttempt = deferred<void>();
+
+  override async unarchiveArenaChat(handle: AgentPersistenceHandle): Promise<void> {
+    await super.unarchiveArenaChat(handle);
+    if (this.arenaUnarchivedHandles.length === 1) {
+      this.firstAttemptStarted.resolve();
+      await this.releaseFirstAttempt.promise;
+      throw new Error("Engine unavailable");
+    }
+  }
 }
 
 class EnvProbeAgentClient extends TestAgentClient {
@@ -6685,6 +6713,64 @@ test("unarchiveSnapshot unarchives native provider storage before clearing archi
   expect(stored?.labels).toEqual({ retained: "yes", source: "reimport" });
 });
 
+test("unarchiveSnapshot serializes simultaneous requests for the same archived chat", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-unarchive-overlap-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: workdir, title: "Concurrent unarchive" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    await manager.archiveAgent(agent.id);
+
+    const results = await Promise.all([
+      manager.unarchiveSnapshot(agent.id),
+      manager.unarchiveSnapshot(agent.id),
+    ]);
+
+    expect(results).toEqual([true, false]);
+    expect(client.unarchivedHandles).toEqual(client.archivedHandles);
+    expect(client.arenaUnarchivedHandles).toEqual(client.archivedHandles);
+    expect((await storage.get(agent.id))?.archivedAt).toBeNull();
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("unarchiveSnapshot lets a queued retry succeed after an earlier engine failure rolls back", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-unarchive-queued-retry-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new GatedArenaUnarchiveClient();
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: workdir, title: "Queued unarchive retry" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    await manager.archiveAgent(agent.id);
+    const firstAttempt = manager.unarchiveSnapshot(agent.id);
+    await client.firstAttemptStarted.promise;
+    const queuedRetry = manager.unarchiveSnapshot(agent.id);
+    const results = Promise.allSettled([firstAttempt, queuedRetry]);
+    client.releaseFirstAttempt.resolve();
+
+    expect(await results).toEqual([
+      { status: "rejected", reason: new Error("Engine unavailable") },
+      { status: "fulfilled", value: true },
+    ]);
+    expect(client.unarchivedHandles).toHaveLength(2);
+    expect(client.arenaUnarchivedHandles).toHaveLength(2);
+    expect((await storage.get(agent.id))?.archivedAt).toBeNull();
+  } finally {
+    client.releaseFirstAttempt.resolve();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test("unarchiveSnapshotByHandle unarchives native provider storage for the matched snapshot", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-native-unarchive-handle-"));
   const storagePath = join(workdir, "agents");
@@ -6746,6 +6832,46 @@ test("unarchiveSnapshot keeps the stored record archived when native unarchive f
   const stored = await storage.get(agent.id);
   expect(stored?.archivedAt).toEqual(expect.any(String));
   expect(client.unarchivedHandles).toHaveLength(1);
+});
+
+test("unarchiveSnapshot unarchives the Arena chat once the record reads unarchived", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-arena-unarchive-"));
+  const storagePath = join(workdir, "agents");
+  const storage = new AgentStorage(storagePath, logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({
+    clients: { codex: client },
+    registry: storage,
+    logger,
+  });
+
+  const agent = await manager.createAgent(
+    {
+      provider: "codex",
+      cwd: workdir,
+      title: "Arena unarchive target",
+    },
+    undefined,
+    { workspaceId: undefined },
+  );
+  await manager.archiveAgent(agent.id);
+  client.readArchivedAtDuringUnarchive = async () => (await storage.get(agent.id))?.archivedAt;
+
+  expect(await manager.unarchiveSnapshot(agent.id)).toBe(true);
+  expect(client.arenaUnarchivedHandles).toEqual(client.unarchivedHandles);
+  expect(client.archivedAtDuringUnarchive).toEqual(expect.any(String));
+  expect(client.archivedAtDuringArenaUnarchive).toBeNull();
+
+  // A chat the engine cannot bring back leaves the agent archived, so Unarchive can be retried.
+  const archivedAt = new Date().toISOString();
+  await manager.archiveSnapshot(agent.id, archivedAt);
+  client.arenaUnarchiveFailure = new Error("Arena chat still archived");
+  await expect(manager.unarchiveSnapshot(agent.id)).rejects.toThrow("Arena chat still archived");
+  expect((await storage.get(agent.id))?.archivedAt).toBe(archivedAt);
+
+  client.arenaUnarchiveFailure = null;
+  expect(await manager.unarchiveSnapshot(agent.id)).toBe(true);
+  expect((await storage.get(agent.id))?.archivedAt).toBeNull();
 });
 
 test("archiveAgent cascade archives in-memory children with the full archive contract", async () => {

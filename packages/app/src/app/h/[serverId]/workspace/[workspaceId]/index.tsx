@@ -95,7 +95,6 @@ function HostWorkspaceRouteContent() {
   const rootNavigationState = useRootNavigationState();
   const hasHydratedWorkspaceLayoutStore = useWorkspaceLayoutStoreHydrated();
   const consumedIntentRef = useRef<string | null>(null);
-  const [intentConsumed, setIntentConsumed] = useState(false);
   const params = useLocalSearchParams<{
     serverId?: string | string[];
     workspaceId?: string | string[];
@@ -116,6 +115,11 @@ function HostWorkspaceRouteContent() {
   const isAgentOpenIntent = recoveryAgentId !== null;
   const isOpenIntentWaitingForWorkspace = Boolean(
     isAgentOpenIntent && (!hasHydratedWorkspaces || !workspaceExists),
+  );
+  // Recovery mounts the deck before the workspace exists. Keep it mounted when
+  // restoration adds the descriptor so the pending action and agent target survive.
+  const [canMountWorkspaceDeck, setCanMountWorkspaceDeck] = useState(
+    !openValue || isOpenIntentWaitingForWorkspace,
   );
   useEffect(() => {
     if (!serverId || !workspaceId) {
@@ -145,7 +149,7 @@ function HostWorkspaceRouteContent() {
           setParams: (params: { open?: string | undefined }) => void;
         },
       });
-      setIntentConsumed(true);
+      setCanMountWorkspaceDeck(true);
       return;
     }
     consumedIntentRef.current = consumptionKey;
@@ -168,7 +172,7 @@ function HostWorkspaceRouteContent() {
       },
     });
 
-    setIntentConsumed(true);
+    setCanMountWorkspaceDeck(true);
   }, [
     hasHydratedWorkspaceLayoutStore,
     isOpenIntentWaitingForWorkspace,
@@ -183,7 +187,7 @@ function HostWorkspaceRouteContent() {
   if (
     openValue &&
     !isOpenIntentWaitingForWorkspace &&
-    (!intentConsumed || !hasHydratedWorkspaceLayoutStore)
+    (!canMountWorkspaceDeck || !hasHydratedWorkspaceLayoutStore)
   ) {
     return null;
   }

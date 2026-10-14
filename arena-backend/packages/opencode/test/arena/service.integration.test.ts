@@ -2551,6 +2551,96 @@ describe("Arena service vertical slice", () => {
     }
   }, 30_000)
 
+  test("unarchives a voted chat so it battles and takes a single-agent turn again", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure arena unarchive fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", { method: "POST", headers, body: JSON.stringify({ title: "Unarchived chat" }) }),
+      )
+      const chatID = (await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))).chat.id
+      const send = (prompt: string) =>
+        request(`/arena/chats/${chatID}/turns`, { method: "POST", headers, body: JSON.stringify({ prompt }) })
+      const battle = async (prompt: string) => {
+        const turnID = (await json<PublicSnapshot>(await send(prompt))).turn?.id
+        if (!turnID) throw new Error("Arena did not return the turn")
+        await waitForTurn(memory.store, turnID, "awaiting_vote")
+        await json<PublicSnapshot>(
+          await request(`/arena/turns/${turnID}/vote`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ vote: "a" }),
+          }),
+        )
+        await waitForTurn(memory.store, turnID, "complete")
+        await waitForWarmPair(memory.store, turnID)
+        return turnID
+      }
+      const archive = async () =>
+        json<PublicSnapshot | null>(await request(`/arena/sessions/${source.id}/archive`, { method: "POST", headers }))
+      const unarchive = async () =>
+        json<PublicSnapshot | null>(
+          await request(`/arena/sessions/${source.id}/unarchive`, { method: "POST", headers }),
+        )
+
+      const first = await battle("Leave a winner and a warm pair behind.")
+      expect((await archive())?.chat.status).toBe("archived")
+      expect((await memory.store.turn(first))?.warmPreparation).toMatchObject({
+        state: "failed",
+        error: "Arena workspace archived",
+      })
+      expect((await send("Refused while archived.")).ok).toBe(false)
+
+      expect((await unarchive())?.chat.status).toBe("ready")
+      // The app reads a failed record as a failed next battle; the worktrees it names are gone.
+      expect((await memory.store.turn(first))?.warmPreparation).toBeUndefined()
+      expect((await unarchive())?.chat.status).toBe("ready")
+
+      const beforeNormal = await memory.store.chat(chatID)
+      if (!beforeNormal) throw new Error("Arena did not retain the unarchived chat")
+      const beforeNormalHash = beforeNormal.canonicalTranscriptHash
+      const normal = await request(`/session/${source.id}/message`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          agent: "build",
+          messageID: MessageID.ascending(),
+          model: { providerID: "openrouter", modelID: "deepseek/deepseek-v4-flash" },
+          parts: [{ type: "text", text: "Take a single-agent turn in the unarchived chat." }],
+        }),
+      })
+      expect(normal.status).toBe(200)
+      await waitForCanonicalTranscriptChange(memory.store, chatID, beforeNormalHash)
+
+      // Archive took every worktree, so the next battle builds its pair from nothing.
+      const second = await battle("Battle again in the unarchived chat.")
+      expect((await memory.store.turn(second))?.setupTimings?.warmPath).toBe("cold")
+
+      expect((await archive())?.chat.status).toBe("archived")
+      expect((await unarchive())?.chat.status).toBe("ready")
+      expect(
+        await json<PublicSnapshot | null>(
+          await request("/arena/sessions/ses_unknown/unarchive", { method: "POST", headers }),
+        ),
+      ).toBeNull()
+    } finally {
+      router.restore()
+    }
+  }, 90_000)
+
   test("resumes a finished contestant while the other contestant is still working", async () => {
     await using directory = await tmpdir({
       git: true,

@@ -95,7 +95,7 @@ describe("OpenRouter proxy", () => {
         id: "private-id",
         model: "private-model",
         choices: [{ delta: { content }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.123 },
+        usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0, cost_details: { upstream_inference_cost: 0.123 } },
       }
       const bytes = new TextEncoder().encode(`: keepalive\n\ndata: ${JSON.stringify(payload)}\n\ndata: [DONE]`)
       let offset = 0
@@ -149,7 +149,7 @@ describe("OpenRouter proxy", () => {
       expect(metrics[0]).toMatchObject({
         generationID: "gen_00000000000000000000000000000001",
         finishReason: "stop",
-        usage: { promptTokens: 10, completionTokens: 5, cost: 0.123 },
+        usage: { promptTokens: 10, completionTokens: 5, cost: 0, upstreamInferenceCost: 0.123 },
       })
     },
     2000,
@@ -305,7 +305,12 @@ describe("OpenRouter proxy", () => {
             id: "provider-generation",
             model: "provider/hidden-model",
             provider: "hidden-provider",
-            usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.123 },
+            usage: {
+              prompt_tokens: 10,
+              completion_tokens: 5,
+              cost: 0,
+              cost_details: { upstream_inference_cost: 0.456 },
+            },
             choices: [{ message: { content: "done" } }],
           },
           { headers: { "x-openrouter-provider": "hidden-provider" } },
@@ -348,7 +353,7 @@ describe("OpenRouter proxy", () => {
       scopeID: "turn-1",
       assignmentID: "opaque-id",
       generationID: "gen_00000000000000000000000000000001",
-      usage: { promptTokens: 10, completionTokens: 5, cost: 0.123 },
+      usage: { promptTokens: 10, completionTokens: 5, cost: 0, upstreamInferenceCost: 0.456 },
     })
     for (const [source, code] of [
       ["openrouter_in_flight_budget", "arena_temporary_budget"],
@@ -375,6 +380,57 @@ describe("OpenRouter proxy", () => {
     }
     upstreamFailure = new Response("not JSON", { status: 402 })
     expect(await (await invoke()).text()).toContain("arena_payment_required")
+  })
+
+  test.each([
+    ["absent", undefined, undefined],
+    ["null", null, undefined],
+    ["zero", 0, 0],
+    ["negative", -0.1, undefined],
+    ["non-numeric", "0.1", undefined],
+  ])("keeps only a finite non-negative upstream inference cost when %s", async (_name, upstream, expected) => {
+    let recordedMetrics: Record<string, unknown> | undefined
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn-cost-details",
+          assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+        },
+      ],
+      recordMetrics: (document) => {
+        recordedMetrics = document
+      },
+    })
+    const response = await openrouter({
+      db: async () => db,
+      fetch: async () =>
+        Response.json({
+          usage: {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            cost: 0,
+            ...(upstream === undefined ? {} : { cost_details: { upstream_inference_cost: upstream } }),
+          },
+        }),
+    })(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-cost-details",
+          "X-Arena-Generation-ID": "gen_00000000000000000000000000000003",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [], stream: false }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ usage: { prompt_tokens: 1, completion_tokens: 1 } })
+    const usage = recordedMetrics?.usage as Record<string, unknown>
+    if (expected === undefined) expect(usage).not.toHaveProperty("upstreamInferenceCost")
+    else expect(usage).toMatchObject({ cost: 0, upstreamInferenceCost: expected })
   })
 
   test("asks OpenRouter to cache Anthropic prompts and records the cache use", async () => {
@@ -571,7 +627,7 @@ describe("OpenRouter proxy", () => {
           [
             "event: hidden-provider",
             'data: {"id":"provider-id","model":"provider/hidden-model","provider":"hidden-provider","choices":[{"delta":{"content":"done"}}]}',
-            'data: {"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.123},"system_fingerprint":"hidden-fingerprint"}',
+            'data: {"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0,"cost_details":{"upstream_inference_cost":0.789}},"system_fingerprint":"hidden-fingerprint"}',
             'data: {"error":{"code":503,"message":"private hidden-provider outage"}}',
             'data: {"error":{"code":402,"message":"private hidden-provider billing"}}',
             "data: [DONE]",
@@ -611,7 +667,7 @@ describe("OpenRouter proxy", () => {
     expect(body).not.toContain("private")
     expect(recordedMetrics).toMatchObject({
       generationID: "gen_00000000000000000000000000000002",
-      usage: { promptTokens: 10, completionTokens: 5, cost: 0.123 },
+      usage: { promptTokens: 10, completionTokens: 5, cost: 0, upstreamInferenceCost: 0.789 },
     })
   })
 

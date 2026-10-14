@@ -972,6 +972,7 @@ export interface Interface {
   ) => Effect.Effect<Stream.Stream<ArenaStreamFrame, Error>, Error>
   readonly session: (sessionID: string, userID?: string) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly archiveSession: (sessionID: string) => Effect.Effect<ReturnType<typeof project> | null, Error>
+  readonly unarchiveSession: (sessionID: string) => Effect.Effect<ReturnType<typeof project> | null, Error>
   readonly inspectCheckout: (worktreeRoot: string) => Effect.Effect<ArenaCheckoutInspection, Error>
   readonly prepareCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
   readonly releaseCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
@@ -9785,6 +9786,34 @@ export const layer: Layer.Layer<
       return yield* respond(store, chat._id)
     })
 
+    /**
+     * Give an archived chat back when its workspace or agent is unarchived. Archive took every
+     * worktree the chat had, so the chat returns as an environment release leaves one: ready, with
+     * no warm record, and its next send builds a pair from nothing. The records archive marked
+     * failed name worktrees that are gone, and the app reads a failed one as a failed next battle.
+     */
+    const unarchiveSession = Effect.fn("Arena.unarchiveSession")(function* (sessionID: string) {
+      const store = yield* available()
+      const found = yield* promise(() => store.chatForSession(sessionID))
+      if (!found) return null
+      return yield* turnStartLock(found._id).withPermits(1)(
+        Effect.gen(function* () {
+          const chat = (yield* promise(() => store.chat(found._id))) ?? found
+          if (chat.status !== "archived") return yield* respond(store, chat._id)
+          const turns = yield* promise(() => store.turnsForChat(chat._id))
+          for (const { generation } of warmRecordsOf(chat, turns)) distrustWarmPair(store, chat._id, generation)
+          for (const turn of turns.filter((candidate) => candidate.warmPreparation)) {
+            yield* writeWarmRecord(store, { kind: "turn", turn }, undefined)
+          }
+          yield* promise(() => store.updateChat({ _id: chat._id, status: "archived" }, { $set: { status: "ready" } }))
+          // The checkout may have moved, gained conflicts, or gone while the chat was archived.
+          const restored = yield* promise(() => store.chat(chat._id))
+          if (restored) yield* reconcileCanonicalAvailability(store, restored)
+          return yield* respond(store, chat._id)
+        }),
+      )
+    })
+
     const stream = (rawSessionID: string, turnID?: string, rawUserID?: string) =>
       Effect.gen(function* () {
         const store = yield* available()
@@ -9872,6 +9901,7 @@ export const layer: Layer.Layer<
       stream,
       session: ensureChat,
       archiveSession,
+      unarchiveSession,
       inspectCheckout,
       prepareCheckout,
       releaseCheckout,

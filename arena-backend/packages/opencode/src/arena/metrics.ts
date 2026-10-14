@@ -350,6 +350,7 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
       cacheReadTokens: usage?.cacheReadTokens ?? 0,
       cacheWriteTokens: usage?.cacheWriteTokens ?? 0,
       cost: usage?.cost ?? 0,
+      ...(usage?.upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost: usage.upstreamInferenceCost }),
       providerErrors: runGenerations.filter((generation) => generation.error !== undefined).length,
       retries: run.retries.length,
       ...(runGenerations.at(-1)?.finishReason ? { finishReason: runGenerations.at(-1)?.finishReason } : {}),

@@ -11,6 +11,11 @@ type SupportedRecoverableWorkspace = Omit<AuthoritativeRecoverableWorkspace, "ac
   action: SupportedWorkspaceRecoveryAction;
 };
 
+export interface WorkspaceRecoveryAttempt {
+  recovery: SupportedRecoverableWorkspace;
+  agentId: string | null;
+}
+
 export type WorkspaceRecoveryModel =
   | { kind: "idle" }
   | { kind: "checking" }
@@ -30,6 +35,7 @@ export type WorkspaceRecoveryModel =
 
 export interface WorkspaceRecoveryController {
   state: WorkspaceRecoveryModel;
+  agentId: string | null;
   restore: () => void;
   retryInspection: () => void;
 }
@@ -43,8 +49,11 @@ export async function recoverWorkspaceSelection(input: {
   client: WorkspaceSelectionRecoveryClient;
   workspaceId: string;
   agentId?: string | null;
+  needsWorkspaceRestore: boolean;
 }): Promise<void> {
-  await input.client.restoreWorkspace(input.workspaceId);
+  if (input.needsWorkspaceRestore) {
+    await input.client.restoreWorkspace(input.workspaceId);
+  }
   if (input.agentId) {
     await input.client.refreshAgent(input.agentId);
   }
@@ -86,15 +95,17 @@ export function resolveWorkspaceRecoveryModel(input: {
     error: string | null;
     data: AuthoritativeWorkspaceRecoveryState | undefined;
   };
-  restore: { pending: boolean; error: string | null };
+  restore: { pending: boolean; error: string | null; attempt: WorkspaceRecoveryAttempt | null };
 }): WorkspaceRecoveryModel {
   const supportedRecovery = getSupportedRecovery(input.inspection.data);
-  if (input.restore.pending && supportedRecovery) {
+  const attemptedRecovery = input.restore.attempt?.recovery ?? supportedRecovery;
+  const hasUnfinishedRecovery = input.restore.pending || input.restore.error !== null;
+  if (hasUnfinishedRecovery && attemptedRecovery) {
     return {
       kind: "recoverable",
-      recovery: supportedRecovery,
-      phase: "restoring",
-      error: null,
+      recovery: attemptedRecovery,
+      phase: resolveRecoveryPhase(input.restore),
+      error: input.restore.error,
     };
   }
   if (!input.enabled || !input.connected || !input.hasClient) {

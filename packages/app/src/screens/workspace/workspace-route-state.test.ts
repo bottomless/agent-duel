@@ -179,4 +179,13 @@ describe("resolveWorkspaceRouteState", () => {
       kind: "ready",
     });
   });
+
+  it("keeps the error and retry action visible when agent recovery fails after workspace restoration", () => {
+    const failed = { ...recoverable, phase: "failed" as const, error: "Engine unavailable" };
+    expect(resolve({ workspace: createWorkspaceDescriptor(), recovery: failed })).toEqual({
+      kind: "archived",
+      hostName: "Laptop",
+      recovery: failed,
+    });
+  });
 });

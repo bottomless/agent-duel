@@ -108,6 +108,7 @@ describe("ArenaTelemetry", () => {
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
             cost: 0.123,
+            upstreamInferenceCost: 0.456,
             attempts: 1,
             latencyMs: 10,
           },
@@ -115,8 +116,11 @@ describe("ArenaTelemetry", () => {
         },
       ],
     })
-    expect(generation).toMatchObject({ usage: { cost: 0.123, totalTokens: 5 }, finishReason: "stop" })
-    expect(runUsage).toMatchObject({ cost: 0.123, totalTokens: 5 })
+    expect(generation).toMatchObject({
+      usage: { cost: 0.123, upstreamInferenceCost: 0.456, totalTokens: 5 },
+      finishReason: "stop",
+    })
+    expect(runUsage).toMatchObject({ cost: 0.123, upstreamInferenceCost: 0.456, totalTokens: 5 })
   })
 
   test("restores server-held metrics after an engine restart", async () => {
@@ -152,6 +156,7 @@ describe("ArenaTelemetry", () => {
             cacheReadTokens: 10,
             cacheWriteTokens: 0,
             cost: 0.25,
+            upstreamInferenceCost: 0.5,
             attempts: 1,
             latencyMs: 500,
           },
@@ -160,8 +165,11 @@ describe("ArenaTelemetry", () => {
       ],
     })
 
-    expect(generation).toMatchObject({ usage: { cost: 0.25, totalTokens: 120 }, finishReason: "stop" })
-    expect(runUsage).toMatchObject({ cost: 0.25, totalTokens: 120 })
+    expect(generation).toMatchObject({
+      usage: { cost: 0.25, upstreamInferenceCost: 0.5, totalTokens: 120 },
+      finishReason: "stop",
+    })
+    expect(runUsage).toMatchObject({ cost: 0.25, upstreamInferenceCost: 0.5, totalTokens: 120 })
   })
 
   test("keeps the response's cache counts when the service recorded no metrics", async () => {

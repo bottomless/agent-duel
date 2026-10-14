@@ -37,12 +37,12 @@ export function resolveWorkspaceRouteState(input: {
 }): WorkspaceRouteState {
   if (input.workspace) {
     if (input.connectionStatus === "online") {
-      if (
-        (input.workspace.filesState === undefined || input.workspace.filesState === "available") &&
-        input.recovery.kind === "recoverable" &&
-        input.recovery.phase === "restoring"
-      ) {
-        return { kind: "archived", hostName: input.hostName, recovery: input.recovery };
+      const hasAvailableFiles =
+        input.workspace.filesState === undefined || input.workspace.filesState === "available";
+      const recovery = input.recovery;
+      const hasUnfinishedRecovery = recovery.kind === "recoverable" && recovery.phase !== "ready";
+      if (hasAvailableFiles && hasUnfinishedRecovery) {
+        return { kind: "archived", hostName: input.hostName, recovery };
       }
       return { kind: "ready" };
     }
