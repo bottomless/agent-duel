@@ -1,9 +1,13 @@
 import { useCallback, useEffect } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { Button } from "@/components/ui/button";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
-import { ArenaSideChoiceButton, DiscardDecision, VoteDecision } from "./decision-bar";
+import {
+  ArenaRunningPillButton,
+  ArenaSideChoiceButton,
+  DiscardDecision,
+  VoteDecision,
+} from "./decision-bar";
 import {
   arenaDecisionPhase,
   arenaRunningDecisionHint,
@@ -102,18 +106,15 @@ function BattleStopDecision({
     void actions.stop();
   }, [actions]);
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      style={styles.stopChoice}
+    <ArenaRunningPillButton
+      hoverSide={null}
+      label="Stop"
       loading={actions.pendingAction?.kind === "stop"}
       disabled={actions.pending || !phase.canStop}
       onPress={handleStop}
       accessibilityLabel="Stop battle"
       testID="arena-stop-battle"
-    >
-      Stop
-    </Button>
+    />
   );
 }
 
@@ -208,10 +209,6 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border,
     borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.surface2,
-  },
-  stopChoice: {
-    minWidth: 96,
-    borderRadius: theme.borderRadius.full,
   },
   hint: {
     color: theme.colors.foregroundMuted,

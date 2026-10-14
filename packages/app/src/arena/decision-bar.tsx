@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet } from "react-native-unistyles";
@@ -16,22 +16,13 @@ import {
 } from "./decision-state";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
 
-// The early pick's icon: its side's colour, without the vote's tint.
-function SideDotA() {
-  return <View style={styles.sideDotA} />;
-}
-
-function SideDotB() {
-  return <View style={styles.sideDotB} />;
-}
-
 /**
  * The decision for one side: the vote, the early pick, or keeping that side after a stop.
  *
  * Two choices of equal weight, so neither can be the accent. The tint is the side's colour,
  * the blue and amber the diff's column headings use, so the button reads as picking that
  * column. Both sides share a width so the pair reads as one decision. The early pick, offered
- * while the other side still works, takes no tint.
+ * while the other side still works, shows the tint only on hover (`ArenaRunningPillButton`).
  */
 export function ArenaSideChoiceButton({
   side,
@@ -52,22 +43,15 @@ export function ArenaSideChoiceButton({
 }) {
   const sideLabel = side.toUpperCase();
   if (kind === "early") {
-    // Not the vote yet: a tinted pick beside a plain Stop read as a switch already set to this
-    // side (the reply target fills its selected segment with the same tint), and voters felt
-    // pushed to take it. Plain, with the side's dot to keep its column.
     return (
-      <Button
-        variant="ghost"
-        size="sm"
-        style={styles.pillChoice}
-        leftIcon={side === "a" ? SideDotA : SideDotB}
+      <ArenaRunningPillButton
+        hoverSide={side}
+        label={label ?? `Choose ${sideLabel} early`}
         loading={loading}
         disabled={disabled}
         onPress={onPress}
         testID={testID}
-      >
-        {label ?? `Choose ${sideLabel} early`}
-      </Button>
+      />
     );
   }
   const buttonLabel = kind === "keep" ? `Keep ${sideLabel}` : `Choose ${sideLabel}`;
@@ -83,6 +67,65 @@ export function ArenaSideChoiceButton({
     >
       {label ?? buttonLabel}
     </Button>
+  );
+}
+
+function runningHoverStyle(side: ArenaSide | null) {
+  if (side === "a") return styles.sideA;
+  if (side === "b") return styles.sideB;
+  return styles.runningHovered;
+}
+
+/**
+ * A button in the pill while the battle runs: `Stop` and the early pick share one neutral outline.
+ * An uneven pair, one filled or brighter, read as a switch already set to that side (the reply
+ * target fills its selected segment with the side's tint), and voters felt pushed to take it
+ * before the other side finished. The early pick takes its side's tint only on hover, once the
+ * voter reaches for it. Hover is tracked on a plain View (docs/hover.md) and changes colours only.
+ */
+export function ArenaRunningPillButton({
+  hoverSide,
+  label,
+  loading,
+  disabled,
+  onPress,
+  testID,
+  accessibilityLabel,
+}: {
+  hoverSide: ArenaSide | null;
+  label: string;
+  loading?: boolean;
+  disabled?: boolean;
+  onPress: () => void;
+  testID: string;
+  accessibilityLabel?: string;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const handlePointerEnter = useCallback(() => setHovered(true), []);
+  const handlePointerLeave = useCallback(() => setHovered(false), []);
+  return (
+    <View
+      style={styles.hoverTarget}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        style={[
+          styles.sideChoice,
+          styles.runningChoice,
+          hovered && !disabled ? runningHoverStyle(hoverSide) : null,
+        ]}
+        loading={loading}
+        disabled={disabled}
+        onPress={onPress}
+        accessibilityLabel={accessibilityLabel}
+        testID={testID}
+      >
+        {label}
+      </Button>
+    </View>
   );
 }
 
@@ -324,17 +367,15 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: tint(theme.colors.statusDotWarning, 24),
     borderColor: tint(theme.colors.statusDotWarning, 50),
   },
-  sideDotA: {
-    width: theme.spacing[1.5],
-    height: theme.spacing[1.5],
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.statusDotRunning,
+  hoverTarget: {
+    position: "relative",
   },
-  sideDotB: {
-    width: theme.spacing[1.5],
-    height: theme.spacing[1.5],
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.statusDotWarning,
+  runningChoice: {
+    borderColor: tint(theme.colors.foregroundMuted, 35),
+  },
+  runningHovered: {
+    backgroundColor: theme.colors.surface3,
+    borderColor: tint(theme.colors.foregroundMuted, 55),
   },
   retry: {
     flexDirection: "row",
