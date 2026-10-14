@@ -42,6 +42,7 @@ import { SessionPrompt } from "@/session/prompt"
 import { SessionRetry } from "@/session/retry"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
+import { ArenaResponseRecovery } from "./response-recovery"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { clearToolExecutionEnvironment, gateToolExecution, isToolExecutionGated } from "@/session/tool-execution-gate"
 import { Permission } from "@/permission"
@@ -53,11 +54,7 @@ import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { generate as generateComparison } from "./comparison"
-import {
-  canonicalizeArenaEnvironment,
-  canonicalizeTranscriptPaths,
-  localizeArenaEnvironment,
-} from "./canonical-path"
+import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
 import { comparisonTimeline } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
 import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
@@ -273,21 +270,29 @@ function sameConflicts(left: readonly string[], right: readonly string[]) {
  * contestant: nothing about the environment is part of a prompt, and keeping it out is what lets
  * the send prompt without waiting for the release.
  */
-function contestantSystemInstruction(worktree?: string, environmentPending = false) {
-  const env = worktree ? previewEnvironment(worktree) : {}
+export function contestantSystemInstruction(
+  worktree?: string,
+  environmentPending = false,
+  processEnv: Record<string, string | undefined> = process.env,
+) {
+  const env = worktree ? previewEnvironment(worktree, processEnv) : {}
   const previewUrls = PORT_ALIASES.flatMap((alias) => {
     const suffix = alias === "PASEO_PORT" ? "" : alias.slice("PASEO_PORT".length)
     const name = `ARENA_PREVIEW_URL${suffix}`
     return env[name] ? [`${name}=${env[name]}`] : []
   })
+  // Every worktree has these URLs whether or not anything listens on them. An unconditional
+  // "report the URL" made contestants that never started a server end with a dead link.
   const currentPreview = previewUrls.length
-    ? `Current public preview URLs:\n${previewUrls.join("\n")}\nIn your final response, report the expanded http(s) URL, never the variable name.`
+    ? `Current public preview URLs, live only while a service listens on the matching port:\n${previewUrls.join("\n")}\nIf you started a service and verified it is listening, give its expanded http(s) URL in your final response, never the variable name. Otherwise do not write about preview URLs at all, not even to say there is none.`
     : ""
   const pendingEnvironment =
     environmentPending && worktree
       ? `The initial model call is running while the environment is still being prepared at ${worktree}. This is your worktree path. You may reason immediately. Tools that do not need the filesystem can run before the base checkout is ready. Once it is ready, safe reads can run while ignored content finishes copying. A tool that could observe or change incomplete state will wait until its required setup phase completes.`
       : ""
-  return [contestantWorktreeInstruction, pendingEnvironment, currentPreview].filter(Boolean).join("\n\n")
+  return [contestantWorktreeInstruction, ArenaResponseRecovery.INSTRUCTION, pendingEnvironment, currentPreview]
+    .filter(Boolean)
+    .join("\n\n")
 }
 function error(value: unknown) {
   return value instanceof Error ? value : new Error(String(value))
@@ -471,7 +476,12 @@ function assignment(value: { readonly assignmentID: string }): HiddenAssignment 
   }
 }
 
-function assignmentDecision(resolution: ReturnType<typeof voteResolution> | ReturnType<typeof stoppedResolution> | ReturnType<typeof earlyResolution>): BattleAssignmentDecision {
+function assignmentDecision(
+  resolution:
+    | ReturnType<typeof voteResolution>
+    | ReturnType<typeof stoppedResolution>
+    | ReturnType<typeof earlyResolution>,
+): BattleAssignmentDecision {
   if (resolution.kind === "vote") return resolution.vote === "tie" ? "tie" : `select:${resolution.vote}`
   if (resolution.kind === "early") return `select:${resolution.vote}`
   if (resolution.appliedSide) return `select:${resolution.appliedSide}`
@@ -731,7 +741,8 @@ async function hostMetadataFingerprint(commonGitDir: string) {
   }
   // Refs the mirror leaves alone: the stash, whose older entries live only in its reflog, notes
   // and replacements. A reftable checkout keeps them in its tables, which this does not read.
-  for (const name of ["refs/stash", "logs/refs/stash"]) add(name, await readFile(join(commonGitDir, name)).catch(() => undefined))
+  for (const name of ["refs/stash", "logs/refs/stash"])
+    add(name, await readFile(join(commonGitDir, name)).catch(() => undefined))
   for (const namespace of ["refs/notes", "refs/replace"]) {
     const names = await readdir(join(commonGitDir, namespace), { recursive: true }).catch(() => [] as string[])
     for (const name of names.toSorted()) {
@@ -1556,7 +1567,11 @@ export const layer: Layer.Layer<
                         Effect.mapError(error),
                       ),
                     ),
-                status: bestEffort(statuses.get(sessionID).pipe(Effect.map(ArenaPrivacy.status))),
+                status: bestEffort(
+                  inDirectory(promptHosts.get(sessionID) ?? run.worktree, statuses.get(sessionID)).pipe(
+                    Effect.map(ArenaPrivacy.status),
+                  ),
+                ),
                 permissions: bestEffort(
                   permissions
                     .list()
@@ -2234,8 +2249,7 @@ export const layer: Layer.Layer<
         // would show one branch and battle on another. Only the name moves here: a head that
         // moved is a different checkout than the chat's history was built on, and completeTurn
         // and the blocked-restore path below own that transition.
-        const renamed =
-          state.head === chat.canonicalCheckout?.head && state.branch !== chat.canonicalCheckout.branch
+        const renamed = state.head === chat.canonicalCheckout?.head && state.branch !== chat.canonicalCheckout.branch
         if (!renamed && sameConflicts(chat.trunkConflicts ?? [], state.conflicts)) return chat
         const refreshed = yield* recordTrunkState(store, chat._id, {
           conflicts: state.conflicts,
@@ -3541,10 +3555,7 @@ export const layer: Layer.Layer<
      * so an agent running there races nothing -- and the prompt is how the developer gets help
      * with the thing Arena is parked on. Every other unresolved turn still owns the checkout.
      */
-    const parkedPromotionTurn = Effect.fn("Arena.parkedPromotionTurn")(function* (
-      store: Store,
-      chat: ChatDocument,
-    ) {
+    const parkedPromotionTurn = Effect.fn("Arena.parkedPromotionTurn")(function* (store: Store, chat: ChatDocument) {
       if (chat.status !== "battle_active" || !chat.activeTurnID) return undefined
       const turn = yield* promise(() => store.turn(chat.activeTurnID!))
       // `isParkedPromotion` is shared with the HTTP mutation guard, which runs first and would
@@ -3748,7 +3759,11 @@ export const layer: Layer.Layer<
       }
       // The panes say why a stopped run stopped, so the abort that ends it is not reported here.
       if (assistant?.error && !isStopAbort({ stopped, error: assistant.error })) {
-        unsettled.push(`Contestant assistant error: ${JSON.stringify(assistant.error)}`)
+        unsettled.push(
+          assistant.error.name === "MessageOutputLengthError"
+            ? ArenaResponseRecovery.EXHAUSTED
+            : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
+        )
       }
       if (Exit.isFailure(promptExit)) unsettled.push(Cause.pretty(promptExit.cause))
       const runState: RunDocument["runState"] =
@@ -3931,6 +3946,32 @@ export const layer: Layer.Layer<
           Effect.logWarning("Arena could not open uploads to a contestant", { sessionID, cause }),
         ),
       )
+    })
+
+    // The proxy routes a contestant's requests, and the recorder keeps its events, only for a run
+    // bound in this process. A battle binds each run as it starts it. After an engine restart a
+    // settled run is bound to nothing, so resuming it for a reply or a retry binds it again.
+    const bindRun = Effect.fnUntraced(function* (run: RunDocument) {
+      const assignment = {
+        runID: run._id,
+        rootSessionID: run.rootSessionID,
+        scopeID: run.turnID,
+        assignmentID: run.proxyAssignmentID,
+        telemetry: true,
+      }
+      registry.assign(run.rootSessionID, assignment)
+      const currentRecorder = recorder
+      if (currentRecorder) {
+        yield* promise(() =>
+          currentRecorder.register({
+            turnID: run.turnID,
+            runID: run._id,
+            rootSessionID: run.rootSessionID,
+            directory: run.worktree,
+            assignment,
+          }),
+        )
+      }
     })
 
     const runPrompt = Effect.fn("Arena.runPrompt")(function* (
@@ -4790,26 +4831,7 @@ export const layer: Layer.Layer<
             createdAt: now,
           }),
         )
-        const proxyAssignment = {
-          runID,
-          rootSessionID: forkedID,
-          scopeID: turn._id,
-          assignmentID: selected.assignmentID,
-          telemetry: true,
-        }
-        registry.assign(forkedID, proxyAssignment)
-        const currentRecorder = recorder
-        if (currentRecorder) {
-          yield* promise(() =>
-            currentRecorder.register({
-              turnID: turn._id,
-              runID,
-              rootSessionID: forkedID,
-              directory: info.directory,
-              assignment: proxyAssignment,
-            }),
-          )
-        }
+        yield* bindRun(run)
         const runtime = {
           side,
           turnID: turn._id,
@@ -4853,7 +4875,10 @@ export const layer: Layer.Layer<
             Effect.tap(() => Effect.sync(() => dispatch.cancel(new Error("Arena prompt stopped before dispatch")))),
           )
           // Staging starts once the request has left, so it cannot compete with the dispatch.
-          yield* Effect.raceFirst(promise(() => dispatch.promise), settledBeforeDispatch).pipe(
+          yield* Effect.raceFirst(
+            promise(() => dispatch.promise),
+            settledBeforeDispatch,
+          ).pipe(
             Effect.tapError((dispatchError) => Effect.sync(() => dispatch.cancel(dispatchError))),
             preparationPhase("dispatch-initial-request", context),
           )
@@ -4947,10 +4972,7 @@ export const layer: Layer.Layer<
               ...(turn.baseSnapshot?.permanentRef ? { requiredRefs: [turn.baseSnapshot.permanentRef] } : {}),
               fetchChangedOnly: reused && warm?.refsMirrored === true,
             }),
-          ).pipe(
-            Effect.mapError(error),
-            preparationPhase("mirror-refs", { chatID: chat._id, turnID: turn._id, side }),
-          )
+          ).pipe(Effect.mapError(error), preparationPhase("mirror-refs", { chatID: chat._id, turnID: turn._id, side }))
           yield* withGit(snapshotHostRefs({ host: info.host })).pipe(
             Effect.mapError(error),
             preparationPhase("snapshot-host-refs", { chatID: chat._id, turnID: turn._id, side }),
@@ -5767,7 +5789,7 @@ export const layer: Layer.Layer<
         if (turn.state === "awaiting_vote") {
           yield* promise(() => store.clearComparison(turn._id, input.comparisonID))
         }
-        return yield* Effect.forEach(runs, input.reset)
+        return yield* Effect.forEach(runs, (run) => input.reset(run).pipe(Effect.tap(bindRun)))
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -8503,7 +8525,12 @@ export const layer: Layer.Layer<
       const operation = yield* withGit(repositoryOperation(root)).pipe(Effect.mapError(error))
       if (operation) {
         const items: ReviewItem[] = [{ kind: "busy", key: "@busy", fingerprint: operation, operation }]
-        return { kind: "review" as const, items, planned: [] as PlannedRef[], switchTo: undefined as string | undefined }
+        return {
+          kind: "review" as const,
+          items,
+          planned: [] as PlannedRef[],
+          switchTo: undefined as string | undefined,
+        }
       }
       const frozenHead = turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA
       const permanentRef = winner.permanentRef ?? `${refRoot(turn)}/${winner.side}`
@@ -8540,7 +8567,9 @@ export const layer: Layer.Layer<
       if (winner.branchChanged && !winner.finalBranch && rawHead && rawHead !== frozenHead) {
         for (let attempt = 1; !targetBranch; attempt++) {
           const name = `arena/turn-${turn.turnIndex + 1}${attempt > 1 ? `-${attempt}` : ""}`
-          const target = yield* withGit(inspectBranchTarget({ canonical: root, branch: name })).pipe(Effect.mapError(error))
+          const target = yield* withGit(inspectBranchTarget({ canonical: root, branch: name })).pipe(
+            Effect.mapError(error),
+          )
           if (target.valid && !target.tip) targetBranch = name
         }
         checkoutAction = { action: "agent", agent: rawHead }
@@ -8879,11 +8908,11 @@ export const layer: Layer.Layer<
         const manual =
           partial !== undefined ||
           (applicationError instanceof OperationError &&
-          (applicationError.operation === "verify_canonical_branch" ||
-            applicationError.operation === "target_branch_checked_out" ||
-            applicationError.operation === "promote_checkout_branch" ||
-            applicationError.operation === "winner_head_missing" ||
-            applicationError.operation === "write_winner_refs"))
+            (applicationError.operation === "verify_canonical_branch" ||
+              applicationError.operation === "target_branch_checked_out" ||
+              applicationError.operation === "promote_checkout_branch" ||
+              applicationError.operation === "winner_head_missing" ||
+              applicationError.operation === "write_winner_refs"))
         return promise(() =>
           store.updateTurn(turn._id, {
             gitApplication: {
@@ -9380,7 +9409,8 @@ export const layer: Layer.Layer<
           store.updateTurn(turn._id, {
             gitApplication: {
               ...application,
-              reason: "Arena put your workspace back the way it was before the apply. The winning changes are not applied.",
+              reason:
+                "Arena put your workspace back the way it was before the apply. The winning changes are not applied.",
             },
           }),
         )

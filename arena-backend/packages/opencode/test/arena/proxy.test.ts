@@ -40,6 +40,132 @@ function transportError(code: string) {
 }
 
 describe("ArenaProxy", () => {
+  test("preserves output exhaustion when OpenRouter labels an unfinished call as tool_calls", () => {
+    for (const reason of ["length", "max_tokens", "max_output_tokens"]) {
+      expect(
+        sanitizePayload(
+          { choices: [{ finish_reason: "tool_calls", native_finish_reason: reason, delta: {} }] },
+          "generation",
+        ),
+      ).toEqual({
+        choices: [{ finish_reason: "length", delta: {} }],
+      })
+    }
+    expect(
+      sanitizePayload(
+        { choices: [{ finish_reason: "tool_calls", native_finish_reason: "tool_use", delta: {} }] },
+        "generation",
+      ),
+    ).toEqual({
+      choices: [{ finish_reason: "tool_calls", delta: {} }],
+    })
+  })
+
+  test.each([
+    { name: "incomplete at cap", args: '{"content":"partial', tokens: 4096, limit: 4096, finish: "length", calls: 0 },
+    {
+      name: "incomplete above cap",
+      args: '{"content":"partial',
+      tokens: 4097,
+      limit: 4096,
+      finish: "length",
+      calls: 0,
+    },
+    { name: "valid at cap", args: '{"content":"complete"}', tokens: 4096, limit: 4096, finish: "tool-calls", calls: 1 },
+    {
+      name: "malformed below cap",
+      args: '{"content":"partial',
+      tokens: 4095,
+      limit: 4096,
+      finish: "tool-calls",
+      calls: 1,
+    },
+    {
+      name: "missing usage",
+      args: '{"content":"partial',
+      tokens: undefined,
+      limit: 4096,
+      finish: "tool-calls",
+      calls: 1,
+    },
+    {
+      name: "missing request cap",
+      args: '{"content":"partial',
+      tokens: 4096,
+      limit: undefined,
+      finish: "tool-calls",
+      calls: 1,
+    },
+  ])(
+    "classifies fragmented tool cutoff before the SDK flushes: $name",
+    async ({ args, tokens, limit, finish, calls }) => {
+      const registry = new AssignmentRegistry()
+      registry.assign("session-root", assignment)
+      const chunks = [
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  { index: 0, id: "write-1", type: "function", function: { name: "write", arguments: args } },
+                ],
+              },
+            },
+          ],
+        },
+        { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls", native_finish_reason: "tool_calls" }] },
+        {
+          choices: [],
+          ...(tokens === undefined
+            ? {}
+            : { usage: { prompt_tokens: 10, completion_tokens: tokens, total_tokens: tokens + 10 } }),
+        },
+      ]
+      const model = createOpenRouter({
+        apiKey: "test",
+        fetch: async (_input, init) =>
+          proxy(
+            new Request("http://arena.invalid/api/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Session-Id": "session-root",
+                "x-arena-request-id": requestID,
+              },
+              body: init?.body,
+            }),
+            registry,
+            {
+              upstream: "https://unit.invalid",
+              fetch: async () => {
+                const bytes = new TextEncoder().encode(
+                  chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n",
+                )
+                let offset = 0
+                return new Response(
+                  new ReadableStream<Uint8Array>({
+                    pull(controller) {
+                      if (offset === bytes.length) return controller.close()
+                      controller.enqueue(bytes.slice(offset, offset + 1))
+                      offset++
+                    },
+                  }),
+                  { headers: { "Content-Type": "text/event-stream" } },
+                )
+              },
+            },
+          ),
+      }).chat("contestant")
+      const result = await model.doStream({ prompt: [], maxOutputTokens: limit })
+      const parts = []
+      for await (const part of result.stream) parts.push(part)
+      expect(parts.filter((part) => part.type === "tool-call")).toHaveLength(calls)
+      expect(parts.find((part) => part.type === "finish")).toMatchObject({ finishReason: { unified: finish } })
+      expect(parts.filter((part) => part.type === "error")).toEqual([])
+    },
+  )
+
   test.each([1, 4096])(
     "reads SSE lines split across %i-byte chunks",
     async (chunkSize) => {
@@ -348,7 +474,7 @@ describe("ArenaProxy", () => {
       provider: { order: ["attacker-selected-provider"] },
       stream: true,
     }
-    expect(rewriteBody(source, routed) as Record<string, unknown>).toEqual({
+    expect(rewriteBody(source, routed)).toEqual({
       model: "contestant",
       messages: [],
       reasoning: { effort: "high" },

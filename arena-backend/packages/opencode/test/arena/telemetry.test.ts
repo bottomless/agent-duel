@@ -108,6 +108,7 @@ describe("ArenaTelemetry", () => {
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
             cost: 0.123,
+            upstreamInferenceCost: 0.456,
             attempts: 1,
             latencyMs: 10,
           },
@@ -115,8 +116,11 @@ describe("ArenaTelemetry", () => {
         },
       ],
     })
-    expect(generation).toMatchObject({ usage: { cost: 0.123, totalTokens: 5 }, finishReason: "stop" })
-    expect(runUsage).toMatchObject({ cost: 0.123, totalTokens: 5 })
+    expect(generation).toMatchObject({
+      usage: { cost: 0.123, upstreamInferenceCost: 0.456, totalTokens: 5 },
+      finishReason: "stop",
+    })
+    expect(runUsage).toMatchObject({ cost: 0.123, upstreamInferenceCost: 0.456, totalTokens: 5 })
   })
 
   test("restores server-held metrics after an engine restart", async () => {
@@ -152,6 +156,7 @@ describe("ArenaTelemetry", () => {
             cacheReadTokens: 10,
             cacheWriteTokens: 0,
             cost: 0.25,
+            upstreamInferenceCost: 0.5,
             attempts: 1,
             latencyMs: 500,
           },
@@ -160,8 +165,57 @@ describe("ArenaTelemetry", () => {
       ],
     })
 
-    expect(generation).toMatchObject({ usage: { cost: 0.25, totalTokens: 120 }, finishReason: "stop" })
-    expect(runUsage).toMatchObject({ cost: 0.25, totalTokens: 120 })
+    expect(generation).toMatchObject({
+      usage: { cost: 0.25, upstreamInferenceCost: 0.5, totalTokens: 120 },
+      finishReason: "stop",
+    })
+    expect(runUsage).toMatchObject({ cost: 0.25, upstreamInferenceCost: 0.5, totalTokens: 120 })
+  })
+
+  test("keeps the response's cache counts when the service recorded no metrics", async () => {
+    let generation: GenerationDocument | undefined
+    const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
+      saveGeneration: async (input: GenerationDocument) => {
+        generation = input
+        return input
+      },
+      updateGeneration: async (_id: string, patch: Partial<GenerationDocument>) => {
+        generation = { ...generation!, ...patch }
+        return generation
+      },
+      generationsForRuns: async () => (generation ? [generation] : []),
+      updateRun: async (_id: string, patch: object) => patch,
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const metadata: RequestMetadata = {
+      assignment: {
+        runID: "run-a",
+        rootSessionID: "session-a",
+        scopeID: "turn-a",
+        assignmentID: "assignment-a",
+        telemetry: true,
+      },
+      generationID: "gen_00000000000000000000000000000002",
+      requestID: "00000000-0000-4000-8000-000000000002",
+      sessionID: "session-a",
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      startedAt: new Date(Date.now() - 10),
+    }
+
+    await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+    await telemetry.response?.({ metadata, status: 200, headers: {}, receivedAt: new Date() })
+    telemetry.rawChunk?.(
+      metadata,
+      'data: {"choices":[{"finish_reason":"stop","delta":{"content":"done"}}],"usage":{"prompt_tokens":1000,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":900,"cache_write_tokens":80}}}\n',
+    )
+    await telemetry.complete?.(metadata, new Date())
+    await telemetry.reveal?.({ runIDs: ["run-a"], metrics: [] })
+
+    expect(generation?.usage).toMatchObject({ promptTokens: 1000, cacheReadTokens: 900, cacheWriteTokens: 80 })
   })
 
   test("persists partial upstream output when a generation is interrupted", async () => {
@@ -180,6 +234,7 @@ describe("ArenaTelemetry", () => {
         generation = { ...generation!, ...patch }
         return generation
       },
+      generationsForRuns: async () => [],
       accumulateRunUsage: async () => undefined,
       addResolvedProvider: async () => undefined,
       recordGenerationRetry: async () => undefined,
@@ -233,6 +288,7 @@ describe("ArenaTelemetry", () => {
         generations.push(input)
         return input
       },
+      generationsForRuns: async () => generations,
       recordGenerationRetry: async (_runID: string, retry: GenerationRetry) => {
         retries.push(retry)
       },
@@ -283,5 +339,50 @@ describe("ArenaTelemetry", () => {
         observedAt: second.startedAt,
       },
     ])
+  })
+
+  test("continues a run's call numbering from its stored generations after an engine restart", async () => {
+    const generations = [0, 1, 2].map(
+      (callIndex) => ({ _id: `gen_stored_${callIndex}`, runID: "run-resumed", callIndex }) as GenerationDocument,
+    )
+    let reads = 0
+    const arena = store({
+      saveGeneration: async (input: GenerationDocument) => {
+        generations.push(input)
+        return input
+      },
+      generationsForRuns: async (runIDs: readonly string[]) => {
+        reads++
+        return generations.filter((generation) => runIDs.includes(generation.runID))
+      },
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const request = (generation: number, sessionID: string): RequestMetadata => ({
+      assignment: {
+        runID: "run-resumed",
+        rootSessionID: "session-root",
+        scopeID: "turn-resumed",
+        assignmentID: "assignment-resumed",
+        telemetry: true,
+      },
+      generationID: `gen_0000000000000000000000000000001${generation}`,
+      requestID: `00000000-0000-4000-8000-00000000001${generation}`,
+      sessionID,
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      startedAt: new Date(),
+    })
+
+    // A resumed root and a subagent reach the proxy together, before either number is known.
+    await Promise.all([
+      telemetry.start?.(request(0, "session-root"), { model: "contestant", messages: [] }),
+      telemetry.start?.(request(1, "session-child"), { model: "contestant", messages: [] }),
+    ])
+    await telemetry.start?.(request(2, "session-root"), { model: "contestant", messages: [] })
+
+    expect(generations.map((generation) => generation.callIndex)).toEqual([0, 1, 2, 3, 4, 5])
+    expect(reads).toBe(1)
   })
 })

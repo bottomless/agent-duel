@@ -1,3 +1,4 @@
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { describe, expect, test } from "bun:test"
 import type { ArenaActiveOperation } from "../../src/arena/operation-tracker"
 import { jsonValue, project } from "../../src/arena/public"
@@ -170,6 +171,31 @@ describe("ArenaPublic", () => {
       { operation: "applying_changes", startedAt: 20, state: "running" },
     ])
   })
+
+  test.each([false, true])(
+    "explains exhausted output recovery without revealing the contestant, revealed=%s",
+    (revealed) => {
+      const input = snapshot(revealed)
+      input.runs[0]!.runState = "error"
+      input.runs[0]!.error = `${ArenaResponseRecovery.EXHAUSTED}\nprivate-provider detail`
+      const output = project(input)
+      expect(output.runs[0]?.error).toBe(ArenaResponseRecovery.EXHAUSTED)
+      expect(output.runs[0]?.error).not.toContain("private-provider")
+    },
+  )
+
+  test.each([false, true])(
+    "explains exhausted idle recovery without exposing provider details, revealed=%s",
+    (revealed) => {
+      const input = snapshot(revealed)
+      input.runs[0]!.runState = "error"
+      input.runs[0]!.error = JSON.stringify({
+        name: "APIError",
+        data: { message: ArenaResponseRecovery.IDLE_EXHAUSTED, detail: "private-provider" },
+      })
+      expect(project(input).runs[0]?.error).toBe(ArenaResponseRecovery.IDLE_EXHAUSTED)
+    },
+  )
 
   test.each([false, true])("hides billing details in payment errors, revealed=%s", (revealed) => {
     const input = snapshot(revealed)

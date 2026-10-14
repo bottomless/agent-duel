@@ -94,6 +94,22 @@ describe("ArenaRunMeta", () => {
     expect(label()).not.toMatch(/Retrying|Waiting|No recent/);
   });
 
+  it.each(["Continuing after response limit", "Continuing after model timeout"])(
+    "shows %s and clears it when the run settles",
+    (message) => {
+      const run = {
+        ...FINISHED_RUN,
+        runState: "pending" as const,
+        status: { type: "retry", attempt: 1, message },
+      };
+      const view = render(<ArenaRunMeta run={run} side="a" active />);
+      expect(view.getByTestId("arena-run-meta-a").textContent).toContain(message);
+      view.rerender(<ArenaRunMeta run={{ ...run, runState: "error" }} side="a" active />);
+      expect(view.getByTestId("arena-run-meta-a").textContent).toContain("Failed");
+      expect(view.getByTestId("arena-run-meta-a").textContent).not.toContain("Continuing");
+    },
+  );
+
   it("refreshes the clock and activity when a retained chat becomes active again", () => {
     vi.useFakeTimers();
     const start = new Date("2026-09-25T10:00:00Z");

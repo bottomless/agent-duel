@@ -1,5 +1,13 @@
 import { ProviderError } from "@/provider/error"
 
+export const MODEL_IDLE_TIMEOUT_MS = 150_000
+
+export class ModelIdleError extends ProviderError.ResponseStreamError {
+  constructor(ms: number) {
+    super(`Arena model response was idle for ${ms}ms`)
+  }
+}
+
 type Part = {
   type: string
   toolCallId?: string
@@ -66,7 +74,7 @@ async function* watchModelIdle<T extends Part>(
                     reject(abort.signal.reason)
                     return
                   }
-                  const error = new ProviderError.ResponseStreamError(`Arena model response was idle for ${ms}ms`)
+                  const error = new ModelIdleError(ms)
                   onIdle?.({
                     parts,
                     sinceStartMs: Date.now() - startedAt,

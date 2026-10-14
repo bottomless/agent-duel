@@ -222,8 +222,10 @@ finish the contestant's battle run. Paseo's ordinary queue waits for an entire r
 owns delivery. The toolbar stays on one row.
 When its own available width is narrow, shorten the target labels, show tool permissions as a
 status icon, and use the send arrow; retain the target-specific placeholder and accessible labels. Tool permissions use a quiet
-status menu: `Auto Accept` or `Ask before tools`. Its description names the scope and explains
-that enabling Auto Accept also accepts pending requests; explicit deny rules still apply.
+status menu: `Auto Accept` or `Ask before tools`. The choice applies to the chat, or to both
+contestants during a battle, and becomes the default for new chats; other chats keep their own. The
+carry-over is intended, so the menu says so. Its descriptions also explain that enabling Auto
+Accept accepts pending requests; explicit deny rules still apply.
 
 The vote lives in a centered sticky pill above the composer: `Choose A`, `Tie`, and `Choose B`.
 Anchor it over the transcript above the composer, with a gray surface inside the pill and a
@@ -744,7 +746,10 @@ field. Each layer has its own file:
   capability-gated Arena proxy; the Arena process never receives the account session. The control
   plane authenticates the account, requires an exact unresolved account/scope/assignment match and
   then inserts the stored OpenRouter slug, price ceiling, provider policy, and `high` reasoning
-  effort. Resolution disables further routing without deleting the assignment.
+  effort. For an `anthropic/` slug it also adds a top-level `cache_control`, because Anthropic
+  caches a prompt only when asked. It skips requests without tools (compaction summaries and
+  titles), whose prefix nothing reads back, and bodies that mark their own cache breakpoints.
+  Resolution disables further routing without deleting the assignment.
 - **Response** (`arena-service/src/openrouter.ts`) — before bytes return to the desktop, the control
   plane strips model, provider, fingerprint, OpenRouter metadata, and cost, replaces the generation
   id, and collapses upstream failures to a generic error. The local proxy repeats the scrub as a
@@ -754,7 +759,9 @@ field. Each layer has its own file:
   provider-specific reasoning metadata, identity fields, and raw upstream errors from stored
   responses, and rewrites provider-shaped tool-call ids before saving response artifacts. The
   control plane holds generation usage, cost, and finish reason and returns them only with the
-  committed resolution; the desktop then records the research metrics. Local-store startup
+  committed resolution. Usage keeps OpenRouter's account charge in `cost` and, when supplied, the
+  provider's `cost_details.upstream_inference_cost` as `upstreamInferenceCost`; the desktop then
+  records both in the research metrics. Local-store startup
   removes those fields and request/response artifacts from legacy unresolved battles; resolved
   history already exposes the contestants by design.
 - **Session data** (`arena/privacy.ts`) — the event bridge blinds durable payloads before projectors
@@ -947,6 +954,18 @@ credit-limit and unknown payment failures need service-side attention. Keep bill
 of user-facing messages. Never change contestants
 or replay a partially received response to recover a payment failure.
 
+An output-token cap continues from the saved response and tool results, under the same assignment.
+Never replay that response: completed tools may already have changed files. Unfinished tool calls
+must stay unexecuted; ask the model to replace them with smaller writes or patches. Allow three
+additional responses for each recovery sequence, including across compaction and loop restarts,
+then report the recovery failure visibly and preserve completed work. A successful complete response
+resets the budget so later cutoffs do not penalize a long run; failed tools and compaction summaries
+do not reset it. This budget is separate from transport retries.
+OpenRouter can report a truncated tool call as `tool_calls`, even in its native finish reason.
+Treat incomplete arguments at the requested output cap as a cutoff too, including when usage arrives
+after the finish chunk. A complete call at the cap remains valid. Normalize before the SDK flushes
+arguments, or it can turn incomplete JSON into an executable empty object.
+
 Other retryable Arena failures share an eight-retry, two-minute budget per execution. A missing or
 malformed retry hint uses bounded backoff so a persistent 5xx cannot spin indefinitely. A known
 connection failure before response headers becomes a retryable upstream error; cancellation and
@@ -986,8 +1005,11 @@ again once both have settled, as after a reply. Each run gets two retries
 by the other side or a new prompt. `canRetryRun` in `arena/domain.ts` is the one rule; the service
 refuses what it refuses, and the app shows the button from it.
 
-An Arena model response that sends no provider chunk for two minutes fails and enters the same retry
-policy. Arena streams request raw chunks (`session/llm.ts`) because some models reason for minutes in
+An Arena model response that sends no provider chunk for 150 seconds cancels its request and
+continues from its partial response with instructions to use smaller writes. Idle failures and
+output cutoffs share the three-attempt recovery budget above, so alternating failures cannot
+reset it. Completed tools stay in history; unfinished calls are marked interrupted. Exhaustion
+ends the run with a neutral explanation and preserves completed work. Arena streams request raw chunks (`session/llm.ts`) because some models reason for minutes in
 chunks that carry only OpenRouter `reasoning_details`, which produce no AI SDK part; counting only
 parts kills those streams mid-thought. Keep-alive comments are not chunks, so a stalled model still
 times out. The deadline pauses while a local tool runs or waits for approval; a long tool call must
@@ -1006,8 +1028,11 @@ whose `createdAt` is when the hosted function reached the end of the response.
 `No recent activity` means the run has emitted no event for 90 seconds; it is not proof of a
 stalled process. Explicit retry and user-input waits take precedence. A tool call that is still
 running reads `Running a command` or `Running a tool` instead: a long command emits nothing until it
-ends, the same reason the engine's deadline pauses for it. That UI label alone must not stop or
-restart a contestant.
+ends, the same reason the engine's deadline pauses for it. Time that label from the call's own
+start as well as from the run's last event (`run-liveness.ts`): queuing or deleting a steer is a run
+event too, and must not put a long command back to `Working` for another 90 seconds. A shorter call
+stays `Working` so the label does not flicker from call to call. That UI label alone must not stop
+or restart a contestant.
 
 ## Gotchas
 

@@ -65,6 +65,7 @@ import {
 import { LLMEvent } from "@opencode-ai/llm"
 import { ArenaPrivacy } from "@/arena/privacy"
 import { ArenaContestant } from "@/arena/contestant"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1133,6 +1134,38 @@ const layer = Layer.effect(
           if (hasDiscardedContext()) continue
           const realUsers = msgs.filter((message) => message.info.role === "user")
 
+          if (
+            lastUser.model.providerID === "arena" &&
+            lastAssistant?.error &&
+            ArenaResponseRecovery.reason(lastAssistant.finish) &&
+            lastAssistant.id > lastUser.id
+          )
+            break
+
+          const recoveryReason = ArenaResponseRecovery.reason(lastAssistant?.finish)
+          const recoverable =
+            lastUser.model.providerID === "arena" &&
+            recoveryReason !== undefined &&
+            lastAssistant !== undefined &&
+            lastAssistant.id > lastUser.id &&
+            !lastAssistant.error &&
+            !lastAssistant.summary
+          const recovery = recoverable
+            ? ArenaResponseRecovery.count(yield* sessions.messages({ sessionID }).pipe(Effect.orDie))
+            : undefined
+          if (recovery !== undefined && recovery > ArenaResponseRecovery.MAX_RECOVERIES && lastAssistant) {
+            lastAssistant.error =
+              recoveryReason === "arena-idle"
+                ? new SessionV1.APIError({
+                    message: ArenaResponseRecovery.IDLE_EXHAUSTED,
+                    isRetryable: false,
+                  }).toObject()
+                : new SessionV1.OutputLengthError({}).toObject()
+            yield* sessions.updateMessage(lastAssistant)
+            yield* events.publish(Session.Event.Error, { sessionID, error: lastAssistant.error })
+            break
+          }
+
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
           )
@@ -1146,6 +1179,7 @@ const layer = Layer.effect(
 
           if (
             lastAssistant?.finish &&
+            !recoverable &&
             !["tool-calls"].includes(lastAssistant.finish) &&
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
@@ -1268,6 +1302,8 @@ const layer = Layer.effect(
               model,
               deferInitialSnapshot: isToolExecutionGated(sessionID) || executionWorktree !== undefined,
               snapshotProvider: executionProvider,
+              responseRecovery:
+                recovery !== undefined && recoveryReason ? { attempt: recovery, reason: recoveryReason } : undefined,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
@@ -1342,6 +1378,17 @@ const layer = Layer.effect(
               system,
               messages: [
                 ...modelMsgs,
+                ...(recovery !== undefined
+                  ? [
+                      {
+                        role: "user" as const,
+                        content:
+                          recoveryReason === "arena-idle"
+                            ? ArenaResponseRecovery.IDLE_CONTINUE
+                            : ArenaResponseRecovery.CONTINUE,
+                      },
+                    ]
+                  : []),
                 ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
               ],
               tools,
@@ -1356,7 +1403,10 @@ const layer = Layer.effect(
               return "break" as const
             }
 
-            const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
+            const finished =
+              handle.message.finish &&
+              !["tool-calls", "unknown"].includes(handle.message.finish) &&
+              !(model.providerID === "arena" && ArenaResponseRecovery.reason(handle.message.finish))
             if (finished && !handle.message.error) {
               // Surface any content-filter finish (e.g. Anthropic stop_reason:
               // refusal) as an error. These turns may have produced no visible

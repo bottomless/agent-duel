@@ -17,6 +17,8 @@ import { PartID } from "./schema"
 import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
+import { ModelIdleError } from "@/arena/model-idle"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
 import { Question } from "@/question"
@@ -55,6 +57,7 @@ type Input = {
   model: Provider.Model
   deferInitialSnapshot?: boolean
   snapshotProvider?: ToolExecutionProvider
+  responseRecovery?: { attempt: number; reason: ArenaResponseRecovery.Reason }
 }
 
 export interface Interface {
@@ -602,7 +605,14 @@ const layer = Layer.effect(
             state: {
               ...part.state,
               status: "error",
-              error: "Tool execution aborted",
+              error:
+                ctx.model.providerID === "arena" &&
+                ArenaResponseRecovery.reason(ctx.assistantMessage.finish) &&
+                part.state.status === "pending"
+                  ? ctx.assistantMessage.finish === "arena-idle"
+                    ? ArenaResponseRecovery.IDLE_TOOL_INTERRUPTED
+                    : ArenaResponseRecovery.TOOL_INTERRUPTED
+                  : "Tool execution aborted",
               metadata: { ...metadata, interrupted: true },
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
@@ -687,7 +697,12 @@ const layer = Layer.effect(
             attemptStart = PartID.ascending()
             attemptCost = ctx.assistantMessage.cost
             toolStarted = false
-            yield* status.set(ctx.sessionID, { type: "busy" })
+            yield* status.set(
+              ctx.sessionID,
+              input.responseRecovery === undefined
+                ? { type: "busy" }
+                : ArenaResponseRecovery.status(input.responseRecovery.attempt, input.responseRecovery.reason),
+            )
             const stream = llm.stream(streamInput)
 
             yield* stream.pipe(
@@ -711,6 +726,15 @@ const layer = Layer.effect(
             Effect.catchCauseIf(
               (cause) => !Cause.hasInterruptsOnly(cause),
               (cause) => Effect.fail(Cause.squash(cause)),
+            ),
+            // Idle recovery must retain this attempt and change the next request. Transport
+            // retries below replay the original request and discard its partial output.
+            Effect.catchIf(
+              (error) => arena && error instanceof ModelIdleError,
+              () =>
+                Effect.sync(() => {
+                  ctx.assistantMessage.finish = "arena-idle"
+                }),
             ),
             Effect.retry(
               SessionRetry.policy({

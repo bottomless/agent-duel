@@ -4,7 +4,7 @@ import { MockLanguageModelV3 } from "ai/test"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import z from "zod"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { timeoutModelIdle, type ModelIdleActivity } from "@/arena/model-idle"
+import { MODEL_IDLE_TIMEOUT_MS, ModelIdleError, timeoutModelIdle, type ModelIdleActivity } from "@/arena/model-idle"
 import { ProviderError } from "@/provider/error"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionRetry } from "@/session/retry"
@@ -92,7 +92,7 @@ test("a silent model stream fails and aborts its request", async () => {
   const events: string[] = []
   await expect(async () => {
     for await (const event of timeoutModelIdle(stream(), abort, 30)) events.push(event.type)
-  }).toThrow(ProviderError.ResponseStreamError)
+  }).toThrow(ModelIdleError)
   expect(events).toEqual(["start"])
   expect(abort.signal.aborted).toBe(true)
 })
@@ -112,12 +112,12 @@ test("an idle deadline reports the latest part types the model produced", async 
     for await (const _ of timeoutModelIdle(stream(), abort, 30, (reported) => (activity = reported))) {
       // Consume until the deadline fires.
     }
-  }).toThrow(ProviderError.ResponseStreamError)
+  }).toThrow(ModelIdleError)
   expect(activity).toMatchObject({ parts: 4, recentParts: "start*1 reasoning-delta*2 raw*1" })
 })
 
-test("a model idle error enters the Arena retry policy", () => {
-  const error = MessageV2.fromError(new ProviderError.ResponseStreamError("Arena model response was idle"), {
+test("ordinary stream errors retain the Arena transport retry policy", () => {
+  const error = MessageV2.fromError(new ProviderError.ResponseStreamError("Connection reset"), {
     providerID: ProviderV2.ID.make("arena"),
     aborted: false,
   })
@@ -152,7 +152,7 @@ test("long local tool work is excluded, then the model deadline resumes", async 
   const events: string[] = []
   await expect(async () => {
     for await (const event of timeoutModelIdle(stream(), abort, 60)) events.push(event.type)
-  }).toThrow(ProviderError.ResponseStreamError)
+  }).toThrow(ModelIdleError)
   expect(events).toEqual(["tool-call", "tool-result"])
 })
 
@@ -167,7 +167,7 @@ test("provider-executed tools do not suspend the model deadline", async () => {
     for await (const _ of timeoutModelIdle(stream(), abort, 30)) {
       // Consume the initial tool call.
     }
-  }).toThrow(ProviderError.ResponseStreamError)
+  }).toThrow(ModelIdleError)
 })
 
 test("AI SDK emits tool activity while a local tool runs", async () => {
@@ -235,7 +235,7 @@ test("model silence after a tool result is bounded even if the model stream rema
   const events: string[] = []
   await expect(async () => {
     for await (const event of timeoutModelIdle(result.fullStream, abort, 100)) events.push(event.type)
-  }).toThrow(ProviderError.ResponseStreamError)
+  }).toThrow(ModelIdleError)
   expect(events).toContain("tool-call")
   expect(events).toContain("tool-result")
 })
@@ -309,5 +309,9 @@ test("without raw chunks, reasoning sent only as provider details looks idle", a
     for await (const _ of timeoutModelIdle(result.fullStream, abort, 150)) {
       // Consume until the deadline fires.
     }
-  }).toThrow(ProviderError.ResponseStreamError)
+  }).toThrow(ModelIdleError)
+})
+
+test("the production idle deadline is 150 seconds", () => {
+  expect(MODEL_IDLE_TIMEOUT_MS).toBe(150_000)
 })

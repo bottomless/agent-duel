@@ -1,7 +1,11 @@
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
-import { arenaRunningTool, isArenaRunPossiblyStalled } from "./run-liveness";
+import { arenaLongRunningTool, isArenaRunPossiblyStalled } from "./run-liveness";
 
-const OFFLINE_MESSAGE = "Waiting for network";
+const RETRY_MESSAGES = new Set([
+  "Waiting for network",
+  "Continuing after response limit",
+  "Continuing after model timeout",
+]);
 
 type ArenaRunTiming = Pick<ArenaRun, "runState" | "startedAt" | "completedAt" | "durationMs">;
 
@@ -38,17 +42,19 @@ export function arenaRunStatusLabel(run: ArenaRun, now: number): string {
         "type" in run.status &&
         run.status.type === "retry"
       )
-        // The engine's offline wait (`ARENA_OFFLINE_MESSAGE` in arena-backend `session/retry.ts`).
-        return "message" in run.status && run.status.message === OFFLINE_MESSAGE
-          ? OFFLINE_MESSAGE
+        // The engine's neutral recovery and offline-wait messages preserve blinding.
+        return "message" in run.status &&
+          typeof run.status.message === "string" &&
+          RETRY_MESSAGES.has(run.status.message)
+          ? run.status.message
           : "Retrying";
-      if (isArenaRunPossiblyStalled(run, now)) {
-        const tool = arenaRunningTool(run);
-        if (tool === "command") return "Running a command";
-        if (tool === "tool") return "Running a tool";
-        return "No recent activity";
+      switch (arenaLongRunningTool(run, now)) {
+        case "command":
+          return "Running a command";
+        case "tool":
+          return "Running a tool";
       }
-      return "Working";
+      return isArenaRunPossiblyStalled(run, now) ? "No recent activity" : "Working";
     case "complete":
       return "Finished";
     case "stopped":

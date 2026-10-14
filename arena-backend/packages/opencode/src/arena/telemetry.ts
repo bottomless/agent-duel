@@ -38,6 +38,10 @@ function number(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
+function nonNegativeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
 function usageFromPayload(value: unknown, latencyMs: number): UsageTotals | undefined {
   if (!record(value)) return undefined
   const source = record(value.usage)
@@ -51,14 +55,17 @@ function usageFromPayload(value: unknown, latencyMs: number): UsageTotals | unde
   const cacheDetails = record(source.cache_tokens) ? source.cache_tokens : undefined
   const promptTokens = number(source.prompt_tokens ?? source.input_tokens)
   const completionTokens = number(source.completion_tokens ?? source.output_tokens)
+  const costDetails = record(source.cost_details) ? source.cost_details : undefined
+  const upstreamInferenceCost = nonNegativeNumber(costDetails?.upstream_inference_cost)
   return {
     promptTokens,
     completionTokens,
     reasoningTokens: number(completionDetails?.reasoning_tokens ?? source.reasoning_tokens),
     totalTokens: number(source.total_tokens) || promptTokens + completionTokens,
     cacheReadTokens: number(promptDetails?.cached_tokens ?? cacheDetails?.read ?? source.cache_read_tokens),
-    cacheWriteTokens: number(cacheDetails?.write ?? source.cache_write_tokens),
+    cacheWriteTokens: number(promptDetails?.cache_write_tokens ?? cacheDetails?.write ?? source.cache_write_tokens),
     cost: number(source.cost ?? value.cost),
+    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
     attempts: 1,
     latencyMs,
   }
@@ -163,6 +170,12 @@ function finishReason(raw: string) {
 }
 
 function addUsage(left: UsageTotals, right: UsageTotals): UsageTotals {
+  const upstreamInferenceCost =
+    left.attempts === 0
+      ? right.upstreamInferenceCost
+      : left.upstreamInferenceCost === undefined || right.upstreamInferenceCost === undefined
+        ? undefined
+        : left.upstreamInferenceCost + right.upstreamInferenceCost
   return {
     promptTokens: left.promptTokens + right.promptTokens,
     completionTokens: left.completionTokens + right.completionTokens,
@@ -171,6 +184,7 @@ function addUsage(left: UsageTotals, right: UsageTotals): UsageTotals {
     cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
     cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
     cost: left.cost + right.cost,
+    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
     attempts: left.attempts + right.attempts,
     latencyMs: left.latencyMs + right.latencyMs,
   }
@@ -204,6 +218,31 @@ export function create(store: Store): Telemetry {
   const revealed = new Set<string>()
   const revealedMetrics = new Map<string, GenerationMetrics>()
   const queues = new Map<string, Promise<void>>()
+  const counterSeeds = new Map<string, Promise<void>>()
+
+  // A run's numbering continues from its stored generations. A reply resumes a finished run after
+  // an engine restart, and restarting at 0 breaks the unique (runID, callIndex) index, which fails
+  // the request before it leaves.
+  const nextCallIndex = async (runID: string) => {
+    if (!counters.has(runID)) {
+      const seed =
+        counterSeeds.get(runID) ??
+        store
+          .generationsForRuns([runID])
+          .then((generations) => {
+            counters.set(
+              runID,
+              generations.reduce((next, generation) => Math.max(next, generation.callIndex + 1), 0),
+            )
+          })
+          .finally(() => counterSeeds.delete(runID))
+      counterSeeds.set(runID, seed)
+      await seed
+    }
+    const callIndex = counters.get(runID)!
+    counters.set(runID, callIndex + 1)
+    return callIndex
+  }
 
   const persist = (metrics: PendingMetrics) => {
     const previous = queues.get(metrics.runID) ?? Promise.resolve()
@@ -240,8 +279,7 @@ export function create(store: Store): Telemetry {
 
   return {
     async start(metadata, _body) {
-      const callIndex = counters.get(metadata.assignment.runID) ?? 0
-      counters.set(metadata.assignment.runID, callIndex + 1)
+      const callIndex = await nextCallIndex(metadata.assignment.runID)
       const id = metadata.generationID
       const runAttempts = attempts.get(metadata.assignment.runID) ?? new Map<string, Attempt>()
       const previous = runAttempts.get(metadata.requestID)

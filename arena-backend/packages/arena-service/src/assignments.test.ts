@@ -165,6 +165,7 @@ describe("Arena assignment control plane", () => {
           cacheReadTokens: 3,
           cacheWriteTokens: 0,
           cost: 0.123,
+          upstreamInferenceCost: 0.456,
           attempts: 1,
           latencyMs: 250,
         },
@@ -187,7 +188,7 @@ describe("Arena assignment control plane", () => {
           metrics: [
             {
               generationID: "gen_00000000000000000000000000000001",
-              usage: { promptTokens: 10, completionTokens: 5, cost: 0.123 },
+              usage: { promptTokens: 10, completionTokens: 5, cost: 0.123, upstreamInferenceCost: 0.456 },
               finishReason: "tool_calls",
             },
           ],

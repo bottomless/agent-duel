@@ -381,6 +381,8 @@ export function installOpenRouterStub(options?: {
   readonly assignmentError?: string
   readonly questionOrdinals?: ReadonlyArray<number>
   readonly emptyOrdinals?: ReadonlyArray<number>
+  /** Contestants whose first request fails with a retryable 503 the engine will not wait out. */
+  readonly failFirstOrdinals?: ReadonlyArray<number>
   readonly contestantCommands?: Readonly<Partial<Record<number, string>>>
   /**
    * A command keyed by the latest user message instead of the model's first request. Each model
@@ -503,6 +505,10 @@ export function installOpenRouterStub(options?: {
     const number = ordinal.get(body.model) ?? ordinal.size + 1
     ordinal.set(body.model, number)
     if (options?.delayedOrdinal === number) await Bun.sleep(options.delayMs ?? 0)
+    // A retry-after past the engine's two-minute retry window ends its own retries at once.
+    if (count === 1 && options?.failFirstOrdinals?.includes(number)) {
+      return Response.json({ error: { message: "Unavailable" } }, { status: 503, headers: { "retry-after": "121" } })
+    }
     const latestUserMessage = body.messages?.findLast((message) => message.role === "user")
     const requestText = JSON.stringify(latestUserMessage?.content ?? "")
     const normalFixture = requestText.includes("canonical normal turn") || requestText.includes("without a battle")

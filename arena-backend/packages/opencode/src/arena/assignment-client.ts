@@ -74,11 +74,16 @@ function finite(value: unknown, name: string) {
   return value
 }
 
+function optionalNonNegative(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
 function usage(value: unknown): UsageTotals {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Arena revealed assignment usage is invalid")
   }
   const input = value as Record<string, unknown>
+  const upstreamInferenceCost = optionalNonNegative(input.upstreamInferenceCost)
   return {
     promptTokens: finite(input.promptTokens, "prompt tokens"),
     completionTokens: finite(input.completionTokens, "completion tokens"),
@@ -87,6 +92,7 @@ function usage(value: unknown): UsageTotals {
     cacheReadTokens: finite(input.cacheReadTokens, "cache read tokens"),
     cacheWriteTokens: finite(input.cacheWriteTokens, "cache write tokens"),
     cost: finite(input.cost, "cost"),
+    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
     attempts: finite(input.attempts, "attempts"),
     latencyMs: finite(input.latencyMs, "latency"),
   }

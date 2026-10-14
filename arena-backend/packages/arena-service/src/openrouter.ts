@@ -17,6 +17,10 @@ function number(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
+function nonNegativeNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
 function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
   if (!record(value)) return undefined
   const source = record(value.usage)
@@ -30,14 +34,17 @@ function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
   const cacheDetails = record(source.cache_tokens) ? source.cache_tokens : undefined
   const promptTokens = number(source.prompt_tokens ?? source.input_tokens)
   const completionTokens = number(source.completion_tokens ?? source.output_tokens)
+  const costDetails = record(source.cost_details) ? source.cost_details : undefined
+  const upstreamInferenceCost = nonNegativeNumber(costDetails?.upstream_inference_cost)
   return {
     promptTokens,
     completionTokens,
     reasoningTokens: number(completionDetails?.reasoning_tokens ?? source.reasoning_tokens),
     totalTokens: number(source.total_tokens) || promptTokens + completionTokens,
     cacheReadTokens: number(promptDetails?.cached_tokens ?? cacheDetails?.read ?? source.cache_read_tokens),
-    cacheWriteTokens: number(cacheDetails?.write ?? source.cache_write_tokens),
+    cacheWriteTokens: number(promptDetails?.cache_write_tokens ?? cacheDetails?.write ?? source.cache_write_tokens),
     cost: number(source.cost ?? value.cost),
+    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
     attempts: 1,
     latencyMs,
   }
@@ -185,6 +192,27 @@ function assignedHeaders(source: Headers) {
   return headers
 }
 
+// Anthropic caches a prompt only when the request asks, and the blinded engine cannot tell it is
+// talking to Claude, so without this every contestant step pays full input price for the whole
+// conversation. OpenRouter puts the breakpoint on the last cacheable block of each request. The
+// engine sends no tools only for compaction summaries and titles, whose prefix no later request
+// shares, so a write there would cost 25% more and never be read. A body that marks its own
+// breakpoints keeps them alone: one more could exceed Anthropic's four or clash with their TTL, and
+// only Claude requests would fail.
+function promptCache(slug: string, input: Record<string, unknown>) {
+  const tools = Array.isArray(input.tools) ? input.tools : []
+  if (!slug.startsWith("anthropic/") || tools.length === 0 || input.cache_control !== undefined) return {}
+  const messages = Array.isArray(input.messages) ? input.messages : []
+  const marked = messages.some(
+    (message) =>
+      record(message) &&
+      (message.cache_control !== undefined ||
+        (Array.isArray(message.content) &&
+          message.content.some((part) => record(part) && part.cache_control !== undefined))),
+  )
+  return marked ? {} : { cache_control: { type: "ephemeral" } }
+}
+
 const alternateSelectors = new Set(["model_id", "models", "preset", "presets", "provider", "provider_name", "route"])
 
 const unsupportedServerFeatures = new Set(["plugin", "plugins", "server_tools", "web_search_options"])
@@ -314,6 +342,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         model: routeAssignment.model.slug,
         reasoning: { effort: "high" },
         provider: routeAssignment.model.routing,
+        ...promptCache(routeAssignment.model.slug, input),
         stream_options: record(input.stream_options)
           ? { ...input.stream_options, include_usage: true }
           : { include_usage: true },
@@ -325,7 +354,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       body,
       signal: request.signal,
     })
-    return sanitizeAssignedResponse(response, generationID, startedAt, async (metrics) => {
+    // Awaited so a body that fails to read or parse still gets the 502 below.
+    return await sanitizeAssignedResponse(response, generationID, startedAt, async (metrics) => {
       if (!metrics || !requestedGenerationID) return
       try {
         await recordAssignmentGenerationMetrics(db, {

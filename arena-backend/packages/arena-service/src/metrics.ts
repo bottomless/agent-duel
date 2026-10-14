@@ -6,6 +6,8 @@ export type UsageTotals = {
   readonly cacheReadTokens: number
   readonly cacheWriteTokens: number
   readonly cost: number
+  /** OpenRouter's provider inference charge, separate from the account charge above. */
+  readonly upstreamInferenceCost?: number
   readonly attempts: number
   readonly latencyMs: number
 }
