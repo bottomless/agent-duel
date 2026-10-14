@@ -16,7 +16,12 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 
-import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import {
+  ARENA_EXPLORE_DESCRIPTION,
+  ARENA_SUBAGENT_INSTRUCTION,
+  TaskTool,
+  type TaskPromptOps,
+} from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -152,6 +157,9 @@ describe("tool.task", () => {
       expect(arena?.jsonSchema?.properties).toHaveProperty("background")
       expect(ordinary?.description).not.toContain("background by default")
       expect(ordinary?.jsonSchema?.properties).not.toHaveProperty("background")
+      expect(arena?.description).toContain(`- explore: ${ARENA_EXPLORE_DESCRIPTION}`)
+      expect(arena?.description).not.toContain("very thorough")
+      expect(ordinary?.description).toContain("very thorough")
     }),
   )
   it.instance("Arena defaults to parallel background children and saves results before they settle", () =>
@@ -325,6 +333,7 @@ describe("tool.task", () => {
       expect(result.output).toContain(`<task id="${child.id}" state="completed">`)
       expect(seen?.sessionID).toBe(child.id)
       expect(seen?.variant).toBe("xhigh")
+      expect(seen?.system).toBeUndefined()
     }),
   )
 
@@ -359,6 +368,7 @@ describe("tool.task", () => {
       expect(result.output).toContain('state="completed"')
       expect(seen?.model).toEqual({ modelID: ref.modelID, providerID: ProviderV2.ID.make("arena") })
       expect(seen?.variant).toBe("high")
+      expect(seen?.system).toBe(ARENA_SUBAGENT_INSTRUCTION)
       expect((yield* sessions.get(result.metadata.sessionId)).parentID).toBe(chat.id)
     }),
   )

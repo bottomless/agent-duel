@@ -11,7 +11,7 @@ import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
-import { TaskTool, ARENA_DESCRIPTION, Parameters as TaskParameters } from "./task"
+import { TaskTool, ARENA_DESCRIPTION, ARENA_EXPLORE_DESCRIPTION, Parameters as TaskParameters } from "./task"
 import { ToolJsonSchema } from "./json-schema"
 import { ArenaRuntime } from "@/arena/runtime"
 import { Database } from "@opencode-ai/core/database/database"
@@ -261,7 +261,7 @@ const layer = Layer.effect(
       return (yield* all()).map((tool) => tool.id)
     })
 
-    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
+    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info, arena: boolean) {
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
       const filtered = items.filter(
         (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
@@ -270,7 +270,11 @@ const layer = Layer.effect(
       const description = list
         .map(
           (item) =>
-            `- ${item.name}: ${item.description ?? "This subagent should only be called manually by the user."}`,
+            `- ${item.name}: ${
+              arena && item.native && item.name === "explore"
+                ? ARENA_EXPLORE_DESCRIPTION
+                : (item.description ?? "This subagent should only be called manually by the user.")
+            }`,
         )
         .join("\n")
       return ["Available agent types and the tools they have access to:", description].join("\n")
@@ -327,7 +331,7 @@ const layer = Layer.effect(
               tool.id === ShellTool.id && contestantTmp
                 ? ShellPrompt.withTmp(output.description, contestantTmp)
                 : output.description,
-              tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined,
+              tool.id === TaskTool.id ? yield* describeTask(input.agent, arenaTask) : undefined,
               tool.id === "execute" ? codeModeDescription : undefined,
             ]
               .filter(Boolean)

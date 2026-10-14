@@ -35,7 +35,20 @@ export const ARENA_DESCRIPTION = [
   "Give each child a separate file or task scope; children share your worktree. Prepare dependencies before delegating work that needs them.",
   "Results arrive automatically in your conversation. If you have nothing else to do, end your response; the battle stays running and you resume when a result arrives. Do not sleep, poll, or duplicate delegated work.",
   "Set background=false only when you need a child's result before your next action. Foreground calls block your next response until the child finishes.",
+  "In each prompt, name the question to answer, the files or areas to start from, and the facts to return. Never give two children the same files to read.",
 ].join("\n\n")
+// Replaces the native explore description in a battle. Contestants asked for "very thorough"
+// on most briefs, and those children ran several minutes while the voter waited.
+export const ARENA_EXPLORE_DESCRIPTION = `Fast read-only agent for finding code. Use this when you need to find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer a focused question about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the thoroughness level: "quick" (the default) for a few targeted searches, or "medium" when the answer spans several areas or naming conventions. Do not ask for exhaustive analysis.`
+// Children in a battle re-read the same files in many small ranges and returned to a parent that
+// had been waiting minutes; this keeps their context and their runtime small.
+export const ARENA_SUBAGENT_INSTRUCTION = [
+  "You are a subagent in a timed coding battle. Your parent waits for your report before it can continue.",
+  "- Do only what the task asks. Stop as soon as you can answer it.",
+  "- Search before you read: use grep or glob to find the relevant lines, then read only those ranges.",
+  "- Never read a file range you already read. Do not read files outside the task's scope.",
+  "- Return a compact report with file paths and line numbers. Do not paste file contents back.",
+].join("\n")
 const BACKGROUND_STARTED = [
   "The task is working in the background. You will be notified automatically when it finishes.",
   "DO NOT sleep, poll for progress, ask the task for status, or duplicate this task's work — avoid working with the same files or topics it is using.",
@@ -220,6 +233,7 @@ export const TaskTool = Tool.define(
           },
           variant: arenaParent ? "high" : next.model ? undefined : variant,
           agent: next.name,
+          ...(arenaParent ? { system: ARENA_SUBAGENT_INSTRUCTION } : {}),
           parts,
         })
         if (arenaParent && result.info.role === "assistant" && result.info.error) {
