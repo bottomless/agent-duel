@@ -33,6 +33,8 @@ function snapshot(
       baseSHA: "abc123",
       comparisonState: state === "awaiting_vote" ? "complete" : "pending",
       canVote: state === "awaiting_vote",
+      canTie: state === "awaiting_vote",
+      canDiscardBattle: false,
       canRetryResolution: false,
       revealed: state === "awaiting_vote",
       createdAt: "2026-08-14T00:00:00.000Z",

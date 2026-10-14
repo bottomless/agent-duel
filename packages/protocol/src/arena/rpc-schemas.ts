@@ -444,6 +444,10 @@ export const ArenaSnapshotSchema = z
       activeOperations: z.array(ArenaActiveOperationSchema).optional(),
       operationProgress: z.array(ArenaOperationProgressSchema).optional(),
       canVote: z.boolean(),
+      // Both results can be chosen (`canTie` in the engine's `arena/domain.ts`).
+      canTie: z.boolean(),
+      // Discard instead of applying a result: after a stop, or when neither result can be chosen.
+      canDiscardBattle: z.boolean(),
       canRetryResolution: z.boolean(),
       canDiscardWinner: z.boolean().optional(),
       revealed: z.boolean(),

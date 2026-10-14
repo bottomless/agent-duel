@@ -41,6 +41,8 @@ function snapshot(input: {
     baseSHA: "abc",
     comparisonState: "pending" as const,
     canVote: false,
+    canTie: false,
+    canDiscardBattle: false,
     canRetryResolution: false,
     revealed: false,
     createdAt: "2026-08-26T10:00:00.000Z",

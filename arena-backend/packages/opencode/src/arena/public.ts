@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import { basename } from "path"
-import { canRetryRun, type Resolution, type Side } from "./domain"
+import { canDiscardBattle, canRetryRun, canTie, type Resolution, type Side } from "./domain"
 import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument } from "./records"
 import { ArenaSchema } from "./schema"
@@ -313,6 +313,8 @@ export function project(snapshot: BattleSnapshot) {
             ...(turn.transitionEvent ? { transition: transition(turn.transitionEvent) } : {}),
             ...(revealed ? { identities: { a: identity(turn.placement.a), b: identity(turn.placement.b) } } : {}),
             canVote: turn.state === "awaiting_vote",
+            canTie: canTie(turn, snapshot.runs),
+            canDiscardBattle: canDiscardBattle(turn, snapshot.runs),
             canRetryResolution:
               turn.state === "canonicalization_failed" ||
               (turn.state === "application_failed" &&

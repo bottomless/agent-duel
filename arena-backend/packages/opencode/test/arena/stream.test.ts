@@ -29,6 +29,8 @@ function fixture() {
       baseSHA: "sha",
       comparisonState: "pending",
       canVote: false,
+      canTie: false,
+      canDiscardBattle: false,
       canRetryResolution: false,
       canDiscardWinner: false,
       revealed: false,

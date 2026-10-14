@@ -29,7 +29,17 @@ export type ArenaDecisionPhase =
       canPickA: boolean;
       canPickB: boolean;
     }
-  | { kind: "awaiting_vote"; canChooseA: boolean; canChooseB: boolean }
+  | {
+      kind: "awaiting_vote";
+      canChooseA: boolean;
+      canChooseB: boolean;
+      /** Only between two results that can be chosen; a tie applies A whatever A is. */
+      canTie: boolean;
+      /** Neither result can be chosen, so Discard takes Tie's place. */
+      canDiscard: boolean;
+      /** A failed side can still be retried, which the hint beside Discard offers. */
+      canRetry: boolean;
+    }
   | { kind: "awaiting_stop_resolution"; canKeepA: boolean; canKeepB: boolean }
   | { kind: "retry_resolution"; detail: string }
   | { kind: "transitional"; label: string; busy: boolean };
@@ -117,6 +127,9 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
         kind: "awaiting_vote",
         canChooseA: canChooseArenaRun(turn.state, runA),
         canChooseB: canChooseArenaRun(turn.state, runB),
+        canTie: turn.canTie,
+        canDiscard: turn.canDiscardBattle,
+        canRetry: runA?.canRetry === true || runB?.canRetry === true,
       };
     case "stopping":
       return transitional("Stopping the battle", true);

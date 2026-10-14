@@ -131,6 +131,7 @@ export function ArenaDecisionPill({
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const phase = arenaDecisionPhase(snapshot);
   const stopped = phase.kind === "awaiting_stop_resolution";
+  const bothFailed = phase.kind === "awaiting_vote" && phase.canDiscard;
   const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
   const visible = isArenaBattleOnScreen(snapshot) && showChoices;
   const handleLayout = useCallback(
@@ -151,6 +152,11 @@ export function ArenaDecisionPill({
       testID="arena-decision-pill"
     >
       {stopped ? <Text style={styles.hint}>Battle stopped · choose what to keep</Text> : null}
+      {bothFailed ? (
+        <Text style={styles.hint}>
+          {phase.canRetry ? "Both agents failed · retry or discard" : "Both agents failed"}
+        </Text>
+      ) : null}
       <View style={styles.pill} testID="arena-battle-choice-row">
         {phase.kind === "running"
           ? arenaRunningDecisionOrder(phase).map((choice) =>
@@ -164,8 +170,10 @@ export function ArenaDecisionPill({
         {phase.kind !== "running" ? (
           <>
             <BattlePaneDecision side="a" phase={phase} actions={actions} />
-            {phase.kind === "awaiting_vote" ? <VoteDecision actions={actions} /> : null}
-            {stopped ? <DiscardDecision actions={actions} /> : null}
+            {phase.kind === "awaiting_vote" && !phase.canDiscard ? (
+              <VoteDecision actions={actions} disabled={!phase.canTie} />
+            ) : null}
+            {stopped || bothFailed ? <DiscardDecision actions={actions} /> : null}
             <BattlePaneDecision side="b" phase={phase} actions={actions} />
           </>
         ) : null}

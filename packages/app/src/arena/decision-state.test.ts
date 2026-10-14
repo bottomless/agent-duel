@@ -43,6 +43,8 @@ function snapshot(input: {
     baseSHA: "abc",
     comparisonState: "pending",
     canVote: false,
+    canTie: false,
+    canDiscardBattle: false,
     canRetryResolution: false,
     revealed: false,
     createdAt: "2026-09-03T10:00:00.000Z",
@@ -170,7 +172,36 @@ describe("arenaDecisionPhase", () => {
           ],
         }),
       ),
-    ).toEqual({ kind: "awaiting_vote", canChooseA: true, canChooseB: false });
+    ).toEqual({
+      kind: "awaiting_vote",
+      canChooseA: true,
+      canChooseB: false,
+      canTie: false,
+      canDiscard: false,
+      canRetry: false,
+    });
+  });
+
+  it("offers Discard in Tie's place when both sides failed", () => {
+    expect(
+      arenaDecisionPhase(
+        snapshot({
+          state: "awaiting_vote",
+          turn: { canDiscardBattle: true },
+          runs: [
+            run({ id: "run-a", side: "a", runState: "error", canRetry: true }),
+            run({ id: "run-b", side: "b", runState: "error" }),
+          ],
+        }),
+      ),
+    ).toEqual({
+      kind: "awaiting_vote",
+      canChooseA: false,
+      canChooseB: false,
+      canTie: false,
+      canDiscard: true,
+      canRetry: true,
+    });
   });
 
   it("waits while a stop is in flight, then asks what to keep", () => {

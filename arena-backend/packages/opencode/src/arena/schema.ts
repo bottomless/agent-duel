@@ -332,6 +332,8 @@ export const Snapshot = Schema.Struct({
       activeOperations: Schema.optional(ActiveOperations),
       operationProgress: Schema.optional(Schema.Array(OperationProgress)),
       canVote: Schema.Boolean,
+      canTie: Schema.Boolean,
+      canDiscardBattle: Schema.Boolean,
       canRetryResolution: Schema.Boolean,
       canDiscardWinner: Schema.Boolean,
       revealed: Schema.Boolean,

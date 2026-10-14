@@ -233,3 +233,43 @@ export function canRetryRun(
     run.worktreeRemovedAt === undefined
   )
 }
+
+type DecidedRun = { readonly side: Side; readonly selectable?: boolean }
+
+/**
+ * May the voter call this battle a tie?
+ *
+ * A tie says the two results are as good as each other, so both have to be results the voter could
+ * choose. It applies A whatever A is (`voteResolution`): over a failed run it would record a vote for
+ * a failure and put that run's unfinished work in the checkout. The service refuses what this
+ * refuses, and the app shows Tie from it.
+ */
+export function canTie(
+  turn: { readonly state: BattleState; readonly resolution?: unknown },
+  runs: ReadonlyArray<DecidedRun>,
+): boolean {
+  return (
+    (turn.state === "awaiting_vote" || turn.state === "awaiting_stop_resolution") &&
+    turn.resolution === undefined &&
+    Side.every((side) => runs.some((run) => run.side === side && run.selectable === true))
+  )
+}
+
+/**
+ * May the voter discard this battle instead of applying either result?
+ *
+ * After a stop, always. A finished battle is decided by the vote, unless neither result can be
+ * chosen, which means both runs failed; Retry stays open beside it. The service refuses what this
+ * refuses, and the app shows Discard from it.
+ */
+export function canDiscardBattle(
+  turn: { readonly state: BattleState; readonly resolution?: unknown },
+  runs: ReadonlyArray<DecidedRun>,
+): boolean {
+  if (turn.resolution !== undefined) return false
+  if (turn.state === "awaiting_stop_resolution") return true
+  return (
+    turn.state === "awaiting_vote" &&
+    Side.every((side) => runs.some((run) => run.side === side && run.selectable !== true))
+  )
+}

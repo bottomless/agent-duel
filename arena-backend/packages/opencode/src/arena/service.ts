@@ -62,7 +62,9 @@ import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignm
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
 import {
+  canDiscardBattle,
   canRetryRun,
+  canTie,
   earlyResolution,
   generationName,
   isFinalState,
@@ -1053,6 +1055,7 @@ export interface Interface {
   ) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly retryComparison: (turnID: string) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly stop: (turnID: string) => Effect.Effect<ReturnType<typeof project>, Error>
+  /** Keep a side after a stop, or discard the battle; see `canDiscardBattle`. */
   readonly resolveStop: (turnID: string, resolution: StopResolution) => Effect.Effect<ReturnType<typeof project>, Error>
 }
 
@@ -9318,6 +9321,10 @@ export const layer: Layer.Layer<
         }
         return yield* respond(store, turn.chatID)
       }
+      if (selected === "tie" && (turn.state === "awaiting_vote" || turn.state === "awaiting_stop_resolution")) {
+        const runs = yield* promise(() => store.runsForTurn(turn._id))
+        if (!canTie(turn, runs)) return yield* Effect.fail(new Error("Arena ties require both contestant results"))
+      }
       if (turn.state === "awaiting_stop_resolution" && selected === "tie") {
         const resolved = voteResolution(selected)
         return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
@@ -9552,13 +9559,22 @@ export const layer: Layer.Layer<
       const turn = yield* promise(() => store.turn(id))
       if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${id}`))
       if (turn.resolution) return yield* respond(store, turn.chatID)
-      if (turn.state !== "awaiting_stop_resolution") {
-        return yield* Effect.fail(new Error("Arena stopped battle is not ready for resolution"))
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      // A finished battle is discarded here too when neither result can be chosen.
+      const open = selected === "discard" ? canDiscardBattle(turn, runs) : turn.state === "awaiting_stop_resolution"
+      if (!open) {
+        return yield* Effect.fail(
+          new Error(
+            turn.state === "awaiting_vote"
+              ? "Arena battle can be discarded only when neither result can be chosen"
+              : "Arena stopped battle is not ready for resolution",
+          ),
+        )
       }
+      const expectedState = turn.state === "awaiting_vote" ? "awaiting_vote" : "awaiting_stop_resolution"
       const resolved = stoppedResolution(selected)
       if (resolved.appliedSide) {
         const side = resolved.appliedSide
-        const runs = yield* promise(() => store.runsForTurn(turn._id))
         if (runs.find((run) => run.side === side)?.applicability === "blocked") {
           return yield* Effect.fail(new Error("Arena side cannot be kept because its environment setup failed"))
         }
@@ -9574,7 +9590,7 @@ export const layer: Layer.Layer<
           turnID: turn._id,
           resolution: resolved,
           models: revealed.models,
-          expectedState: "awaiting_stop_resolution",
+          expectedState,
           at: new Date(),
         }),
       )

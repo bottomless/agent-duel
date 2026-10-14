@@ -565,6 +565,8 @@ function installOpenRouterStub(options?: {
     calls,
     contestantRequests,
     modelForAssignment: (assignmentID: string) => assignmentsByID.get(assignmentID)?.model.slug,
+    /** The decision the control plane holds for a battle, if one was resolved. */
+    battleDecision: (scopeID: string) => assignmentSets.get(`battle:${scopeID}`)?.decision,
     utilityCalls: () => utilityCalls,
     restore: () => {
       setArenaCredentials(undefined)
@@ -2858,6 +2860,162 @@ describe("Arena service vertical slice", () => {
       expect(messageIDs(after)).not.toContain(failed.terminalAssistantMessageID)
       expect(messages.some((message) => message.role === "assistant")).toBe(true)
       expect(messages.some((message) => message.error !== undefined)).toBe(false)
+    } finally {
+      router.restore()
+    }
+  }, 40_000)
+
+  test("discards a battle whose contestants both failed instead of calling it a tie", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure both-failed fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ failFirstOrdinals: [1, 2] })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Both contestants fail",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Fail on both sides." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+      const head = await $`git rev-parse HEAD`.cwd(directory.path).text()
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const failed = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
+      expect(failed.runs.map((run) => [run.runState, run.selectable, run.canRetry])).toEqual([
+        ["error", false, true],
+        ["error", false, true],
+      ])
+      expect(failed.turn?.canTie).toBe(false)
+      expect(failed.turn?.canDiscardBattle).toBe(true)
+
+      // A tie applies A whatever A is, so it would have recorded a vote between two failures.
+      const tie = await request(`/arena/turns/${turnID}/vote`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ vote: "tie" }),
+      })
+      expect(tie.ok).toBe(false)
+      const kept = await request(`/arena/turns/${turnID}/stop-resolution`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ resolution: "apply_a" }),
+      })
+      expect(kept.ok).toBe(false)
+      expect((await memory.store.turn(turnID))?.resolution).toBeUndefined()
+      expect(router.battleDecision(turnID)).toBeUndefined()
+
+      const discarded = await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/stop-resolution`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ resolution: "discard" }),
+        }),
+      )
+      expect(discarded.turn?.state).toBe("discarded")
+      expect(discarded.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
+      expect(discarded.turn?.vote).toBeUndefined()
+      expect(router.battleDecision(turnID)).toBe("discard")
+      await waitForReadyChat(memory.store, attached.chat.id)
+      expect(await $`git rev-parse HEAD`.cwd(directory.path).text()).toBe(head)
+    } finally {
+      router.restore()
+    }
+  }, 40_000)
+
+  test("refuses a tie and a discard while one contestant failed", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure one-failed fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ failFirstOrdinals: [1] })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "One contestant fails",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Fail on one side." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const settled = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
+      const chosen = settled.runs.find((run) => run.selectable)
+      expect(chosen).toBeDefined()
+      expect(settled.runs.filter((run) => run.runState === "error")).toHaveLength(1)
+      expect(settled.turn?.canTie).toBe(false)
+      expect(settled.turn?.canDiscardBattle).toBe(false)
+
+      const tie = await request(`/arena/turns/${turnID}/vote`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ vote: "tie" }),
+      })
+      expect(tie.ok).toBe(false)
+      const discard = await request(`/arena/turns/${turnID}/stop-resolution`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ resolution: "discard" }),
+      })
+      expect(discard.ok).toBe(false)
+      expect(router.battleDecision(turnID)).toBeUndefined()
+
+      await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/vote`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ vote: chosen!.side }),
+        }),
+      )
+      await waitForTurn(memory.store, turnID, "complete")
+      expect(router.battleDecision(turnID)).toBe(`select:${chosen!.side}`)
     } finally {
       router.restore()
     }

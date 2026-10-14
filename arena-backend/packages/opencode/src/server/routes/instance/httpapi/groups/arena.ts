@@ -568,7 +568,8 @@ const group = HttpApiGroup.make("arena")
       OpenApi.annotations({
         identifier: "arena.turn.stop.resolve",
         summary: "Resolve a stopped battle",
-        description: "Discard a stopped turn or promote the partial A or B result outside benchmark scoring.",
+        description:
+          "Discard a stopped turn or promote the partial A or B result outside benchmark scoring. A finished turn whose results both failed is discarded here too.",
       }),
     ),
   )

@@ -60,7 +60,13 @@ export function ArenaSideChoiceButton({
   );
 }
 
-export function VoteDecision({ actions }: { actions: ArenaBattleActions }) {
+export function VoteDecision({
+  actions,
+  disabled,
+}: {
+  actions: ArenaBattleActions;
+  disabled?: boolean;
+}) {
   const { pending, pendingAction } = actions;
   const tie = useCallback(() => {
     void actions.tie();
@@ -71,7 +77,7 @@ export function VoteDecision({ actions }: { actions: ArenaBattleActions }) {
       size="sm"
       style={styles.pillChoice}
       loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
-      disabled={pending}
+      disabled={pending || disabled}
       onPress={tie}
       accessibilityLabel="Tie battle"
       accessibilityHint="A tie keeps Agent A's work."
@@ -82,7 +88,7 @@ export function VoteDecision({ actions }: { actions: ArenaBattleActions }) {
   );
 }
 
-/** The third choice after a stop, between Keep A and Keep B. */
+/** The third choice after a stop, or in Tie's place when neither result can be chosen. */
 export function DiscardDecision({ actions }: { actions: ArenaBattleActions }) {
   const { pending, pendingAction } = actions;
   const discard = useCallback(() => {

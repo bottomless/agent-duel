@@ -240,9 +240,11 @@ transparent, click-through area around it. It stays reachable while reviewing ei
 the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep B`; an early
 choice while the battle runs sits there too. While neither result is selectable, show one `Stop`
 button. When one result becomes selectable, put `Choose A now` or `Choose B now` in its side
-and `Stop` in the other side.
-Choosing early stops the other side, so it confirms first. Discarding a stopped battle also
-requires confirmation. Action failures remain on the battle until another attempt; the normal
+and `Stop` in the other side. `Tie` is disabled unless both results can be chosen. When neither
+can, both sides failed: `Discard` takes Tie's place, under `Both agents failed · retry or
+discard` while a side can still be retried and `Both agents failed` once neither can.
+Choosing early stops the other side, so it confirms first. Discarding a battle also requires
+confirmation. Action failures remain on the battle until another attempt; the normal
 action controls provide the retry so a destructive operation is never retried automatically.
 `Choose A` and `Choose B` carry their side's colour as a tint, the blue and amber of the diff's
 column headings, so the vote reads as picking that column; two choices of equal weight mean
@@ -834,7 +836,12 @@ Use one utility request; increase evidence quality before adding model passes.
 - **Early vote** while still `running` claims the resolution, then cancels the loser in the
   background until it reports terminal. Ties are rejected here — a tie needs both results. The
   early choice asks before sending one, since the other side's work is gone the moment it lands.
-- **Tie** applies **A**, deterministically (`arena/domain.ts:96`).
+- **Tie** applies **A**, deterministically (`voteResolution` in `arena/domain.ts`), so it needs two
+  results that can be chosen (`canTie`). Over a failed run it would record a vote for a failure
+  and put that run's unfinished work in the checkout.
+- **Discard** at `awaiting_vote` is open only when neither result can be chosen, which means both
+  runs failed (`canDiscardBattle`). It is the stopped battle's discard: the control plane records
+  `discard`, not a vote, and the checkout is left as it was.
 - **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
   (`arena/service.ts:4527`).
 
@@ -1017,8 +1024,9 @@ Never restart once the attempt has started a local tool: the resent request does
 call, and the model can repeat its side effect. That failure ends the step instead, and the next
 step continues from the stored tool call and result (`session/processor.ts`).
 
-A run that fails after the budget can be retried by hand. A failed run cannot be chosen, so without
-a retry the voter is left with the other side alone. When the failure is one the policy above would
+A run that fails after the budget can be retried by hand. A failed run cannot be chosen or tied, so
+without a retry the voter is left with the other side alone, or with Discard when both failed (see
+[Resolving](#resolving)). When the failure is one the policy above would
 have retried (`errorRetryable`, set in `finalizeSide`), the pane shows **Retry** under its error.
 Retry continues the same session on the same assignment from its last finished step, adding no
 message (`prompts.loop`), so the battle stays blind. It removes the failed step's message first, for
@@ -1063,7 +1071,7 @@ or restart a contestant.
 - `TurnDocument.setupTimings` records where a send spent its time. Read it before guessing.
 - `RunDocument.firstToolAt` records the model-emitted tool part's start time, before any environment
   guard. Tool completion controls `toolCount`.
-- A tie always applies A.
+- A tie always applies A, so it is offered only when both results can be chosen.
 - An early vote cancels the loser, so its transcript stops mid-run and its diff is whatever it had
   reached.
 - Generation-scoped battle refs preserve the contestant results. Nothing prunes them.

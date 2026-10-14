@@ -608,6 +608,8 @@ export type PublicSnapshot = {
     readonly vote?: string
     readonly appliedSide?: string
     readonly canVote: boolean
+    readonly canTie: boolean
+    readonly canDiscardBattle: boolean
     readonly revealed: boolean
     readonly identities?: {
       readonly a: { readonly name: string }

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
   abortedResolution,
+  canDiscardBattle,
   canRetryRun,
+  canTie,
   canTransition,
   earlyResolution,
   isFinalState,
@@ -151,5 +153,39 @@ describe("canRetryRun", () => {
     expect(canRetryRun({ state: "running" }, { ...failed, worktreeRemovedAt: new Date() })).toBe(false)
     expect(canRetryRun({ state: "running" }, { ...failed, manualRetries: MAX_MANUAL_RUN_RETRIES - 1 })).toBe(true)
     expect(canRetryRun({ state: "running" }, { ...failed, manualRetries: MAX_MANUAL_RUN_RETRIES })).toBe(false)
+  })
+})
+
+describe("canTie and canDiscardBattle", () => {
+  const chosen = (side: "a" | "b") => ({ side, selectable: true })
+  const failed = (side: "a" | "b") => ({ side, selectable: false })
+  const both = [chosen("a"), chosen("b")]
+  const neither = [failed("a"), failed("b")]
+  const one = [failed("a"), chosen("b")]
+
+  test("ties only two results that can be chosen", () => {
+    expect(canTie({ state: "awaiting_vote" }, both)).toBe(true)
+    expect(canTie({ state: "awaiting_vote" }, one)).toBe(false)
+    expect(canTie({ state: "awaiting_vote" }, neither)).toBe(false)
+    expect(canTie({ state: "awaiting_vote" }, [chosen("a")])).toBe(false)
+  })
+
+  test("discards a finished battle only when neither result can be chosen", () => {
+    expect(canDiscardBattle({ state: "awaiting_vote" }, neither)).toBe(true)
+    expect(canDiscardBattle({ state: "awaiting_vote" }, one)).toBe(false)
+    expect(canDiscardBattle({ state: "awaiting_vote" }, both)).toBe(false)
+  })
+
+  test("discards a stopped battle whatever its results", () => {
+    expect(canDiscardBattle({ state: "awaiting_stop_resolution" }, both)).toBe(true)
+    expect(canDiscardBattle({ state: "awaiting_stop_resolution" }, neither)).toBe(true)
+  })
+
+  test("refuses both once the battle is decided or not waiting on the voter", () => {
+    const decided = { state: "awaiting_vote" as const, resolution: voteResolution("a") }
+    expect(canTie(decided, both)).toBe(false)
+    expect(canDiscardBattle(decided, neither)).toBe(false)
+    expect(canTie({ state: "running" }, both)).toBe(false)
+    expect(canDiscardBattle({ state: "running" }, neither)).toBe(false)
   })
 })
