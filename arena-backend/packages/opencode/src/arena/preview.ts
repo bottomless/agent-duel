@@ -438,8 +438,9 @@ export function environment(
   const previewUrl2 = url({ ...preview, hostname: hostnameForAlias(preview.hostname, "PASEO_PORT2") }, env)
   const previewUrl3 = url({ ...preview, hostname: hostnameForAlias(preview.hostname, "PASEO_PORT3") }, env)
   const relative = path.relative(path.resolve(directory), path.resolve(cwd))
+  // Stored with `/`, as `safeOwnerRelativeCwd` reads it back, so both sides of a Windows battle agree.
   const ownerRelativeCwd = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
-    ? relative || "."
+    ? relative.replaceAll(path.sep, "/") || "."
     : "."
   return {
     HOST: "127.0.0.1",
