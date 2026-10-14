@@ -608,6 +608,71 @@ it.instance(
   { git: true },
 )
 
+// Arena staging disposes a contestant's worktree instance after the run has enabled Auto Accept.
+it.instance(
+  "Auto Accept survives instance dispose",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const store = yield* InstanceStore.Service
+      const permission = yield* Permission.Service
+      yield* permission.setAutoAccept(true)
+      yield* store.dispose(yield* store.load({ directory: test.directory }))
+
+      yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "read",
+        patterns: ["tests/options.env.test.js"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+      })
+      expect(yield* list()).toEqual([])
+
+      yield* permission.setAutoAccept(false)
+      yield* store.dispose(yield* store.load({ directory: test.directory }))
+      const pending = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "read",
+        patterns: ["tests/options.env.test.js"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(pending)
+    }),
+  { git: true },
+)
+
+it.live("Auto Accept stays scoped to its directory", () =>
+  Effect.gen(function* () {
+    const one = yield* tmpdirScoped({ git: true })
+    const two = yield* tmpdirScoped({ git: true })
+    const store = yield* InstanceStore.Service
+    const permission = yield* Permission.Service
+    yield* store.provide({ directory: one }, permission.setAutoAccept(true))
+
+    const pending = yield* store
+      .provide(
+        { directory: two },
+        ask({
+          sessionID: SessionID.make("session_scoped"),
+          permission: "bash",
+          patterns: ["ls"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        }),
+      )
+      .pipe(Effect.forkScoped)
+    expect(yield* store.provide({ directory: two }, waitForPending(1))).toHaveLength(1)
+    yield* store.provide({ directory: two }, rejectAll())
+    yield* Fiber.await(pending)
+  }),
+)
+
 it.instance(
   "ask - resolves immediately when action is allow",
   () =>

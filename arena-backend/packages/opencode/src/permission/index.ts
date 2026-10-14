@@ -31,7 +31,6 @@ interface PendingEntry {
 interface State {
   pending: Map<PermissionV1.ID, PendingEntry>
   approved: PermissionV1.Rule[]
-  autoAccept: boolean
 }
 
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
@@ -52,13 +51,15 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    // Directories with Auto Accept on. Kept outside the instance state because Arena staging
+    // disposes a contestant's worktree instance after its run has turned Auto Accept on.
+    const autoAccept = new Set<string>()
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
         const state = {
           pending: new Map<PermissionV1.ID, PendingEntry>(),
           approved: [],
-          autoAccept: false,
         }
 
         yield* Effect.addFinalizer(() =>
@@ -75,7 +76,7 @@ const layer = Layer.effect(
     )
 
     const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
-      const { approved, pending, autoAccept } = yield* InstanceState.get(state)
+      const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, writes, ...request } = input
       // Only exact keys count: a `*` rule must not make an external write ask twice.
       const readOnly = ruleset.filter((rule) => rule.permission === ArenaContestant.EXTERNAL_WRITE)
@@ -105,7 +106,7 @@ const layer = Layer.effect(
 
       if (!needsAsk) return
       // Arena's Auto Accept applies only after explicit deny rules have been evaluated.
-      if (autoAccept) return
+      if (autoAccept.has(yield* InstanceState.directory)) return
 
       const id = request.id ?? PermissionV1.ID.ascending()
       const info: PermissionV1.Request = {
@@ -196,10 +197,13 @@ const layer = Layer.effect(
     })
 
     const setAutoAccept = Effect.fn("Permission.setAutoAccept")(function* (enabled: boolean) {
-      const current = yield* InstanceState.get(state)
-      current.autoAccept = enabled
-      if (!enabled) return
-      for (const request of [...current.pending.values()]) {
+      const directory = yield* InstanceState.directory
+      if (!enabled) {
+        autoAccept.delete(directory)
+        return
+      }
+      autoAccept.add(directory)
+      for (const request of [...(yield* InstanceState.get(state)).pending.values()]) {
         yield* reply({ requestID: request.info.id, reply: "once" }).pipe(Effect.ignore)
       }
     })
