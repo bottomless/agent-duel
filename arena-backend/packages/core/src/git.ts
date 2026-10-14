@@ -396,7 +396,7 @@ const layer = Layer.effect(
         [
           ["core.autocrlf", "false"],
           ["core.longpaths", "true"],
-          ["core.symlinks", "true"],
+          ["core.symlinks", String(FSUtil.canSymlink())],
           ["core.fsmonitor", "false"],
           ["feature.manyFiles", "true"],
           ["index.version", "4"],
