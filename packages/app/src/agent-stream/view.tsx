@@ -1029,6 +1029,12 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       }),
       [expandedToolCallGroupIds, isMobile, projectedToolCalls.historyGroupUpdatesByHostId],
     );
+    // `renderLiveHeadRow` is stable, so head rows redraw only on this revision. Arena summaries
+    // attach after a head item without changing it; without them here the summary never drew.
+    const liveHeadRowRevision = useMemo(
+      () => ({ expandedToolCallGroupIds, afterItems }),
+      [afterItems, expandedToolCallGroupIds],
+    );
 
     return (
       <ToolCallSheetProvider>
@@ -1038,7 +1044,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               agentId,
               segments: renderModel.segments,
               historyRowRevision,
-              liveHeadRowRevision: expandedToolCallGroupIds,
+              liveHeadRowRevision,
               boundary,
               renderers,
               listEmptyComponent,
