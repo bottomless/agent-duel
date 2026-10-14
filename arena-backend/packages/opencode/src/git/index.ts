@@ -1,5 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { AppProcess } from "@opencode-ai/core/process"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Effect, Layer, Context, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 
@@ -12,7 +13,7 @@ const cfg = [
   "-c",
   "core.longpaths=true",
   "-c",
-  "core.symlinks=true",
+  `core.symlinks=${FSUtil.canSymlink()}`,
   "-c",
   "core.quotepath=false",
 ] as const

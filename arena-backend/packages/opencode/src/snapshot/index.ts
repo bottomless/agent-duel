@@ -21,7 +21,7 @@ export type FileDiff = typeof FileDiff.Type
 
 const prune = "7.days"
 const limit = 2 * 1024 * 1024
-const core = ["-c", "core.longpaths=true", "-c", "core.symlinks=true"]
+const core = ["-c", "core.longpaths=true", "-c", `core.symlinks=${FSUtil.canSymlink()}`]
 const cfg = ["-c", "core.autocrlf=false", ...core]
 const quote = [...cfg, "-c", "core.quotepath=false"]
 interface GitResult {
@@ -326,7 +326,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 })
                 yield* git(["--git-dir", state.gitdir, "config", "core.autocrlf", "false"])
                 yield* git(["--git-dir", state.gitdir, "config", "core.longpaths", "true"])
-                yield* git(["--git-dir", state.gitdir, "config", "core.symlinks", "true"])
+                yield* git(["--git-dir", state.gitdir, "config", "core.symlinks", String(FSUtil.canSymlink())])
                 yield* git(["--git-dir", state.gitdir, "config", "core.fsmonitor", "false"])
                 // Tuning for very large worktrees so the first add stays bounded.
                 yield* git(["--git-dir", state.gitdir, "config", "feature.manyFiles", "true"])
