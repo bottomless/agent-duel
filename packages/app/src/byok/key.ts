@@ -70,10 +70,15 @@ export function createArenaByokKey(storage: ArenaByokKeyStorage): ArenaByokKey {
       );
     },
     async deliver(client) {
-      const status = await client.arenaByokStatus();
+      // Announced before the stored key is read: the chats this connection reopens start Arena,
+      // and a daemon without a key holds those starts until the key arrives or we say there is none.
+      const status = await client.arenaByokStatus({ keyHandover: "pending" });
       if (!status.available) return status;
-      const key = await read();
-      if (key === null) return status;
+      const key = await read().catch(async (error: unknown) => {
+        await client.arenaByokStatus({ keyHandover: "none" });
+        throw error;
+      });
+      if (key === null) return client.arenaByokStatus({ keyHandover: "none" });
       return handOver(client, key);
     },
     async ensure(client) {

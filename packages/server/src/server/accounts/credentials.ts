@@ -24,10 +24,62 @@ let current: ArenaCredentials | null = null;
 let version = 0;
 const runtimeCredentials = new Map<string, number>();
 
+interface CredentialsHandover {
+  readonly arrived: Promise<void>;
+  readonly end: () => void;
+  /** Clients that may still hand credentials over. */
+  readonly clients: Set<object>;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+let handover: CredentialsHandover | null = null;
+
 export function installArenaCredentials(credentials: ArenaCredentials): void {
   current = credentials;
   version += 1;
   runtimeCredentials.clear();
+  endArenaCredentialsHandover();
+}
+
+/**
+ * Holds Arena starts that find no credentials until they are installed or cleared, or until every
+ * expected client reports it has none. `timeoutMs` bounds the wait for a client that never answers;
+ * another call restarts it.
+ */
+export function expectArenaCredentials(client: object, timeoutMs: number): void {
+  if (current) return;
+  handover ??= startArenaCredentialsHandover();
+  handover.clients.add(client);
+  clearTimeout(handover.timer);
+  handover.timer = setTimeout(endArenaCredentialsHandover, timeoutMs);
+  handover.timer.unref?.();
+}
+
+/** `client` has no credentials to hand over, so starts stop waiting for it. */
+export function expectNoArenaCredentials(client: object): void {
+  if (!handover) return;
+  handover.clients.delete(client);
+  if (handover.clients.size === 0) endArenaCredentialsHandover();
+}
+
+/** Settles when a pending handover ends, or is `null` when none is pending. */
+export function pendingArenaCredentialsHandover(): Promise<void> | null {
+  return handover?.arrived ?? null;
+}
+
+function startArenaCredentialsHandover(): CredentialsHandover {
+  let end = () => {};
+  const arrived = new Promise<void>((resolve) => {
+    end = resolve;
+  });
+  return { arrived, end, clients: new Set() };
+}
+
+function endArenaCredentialsHandover(): void {
+  if (!handover) return;
+  clearTimeout(handover.timer);
+  handover.end();
+  handover = null;
 }
 
 /**
@@ -43,6 +95,7 @@ export function clearArenaCredentials(): void {
   current = null;
   version += 1;
   runtimeCredentials.clear();
+  endArenaCredentialsHandover();
 }
 
 export function readArenaCredentials(): ArenaCredentialsSnapshot | null {

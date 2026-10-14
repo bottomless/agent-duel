@@ -2786,6 +2786,21 @@ test("reads BYOK status and sets or clears the key through the dotted RPCs", asy
     }),
   );
   await expect(clearPromise).rejects.toMatchObject({ code: "arena_byok_unavailable" });
+
+  const handoverPromise = client.arenaByokStatus({ keyHandover: "pending" });
+  const handoverRequest = parseSentFrame(mock.sent[3]);
+  expect(handoverRequest).toEqual({
+    type: "arena.byok.status.get.request",
+    requestId: expect.any(String),
+    keyHandover: "pending",
+  });
+  mock.triggerMessage(
+    wrapSessionMessage({
+      type: "arena.byok.status.get.response",
+      payload: { requestId: handoverRequest.requestId, available: true, configured: false },
+    }),
+  );
+  await expect(handoverPromise).resolves.toEqual({ available: true, configured: false });
 });
 
 test("creates and registers a project directory through the dotted RPC", async () => {

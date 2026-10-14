@@ -147,14 +147,27 @@ command-line argument, or plaintext file. Contestants run unsandboxed as the sam
    authorizes nothing. The engine still strips `OPENROUTER_API_KEY` from contestant environments,
    and the daemon redacts a key request from its raw-payload error log.
 
-A new or cleared key restarts the Arena child the way an account change does, which interrupts
+A replaced or cleared key restarts the Arena child the way an account change does, which interrupts
 every running battle, so Settings confirms a replacement or removal. Sending the key the daemon
-already holds changes nothing, and the daemon forgets the key when it exits, so the app hands the
-stored key over every time a host comes online. Without a key, Arena refuses to start the same way
-it does when nobody is signed in. Before a battle starts, the app checks for a key instead of
-letting that refusal surface: it hands over the stored key, or stops with a message that points to
-Settings. The check never replaces a key the daemon already holds; two clients with different keys
-would otherwise restart Arena under each other's battles.
+already holds changes nothing. The daemon forgets the key when it exits, so the app hands the
+stored key over every time a host comes online, and a restarted daemon receives it alongside the
+requests that reopen the app's chats. Those requests start Arena, and the handover must not stop
+that start, or the reopened chat stays on "Failed to load agent":
+
+- The first key restarts nothing, since Arena cannot run without one.
+- The opencode provider reload after a key change never forces its load. A forced load replaces
+  the Arena server under every request waiting on its start.
+- A connecting client sends `keyHandover: "pending"` with `arena.byok.status.get.request` before
+  it reads its stored key, and `"none"` if it has no key. Until each announcing client hands a key
+  over or says `"none"`, a keyless daemon holds Arena starts instead of refusing them
+  (`expectKey` in `accounts/byok.ts`). A client without a key releases them within a few dozen
+  milliseconds; 10 seconds bound the wait for a client that never answers.
+
+Without a key, Arena refuses to start the same way it does when nobody is signed in. Before a
+battle starts, the app checks for a key instead of letting that refusal surface: it hands over the
+stored key, or stops with a message that points to Settings. The check never replaces a key the
+daemon already holds; two clients with different keys would otherwise restart Arena under each
+other's battles.
 
 BYOK battles are blinded the same way, but nothing enforces it; see [Blinding](arena.md#blinding).
 
@@ -217,7 +230,7 @@ end-to-end encrypted relay does not provide.
   verification, Arena credential installation, sign-out, and unavailable-versus-rejected behavior.
 - `packages/server/src/server/accounts/config.test.ts` covers choosing hosted, BYOK, or no Arena;
   `byok.test.ts` and the `Arena BYOK RPCs` cases in `session.test.ts` cover holding, replacing, and
-  clearing the key and when that restarts Arena.
+  clearing the key, when that restarts Arena, and reloading providers without forcing them.
 - `packages/app/src/byok/key.test.ts` covers where the app stores the key, handing it over on
   connect, saving and removing it, and the check before a battle starts;
   `packages/app/src/runtime/host-runtime.test.ts` checks that every connection hands it over again.
@@ -225,7 +238,8 @@ end-to-end encrypted relay does not provide.
   reaches only the allowlisted Arena routes and that the daemon substitutes the account token.
 - `packages/server/src/server/agent/providers/opencode-server-manager.test.ts` covers private stdin
   delivery in both modes, missing credentials, pipe failures, account changes during startup or
-  shutdown, and the restart on a BYOK key change.
+  shutdown, the restart on a BYOK key change, and a reopened chat's Arena start surviving the key
+  handover or waiting for it.
 - `arena-backend/packages/opencode/test/arena/credentials.test.ts` checks bounded startup parsing;
   `runtime.test.ts` checks authenticated research uploads and refusal to use legacy environment keys.
 

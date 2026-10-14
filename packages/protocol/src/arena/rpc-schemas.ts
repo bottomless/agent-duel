@@ -622,9 +622,17 @@ export const ArenaByokStatusSchema = z.object({
   configured: z.boolean(),
 });
 export type ArenaByokStatus = z.infer<typeof ArenaByokStatusSchema>;
+/**
+ * A client that just connected sends `keyHandover: "pending"` before it reads its stored key, and
+ * `"none"` if it has none. While a key may still arrive, a daemon without one holds Arena starts
+ * for it rather than failing the chats the client reopens.
+ */
+export const ArenaByokKeyHandoverSchema = z.enum(["pending", "none"]);
+export type ArenaByokKeyHandover = z.infer<typeof ArenaByokKeyHandoverSchema>;
 export const ArenaByokStatusGetRequestSchema = z.object({
   type: z.literal("arena.byok.status.get.request"),
   requestId: z.string(),
+  keyHandover: ArenaByokKeyHandoverSchema.optional(),
 });
 export const ArenaByokStatusGetResponseSchema = z.object({
   type: z.literal("arena.byok.status.get.response"),

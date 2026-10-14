@@ -29,7 +29,11 @@ import { deriveProjectKey } from "./project-key.js";
 import type { SessionOptions } from "./session.js";
 import type { SessionOutboundMessage } from "./messages.js";
 import { createArenaByokService } from "./accounts/byok.js";
-import { clearArenaCredentials, readArenaCredentials } from "./accounts/credentials.js";
+import {
+  clearArenaCredentials,
+  pendingArenaCredentialsHandover,
+  readArenaCredentials,
+} from "./accounts/credentials.js";
 import {
   asSessionInternals as asSessionInternalsHelper,
   asAgentManager,
@@ -458,7 +462,7 @@ describe("Arena BYOK RPCs", () => {
     ]);
   });
 
-  test("trims a key, holds it in memory, and restarts Arena to hand it over", async () => {
+  test("trims a key and holds it in memory", async () => {
     const { session, messages, restarts } = createByokSession({ byok: true });
 
     await session.handleMessage({ type: "arena.byok.status.get.request", requestId: "before" });
@@ -480,7 +484,8 @@ describe("Arena BYOK RPCs", () => {
         payload: { requestId: "after", available: true, configured: true },
       },
     ]);
-    expect(restarts()).toBe(1);
+    // Arena cannot run without a key, so the first one has nothing to restart.
+    expect(restarts()).toBe(0);
     expect(readArenaCredentials()?.credentials).toEqual({
       mode: "byok",
       openRouterApiKey: "sk-or-v1-private",
@@ -505,8 +510,26 @@ describe("Arena BYOK RPCs", () => {
       type: "arena.byok.key.set.response",
       payload: { requestId: "clear", configured: false },
     });
-    expect(restarts()).toBe(2);
+    expect(restarts()).toBe(1);
     expect(readArenaCredentials()).toBeNull();
+  });
+
+  test("holds Arena starts while a connecting client may hand over its key", async () => {
+    const { session } = createByokSession({ byok: true });
+
+    await session.handleMessage({
+      type: "arena.byok.status.get.request",
+      requestId: "pending",
+      keyHandover: "pending",
+    });
+    expect(pendingArenaCredentialsHandover()).not.toBeNull();
+
+    await session.handleMessage({
+      type: "arena.byok.status.get.request",
+      requestId: "none",
+      keyHandover: "none",
+    });
+    expect(pendingArenaCredentialsHandover()).toBeNull();
   });
 
   test("refuses a blank key without touching Arena", async () => {

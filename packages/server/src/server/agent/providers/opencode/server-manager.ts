@@ -20,6 +20,7 @@ import { resolveOpenCodeHomeDir } from "./paths.js";
 import {
   isArenaCredentialsCurrent,
   issueArenaLaunchCredentials,
+  pendingArenaCredentialsHandover,
   revokeArenaRuntimeCredentials,
   type ArenaCredentials,
   type ArenaCredentialsSnapshot,
@@ -492,13 +493,20 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
         throw new Error("OpenCode server startup was interrupted by shutdown");
       }
     };
-    const port = await this.portAllocator();
-    ensureCurrentGeneration();
-    const url = `http://127.0.0.1:${port}`;
     const launchPrefix = await this.resolveCommandPrefix();
     ensureCurrentGeneration();
     const isArenaLaunch =
       launchPrefix.kind === "arena-source" || launchPrefix.kind === "arena-binary";
+    // A BYOK daemon starts without its key, and the app hands it over just after connecting,
+    // alongside the requests that reopen its chats. Wait for it before taking a port.
+    const credentialsHandover = isArenaLaunch ? pendingArenaCredentialsHandover() : null;
+    if (credentialsHandover) {
+      await credentialsHandover;
+      ensureCurrentGeneration();
+    }
+    const port = await this.portAllocator();
+    ensureCurrentGeneration();
+    const url = `http://127.0.0.1:${port}`;
     const serverArgs = [
       ...launchPrefix.args,
       ...(isArenaLaunch ? ["--arena-credentials-stdin"] : []),

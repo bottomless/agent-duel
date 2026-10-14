@@ -737,10 +737,7 @@ export async function createPaseoDaemon(
       ? createArenaByokService({
           // Assigned further down; the key only arrives once a client connects.
           providerSnapshots: {
-            refreshSettingsSnapshot: (options) =>
-              providerSnapshotManager.refreshSettingsSnapshot(options),
-            warmUpWorkspaceSnapshots: (options) =>
-              providerSnapshotManager.warmUpWorkspaceSnapshots(options),
+            reloadSnapshots: (options) => providerSnapshotManager.reloadSnapshots(options),
           },
         })
       : null;

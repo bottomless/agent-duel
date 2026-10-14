@@ -2112,6 +2112,8 @@ export class Session {
       case "arena.byok.status.get.request": {
         const available = this.arenaByok !== null;
         const configured = this.arenaByok?.isConfigured() ?? false;
+        if (msg.keyHandover === "pending") this.arenaByok?.expectKey(this);
+        if (msg.keyHandover === "none") this.arenaByok?.expectNoKey(this);
         this.emit({
           type: "arena.byok.status.get.response",
           payload: { requestId: msg.requestId, available, configured },

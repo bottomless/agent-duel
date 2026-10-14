@@ -80,14 +80,15 @@ afterEach(() => {
 });
 
 describe("Arena BYOK key", () => {
-  it("holds the key in memory and restarts Arena to hand it over", async () => {
+  it("holds the key in memory, with no Arena to restart for the first one", async () => {
     const byok = createService();
     expect(byok.isConfigured()).toBe(false);
 
     await byok.setKey("sk-or-v1-first");
 
     expect(byok.isConfigured()).toBe(true);
-    expect(restarts).toBe(1);
+    // Arena cannot start without a key, and a restart would stop the start a reopened chat waits on.
+    expect(restarts).toBe(0);
     expect(readArenaCredentials()?.credentials).toEqual({
       mode: "byok",
       openRouterApiKey: "sk-or-v1-first",
@@ -101,7 +102,7 @@ describe("Arena BYOK key", () => {
 
     await byok.setKey("sk-or-v1-second");
 
-    expect(restarts).toBe(2);
+    expect(restarts).toBe(1);
     expect(isArenaCredentialsCurrent(launch)).toBe(false);
     expect(readArenaCredentials()?.credentials).toEqual({
       mode: "byok",
@@ -110,7 +111,7 @@ describe("Arena BYOK key", () => {
 
     await byok.setKey(null);
 
-    expect(restarts).toBe(3);
+    expect(restarts).toBe(2);
     expect(byok.isConfigured()).toBe(false);
     expect(readArenaCredentials()).toBeNull();
   });
@@ -124,7 +125,7 @@ describe("Arena BYOK key", () => {
     await byok.setKey(null);
     await byok.setKey(null);
 
-    expect(restarts).toBe(2);
+    expect(restarts).toBe(1);
     expect(isArenaCredentialsCurrent(launch)).toBe(false);
   });
 
@@ -133,7 +134,7 @@ describe("Arena BYOK key", () => {
 
     await Promise.all([byok.setKey("sk-or-v1-first"), byok.setKey("sk-or-v1-second")]);
 
-    expect(restarts).toBe(2);
+    expect(restarts).toBe(1);
     expect(readArenaCredentials()?.credentials).toEqual({
       mode: "byok",
       openRouterApiKey: "sk-or-v1-second",
@@ -158,10 +159,8 @@ describe("Arena BYOK key", () => {
       await byok.setKey("sk-or-v1-first");
 
       await vi.waitFor(() => expect(pushed.at(-1)).toBe("ready"));
-      // A forced opencode load starts a new Arena server; only the global reload may force one.
-      expect(catalogLoads.filter((load) => load.force).map((load) => load.scope)).toEqual([
-        "global",
-      ]);
+      // A forced opencode load replaces the Arena server under every request waiting on its start.
+      expect(catalogLoads.filter((load) => load.force)).toEqual([]);
     } finally {
       providerSnapshots.destroy();
     }

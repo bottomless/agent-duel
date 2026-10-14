@@ -17,6 +17,8 @@ import type {
   ManagedProcessReapResult,
 } from "../../managed-processes/managed-processes.js";
 import type { ProcessTerminator, TreeKillTarget } from "../../../utils/tree-kill.js";
+import type { AgentClient } from "../agent-sdk-types.js";
+import { ProviderSnapshotManager } from "../provider-snapshot-manager.js";
 import {
   OpenCodeServerManager,
   resolveOpenCodeServerLaunch,
@@ -224,6 +226,122 @@ describe("OpenCodeServerManager generations", () => {
     await expect(manager.acquireCurrent()).rejects.toThrow("Arena credentials are unavailable");
     await first.release();
     await second.release();
+  });
+
+  test("keeps the Arena start a reopened chat waits on when the app hands over its key", async () => {
+    // A restarted daemon has no key. The app hands it over right after connecting, while the chat
+    // it restores loads its timeline, which starts Arena. Reloading the providers for the new key
+    // must share that start rather than replace the server under it.
+    const { manager, runtime } = createTestManager([4097, 4098], {
+      launchKind: "arena-source",
+      autoAnnounce: false,
+    });
+    const catalogReady = Promise.withResolvers<void>();
+    const catalogClient = createArenaCatalogClient(manager, catalogReady.promise);
+    const providerSnapshots = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      extraClients: { opencode: catalogClient.client },
+    });
+    const byok = createArenaByokService({
+      restartArena: () => manager.shutdown(),
+      providerSnapshots,
+    });
+    try {
+      // The app reads the provider list before its key reaches the daemon.
+      providerSnapshots.getSnapshot();
+      await byok.setKey("sk-or-v1-first");
+      const reopenedChat = manager.acquireCurrent();
+      await vi.waitFor(() => expect(runtime.launchedPorts).toEqual([4097]));
+      catalogReady.resolve();
+      await vi.waitFor(() => expect(catalogClient.acquires).toBe(2));
+      await runtime.settle();
+      runtime.processForPort(4097).announceListening();
+
+      const acquisition = await reopenedChat;
+
+      expect(acquisition.server.port).toBe(4097);
+      expect(runtime.terminatedPorts).toEqual([]);
+      await acquisition.release();
+    } finally {
+      providerSnapshots.destroy();
+    }
+  });
+
+  test("starts Arena for a chat reopened before the app's key arrives once the key does", async () => {
+    const { manager, runtime } = createTestManager([4099], { launchKind: "arena-source" });
+    const byok = createArenaByokService({ restartArena: () => manager.shutdown() });
+
+    // The app announces a handover on connecting, then hands its key over.
+    byok.expectKey(appWindow);
+    const reopenedChat = manager.acquireCurrent();
+    await runtime.settle();
+    expect(runtime.spawnCalls).toHaveLength(0);
+    await byok.setKey("sk-or-v1-first");
+
+    const acquisition = await reopenedChat;
+    expect(readStdinPayload(runtime, 4099).openRouterApiKey).toBe("sk-or-v1-first");
+    expect(runtime.terminatedPorts).toEqual([]);
+    await acquisition.release();
+  });
+
+  test("fails an Arena start at once when the app has no key to hand over", async () => {
+    const { manager, runtime } = createTestManager([4102], { launchKind: "arena-source" });
+    const byok = createArenaByokService({ restartArena: () => manager.shutdown() });
+
+    byok.expectKey(appWindow);
+    const start = manager.acquireCurrent();
+    const outcome = start.catch((error: unknown) => error);
+    await runtime.settle();
+    byok.expectNoKey(appWindow);
+
+    expect(await outcome).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("Arena credentials are unavailable"),
+      }),
+    );
+    expect(runtime.spawnCalls).toHaveLength(0);
+  });
+
+  test("keeps waiting for one window's key when another window has none", async () => {
+    const { manager, runtime } = createTestManager([4103], { launchKind: "arena-source" });
+    const byok = createArenaByokService({ restartArena: () => manager.shutdown() });
+    const browserHarness = {};
+
+    byok.expectKey(appWindow);
+    byok.expectKey(browserHarness);
+    const reopenedChat = manager.acquireCurrent();
+    byok.expectNoKey(browserHarness);
+    await runtime.settle();
+    expect(runtime.spawnCalls).toHaveLength(0);
+    await byok.setKey("sk-or-v1-first");
+
+    const acquisition = await reopenedChat;
+    expect(readStdinPayload(runtime, 4103).openRouterApiKey).toBe("sk-or-v1-first");
+    await acquisition.release();
+  });
+
+  test("fails an Arena start when an announced key never arrives", async () => {
+    vi.useFakeTimers();
+    const { manager, runtime } = createTestManager([4100, 4101], { launchKind: "arena-source" });
+    const byok = createArenaByokService({
+      restartArena: () => manager.shutdown(),
+      keyHandoverTimeoutMs: 5_000,
+    });
+
+    byok.expectKey(appWindow);
+    const start = manager.acquireCurrent();
+    const outcome = start.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(runtime.spawnCalls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await outcome).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("Arena credentials are unavailable"),
+      }),
+    );
+    // Once the wait is over, a start without a key fails at once again.
+    await expect(manager.acquireCurrent()).rejects.toThrow("Arena credentials are unavailable");
   });
 
   test("shuts down an Arena launch that becomes stale while starting", async () => {
@@ -675,6 +793,52 @@ describe.runIf(process.platform === "win32")(
     }, 60_000);
   },
 );
+
+/** Stands in for the app session that announces a key handover. */
+const appWindow = {};
+
+/** Loads its catalog from the manager the way the real opencode client does, once `ready`. */
+function createArenaCatalogClient(
+  manager: OpenCodeServerManager,
+  ready: Promise<void>,
+): { client: AgentClient; readonly acquires: number } {
+  let acquires = 0;
+  const client: AgentClient = {
+    provider: "opencode",
+    capabilities: {
+      supportsStreaming: false,
+      supportsSessionPersistence: false,
+      supportsDynamicModes: false,
+      supportsMcpServers: false,
+      supportsReasoningStream: false,
+      supportsToolInvocations: false,
+    },
+    async createSession() {
+      throw new Error("not implemented");
+    },
+    async resumeSession() {
+      throw new Error("not implemented");
+    },
+    async fetchCatalog(options) {
+      acquires += 1;
+      const acquisition = options.force
+        ? await manager.acquireNew()
+        : await manager.acquireCurrent();
+      await acquisition.release();
+      return { models: [], modes: [{ id: "build", label: "Build" }] };
+    },
+    async isAvailable() {
+      await ready;
+      return true;
+    },
+  };
+  return {
+    client,
+    get acquires() {
+      return acquires;
+    },
+  };
+}
 
 function readStdinPayload(
   runtime: FakeOpenCodeServerRuntime,

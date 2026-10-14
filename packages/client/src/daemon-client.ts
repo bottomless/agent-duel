@@ -7,6 +7,7 @@ import type { AgentAttentionNotificationPayload } from "@getpaseo/protocol/agent
 import type {
   ArenaRetryMode,
   ArenaReviewAnswer,
+  ArenaByokKeyHandover,
   ArenaByokKeySetResult,
   ArenaByokStatus,
   ArenaComparisonDiff,
@@ -2045,10 +2046,15 @@ export class DaemonClient {
     });
   }
 
-  async arenaByokStatus(): Promise<ArenaByokStatus> {
+  async arenaByokStatus(
+    options: { keyHandover?: ArenaByokKeyHandover } = {},
+  ): Promise<ArenaByokStatus> {
     const payload =
       await this.sendNamespacedCorrelatedSessionRequest<"arena.byok.status.get.response">({
-        message: { type: "arena.byok.status.get.request" },
+        message: {
+          type: "arena.byok.status.get.request",
+          ...(options.keyHandover ? { keyHandover: options.keyHandover } : {}),
+        },
       });
     return { available: payload.available, configured: payload.configured };
   }

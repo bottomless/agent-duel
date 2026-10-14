@@ -263,16 +263,25 @@ export class ProviderSnapshotManager {
   }
 
   /**
-   * Loads what is still loading in every workspace snapshot. A settings refresh resets them and
-   * reloads only the global one, leaving each workspace to the client that asked for the refresh.
+   * Reloads providers in every snapshot, the global one included, without forcing them. A forced
+   * opencode load replaces the Arena server, and a request waiting on that server's start fails.
    */
-  async warmUpWorkspaceSnapshots(
-    options: Omit<ProviderSnapshotWarmUpOptions, "cwd"> = {},
-  ): Promise<void> {
-    const workspaceCwds = Array.from(this.snapshots.keys()).filter(
-      (cwd) => !isGlobalProviderSnapshotKey(cwd),
+  async reloadSnapshots(options: { providers: AgentProvider[] }): Promise<void> {
+    const providers = this.resolveRefreshProviders(options.providers);
+    if (!providers || providers.length === 0) {
+      return;
+    }
+    this.clearCachedProviders(providers);
+    await Promise.all(
+      Array.from(this.snapshots.keys(), (cwd) =>
+        this.warmUp(
+          isGlobalProviderSnapshotKey(cwd)
+            ? createGlobalSnapshotTarget()
+            : resolveProviderSnapshotTarget(cwd),
+          providers,
+        ),
+      ),
     );
-    await Promise.all(workspaceCwds.map((cwd) => this.warmUpSnapshotForCwd({ ...options, cwd })));
   }
 
   async refresh(options: ProviderSnapshotRefreshOptions): Promise<void> {

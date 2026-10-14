@@ -40,11 +40,12 @@ function createMemoryStorage(initial: string | null = null) {
 function createDaemon(input: { byok: boolean; key?: string | null }) {
   let key = input.key ?? null;
   const sent: Array<string | null> = [];
+  const handovers: string[] = [];
   const client: ArenaByokClient = {
-    arenaByokStatus: async (): Promise<ArenaByokStatus> => ({
-      available: input.byok,
-      configured: key !== null,
-    }),
+    arenaByokStatus: async (options = {}): Promise<ArenaByokStatus> => {
+      if (options.keyHandover) handovers.push(options.keyHandover);
+      return { available: input.byok, configured: key !== null };
+    },
     setArenaByokKey: async (next) => {
       if (!input.byok) throw new Error("This build signs in to Agent Duel");
       sent.push(next);
@@ -52,7 +53,7 @@ function createDaemon(input: { byok: boolean; key?: string | null }) {
       return { configured: key !== null };
     },
   };
-  return { client, sent, held: () => key };
+  return { client, sent, handovers, held: () => key };
 }
 
 function deferred<T>() {
@@ -73,6 +74,35 @@ describe("delivering the OpenRouter key on connect", () => {
       configured: true,
     });
     expect(daemon.held()).toBe("sk-or-stored");
+    // Announced first, so the daemon holds Arena starts for the key instead of failing them.
+    expect(daemon.handovers).toEqual(["pending"]);
+  });
+
+  it("tells a daemon at once that this computer has no key to hand over", async () => {
+    const keys = createArenaByokKey(createMemoryStorage().storage);
+    const daemon = createDaemon({ byok: true });
+
+    await expect(keys.deliver(daemon.client)).resolves.toEqual({
+      available: true,
+      configured: false,
+    });
+    expect(daemon.handovers).toEqual(["pending", "none"]);
+    expect(daemon.sent).toEqual([]);
+  });
+
+  it("tells the daemon there is no key coming when the stored key cannot be read", async () => {
+    const storage: ArenaByokKeyStorage = {
+      load: async () => {
+        throw new Error("Encrypted OpenRouter key storage is unavailable");
+      },
+      save: async () => undefined,
+      clear: async () => undefined,
+    };
+    const keys = createArenaByokKey(storage);
+    const daemon = createDaemon({ byok: true });
+
+    await expect(keys.deliver(daemon.client)).rejects.toThrow("storage is unavailable");
+    expect(daemon.handovers).toEqual(["pending", "none"]);
   });
 
   it("sends nothing to a daemon with a control plane", async () => {
