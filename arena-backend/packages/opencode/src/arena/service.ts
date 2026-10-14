@@ -4209,7 +4209,14 @@ export const layer: Layer.Layer<
       if (consumesExpected) {
         return yield* Effect.fail(new Error("Arena pending steer was already consumed"))
       }
-      if (later.some((message) => message.info.role === "user")) {
+      // A background subagent's result arrives as a user message of synthetic text only. It goes
+      // out with the steer, so it does not make the steer stale.
+      if (
+        later.some(
+          (message) =>
+            message.info.role === "user" && !message.parts.every((part) => "synthetic" in part && part.synthetic),
+        )
+      ) {
         return yield* Effect.fail(new Error("Arena pending steer is not the latest queued message"))
       }
       interruptingSteers.set(runID, { messageID: expectedMessageID, hostDirectory })
