@@ -2030,6 +2030,15 @@ export class AgentManager {
     agentId: string,
     updates?: { workspaceId?: string; labels?: AgentLabelPatch },
   ): Promise<boolean> {
+    return this.runLifecycleMutation(agentId, () =>
+      this.unarchiveSnapshotUnlocked(agentId, updates),
+    );
+  }
+
+  private async unarchiveSnapshotUnlocked(
+    agentId: string,
+    updates?: { workspaceId?: string; labels?: AgentLabelPatch },
+  ): Promise<boolean> {
     const registry = this.requireRegistry();
     const record = await registry.get(agentId);
     if (!record || !record.archivedAt) {

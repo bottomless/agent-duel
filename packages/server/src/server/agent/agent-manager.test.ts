@@ -331,6 +331,20 @@ class NativeArchiveRecordingClient extends TestAgentClient {
   }
 }
 
+class GatedArenaUnarchiveClient extends NativeArchiveRecordingClient {
+  readonly firstAttemptStarted = deferred<void>();
+  readonly releaseFirstAttempt = deferred<void>();
+
+  override async unarchiveArenaChat(handle: AgentPersistenceHandle): Promise<void> {
+    await super.unarchiveArenaChat(handle);
+    if (this.arenaUnarchivedHandles.length === 1) {
+      this.firstAttemptStarted.resolve();
+      await this.releaseFirstAttempt.promise;
+      throw new Error("Engine unavailable");
+    }
+  }
+}
+
 class EnvProbeAgentClient extends TestAgentClient {
   probe: Promise<{ probe: string | null; agentId: string | null }> | null = null;
 
@@ -6697,6 +6711,64 @@ test("unarchiveSnapshot unarchives native provider storage before clearing archi
   expect(stored?.archivedAt).toBeNull();
   expect(stored?.workspaceId).toBe("ws-restored");
   expect(stored?.labels).toEqual({ retained: "yes", source: "reimport" });
+});
+
+test("unarchiveSnapshot serializes simultaneous requests for the same archived chat", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-unarchive-overlap-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new NativeArchiveRecordingClient();
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: workdir, title: "Concurrent unarchive" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    await manager.archiveAgent(agent.id);
+
+    const results = await Promise.all([
+      manager.unarchiveSnapshot(agent.id),
+      manager.unarchiveSnapshot(agent.id),
+    ]);
+
+    expect(results).toEqual([true, false]);
+    expect(client.unarchivedHandles).toEqual(client.archivedHandles);
+    expect(client.arenaUnarchivedHandles).toEqual(client.archivedHandles);
+    expect((await storage.get(agent.id))?.archivedAt).toBeNull();
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("unarchiveSnapshot lets a queued retry succeed after an earlier engine failure rolls back", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-unarchive-queued-retry-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const client = new GatedArenaUnarchiveClient();
+  const manager = new AgentManager({ clients: { codex: client }, registry: storage, logger });
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: workdir, title: "Queued unarchive retry" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    await manager.archiveAgent(agent.id);
+    const firstAttempt = manager.unarchiveSnapshot(agent.id);
+    await client.firstAttemptStarted.promise;
+    const queuedRetry = manager.unarchiveSnapshot(agent.id);
+    const results = Promise.allSettled([firstAttempt, queuedRetry]);
+    client.releaseFirstAttempt.resolve();
+
+    expect(await results).toEqual([
+      { status: "rejected", reason: new Error("Engine unavailable") },
+      { status: "fulfilled", value: true },
+    ]);
+    expect(client.unarchivedHandles).toHaveLength(2);
+    expect(client.arenaUnarchivedHandles).toHaveLength(2);
+    expect((await storage.get(agent.id))?.archivedAt).toBeNull();
+  } finally {
+    client.releaseFirstAttempt.resolve();
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test("unarchiveSnapshotByHandle unarchives native provider storage for the matched snapshot", async () => {
