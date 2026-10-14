@@ -61,6 +61,13 @@ export function decisionBarShowsPhase(phase: ArenaDecisionPhase): boolean {
   return phase.kind === "retry_resolution" || phase.kind === "transitional";
 }
 
+/** Names the side still working once the other can be picked early, so the pick is not a guess. */
+export function arenaRunningDecisionHint(phase: ArenaDecisionPhase): string | null {
+  if (phase.kind !== "running" || phase.waitingFor === null) return null;
+  if (!phase.canPickA && !phase.canPickB) return null;
+  return `Agent ${phase.waitingFor.toUpperCase()} is still working`;
+}
+
 export function arenaRunningDecisionOrder({
   canPickA,
   canPickB,
