@@ -82,7 +82,7 @@ import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-uti
 import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
 import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
-import { applyArenaFirstTurnMetadata } from "./arena-workspace-auto-name.js";
+import { applyArenaChatTitle, applyArenaFirstTurnMetadata } from "./arena-workspace-auto-name.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
 import {
   CLIENT_SHUTDOWN_RPC_REASON,
@@ -4051,6 +4051,11 @@ export class Session {
               void this.agentManager
                 .hydrateArenaWinner(msg.agentId, state)
                 .catch((err) => this.sessionLogger.error({ err }, "Arena winner hydration failed"));
+              void applyArenaChatTitle({
+                agent: snapshot,
+                snapshot: state,
+                workspaceAutoName: this.workspaceAutoName,
+              }).catch((err) => this.sessionLogger.error({ err }, "Arena chat title failed"));
             }
             this.emitForSource(
               {

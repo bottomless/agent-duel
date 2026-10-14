@@ -661,6 +661,8 @@ export type ComparisonDocument = {
   responseArtifactID?: Identifier
   state: "pending" | "running" | "complete" | "failed"
   output?: string
+  /** The chat's name, which only the first turn's comparison writes. */
+  title?: string
   usage?: UsageTotals
   latencyMs?: number
   error?: string

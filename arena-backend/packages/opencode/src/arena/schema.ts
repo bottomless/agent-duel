@@ -344,6 +344,7 @@ export const Snapshot = Schema.Struct({
     Schema.Struct({
       state: Schema.Literals(["pending", "running", "complete", "failed"]),
       output: Schema.optional(Schema.String),
+      title: Schema.optional(Schema.String),
       truncated: Schema.Boolean,
       omittedArtifacts: Schema.Array(Schema.String),
     }),

@@ -457,6 +457,7 @@ export const ArenaSnapshotSchema = z
       .object({
         state: z.enum(["pending", "running", "complete", "failed"]),
         output: z.string().optional(),
+        title: z.string().optional(),
         truncated: z.boolean(),
         omittedArtifacts: z.array(z.string()),
       })

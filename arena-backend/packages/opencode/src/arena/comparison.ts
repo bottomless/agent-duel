@@ -6,16 +6,19 @@ import { prepareEvidence, type ComparisonFileFact } from "./comparison-evidence"
 
 export const model = comparisonModel.id
 export const provider = comparisonModel.provider
-export const promptVersion = "arena-comparison-v11"
+export const promptVersion = "arena-comparison-v12"
 
 // Timelines carry only visible text and tool calls, so a real one runs a few thousand characters.
 // The cap is a guard against a runaway contestant, not a working budget.
 const MAX_TRANSCRIPT_CHARS = 12_000
+const MAX_TITLE_CHARS = 80
 const encoder = new TextEncoder()
 
 type Input = {
   readonly store: Store
   readonly turnID: string
+  /** The first turn's judge also names the chat. */
+  readonly turnIndex: number
   readonly userPrompt: string
   /** What the prompt carried besides text, as `ArenaAttachments.describeForJudge` renders it. */
   readonly userAttachments?: string
@@ -84,6 +87,23 @@ function output(value: unknown) {
   return typeof content === "string" ? content.trim() : undefined
 }
 
+/** Takes the title line the first turn's judge appends out of the report the card shows. */
+function splitTitle(content: string) {
+  const lines = content.split("\n")
+  const index = lines.findLastIndex((line) => /^title\s*:/i.test(line.replaceAll("**", "").trim()))
+  if (index === -1) return { output: content }
+  const title = lines[index]
+    .replaceAll("**", "")
+    .trim()
+    .replace(/^title\s*:\s*/i, "")
+    .replace(/^["'`]+|["'`.]+$/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, MAX_TITLE_CHARS)
+    .trim()
+  const output = lines.toSpliced(index, 1).join("\n").trim()
+  return title ? { output, title } : { output }
+}
+
 function resolvedProvider(value: unknown) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
   const provider = (value as Record<string, unknown>).provider
@@ -101,6 +121,7 @@ export async function generate(input: Input) {
     ...(transcriptB.truncated ? ["transcript_b_tail"] : []),
   ]
   const gitTruncated = input.baseToATruncated || input.baseToBTruncated || input.aToBTruncated
+  const namesChat = input.turnIndex === 0
   // Base patches establish attribution and shared work. Direct A/B differences
   // keep a small divergence visible when the base patches are dominated by a
   // generated file; they never establish which contestant introduced it.
@@ -120,6 +141,12 @@ export async function generate(input: Input) {
     "Second, under the heading 'Where they differ': a markdown table with the columns Aspect, Agent A, Agent B, one row per difference that changes behavior, coverage, or scope. Leave out work both did identically.",
     "Keep the whole report under 180 words. No preamble, no closing remarks, no other sections.",
     "Do not infer model identity, recommend a winner, score either side, or discuss style unless it changes behavior.",
+    // The sidebar names a new chat from this line instead of a separate model call.
+    ...(namesChat
+      ? [
+          "After the report, add one last line: 'Title: ' followed by a sentence-case name of at most six words for the task in the user prompt. Name the task, not either agent's result.",
+        ]
+      : []),
     "",
     "## User prompt",
     input.userPrompt,
@@ -267,14 +294,15 @@ export async function generate(input: Input) {
     }
     const parsed = JSON.parse(raw) as unknown
     const content = output(parsed)
-    if (!content) throw new Error("Utility response did not contain comparison text")
+    const report = content && namesChat ? splitTitle(content) : { output: content }
+    if (!report.output) throw new Error("Utility response did not contain comparison text")
     const rawUsage =
       typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>).usage
         : undefined
     return await input.store.updateComparison(comparisonID, {
       state: "complete",
-      output: content,
+      ...report,
       resolvedProvider: resolvedProvider(parsed) ?? provider,
       responseArtifactID,
       artifactIDs,

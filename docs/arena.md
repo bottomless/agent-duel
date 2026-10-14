@@ -133,7 +133,14 @@ its paragraphs capped at the reading measure (`proseMeasure`) while the differen
 the card's width, since a 1000px line of 14px prose is unreadable; and the diff's layout toggle
 uses the `xs` tier like the A | A+B | B control inside it. The agent names are the largest type
 on the card. The judge is asked for a short report (`arena/comparison.ts`,
-`arena-comparison-v10`): what each agent did, including shared violations of the task, then a table of where they differ, and nothing else.
+`arena-comparison-v12`): what each agent did, including shared violations of the task, then a table of where they differ, and nothing else.
+On the first turn it also ends with a `Title:` line, which the engine takes out of the report. A
+new battle chat's workspace shows the prompt's first line from the send and that title once the
+comparison arrives; a workspace with any other name keeps it
+(`arena-workspace-auto-name.ts`). Nothing else names a battle chat: in Arena every OpenCode prompt
+runs on a paid contestant with the full agent setup, so Paseo's naming agent cost up to $0.25 per
+new chat. When both sides leave identical trees there is no comparison call,
+and the chat keeps its prompt's first line.
 The card shows it whole; only a report that measures longer than a screen of the card folds to its
 opening with `Show full summary` (`verdict-body.tsx`). Trimming at the prompt was Michael's call:
 the fold spent latency on prose the voter then had to unfold. The status is `git merge-tree

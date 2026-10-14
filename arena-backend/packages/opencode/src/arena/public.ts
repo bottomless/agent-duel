@@ -413,6 +413,7 @@ export function project(snapshot: BattleSnapshot) {
           comparison: {
             state: snapshot.comparison.state,
             ...(snapshot.comparison.output ? { output: snapshot.comparison.output } : {}),
+            ...(snapshot.comparison.title ? { title: snapshot.comparison.title } : {}),
             truncated: snapshot.comparison.truncated,
             omittedArtifacts: snapshot.comparison.omittedArtifacts,
           },

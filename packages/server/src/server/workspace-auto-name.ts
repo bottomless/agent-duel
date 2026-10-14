@@ -27,7 +27,7 @@ type PreferredSelection =
 
 interface WorkspaceAutoNameOptions {
   agentManager: AgentManager;
-  workspaceRegistry: Pick<WorkspaceRegistry, "update">;
+  workspaceRegistry: Pick<WorkspaceRegistry, "get" | "update">;
   workspaceGitService: WorkspaceGitService;
   providerSnapshotManager: ProviderSnapshotManager;
   readDaemonConfig: () => StructuredGenerationDaemonConfig;
@@ -38,6 +38,15 @@ interface WorkspaceAutoNameOptions {
   generateWorkspaceName?: WorkspaceNameGenerator;
 }
 
+// A generated title replaces only an empty title or the one taken from the first prompt, so a
+// name the user typed survives.
+function isReplaceableTitle(
+  title: string | null | undefined,
+  promptTitle: string | null | undefined,
+): boolean {
+  return !title || (Boolean(promptTitle) && title === promptTitle);
+}
+
 interface ScheduleContext {
   preferredSelection?: PreferredSelection;
   currentSelection?: CurrentSelection;
@@ -45,7 +54,7 @@ interface ScheduleContext {
 
 export class WorkspaceAutoName {
   private readonly agentManager: AgentManager;
-  private readonly workspaceRegistry: Pick<WorkspaceRegistry, "update">;
+  private readonly workspaceRegistry: Pick<WorkspaceRegistry, "get" | "update">;
   private readonly workspaceGitService: WorkspaceGitService;
   private readonly providerSnapshotManager: ProviderSnapshotManager;
   private readonly readDaemonConfig: () => StructuredGenerationDaemonConfig;
@@ -187,13 +196,30 @@ export class WorkspaceAutoName {
     await this.emitWorkspaceUpdateForWorkspaceId(input.workspaceId);
   }
 
+  /** Names a workspace from a title generated elsewhere, under the rule this class's own follow. */
+  async applyTitle(
+    workspaceId: string,
+    input: { title: string; promptTitle: string | null },
+  ): Promise<void> {
+    const current = await this.workspaceRegistry.get(workspaceId);
+    if (
+      !current ||
+      current.title === input.title ||
+      !isReplaceableTitle(current.title, input.promptTitle)
+    ) {
+      return;
+    }
+    await this.applyGeneratedWorkspaceTitle(workspaceId, input);
+    await this.emitWorkspaceUpdateForWorkspaceId(workspaceId);
+  }
+
   private async applyGeneratedWorkspaceTitle(
     workspaceId: string,
     input: { title: string; branch?: string | null; promptTitle?: string | null },
   ): Promise<void> {
     await this.workspaceRegistry.update(workspaceId, (current) => {
       let title = current.title;
-      if (!title || (input.promptTitle && title === input.promptTitle)) {
+      if (isReplaceableTitle(title, input.promptTitle)) {
         title = input.title;
       }
       return {

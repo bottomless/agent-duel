@@ -39,6 +39,7 @@ describe("ArenaComparison", () => {
     const result = await generate({
       store: arena,
       turnID: "equal-turn",
+      turnIndex: 1,
       userPrompt: "Reply with one",
       baseCommit: "base",
       aCommit: "a",
@@ -102,6 +103,7 @@ describe("ArenaComparison", () => {
     const result = await generate({
       store: arena,
       turnID: "turn",
+      turnIndex: 1,
       userPrompt: "Make the interface darker",
       baseCommit: "base",
       aCommit: "a",
@@ -143,6 +145,7 @@ describe("ArenaComparison", () => {
     expect(prompt).toContain(`## Git diff (base -> B)\n${gitPatch("BASE TO B")}`)
     expect(prompt).not.toContain("## Git diff (A -> B;")
     expect(prompt).not.toContain("DIRECT A TO B")
+    expect(prompt).not.toContain("Title: ")
     expect(comparison?.utilityInputManifest.filter((item) => item.kind === "patch")).toEqual([
       expect.objectContaining({ relation: "base_to_a" }),
       expect.objectContaining({ relation: "base_to_b" }),
@@ -155,6 +158,71 @@ describe("ArenaComparison", () => {
       requestArtifactID: "comparison|4:turn|request",
       responseArtifactID: "comparison|4:turn|response",
       artifactIDs: ["patch-a", "patch-b", "patch-ab", "comparison|4:turn|request", "comparison|4:turn|response"],
+    })
+  })
+
+  test("names the chat from the first turn's report and keeps the name off the card", async () => {
+    setArenaCredentials({
+      mode: "hosted",
+      token: "test-key",
+      controlPlaneUrl: "https://control.test",
+      controlTokenHash: "0".repeat(64),
+    })
+    let comparison: ComparisonDocument | undefined
+    const arena = store({
+      saveComparison: async (input: ComparisonDocument) => {
+        comparison = input
+        return input
+      },
+      updateComparison: async (_id: string, patch: Partial<ComparisonDocument>) => {
+        comparison = { ...comparison!, ...patch }
+        return comparison
+      },
+      storeArtifact: async (input: { _id: string }) => input,
+    })
+    let prompt = ""
+
+    const result = await generate({
+      store: arena,
+      turnID: "first",
+      turnIndex: 0,
+      userPrompt: "Make the interface darker",
+      baseCommit: "base",
+      aCommit: "a",
+      bCommit: "b",
+      baseTree: "base-tree",
+      aTree: "a-tree",
+      bTree: "b-tree",
+      aToB: gitPatch("DIRECT A TO B"),
+      aToBTruncated: false,
+      baseToA: gitPatch("BASE TO A"),
+      baseToATruncated: false,
+      baseToB: gitPatch("BASE TO B"),
+      baseToBTruncated: false,
+      transcriptA: "A behavior",
+      transcriptB: "B behavior",
+      files: [],
+      artifactIDs: [],
+      execute: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }
+        prompt = body.messages[0]?.content ?? ""
+        return Response.json({
+          choices: [
+            {
+              message: {
+                content: "## What each agent did\nA darkened it.\n\n**Title:** \"Darker interface theme.\"\n",
+              },
+            },
+          ],
+        })
+      },
+    })
+
+    expect(prompt).toContain("'Title: '")
+    expect(result).toMatchObject({
+      state: "complete",
+      output: "## What each agent did\nA darkened it.",
+      title: "Darker interface theme",
     })
   })
 
@@ -186,6 +254,7 @@ describe("ArenaComparison", () => {
     await generate({
       store: arena,
       turnID: "lopsided",
+      turnIndex: 1,
       userPrompt: "Rework the parser",
       baseCommit: "base",
       aCommit: "a",
@@ -237,6 +306,7 @@ describe("ArenaComparison", () => {
     await generate({
       store: arena,
       turnID: "quiet-a",
+      turnIndex: 1,
       userPrompt: "Fix the crash",
       baseCommit: "base",
       aCommit: "a",
@@ -290,6 +360,7 @@ test.each([503, 429, 402])(
         },
       }),
       turnID: "retry",
+      turnIndex: 1,
       userPrompt: "Fix the task list",
       baseCommit: "base",
       aCommit: "a",
@@ -341,6 +412,7 @@ test("caps automatic comparison retries at three attempts", async () => {
       storeArtifact: async (input: { _id: string }) => input,
     }),
     turnID: "bounded-retry",
+    turnIndex: 1,
     userPrompt: "Fix it",
     baseCommit: "base",
     aCommit: "a",
@@ -385,6 +457,7 @@ test("large file evidence makes exactly one model call and records partial cover
       storeArtifact: async (input: { _id: string }) => input,
     }),
     turnID: "single-call",
+    turnIndex: 1,
     userPrompt: "Replace the long line",
     baseCommit: "base",
     aCommit: "a",
@@ -441,6 +514,7 @@ test("complete computed JSON evidence makes one call without a missing-evidence 
       storeArtifact: async (input: { _id: string }) => input,
     }),
     turnID: "computed-complete",
+    turnIndex: 1,
     userPrompt: "Reverse the catalog order.",
     baseCommit: "base",
     aCommit: "a",
@@ -465,7 +539,7 @@ test("complete computed JSON evidence makes one call without a missing-evidence 
     },
   })
   expect(calls).toBe(1)
-  expect(result.promptVersion).toBe("arena-comparison-v11")
+  expect(result.promptVersion).toBe("arena-comparison-v12")
   expect(result.truncated).toBe(false)
   expect(result.omittedArtifacts).toEqual([])
   expect(result.utilityInputManifest.every((item) => !item.truncated)).toBe(true)

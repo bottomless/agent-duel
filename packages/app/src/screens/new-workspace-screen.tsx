@@ -1295,8 +1295,8 @@ async function runCreateChatAgent(input: CreateChatAgentInput): Promise<void> {
   }
   const ensuredWorkspace = await ensureWorkspace({
     cwd,
-    // The first Arena battle owns workspace naming: its two contestant titles
-    // remain visible as A/B until the vote resolves the workspace title.
+    // The first Arena battle owns workspace naming: the prompt's first line,
+    // then the title its comparison writes.
     prompt: arenaPreferences.battleMode ? "" : text,
     attachments: arenaPreferences.battleMode ? [] : workspaceNamingAttachments,
     withInitialAgent: true,
