@@ -6,8 +6,9 @@ import { ChildProcess } from "effect/unstable/process"
 
 const cfg = [
   "--no-optional-locks",
-  "-c",
-  "core.autocrlf=false",
+  // Git for Windows checks text out with CRLF (core.autocrlf=true by default); reading that checkout
+  // with autocrlf off would take every such file for an edit. Elsewhere it stays pinned off.
+  ...(process.platform === "win32" ? [] : ["-c", "core.autocrlf=false"]),
   "-c",
   "core.fsmonitor=false",
   "-c",
