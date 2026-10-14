@@ -499,7 +499,55 @@ for (const hosted of [false, true]) {
       yield* Fiber.join(run)
       expect((yield* inTasks(jobs.list())).map((job) => job.status)).toEqual(["cancelled"])
       const messages = yield* session.messages({ sessionID: chat.id })
-      expect(messages.filter((message) => message.info.role === "user")).toHaveLength(1)
+      const users = messages.filter((message) => message.info.role === "user")
+      expect(users).toHaveLength(2)
+      expect(users[1]?.parts).toMatchObject([{ type: "text", synthetic: true }])
+      expect(JSON.stringify(users[1]?.parts)).toContain('state=\\"cancelled\\"')
+    }),
+  )
+
+  it.instance(`Arena tells the parent when Send now cancels a background child (hosted=${hosted})`, () =>
+    Effect.gen(function* () {
+      const { chat, llm, session } = yield* outputLimitSession()
+      const inTasks = yield* taskEnvironment(chat.id, hosted)
+      const prompt = yield* SessionPrompt.Service
+      const jobs = yield* BackgroundJob.Service
+      const child = (body: Record<string, unknown>) =>
+        Array.isArray(body.messages) &&
+        body.messages.some((message) => message.role === "user" && message.content === "child-send-now-only")
+      yield* llm.pushMatch(({ body }) => child(body), reply().hang())
+      yield* llm.pushMatch(
+        ({ body }) => !child(body),
+        reply().tool("task", { description: "slow child", prompt: "child-send-now-only", subagent_type: "general" }),
+        reply().hang(),
+        reply().text("Answered the steer.").stop(),
+      )
+      const run = yield* prompt
+        .prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Delegate a task and keep working." }] })
+        .pipe(Effect.forkChild)
+      // The parent's own next request runs alongside the child.
+      yield* pollWithTimeout(
+        llm.inputs.pipe(Effect.map((inputs) => (inputs.length >= 3 ? true : undefined))),
+        "timed out waiting for the parent to continue alongside its child",
+      )
+      const [job] = yield* inTasks(jobs.list())
+      expect(job?.status).toBe("running")
+      // Send now queues the steer, cancels the contestant and its descendants, then resumes the loop.
+      yield* prompt.prompt({ sessionID: chat.id, noReply: true, parts: [{ type: "text", text: "Also rename foo." }] })
+      yield* prompt.cancel(chat.id)
+      yield* inTasks(prompt.cancel(SessionID.make(job!.id)))
+      yield* Fiber.join(run)
+      const resumed = yield* prompt.loop({ sessionID: chat.id })
+      expect(resumed.parts.some((part) => part.type === "text" && part.text === "Answered the steer.")).toBe(true)
+      expect((yield* inTasks(jobs.list())).map((item) => item.status)).toEqual(["cancelled"])
+      const notices = (yield* session.messages({ sessionID: chat.id }))
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "text" && part.synthetic && part.text.includes('state="cancelled"'))
+      expect(notices).toHaveLength(1)
+      const last = JSON.stringify((yield* llm.inputs).at(-1))
+      expect(last).toContain("Also rename foo.")
+      expect(last).toContain("Subagent cancelled")
+      expect(yield* llm.misses).toHaveLength(0)
     }),
   )
 }

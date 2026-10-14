@@ -71,11 +71,11 @@ export const Parameters = Schema.Struct({
 
 function renderOutput(input: {
   sessionID: SessionID
-  state: "running" | "completed" | "error"
+  state: "running" | "completed" | "error" | "cancelled"
   summary?: string
   text: string
 }) {
-  const tag = input.state === "error" ? "task_error" : "task_result"
+  const tag = input.state === "error" || input.state === "cancelled" ? "task_error" : "task_result"
   return [
     `<task id="${input.sessionID}" state="${input.state}">`,
     ...(input.summary ? [`<summary>${input.summary}</summary>`] : []),
@@ -229,7 +229,7 @@ export const TaskTool = Tool.define(
       })
 
       const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
-        state: "completed" | "error",
+        state: "completed" | "error" | "cancelled",
         text: string,
       ) {
         const currentParent = yield* sessions.get(ctx.sessionID)
@@ -248,7 +248,9 @@ export const TaskTool = Tool.define(
                 summary:
                   state === "completed"
                     ? `Background task completed: ${params.description}`
-                    : `Background task failed: ${params.description}`,
+                    : state === "cancelled"
+                      ? `Background task cancelled: ${params.description}`
+                      : `Background task failed: ${params.description}`,
                 text,
               }),
             },
@@ -260,25 +262,34 @@ export const TaskTool = Tool.define(
 
       // Arena's owning prompt loop must see the result before the job can settle; a detached
       // notification could otherwise arrive after the contestant's Git result was finalized.
-      const runJob = () =>
-        runTask().pipe(
+      // A cancelled child is reported too: Send now, Stop and a failed parent cancel children,
+      // and a parent told it will be notified would otherwise wait for a result that never comes.
+      const runJob = () => {
+        let delivered = false
+        const deliver = (state: "completed" | "error" | "cancelled", text: string) =>
+          Effect.gen(function* () {
+            const job = yield* background.get(nextSession.id)
+            if (delivered || !arenaParent || job?.metadata?.background !== true) return
+            delivered = true
+            yield* inject(state, text)
+          })
+        return runTask().pipe(
           Effect.matchCauseEffect({
-            onSuccess: (text) =>
-              Effect.gen(function* () {
-                const job = yield* background.get(nextSession.id)
-                if (arenaParent && job?.metadata?.background === true) yield* inject("completed", text)
-                return text
-              }),
+            onSuccess: (text) => deliver("completed", text).pipe(Effect.as(text)),
             onFailure: (cause) =>
               Effect.gen(function* () {
-                const job = yield* background.get(nextSession.id)
-                if (arenaParent && job?.metadata?.background === true && !Cause.hasInterruptsOnly(cause)) {
-                  yield* inject("error", "The subagent could not complete its task. Review its work before continuing.")
+                if (!Cause.hasInterruptsOnly(cause)) {
+                  yield* deliver(
+                    "error",
+                    "The subagent could not complete its task. Review its work before continuing.",
+                  )
                 }
                 return yield* Effect.failCause(cause)
               }),
           }),
+          Effect.onInterrupt(() => deliver("cancelled", "Subagent cancelled").pipe(Effect.ignore)),
         )
+      }
 
       const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
         if (arenaParent) return

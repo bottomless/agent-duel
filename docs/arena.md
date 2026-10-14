@@ -704,7 +704,9 @@ can request `background=false` when its result is needed before the parent's nex
 Ending the parent's response while children work does not finish the contestant: keep its owning
 prompt loop alive, accept queued replies, and feed each child result back before finalization.
 For staged requests hosted in the canonical checkout, track children in the contestant's instance.
-Stop, early selection, and terminal parent failures cancel outstanding children. Save child
+Stop, early selection, terminal parent failures, and Send now on a queued steer cancel
+outstanding children. Each cancelled child still leaves a cancelled result in the parent's
+history: the parent was told it would be notified, and Send now and Retry resume it. Save child
 results before marking their jobs complete; detached notifications can otherwise arrive after
 Arena has captured the final Git state. This behavior does not depend on the experimental
 background-subagent flag used by ordinary OpenCode sessions.
