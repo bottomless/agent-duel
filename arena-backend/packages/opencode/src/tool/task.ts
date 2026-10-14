@@ -10,7 +10,7 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
@@ -29,6 +29,13 @@ const BACKGROUND_DESCRIPTION = [
   "Use background only for independent work that can run while you continue elsewhere.",
   "You will be notified automatically when it finishes.",
 ].join(" ")
+export const ARENA_DESCRIPTION = [
+  DESCRIPTION,
+  "Tasks run in the background by default and return immediately. Launch independent tasks together, then continue your own non-overlapping work while they run.",
+  "Give each child a separate file or task scope; children share your worktree. Prepare dependencies before delegating work that needs them.",
+  "Results arrive automatically in your conversation. If you have nothing else to do, end your response; the battle stays running and you resume when a result arrives. Do not sleep, poll, or duplicate delegated work.",
+  "Set background=false only when you need a child's result before your next action. Foreground calls block your next response until the child finishes.",
+].join("\n\n")
 const BACKGROUND_STARTED = [
   "The task is working in the background. You will be notified automatically when it finishes.",
   "DO NOT sleep, poll for progress, ask the task for status, or duplicate this task's work — avoid working with the same files or topics it is using.",
@@ -95,19 +102,20 @@ export const TaskTool = Tool.define(
       ctx: Tool.Context,
     ) {
       const cfg = yield* config.get()
-      const runInBackground = params.background === true
-      if (runInBackground && !flags.experimentalBackgroundSubagents) {
+      const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.orDie,
+      )
+      if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
+      const arenaParent = msg.info.providerID === ArenaRuntime.providerID
+      const runInBackground = arenaParent ? params.background !== false : params.background === true
+      if (runInBackground && !arenaParent && !flags.experimentalBackgroundSubagents) {
         return yield* Effect.fail(
           new Error("Background subagents require OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"),
         )
       }
 
       const parent = yield* sessions.get(ctx.sessionID)
-      if (runInBackground && parent.model?.providerID === ArenaRuntime.providerID) {
-        return yield* Effect.fail(
-          new Error("Background subagents are unavailable during an Arena battle; use a foreground subagent"),
-        )
-      }
       let current = parent
       let depth = 0
       while (current.parentID) {
@@ -177,12 +185,6 @@ export const TaskTool = Tool.define(
           ],
         }))
 
-      const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
-        Effect.provideService(Database.Service, database),
-        Effect.orDie,
-      )
-      if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
-      const arenaParent = msg.info.providerID === ArenaRuntime.providerID
       const variant = arenaParent ? "high" : msg.info.variant
 
       const model = arenaParent
@@ -195,6 +197,7 @@ export const TaskTool = Tool.define(
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,
         model,
+        ...(arenaParent ? { arena: true } : {}),
         ...(runInBackground ? { background: true } : {}),
       }
 
@@ -219,6 +222,9 @@ export const TaskTool = Tool.define(
           agent: next.name,
           parts,
         })
+        if (arenaParent && result.info.role === "assistant" && result.info.error) {
+          return yield* Effect.fail(new Error("The subagent could not complete its task."))
+        }
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
 
@@ -227,31 +233,55 @@ export const TaskTool = Tool.define(
         text: string,
       ) {
         const currentParent = yield* sessions.get(ctx.sessionID)
-        yield* ops
-          .prompt({
-            sessionID: ctx.sessionID,
-            agent: currentParent.agent ?? ctx.agent,
-            variant,
-            parts: [
-              {
-                type: "text",
-                synthetic: true,
-                text: renderOutput({
-                  sessionID: nextSession.id,
-                  state,
-                  summary:
-                    state === "completed"
-                      ? `Background task completed: ${params.description}`
-                      : `Background task failed: ${params.description}`,
-                  text,
-                }),
-              },
-            ],
-          })
-          .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
+        const delivery = ops.prompt({
+          sessionID: ctx.sessionID,
+          agent: currentParent.agent ?? ctx.agent,
+          variant,
+          ...(arenaParent ? { model, noReply: true } : {}),
+          parts: [
+            {
+              type: "text",
+              synthetic: true,
+              text: renderOutput({
+                sessionID: nextSession.id,
+                state,
+                summary:
+                  state === "completed"
+                    ? `Background task completed: ${params.description}`
+                    : `Background task failed: ${params.description}`,
+                text,
+              }),
+            },
+          ],
+        })
+        if (arenaParent) yield* delivery
+        else yield* delivery.pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
       })
 
+      // Arena's owning prompt loop must see the result before the job can settle; a detached
+      // notification could otherwise arrive after the contestant's Git result was finalized.
+      const runJob = () =>
+        runTask().pipe(
+          Effect.matchCauseEffect({
+            onSuccess: (text) =>
+              Effect.gen(function* () {
+                const job = yield* background.get(nextSession.id)
+                if (arenaParent && job?.metadata?.background === true) yield* inject("completed", text)
+                return text
+              }),
+            onFailure: (cause) =>
+              Effect.gen(function* () {
+                const job = yield* background.get(nextSession.id)
+                if (arenaParent && job?.metadata?.background === true && !Cause.hasInterruptsOnly(cause)) {
+                  yield* inject("error", "The subagent could not complete its task. Review its work before continuing.")
+                }
+                return yield* Effect.failCause(cause)
+              }),
+          }),
+        )
+
       const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
+        if (arenaParent) return
         yield* background.wait({ id: jobID }).pipe(
           Effect.flatMap((result) => {
             if (result.info?.status === "completed") return inject("completed", result.info.output ?? "")
@@ -262,7 +292,7 @@ export const TaskTool = Tool.define(
         )
       })
 
-      if (yield* background.extend({ id: nextSession.id, run: runTask() })) {
+      if (yield* background.extend({ id: nextSession.id, run: runJob() })) {
         return {
           title: params.description,
           metadata: {
@@ -291,7 +321,7 @@ export const TaskTool = Tool.define(
           }),
           notify(nextSession.id),
         ]),
-        run: runTask().pipe(Effect.onInterrupt(() => ops.cancel(nextSession.id))),
+        run: runJob().pipe(Effect.onInterrupt(() => ops.cancel(nextSession.id))),
       })
 
       function backgroundResult() {

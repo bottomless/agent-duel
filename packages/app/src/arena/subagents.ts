@@ -70,11 +70,39 @@ export function projectArenaSessions(run: Pick<ArenaRun, "sessionID" | "messages
   return { root, byTask, unattached };
 }
 
+function backgroundRunState(
+  runState: ArenaRun["runState"],
+  child: Pick<ArenaRun, "messages" | "parts">,
+): ArenaRun["runState"] {
+  const message = record(child.messages?.at(-1));
+  const error = record(message?.error);
+  if (error) {
+    if (error.name === "MessageAbortedError")
+      return runState === "stopped" ? "stopped" : "interrupted";
+    return "error";
+  }
+  const parts = typeof message?.id === "string" ? (child.parts?.[message.id] ?? []) : [];
+  if (
+    message?.role === "assistant" &&
+    message.summary !== true &&
+    message.finish === "stop" &&
+    typeof record(message.time)?.completed === "number" &&
+    !parts.some((part) => record(part)?.type === "tool")
+  )
+    return "complete";
+  return runState;
+}
+
 export function arenaSubagentRunState(
   runState: ArenaRun["runState"],
   task: unknown,
+  child: Pick<ArenaRun, "messages" | "parts"> = {},
 ): ArenaRun["runState"] {
   const state = record(record(task)?.state);
+  // A background task's completed tool call only acknowledges its launch.
+  if (state?.status === "completed" && record(state.metadata)?.background === true) {
+    return backgroundRunState(runState, child);
+  }
   if (state?.status === "completed") return "complete";
   if (state?.status === "error") {
     // Stop aborts the delegation, which OpenCode records as an error marked `interrupted`.

@@ -486,7 +486,10 @@ function ArenaSubagent({
         ...context.run,
         sessionID: session.id,
         messages: session.messages,
-        runState: arenaSubagentRunState(context.run.runState, session.task),
+        runState: arenaSubagentRunState(context.run.runState, session.task, {
+          messages: session.messages,
+          parts: context.run.parts,
+        }),
       },
     }),
     [context, session],

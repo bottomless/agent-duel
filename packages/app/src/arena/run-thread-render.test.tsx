@@ -362,6 +362,81 @@ describe("ArenaRunThread", () => {
     );
   });
 
+  it("tracks background child progress after its launch tool completes", () => {
+    const thread = (run: ArenaRun) => <ArenaRunThread run={run} />;
+    const source = subagentRun();
+    const run: ArenaRun = {
+      ...source,
+      parts: {
+        ...source.parts,
+        assistant: [
+          {
+            type: "tool",
+            tool: "task",
+            state: {
+              status: "completed",
+              input: { description: "Background task" },
+              metadata: { sessionId: "child", background: true },
+            },
+          },
+        ],
+      },
+    };
+    const view = render(thread(run));
+    const latest = () =>
+      within(view.getByTestId("arena-subagent")).getByTestId("arena-subagent-latest");
+    expect(latest().textContent).not.toBe("Completed");
+    expect(latest().getAttribute("data-loading")).toBe("true");
+    view.rerender(thread({ ...run, runState: "stopped" }));
+    expect(latest().textContent).toBe("Stopped");
+    const finished: ArenaRun = {
+      ...run,
+      messages: [
+        ...(run.messages ?? []),
+        {
+          id: "child-final",
+          role: "assistant",
+          sessionID: "child",
+          finish: "stop",
+          time: { completed: 10 },
+        },
+      ],
+      parts: { ...run.parts, "child-final": [{ type: "text", text: "Finished child work." }] },
+    };
+    view.rerender(thread(finished));
+    expect(latest().textContent).toBe("Completed");
+    expect(latest().getAttribute("data-loading")).toBe("false");
+    view.rerender(
+      thread({
+        ...finished,
+        messages: [
+          ...(finished.messages ?? []),
+          {
+            id: "child-follow-up",
+            role: "user",
+            sessionID: "child",
+          },
+        ],
+      }),
+    );
+    expect(latest().textContent).not.toBe("Completed");
+    view.rerender(
+      thread({
+        ...finished,
+        messages: [
+          ...(finished.messages ?? []),
+          {
+            id: "child-error",
+            role: "assistant",
+            sessionID: "child",
+            error: { name: "APIError" },
+          },
+        ],
+      }),
+    );
+    expect(latest().textContent).toBe("Failed");
+  });
+
   it("keeps a subagent's row moving while its reply streams", () => {
     const run = respondingSubagentRun();
     const view = render(<ArenaRunThread run={run} />);

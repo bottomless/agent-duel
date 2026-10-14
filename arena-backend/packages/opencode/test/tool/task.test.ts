@@ -139,6 +139,79 @@ function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithPa
 }
 
 describe("tool.task", () => {
+  it.instance("Arena advertises background tasks without enabling them for other providers", () =>
+    Effect.gen(function* () {
+      const agents = yield* Agent.Service
+      const registry = yield* ToolRegistry.Service
+      const agent = yield* agents.get("build")
+      const arena = (yield* registry.tools({ ...ref, providerID: ProviderV2.ID.make("arena"), agent })).find(
+        (tool) => tool.id === "task",
+      )
+      const ordinary = (yield* registry.tools({ ...ref, agent })).find((tool) => tool.id === "task")
+      expect(arena?.description).toContain("background by default")
+      expect(arena?.jsonSchema?.properties).toHaveProperty("background")
+      expect(ordinary?.description).not.toContain("background by default")
+      expect(ordinary?.jsonSchema?.properties).not.toHaveProperty("background")
+    }),
+  )
+  it.instance("Arena defaults to parallel background children and saves results before they settle", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const jobs = yield* BackgroundJob.Service
+      const { chat, assistant } = yield* seed()
+      yield* sessions.updateMessage({
+        ...assistant,
+        providerID: ProviderV2.ID.make("arena"),
+        modelID: ModelV2.ID.make("contestant"),
+      })
+      const done = yield* Deferred.make<void>()
+      const started = yield* Deferred.make<void>()
+      const notifications: SessionPrompt.PromptInput[] = []
+      let children = 0
+      const promptOps: TaskPromptOps = {
+        ...stubOps(),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            if (input.sessionID === chat.id) {
+              notifications.push(input)
+              return reply(input, "saved")
+            }
+            children++
+            if (children === 2) yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(done)
+            return reply(input, "child finished")
+          }),
+      }
+      const def = yield* (yield* TaskTool).init()
+      const context = {
+        sessionID: chat.id,
+        messageID: assistant.id,
+        agent: "build",
+        abort: new AbortController().signal,
+        extra: { promptOps },
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const first = yield* def.execute({ description: "first", prompt: "first", subagent_type: "general" }, context)
+      const second = yield* def.execute({ description: "second", prompt: "second", subagent_type: "general" }, context)
+      yield* Deferred.await(started)
+      expect(first.metadata.background).toBe(true)
+      expect(second.metadata.background).toBe(true)
+      expect((yield* jobs.list()).filter((job) => job.status === "running")).toHaveLength(2)
+      expect(notifications).toHaveLength(0)
+      yield* Deferred.succeed(done, undefined)
+      yield* Effect.all([jobs.wait({ id: first.metadata.sessionId }), jobs.wait({ id: second.metadata.sessionId })])
+      expect(notifications).toHaveLength(2)
+      for (const input of notifications) {
+        expect(input.noReply).toBe(true)
+        expect(input.model).toEqual({ providerID: "arena", modelID: "contestant" })
+        expect(input.variant).toBe("high")
+        expect(input.parts[0]).toMatchObject({ type: "text", synthetic: true })
+      }
+    }),
+  )
+
   it.instance(
     "description sorts subagents by name and is stable across calls",
     () =>
@@ -265,7 +338,12 @@ describe("tool.task", () => {
       let seen: SessionPrompt.PromptInput | undefined
 
       const result = yield* def.execute(
-        { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+          background: false,
+        },
         {
           sessionID: chat.id,
           messageID: assistant.id,

@@ -58,6 +58,7 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import {
   isToolExecutionGated,
+  readyToolExecutionEnvironment,
   relocateHostPaths,
   toolExecutionProvider,
   toolExecutionWorktree,
@@ -66,6 +67,8 @@ import { LLMEvent } from "@opencode-ai/llm"
 import { ArenaPrivacy } from "@/arena/privacy"
 import { ArenaContestant } from "@/arena/contestant"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { ArenaRuntime } from "@/arena/runtime"
+import { BackgroundJob } from "@/background/job"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -148,6 +151,17 @@ const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const instruction = yield* Instruction.Service
     const state = yield* SessionRunState.Service
+    const background = yield* BackgroundJob.Service
+    // A staged Arena request and its tools can live in different instances. Session IDs
+    // are process-unique; keep their wakeups together for this service's lifetime.
+    const wakeups = new Map<SessionID, Latch.Latch>()
+    const inTaskEnvironment = <A, E, R>(sessionID: SessionID, effect: Effect.Effect<A, E, R>) =>
+      Effect.suspend(() => {
+        // Before the base checkout exists no child can have started. Do not wait for
+        // staging here: the first model request must dispatch before staging starts.
+        const provide = readyToolExecutionEnvironment(sessionID)?.provide
+        return provide ? provide(effect) : effect
+      })
     const revert = yield* SessionRevert.Service
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
@@ -1083,6 +1097,8 @@ const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
+      const wake = wakeups.get(input.sessionID)
+      if (wake) yield* wake.open
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
     })
@@ -1107,8 +1123,19 @@ const layer = Layer.effect(
           : currentContext
         let structured: unknown
         let step = 0
+        const wake = yield* Latch.make()
+        wakeups.set(sessionID, wake)
 
         while (true) {
+          yield* wake.close
+          // Snapshot jobs before history: a completed Arena job has already saved its result.
+          const pendingTasks = (yield* inTaskEnvironment(sessionID, background.list())).filter(
+            (job) =>
+              job.status === "running" &&
+              job.metadata?.arena === true &&
+              job.metadata.background === true &&
+              job.metadata.parentSessionId === sessionID,
+          )
           // Read every step, not once per run: a message sent into a running loop can come with a
           // permission granted for it, such as an upload's directory opened to an Arena contestant
           // that is still working, and the tools of the step that answers it must see that grant.
@@ -1182,8 +1209,18 @@ const layer = Layer.effect(
             !recoverable &&
             !["tool-calls"].includes(lastAssistant.finish) &&
             !hasToolCalls &&
-            lastUser.id < lastAssistant.id
+            lastUser.id < lastAssistant.id &&
+            (lastUser.model.providerID !== ArenaRuntime.providerID || lastAssistant.parentID === lastUser.id)
           ) {
+            if (!lastAssistant.error && pendingTasks.length > 0) {
+              yield* Effect.raceAll([
+                wake.await,
+                ...pendingTasks.map((job) =>
+                  inTaskEnvironment(sessionID, background.wait({ id: job.id })).pipe(Effect.asVoid),
+                ),
+              ])
+              continue
+            }
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
@@ -1457,7 +1494,26 @@ const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+      return yield* state.ensureRunning(
+        input.sessionID,
+        lastAssistant(input.sessionID),
+        runLoop(input.sessionID).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              const jobs = (yield* inTaskEnvironment(input.sessionID, background.list())).filter(
+                (job) =>
+                  job.status === "running" &&
+                  job.metadata?.arena === true &&
+                  job.metadata.parentSessionId === input.sessionID,
+              )
+              yield* Effect.forEach(jobs, (job) => inTaskEnvironment(input.sessionID, background.cancel(job.id)), {
+                concurrency: "unbounded",
+                discard: true,
+              })
+            }).pipe(Effect.ensuring(Effect.sync(() => wakeups.delete(input.sessionID)))),
+          ),
+        ),
+      )
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
@@ -1737,6 +1793,7 @@ export const node = LayerNode.make({
     CrossSpawnSpawner.node,
     Instruction.node,
     SessionRunState.node,
+    BackgroundJob.node,
     SessionRevert.node,
     SessionSummary.node,
     SystemPrompt.node,

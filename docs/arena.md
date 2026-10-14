@@ -698,6 +698,17 @@ the host repository is a copy-on-write clone of the checkout's git directory whe
 filesystem allows it. Both are then prompted concurrently; a cold or refreshed side is prompted
 before its staging, as described above.
 
+Contestant subagents run in the background by default and share their parent's worktree. Give
+independent children separate file scopes so they can work in parallel with the parent. A task
+can request `background=false` when its result is needed before the parent's next action.
+Ending the parent's response while children work does not finish the contestant: keep its owning
+prompt loop alive, accept queued replies, and feed each child result back before finalization.
+For staged requests hosted in the canonical checkout, track children in the contestant's instance.
+Stop, early selection, and terminal parent failures cancel outstanding children. Save child
+results before marking their jobs complete; detached notifications can otherwise arrive after
+Arena has captured the final Git state. This behavior does not depend on the experimental
+background-subagent flag used by ordinary OpenCode sessions.
+
 The local OpenCode HTTP server is not an Arena client API. In Arena mode the daemon authenticates
 all session and orchestration calls with its private control token, while the OpenCode process keeps
 only a one-way verifier. The renderer and browser QA harness continue through the daemon protocol,

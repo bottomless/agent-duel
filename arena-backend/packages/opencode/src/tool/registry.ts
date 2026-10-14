@@ -11,7 +11,9 @@ import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
-import { TaskTool } from "./task"
+import { TaskTool, ARENA_DESCRIPTION, Parameters as TaskParameters } from "./task"
+import { ToolJsonSchema } from "./json-schema"
+import { ArenaRuntime } from "@/arena/runtime"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
@@ -308,10 +310,11 @@ const layer = Layer.effect(
       return yield* Effect.forEach(
         visible,
         Effect.fnUntraced(function* (tool: Tool.Def) {
+          const arenaTask = tool.id === TaskTool.id && input.providerID === ArenaRuntime.providerID
           const output = {
-            description: tool.description,
+            description: arenaTask ? ARENA_DESCRIPTION : tool.description,
             parameters: tool.parameters,
-            jsonSchema: tool.jsonSchema,
+            jsonSchema: arenaTask ? ToolJsonSchema.fromSchema(TaskParameters) : tool.jsonSchema,
           }
           yield* plugin.trigger("tool.definition", { toolID: tool.id }, output)
           const jsonSchema =
