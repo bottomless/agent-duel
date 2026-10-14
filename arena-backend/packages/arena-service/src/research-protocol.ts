@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto"
-import { gunzipSync, gzipSync } from "node:zlib"
 import { z } from "zod"
 import type { ArenaMutation } from "./collection"
 
@@ -97,80 +96,91 @@ export function projectResearchMutation(mutation: ResearchMutation): ResearchRec
   }
 }
 
-/** What a transcript's research copy holds in place of an image: the `images` record with these bytes. */
+/** What a transcript holds in place of an image: the image named by the SHA-256 of its bytes. */
 export const RESEARCH_IMAGE_REFERENCE = "arena-image:sha256:"
 const IMAGE_DATA_URL = /^data:(image\/[^;,]+);base64,/
+const IMAGE_ARTIFACT_ID = /\|image\|[0-9a-f]{64}$/
 
-/**
- * A transcript keeps each image inline as a base64 data URL, so a few large images put its research
- * copy over MAX_RESEARCH_RECORD_BYTES and the uploader drops the whole transcript. Each image goes as
- * its own `images` record named by the SHA-256 of its bytes, and the transcript names it instead.
- * Both contestants are sent the same bytes, so a battle's images are uploaded once.
- *
- * The local artifact is untouched; its `originalSize`, `storedSize`, and `contentHash` still describe
- * it, and `imageIDs` lists the images taken out of `data`, in the order they first appear.
- */
-function externalizeTranscriptImages(mutation: ResearchMutation): ResearchMutation[] {
-  const document = mutation.document
-  if (
-    mutation.collection !== "artifacts" ||
-    document?.kind !== "transcript" ||
-    document.compression !== "gzip" ||
-    !(document.data instanceof Uint8Array)
-  ) {
-    return [mutation]
-  }
-  let transcript: unknown
-  try {
-    transcript = JSON.parse(gunzipSync(document.data).toString("utf8"))
-  } catch {
-    return [mutation]
-  }
-  const images = new Map<string, ResearchMutation>()
-  const replace = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(replace)
-    if (typeof value !== "object" || value === null) return value
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => {
-        const match = key === "url" && typeof entry === "string" ? IMAGE_DATA_URL.exec(entry) : null
-        if (!match) return [key, replace(entry)]
-        const data = entry.slice(match[0].length)
-        const bytes = Buffer.from(data, "base64")
-        const id = createHash("sha256").update(bytes).digest("hex")
-        if (!images.has(id)) {
-          images.set(id, {
-            collection: "images",
-            id,
-            // Named by its content, so every copy is the same record and the first one stored stands.
-            revision: 1,
-            document: { _id: id, mimeType: match[1], byteSize: bytes.byteLength, data, dataEncoding: "base64" },
-          })
-        }
-        return [key, `${RESEARCH_IMAGE_REFERENCE}${id}`]
-      }),
-    )
-  }
-  const externalized = replace(transcript)
-  if (images.size === 0) return [mutation]
-  return [
-    ...images.values(),
-    {
-      ...mutation,
-      document: {
-        ...document,
-        data: gzipSync(Buffer.from(JSON.stringify(externalized)), { level: 6 }),
-        imageIDs: [...images.keys()],
-      },
-    },
-  ]
+export type TranscriptImage = { readonly id: string; readonly mimeType: string; readonly bytes: Buffer }
+
+/** Rewrites every `url` string in a transcript, leaving the rest as it is. */
+function replaceUrls(value: unknown, replace: (url: string) => string | undefined): unknown {
+  if (Array.isArray(value)) return value.map((item) => replaceUrls(item, replace))
+  if (typeof value !== "object" || value === null) return value
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      const replaced = key === "url" && typeof entry === "string" ? replace(entry) : undefined
+      return [key, replaced ?? replaceUrls(entry, replace)]
+    }),
+  )
 }
 
 /**
- * The research records one local change becomes: none for data that is not collected, the record
- * itself, or for a transcript with images, the images first and then the transcript that names them.
+ * A session keeps each image inline as a base64 data URL, a pasted one and every screenshot a
+ * contestant reads, so a long run's transcript is mostly images. This names each image by the SHA-256
+ * of its bytes in its place, and returns the images once each, in the order they first appear.
+ */
+export function externalizeImages(value: unknown) {
+  const images = new Map<string, TranscriptImage>()
+  const externalized = replaceUrls(value, (url) => {
+    const match = IMAGE_DATA_URL.exec(url)
+    const mimeType = match?.[1]
+    if (!match || !mimeType) return undefined
+    const bytes = Buffer.from(url.slice(match[0].length), "base64")
+    const id = createHash("sha256").update(bytes).digest("hex")
+    if (!images.has(id)) images.set(id, { id, mimeType, bytes })
+    return `${RESEARCH_IMAGE_REFERENCE}${id}`
+  })
+  return { value: externalized, images: [...images.values()] }
+}
+
+/** Puts back each image `externalizeImages` named. A name `images` does not hold stays as it is. */
+export function inlineImages(value: unknown, images: ReadonlyMap<string, Omit<TranscriptImage, "id">>) {
+  return replaceUrls(value, (url) => {
+    const image = url.startsWith(RESEARCH_IMAGE_REFERENCE)
+      ? images.get(url.slice(RESEARCH_IMAGE_REFERENCE.length))
+      : undefined
+    return image ? `data:${image.mimeType};base64,${image.bytes.toString("base64")}` : undefined
+  })
+}
+
+/** The artifact a run keeps one of its transcript's images in, by the image's ID. */
+export function imageArtifactID(runID: string, imageID: string) {
+  return `${runID}|image|${imageID}`
+}
+
+/**
+ * A transcript image goes as its own `images` record, named by its content: inline, a few large ones
+ * put the transcript over MAX_RESEARCH_RECORD_BYTES and the uploader dropped all of it. Both sides'
+ * copies of an image are one record, and the first one stored stands, so removing one run's copy
+ * removes nothing: the other side's transcript can still name it.
+ */
+function imageRecords(mutation: ResearchMutation): ResearchRecord[] | undefined {
+  if (mutation.collection !== "artifacts") return undefined
+  const document = mutation.document
+  if (document === null) return IMAGE_ARTIFACT_ID.test(mutation.id) ? [] : undefined
+  if (document.kind !== "image") return undefined
+  const { contentHash, data, mimeType } = document
+  if (document.truncated || typeof contentHash !== "string" || !(data instanceof Uint8Array)) return []
+  const image = {
+    _id: contentHash,
+    mimeType,
+    byteSize: data.byteLength,
+    data: Buffer.from(data).toString("base64"),
+    dataEncoding: "base64",
+  }
+  return [{ collection: "images", id: contentHash, revision: 1, document: researchDocument("images", image) }]
+}
+
+/**
+ * The research records one local change becomes: none for data that is not collected, an image's
+ * `images` record, or the record itself.
  */
 export function projectResearchRecords(mutation: ResearchMutation): ResearchRecord[] {
-  return externalizeTranscriptImages(mutation).flatMap((item) => projectResearchMutation(item) ?? [])
+  const images = imageRecords(mutation)
+  if (images) return images
+  const record = projectResearchMutation(mutation)
+  return record ? [record] : []
 }
 
 export function encodeResearchBatch(batch: ResearchBatch) {

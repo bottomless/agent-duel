@@ -48,11 +48,16 @@ to 3 MiB and a record to 2 MiB; oversized records are logged and dropped while t
 intact. The control plane still owns authentication, the OpenRouter proxy, and research
 ingestion.
 
-A transcript holds its images inline, so a few large ones put it over the record limit. Its research
-copy carries each image as its own `images` record, named by the SHA-256 of its bytes, and refers to
-it as `arena-image:sha256:<hash>`, with `imageIDs` listing them; both sides share a battle's images,
-so each is uploaded once. The control plane refuses a whole batch that names a collection it does
-not know, so deploy it before a desktop build that sends a new one.
+A session holds its images inline: a pasted one and every screenshot a contestant reads. A long
+run's transcript is then mostly images, and over the 10 MB artifact limit it is not kept at all,
+which stops the turn instead of asking for a vote. So the archive keeps each image as its own `image`
+artifact, named by the SHA-256 of its bytes, and the transcript refers to it as
+`arena-image:sha256:<hash>`, with `imageIDs` listing them (`arena/transcript-artifact.ts`). Reading an
+archived battle puts the images back, since the battle card shows the prompt's images from that copy.
+Research gets the same transcript, sent first so a full upload buffer drops images rather than the
+transcript, and each image as an `images` record; both sides share a battle's images, so each is
+uploaded once. The control plane refuses a whole batch that names a collection it does not know, so
+deploy it before a desktop build that sends a new one.
 
 ## Live synchronization
 

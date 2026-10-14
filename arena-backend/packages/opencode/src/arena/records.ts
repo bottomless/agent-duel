@@ -627,7 +627,14 @@ export type ArtifactDocument = {
   readonly _id: Identifier
   readonly runID?: Identifier
   readonly turnID?: Identifier
-  readonly kind: "tool_output" | "generation_request" | "generation_response" | "patch" | "transcript" | "other"
+  readonly kind:
+    | "tool_output"
+    | "generation_request"
+    | "generation_response"
+    | "patch"
+    | "transcript"
+    | "image"
+    | "other"
   readonly mimeType: string
   readonly encoding: "binary" | "utf8" | "json"
   readonly compression: "none" | "gzip"
@@ -637,6 +644,8 @@ export type ArtifactDocument = {
   readonly contentHash: string
   readonly truncated: boolean
   readonly truncationReason?: "artifact_limit" | "run_limit"
+  /** A transcript's images, named in its place and each kept as its own `image` artifact. */
+  readonly imageIDs?: ReadonlyArray<string>
   readonly createdAt: Date
 }
 

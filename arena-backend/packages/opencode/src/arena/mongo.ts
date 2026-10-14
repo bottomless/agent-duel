@@ -1528,18 +1528,21 @@ export class Store {
   private async storeArtifactNow(input: ArtifactInput) {
     const existing = await this.artifacts.findOne({ _id: input._id })
     if (existing) return existing
-    const totals = input.runID
-      ? (await this.artifacts.find({ runID: input.runID }, { projection: { storedSize: 1 } }).toArray()).reduce(
-          (sum, artifact) => sum + artifact.storedSize,
-          0,
-        )
-      : 0
+    // The transcript and its images are written when the run ends and are its record. The run budget
+    // bounds the per-call artifacts written before them, which a long run can fill on its own.
+    const record = input.kind === "transcript" || input.kind === "image"
+    const totals =
+      input.runID && !record
+        ? (await this.artifacts.find({ runID: input.runID }, { projection: { storedSize: 1 } }).toArray()).reduce(
+            (sum, artifact) => sum + artifact.storedSize,
+            0,
+          )
+        : 0
     const limited = bound({
       data: input.data,
-      // The transcript is written when the run ends and is its record. The run budget bounds the
-      // per-call artifacts written before it, which a long run can fill on its own.
-      runStoredBytes: input.kind === "transcript" ? 0 : totals,
-      whole: input.compression === "gzip",
+      runStoredBytes: totals,
+      // A gzip stream or an image cut short does not decode.
+      whole: input.compression === "gzip" || input.kind === "image",
     })
     return insertIdempotent(this.artifacts, {
       ...input,
