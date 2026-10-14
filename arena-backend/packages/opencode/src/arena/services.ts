@@ -112,9 +112,10 @@ function inside(root: string, candidate: string) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }
 
+// Stored with `/`, the form `safeOwnerRelativeCwd` gives an owner-reported directory.
 function relativeCwd(root: string, cwd: string) {
   const relative = path.relative(root, path.resolve(cwd))
-  return relative || "."
+  return relative.replaceAll(path.sep, "/") || "."
 }
 
 function safeOwnerRelativeCwd(value: string | undefined) {
