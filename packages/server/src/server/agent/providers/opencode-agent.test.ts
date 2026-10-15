@@ -626,9 +626,44 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     }
 
     expect(requests).toEqual([
-      { method: "POST", path: "/instance/dispose", directory: "/workspace/folder" },
+      {
+        method: "POST",
+        path: "/instance/dispose",
+        directory: encodeURIComponent("/workspace/folder"),
+      },
     ]);
     expect(runtime.acquisitions[0]?.releaseCount).toBe(1);
+  });
+
+  test("sends any directory name in a header OpenCode decodes back to it", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const directories: Array<string | null> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      // Headers rejects a value it cannot send, as fetch does.
+      directories.push(new Headers(init?.headers).get("x-opencode-directory"));
+      return Response.json(true);
+    });
+    const names = [
+      "C:\\Users\\Şule\\Masaüstü\\proje ı",
+      "/Users/王芳/项目",
+      "/home/иван/Проекты",
+      "/work/🚀 launch",
+      // Sent raw, OpenCode would decode the escape and open another directory.
+      "/work/a%41b",
+    ];
+
+    try {
+      for (const name of names) await client.refreshProjectDirectory(name);
+    } finally {
+      fetchMock.mockRestore();
+    }
+
+    expect(directories.map((value) => value && decodeURIComponent(value))).toEqual(names);
   });
 
   test("recovers Arena streams and canonical reads after the managed backend changes ports", async () => {
