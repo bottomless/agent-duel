@@ -1,3 +1,9 @@
+import {
+  SINGLE_AGENT_MODELS,
+  singleAgentControlsLocked,
+  singleAgentRatingRequired,
+} from "@/arena/single-agent";
+import { SingleAgentRatingDialog, SingleAgentComposerTooltip } from "@/arena/single-agent-rating";
 import { usePendingArenaPrompt } from "@/arena/use-pending-arena-prompt";
 import { ArenaStreamStatus } from "@/arena/stream-status";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -164,7 +170,7 @@ import {
   isArenaBattleOnScreen,
   partitionArenaSummaries,
 } from "@/arena/summary-anchor";
-import { ARENA_BOOTSTRAP_MODEL, arenaAgentPreferenceKey } from "@/arena/constants";
+import { arenaAgentPreferenceKey } from "@/arena/constants";
 import { applyArenaPreferencePatch, useArenaPreferences } from "@/arena/preferences";
 import {
   useArenaSessionQuery,
@@ -1703,7 +1709,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   const calloutArenaPreferences = useArenaPreferences(
     arenaAgentPreferenceKey(serverId, agentId ?? ""),
   );
-  const calloutThinking = calloutArenaPreferences.thinking;
+  const calloutModel = SINGLE_AGENT_MODELS[calloutArenaPreferences.modelSize];
   const calloutPendingPrompt = usePendingBattlePrompt(serverId, agentId ?? "");
   const [resolvingConflicts, setResolvingConflicts] = useState(false);
   // The send resolves in milliseconds while the agent works for much longer, so releasing the
@@ -1719,8 +1725,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
       void (async () => {
         try {
           await Promise.all([
-            calloutClient.setAgentModel(agentId, ARENA_BOOTSTRAP_MODEL),
-            calloutClient.setAgentThinkingOption(agentId, calloutThinking),
+            calloutClient.setAgentModel(agentId, calloutModel.model),
+            calloutClient.setAgentThinkingOption(agentId, calloutModel.thinking),
           ]);
           await dispatchComposerAgentMessage({
             client: calloutClient,
@@ -1737,7 +1743,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
         }
       })();
     },
-    [agentId, calloutClient, calloutThinking, serverId, toast],
+    [agentId, calloutClient, calloutModel, serverId, toast],
   );
   const resolveTrunkConflicts = useCallback(
     () => askCalloutAgent(resolvePromptText),
@@ -1840,6 +1846,19 @@ const AgentStreamSection = memo(function AgentStreamSection({
       ) : null,
     [filesState, filesRecoveryState, restoreFiles, retryInspection],
   );
+  const singleAgent = arenaSession.data?.singleAgent;
+  const singleAgentRating = useMemo(
+    () =>
+      singleAgent?.completed && singleAgentRatingRequired(singleAgent) ? (
+        <SingleAgentRatingDialog
+          key={singleAgent.id}
+          serverId={serverId}
+          agentId={agent.id}
+          ratingId={singleAgent.id}
+        />
+      ) : null,
+    [singleAgent, serverId, agent.id],
+  );
   // The summary keeps its slot when the next battle starts, so it stays mounted above the panes.
   const liveContent = useMemo(
     () =>
@@ -1848,7 +1867,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
       chatCallouts ||
       filesRecoveryBanner ||
       queuedBattlePreview ||
-      feedbackBattle ? (
+      feedbackBattle ||
+      singleAgentRating ? (
         <View style={styles.arenaReadyContent}>
           {latestBattleSummary}
           {activeBattle ?? (
@@ -1865,6 +1885,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
                   promptEligible={feedbackPromptEligible}
                 />
               ) : null}
+              {singleAgentRating}
             </>
           )}
         </View>
@@ -1878,6 +1899,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
       filesRecoveryBanner,
       latestBattleSummary,
       queuedBattlePreview,
+      singleAgentRating,
       workspaceId,
     ],
   );
@@ -2018,6 +2040,50 @@ const AgentComposerSection = memo(function AgentComposerSection({
   );
 });
 
+function useSingleAgentComposerState({
+  serverId,
+  agentId,
+  active,
+}: {
+  serverId: string;
+  agentId: string;
+  active: boolean;
+}) {
+  const arenaPreferences = useArenaPreferences(arenaAgentPreferenceKey(serverId, agentId));
+  const arenaSession = useArenaSessionQuery(serverId, agentId);
+  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
+  const toast = useToast();
+  const singleAgentRunning = useSessionStore((state) => {
+    const status = state.sessions[serverId]?.agents?.get(agentId)?.status;
+    return status === "running" || status === "initializing";
+  });
+  const singleAgentLocked = singleAgentControlsLocked({
+    singleAgent: arenaSession.data?.singleAgent,
+    modelSize: arenaPreferences.modelSize,
+    running: singleAgentRunning,
+  });
+  const selectedSingleAgentModel = SINGLE_AGENT_MODELS[arenaPreferences.modelSize];
+  const configuredModel = useSessionStore(
+    (state) => state.sessions[serverId]?.agents?.get(agentId)?.model,
+  );
+
+  useEffect(() => {
+    if (!active || !client) return;
+    void Promise.all([
+      client.setAgentModel(agentId, selectedSingleAgentModel.model),
+      client.setAgentThinkingOption(agentId, selectedSingleAgentModel.thinking),
+    ]).catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
+  }, [agentId, selectedSingleAgentModel, client, active, toast]);
+
+  const disabled =
+    singleAgentLocked || (active && configuredModel !== selectedSingleAgentModel.model);
+  return {
+    locked: singleAgentLocked,
+    disabled,
+    completed: arenaSession.data?.singleAgent?.completed === true,
+  };
+}
+
 function ActiveAgentComposer({
   agentId,
   serverId,
@@ -2043,7 +2109,6 @@ function ActiveAgentComposer({
 }) {
   const insets = useSafeAreaInsets();
   const toast = useToast();
-  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const arenaPreferenceKey = arenaAgentPreferenceKey(serverId, agentId);
   const arenaPreferences = useArenaPreferences(arenaPreferenceKey);
   const arenaSession = useArenaSessionQuery(serverId, agentId);
@@ -2202,17 +2267,12 @@ function ActiveAgentComposer({
     trunkConflicts,
   ]);
 
-  // Conflicts put the chat in single-agent mode without spending the Battle preference, so the
-  // agent needs the same model and thinking the toggle's own handler would have set. This used to
-  // ride on the cascade from forcing Battle off, which no longer happens for a conflict.
   const singleAgentTurnsActive = !arenaPreferences.battleMode || trunkConflicts !== null;
-  useEffect(() => {
-    if (!singleAgentTurnsActive || !client) return;
-    void Promise.all([
-      client.setAgentModel(agentId, ARENA_BOOTSTRAP_MODEL),
-      client.setAgentThinkingOption(agentId, arenaPreferences.thinking),
-    ]).catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
-  }, [agentId, arenaPreferences.thinking, client, singleAgentTurnsActive, toast]);
+  const singleAgentComposer = useSingleAgentComposerState({
+    serverId,
+    agentId,
+    active: singleAgentTurnsActive,
+  });
 
   useEffect(() => {
     const guard = resolveConflictGuard({
@@ -2336,6 +2396,7 @@ function ActiveAgentComposer({
     if (
       !snapshot ||
       !canDrainArenaFollowUp(snapshot) ||
+      singleAgentRatingRequired(snapshot.singleAgent) ||
       arenaStart.isPending ||
       !queuedArenaFollowUp
     ) {
@@ -2455,46 +2516,51 @@ function ActiveAgentComposer({
         onArchiveFinished={handleHideFinishedProviderSubagents}
         onDetachSubagent={canDetachSubagents ? handleDetachSubagent : undefined}
       />
-      <Composer
-        agentId={agentId}
-        serverId={serverId}
-        workspaceId={workspaceId}
-        externalKeyboardShift
-        isPaneFocused={isPaneFocused}
-        value={agentInputDraft.text}
-        onChangeText={agentInputDraft.setText}
-        attachments={agentInputDraft.attachments}
-        attachmentScopeKeys={attachmentScopeKeys}
-        onOpenWorkspaceAttachment={handleOpenWorkspaceAttachment}
-        onChangeAttachments={agentInputDraft.setAttachments}
-        cwd={cwd}
-        clearDraft={agentInputDraft.clear}
-        autoFocus={isPaneFocused}
-        autoFocusKey={String(agentInputDraft.attachmentFocusRequestId)}
-        onSubmitMessage={composerPresentation.onSubmitMessage}
-        queueWhileBusy={canQueueNextTurn}
-        arenaFollowUp={arenaComposerQueueState.arenaFollowUp}
-        submitButtonAccessibilityLabel={composerPresentation.submitButtonAccessibilityLabel}
-        submitButtonTestID={composerPresentation.submitButtonTestID}
-        submitLabel={composerPresentation.submitLabel}
-        placeholder={composerPresentation.placeholder}
-        maxImages={composerMaxImages}
-        leftContent={battleReplyComposer.leftContent}
-        isSubmitLoading={
-          isSubmitLoading ||
-          arenaStart.isPending ||
-          arenaReplyMutation.isPending ||
-          useLegacyBattleLoading
-        }
-        disabled={arenaComposerQueueState.disabled}
-        defaultSendBehavior={arenaComposerQueueState.defaultSendBehavior}
-        onAttentionInputFocus={onAttentionInputFocus}
-        onAttentionPromptSend={onAttentionPromptSend}
-        onComposerHeightChange={onComposerHeightChange}
-        onMessageSent={onMessageSent}
-        onClientSlashCommand={handleClientSlashCommand}
-        isCompactLayout={isCompactComposerLayout}
-      />
+      <SingleAgentComposerTooltip
+        locked={singleAgentComposer.locked}
+        completed={singleAgentComposer.completed}
+      >
+        <Composer
+          agentId={agentId}
+          serverId={serverId}
+          workspaceId={workspaceId}
+          externalKeyboardShift
+          isPaneFocused={isPaneFocused}
+          value={agentInputDraft.text}
+          onChangeText={agentInputDraft.setText}
+          attachments={agentInputDraft.attachments}
+          attachmentScopeKeys={attachmentScopeKeys}
+          onOpenWorkspaceAttachment={handleOpenWorkspaceAttachment}
+          onChangeAttachments={agentInputDraft.setAttachments}
+          cwd={cwd}
+          clearDraft={agentInputDraft.clear}
+          autoFocus={isPaneFocused}
+          autoFocusKey={String(agentInputDraft.attachmentFocusRequestId)}
+          onSubmitMessage={composerPresentation.onSubmitMessage}
+          queueWhileBusy={canQueueNextTurn}
+          arenaFollowUp={arenaComposerQueueState.arenaFollowUp}
+          submitButtonAccessibilityLabel={composerPresentation.submitButtonAccessibilityLabel}
+          submitButtonTestID={composerPresentation.submitButtonTestID}
+          submitLabel={composerPresentation.submitLabel}
+          placeholder={composerPresentation.placeholder}
+          maxImages={composerMaxImages}
+          leftContent={battleReplyComposer.leftContent}
+          isSubmitLoading={
+            isSubmitLoading ||
+            arenaStart.isPending ||
+            arenaReplyMutation.isPending ||
+            useLegacyBattleLoading
+          }
+          disabled={arenaComposerQueueState.disabled || singleAgentComposer.disabled}
+          defaultSendBehavior={arenaComposerQueueState.defaultSendBehavior}
+          onAttentionInputFocus={onAttentionInputFocus}
+          onAttentionPromptSend={onAttentionPromptSend}
+          onComposerHeightChange={onComposerHeightChange}
+          onMessageSent={onMessageSent}
+          onClientSlashCommand={handleClientSlashCommand}
+          isCompactLayout={isCompactComposerLayout}
+        />
+      </SingleAgentComposerTooltip>
     </ReanimatedAnimated.View>
   );
 }

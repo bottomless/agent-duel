@@ -4,6 +4,7 @@ import { validateOpenRouter, type ModelPool } from "./pool"
 import { handleAssignmentsRequest } from "./assignments"
 import { handleComparisonRequest } from "./comparison"
 import { handleOpenRouterRequest } from "./openrouter"
+import { mediumModel } from "./default-pool"
 
 export type ArenaServiceOptions = {
   /**
@@ -53,7 +54,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     validateModels:
       options.validateModels ??
       ((apiKey) =>
-        (validation ??= validateOpenRouter(options.pool, apiKey, fetch).catch((error) => {
+        (validation ??= validateOpenRouter([...options.pool, mediumModel], apiKey, fetch).catch((error) => {
           validation = undefined
           throw error
         }))),

@@ -5,11 +5,13 @@ export type ModelProfile = {
   readonly contextWindow: number
   /** Sent to OpenRouter as `provider`. */
   readonly routing: Readonly<Record<string, unknown>>
+  readonly reasoningEffort?: "high" | "xhigh"
 }
 
 export type ModelPool = readonly ModelProfile[]
 
 type CatalogModel = {
+  readonly id?: unknown
   readonly canonical_slug?: unknown
   readonly context_length?: unknown
   readonly architecture?: { readonly input_modalities?: unknown; readonly output_modalities?: unknown }
@@ -29,7 +31,11 @@ export function validateCatalog(pool: ModelPool, value: unknown) {
   if (!record(value) || !Array.isArray(value.data)) throw new Error("OpenRouter returned an invalid model catalog")
   const catalog = value.data.filter(record) as CatalogModel[]
   for (const profile of pool) {
-    const model = catalog.find((item) => item.canonical_slug === profile.canonicalSlug)
+    const model = catalog.find(
+      (item) =>
+        item.canonical_slug === profile.canonicalSlug ||
+        (profile.canonicalSlug === profile.slug && item.id === profile.slug),
+    )
     if (!model) {
       throw new Error(`Arena contestant is unavailable: ${profile.displayName}`)
     }
@@ -48,8 +54,9 @@ export function validateCatalog(pool: ModelPool, value: unknown) {
     if (!inputs.has("image")) {
       throw new Error(`Arena contestant cannot read images: ${profile.displayName}`)
     }
-    if (!parameters.has("reasoning") || !parameters.has("reasoning_effort") || !efforts.has("high")) {
-      throw new Error(`Arena contestant does not support High reasoning: ${profile.displayName}`)
+    const effort = profile.reasoningEffort ?? "high"
+    if (!parameters.has("reasoning") || !parameters.has("reasoning_effort") || !efforts.has(effort)) {
+      throw new Error(`Arena contestant does not support ${effort} reasoning: ${profile.displayName}`)
     }
   }
 }

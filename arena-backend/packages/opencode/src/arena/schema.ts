@@ -163,16 +163,7 @@ export const ReviewAnswer = Schema.Struct({
 const GitApplication = Schema.Struct({
   // `review` is the one state that reports work not yet done: the promotion stopped before
   // writing anything, and `review.items` are the questions it needs answered first.
-  state: Schema.Literals([
-    "pending",
-    "applied",
-    "blocked",
-    "failed",
-    "conflicted",
-    "manual",
-    "review",
-    "discarded",
-  ]),
+  state: Schema.Literals(["pending", "applied", "blocked", "failed", "conflicted", "manual", "review", "discarded"]),
   reason: Schema.optional(Schema.String),
   resultCommit: Schema.optional(Schema.String),
   branch: Schema.optional(Schema.String),
@@ -315,6 +306,9 @@ export const Snapshot = Schema.Struct({
   singleAgent: Schema.optional(
     Schema.Struct({
       id: Schema.String,
+      modelSize: Schema.Literals(["medium", "frontier"]),
+      ratingRequired: Schema.Boolean,
+      completed: Schema.Boolean,
       revealed: Schema.Boolean,
       vote: Schema.optional(Schema.Literals(["up", "down"])),
       identity: Schema.optional(Identity),

@@ -1,4 +1,4 @@
-import type { ModelPool } from "./pool"
+import type { ModelPool, ModelProfile } from "./pool"
 
 // The control plane's development set, and the pool a BYOK source build draws
 // from on the user's own key. The hosted production pool stays in the control
@@ -38,3 +38,15 @@ export const defaultPool = [
     },
   },
 ] as const satisfies ModelPool
+
+export const mediumModel = {
+  displayName: "GPT Luna 5.6 Xhigh",
+  slug: "openai/gpt-5.6-luna",
+  canonicalSlug: "openai/gpt-5.6-luna-20260709",
+  contextWindow: 1_050_000,
+  routing: {
+    sort: "throughput",
+    require_parameters: true,
+  },
+  reasoningEffort: "xhigh",
+} as const satisfies ModelProfile

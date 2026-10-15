@@ -321,22 +321,25 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(ctx.params.sessionID)
       yield* assertSessionMutationAllowed(ctx.params.sessionID)
       const messageID = ctx.payload.messageID ?? MessageID.ascending()
-      const arenaTurn = yield* arena.beginNormalTurn({
-        sessionID: ctx.params.sessionID,
-        messageID,
-      }).pipe(
-        // BadRequest carries a tag and nothing else, so a refusal reaches the app as
-        // `{"_tag":"BadRequest"}` with no reason. Log it here or the reason is gone for good.
-        Effect.tapError((error) =>
-          Effect.logWarning("Arena refused a normal turn", { sessionID: ctx.params.sessionID, error }),
-        ),
-        Effect.mapError(() => new HttpApiError.BadRequest({})),
-      )
+      const arenaTurn = yield* arena
+        .beginNormalTurn({
+          sessionID: ctx.params.sessionID,
+          messageID,
+          model: ctx.payload.model,
+        })
+        .pipe(
+          // BadRequest carries a tag and nothing else, so a refusal reaches the app as
+          // `{"_tag":"BadRequest"}` with no reason. Log it here or the reason is gone for good.
+          Effect.tapError((error) =>
+            Effect.logWarning("Arena refused a normal turn", { sessionID: ctx.params.sessionID, error }),
+          ),
+          Effect.mapError(() => new HttpApiError.BadRequest({})),
+        )
       const message = yield* promptSvc
         .prompt({
           ...ctx.payload,
           messageID,
-          ...(arenaTurn ? { model: arenaTurn.model } : {}),
+          ...(arenaTurn ? { model: arenaTurn.model, variant: arenaTurn.variant } : {}),
           // Beside the user's words, where the model weighs it against the transcript; a system
           // line lost to the winner's grafted "Done." in testing.
           ...(arenaTurn?.note
@@ -345,9 +348,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           sessionID: ctx.params.sessionID,
         })
         .pipe(
-          Effect.ensuring(
-            arena.recordNormalTurn({ sessionID: ctx.params.sessionID, messageID }),
-          ),
+          Effect.ensuring(arena.recordNormalTurn({ sessionID: ctx.params.sessionID, messageID })),
           Effect.mapError(() => new HttpApiError.BadRequest({})),
         )
       return HttpServerResponse.stream(
@@ -365,22 +366,25 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(ctx.params.sessionID)
       yield* assertSessionMutationAllowed(ctx.params.sessionID)
       const messageID = ctx.payload.messageID ?? MessageID.ascending()
-      const arenaTurn = yield* arena.beginNormalTurn({
-        sessionID: ctx.params.sessionID,
-        messageID,
-      }).pipe(
-        // BadRequest carries a tag and nothing else, so a refusal reaches the app as
-        // `{"_tag":"BadRequest"}` with no reason. Log it here or the reason is gone for good.
-        Effect.tapError((error) =>
-          Effect.logWarning("Arena refused a normal turn", { sessionID: ctx.params.sessionID, error }),
-        ),
-        Effect.mapError(() => new HttpApiError.BadRequest({})),
-      )
+      const arenaTurn = yield* arena
+        .beginNormalTurn({
+          sessionID: ctx.params.sessionID,
+          messageID,
+          model: ctx.payload.model,
+        })
+        .pipe(
+          // BadRequest carries a tag and nothing else, so a refusal reaches the app as
+          // `{"_tag":"BadRequest"}` with no reason. Log it here or the reason is gone for good.
+          Effect.tapError((error) =>
+            Effect.logWarning("Arena refused a normal turn", { sessionID: ctx.params.sessionID, error }),
+          ),
+          Effect.mapError(() => new HttpApiError.BadRequest({})),
+        )
       yield* promptSvc
         .prompt({
           ...ctx.payload,
           messageID,
-          ...(arenaTurn ? { model: arenaTurn.model } : {}),
+          ...(arenaTurn ? { model: arenaTurn.model, variant: arenaTurn.variant } : {}),
           // Beside the user's words, where the model weighs it against the transcript; a system
           // line lost to the winner's grafted "Done." in testing.
           ...(arenaTurn?.note
@@ -389,17 +393,17 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           sessionID: ctx.params.sessionID,
         })
         .pipe(
-        Effect.ensuring(arena.recordNormalTurn({ sessionID: ctx.params.sessionID, messageID })),
-        Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            yield* Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause })
-            yield* events.publish(Session.Event.Error, {
-              sessionID: ctx.params.sessionID,
-              error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
-            })
-          }),
-        ),
-        Effect.forkIn(scope, { startImmediately: true }),
+          Effect.ensuring(arena.recordNormalTurn({ sessionID: ctx.params.sessionID, messageID })),
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause })
+              yield* events.publish(Session.Event.Error, {
+                sessionID: ctx.params.sessionID,
+                error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+              })
+            }),
+          ),
+          Effect.forkIn(scope, { startImmediately: true }),
         )
       return HttpApiSchema.NoContent.make()
     })

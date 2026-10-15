@@ -3,10 +3,12 @@ import { useCallback } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { DEFAULT_ARENA_THINKING, type ArenaThinkingLevel } from "./constants";
+import type { SingleAgentModelSize } from "./single-agent";
 
 export interface ArenaPreferences {
   battleMode: boolean;
   thinking: ArenaThinkingLevel;
+  modelSize: SingleAgentModelSize;
   /**
    * What `battleMode` was before a conflicted trunk paused battles, or undefined when nothing is
    * paused. Battles cannot run on a half-merged tree, so the switch goes off and stays off while
@@ -24,6 +26,7 @@ interface ArenaPreferencesState {
 export const DEFAULT_ARENA_PREFERENCES: ArenaPreferences = {
   battleMode: true,
   thinking: DEFAULT_ARENA_THINKING,
+  modelSize: "medium",
 };
 
 const useArenaPreferencesStore = create<ArenaPreferencesState>()(
@@ -77,6 +80,7 @@ export function useArenaPreferences(key: string) {
   const setPreferences = useArenaPreferencesStore((state) => state.setPreferences);
   const battleMode = stored?.battleMode ?? DEFAULT_ARENA_PREFERENCES.battleMode;
   const thinking = stored?.thinking ?? DEFAULT_ARENA_PREFERENCES.thinking;
+  const modelSize = stored?.modelSize ?? DEFAULT_ARENA_PREFERENCES.modelSize;
   const battleModeBeforeConflict = stored?.battleModeBeforeConflict;
   const setBattleMode = useCallback(
     (value: boolean) => setPreferences(key, { battleMode: value }),
@@ -86,5 +90,17 @@ export function useArenaPreferences(key: string) {
     (value: ArenaThinkingLevel) => setPreferences(key, { thinking: value }),
     [key, setPreferences],
   );
-  return { battleMode, battleModeBeforeConflict, thinking, setBattleMode, setThinking };
+  const setModelSize = useCallback(
+    (value: SingleAgentModelSize) => setPreferences(key, { modelSize: value }),
+    [key, setPreferences],
+  );
+  return {
+    battleMode,
+    battleModeBeforeConflict,
+    thinking,
+    modelSize,
+    setBattleMode,
+    setThinking,
+    setModelSize,
+  };
 }

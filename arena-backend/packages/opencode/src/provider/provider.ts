@@ -1264,9 +1264,9 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
   }
 }
 
-  function arenaProvider(): Info {
-    const providerID = ProviderV2.ID.make(ArenaRuntime.providerID)
-    const model = {
+function arenaProvider(): Info {
+  const providerID = ProviderV2.ID.make(ArenaRuntime.providerID)
+  const model = {
     id: ModelV2.ID.make(ArenaModelProfile.contestant.id),
     providerID,
     name: "Contestant",
@@ -1297,8 +1297,19 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
     },
     release_date: "2026-01-01",
     variants: { high: { reasoning: { effort: "high" } } },
-    } satisfies Model
-    const models = { [ArenaModelProfile.contestant.id]: model }
+  } satisfies Model
+  const medium = {
+    ...model,
+    id: ModelV2.ID.make(ArenaModelProfile.medium.id),
+    name: "GPT Luna 5.6 Xhigh",
+    api: { ...model.api, id: ArenaModelProfile.medium.id },
+    limit: {
+      context: ArenaModelProfile.medium.contextWindow,
+      output: ArenaModelProfile.medium.outputLimit,
+    },
+    variants: { xhigh: { reasoning: { effort: "xhigh" } } },
+  } satisfies Model
+  const models = { [ArenaModelProfile.contestant.id]: model, [ArenaModelProfile.medium.id]: medium }
   return {
     id: providerID,
     source: "custom",

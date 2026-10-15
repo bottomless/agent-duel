@@ -334,12 +334,16 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     if (!record(input)) {
       return Response.json({ error: { message: "Arena OpenRouter request body must be an object" } }, { status: 400 })
     }
-    if (input.model !== "contestant") {
+    if (input.model !== "contestant" && input.model !== "medium") {
       return Response.json({ error: { message: "Arena contestant model is invalid" } }, { status: 400 })
     }
     const db = await context.db()
     const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
     if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
+    const expectedModel = routeAssignment.modelSize === "medium" ? "medium" : "contestant"
+    if (input.model !== expectedModel) {
+      return Response.json({ error: { message: "Arena contestant model is invalid" } }, { status: 400 })
+    }
     const requestedGenerationID = request.headers.get("x-arena-generation-id")?.trim()
     if (requestedGenerationID && !/^gen_[0-9a-f]{32}$/i.test(requestedGenerationID)) {
       return Response.json({ error: { message: "Arena generation ID is invalid" } }, { status: 400 })
@@ -350,7 +354,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       JSON.stringify({
         ...withoutSampling(input),
         model: routeAssignment.model.slug,
-        reasoning: { effort: "high" },
+        reasoning: { effort: routeAssignment.modelSize === "medium" ? "xhigh" : "high" },
         provider: routeAssignment.model.routing,
         ...promptCache(routeAssignment.model.slug, input),
         stream_options: record(input.stream_options)

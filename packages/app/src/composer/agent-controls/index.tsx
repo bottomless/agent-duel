@@ -84,10 +84,8 @@ import {
   type AgentProfilePicker,
 } from "@/agent-profiles";
 import { Switch } from "@/components/ui/switch";
-import { useCompactComposerToolbar } from "@/composer/toolbar-layout";
 import { ArenaAutoAcceptControl } from "@/arena/auto-accept-control";
 import {
-  ARENA_BOOTSTRAP_MODEL,
   ARENA_THINKING_OPTIONS,
   arenaAgentPreferenceKey,
   type ArenaThinkingLevel,
@@ -98,9 +96,9 @@ import {
   resolveBattleModeDisabled,
 } from "@/arena/conflict-guard";
 import { useArenaPreferences } from "@/arena/preferences";
-import { useArenaSessionQuery, useArenaTurnMutation } from "@/arena/use-arena-session";
-import { useVisibleSingleAgentIdentity } from "@/composer/agent-controls/single-agent-identity-visibility";
-import { SingleAgentIdentityControl } from "./single-agent-identity-control";
+import { useArenaSessionQuery } from "@/arena/use-arena-session";
+import { SingleAgentSizeControl } from "./single-agent-size-control";
+import { singleAgentControlsLocked, type SingleAgentModelSize } from "@/arena/single-agent";
 
 interface AgentControlOption {
   id: string;
@@ -141,11 +139,12 @@ interface ControlledAgentControlsProps {
   battleMode?: boolean;
   onBattleModeChange?: (enabled: boolean) => void;
   battleModeDisabled?: boolean;
+  modelSize?: SingleAgentModelSize;
+  onModelSizeChange?: (value: SingleAgentModelSize) => void;
   battleActive?: boolean;
   battleToggleHidden?: boolean;
   singleAgent?: ArenaSnapshot["singleAgent"];
-  singleAgentVotePending?: boolean;
-  onSingleAgentVote?: (vote: "up" | "down") => void;
+  singleAgentLocked?: boolean;
 }
 
 export interface DraftAgentControlsProps {
@@ -177,6 +176,8 @@ export interface DraftAgentControlsProps {
   battleMode?: boolean;
   onBattleModeChange?: (enabled: boolean) => void;
   battleModeDisabled?: boolean;
+  modelSize?: SingleAgentModelSize;
+  onModelSizeChange?: (value: SingleAgentModelSize) => void;
 }
 
 interface AgentControlsProps {
@@ -360,38 +361,33 @@ function pickDesktopModel({
 }
 
 function ArenaModeControls({
-  battleMode,
+  battleMode = true,
   onBattleModeChange,
   battleModeDisabled,
   battleActive = false,
-  battleToggleHidden = false,
+  battleToggleHidden,
   features,
   onSetFeature,
-  thinkingOptions,
-  selectedThinkingOptionId,
-  onSelectThinkingOption,
   disabled,
+  modelSize = "medium",
+  onModelSizeChange,
   singleAgent,
-  singleAgentVotePending = false,
-  onSingleAgentVote,
-}: {
-  battleMode: boolean;
-  onBattleModeChange?: (enabled: boolean) => void;
-  battleModeDisabled: boolean;
-  battleActive?: boolean;
-  battleToggleHidden?: boolean;
-  features?: AgentFeature[];
-  onSetFeature?: (featureId: string, value: unknown) => void;
-  thinkingOptions: AgentControlOption[];
-  selectedThinkingOptionId?: string;
-  onSelectThinkingOption?: (thinkingOptionId: string) => void;
-  disabled: boolean;
-  singleAgent?: ArenaSnapshot["singleAgent"];
-  singleAgentVotePending?: boolean;
-  onSingleAgentVote?: (vote: "up" | "down") => void;
-}) {
-  const { t } = useTranslation();
-  const compactToolbar = useCompactComposerToolbar();
+  singleAgentLocked = false,
+}: Pick<
+  ControlledAgentControlsProps,
+  | "battleMode"
+  | "onBattleModeChange"
+  | "battleModeDisabled"
+  | "battleActive"
+  | "battleToggleHidden"
+  | "features"
+  | "onSetFeature"
+  | "disabled"
+  | "modelSize"
+  | "onModelSizeChange"
+  | "singleAgent"
+  | "singleAgentLocked"
+>) {
   const autoAccept = features?.find(
     (feature): feature is Extract<AgentFeature, { type: "toggle" }> =>
       feature.id === "auto_accept" && feature.type === "toggle",
@@ -400,22 +396,9 @@ function ArenaModeControls({
     (enabled: boolean) => onSetFeature?.("auto_accept", enabled),
     [onSetFeature],
   );
-  const [thinkingOpen, setThinkingOpen] = useState(false);
-  const thinkingAnchorRef = useRef<View>(null);
-  const options = useMemo(() => toComboboxOptions(thinkingOptions), [thinkingOptions]);
-  const selected =
-    thinkingOptions.find((option) => option.id === selectedThinkingOptionId)?.label ??
-    thinkingOptions[0]?.label ??
-    "High";
-  const handleThinkingPress = useCallback(() => {
-    setThinkingOpen((value) => !value);
-  }, []);
-  const handleThinkingSelect = useCallback(
-    (id: string) => {
-      onSelectThinkingOption?.(id);
-    },
-    [onSelectThinkingOption],
-  );
+  const controlsDisabled = Boolean(disabled || singleAgentLocked);
+  const showSingleAgent = !battleMode || singleAgentLocked;
+  const activeModelSize = singleAgentLocked && singleAgent ? singleAgent.modelSize : modelSize;
   return (
     <View style={styles.arenaControls} testID="arena-agent-controls">
       {!battleToggleHidden ? (
@@ -424,63 +407,27 @@ function ArenaModeControls({
           <Switch
             value={battleMode}
             onValueChange={onBattleModeChange}
-            disabled={disabled || battleModeDisabled}
+            disabled={controlsDisabled || battleModeDisabled}
             accessibilityLabel="Battle mode"
             testID="arena-battle-toggle"
           />
         </View>
       ) : null}
+      {showSingleAgent ? (
+        <SingleAgentSizeControl
+          value={activeModelSize}
+          singleAgent={singleAgent}
+          disabled={controlsDisabled}
+          onChange={onModelSizeChange}
+        />
+      ) : null}
       {autoAccept ? (
         <ArenaAutoAcceptControl
           enabled={autoAccept.value}
           onChange={handleAutoAcceptChange}
-          disabled={disabled || !onSetFeature}
+          disabled={controlsDisabled || !onSetFeature}
           battleActive={battleActive}
         />
-      ) : null}
-      {!battleMode ? (
-        <>
-          {singleAgent ? (
-            <SingleAgentIdentityControl
-              disabled={disabled}
-              pending={singleAgentVotePending}
-              singleAgent={singleAgent}
-              onVote={onSingleAgentVote}
-            />
-          ) : null}
-          {/* The same tooltip the provider composer gives Thinking; a compact toolbar shows only
-              the icon, so the tooltip is the control's only label there. */}
-          <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
-            <TooltipTrigger asChild triggerRefProp="ref">
-              <AgentControlTrigger
-                ref={thinkingAnchorRef}
-                icon={ThinkingIcon}
-                surface="toolbar"
-                label="Thinking"
-                showToolbarLabel={!compactToolbar}
-                value={selected}
-                open={thinkingOpen}
-                disabled={disabled}
-                onPress={handleThinkingPress}
-                accessibilityLabel={`Thinking level: ${selected}`}
-                testID="agent-thinking-selector"
-              />
-            </TooltipTrigger>
-            <TooltipContent side="top" align="center" offset={8}>
-              <Text style={styles.tooltipText}>{t(getAgentControlHintKey("thinking"))}</Text>
-            </TooltipContent>
-          </Tooltip>
-          <Combobox
-            options={options}
-            value={selectedThinkingOptionId ?? "high"}
-            onSelect={handleThinkingSelect}
-            open={thinkingOpen}
-            onOpenChange={setThinkingOpen}
-            anchorRef={thinkingAnchorRef}
-            desktopPlacement="top-start"
-            desktopMinWidth={180}
-          />
-        </>
       ) : null}
     </View>
   );
@@ -516,14 +463,6 @@ function selectAgentControlsSlice(
     thinkingOptionId: currentAgent.thinkingOptionId,
     lastUsage: currentAgent.lastUsage,
   };
-}
-
-function selectAgentStatus(agent: AgentControlsSlice) {
-  return agent?.status;
-}
-
-function selectSingleAgentIdentity(snapshot: ArenaSnapshot | undefined) {
-  return snapshot?.singleAgent;
 }
 
 function resolveSnapshotSelectedEntry(
@@ -600,11 +539,12 @@ function ControlledAgentControls({
   battleMode,
   onBattleModeChange,
   battleModeDisabled = false,
+  modelSize,
+  onModelSizeChange,
   battleActive,
   battleToggleHidden,
   singleAgent,
-  singleAgentVotePending,
-  onSingleAgentVote,
+  singleAgentLocked,
 }: ControlledAgentControlsProps) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
@@ -836,17 +776,15 @@ function ControlledAgentControls({
         battleMode={battleMode}
         onBattleModeChange={onBattleModeChange}
         battleModeDisabled={battleModeDisabled}
+        modelSize={modelSize}
+        onModelSizeChange={onModelSizeChange}
         battleActive={battleActive}
         battleToggleHidden={battleToggleHidden}
         features={features}
         onSetFeature={onSetFeature}
-        thinkingOptions={formattedThinkingOptions}
-        selectedThinkingOptionId={selectedThinkingOptionId}
-        onSelectThinkingOption={onSelectThinkingOption}
         disabled={disabled}
         singleAgent={singleAgent}
-        singleAgentVotePending={singleAgentVotePending}
-        onSingleAgentVote={onSingleAgentVote}
+        singleAgentLocked={singleAgentLocked}
       />
     );
   }
@@ -1642,11 +1580,15 @@ export const AgentControls = memo(function AgentControls({
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const arenaPreferences = useArenaPreferences(arenaAgentPreferenceKey(serverId, agentId));
   const arenaSession = useArenaSessionQuery(serverId, agentId);
-  const arenaTurn = useArenaTurnMutation(serverId, agentId);
-  const visibleSingleAgent = useVisibleSingleAgentIdentity(
-    selectAgentStatus(agent),
-    selectSingleAgentIdentity(arenaSession.data),
-    arenaSession.refetch,
+  const singleAgent = arenaSession.data?.singleAgent;
+  const singleAgentLocked = useMemo(
+    () =>
+      singleAgentControlsLocked({
+        singleAgent,
+        modelSize: arenaPreferences.modelSize,
+        running: agent?.status === "running" || agent?.status === "initializing",
+      }),
+    [singleAgent, arenaPreferences.modelSize, agent?.status],
   );
   const toast = useToast();
   const modeControl = useLiveAgentModeControl(serverId, agentId);
@@ -1839,17 +1781,17 @@ export const AgentControls = memo(function AgentControls({
 
   const handleArenaBattleMode = useCallback(
     (enabled: boolean) => {
+      if (singleAgentLocked) return;
       arenaPreferences.setBattleMode(enabled);
-      if (!enabled && client) {
-        void client.setAgentModel(agentId, ARENA_BOOTSTRAP_MODEL).catch((error) => {
-          toast.error(toErrorMessage(error));
-        });
-        void client.setAgentThinkingOption(agentId, arenaPreferences.thinking).catch((error) => {
-          toast.error(toErrorMessage(error));
-        });
-      }
     },
-    [agentId, arenaPreferences, client, toast],
+    [arenaPreferences, singleAgentLocked],
+  );
+  const handleModelSizeChange = useCallback(
+    (value: SingleAgentModelSize) => {
+      if (singleAgentLocked) return;
+      arenaPreferences.setModelSize(value);
+    },
+    [arenaPreferences, singleAgentLocked],
   );
 
   const handleArenaThinking = useCallback(
@@ -1863,17 +1805,6 @@ export const AgentControls = memo(function AgentControls({
       }
     },
     [agentId, arenaPreferences, client, toast],
-  );
-
-  const handleSingleAgentVote = useCallback(
-    (vote: "up" | "down") => {
-      const ratingId = arenaSession.data?.singleAgent?.id;
-      if (!ratingId) return;
-      void arenaTurn
-        .mutateAsync({ kind: "single_agent_vote", ratingId, vote })
-        .catch((error) => toast.error(toErrorMessage(error)));
-    },
-    [arenaSession.data?.singleAgent?.id, arenaTurn, toast],
   );
 
   if (!agent) {
@@ -1911,9 +1842,10 @@ export const AgentControls = memo(function AgentControls({
         snapshot: arenaSession.data,
         agentRunning: agent.status === "running",
       })}
-      singleAgent={visibleSingleAgent}
-      singleAgentVotePending={arenaTurn.isPending}
-      onSingleAgentVote={handleSingleAgentVote}
+      modelSize={arenaPreferences.modelSize}
+      onModelSizeChange={handleModelSizeChange}
+      singleAgentLocked={singleAgentLocked}
+      singleAgent={singleAgent}
     />
   );
 });
@@ -1947,6 +1879,8 @@ export function DraftAgentControls({
   battleMode,
   onBattleModeChange,
   battleModeDisabled = false,
+  modelSize,
+  onModelSizeChange,
 }: DraftAgentControlsProps) {
   const mappedThinkingOptions = useMemo<AgentControlOption[]>(() => {
     return toThinkingControlOptions(thinkingOptions);
@@ -2037,6 +1971,8 @@ export function DraftAgentControls({
       battleMode={battleMode}
       onBattleModeChange={onBattleModeChange}
       battleModeDisabled={battleModeDisabled}
+      modelSize={modelSize}
+      onModelSizeChange={onModelSizeChange}
     />
   );
 }

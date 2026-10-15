@@ -7,6 +7,12 @@ export const contestant = {
   outputLimit: 131_072,
 } as const
 
+export const medium = {
+  id: "medium",
+  contextWindow: 1_050_000,
+  outputLimit: 128_000,
+} as const
+
 // Session creation can carry this non-contestant placeholder before Arena has
 // assigned a model. No battle request is routed with it.
 export const bootstrapModel = {
@@ -24,6 +30,13 @@ export const highReasoning = {
   variant: "high",
   reasoning: {
     effort: "high",
+  },
+} as const
+
+export const xhighReasoning = {
+  variant: "xhigh",
+  reasoning: {
+    effort: "xhigh",
   },
 } as const
 

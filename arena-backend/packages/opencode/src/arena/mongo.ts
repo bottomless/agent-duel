@@ -469,9 +469,7 @@ export class Store {
    * chat that has only ever run with Battle off: those turns fold straight into the canonical
    * spine without a turn record, so there is nothing here to anchor to.
    */
-  private async contributionSpans(
-    chats: readonly Pick<ChatDocument, "_id" | "canonicalSessionID">[],
-  ) {
+  private async contributionSpans(chats: readonly Pick<ChatDocument, "_id" | "canonicalSessionID">[]) {
     const spans = new Map<string, { base: string; result: string }>()
     if (chats.length === 0) return spans
     const chatIDs = chats.map((chat) => chat._id)
@@ -568,8 +566,33 @@ export class Store {
     return this.singleAgentRatings.findOne({ sessionID, messageID })
   }
 
+  singleAgentRatingByID(sessionID: string, ratingID: string) {
+    return this.singleAgentRatings.findOne({ _id: ratingID, sessionID })
+  }
+
   latestSingleAgentRating(sessionID: string) {
     return this.singleAgentRatings.find({ sessionID }).sort({ createdAt: -1, _id: -1 }).limit(1).next()
+  }
+
+  pendingSingleAgentRating(sessionID: string) {
+    return this.singleAgentRatings.findOne({
+      sessionID,
+      modelSize: "frontier",
+      vote: { $exists: false },
+    })
+  }
+
+  snapshotSingleAgentRating(sessionID: string) {
+    return this.singleAgentRatings
+      .find({
+        sessionID,
+        modelSize: "frontier",
+        vote: { $exists: false },
+      })
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(1)
+      .next()
+      .then((pending) => pending ?? this.latestSingleAgentRating(sessionID))
   }
 
   async completeSingleAgentRating(input: { sessionID: string; messageID: string; at?: Date }) {
@@ -587,6 +610,15 @@ export class Store {
     })
     if (!current) throw new Error(`Arena single-agent pass not found: ${input.messageID}`)
     return current
+  }
+
+  async abandonSingleAgentRating(input: { sessionID: string; messageID: string }) {
+    const result = await this.singleAgentRatings.deleteOne({
+      sessionID: input.sessionID,
+      messageID: input.messageID,
+      vote: { $exists: false },
+    })
+    if ((result.deletedCount ?? 0) > 0) this.changed()
   }
 
   async recordSingleAgentResult(input: {
@@ -624,10 +656,8 @@ export class Store {
     at?: Date
   }) {
     const at = input.at ?? new Date()
-    const current = await this.latestSingleAgentRating(input.sessionID)
-    if (!current || current._id !== input.ratingID) {
-      throw new Error("Arena single-agent pass is no longer current")
-    }
+    const current = await this.singleAgentRatingByID(input.sessionID, input.ratingID)
+    if (!current) throw new Error(`Arena single-agent rating not found: ${input.ratingID}`)
     if (!current.completedAt) throw new Error("Arena single-agent pass is not complete")
     const updated = await this.singleAgentRatings.findOneAndUpdate(
       {
@@ -649,19 +679,8 @@ export class Store {
       { returnDocument: "after" },
     )
     if (updated) {
-      const latest = await this.latestSingleAgentRating(input.sessionID)
-      if (latest?._id === input.ratingID) {
-        this.changed()
-        return updated
-      }
-      await this.singleAgentRatings.updateOne(
-        { _id: input.ratingID, vote: input.vote, voteAt: at, revealAt: at },
-        {
-          $unset: { vote: "", voteParticipantID: "", voteAt: "", revealAt: "" },
-          $set: { updatedAt: current.updatedAt },
-        },
-      )
-      throw new Error("Arena single-agent pass is no longer current")
+      this.changed()
+      return updated
     }
     const recorded = await this.singleAgentRatings.findOne({ _id: input.ratingID })
     if (!recorded) throw new Error(`Arena single-agent rating not found: ${input.ratingID}`)
@@ -1087,11 +1106,7 @@ export class Store {
    * in the compare-and-set prevents a restart between the state transition and the choice write
    * from applying the winner before the discard can take effect.
    */
-  async claimApplyBaseChoice(input: {
-    readonly turnID: string
-    readonly choice: ApplyBaseChoice
-    readonly at: Date
-  }) {
+  async claimApplyBaseChoice(input: { readonly turnID: string; readonly choice: ApplyBaseChoice; readonly at: Date }) {
     const updated = await this.turns.findOneAndUpdate(
       {
         _id: input.turnID,
@@ -1574,7 +1589,7 @@ export class Store {
   async snapshot(chatID: string, afterSequence = -1): Promise<BattleSnapshot> {
     const chat = await this.chats.findOne({ _id: chatID })
     if (!chat) throw new Error(`Arena chat not found: ${chatID}`)
-    const singleAgentRating = await this.latestSingleAgentRating(chat.canonicalSessionID)
+    const singleAgentRating = await this.snapshotSingleAgentRating(chat.canonicalSessionID)
     const history = await this.history(chatID)
     const targetTurnID = chat.activeTurnID ?? history.at(-1)?._id
     if (!targetTurnID)
@@ -1614,7 +1629,7 @@ export class Store {
       this.comparisons.findOne({ turnID }),
     ])
     if (!chat) throw new Error(`Arena chat not found: ${turn.chatID}`)
-    const singleAgentRating = await this.latestSingleAgentRating(chat.canonicalSessionID)
+    const singleAgentRating = await this.snapshotSingleAgentRating(chat.canonicalSessionID)
     return {
       chat,
       turn,

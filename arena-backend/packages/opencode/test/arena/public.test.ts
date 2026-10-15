@@ -229,23 +229,33 @@ describe("ArenaPublic", () => {
     expect(project(snapshot(false)).turn?.endedAt).toBeUndefined()
   })
 
-  test("reveals a single-agent identity only after its separate thumbs vote", () => {
+  test("shows single-agent rating state and reveals identity only after its separate thumbs vote", () => {
     const input = snapshot(false)
     input.singleAgentRating = {
       _id: "single-agent|canonical",
       sessionID: "canonical",
       messageID: "message",
+      modelSize: "frontier",
       assignment: input.turn!.placement.a,
       createdAt: input.chat.createdAt,
       updatedAt: input.chat.updatedAt,
     }
 
-    expect(project(input).singleAgent).toBeUndefined()
+    expect(project(input).singleAgent).toEqual({
+      id: "single-agent|canonical",
+      modelSize: "frontier",
+      ratingRequired: true,
+      completed: false,
+      revealed: false,
+    })
 
     input.singleAgentRating.completedAt = input.chat.updatedAt
     const hidden = project(input)
     expect(hidden.singleAgent).toEqual({
       id: "single-agent|canonical",
+      modelSize: "frontier",
+      ratingRequired: true,
+      completed: true,
       revealed: false,
     })
     expect(JSON.stringify(hidden.singleAgent)).not.toContain("GLM 5.2")
@@ -256,9 +266,54 @@ describe("ArenaPublic", () => {
     const revealed = project(input)
     expect(revealed.singleAgent).toEqual({
       id: "single-agent|canonical",
+      modelSize: "frontier",
+      ratingRequired: false,
+      completed: true,
       revealed: true,
       vote: "up",
       identity: { name: "GLM 5.2" },
+    })
+  })
+
+  test("shows the fixed Medium identity without requiring a rating", () => {
+    const input = snapshot(false)
+    input.singleAgentRating = {
+      _id: "single-agent|medium",
+      sessionID: "canonical",
+      messageID: "message",
+      modelSize: "medium",
+      assignment: input.turn!.placement.a,
+      createdAt: input.chat.createdAt,
+      updatedAt: input.chat.updatedAt,
+    }
+
+    expect(project(input).singleAgent).toEqual({
+      id: "single-agent|medium",
+      modelSize: "medium",
+      ratingRequired: false,
+      completed: false,
+      revealed: true,
+      identity: { name: "GPT Luna 5.6 Xhigh" },
+    })
+  })
+
+  test("keeps legacy ratings visible without retroactively requiring a vote", () => {
+    const input = snapshot(false)
+    input.singleAgentRating = {
+      _id: "single-agent|legacy",
+      sessionID: "canonical",
+      messageID: "message",
+      assignment: input.turn!.placement.a,
+      completedAt: input.chat.updatedAt,
+      createdAt: input.chat.createdAt,
+      updatedAt: input.chat.updatedAt,
+    }
+
+    expect(project(input).singleAgent).toMatchObject({
+      id: "single-agent|legacy",
+      modelSize: "frontier",
+      ratingRequired: false,
+      completed: true,
     })
   })
 

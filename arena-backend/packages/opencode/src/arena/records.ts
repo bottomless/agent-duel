@@ -278,6 +278,7 @@ export type HiddenAssignment = {
 }
 
 export type SingleAgentVote = "up" | "down"
+export type SingleAgentModelSize = "medium" | "frontier"
 
 export type SingleAgentRatingDocument = {
   readonly _id: Identifier
@@ -290,6 +291,8 @@ export type SingleAgentRatingDocument = {
   userId?: string
   readonly sessionID: string
   readonly messageID: string
+  /** Older records omitted this field and are frontier ratings. */
+  readonly modelSize?: SingleAgentModelSize
   readonly assignment: HiddenAssignment
   completedAt?: Date
   precedingTurnCount?: number
@@ -384,15 +387,7 @@ export type TurnDocument = {
    */
   canonicalGraftedAt?: Date
   gitApplication?: {
-    readonly state:
-      | "pending"
-      | "applied"
-      | "blocked"
-      | "failed"
-      | "conflicted"
-      | "manual"
-      | "review"
-      | "discarded"
+    readonly state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
     readonly reason?: string
     readonly resultCommit?: string
     readonly branch?: string

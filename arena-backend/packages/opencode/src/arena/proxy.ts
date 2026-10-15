@@ -15,6 +15,7 @@ export type Assignment = {
   readonly scopeID: string
   readonly assignmentID: string
   readonly telemetry: boolean
+  readonly modelSize?: "medium" | "frontier"
 }
 
 export type RequestMetadata = {
@@ -24,7 +25,7 @@ export type RequestMetadata = {
   readonly sessionID: string
   readonly parentSessionID?: string
   readonly requestedModel: string
-  readonly enforcedReasoning: { readonly effort: "high" }
+  readonly enforcedReasoning: { readonly effort: "high" | "xhigh" }
   readonly classification?: "compaction"
   readonly startedAt: Date
 }
@@ -159,14 +160,15 @@ function sessionHeaders(headers: Headers) {
 
 export function rewriteBody(body: unknown, assignment: Assignment): Record<string, unknown> {
   if (!record(body)) throw new Error("Arena proxy request body must be an object")
-  if (body.model !== contestant.id) {
+  const expectedModel = assignment.modelSize === "medium" ? "medium" : contestant.id
+  if (body.model !== expectedModel) {
     throw new Error("Arena proxy request used an unexpected contestant transport model")
   }
   const { provider: _provider, ...safe } = body
   return {
     ...safe,
-    model: contestant.id,
-    reasoning: { effort: "high" },
+    model: expectedModel,
+    reasoning: { effort: assignment.modelSize === "medium" ? "xhigh" : "high" },
     stream_options: record(body.stream_options)
       ? { ...body.stream_options, include_usage: true }
       : { include_usage: true },
@@ -488,8 +490,8 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       requestID,
       sessionID,
       ...(parentSessionID ? { parentSessionID } : {}),
-      requestedModel: contestant.id,
-      enforcedReasoning: { effort: "high" },
+      requestedModel: assignment.modelSize === "medium" ? "medium" : contestant.id,
+      enforcedReasoning: { effort: assignment.modelSize === "medium" ? "xhigh" : "high" },
       ...(request.headers.get("x-arena-generation-classification") === "compaction"
         ? { classification: "compaction" as const }
         : {}),

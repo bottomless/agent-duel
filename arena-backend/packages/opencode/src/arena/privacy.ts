@@ -16,6 +16,7 @@ import { ARENA_OFFLINE_MESSAGE } from "@/session/retry"
 
 const providerID = ProviderV2.ID.make("arena")
 const modelID = ModelV2.ID.make("contestant")
+const mediumModelID = ModelV2.ID.make("medium")
 const errorMessage = "Arena contestant request failed"
 const retryMessage = "Arena contestant is retrying"
 const callIDPrefix = "call_arena_"
@@ -566,14 +567,34 @@ export function event(input: unknown): unknown {
   return eventValue(input)
 }
 
-// The prompt loop reloads the user message from SQLite and sends its `system` text to the model, so
-// the durable copy keeps it. It carries Arena's contestant instructions and the user's agent
-// instructions, never a model identity. Live output still hides it through `messageInfo`.
-function withInstructions(type: string, input: unknown, persisted: Record<string, unknown>) {
+// Prompt execution and TaskTool reload messages from SQLite. Keep the user `system` text and the
+// one safe Arena Medium transport ID in durable copies for both user and assistant records. Never
+// preserve arbitrary provider/model identities; live output still hides execution details through
+// `messageInfo`.
+function withExecutionSettings(type: string, input: unknown, persisted: Record<string, unknown>) {
   if (type.replace(/\.\d+$/, "") !== "message.updated") return persisted
   if (!record(input) || !record(input.info) || !record(persisted.info)) return persisted
-  if (input.info.role !== "user" || typeof input.info.system !== "string") return persisted
-  return { ...persisted, info: { ...persisted.info, system: input.info.system } }
+  if (input.info.role !== "user" && input.info.role !== "assistant") return persisted
+  const inputModel = input.info.role === "user" ? input.info.model : input.info
+  const persistedModel = persisted.info.role === "user" ? persisted.info.model : persisted.info
+  const medium =
+    record(inputModel) &&
+    record(persistedModel) &&
+    inputModel.providerID === providerID &&
+    inputModel.modelID === mediumModelID
+  const executionModel = medium
+    ? input.info.role === "user"
+      ? { model: { ...persistedModel, providerID, modelID: mediumModelID } }
+      : { providerID, modelID: mediumModelID }
+    : {}
+  return {
+    ...persisted,
+    info: {
+      ...persisted.info,
+      ...(input.info.role === "user" && typeof input.info.system === "string" ? { system: input.info.system } : {}),
+      ...executionModel,
+    },
+  }
 }
 
 export function persistedEventData<D extends Definition>(definition: D, input: Data<D>): Data<D> {
@@ -582,7 +603,7 @@ export function persistedEventData<D extends Definition>(definition: D, input: D
   if (!record(envelope) || !record(envelope.properties)) {
     throw new Error(`Arena privacy produced an invalid ${definition.type} event envelope`)
   }
-  const sanitized = omitUndefined(withInstructions(definition.type, input, envelope.properties))
+  const sanitized = omitUndefined(withExecutionSettings(definition.type, input, envelope.properties))
   const encoded = Schema.encodeUnknownSync(definition.data)(sanitized)
   return Schema.decodeUnknownSync(definition.data)(encoded) as Data<D>
 }

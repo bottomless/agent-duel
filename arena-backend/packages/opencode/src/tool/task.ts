@@ -2,6 +2,7 @@ import * as Tool from "./tool"
 import DESCRIPTION from "./task.txt"
 import { ToolJsonSchema } from "./json-schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { BackgroundJob } from "@/background/job"
 import { Session } from "@/session/session"
 import { SessionID, MessageID } from "../session/schema"
@@ -185,7 +186,8 @@ export const TaskTool = Tool.define(
           ],
         }))
 
-      const variant = arenaParent ? "high" : msg.info.variant
+      const arenaMedium = msg.info.modelID === ModelV2.ID.make("medium")
+      const variant = arenaParent ? (arenaMedium ? "xhigh" : "high") : msg.info.variant
 
       const model = arenaParent
         ? { modelID: msg.info.modelID, providerID: msg.info.providerID }
@@ -218,7 +220,7 @@ export const TaskTool = Tool.define(
             modelID: model.modelID,
             providerID: model.providerID,
           },
-          variant: arenaParent ? "high" : next.model ? undefined : variant,
+          variant: arenaParent ? variant : next.model ? undefined : variant,
           agent: next.name,
           parts,
         })

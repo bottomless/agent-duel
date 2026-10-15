@@ -135,7 +135,7 @@ import {
   type ReviewAnswer,
   type ReviewItem,
 } from "./branch-review"
-import { contestant, highReasoning } from "./model-profile"
+import { contestant, highReasoning, medium, xhighReasoning } from "./model-profile"
 import { ArenaMetrics } from "./metrics"
 import { jsonValue, parseSnapshot, project } from "./public"
 import { ArenaSchema } from "./schema"
@@ -159,6 +159,7 @@ import type {
   PartialApply,
   SessionArchiveDocument,
   SingleAgentVote,
+  SingleAgentModelSize,
   TurnDocument,
   SlotSyncTimings,
   TurnSetupTimings,
@@ -354,6 +355,7 @@ function accountID(value?: string) {
 /** What a single-agent turn runs with: the Arena model, and a note about a winner not yet applied. */
 export type NormalTurnStart = {
   readonly model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+  readonly variant: "high" | "xhigh"
   /** Sent as a synthetic part of the user's message: the model reads it, the chat does not show it. */
   readonly note?: string
 }
@@ -470,11 +472,15 @@ async function arenaCopyConfiguration(root: string): Promise<unknown> {
   return await file.json()
 }
 
-function assignment(value: { readonly assignmentID: string }): HiddenAssignment {
+function assignment(
+  value: { readonly assignmentID: string },
+  modelSize: SingleAgentModelSize = "frontier",
+): HiddenAssignment {
+  const reasoning = modelSize === "medium" ? xhighReasoning.reasoning : highReasoning.reasoning
   return {
     assignmentID: value.assignmentID,
-    requestedReasoning: highReasoning.reasoning,
-    enforcedReasoning: highReasoning.reasoning,
+    requestedReasoning: reasoning,
+    enforcedReasoning: reasoning,
   }
 }
 
@@ -1004,6 +1010,7 @@ export interface Interface {
   readonly beginNormalTurn: (input: {
     sessionID: SessionID
     messageID: MessageID
+    model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
   }) => Effect.Effect<NormalTurnStart | undefined, Error>
   readonly recordNormalTurn: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
   readonly singleAgentVote: (
@@ -1726,12 +1733,19 @@ export const layer: Layer.Layer<
 
     const snapshot = Effect.fn("Arena.snapshot")(function* (id: string, afterSequence = -1) {
       const store = yield* available()
+      const chat = yield* promise(() => store.chat(id))
+      if (chat) yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
       const current = yield* promise(() => store.snapshot(id, afterSequence))
       return yield* projectSnapshot(current, afterSequence)
     })
 
     const turnSnapshot = Effect.fn("Arena.turnSnapshot")(function* (id: string, afterSequence = -1) {
       const store = yield* available()
+      const turn = yield* promise(() => store.turn(id))
+      if (turn) {
+        const chat = yield* promise(() => store.chat(turn.chatID))
+        if (chat) yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
+      }
       const current = yield* promise(() => store.snapshotTurn(id, afterSequence))
       return yield* projectSnapshot(current, afterSequence)
     })
@@ -2081,6 +2095,7 @@ export const layer: Layer.Layer<
     const ensureSingleAgentRating = Effect.fn("Arena.ensureSingleAgentRating")(function* (
       rawSessionID: string,
       messageID: MessageID,
+      modelSize: SingleAgentModelSize,
     ) {
       const store = yield* available()
       const existing = yield* promise(() => store.singleAgentRating(rawSessionID, messageID))
@@ -2090,6 +2105,7 @@ export const layer: Layer.Layer<
           rootSessionID: rawSessionID,
           scopeID: existing._id,
           assignmentID: existing.assignment.assignmentID,
+          ...(existing.modelSize ? { modelSize: existing.modelSize } : { modelSize: "frontier" as const }),
           telemetry: false,
         })
         return existing
@@ -2097,14 +2113,15 @@ export const layer: Layer.Layer<
       const owner = yield* promise(() => store.chatForSession(rawSessionID))
       const now = new Date()
       const id = `single-agent|${rawSessionID.length}:${rawSessionID}|${messageID.length}:${messageID}`
-      const selected = yield* promise(() => createSingleAssignment(id))
+      const selected = yield* promise(() => createSingleAssignment(id, modelSize))
       const rating = (yield* promise(() =>
         store.claimSingleAgentRating({
           _id: id,
           ...(owner?.userId ? { userId: owner.userId } : {}),
           sessionID: rawSessionID,
           messageID,
-          assignment: assignment(selected),
+          modelSize,
+          assignment: assignment(selected, modelSize),
           createdAt: now,
           updatedAt: now,
         }),
@@ -2114,10 +2131,18 @@ export const layer: Layer.Layer<
         rootSessionID: rawSessionID,
         scopeID: rating._id,
         assignmentID: rating.assignment.assignmentID,
+        ...(rating.modelSize ? { modelSize: rating.modelSize } : { modelSize: "frontier" as const }),
         telemetry: false,
       })
       return rating
     })
+
+    const recoverInterruptedSingleAgentRating = async (store: Store, sessionID: string) => {
+      const pending = await store.pendingSingleAgentRating(sessionID)
+      if (!pending || pending.completedAt || activeNormalTurns.active(sessionID)) return pending
+      await store.completeSingleAgentRating({ sessionID, messageID: pending.messageID })
+      return store.pendingSingleAgentRating(sessionID)
+    }
 
     const turnStartLock = (chatID: string) => {
       const existing = turnStartLocks.get(chatID)
@@ -3470,15 +3495,20 @@ export const layer: Layer.Layer<
       if (
         message?.info.role !== "user" ||
         message.info.model.providerID !== ProviderV2.ID.make("arena") ||
-        message.info.model.modelID !== ModelV2.ID.make(contestant.id)
-      )
+        (message.info.model.modelID !== ModelV2.ID.make(contestant.id) &&
+          message.info.model.modelID !== ModelV2.ID.make(medium.id))
+      ) {
+        yield* promise(() => store.abandonSingleAgentRating(input))
         return
+      }
       if (
         !transcript.some(
           (candidate) => candidate.info.role === "assistant" && candidate.info.parentID === message.info.id,
         )
-      )
+      ) {
+        yield* promise(() => store.abandonSingleAgentRating(input))
         return
+      }
       yield* promise(() => store.completeSingleAgentRating(input))
       const chat = yield* promise(() => store.chatForSession(input.sessionID))
       if (!chat || chat.status !== "ready" || chat.canonicalSessionID !== input.sessionID) return
@@ -3566,18 +3596,34 @@ export const layer: Layer.Layer<
     const beginNormalTurn = Effect.fn("Arena.beginNormalTurn")(function* (input: {
       sessionID: SessionID
       messageID: MessageID
+      model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
     }) {
       if (!enabled()) return undefined
       const store = yield* available()
-      const assignModel = ensureSingleAgentRating(input.sessionID, input.messageID).pipe(
+      const requestedModelSize: SingleAgentModelSize =
+        input.model?.modelID === ModelV2.ID.make("contestant") || input.model?.modelID === ModelV2.ID.make("frontier")
+          ? "frontier"
+          : "medium"
+      const pending = yield* promise(() => recoverInterruptedSingleAgentRating(store, input.sessionID))
+      if (pending) return yield* Effect.fail(new Error("Arena frontier result must be rated before another turn"))
+      const assignModel = ensureSingleAgentRating(input.sessionID, input.messageID, requestedModelSize).pipe(
         Effect.map(
-          (): NormalTurnStart => ({
-            model: { providerID: ProviderV2.ID.make("arena"), modelID: ModelV2.ID.make(contestant.id) },
+          (rating): NormalTurnStart => ({
+            model: {
+              providerID: ProviderV2.ID.make("arena"),
+              modelID: ModelV2.ID.make(rating.modelSize === "medium" ? medium.id : contestant.id),
+            },
+            variant: rating.modelSize === "medium" ? xhighReasoning.variant : highReasoning.variant,
           }),
         ),
       )
       const chat = yield* promise(() => store.chatForSession(input.sessionID))
-      if (!chat || chat.canonicalSessionID !== input.sessionID) return yield* assignModel
+      if (!chat || chat.canonicalSessionID !== input.sessionID) {
+        activeNormalTurns.reserve(input.sessionID)
+        return yield* assignModel.pipe(
+          Effect.onError(() => Effect.sync(() => activeNormalTurns.release(input.sessionID))),
+        )
+      }
       const repairing = (yield* parkedPromotionTurn(store, chat)) !== undefined
       if (chat.status !== "ready" && !repairing) {
         return yield* Effect.fail(new Error("Arena chat already has an active battle"))
@@ -3710,6 +3756,9 @@ export const layer: Layer.Layer<
         try: () => participantID(rawParticipantID),
         catch: error,
       })
+      const rating = yield* promise(() => store.singleAgentRatingByID(rawSessionID, ratingID))
+      if (!rating) return yield* Effect.fail(new Error("Arena single-agent rating does not belong to this session"))
+      if (!rating.completedAt) return yield* Effect.fail(new Error("Arena single-agent pass is not complete"))
       const resolved = yield* promise(() => resolveAssignments("single", ratingID, `rate:${vote}`))
       const committedVote = resolved.decision === "rate:up" ? "up" : "down"
       const model = resolved.assignments[0]?.model
@@ -5366,6 +5415,9 @@ export const layer: Layer.Layer<
       })
       const storedChat = yield* promise(() => store.chat(id))
       if (!storedChat) return yield* Effect.fail(new Error(`Arena chat not found: ${id}`))
+      if (yield* promise(() => recoverInterruptedSingleAgentRating(store, storedChat.canonicalSessionID))) {
+        return yield* Effect.fail(new Error("Arena frontier result must be rated before starting a battle"))
+      }
       if (storedChat.checkoutEvicted) {
         return yield* Effect.fail(new Error("Arena checkout is currently being evicted"))
       }
@@ -9857,6 +9909,7 @@ export const layer: Layer.Layer<
           Effect.gen(function* () {
             const chat = yield* promise(() => store.chatForSession(rawSessionID))
             if (!chat) return yield* Effect.fail(new Error("Arena chat unavailable"))
+            yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
             const current = yield* promise(() =>
               turnID
                 ? store.snapshotTurn(turnID, Number.MAX_SAFE_INTEGER)

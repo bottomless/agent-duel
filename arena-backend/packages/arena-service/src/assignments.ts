@@ -3,11 +3,15 @@ import { isAssignmentDecision, type AssignmentDecision } from "./assignment-deci
 import { isDuplicateKeyError, type ArenaCollection, type ArenaDb } from "./collection"
 import { authorize, type ArenaContext } from "./context"
 import type { GenerationMetrics } from "./metrics"
+import { mediumModel } from "./default-pool"
 import { sampleOne, samplePair, type ModelProfile } from "./pool"
+
+export type SingleAgentModelSize = "medium" | "frontier"
 
 type PrivateAssignment = {
   readonly assignmentID: string
   readonly model: ModelProfile
+  readonly modelSize?: SingleAgentModelSize
 }
 
 type AssignmentSetDocument = {
@@ -66,27 +70,37 @@ function requireOnly(input: Record<string, unknown>, allowed: readonly string[])
 }
 
 async function createSet(db: ArenaDb, context: ArenaContext, userId: string, input: Record<string, unknown>) {
-  requireOnly(input, ["action", "kind", "scopeID"])
+  requireOnly(input, ["action", "kind", "scopeID", "modelSize"])
   const kind = input.kind
   if (kind !== "battle" && kind !== "single") throw new Error("Arena assignment kind is invalid")
   const scopeID = requiredString(input.scopeID, "scopeID")
+  const modelSize = (input.modelSize === undefined ? "medium" : input.modelSize) as SingleAgentModelSize
+  if (kind === "battle" && input.modelSize !== undefined) {
+    throw new Error("Arena battle assignments do not support modelSize")
+  }
+  if (kind === "single" && modelSize !== "medium" && modelSize !== "frontier") {
+    throw new Error("Arena single-agent modelSize is invalid")
+  }
   const assignments = collection(db)
   const id = setID(userId, kind, scopeID)
   const existing = await assignments.findOne({ _id: id, userId, kind, scopeID })
   if (existing) return Response.json({ assignments: publicAssignments(existing) })
 
   const profiles =
-    kind === "battle" ? samplePair(context.pool, context.random) : [sampleOne(context.pool, context.random)]
+    kind === "battle"
+      ? samplePair(context.pool, context.random)
+      : [modelSize === "medium" ? mediumModel : sampleOne(context.pool, context.random)]
+  const privateAssignments: readonly PrivateAssignment[] = profiles.map((model) => {
+    const value = { assignmentID: context.uuid(), model }
+    return kind === "single" ? { ...value, modelSize } : value
+  })
   const now = context.now()
   const document: AssignmentSetDocument = {
     _id: id,
     userId,
     scopeID,
     kind,
-    assignments: profiles.map((model) => ({
-      assignmentID: context.uuid(),
-      model,
-    })),
+    assignments: privateAssignments,
     createdAt: now,
   }
   try {

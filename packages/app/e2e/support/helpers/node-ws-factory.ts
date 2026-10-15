@@ -18,10 +18,12 @@ interface WebSocketLike {
 
 export type NodeWebSocketFactory = (
   url: string,
-  options?: { headers?: Record<string, string> },
+  options?: { headers?: Record<string, string>; protocols?: string[] },
 ) => WebSocketLike;
 
 export function createNodeWebSocketFactory(): NodeWebSocketFactory {
-  return (url: string, options?: { headers?: Record<string, string> }) =>
-    new WebSocket(url, { headers: options?.headers }) as unknown as WebSocketLike;
+  return (url, options) =>
+    new WebSocket(url, options?.protocols ?? [], {
+      headers: options?.headers,
+    }) as unknown as WebSocketLike;
 }

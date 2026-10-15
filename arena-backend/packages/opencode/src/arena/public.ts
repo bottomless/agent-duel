@@ -3,7 +3,7 @@ import { basename } from "path"
 import { canDiscardBattle, canRetryRun, canTie, type Resolution, type Side } from "./domain"
 import { eventWithoutAttachmentData } from "./live"
 import { ArenaActiveOperation } from "./operation-tracker"
-import type { BattleSnapshot, HiddenAssignment, RunDocument } from "./records"
+import type { BattleSnapshot, HiddenAssignment, RunDocument, SingleAgentRatingDocument } from "./records"
 import { ArenaSchema } from "./schema"
 import { ArenaResponseRecovery } from "./response-recovery"
 import { runPaymentMessage } from "@agent-duel/arena-service/request-error"
@@ -91,6 +91,23 @@ export type PublicRun = {
 function identity(assignment: HiddenAssignment): PublicIdentity {
   if (!assignment.model) throw new Error("Arena contestant identity was not revealed")
   return { name: assignment.model }
+}
+
+function singleAgent(rating: SingleAgentRatingDocument) {
+  const modelSize = rating.modelSize ?? "frontier"
+  const medium = modelSize === "medium"
+  let revealedIdentity: PublicIdentity | undefined
+  if (medium) revealedIdentity = { name: "GPT Luna 5.6 Xhigh" }
+  else if (rating.vote) revealedIdentity = identity(rating.assignment)
+  return {
+    id: rating._id,
+    modelSize,
+    ratingRequired: rating.modelSize === "frontier" && rating.vote === undefined,
+    completed: rating.completedAt !== undefined,
+    revealed: medium || rating.vote !== undefined,
+    ...(revealedIdentity ? { identity: revealedIdentity } : {}),
+    ...(rating.vote ? { vote: rating.vote } : {}),
+  }
 }
 
 function resolution(value: Resolution): Resolution {
@@ -275,14 +292,9 @@ export function project(snapshot: BattleSnapshot) {
           }
         : {}),
     },
-    ...(snapshot.singleAgentRating?.completedAt
+    ...(snapshot.singleAgentRating
       ? {
-          singleAgent: {
-            id: snapshot.singleAgentRating._id,
-            revealed: snapshot.singleAgentRating.vote !== undefined,
-            ...(snapshot.singleAgentRating.vote ? { vote: snapshot.singleAgentRating.vote } : {}),
-            ...(snapshot.singleAgentRating.vote ? { identity: identity(snapshot.singleAgentRating.assignment) } : {}),
-          },
+          singleAgent: singleAgent(snapshot.singleAgentRating),
         }
       : {}),
     ...(turn

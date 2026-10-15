@@ -485,6 +485,16 @@ describe("ArenaProxy", () => {
     expect(() => rewriteBody({ model: "provider/model" }, routed)).toThrow("unexpected contestant transport model")
   })
 
+  test("accepts the Medium transport model and enforces xhigh reasoning", () => {
+    const routed = { ...assignment, modelSize: "medium" as const }
+    expect(rewriteBody({ model: "medium", messages: [], reasoning: { effort: "high" } }, routed)).toMatchObject({
+      model: "medium",
+      reasoning: { effort: "xhigh" },
+      stream_options: { include_usage: true },
+    })
+    expect(() => rewriteBody({ model: "contestant" }, routed)).toThrow("unexpected contestant transport model")
+  })
+
   test("removes response identity fields without corrupting nested tool arguments", () => {
     const payload = sanitizePayload(
       {

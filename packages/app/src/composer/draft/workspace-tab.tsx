@@ -1,3 +1,4 @@
+import { SINGLE_AGENT_MODELS } from "@/arena/single-agent";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Keyboard, ScrollView, StyleSheet as RNStyleSheet, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
@@ -135,8 +136,8 @@ async function submitDraftCreateRequest(input: {
   const config = buildWorkspaceDraftAgentConfig({
     provider,
     cwd,
-    model: ARENA_BOOTSTRAP_MODEL,
-    thinkingOptionId: arenaPreferences.thinking,
+    model: SINGLE_AGENT_MODELS[arenaPreferences.modelSize].model,
+    thinkingOptionId: SINGLE_AGENT_MODELS[arenaPreferences.modelSize].thinking,
     featureValues: input.featureValues,
   });
 
@@ -666,6 +667,8 @@ export function WorkspaceDraftAgentTab({
         if (!ARENA_THINKING_OPTIONS.some((option) => option.id === thinking)) return;
         arenaPreferences.setThinking(thinking as ArenaThinkingLevel);
       },
+      modelSize: arenaPreferences.modelSize,
+      onModelSizeChange: arenaPreferences.setModelSize,
       battleMode: arenaPreferences.battleMode,
       onBattleModeChange: arenaPreferences.setBattleMode,
       battleModeDisabled: isSubmitting,

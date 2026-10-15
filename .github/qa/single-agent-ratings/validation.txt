@@ -1,0 +1,437 @@
+Final branch validation on macOS after rebasing onto e26bb17c1 (2026-10-15).
+
+The Electron run uses the real desktop main process and BrowserWindow.
+UI integration uses real daemon, Arena engine, shared service, and SQLite.
+Only upstream model responses and one failed rating save are controlled.
+Paid upstream model generation, deployed control plane, packaged release,
+Windows and Linux were not exercised.
+
+$ Repository root: npm run format
+
+> paseo@0.4.0-beta.7 format
+> oxfmt .
+
+Finished in 572ms on 3632 files using 18 threads.
+
+$ Repository root: npm run build:server
+
+> paseo@0.4.0-beta.7 build:server
+> npm run build:server-deps && npm run build --workspace=@getpaseo/server && npm run build --workspace=@getpaseo/cli
+
+
+> paseo@0.4.0-beta.7 build:server-deps
+> concurrently --kill-others-on-fail --names highlight,relay,client --prefix-colors yellow,blue,cyan "npm run build:highlight" "npm run build:relay" "npm run build:client"
+
+[client]
+[client] > paseo@0.4.0-beta.7 build:client
+[client] > npm run build --workspace=@getpaseo/client
+[client]
+[highlight]
+[highlight] > paseo@0.4.0-beta.7 build:highlight
+[highlight] > npm run build --workspace=@getpaseo/highlight
+[highlight]
+[relay]
+[relay] > paseo@0.4.0-beta.7 build:relay
+[relay] > npm run build --workspace=@getpaseo/relay
+[relay]
+[relay]
+[relay] > @getpaseo/relay@0.4.0-beta.7 build
+[relay] > tsc -p tsconfig.json --incremental false
+[relay]
+[client]
+[client] > @getpaseo/client@0.4.0-beta.7 build
+[client] > npm run build --workspace=@getpaseo/protocol && tsc -p tsconfig.json --incremental false
+[client]
+[highlight]
+[highlight] > @getpaseo/highlight@0.4.0-beta.7 build
+[highlight] > tsc -p tsconfig.json --incremental false
+[highlight]
+[client]
+[client] > @getpaseo/protocol@0.4.0-beta.7 prebuild
+[client] > npm run generate:validators
+[client]
+[client]
+[client] > @getpaseo/protocol@0.4.0-beta.7 generate:validators
+[client] > node scripts/generate-validation-aot.mjs
+[client]
+[highlight] npm run build:highlight exited with code 0
+[relay] npm run build:relay exited with code 0
+[client] generated src/generated/validation/ws-outbound.aot.ts from codegen/ws-outbound.compile.ts (WSOutboundMessageSchema)
+[client]
+[client] > @getpaseo/protocol@0.4.0-beta.7 build
+[client] > tsc -p tsconfig.json --incremental false
+[client]
+[client] npm run build:client exited with code 0
+
+> @getpaseo/server@0.4.0-beta.7 build
+> npm run build:lib && npm run build:scripts
+
+
+> @getpaseo/server@0.4.0-beta.7 build:lib
+> tsc -p tsconfig.server.json --incremental false && node -e "const fs=require('node:fs'); fs.mkdirSync('dist/server/server/speech/providers/local/sherpa/assets',{recursive:true}); fs.copyFileSync('src/server/speech/providers/local/sherpa/assets/silero_vad.onnx','dist/server/server/speech/providers/local/sherpa/assets/silero_vad.onnx'); fs.cpSync('src/terminal/shell-integration','dist/server/terminal/shell-integration',{recursive:true}); fs.cpSync('src/terminal/shell-integration','dist/src/terminal/shell-integration',{recursive:true}); fs.copyFileSync('src/terminal/terminal-ts-loader.mjs','dist/server/terminal/terminal-ts-loader.mjs');"
+
+
+> @getpaseo/server@0.4.0-beta.7 build:scripts
+> tsc -p tsconfig.scripts.json --incremental false && node -e "const fs=require('node:fs'); fs.mkdirSync('dist/scripts',{recursive:true}); fs.copyFileSync('scripts/mcp-stdio-socket-bridge-cli.mjs','dist/scripts/mcp-stdio-socket-bridge-cli.mjs');"
+
+
+> @getpaseo/cli@0.4.0-beta.7 build
+> tsc -p tsconfig.json --incremental false
+
+
+$ Repository root: npm run build:main --workspace=@getpaseo/desktop
+
+> @getpaseo/desktop@0.4.0-beta.7 build:main
+> tsc -p tsconfig.json && npm run build:notification-permissions
+
+
+> @getpaseo/desktop@0.4.0-beta.7 build:notification-permissions
+> node ./scripts/build-notification-permissions.mjs
+
+
+$ Repository root: npm run typecheck
+
+> paseo@0.4.0-beta.7 typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> @getpaseo/expo-two-way-audio@0.4.0-beta.7 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/highlight@0.4.0-beta.7 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/protocol@0.4.0-beta.7 pretypecheck
+> npm run generate:validators
+
+
+> @getpaseo/protocol@0.4.0-beta.7 generate:validators
+> node scripts/generate-validation-aot.mjs
+
+generated src/generated/validation/ws-outbound.aot.ts from codegen/ws-outbound.compile.ts (WSOutboundMessageSchema)
+
+> @getpaseo/protocol@0.4.0-beta.7 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/client@0.4.0-beta.7 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/server@0.4.0-beta.7 typecheck
+> tsgo -p tsconfig.server.typecheck.json --noEmit
+
+
+> @getpaseo/app@0.4.0-beta.7 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/relay@0.4.0-beta.7 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/desktop@0.4.0-beta.7 typecheck
+> tsgo --noEmit -p tsconfig.json
+
+
+> @getpaseo/cli@0.4.0-beta.7 typecheck
+> tsgo --noEmit
+
+
+$ Repository root: npm run lint
+
+> paseo@0.4.0-beta.7 lint
+> oxlint --disable-nested-config
+
+Found 0 warnings and 0 errors.
+Finished in 465ms on 3482 files with 177 rules using 18 threads.
+
+$ Repository root: PLAYWRIGHT_BROWSERS_PATH=/tmp/agent-duel-playwright npm run test:e2e --workspace=@getpaseo/app -- e2e/browser/single-agent-rating.spec.ts --workers=1 --max-failures=1
+
+> @getpaseo/app@0.4.0-beta.7 test:e2e
+> playwright test --project=browser e2e/browser/single-agent-rating.spec.ts --workers=1 --max-failures=1
+
+[metro] Starting project at /Users/michaelmayer/.codex/worktrees/76e7/agent-duel/packages/app
+[metro] Using src/app as the root directory for Expo Router.
+[metro] Experimental Expo Autolinking module resolver is enabled.
+[metro] React Compiler enabled
+[metro] Starting Metro Bundler
+[metro] Waiting on http://localhost:52097
+[metro] Logs for your project will appear below.
+[metro] Web Bundled 1305ms packages/app/index.ts (4917 modules)
+[e2e] Metro warmed on port 52097
+
+Running 3 tests using 1 worker
+
+(node:57596) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:57596) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 85ms packages/app/index.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 35ms packages/app/src/attachments/web/indexeddb-attachment-store.ts (1 module)
+[metro] Web Bundled 89ms packages/app/index.ts (1 module)
+[metro] Web Bundled 3ms packages/app/src/attachments/web/indexeddb-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+
+  ✓  1 [browser] › e2e/browser/single-agent-rating.spec.ts:277:5 › Single-agent ratings through the daemon and Arena engine › requires a saved thumbs up after every frontier run (10.2s)
+[metro] Web Bundled 83ms packages/app/index.ts (1 module)
+[metro] Web Bundled 4ms packages/app/src/attachments/web/indexeddb-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 83ms packages/app/index.ts (1 module)
+[metro] Web Bundled 3ms packages/app/src/attachments/web/indexeddb-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+  ✓  2 [browser] › e2e/browser/single-agent-rating.spec.ts:277:5 › Single-agent ratings through the daemon and Arena engine › requires a saved thumbs down after every frontier run (7.5s)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 79ms packages/app/index.ts (1 module)
+[metro] Web Bundled 3ms packages/app/src/attachments/web/indexeddb-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+  ✓  3 [browser] › e2e/browser/single-agent-rating.spec.ts:415:3 › Single-agent ratings through the daemon and Arena engine › runs Medium twice without a rating and preserves picker presentation (3.9s)
+[e2e] Metro stopped
+
+  3 passed (31.5s)
+
+$ Repository root: E2E_DESKTOP_RUNTIME=1 PLAYWRIGHT_BROWSERS_PATH=/tmp/agent-duel-playwright npm run test:e2e --workspace=@getpaseo/app -- e2e/browser/single-agent-rating.spec.ts --workers=1 --max-failures=1
+
+> @getpaseo/app@0.4.0-beta.7 test:e2e
+> playwright test --project=browser e2e/browser/single-agent-rating.spec.ts --workers=1 --max-failures=1
+
+[metro] Starting project at /Users/michaelmayer/.codex/worktrees/76e7/agent-duel/packages/app
+[metro] Using src/app as the root directory for Expo Router.
+[metro] Experimental Expo Autolinking module resolver is enabled.
+[metro] React Compiler enabled
+[metro] Starting Metro Bundler
+[metro] Waiting on http://localhost:52839
+[metro] Logs for your project will appear below.
+[metro] Web Bundled 1351ms packages/app/index.ts (4917 modules)
+[e2e] Metro warmed on port 52839
+
+Running 3 tests using 1 worker
+
+(node:64360) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:64360) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 95ms packages/app/index.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 30ms packages/app/src/desktop/attachments/desktop-attachment-store.ts (1 module)
+[metro] Web Bundled 25ms packages/app/src/desktop/attachments/desktop-attachment-bridge.ts (155 modules)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 84ms packages/app/index.ts (1 module)
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-bridge.ts (1 module)
+[metro] Web Bundled 84ms packages/app/index.ts (1 module)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-bridge.ts (1 module)
+
+  ✓  1 [browser] › e2e/browser/single-agent-rating.spec.ts:277:5 › Single-agent ratings through the daemon and Arena engine › requires a saved thumbs up after every frontier run (16.5s)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 87ms packages/app/index.ts (1 module)
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 2ms packages/app/src/desktop/attachments/desktop-attachment-bridge.ts (1 module)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 79ms packages/app/index.ts (1 module)
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-bridge.ts (1 module)
+[metro] Web Bundled 77ms packages/app/index.ts (1 module)
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-bridge.ts (1 module)
+  ✓  2 [browser] › e2e/browser/single-agent-rating.spec.ts:277:5 › Single-agent ratings through the daemon and Arena engine › requires a saved thumbs down after every frontier run (14.1s)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 83ms packages/app/index.ts (1 module)
+[metro] Web Bundled 3ms packages/app/src/desktop/attachments/desktop-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 2ms packages/app/src/desktop/attachments/desktop-attachment-bridge.ts (1 module)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 80ms packages/app/index.ts (1 module)
+[metro] Web Bundled 2ms packages/app/src/desktop/attachments/desktop-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 2ms packages/app/src/desktop/attachments/desktop-attachment-bridge.ts (1 module)
+  ✓  3 [browser] › e2e/browser/single-agent-rating.spec.ts:415:3 › Single-agent ratings through the daemon and Arena engine › runs Medium twice without a rating and preserves picker presentation (11.2s)
+[e2e] Metro stopped
+
+  3 passed (47.9s)
+
+$ arena-backend/packages/arena-service: bun test src/openrouter.test.ts --bail=1
+bun test v1.3.14 (0d9b296a)
+
+src/openrouter.test.ts:
+(pass) OpenRouter proxy > reads SSE lines split across 1-byte chunks [3.33ms]
+(pass) OpenRouter proxy > reads SSE lines split across 4096-byte chunks [0.89ms]
+(pass) OpenRouter proxy > rejects a request before contacting OpenRouter when the session is invalid [0.07ms]
+(pass) OpenRouter proxy > rejects a request without assignment scope before contacting OpenRouter [0.05ms]
+(pass) OpenRouter proxy > does not expose arbitrary OpenRouter paths [0.02ms]
+(pass) OpenRouter proxy > rejects every request missing assignment headers [0.07ms]
+(pass) OpenRouter proxy > rejects partial assignment headers without falling through to utility access [0.03ms]
+(pass) OpenRouter proxy > rejects query selectors and malformed JSON [0.07ms]
+(pass) OpenRouter proxy > resolves an opaque assignment and removes identity and cost before returning it [0.46ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when absent [0.13ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when null [0.04ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when zero [0.03ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when negative [0.03ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when non-numeric [0.03ms]
+(pass) OpenRouter proxy > asks OpenRouter to cache Anthropic prompts and records the cache use [0.45ms]
+(pass) OpenRouter proxy > leaves sampling to each provider, because the engine cannot choose it for a hidden model [0.11ms]
+(pass) OpenRouter proxy > forces xhigh reasoning for a medium assignment [0.08ms]
+(pass) OpenRouter proxy > does not limit assigned request size [1.58ms]
+(pass) OpenRouter proxy > rejects alternate model and routing selectors and server-side tools on assigned requests [0.13ms]
+(pass) OpenRouter proxy > scrubs identity metadata from assigned event streams [0.56ms]
+(pass) OpenRouter proxy > turns an upstream stream break into a safe retryable event [0.18ms]
+[arena-service] OpenRouter proxy failed
+(pass) OpenRouter proxy > answers an unreadable upstream body with a 502 [0.19ms]
+[arena-service] OpenRouter proxy failed
+[arena-service] OpenRouter proxy failed
+(pass) OpenRouter proxy > answers an offline machine with the network body only where the service runs locally [0.14ms]
+(pass) OpenRouter proxy > rejects cross-account, cross-scope, and incomplete assignment credentials [0.11ms]
+
+ 24 pass
+ 0 fail
+ 117 expect() calls
+Ran 24 tests across 1 file. [19.00ms]
+
+$ arena-backend/packages/opencode: bun test test/arena/privacy.test.ts --bail=1
+bun test v1.3.14 (0d9b296a)
+
+test/arena/privacy.test.ts:
+(pass) ArenaPrivacy > keeps neutral idle recovery status and exhaustion while stripping provider details [80.61ms]
+(pass) ArenaPrivacy > keeps only the synthetic replay marker needed by the durable output-limit budget [0.62ms]
+(pass) ArenaPrivacy > coordinates queued-message discard reservations and prompt claims atomically [0.46ms]
+(pass) ArenaPrivacy > leaves non-Arena values and mutation behavior unchanged [5.36ms]
+(pass) ArenaPrivacy > removes model identity, provider metadata, usage, and raw upstream errors [0.46ms]
+(pass) ArenaPrivacy > keeps a battle attachment's label on a text part and drops every other metadata key [0.37ms]
+(pass) ArenaPrivacy > hides billing details and the upstream body in payment failures [0.30ms]
+(pass) ArenaPrivacy > replaces every retry message except the shared offline wait [0.16ms]
+(pass) ArenaPrivacy > rewrites upstream tool call IDs into one contestant-agnostic format [0.56ms]
+(pass) ArenaPrivacy > maps a tool call ID to the same value everywhere it is published [0.56ms]
+(pass) ArenaPrivacy > sanitizes V1, V2, and durable replay event envelopes [1.43ms]
+(pass) ArenaPrivacy > redacts V2 context and settlement metrics and fails closed for unknown events [0.36ms]
+(pass) ArenaPrivacy > hides catalogs and blocks model configuration mutations at HTTP boundaries [402.98ms]
+(pass) ArenaPrivacy > sanitizes session and message responses before they reach the browser [166.00ms]
+(pass) ArenaPrivacy > persists only blinded Arena session data while returning raw live values [214.37ms]
+(pass) ArenaPrivacy > persists contestant instructions for the model while live output hides them [203.05ms]
+(pass) ArenaPrivacy > preserves DateTime values while blinding durable session.next events [0.41ms]
+(pass) ArenaPrivacy > restores only continuation metadata instead of retaining complete tool output [0.32ms]
+(pass) ArenaPrivacy > sanitizes global SSE events before serialization [4.39ms]
+
+ 19 pass
+ 0 fail
+ 139 expect() calls
+Ran 19 tests across 1 file. [1.80s]
+
+$ arena-backend/packages/arena-service: bun run typecheck
+$ tsgo --noEmit
+
+$ arena-backend/packages/opencode: bun run typecheck
+$ tsgo --noEmit
+
+Earlier focused backend checks before the rebase (passed):
+
+Local SQLite rating gate: test/arena/single-agent-rating.test.ts
+bun test v1.3.14 (0d9b296a)
+
+test/arena/single-agent-rating.test.ts:
+(pass) single-agent ratings in the local SQLite store > gates, snapshots, validates, and clears frontier ratings durably [33.59ms]
+
+ 1 pass
+ 0 fail
+ 9 expect() calls
+Ran 1 test across 1 file. [940.00ms]
+
+Medium proxy reasoning regression in test/arena/proxy.test.ts
+bun test v1.3.14 (0d9b296a)
+
+test/arena/proxy.test.ts:
+(pass) ArenaProxy > accepts the Medium transport model and enforces xhigh reasoning [0.10ms]
+
+ 1 pass
+ 19 filtered out
+ 0 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [521.00ms]
+
+Single-agent lifecycle/variant regression in test/arena/service.integration.test.ts
+bun test v1.3.14 (0d9b296a)
+
+test/arena/service.integration.test.ts:
+(pass) Arena service vertical slice > rotates single-agent contestants per completed pass and records votes separately [2954.77ms]
+
+ 1 pass
+ 51 filtered out
+ 0 fail
+ 25 expect() calls
+Ran 1 test across 1 file. [3.84s]
+
+Medium assistant persistence regression: demonstrated red before the fix.
+$ arena-backend/packages/opencode: bun test test/arena/privacy.test.ts -t "persists only blinded Arena session data" --bail=1
+bun test v1.3.14 (0d9b296a)
+
+test/arena/privacy.test.ts:
+782 |       expect(ArenaPrivacy.messageInfo(user).model).toMatchObject({
+783 |         providerID: "arena",
+784 |         modelID: "contestant",
+785 |       })
+786 |     }
+787 |     expect(result.reloadedMediumAssistant.info).toMatchObject({
+                                                      ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "modelID": "medium",
++   "agent": "build",
++   "cost": 0,
++   "error": {
++     "data": {
++       "isRetryable": true,
++       "message": "Arena contestant request failed",
++       "statusCode": 503,
++     },
++     "name": "APIError",
++   },
++   "id": "msg_arena_medium_assistant",
++   "mode": "build",
++   "modelID": "contestant",
++   "parentID": "msg_arena_medium_persisted",
++   "path": {
++     "cwd": "/repo",
++     "root": "/repo",
++   },
+    "providerID": "arena",
++   "role": "assistant",
++   "sessionID": "ses_ebe46ee70ffe5eCoWP5zPAmj5L",
++   "time": {
++     "completed": 6,
++     "created": 5,
++   },
++   "tokens": {
++     "cache": {
++       "read": 0,
++       "write": 0,
++     },
++     "input": 0,
++     "output": 0,
++     "reasoning": 0,
++     "total": 0,
++   },
+  }
+
+- Expected  - 1
++ Received  + 34
+
+      at <anonymous> (/Users/michaelmayer/.codex/worktrees/76e7/agent-duel/arena-backend/packages/opencode/test/arena/privacy.test.ts:787:49)
+(fail) ArenaPrivacy > persists only blinded Arena session data while returning raw live values [453.32ms]
+Ran 1 test across 1 file. [956.00ms]
+Bailed out after 1 failure
+
+The final privacy run above passes all 19 tests after preserving the safe Medium assistant execution alias.
+$ arena-backend/packages/opencode: bun run typecheck
+$ tsgo --noEmit

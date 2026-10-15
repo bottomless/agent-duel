@@ -215,14 +215,29 @@ describe("Arena RPC schemas", () => {
   it("keeps the single-agent identity hidden until a thumbs vote is present", () => {
     const hidden = ArenaSnapshotSchema.parse({
       ...snapshot(),
-      singleAgent: { id: "single-agent-1", revealed: false },
+      singleAgent: {
+        id: "single-agent-1",
+        modelSize: "frontier",
+        ratingRequired: true,
+        completed: true,
+        revealed: false,
+      },
     });
-    expect(hidden.singleAgent).toEqual({ id: "single-agent-1", revealed: false });
+    expect(hidden.singleAgent).toEqual({
+      id: "single-agent-1",
+      modelSize: "frontier",
+      ratingRequired: true,
+      completed: true,
+      revealed: false,
+    });
 
     const revealed = ArenaSnapshotSchema.parse({
       ...snapshot(),
       singleAgent: {
         id: "single-agent-1",
+        modelSize: "frontier",
+        ratingRequired: true,
+        completed: true,
         revealed: true,
         vote: "down",
         identity: { name: "Qwen 3.8 Max" },
@@ -230,6 +245,9 @@ describe("Arena RPC schemas", () => {
     });
     expect(revealed.singleAgent).toEqual({
       id: "single-agent-1",
+      modelSize: "frontier",
+      ratingRequired: true,
+      completed: true,
       revealed: true,
       vote: "down",
       identity: { name: "Qwen 3.8 Max" },

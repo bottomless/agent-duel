@@ -34,11 +34,7 @@ import { MessageID } from "@/session/schema"
 import { Server } from "@/server/server"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
-import {
-  json,
-  type PublicSnapshot,
-  TOOL_OUTPUT_BODY,
-} from "./harness"
+import { json, type PublicSnapshot, TOOL_OUTPUT_BODY } from "./harness"
 
 const arenaControlToken = "test-control-token"
 
@@ -622,7 +618,11 @@ async function waitForTurn(
   while (Date.now() < deadline) {
     const turn = await store.turn(turnID)
     if (turn?.state === state && (!until || until(turn))) return turn
-    if (turn && turn.state !== state && ["discarded", "application_failed", "canonicalization_failed"].includes(turn.state)) {
+    if (
+      turn &&
+      turn.state !== state &&
+      ["discarded", "application_failed", "canonicalization_failed"].includes(turn.state)
+    ) {
       const runs = await store.runsForTurn(turnID)
       throw new Error(
         `Arena turn reached ${turn.state} while waiting for ${state}: ${turn.failureReason ?? "no failure recorded"}; git=${JSON.stringify(turn.gitApplication)}; ${JSON.stringify(
@@ -804,7 +804,6 @@ afterEach(async () => {
 })
 
 describe("Arena service vertical slice", () => {
-
   for (const action of ["send", "archive"] as const) {
     test(`keeps warm ownership local while another chat starts (${action})`, async () => {
       await using directory = await tmpdir({
@@ -2336,18 +2335,27 @@ describe("Arena service vertical slice", () => {
         headers,
         body: JSON.stringify({
           agent: "build",
+          model: { providerID: "arena", modelID: "medium" },
           messageID: firstMessageID,
           parts: [{ type: "text", text: "Handle this first pass without a battle." }],
         }),
       })
       expect(firstPass.status).toBe(200)
+      const firstMessages = await json<
+        Array<{ readonly info?: { readonly id?: string; readonly model?: { readonly variant?: string } } }>
+      >(await request(`/session/${source.id}/message`, { headers }))
+      expect(firstMessages.find((message) => message.info?.id === firstMessageID)?.info?.model?.variant).toBe("xhigh")
 
       const hidden = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
-      expect(hidden.singleAgent).toMatchObject({ revealed: false })
-      expect(hidden.singleAgent?.identity).toBeUndefined()
+      expect(hidden.singleAgent).toMatchObject({
+        modelSize: "medium",
+        ratingRequired: false,
+        revealed: true,
+        identity: { name: "GPT Luna 5.6 Xhigh" },
+      })
       const firstRating = await memory.store.latestSingleAgentRating(source.id)
       if (!firstRating) throw new Error("Arena did not persist the first single-agent pass")
-      expect(firstRating).toMatchObject({ messageID: firstMessageID, precedingTurnCount: 0 })
+      expect(firstRating).toMatchObject({ messageID: firstMessageID, modelSize: "medium", precedingTurnCount: 0 })
       expect(firstRating.completedAt).toBeInstanceOf(Date)
       expect(firstRating.resultTree).toBe(
         (await $`git rev-parse HEAD^{tree}`.cwd(directory.path).quiet().text()).trim(),
@@ -2367,7 +2375,7 @@ describe("Arena service vertical slice", () => {
         }),
       )
       expect(revealed.singleAgent).toMatchObject({ id: firstRating._id, revealed: true, vote: "up" })
-      expect(testProfiles.map((profile) => profile.displayName)).toContain(revealed.singleAgent?.identity?.name)
+      expect(revealed.singleAgent?.identity).toEqual({ name: "GPT Luna 5.6 Xhigh" })
 
       const secondRequestBoundary = router.contestantRequests.length
       const secondMessageID = MessageID.ascending()
@@ -2376,6 +2384,7 @@ describe("Arena service vertical slice", () => {
         headers,
         body: JSON.stringify({
           agent: "build",
+          model: { providerID: "arena", modelID: "contestant" },
           messageID: secondMessageID,
           parts: [{ type: "text", text: "Handle this second pass without a battle." }],
         }),
@@ -2383,16 +2392,56 @@ describe("Arena service vertical slice", () => {
       while (router.contestantRequests.length === secondRequestBoundary) await Bun.sleep(5)
 
       const running = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
-      expect(running.singleAgent).toBeUndefined()
+      expect(running.singleAgent).toMatchObject({
+        modelSize: "frontier",
+        ratingRequired: true,
+        completed: false,
+        revealed: false,
+      })
+      const messages = await json<
+        Array<{
+          readonly info?: {
+            readonly id?: string
+            readonly role?: string
+            readonly model?: { readonly variant?: string }
+          }
+        }>
+      >(await request(`/session/${source.id}/message`, { headers }))
+      expect(messages.find((message) => message.info?.id === secondMessageID)?.info?.model?.variant).toBe("high")
       const secondRating = await memory.store.latestSingleAgentRating(source.id)
       if (!secondRating) throw new Error("Arena did not persist the second single-agent pass")
       expect(secondRating.messageID).toBe(secondMessageID)
       expect(secondRating.assignment.assignmentID).not.toBe(firstRating.assignment.assignmentID)
       expect(secondRating.completedAt).toBeUndefined()
 
+      const earlyVote = await request(`/arena/sessions/${source.id}/single-agent-vote`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ratingID: secondRating._id, vote: "up" }),
+      })
+      expect(earlyVote.status).toBe(400)
+
+      const blockedMedium = await request(`/session/${source.id}/message`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          agent: "build",
+          model: { providerID: "arena", modelID: "medium" },
+          messageID: MessageID.ascending(),
+          parts: [{ type: "text", text: "This prompt must wait for the frontier rating." }],
+        }),
+      })
+      expect(blockedMedium.status).toBe(400)
+
       expect((await secondPass).status).toBe(200)
       const secondHidden = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
-      expect(secondHidden.singleAgent).toEqual({ id: secondRating._id, revealed: false })
+      expect(secondHidden.singleAgent).toMatchObject({
+        id: secondRating._id,
+        modelSize: "frontier",
+        ratingRequired: true,
+        completed: true,
+        revealed: false,
+      })
       expect(secondHidden.singleAgent?.id).not.toBe(firstRating._id)
       expect(memory.singleAgentRatings.values).toHaveLength(2)
       expect(memory.singleAgentRatings.values[0]).toMatchObject({
@@ -2407,11 +2456,11 @@ describe("Arena service vertical slice", () => {
         headers,
         body: JSON.stringify({ ratingID: firstRating._id, vote: "up" }),
       })
-      expect(staleVote.status).toBe(400)
+      expect(staleVote.status).toBe(200)
     } finally {
       router.restore()
     }
-  })
+  }, 30_000)
 
   test("asks the drawn model for no title, because the daemon names Arena chats itself", async () => {
     await using directory = await tmpdir({
@@ -3671,7 +3720,8 @@ describe("Arena service vertical slice", () => {
       for (const model of models) {
         expect(
           router.contestantRequests.some(
-            (body) => body.model === model && JSON.stringify(body.messages).includes("Both sides: keep the change minimal."),
+            (body) =>
+              body.model === model && JSON.stringify(body.messages).includes("Both sides: keep the change minimal."),
           ),
         ).toBe(true)
       }
@@ -3963,7 +4013,8 @@ describe("Arena service vertical slice", () => {
     await writeFile(`${directory.path}/.arena-warm-cache`, "canonical cache\n")
     const initialHead = (await $`git rev-parse HEAD`.cwd(directory.path).quiet().text()).trim()
     const memory = memoryStore()
-    const command = "printf 'contestant result\\n' > arena-result.txt; git update-ref refs/heads/conflict-carry-over HEAD"
+    const command =
+      "printf 'contestant result\\n' > arena-result.txt; git update-ref refs/heads/conflict-carry-over HEAD"
     const router = installOpenRouterStub({ contestantCommands: { 1: command, 2: command } })
     process.env.OPENCODE_ARENA = "1"
     setStoreForTest(memory.store)
@@ -4238,9 +4289,7 @@ describe("Arena service vertical slice", () => {
       const nextTurnID = next.turn?.id
       if (!nextTurnID) throw new Error("Arena did not admit a turn after discarding the winner")
       await waitForTurn(memory.store, nextTurnID, "running")
-      await json<PublicSnapshot>(
-        await request(`/arena/turns/${nextTurnID}/stop`, { method: "POST", headers }),
-      )
+      await json<PublicSnapshot>(await request(`/arena/turns/${nextTurnID}/stop`, { method: "POST", headers }))
       await waitForTurn(memory.store, nextTurnID, "awaiting_stop_resolution")
       await json<PublicSnapshot>(
         await request(`/arena/turns/${nextTurnID}/stop-resolution`, {
@@ -4300,9 +4349,7 @@ describe("Arena service vertical slice", () => {
       const developerTree = (await $`git write-tree`.cwd(directory.path).quiet().text()).trim()
       await $`git reset --mixed HEAD`.cwd(directory.path).quiet()
       const baseTree = (await $`git rev-parse HEAD^{tree}`.cwd(directory.path).quiet().text()).trim()
-      const winnerTree = (
-        await $`git rev-parse ${winner.finalCommit}^{tree}`.cwd(directory.path).quiet().text()
-      ).trim()
+      const winnerTree = (await $`git rev-parse ${winner.finalCommit}^{tree}`.cwd(directory.path).quiet().text()).trim()
       await $`git read-tree -m ${baseTree} ${developerTree} ${winnerTree}`.cwd(directory.path).quiet()
       await $`git checkout --conflict=merge -- arena-result.txt`.cwd(directory.path).quiet()
 
@@ -4320,9 +4367,7 @@ describe("Arena service vertical slice", () => {
       }
       setStoreForTest(memory.restart())
 
-      const recovered = await json<PublicSnapshot>(
-        await request(`/arena/chats/${attached.chat.id}`, { headers }),
-      )
+      const recovered = await json<PublicSnapshot>(await request(`/arena/chats/${attached.chat.id}`, { headers }))
       // "Not blocked" is the claim, not "idle". A parked promotion holds the chat on its own turn
       // and stays there; what changed is that the gates let it take prompts while it waits.
       expect(recovered.chat.status).not.toBe("blocked")
@@ -4483,7 +4528,9 @@ describe("Arena service vertical slice", () => {
       await waitForTurn(memory.store, turnID, "complete")
 
       expect((await $`git branch --show-current`.cwd(directory.path).quiet().text()).trim()).toBe(currentBranch)
-      expect((await $`git merge-base --is-ancestor ${currentHead} HEAD`.cwd(directory.path).quiet().nothrow()).exitCode).toBe(0)
+      expect(
+        (await $`git merge-base --is-ancestor ${currentHead} HEAD`.cwd(directory.path).quiet().nothrow()).exitCode,
+      ).toBe(0)
       expect(await Bun.file(`${directory.path}/winner.txt`).text()).toMatch(/^winner [12]\n$/)
       expect(await memory.store.chat(attached.chat.id)).toMatchObject({
         status: "ready",
@@ -4712,7 +4759,9 @@ describe("Arena service vertical slice", () => {
       expect((await $`git rev-parse HEAD^2`.cwd(directory.path).quiet().text()).trim()).toBe(sourceHead)
       expect((await $`git rev-parse ${sourceBranch}`.cwd(directory.path).quiet().text()).trim()).toBe(sourceHead)
       // The promotion leaves only the permanent battle refs behind; every transient ref is gone.
-      const battleRefs = (await $`git for-each-ref --format="%(refname)" refs/battles/`.cwd(directory.path).quiet().text())
+      const battleRefs = (
+        await $`git for-each-ref --format="%(refname)" refs/battles/`.cwd(directory.path).quiet().text()
+      )
         .trim()
         .split("\n")
         .filter(Boolean)

@@ -1,3 +1,4 @@
+import { SINGLE_AGENT_MODELS, type SingleAgentModelSize } from "@/arena/single-agent";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Text, View } from "react-native";
@@ -34,7 +35,6 @@ import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store"
 import type { MessagePayload } from "@/composer/types";
 import {
   ARENA_PROVIDER,
-  ARENA_BOOTSTRAP_MODEL,
   ARENA_THINKING_OPTIONS,
   arenaAgentPreferenceKey,
   arenaDraftPreferenceKey,
@@ -94,7 +94,7 @@ function buildChatDraftComposerArgs({
         ? {
             workingDir: workspaceDirectory || sourceDirectory,
             provider: ARENA_PROVIDER,
-            model: ARENA_BOOTSTRAP_MODEL,
+            model: SINGLE_AGENT_MODELS.medium.model,
             thinkingOptionId: "high",
           }
         : undefined,
@@ -140,7 +140,7 @@ function buildCreateAgentOptions({
   workspaceDirectory,
   workspaceId,
   battleMode,
-  thinking,
+  modelSize,
 }: {
   text: string;
   attachments: NonNullable<CreateAgentRequestOptions["attachments"]>;
@@ -148,14 +148,14 @@ function buildCreateAgentOptions({
   workspaceDirectory: string;
   workspaceId: string;
   battleMode: boolean;
-  thinking: ArenaThinkingLevel;
+  modelSize: SingleAgentModelSize;
 }): CreateAgentRequestOptions {
   return {
     provider: ARENA_PROVIDER,
     cwd: workspaceDirectory,
     workspaceId,
-    model: ARENA_BOOTSTRAP_MODEL,
-    thinkingOptionId: thinking,
+    model: SINGLE_AGENT_MODELS[modelSize].model,
+    thinkingOptionId: SINGLE_AGENT_MODELS[modelSize].thinking,
     ...(!battleMode && text.trim() ? { initialPrompt: text.trim() } : {}),
     ...(!battleMode && encodedImages && encodedImages.length > 0 ? { images: encodedImages } : {}),
     ...(!battleMode && attachments.length > 0 ? { attachments } : {}),
@@ -339,8 +339,8 @@ export function WorkspaceSetupDialog() {
             encodedImages: encodedImages ?? null,
             workspaceDirectory,
             workspaceId: ensuredWorkspace.id,
+            modelSize: arenaPreferences.modelSize,
             battleMode: arenaPreferences.battleMode,
-            thinking: arenaPreferences.thinking,
           }),
         );
         copyArenaPreferences(arenaPreferenceKey, arenaAgentPreferenceKey(serverId, agent.id));
@@ -415,6 +415,8 @@ export function WorkspaceSetupDialog() {
               if (!ARENA_THINKING_OPTIONS.some((option) => option.id === thinking)) return;
               arenaPreferences.setThinking(thinking as ArenaThinkingLevel);
             },
+            modelSize: arenaPreferences.modelSize,
+            onModelSizeChange: arenaPreferences.setModelSize,
             battleMode: arenaPreferences.battleMode,
             onBattleModeChange: arenaPreferences.setBattleMode,
             battleModeDisabled: pendingAction !== null,

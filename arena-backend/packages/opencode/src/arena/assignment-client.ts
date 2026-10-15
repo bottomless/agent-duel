@@ -7,6 +7,7 @@ import {
   type SingleAssignmentDecision,
 } from "@agent-duel/arena-service/assignment-decision"
 import type { GenerationMetrics, UsageTotals } from "./records"
+import type { SingleAgentModelSize } from "./records"
 
 export type OpaqueAssignment = {
   readonly assignmentID: string
@@ -122,8 +123,8 @@ export async function createBattleAssignments(scopeID: string) {
   return { a: opaque(values[0]), b: opaque(values[1]) } as const
 }
 
-export async function createSingleAssignment(scopeID: string) {
-  const { assignments: values } = await request({ action: "create", kind: "single", scopeID })
+export async function createSingleAssignment(scopeID: string, modelSize: SingleAgentModelSize = "medium") {
+  const { assignments: values } = await request({ action: "create", kind: "single", scopeID, modelSize })
   if (values.length !== 1) throw new Error("Arena single-agent assignment response must contain one contestant")
   return opaque(values[0])
 }

@@ -97,6 +97,21 @@ function snapshotCollection<T extends { readonly _id: string }>() {
 }
 
 describe("ArenaMongo claims", () => {
+  test("gates only explicit frontier ratings, including an active pass", async () => {
+    let filter: unknown
+    const arena = store({
+      singleAgentRatings: {
+        findOne: async (value: unknown) => {
+          filter = value
+          return undefined
+        },
+      },
+    })
+
+    await arena.pendingSingleAgentRating("session")
+    expect(filter).toEqual({ sessionID: "session", modelSize: "frontier", vote: { $exists: false } })
+  })
+
   test("publishes successful control writes only to active store observers", async () => {
     let modifiedCount = 0
     const arena = store({ chats: { updateOne: async () => ({ modifiedCount }) } })
@@ -143,7 +158,7 @@ describe("ArenaMongo claims", () => {
     await expect(arena.recordSingleAgentVote({ ...input, vote: "down" })).rejects.toThrow("already been recorded")
   })
 
-  test("rolls back a vote when a newer single-agent pass wins the race", async () => {
+  test("records an older completed rating when a newer pass exists", async () => {
     let rating: SingleAgentRatingDocument = {
       _id: "single-agent|session|first",
       sessionID: "session",
@@ -161,7 +176,6 @@ describe("ArenaMongo claims", () => {
       updatedAt: new Date(now.getTime() + 1),
     }
     let latest = rating
-    let rolledBack = false
     const arena = store({
       latestSingleAgentRating: async () => latest,
       singleAgentRatings: {
@@ -169,11 +183,6 @@ describe("ArenaMongo claims", () => {
           rating = { ...rating, vote: "up", voteAt: now, revealAt: now, updatedAt: now }
           latest = newer
           return rating
-        },
-        updateOne: async () => {
-          rolledBack = true
-          rating = { ...rating, vote: undefined, voteAt: undefined, revealAt: undefined }
-          return { matchedCount: 1, modifiedCount: 1 }
         },
         findOne: async () => rating,
       },
@@ -187,9 +196,8 @@ describe("ArenaMongo claims", () => {
         model: "Contestant",
         at: now,
       }),
-    ).rejects.toThrow("no longer current")
-    expect(rolledBack).toBe(true)
-    expect(rating.vote).toBeUndefined()
+    ).resolves.toMatchObject({ _id: rating._id, vote: "up" })
+    expect(rating.vote).toBe("up")
   })
 
   test("upserts part snapshots while preserving first observation and duplicate counts", async () => {

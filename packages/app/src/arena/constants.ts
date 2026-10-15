@@ -1,6 +1,6 @@
 export const ARENA_PROVIDER = "opencode";
 // Agent creation needs an initial model. The Arena backend replaces it with the
-// session's persisted random contestant before every prompt.
+// selected single-agent tier before every prompt.
 export const ARENA_BOOTSTRAP_MODEL = "openrouter/deepseek/deepseek-v4-flash";
 
 export const ARENA_THINKING_OPTIONS = [

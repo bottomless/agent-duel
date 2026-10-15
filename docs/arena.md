@@ -969,10 +969,24 @@ it for vendor marks and pretty names.
 
 ## Battle off
 
-The Battle toggle is per turn. With it off, the control plane draws one contestant through the same
-opaque assignment boundary, and `reconcileNormalTurn` (`arena/service.ts`) folds the resulting Git
-and transcript state back into the canonical spine. The rating commits that assignment's reveal.
-A process-local reservation keeps a battle and an ordinary turn from racing for the same session.
+The Battle toggle is per turn. With it off, choose **Medium** (the default) or **frontier**.
+Medium shows **GPT Luna 5.6 Xhigh** and allows continued use without a rating. Frontier draws one
+contestant from the battle pool and hides its identity until a thumbs-up or thumbs-down rating.
+The question-mark control explains this before the user sends a prompt.
+
+A frontier turn locks the chat composer and its settings until its completed result is rated.
+Keep Stop and tool permission responses available while the agent works. When it finishes, show
+an in-stream rating dialog below the response, with both thumbs and no dismiss action. The disabled
+composer’s tooltip points to that dialog. A failed save stays in the dialog and leaves the gate
+closed for retry. The gate belongs to the persisted result, so changing the local preference,
+reconnecting, or starting a battle cannot bypass it. If an older frontier result still needs a
+rating, surface that result first.
+
+Both sizes use the assignment boundary, and `reconcileNormalTurn` (`arena/service.ts`) folds the
+resulting Git and transcript state back into the canonical spine. A process-local reservation
+keeps a battle and an ordinary turn from racing for the same session. The shared arena-service
+assignment route accepts `modelSize` for single-agent turns; deploy that contract in the hosted
+control plane before shipping a desktop build that sends it.
 
 ## States and failure
 

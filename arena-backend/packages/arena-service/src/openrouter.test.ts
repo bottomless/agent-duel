@@ -559,6 +559,53 @@ describe("OpenRouter proxy", () => {
     expect(upstreamBody).toMatchObject({ model: "provider/hidden-model", max_tokens: 32_000 })
   })
 
+  test("forces xhigh reasoning for a medium assignment", async () => {
+    let upstreamBody: Record<string, unknown> | undefined
+    const proxy = openrouter({
+      db: async () =>
+        fakeDb({
+          assignmentSets: () => [
+            {
+              userId: "user-1",
+              scopeID: "medium-scope",
+              assignments: [
+                {
+                  assignmentID: "medium-id",
+                  modelSize: "medium",
+                  model: {
+                    displayName: "GPT Luna 5.6 Xhigh",
+                    slug: "openai/gpt-5.6-luna",
+                    canonicalSlug: "openai/gpt-5.6-luna",
+                    routing: { sort: "throughput" },
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      fetch: async (_input, init) => {
+        upstreamBody = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+        return Response.json({ choices: [] })
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "medium-id",
+          "X-Arena-Scope-ID": "medium-scope",
+        },
+        body: JSON.stringify({ model: "medium", messages: [], reasoning: { effort: "low" } }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    expect(upstreamBody).toMatchObject({
+      model: "openai/gpt-5.6-luna",
+      reasoning: { effort: "xhigh" },
+    })
+  })
+
   test("does not limit assigned request size", async () => {
     const content = "x".repeat(2 * 1024 * 1024 + 1)
     let upstreamContentLength = 0

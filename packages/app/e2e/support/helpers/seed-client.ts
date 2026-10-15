@@ -169,6 +169,7 @@ export interface SeedDaemonClient {
 
 export async function connectSeedClient(options?: {
   port?: number;
+  sessionToken?: string;
   /** Use only with a private host whose teardown removes its entire PASEO_HOME. */
   projectOwnership?: "client" | "host";
 }): Promise<SeedDaemonClient> {
@@ -176,6 +177,7 @@ export async function connectSeedClient(options?: {
     clientIdPrefix: "seed",
     appVersion: loadAppVersion(),
     port: options?.port,
+    sessionToken: options?.sessionToken,
   });
   return options?.projectOwnership === "host" ? client : withProjectOwnership(client);
 }
@@ -206,6 +208,7 @@ export async function seedWorkspace(options: {
   repoPrefix: string;
   title?: string;
   port?: number;
+  sessionToken?: string;
   /** Repo fixture options; only applies to git projects (the default). */
   repo?: Parameters<typeof createTempGitRepo>[1];
   /** Set to false to seed a plain non-git directory instead of a git repo. */
@@ -215,7 +218,10 @@ export async function seedWorkspace(options: {
     options.git === false
       ? await createTempDirectory(options.repoPrefix)
       : await createTempGitRepo(options.repoPrefix, options.repo);
-  const client = await connectSeedClient({ port: options.port });
+  const client = await connectSeedClient({
+    port: options.port,
+    sessionToken: options.sessionToken,
+  });
   try {
     const created = await client.createWorkspace({
       source: { kind: "directory", path: project.path },

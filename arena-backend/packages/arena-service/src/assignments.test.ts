@@ -248,6 +248,26 @@ describe("Arena assignment control plane", () => {
     expect(await resolved.json()).toMatchObject({ decision: "rate:down" })
   })
 
+  test("routes medium single-agent assignments to the fixed xhigh model", async () => {
+    const response = await service({ ids: ["medium-assignment"] }).assignments(
+      request({ action: "create", kind: "single", scopeID: "rating-medium", modelSize: "medium" }),
+    )
+    expect(await response.json()).toEqual({ assignments: [{ assignmentID: "medium-assignment" }] })
+    const stored = await mongo.db
+      .collection<{
+        _id: string
+        assignments: readonly { modelSize?: string; model: { displayName: string; slug: string } }[]
+      }>("arenaAssignmentSets")
+      .findOne({ scopeID: "rating-medium" })
+    expect(stored?.assignments[0]).toMatchObject({
+      modelSize: "medium",
+      model: {
+        displayName: "GPT Luna 5.6 Xhigh",
+        slug: "openai/gpt-5.6-luna",
+      },
+    })
+  })
+
   test("rejects client-directed assignment exclusions", async () => {
     const response = await service().assignments(
       request({
@@ -292,7 +312,7 @@ describe("Arena assignment control plane", () => {
     )
     expect(battle.status).toBe(200)
     const single = await service({ ids: ["single-a"], random: [0.5] }).assignments(
-      request({ action: "create", kind: "single", scopeID: "turn-kinds" }),
+      request({ action: "create", kind: "single", scopeID: "turn-kinds", modelSize: "frontier" }),
     )
     expect(single.status).toBe(200)
 

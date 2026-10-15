@@ -23,7 +23,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-event"
 import { ArenaRuntime } from "@/arena/runtime"
-import { contestant as arenaContestant } from "@/arena/model-profile"
+import { contestant as arenaContestant, medium as arenaMedium } from "@/arena/model-profile"
 import type { Assignment } from "@/arena/proxy"
 import type { ModelMessage } from "ai"
 
@@ -400,8 +400,8 @@ const layer = Layer.effect(
       const compactionModel = assignment
         ? {
             providerID: ProviderV2.ID.make(ArenaRuntime.providerID),
-            modelID: ModelV2.ID.make(arenaContestant.id),
-            variant: "high",
+            modelID: ModelV2.ID.make(assignment.modelSize === "medium" ? arenaMedium.id : arenaContestant.id),
+            variant: assignment.modelSize === "medium" ? "xhigh" : "high",
           }
         : userMessage.model
       const model = assignment

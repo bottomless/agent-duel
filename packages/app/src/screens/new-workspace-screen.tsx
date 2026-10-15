@@ -2507,6 +2507,8 @@ export function NewWorkspaceScreen({
               if (!ARENA_THINKING_OPTIONS.some((option) => option.id === thinking)) return;
               arenaPreferences.setThinking(thinking as ArenaThinkingLevel);
             },
+            modelSize: arenaPreferences.modelSize,
+            onModelSizeChange: arenaPreferences.setModelSize,
             battleMode: arenaPreferences.battleMode,
             onBattleModeChange: arenaPreferences.setBattleMode,
             battleModeDisabled: isPending,

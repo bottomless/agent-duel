@@ -103,7 +103,7 @@ async function localService(input: { readonly ids: string[]; readonly random: nu
           body: JSON.stringify(body),
         }),
       ),
-    contestant: (scopeID: string, assignmentID: string, generationID?: string) =>
+    contestant: (scopeID: string, assignmentID: string, generationID?: string, model = "contestant") =>
       send(
         new Request("http://arena.local/api/openrouter/api/v1/chat/completions", {
           method: "POST",
@@ -113,7 +113,7 @@ async function localService(input: { readonly ids: string[]; readonly random: nu
             "X-Arena-Scope-ID": scopeID,
             ...(generationID ? { "X-Arena-Generation-ID": generationID } : {}),
           },
-          body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "fix it" }], stream: false }),
+          body: JSON.stringify({ model, messages: [{ role: "user", content: "fix it" }], stream: false }),
         }),
       ),
     comparison: (scopeID: string) =>
@@ -219,7 +219,12 @@ describe("Arena service on the desktop SQLite local store", () => {
   test("routes a single-contestant call (a dotted-path assignment lookup matches 0 rows on SQLite)", async () => {
     await using arena = await localService({ ids: ["assignment-single"], random: [0.5] })
 
-    const created = await arena.assignments({ action: "create", kind: "single", scopeID: "turn-single" })
+    const created = await arena.assignments({
+      action: "create",
+      kind: "single",
+      scopeID: "turn-single",
+      modelSize: "frontier",
+    })
     expect(created.status).toBe(200)
     expect(await created.json()).toEqual({ assignments: [{ assignmentID: "assignment-single" }] })
 
@@ -231,5 +236,20 @@ describe("Arena service on the desktop SQLite local store", () => {
 
     expect((await arena.contestant("turn-other", "assignment-single")).status).toBe(403)
     expect(arena.upstream).toHaveLength(1)
+  })
+
+  test("routes an unspecified single-agent assignment through Medium with xhigh reasoning", async () => {
+    await using arena = await localService({ ids: ["assignment-medium"], random: [0.5] })
+
+    const created = await arena.assignments({ action: "create", kind: "single", scopeID: "turn-medium" })
+    expect(created.status).toBe(200)
+    expect(await created.json()).toEqual({ assignments: [{ assignmentID: "assignment-medium" }] })
+
+    const routed = await arena.contestant("turn-medium", "assignment-medium", undefined, "medium")
+    expect(routed.status).toBe(200)
+    expect(arena.upstream[0]?.body).toMatchObject({
+      model: "openai/gpt-5.6-luna",
+      reasoning: { effort: "xhigh" },
+    })
   })
 })

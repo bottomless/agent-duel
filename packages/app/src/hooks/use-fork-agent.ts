@@ -1,3 +1,4 @@
+import { SINGLE_AGENT_MODELS } from "@/arena/single-agent";
 import { createNameId } from "mnemonic-id";
 import { useTranslation } from "react-i18next";
 import type {
@@ -5,7 +6,7 @@ import type {
   DaemonClient,
 } from "@getpaseo/client/internal/daemon-client";
 import type { ToastApi } from "@/components/toast-host";
-import { ARENA_BOOTSTRAP_MODEL, ARENA_PROVIDER, arenaAgentPreferenceKey } from "@/arena/constants";
+import { ARENA_PROVIDER, arenaAgentPreferenceKey } from "@/arena/constants";
 import { copyArenaPreferences, getArenaPreferences } from "@/arena/preferences";
 import { resolveNextForkTitle } from "@/hooks/fork-agent-title";
 import {
@@ -86,8 +87,8 @@ async function createNativeForkAgent(input: {
       ...buildWorkspaceDraftAgentConfig({
         provider: ARENA_PROVIDER,
         cwd: input.cwd,
-        model: ARENA_BOOTSTRAP_MODEL,
-        thinkingOptionId: sourcePreferences.thinking,
+        model: SINGLE_AGENT_MODELS[sourcePreferences.modelSize].model,
+        thinkingOptionId: SINGLE_AGENT_MODELS[sourcePreferences.modelSize].thinking,
         featureValues: {},
       }),
       title: input.title,

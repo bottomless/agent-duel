@@ -18,6 +18,7 @@ import { Server } from "@/server/server"
 import { Session } from "@/session/session"
 import { SessionRetry } from "@/session/retry"
 import { MessageID, PartID, SessionID } from "@/session/schema"
+import { MessageV2 } from "@/session/message-v2"
 import { eq } from "drizzle-orm"
 import { DateTime, Effect } from "effect"
 import { resetDatabase } from "../fixture/db"
@@ -672,7 +673,50 @@ describe("ArenaPrivacy", () => {
           if (!tool || tool.type !== "tool") throw new Error("Contestant fixture is missing its tool part")
           tool.callID = rawCallID
 
+          const mediumUser: SessionV1.User = {
+            id: MessageID.make("msg_arena_medium_persisted"),
+            sessionID: created.id,
+            role: "user",
+            time: { created: 3 },
+            agent: "build",
+            model: {
+              providerID: ProviderV2.ID.make("arena"),
+              modelID: ModelV2.ID.make("medium"),
+              variant: "xhigh",
+            },
+            system: "Arena contestant instructions",
+          }
+          const mediumUserWithoutSystem: SessionV1.User = {
+            id: MessageID.make("msg_arena_medium_without_system"),
+            sessionID: created.id,
+            role: "user",
+            time: { created: 4 },
+            agent: "build",
+            model: {
+              providerID: ProviderV2.ID.make("arena"),
+              modelID: ModelV2.ID.make("medium"),
+              variant: "xhigh",
+            },
+          }
+          const mediumAssistant: SessionV1.Assistant = {
+            ...source.info,
+            id: MessageID.make("msg_arena_medium_assistant"),
+            sessionID: created.id,
+            parentID: mediumUser.id,
+            time: { created: 5, completed: 6 },
+            modelID: ModelV2.ID.make("medium"),
+            providerID: ProviderV2.ID.make("arena"),
+            variant: "xhigh",
+          }
+
           const returnedMessage = yield* sessions.updateMessage(source.info)
+          yield* sessions.updateMessage(mediumUser)
+          yield* sessions.updateMessage(mediumUserWithoutSystem)
+          yield* sessions.updateMessage(mediumAssistant)
+          const reloadedMediumAssistant = yield* MessageV2.get({
+            sessionID: created.id,
+            messageID: mediumAssistant.id,
+          })
           const returnedParts = yield* Effect.forEach(source.parts, (part) => sessions.updatePart(part))
           const reloaded = yield* sessions.messages({ sessionID: created.id })
           const { db } = yield* Database.Service
@@ -681,7 +725,19 @@ describe("ArenaPrivacy", () => {
           const parts = yield* db.select().from(PartTable).where(eq(PartTable.session_id, created.id)).all()
           const events = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all()
 
-          return { returnedMessage, returnedParts, reloaded, session, messages, parts, events }
+          return {
+            returnedMessage,
+            returnedParts,
+            reloaded,
+            session,
+            messages,
+            parts,
+            events,
+            mediumUser,
+            mediumUserWithoutSystem,
+            mediumAssistant,
+            reloadedMediumAssistant,
+          }
         }),
       ),
     )
@@ -720,6 +776,23 @@ describe("ArenaPrivacy", () => {
       tokens_reasoning: 0,
       tokens_cache_read: 0,
       tokens_cache_write: 0,
+    })
+    for (const user of [result.mediumUser, result.mediumUserWithoutSystem]) {
+      const persistedMedium = result.messages.find((message) => message.id === user.id)
+      expect(persistedMedium).toMatchObject({ data: { model: { modelID: "medium", providerID: "arena" } } })
+      expect(ArenaPrivacy.messageInfo(user).model).toMatchObject({
+        providerID: "arena",
+        modelID: "contestant",
+      })
+    }
+    expect(result.reloadedMediumAssistant.info).toMatchObject({
+      modelID: "medium",
+      providerID: "arena",
+      variant: "xhigh",
+    })
+    expect(ArenaPrivacy.messageInfo(result.reloadedMediumAssistant.info)).toMatchObject({
+      modelID: "contestant",
+      providerID: "arena",
     })
   })
 
