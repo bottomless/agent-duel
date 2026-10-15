@@ -212,6 +212,7 @@ import {
 } from "./services"
 import { buildEnvironmentTransition } from "./transition"
 import { createIgnoredJournal, createSlotWatch, watcherBackendUnavailable, type JournalMark } from "./environment-watch"
+import { readWindowsProcesses } from "./windows-processes"
 import type { Store } from "./mongo"
 
 const encoder = new TextEncoder()
@@ -815,11 +816,26 @@ const execFile = promisify(nodeExecFile)
 type WorkingProcess = { readonly pid: number; readonly directory: string }
 
 /**
+ * The names from `root` down to `directory`, or undefined unless `directory` is `root` or lies
+ * inside it. `path.relative` compares as the platform does: on Windows a process reports its
+ * directory with backslashes, and in whatever case it was entered.
+ */
+function namesBelow(root: string, directory: string): string[] | undefined {
+  const value = relativePath(root, directory)
+  if (/^\.\.(?:[\\/]|$)/.test(value) || isAbsolutePath(value)) return undefined
+  return value ? value.split(/[\\/]/) : []
+}
+
+/**
  * The working directory of every process this user can see, as resolved paths, or undefined
  * when they could not be listed.
  */
 async function processDirectories(): Promise<readonly WorkingProcess[] | undefined> {
-  if (process.platform === "win32") return []
+  // No lsof or /proc: the process table services are captured from carries each directory.
+  if (process.platform === "win32") {
+    const rows = await readWindowsProcesses().catch(() => undefined)
+    return rows?.flatMap((row) => (row.cwd ? [{ pid: row.pid, directory: row.cwd }] : []))
+  }
   if (process.platform === "linux") {
     const pids = await readdir("/proc").catch(() => undefined)
     if (!pids) return undefined
@@ -865,8 +881,8 @@ async function slotPoolProcesses(
   const identities = Array.from(new Set([resolvePath(pool), await realpath(pool).catch(() => resolvePath(pool))]))
   const inFreeSlot = (directory: string) =>
     identities.some((id) => {
-      if (!directory.startsWith(`${id}/`)) return false
-      const name = directory.slice(id.length + 1).split("/")[0] ?? ""
+      const name = namesBelow(id, directory)?.[0]
+      if (name === undefined) return false
       return name !== TRASH_DIRNAME && hostedWorktree(name) === undefined && !owned.has(name)
     })
   const inPool = (listed: readonly WorkingProcess[]) => listed.some((entry) => inFreeSlot(entry.directory))
@@ -2742,7 +2758,7 @@ export const layer: Layer.Layer<
         // that is being deleted, as it did when released worktrees were removed.
         const identities = [resolvePath(directory), directoryIdentity(directory)]
         const inside = working?.filter((entry) =>
-          identities.some((id) => entry.directory === id || entry.directory.startsWith(`${id}/`)),
+          identities.some((id) => namesBelow(id, entry.directory) !== undefined),
         )
         if (!inside || inside.length > 0) {
           for (const entry of inside ?? []) occupiers.set(entry.pid, entry.directory)
@@ -6595,7 +6611,9 @@ export const layer: Layer.Layer<
             { discard: true },
           )
           const inPool = (listed: readonly WorkingProcess[]) =>
-            listed.some((entry) => identities.some((identity) => entry.directory.startsWith(`${identity}/`)))
+            listed.some((entry) =>
+              identities.some((identity) => (namesBelow(identity, entry.directory)?.length ?? 0) > 0),
+            )
           let listed = yield* Effect.promise(() => processDirectories())
           if (listed && inPool(listed)) {
             // A disposed instance's language server can still be exiting.
