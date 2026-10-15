@@ -1374,7 +1374,7 @@ export const layer: Layer.Layer<
     const slotWatch = createSlotWatch()
     const watcherUnavailable = watcherBackendUnavailable()
     if (watcherUnavailable) {
-      yield* Effect.logError("Arena filesystem watcher unavailable; every send re-syncs both sides", {
+      yield* Effect.logError("Arena filesystem watcher unavailable; every send scans both sides' copied roots", {
         reason: watcherUnavailable,
         platform: process.platform,
         arch: process.arch,
