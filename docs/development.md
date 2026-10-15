@@ -32,8 +32,10 @@ cd arena-backend && bun install
 - The engine keeps the user's `core.autocrlf`. Git for Windows checks text out with CRLF, and
   pinning autocrlf off, as the engine does elsewhere, would read every such file as edited.
 - Neither file watcher runs on Windows. Parcel's Windows backend crashes the process when a watch
-  is dropped while its directory is still being written to. Each send re-syncs both sides instead
-  (`watcherBackendUnavailable` in `arena/environment-watch.ts`).
+  is dropped while its directory is still being written to. Each send scans the copied roots on
+  both sides instead and copies again only the ones that changed (`treeDigest` in
+  `arena/copy-snapshot.ts`). Windows has no copy-on-write clone, so those copies go through
+  robocopy (`copyDirectory` in `util/copy-tree.ts`).
 - The Win32 API stands in for `ps` and `lsof` (`arena/windows-processes.ts`). A "process group" is
   the tree under one command the engine started, and it keeps the pid of a parent that has exited.
 - Tests that create symlinks, set sub-millisecond times, `chmod`, run a fake `git` script, or

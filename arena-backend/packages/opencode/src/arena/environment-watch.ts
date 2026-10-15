@@ -78,7 +78,7 @@ type Record = {
  * None on Windows: parcel's Windows backend (2.5.1) touches freed memory when a subscription is
  * dropped while its directory is still being written to, which takes the engine down, and a slot
  * is let go of exactly while a contestant's dev server may still be writing. Without a watcher
- * every send re-syncs both sides (see `watcherBackendUnavailable`).
+ * a send scans the copied roots instead (see `watcherBackendUnavailable`).
  */
 const backend = (): ParcelWatcher.BackendType | undefined => {
   if (process.platform === "darwin") return "fs-events"
@@ -234,9 +234,10 @@ async function releaseAnchor() {
 }
 
 /**
- * Why this process cannot watch ignored content, if it cannot. Without a backend no warm pair can
- * be trusted, so every send re-syncs both sides: exact, but seconds slower. A compiled engine
- * reaches this state when the platform binding was not resolvable at build time.
+ * Why this process cannot watch ignored content, if it cannot. Without a backend no watch vouches
+ * for a warm pair, so manifests are taken with `scan`: a send digests each copied root on both
+ * sides (`treeDigest`) and copies again only the ones that changed. A compiled engine reaches this
+ * state when the platform binding was not resolvable at build time.
  */
 export function watcherBackendUnavailable(): string | undefined {
   if (backend() === undefined) return `no watcher backend for ${process.platform}`
