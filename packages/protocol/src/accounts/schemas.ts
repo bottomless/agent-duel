@@ -3,11 +3,43 @@ import { z } from "zod";
 export const signInMethodSchema = z.enum(["email", "google", "github"]);
 export type SignInMethod = z.infer<typeof signInMethodSchema>;
 
+export const legalDocumentsSchema = z.object({
+  termsVersion: z.string().min(1),
+  termsUrl: z.string().url().startsWith("https://"),
+  privacyPolicyVersion: z.string().min(1),
+  privacyPolicyUrl: z.string().url().startsWith("https://"),
+});
+export type LegalDocuments = z.infer<typeof legalDocumentsSchema>;
+
+export const acceptTermsRequestSchema = legalDocumentsSchema
+  .pick({ termsVersion: true, privacyPolicyVersion: true })
+  .extend({ accepted: z.literal(true) });
+export type AcceptTermsRequest = z.infer<typeof acceptTermsRequestSchema>;
+
+export const legalAcceptanceSchema = legalDocumentsSchema
+  .pick({ termsVersion: true, privacyPolicyVersion: true })
+  .extend({ acceptedAt: z.string().datetime() });
+export type LegalAcceptance = z.infer<typeof legalAcceptanceSchema>;
+
+export function hasAcceptedLegalDocuments(
+  acceptance: LegalAcceptance | null | undefined,
+  documents: LegalDocuments,
+): boolean {
+  return (
+    acceptance != null &&
+    acceptance.termsVersion === documents.termsVersion &&
+    acceptance.privacyPolicyVersion === documents.privacyPolicyVersion &&
+    Number.isFinite(Date.parse(acceptance.acceptedAt))
+  );
+}
+
 export const accountUserSchema = z.object({
   id: z.string(),
   email: z.string(),
   name: z.string().nullable(),
   image: z.string().nullable(),
+  // Existing persisted accounts and tokens predate acceptance records.
+  legalAcceptance: legalAcceptanceSchema.nullish(),
 });
 export type AccountUser = z.infer<typeof accountUserSchema>;
 
@@ -15,6 +47,7 @@ export const authMethodsResponseSchema = z.object({
   /** False when the daemon has no accounts database and therefore no sign-in. */
   enabled: z.boolean(),
   methods: z.array(signInMethodSchema),
+  legal: legalDocumentsSchema.nullable(),
 });
 export type AuthMethodsResponse = z.infer<typeof authMethodsResponseSchema>;
 
@@ -27,6 +60,7 @@ export const desktopSignInReturnUrlSchema = z
 
 export const openSignInFlowRequestSchema = z.object({
   desktopReturnUrl: desktopSignInReturnUrlSchema.optional(),
+  acceptance: acceptTermsRequestSchema,
 });
 export type OpenSignInFlowRequest = z.infer<typeof openSignInFlowRequestSchema>;
 

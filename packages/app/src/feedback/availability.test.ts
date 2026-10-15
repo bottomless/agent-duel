@@ -11,6 +11,8 @@ const signedIn: ResolveAccountGateInput = {
   hasStoredSession: true,
   sessionPhase: "success",
   sessionIsValid: true,
+  legalDocumentsAvailable: true,
+  hasAcceptedLegalDocuments: true,
 };
 
 function feedbackAvailableFor(input: ResolveAccountGateInput): boolean {

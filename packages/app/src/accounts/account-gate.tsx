@@ -1,13 +1,24 @@
 import { useCallback, useEffect, type ReactNode } from "react";
+import { ActivityIndicator, View, type ViewStyle } from "react-native";
+import {
+  hasAcceptedLegalDocuments,
+  legalAcceptanceSchema,
+  type LegalDocuments,
+} from "@getpaseo/protocol/accounts/schemas";
 import { useFetchQuery } from "@/data/query";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { fetchAuthMethods, fetchCurrentSession, type AccountsEndpoint } from "./client";
 import { useAccountsEndpoint } from "./endpoint";
-import { resolveAccountGate, type QueryPhase } from "./gate";
+import { resolveAccountGate, type QueryPhase, type AccountGate as AccountGateState } from "./gate";
 import { AccountGateKindContext } from "./gate-context";
-import { useAccountSessionHydrated, useAccountSessionStore } from "./session-store";
+import {
+  useAccountSessionHydrated,
+  useAccountSessionStore,
+  type AccountSession,
+} from "./session-store";
 import { SignInScreen } from "./sign-in-screen";
 import { DaemonUnreachable } from "./daemon-unreachable";
+import { TermsAcceptanceModal } from "./terms-acceptance-modal";
 
 const STALE_TIME_MS = 5 * 60 * 1000;
 
@@ -53,6 +64,11 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
   });
 
   const resolvedSession = sessionQuery.data;
+  const documents = methodsQuery.data?.legal;
+  const accountUser = resolvedSession?.user ?? session?.user;
+  const accepted = documents
+    ? hasAcceptedLegalDocuments(accountUser?.legalAcceptance, documents)
+    : legalAcceptanceSchema.safeParse(accountUser?.legalAcceptance).success;
   useEffect(() => {
     if (resolvedSession === undefined) {
       return;
@@ -71,14 +87,14 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
   // while it was being refused, and ensureConnectedAll wakes a client that did connect once and
   // is now sitting out its own backoff.
   useEffect(() => {
-    if (!sessionToken) {
+    if (!sessionToken || !accepted) {
       return;
     }
     const store = getHostRuntimeStore();
     void store.bootstrapConfiguredConnection();
     store.ensureConnectedAll();
     void store.runProbeCycleNow(undefined, { force: true });
-  }, [sessionToken]);
+  }, [sessionToken, accepted]);
 
   const retryMethods = useCallback(() => {
     void methodsQuery.refetch();
@@ -93,19 +109,77 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
     hasStoredSession: sessionToken !== null,
     sessionPhase: phaseOf(sessionQuery.status),
     sessionIsValid: resolvedSession != null,
+    legalDocumentsAvailable: documents != null,
+    hasAcceptedLegalDocuments: accepted,
   });
 
+  return (
+    <AccountGateContent
+      gate={gate}
+      endpoint={endpoint}
+      session={session}
+      documents={documents}
+      onRetry={retryMethods}
+    >
+      {children}
+    </AccountGateContent>
+  );
+}
+
+interface AccountGateContentProps {
+  gate: AccountGateState;
+  endpoint: AccountsEndpoint | null;
+  session: AccountSession | null;
+  documents: LegalDocuments | null | undefined;
+  onRetry: () => void;
+  children: ReactNode;
+}
+
+const checkingStyle: ViewStyle = { flex: 1, alignItems: "center", justifyContent: "center" };
+
+function AccountGateContent({
+  gate,
+  endpoint,
+  session,
+  documents,
+  onRetry,
+  children,
+}: AccountGateContentProps) {
   const app = (
     <AccountGateKindContext.Provider value={gate.kind}>{children}</AccountGateKindContext.Provider>
   );
   if (!endpoint) {
     return app;
   }
-  if (gate.kind === "signed-out") {
-    return <SignInScreen endpoint={endpoint} methods={gate.methods} />;
+  if (gate.kind === "signed-out" && documents) {
+    return (
+      <SignInScreen
+        key={`${documents.termsVersion}:${documents.privacyPolicyVersion}`}
+        endpoint={endpoint}
+        methods={gate.methods}
+        documents={documents}
+      />
+    );
   }
   if (gate.kind === "unreachable") {
-    return <DaemonUnreachable endpoint={endpoint.baseUrl} onRetry={retryMethods} />;
+    return <DaemonUnreachable endpoint={endpoint.baseUrl} onRetry={onRetry} />;
+  }
+  if (gate.kind === "checking") {
+    return (
+      <View style={checkingStyle}>
+        <ActivityIndicator accessibilityLabel="Checking your account" />
+      </View>
+    );
+  }
+  if (gate.kind === "acceptance-required" && session && documents) {
+    return (
+      <TermsAcceptanceModal
+        key={`${session.user.id}:${documents.termsVersion}:${documents.privacyPolicyVersion}`}
+        endpoint={endpoint}
+        session={session}
+        documents={documents}
+      />
+    );
   }
 
   return app;

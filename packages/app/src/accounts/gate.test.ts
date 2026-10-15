@@ -10,6 +10,8 @@ const base: ResolveAccountGateInput = {
   hasStoredSession: true,
   sessionPhase: "success",
   sessionIsValid: true,
+  legalDocumentsAvailable: true,
+  hasAcceptedLegalDocuments: true,
 };
 
 describe("resolveAccountGate", () => {
@@ -34,7 +36,9 @@ describe("resolveAccountGate", () => {
   });
 
   it("keeps a stored session through a failed check instead of signing the user out", () => {
-    expect(resolveAccountGate({ ...base, methodsPhase: "error" })).toEqual({ kind: "signed-in" });
+    expect(
+      resolveAccountGate({ ...base, methodsPhase: "error", legalDocumentsAvailable: false }),
+    ).toEqual({ kind: "signed-in" });
     expect(resolveAccountGate({ ...base, sessionPhase: "error" })).toEqual({ kind: "signed-in" });
   });
 
@@ -51,5 +55,22 @@ describe("resolveAccountGate", () => {
 
   it("lets a valid session through", () => {
     expect(resolveAccountGate(base)).toEqual({ kind: "signed-in" });
+  });
+
+  it("requires acceptance for a legacy or outdated account, including failed session revalidation", () => {
+    expect(resolveAccountGate({ ...base, hasAcceptedLegalDocuments: false })).toEqual({
+      kind: "acceptance-required",
+    });
+    expect(
+      resolveAccountGate({ ...base, hasAcceptedLegalDocuments: false, sessionPhase: "error" }),
+    ).toEqual({ kind: "acceptance-required" });
+    expect(
+      resolveAccountGate({
+        ...base,
+        hasAcceptedLegalDocuments: false,
+        methodsPhase: "error",
+        legalDocumentsAvailable: false,
+      }),
+    ).toEqual({ kind: "unreachable" });
   });
 });

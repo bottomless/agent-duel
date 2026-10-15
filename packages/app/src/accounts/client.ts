@@ -10,6 +10,7 @@ import {
   type OpenSignInFlowResponse,
   type OpenSignInFlowRequest,
   type SignInMethod,
+  type AcceptTermsRequest,
 } from "@getpaseo/protocol/accounts/schemas";
 
 export interface AccountsEndpoint {
@@ -98,7 +99,7 @@ export async function fetchCurrentSession(
 
 export async function openSignInFlow(
   endpoint: AccountsEndpoint,
-  input: OpenSignInFlowRequest = {},
+  input: OpenSignInFlowRequest,
 ): Promise<OpenSignInFlowResponse> {
   const body = await request(endpoint, { path: "/api/auth/flow", method: "POST", body: input });
   return openSignInFlowResponseSchema.parse(body);
@@ -125,6 +126,20 @@ export async function sendMagicLink(
 
 export async function signOut(endpoint: AccountsEndpoint, sessionToken: string): Promise<void> {
   await request(endpoint, { path: "/api/auth/sign-out", method: "POST", sessionToken });
+}
+
+export async function acceptTerms(
+  endpoint: AccountsEndpoint,
+  sessionToken: string,
+  acceptance: AcceptTermsRequest,
+): Promise<CurrentSessionResponse> {
+  const body = await request(endpoint, {
+    path: "/api/auth/accept-terms",
+    method: "POST",
+    sessionToken,
+    body: acceptance,
+  });
+  return currentSessionResponseSchema.parse(body);
 }
 
 export function buildOAuthStartUrl(

@@ -23,6 +23,32 @@ No account storage code ships in this repository or the desktop app. The account
 records; the daemon passes the locally verified user to
 the Arena runtime when it resolves a session into a chat.
 
+## Terms acceptance
+
+The hosted sign-in screen starts with an unchecked agreement to the Terms of Service and an
+acknowledgment of the separate Privacy Policy. All email, Google, and GitHub sign-in actions require
+the checkbox. Links and document versions come from `GET /api/auth/methods`, not a build-time URL.
+The accepted version pair travels with the sign-in flow and is saved on the authenticated account
+with a server timestamp when that flow is claimed.
+
+An existing account without current acceptance sees a blocking modal before the app shell mounts.
+Escape, the backdrop, and swipe dismissal cannot bypass it. The user can read both documents,
+accept and continue, or sign out. `POST /api/auth/accept-terms` saves the current version pair and
+returns the updated account. Pending saves disable duplicate actions; failures stay visible for
+retry. Account JSON includes `legalAcceptance: {termsVersion, privacyPolicyVersion, acceptedAt}`;
+missing records are never treated as acceptance. Both free and paid hosted accounts use this flow.
+
+`GET /api/auth/session` refreshes account metadata from the control plane because acceptance may
+change while the same 30-day signed token remains valid. WebSocket signature checks remain local.
+During an outage, a previously accepted, persisted account can continue local work; a user without
+an acceptance record cannot bypass the gate. The control plane independently requires current
+acceptance for work-data uploads and hosted model processing, including requests from older builds.
+BYOK source builds without hosted accounts retain their existing no-sign-in behavior.
+
+The control-plane deployment must publish final, versioned Terms and Privacy Policy URLs before
+enabling this flow. Agreement to Terms and acknowledgment of the Privacy Policy are not separate
+optional consent for personal-data uses that require it.
+
 ## The sign-in flow
 
 All methods share one flow because the browser that completes sign-in is not the client that needs
@@ -60,7 +86,7 @@ The control plane stores only a SHA-256 hash of each session token, and claims e
 once.
 
 The local daemon verifies signature and expiry without contacting the control plane. This keeps
-ordinary local agents available while the internet or control plane is unreachable. Opening a new
+ordinary local agents available to previously accepted accounts while the internet or control plane is unreachable. Opening a new
 session requires the network, as do OpenRouter requests and selected research uploads. Arena
 history and recovery remain local.
 

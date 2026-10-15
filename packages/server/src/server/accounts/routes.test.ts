@@ -13,6 +13,8 @@ import {
 } from "./backend.js";
 import { createAccountsRouter } from "./routes.js";
 import { createAccountsService } from "./service.js";
+import { verifySessionToken } from "./token.js";
+import type { AcceptTermsRequest } from "@getpaseo/protocol/accounts/schemas";
 import {
   clearArenaCredentials,
   issueArenaLaunchCredentials,
@@ -29,6 +31,17 @@ const config: AccountsConfig = {
 };
 const user = { id: "user-1", email: "dev@example.com", name: "Dev", image: null };
 const otherUser = { id: "user-2", email: "other@example.com", name: "Other", image: null };
+
+const acceptance: AcceptTermsRequest = {
+  accepted: true,
+  termsVersion: "v1",
+  privacyPolicyVersion: "v1",
+};
+const legalAcceptance = {
+  termsVersion: "v1",
+  privacyPolicyVersion: "v1",
+  acceptedAt: "2026-10-15T12:00:00.000Z",
+};
 
 interface TestSession {
   readonly account?: AccountUser;
@@ -61,6 +74,8 @@ class StubBackend {
   requestError: AccountsRequestError | null = null;
   sent: { email: string; flowId: string } | null = null;
   claim: Awaited<ReturnType<AccountsBackend["claimFlow"]>> = { status: "pending" };
+
+  accepted: { token: string; input: AcceptTermsRequest } | null = null;
 
   private guard() {
     if (this.unavailable) throw new AccountsBackendUnavailableError(new Error("offline"));
@@ -96,6 +111,17 @@ class StubBackend {
   }
 
   async revokeSession() {}
+  async currentSession(token: string) {
+    this.guard();
+    const session = verifySessionToken(token, keys.publicKey);
+    if (!session) throw new AccountsRequestError(401, "Not signed in");
+    return { user: { ...session.user, legalAcceptance }, method: session.method };
+  }
+  async acceptTerms(token: string, input: AcceptTermsRequest) {
+    const session = await this.currentSession(token);
+    this.accepted = { token, input };
+    return session;
+  }
   async close() {}
 }
 
@@ -132,6 +158,7 @@ beforeEach(() => {
   backend.unavailable = false;
   backend.requestError = null;
   backend.sent = null;
+  backend.accepted = null;
   backend.claim = { status: "pending" };
   shutdownCalls = 0;
   clearArenaCredentials();
@@ -177,6 +204,57 @@ function arenaCredentials(token: string) {
 }
 
 describe("account routes", () => {
+  it("passes explicit acceptance to the authenticated account and reads the saved date", async () => {
+    const token = sessionToken();
+    const response = await fetch(`${baseUrl}/api/auth/accept-terms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-paseo-session": token },
+      body: JSON.stringify(acceptance),
+    });
+    expect(response.status).toBe(200);
+    expect(backend.accepted).toEqual({ token, input: acceptance });
+    expect((await response.json()).user.legalAcceptance).toEqual(legalAcceptance);
+    const reload = await fetch(`${baseUrl}/api/auth/session`, {
+      headers: { "x-paseo-session": token },
+    });
+    expect((await reload.json()).user.legalAcceptance).toEqual(legalAcceptance);
+  });
+
+  it("refuses missing authentication and unchecked acceptance without recording it", async () => {
+    const unauthenticated = await fetch(`${baseUrl}/api/auth/accept-terms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(acceptance),
+    });
+    expect(unauthenticated.status).toBe(401);
+    const unchecked = await fetch(`${baseUrl}/api/auth/accept-terms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-paseo-session": sessionToken() },
+      body: JSON.stringify({ ...acceptance, accepted: false }),
+    });
+    expect(unchecked.status).toBe(400);
+    expect(backend.accepted).toBeNull();
+  });
+
+  it("returns a retryable save failure without recording acceptance", async () => {
+    backend.unavailable = true;
+    const response = await fetch(`${baseUrl}/api/auth/accept-terms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-paseo-session": sessionToken() },
+      body: JSON.stringify(acceptance),
+    });
+    expect(response.status).toBe(503);
+    expect(backend.accepted).toBeNull();
+  });
+
+  it("does not open a sign-in flow without explicit acceptance", async () => {
+    const response = await fetch(`${baseUrl}/api/auth/flow`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(response.status).toBe(400);
+  });
   it("reports the control plane's sign-in methods", async () => {
     const response = await fetch(`${baseUrl}/api/auth/methods`);
     expect(await response.json()).toEqual({ enabled: true, methods: ["email", "github"] });
@@ -187,7 +265,7 @@ describe("account routes", () => {
     const response = await fetch(`${baseUrl}/api/auth/flow`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ desktopReturnUrl }),
+      body: JSON.stringify({ desktopReturnUrl, acceptance }),
     });
     expect((await response.json()).flowId).toBe(desktopReturnUrl);
   });
@@ -212,8 +290,7 @@ describe("account routes", () => {
     const offline = await fetch(`${baseUrl}/api/auth/session`, {
       headers: { "x-paseo-session": token },
     });
-    expect(offline.status).toBe(200);
-    expect((await offline.json()).user).toEqual(user);
+    expect(offline.status).toBe(503);
   });
 
   it("does not restart Arena when the same token is resolved again", async () => {
@@ -384,14 +461,14 @@ describe("account routes", () => {
     );
   });
 
-  it("reports control-plane outages without rejecting a locally valid session", async () => {
+  it("reports control-plane outages when account data cannot be refreshed", async () => {
     backend.unavailable = true;
     const methods = await fetch(`${baseUrl}/api/auth/methods`);
     expect(methods.status).toBe(503);
     const session = await fetch(`${baseUrl}/api/auth/session`, {
       headers: { "x-paseo-session": sessionToken() },
     });
-    expect(session.status).toBe(200);
+    expect(session.status).toBe(503);
   });
 
   it("preserves actionable control-plane errors", async () => {

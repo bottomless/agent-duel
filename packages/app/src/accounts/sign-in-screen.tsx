@@ -2,7 +2,12 @@ import { useCallback, useMemo, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { ChevronLeft, Mail } from "lucide-react-native";
-import type { SignInMethod } from "@getpaseo/protocol/accounts/schemas";
+import type {
+  SignInMethod,
+  LegalDocuments,
+  AcceptTermsRequest,
+} from "@getpaseo/protocol/accounts/schemas";
+import { LegalCheckbox } from "./legal-checkbox";
 import { Button } from "@/components/ui/button";
 import { Field, FormTextInput } from "@/components/ui/form-field";
 import { githubMark, googleMark } from "./provider-marks";
@@ -140,10 +145,23 @@ function ProviderButton({ provider, disabled, loading, onPress }: ProviderButton
 export interface SignInScreenProps {
   endpoint: AccountsEndpoint;
   methods: readonly SignInMethod[];
+  documents: LegalDocuments;
 }
 
-export function SignInScreen({ endpoint, methods }: SignInScreenProps) {
-  const { state, startEmail, startOAuth, goBack } = useSignIn(endpoint);
+export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps) {
+  const [accepted, setAccepted] = useState(false);
+  const acceptance = useMemo<AcceptTermsRequest | null>(
+    () =>
+      accepted
+        ? {
+            accepted: true,
+            termsVersion: documents.termsVersion,
+            privacyPolicyVersion: documents.privacyPolicyVersion,
+          }
+        : null,
+    [accepted, documents],
+  );
+  const { state, startEmail, startOAuth, goBack } = useSignIn(endpoint, acceptance);
   const [email, setEmail] = useState("");
 
   const emailEnabled = methods.includes("email");
@@ -152,7 +170,7 @@ export function SignInScreen({ endpoint, methods }: SignInScreenProps) {
     [methods],
   );
   const busy = isSignInBusy(state);
-  const canSubmitEmail = EMAIL_PATTERN.test(email.trim()) && !busy;
+  const canSubmitEmail = EMAIL_PATTERN.test(email.trim()) && !busy && accepted;
 
   const submitEmail = useCallback(() => {
     startEmail(email.trim().toLowerCase());
@@ -251,6 +269,12 @@ export function SignInScreen({ endpoint, methods }: SignInScreenProps) {
                   returnKeyType="go"
                 />
               </Field>
+              <LegalCheckbox
+                documents={documents}
+                checked={accepted}
+                onChange={setAccepted}
+                disabled={busy}
+              />
               <Button
                 variant="default"
                 leftIcon={Mail}
@@ -274,11 +298,19 @@ export function SignInScreen({ endpoint, methods }: SignInScreenProps) {
 
           {providers.length > 0 ? (
             <View style={styles.providers}>
+              {!emailEnabled ? (
+                <LegalCheckbox
+                  documents={documents}
+                  checked={accepted}
+                  onChange={setAccepted}
+                  disabled={busy}
+                />
+              ) : null}
               {providers.map((provider) => (
                 <ProviderButton
                   key={provider}
                   provider={provider}
-                  disabled={busy}
+                  disabled={busy || !accepted}
                   loading={state.kind === "opening" && state.method === provider}
                   onPress={startOAuth}
                 />

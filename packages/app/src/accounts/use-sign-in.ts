@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer } from "react";
 import { getDesktopHost } from "@/desktop/host";
 import { openExternalUrl } from "@/utils/open-external-url";
 import { useAccountSessionStore } from "./session-store";
+import type { AcceptTermsRequest } from "@getpaseo/protocol/accounts/schemas";
 import {
   buildOAuthStartUrl,
   claimSignInFlow,
@@ -30,25 +31,29 @@ function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
 
-async function openAppSignInFlow(endpoint: AccountsEndpoint) {
+async function openAppSignInFlow(endpoint: AccountsEndpoint, acceptance: AcceptTermsRequest) {
   // Returning to the desktop is optional; a local listener failure must not
   // prevent signing in. Browser clients keep the manual return instruction.
   const desktopReturnUrl = await getDesktopHost()
     ?.accounts?.createReturnUrl?.()
     .catch(() => undefined);
-  return openSignInFlow(endpoint, { desktopReturnUrl });
+  return openSignInFlow(endpoint, { desktopReturnUrl, acceptance });
 }
 
-export function useSignIn(endpoint: AccountsEndpoint): SignInController {
+export function useSignIn(
+  endpoint: AccountsEndpoint,
+  acceptance: AcceptTermsRequest | null,
+): SignInController {
   const [state, dispatch] = useReducer(signInReducer, initialSignInState);
   const setSession = useAccountSessionStore((store) => store.setSession);
 
   const startEmail = useCallback(
     (email: string) => {
+      if (!acceptance) return;
       dispatch({ type: "start", method: "email" });
       void (async () => {
         try {
-          const flow = await openAppSignInFlow(endpoint);
+          const flow = await openAppSignInFlow(endpoint, acceptance);
           await sendMagicLink(endpoint, { email, flowId: flow.flowId });
           dispatch({ type: "email-sent", email, flow });
         } catch (error) {
@@ -59,15 +64,16 @@ export function useSignIn(endpoint: AccountsEndpoint): SignInController {
         }
       })();
     },
-    [endpoint],
+    [endpoint, acceptance],
   );
 
   const startOAuth = useCallback(
     (provider: OAuthSignInMethod) => {
+      if (!acceptance) return;
       dispatch({ type: "start", method: provider });
       void (async () => {
         try {
-          const flow = await openAppSignInFlow(endpoint);
+          const flow = await openAppSignInFlow(endpoint, acceptance);
           await openExternalUrl(buildOAuthStartUrl(endpoint, { provider, flowId: flow.flowId }));
           dispatch({ type: "browser-opened", provider, flow });
         } catch (error) {
@@ -78,7 +84,7 @@ export function useSignIn(endpoint: AccountsEndpoint): SignInController {
         }
       })();
     },
-    [endpoint],
+    [endpoint, acceptance],
   );
 
   const goBack = useCallback(() => {

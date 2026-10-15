@@ -1,6 +1,7 @@
 import express, { type Request, type RequestHandler, type Router } from "express";
 import {
   claimSignInFlowRequestSchema,
+  acceptTermsRequestSchema,
   openSignInFlowRequestSchema,
   sendMagicLinkRequestSchema,
   SESSION_HEADER,
@@ -56,7 +57,7 @@ export function createAccountsRouter(service: AccountsService): Router {
     route(async (req, res) => {
       const parsed = openSignInFlowRequestSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        res.status(400).json({ error: "Invalid sign-in return address" });
+        res.status(400).json({ error: "Invalid sign-in request or missing terms acceptance" });
         return;
       }
       res.json(await service.backend.openFlow(parsed.data));
@@ -122,7 +123,25 @@ export function createAccountsRouter(service: AccountsService): Router {
         res.status(401).json({ error: "Not signed in" });
         return;
       }
-      res.json({ user: resolved.user, method: resolved.method });
+      // Acceptance is account data, not an immutable claim in a 30-day token.
+      res.json(await service.backend.currentSession(token!));
+    }),
+  );
+
+  router.post(
+    "/accept-terms",
+    route(async (req, res) => {
+      const token = readSessionToken(req);
+      if (!token) {
+        res.status(401).json({ error: "Not signed in" });
+        return;
+      }
+      const parsed = acceptTermsRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Explicit terms acceptance is required" });
+        return;
+      }
+      res.json(await service.backend.acceptTerms(token, parsed.data));
     }),
   );
 

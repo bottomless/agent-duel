@@ -481,6 +481,8 @@ export interface AdaptiveModalSheetProps {
   header: SheetHeader;
   visible: boolean;
   onClose: () => void;
+  /** Required decisions stay open until an action inside the sheet resolves them. */
+  dismissible?: boolean;
   onDismiss?: () => void;
   children: ReactNode;
   /** Sticky footer rendered below the scrollable content. */
@@ -501,7 +503,8 @@ export interface AdaptiveModalSheetProps {
 export function AdaptiveModalSheet({
   header,
   visible,
-  onClose,
+  onClose: requestClose,
+  dismissible = true,
   onDismiss,
   children,
   footer,
@@ -514,6 +517,9 @@ export function AdaptiveModalSheet({
   contentStyle,
   sizeContentToCurrentSnapPoint = false,
 }: AdaptiveModalSheetProps) {
+  const onClose = useCallback(() => {
+    if (dismissible) requestClose();
+  }, [dismissible, requestClose]);
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const isMobile = useIsCompactFormFactor();
@@ -588,9 +594,15 @@ export function AdaptiveModalSheet({
 
   const renderBackdrop = useCallback(
     (props: React.ComponentProps<typeof BottomSheetBackdrop>) => (
-      <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} opacity={0.45} />
+      <BottomSheetBackdrop
+        {...props}
+        disappearsOnIndex={-1}
+        appearsOnIndex={0}
+        opacity={0.45}
+        pressBehavior={dismissible ? "close" : "none"}
+      />
     ),
-    [],
+    [dismissible],
   );
 
   const desktopCardStyle = useMemo(
@@ -659,7 +671,12 @@ export function AdaptiveModalSheet({
   if (isMobile) {
     const sheetContent = (
       <>
-        <SheetHeaderView header={header} onClose={onClose} testID={testID} />
+        <SheetHeaderView
+          header={header}
+          onClose={onClose}
+          testID={testID}
+          showCloseButton={dismissible}
+        />
         {scrollable ? (
           <BottomSheetScrollView
             style={sizeContentToCurrentSnapPoint ? styles.bottomSheetVisibleScroll : undefined}
@@ -685,7 +702,7 @@ export function AdaptiveModalSheet({
         onChange={handleSheetChange}
         onDismiss={handleDismiss}
         backdropComponent={renderBackdrop}
-        enablePanDownToClose
+        enablePanDownToClose={dismissible}
         backgroundComponent={SheetBackground}
         handleIndicatorStyle={handleIndicatorStyle}
         keyboardBehavior="extend"
@@ -704,7 +721,7 @@ export function AdaptiveModalSheet({
 
   const cardInner = (
     <OverlayLayerProvider layer={modalLayer}>
-      <SheetHeaderView header={header} onClose={onClose} />
+      <SheetHeaderView header={header} onClose={onClose} showCloseButton={dismissible} />
       {scrollable ? (
         <View style={styles.desktopScrollContainer}>
           <ScrollView

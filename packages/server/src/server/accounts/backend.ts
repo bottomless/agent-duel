@@ -1,5 +1,12 @@
 import { z } from "zod";
 import type { Logger } from "pino";
+import {
+  accountUserSchema,
+  authMethodsResponseSchema,
+  currentSessionResponseSchema,
+  type OpenSignInFlowRequest,
+  type AcceptTermsRequest,
+} from "@getpaseo/protocol/accounts/schemas";
 
 export class AccountsBackendUnavailableError extends Error {
   constructor(readonly cause: unknown) {
@@ -19,13 +26,6 @@ export class AccountsRequestError extends Error {
 }
 
 const signInMethodSchema = z.enum(["email", "google", "github"]);
-const accountUserSchema = z.object({
-  id: z.string(),
-  email: z.string(),
-  name: z.string().nullable(),
-  image: z.string().nullable(),
-});
-const methodsSchema = z.object({ enabled: z.boolean(), methods: z.array(signInMethodSchema) });
 const openedFlowSchema = z.object({
   flowId: z.string(),
   secret: z.string(),
@@ -94,10 +94,10 @@ export class AccountsBackend {
   }
 
   methods() {
-    return this.request("/methods", methodsSchema, { method: "GET" });
+    return this.request("/methods", authMethodsResponseSchema, { method: "GET" });
   }
 
-  openFlow(input: { desktopReturnUrl?: string } = {}) {
+  openFlow(input: OpenSignInFlowRequest) {
     return this.request("/flow", openedFlowSchema, { body: input });
   }
 
@@ -115,6 +115,14 @@ export class AccountsBackend {
 
   async revokeSession(token: string) {
     await this.request("/sign-out", okSchema, { token, body: {} });
+  }
+
+  currentSession(token: string) {
+    return this.request("/session", currentSessionResponseSchema, { method: "GET", token });
+  }
+
+  acceptTerms(token: string, input: AcceptTermsRequest) {
+    return this.request("/accept-terms", currentSessionResponseSchema, { token, body: input });
   }
 
   close(): Promise<void> {

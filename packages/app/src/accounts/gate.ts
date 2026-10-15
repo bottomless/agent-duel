@@ -8,6 +8,7 @@ export type AccountGate =
   | { kind: "unreachable" }
   | { kind: "disabled" }
   | { kind: "signed-out"; methods: readonly SignInMethod[] }
+  | { kind: "acceptance-required" }
   | { kind: "signed-in" };
 
 export interface ResolveAccountGateInput {
@@ -19,6 +20,8 @@ export interface ResolveAccountGateInput {
   hasStoredSession: boolean;
   sessionPhase: QueryPhase;
   sessionIsValid: boolean;
+  legalDocumentsAvailable: boolean;
+  hasAcceptedLegalDocuments: boolean;
 }
 
 /**
@@ -35,11 +38,16 @@ export function resolveAccountGate(input: ResolveAccountGateInput): AccountGate 
     return { kind: "checking" };
   }
   if (input.methodsPhase === "error") {
-    return input.hasStoredSession ? { kind: "signed-in" } : { kind: "unreachable" };
+    if (!input.hasStoredSession) return { kind: "unreachable" };
+    if (input.hasAcceptedLegalDocuments) return { kind: "signed-in" };
+    return input.legalDocumentsAvailable
+      ? { kind: "acceptance-required" }
+      : { kind: "unreachable" };
   }
   if (!input.accountsEnabled) {
     return { kind: "disabled" };
   }
+  if (!input.legalDocumentsAvailable) return { kind: "unreachable" };
   if (!input.hasStoredSession) {
     return { kind: "signed-out", methods: input.methods };
   }
@@ -47,10 +55,13 @@ export function resolveAccountGate(input: ResolveAccountGateInput): AccountGate 
     return { kind: "checking" };
   }
   if (input.sessionPhase === "error") {
-    return { kind: "signed-in" };
+    return input.hasAcceptedLegalDocuments
+      ? { kind: "signed-in" }
+      : { kind: "acceptance-required" };
   }
   if (!input.sessionIsValid) {
     return { kind: "signed-out", methods: input.methods };
   }
+  if (!input.hasAcceptedLegalDocuments) return { kind: "acceptance-required" };
   return { kind: "signed-in" };
 }

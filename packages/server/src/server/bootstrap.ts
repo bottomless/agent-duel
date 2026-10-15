@@ -772,7 +772,7 @@ export async function createPaseoDaemon(
     // The app asks before it renders anything, so the answer has to exist even
     // when there is nothing to sign in to.
     app.get("/api/auth/methods", (_req, res) => {
-      res.json({ enabled: false, methods: [] });
+      res.json({ enabled: false, methods: [], legal: null });
     });
     if (arenaByok) {
       logger.info(
