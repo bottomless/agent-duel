@@ -1625,6 +1625,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
     () => latestSummary !== null && arenaTurnFollowedUp(latestSummary, presentedStream),
     [latestSummary, presentedStream],
   );
+  // The feedback prompt stays at the end of the chat even after the summary moves up.
+  const feedbackBattle = arenaBattleOnScreen ? null : latestSummary;
   const summaryPlacement = useMemo(
     () =>
       partitionArenaSummaries(
@@ -1655,19 +1657,6 @@ const AgentStreamSection = memo(function AgentStreamSection({
           item={historyItem}
         />,
       );
-      // Its feedback prompt moves with it, as it sat under the summary at the end of the chat.
-      if (latestSummaryFollowedUp && historyItem.id === latestSummary?.id) {
-        nodes.push(
-          <ChatFeedbackCard
-            key={`battle-feedback-${historyItem.id}`}
-            battleId={historyItem.id}
-            agentId={agent.id}
-            workspaceId={workspaceId}
-            promptEligible={feedbackPromptEligible}
-            style={styles.inlineFeedbackCard}
-          />,
-        );
-      }
       groups.set(anchor, nodes);
     }
     return new Map(
@@ -1676,16 +1665,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
         <View key={`arena-summaries-${anchor}`}>{nodes}</View>,
       ]),
     );
-  }, [
-    agent.id,
-    feedbackPromptEligible,
-    latestSummary?.id,
-    latestSummaryFollowedUp,
-    serverId,
-    summaryAnchorKey,
-    summaryPlacement.inline,
-    workspaceId,
-  ]);
+  }, [agent.id, serverId, summaryAnchorKey, summaryPlacement.inline, workspaceId]);
 
   // The active battle owns setup progress and the contestant panes in the stream.
   const activeBattle = useMemo(() => {
@@ -1868,16 +1848,20 @@ const AgentStreamSection = memo(function AgentStreamSection({
   const liveContent = useMemo(
     () =>
       activeBattle ??
-      (latestBattleSummary || chatCallouts || filesRecoveryBanner || queuedBattlePreview ? (
+      (latestBattleSummary ||
+      chatCallouts ||
+      filesRecoveryBanner ||
+      queuedBattlePreview ||
+      feedbackBattle ? (
         <View style={styles.arenaReadyContent}>
           {latestBattleSummary}
           {chatCallouts}
           {filesRecoveryBanner}
           {queuedBattlePreview}
-          {summaryPlacement.live && !queuedBattlePreview ? (
+          {feedbackBattle && !queuedBattlePreview ? (
             <ChatFeedbackCard
-              key={`battle-feedback-${summaryPlacement.live.id}`}
-              battleId={summaryPlacement.live.id}
+              key={`battle-feedback-${feedbackBattle.id}`}
+              battleId={feedbackBattle.id}
               agentId={agent.id}
               workspaceId={workspaceId}
               promptEligible={feedbackPromptEligible}
@@ -1889,11 +1873,11 @@ const AgentStreamSection = memo(function AgentStreamSection({
       activeBattle,
       agent.id,
       chatCallouts,
+      feedbackBattle,
       feedbackPromptEligible,
       filesRecoveryBanner,
       latestBattleSummary,
       queuedBattlePreview,
-      summaryPlacement.live,
       workspaceId,
     ],
   );
@@ -2687,11 +2671,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   arenaReadyContent: {
     gap: theme.spacing[3],
-  },
-  // The space it has under the summary at the end of the chat, and room before the next prompt.
-  inlineFeedbackCard: {
-    marginTop: theme.spacing[3],
-    marginBottom: theme.spacing[2],
   },
   // The conversation's own measure, so the notice lines up with the battle
   // summary above it rather than breaking out of the column.
