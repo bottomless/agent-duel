@@ -68,7 +68,6 @@ import { ArenaPrivacy } from "@/arena/privacy"
 import { ArenaRuntime } from "@/arena/runtime"
 import { ArenaContestant } from "@/arena/contestant"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
-import { ArenaRuntime } from "@/arena/runtime"
 import { BackgroundJob } from "@/background/job"
 
 // @ts-ignore
