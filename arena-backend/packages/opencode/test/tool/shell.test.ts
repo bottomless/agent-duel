@@ -806,9 +806,11 @@ describe("tool.shell permissions", () => {
     }),
   )
 
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && ps[0]) {
+    // A drive-less `/Users/...` names the current drive in PowerShell; Git Bash, the default, reads it
+    // under its own root (see the Git Bash test below).
     it.live("normalizes external_directory workdir variants on Windows", () =>
-      Effect.gen(function* () {
+      withShell(ps[0]!, Effect.gen(function* () {
         const err = new Error("stop after permission")
         const outerTmp = yield* tmpdirScoped()
         const tmp = yield* tmpdirScoped()
@@ -838,7 +840,7 @@ describe("tool.shell permissions", () => {
             }
           }),
         )
-      }),
+      })),
     )
 
     if (bash) {
