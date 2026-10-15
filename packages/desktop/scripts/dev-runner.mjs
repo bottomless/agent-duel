@@ -233,15 +233,27 @@ async function waitForElectronPage(port, expectedUrl, timeoutMs = 60_000) {
 }
 
 async function waitForElectronRenderer(webSocketUrl, developmentSession, timeoutMs = 60_000) {
+  // The app saves the session back with fresher account fields (its terms acceptance), so the
+  // stored text drifts from what dev-login printed. Compare tokens, or every save reloads again.
+  const developmentToken = developmentSession
+    ? (JSON.parse(developmentSession).state?.session?.token ?? null)
+    : null;
   const expression = developmentSession
     ? `(async () => {
         const storage = window.paseoDesktop?.accounts.session;
         if (!storage) return false;
-        const session = ${JSON.stringify(developmentSession)};
-        if (await storage.load() !== session) {
-          window.__paseoDevLogin ??= storage.save(session).then(() => location.reload());
+        let token = null;
+        try {
+          token = JSON.parse(await storage.load())?.state?.session?.token ?? null;
+        } catch {}
+        if (token !== ${JSON.stringify(developmentToken)}) {
+          window.__paseoDevLogin ??= storage
+            .save(${JSON.stringify(developmentSession)})
+            .then(() => location.reload());
           return false;
         }
+        // The terms prompt is a started app too; a new dev account stops there until it accepts.
+        if (document.querySelector('[data-testid="accept-terms"]')) return true;
         const store = window.__paseoHostRuntimeStore;
         return store?.getHosts().some(host =>
           host.connections.some(connection => connection.type === "directTcp" &&

@@ -3,11 +3,24 @@ import { z } from "zod";
 export const signInMethodSchema = z.enum(["email", "google", "github"]);
 export type SignInMethod = z.infer<typeof signInMethodSchema>;
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+// A local control plane (agent-duel-cloud scripts/dev.sh) serves its policy pages over loopback HTTP.
+const legalDocumentUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname))
+    );
+  }, "Legal document links must use HTTPS");
+
 export const legalDocumentsSchema = z.object({
   termsVersion: z.string().min(1),
-  termsUrl: z.string().url().startsWith("https://"),
+  termsUrl: legalDocumentUrlSchema,
   privacyPolicyVersion: z.string().min(1),
-  privacyPolicyUrl: z.string().url().startsWith("https://"),
+  privacyPolicyUrl: legalDocumentUrlSchema,
 });
 export type LegalDocuments = z.infer<typeof legalDocumentsSchema>;
 
