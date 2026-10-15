@@ -45,8 +45,8 @@ export function buildAddProjectMethods(host: AddProjectHost): AddProjectMethodOp
     id: "browse",
     label: "Browse",
     description: host.canBrowse
-      ? "Choose or create a directory in Finder"
-      : "Open Agent Arena in Electron to browse with Finder",
+      ? "Choose or create a directory on this computer"
+      : "Open Agent Arena in Electron to browse folders",
     disabled: !host.canBrowse,
   });
   options.push({
