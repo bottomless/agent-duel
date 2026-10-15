@@ -600,6 +600,48 @@ describe("ArenaGit", () => {
     }),
   )
 
+  it.live("writes a winner's files with the line endings a checkout gives them", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const candidate = yield* scopedTmpdir()
+      // LF in the repository and CRLF on disk, as Git for Windows' core.autocrlf keeps text.
+      yield* Effect.promise(async () => {
+        await fs.writeFile(`${canonical.path}/.gitattributes`, "*.txt text eol=crlf\n", "utf8")
+        await fs.writeFile(`${canonical.path}/notes.txt`, "one\r\ntwo\r\n", "utf8")
+        await $`git add .`.cwd(canonical.path).quiet()
+        await $`git commit -m base`.cwd(canonical.path).quiet()
+      })
+      const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() => $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet())
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow()).pipe(
+          Effect.ignore,
+        ),
+      )
+      yield* Effect.promise(async () => {
+        await fs.writeFile(`${candidate.path}/notes.txt`, "one\r\ntwo\r\nthree\r\n", "utf8")
+        await fs.writeFile(`${candidate.path}/added.txt`, "new\r\n", "utf8")
+      })
+      const result = yield* finalize({ worktree: candidate.path, baseSHA: frozenHead, permanentRef: "refs/battles/eol/a" })
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead,
+        baseWorkingTree: frozenHead,
+        baseIndexTree: frozenHead,
+        resultCommit: result.finalCommit,
+        finalIndexTree: result.finalIndexTree,
+        safetyRef: "refs/battles/eol/safety",
+      })
+      expect(promoted.conflicts).toEqual([])
+      const read = (name: string) => Effect.promise(() => fs.readFile(`${canonical.path}/${name}`, "utf8"))
+      expect(yield* read("notes.txt")).toBe("one\r\ntwo\r\nthree\r\n")
+      expect(yield* read("added.txt")).toBe("new\r\n")
+      expect(yield* Effect.promise(() => $`git status --porcelain`.cwd(canonical.path).quiet().text())).toBe(
+        " M notes.txt\n?? added.txt\n",
+      )
+    }),
+  )
+
   it.live("promotes committed baseline state without reapplying the frozen baseline", () =>
     Effect.gen(function* () {
       const canonical = yield* scopedTmpdir({ git: true })

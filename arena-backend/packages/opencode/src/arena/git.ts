@@ -3,10 +3,8 @@ import { Effect, Semaphore, Stream } from "effect"
 import { randomUUID } from "crypto"
 import { spawn } from "child_process"
 import {
-  chmod,
   copyFile,
   lstat,
-  mkdir,
   mkdtemp,
   readdir,
   readFile,
@@ -14,7 +12,6 @@ import {
   rename,
   rm,
   stat,
-  symlink,
   unlink,
   utimes,
   writeFile,
@@ -4426,6 +4423,86 @@ const readBlobs = Effect.fn("ArenaGit.readBlobs")(function* (git: Git.Interface,
   return blobs
 })
 
+/** The largest file a worktree write accepts, as when each blob was read by its own call. */
+const MAX_WORKTREE_BLOB_BYTES = 200 * 1024 * 1024
+/** How many blob bytes one `cat-file --batch` call may buffer. A larger blob is read alone. */
+const WORKTREE_BLOB_BATCH_BYTES = 64 * 1024 * 1024
+
+/**
+ * Sizes of the blobs a worktree write needs, from one `cat-file --batch-check`. Each blob used to be
+ * read by a `cat-file` process of its own, and starting one costs ~10 ms: a 3,000-file winner spent
+ * half a minute in process startup before the vote finished.
+ */
+const readBlobSizes = Effect.fn("ArenaGit.readBlobSizes")(function* (
+  git: Git.Interface,
+  root: string,
+  oids: readonly string[],
+) {
+  const sizes = new Map<string, number>()
+  const unique = [...new Set(oids)]
+  if (unique.length === 0) return sizes
+  const listing = yield* read(git, root, "read_worktree_blob_sizes", ["cat-file", "--batch-check"], {
+    stdin: Stream.make(new TextEncoder().encode(`${unique.join("\n")}\n`)),
+    maxOutputBytes: 64 * 1024 * 1024,
+  })
+  for (const line of listing.split("\n")) {
+    const [oid, type, size] = line.split(" ")
+    const bytes = Number(size)
+    if (!oid || type !== "blob" || !Number.isSafeInteger(bytes)) {
+      return yield* Effect.fail(new OperationError("read_worktree_blob", `Git could not read blob ${oid || line}`))
+    }
+    if (bytes > MAX_WORKTREE_BLOB_BYTES) {
+      return yield* Effect.fail(new OperationError("read_worktree_blob", `Blob ${oid} is larger than 200 MB`))
+    }
+    sizes.set(oid, bytes)
+  }
+  const missing = unique.find((oid) => !sizes.has(oid))
+  if (missing) return yield* Effect.fail(new OperationError("read_worktree_blob", `Git could not read blob ${missing}`))
+  return sizes
+})
+
+/** The blobs of the changes from `start` on that fit in one batch; always at least the first. */
+function nextBlobBatch(changes: readonly { oid?: string }[], start: number, sizes: ReadonlyMap<string, number>) {
+  const batch = new Set<string>()
+  let bytes = 0
+  for (const change of changes.slice(start)) {
+    if (!change.oid || batch.has(change.oid)) continue
+    const size = sizes.get(change.oid) ?? 0
+    if (batch.size > 0 && bytes + size > WORKTREE_BLOB_BATCH_BYTES) break
+    batch.add(change.oid)
+    bytes += size
+  }
+  return [...batch]
+}
+
+const readBlobBatch = Effect.fn("ArenaGit.readBlobBatch")(function* (
+  git: Git.Interface,
+  root: string,
+  oids: readonly string[],
+  sizes: ReadonlyMap<string, number>,
+) {
+  // Each answer is `<oid> blob <size>\n<content>\n`.
+  const expected = oids.reduce((total, oid) => total + oid.length + 32 + (sizes.get(oid) ?? 0), 0)
+  const result = yield* run(git, root, "read_worktree_blob", ["cat-file", "--batch"], {
+    stdin: Stream.make(new TextEncoder().encode(`${oids.join("\n")}\n`)),
+    maxOutputBytes: expected,
+  })
+  const output = result.stdout
+  const blobs = new Map<string, Buffer>()
+  let offset = 0
+  for (const oid of oids) {
+    const newline = output.indexOf(0x0a, offset)
+    const [name, type, size] = newline < 0 ? [] : output.toString("utf8", offset, newline).split(" ")
+    const end = newline + 1 + Number(size)
+    if (result.truncated || name !== oid || type !== "blob" || Number(size) !== sizes.get(oid) || end > output.length) {
+      return yield* Effect.fail(new OperationError("read_worktree_blob", `Git could not read blob ${oid}`))
+    }
+    blobs.set(oid, output.subarray(newline + 1, end))
+    offset = end + 1
+  }
+  return blobs
+})
+
 /** Writes each content as a blob with one `hash-object`; the OIDs come back in the same order. */
 const writeBlobs = Effect.fn("ArenaGit.writeBlobs")(function* (
   git: Git.Interface,
@@ -4555,6 +4632,12 @@ const editTree = Effect.fn("ArenaGit.editTree")(function* (
  * Bring the working tree from one snapshot to another by touching only the paths that differ.
  * Untracked files in the snapshots are ordinary entries; ignored files are in neither and are
  * never touched.
+ *
+ * Git writes the files, from a scratch index holding `to`, so each one is checked out the way a
+ * `git checkout` would write it: line endings under `core.autocrlf` or `eol`, smudge filters such
+ * as LFS, the executable bit, and links per `core.symlinks`. The blobs hold normalized content, so
+ * writing them as they are turned a Windows checkout's CRLF files into LF ones. It also runs two
+ * processes however many files change.
  */
 const writeTreeToWorktree = Effect.fn("ArenaGit.writeTreeToWorktree")(function* (
   git: Git.Interface,
@@ -4565,125 +4648,37 @@ const writeTreeToWorktree = Effect.fn("ArenaGit.writeTreeToWorktree")(function* 
   if (from === to) return
   const listing = yield* read(git, root, "read_worktree_delta", ["diff-tree", "-r", "-z", "--no-renames", from, to])
   const fields = listing.split("\0")
-  const changes: { path: string; mode?: string; oid?: string }[] = []
+  const removed: string[] = []
+  const written: string[] = []
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const meta = fields[i]
     const path = fields[i + 1]
     if (!meta || !path) continue
     const [, dstMode, , dstOid, status] = meta.slice(1).split(" ")
-    if (status === "D" || !dstMode || !dstOid) changes.push({ path })
-    else if (dstMode !== "160000") changes.push({ path, mode: dstMode, oid: dstOid })
+    if (status === "D" || !dstMode || !dstOid) removed.push(path)
+    else if (dstMode !== "160000") written.push(path)
   }
-  const sizes = yield* readBlobSizes(
-    git,
-    root,
-    changes.flatMap((change) => (change.oid ? [change.oid] : [])),
-  )
-  let blobs = new Map<string, Buffer>()
-  for (const [index, change] of changes.entries()) {
-    const target = join(root, change.path)
-    if (!change.oid || !change.mode) {
-      yield* Effect.promise(() => rm(target, { force: true, recursive: false }).catch(() => undefined))
-      continue
-    }
-    const mode = change.mode
-    // Blobs are read ahead in batches but written in the delta's order: a file that replaces a
-    // directory, or the reverse, depends on the entry before it having been applied.
-    if (!blobs.has(change.oid)) blobs = yield* readBlobBatch(git, root, nextBlobBatch(changes, index, sizes), sizes)
-    const blob = blobs.get(change.oid)!
-    yield* Effect.promise(async () => {
-      await mkdir(dirname(target), { recursive: true })
-      await rm(target, { force: true, recursive: true }).catch(() => undefined)
-      if (mode === "120000") {
-        // Without the symlink privilege Git (core.symlinks=false) keeps a link as a file holding its target.
-        if (FSUtil.canSymlink()) await symlink(blob.toString("utf8"), target)
-        else await writeFile(target, blob)
-        return
-      }
-      await writeFile(target, blob, { mode: mode === "100755" ? 0o755 : 0o644 })
-      if (mode === "100755") await chmod(target, 0o755)
+  // Removals first: a file that replaces a directory, or the reverse, finds the old entry gone,
+  // and `checkout-index --force` clears whatever is still in its way.
+  for (const path of removed) {
+    yield* Effect.promise(() => rm(join(root, path), { force: true, recursive: false }).catch(() => undefined))
+  }
+  if (written.length === 0) return
+  const index = join(tmpdir(), `opencode-arena-index-${randomUUID()}`)
+  yield* Effect.gen(function* () {
+    const env = { GIT_INDEX_FILE: index }
+    yield* run(git, root, "load_worktree_tree", ["read-tree", to], { env })
+    yield* run(git, root, "write_worktree_files", ["checkout-index", "--force", "-z", "--stdin"], {
+      env,
+      stdin: Stream.make(new TextEncoder().encode(`${written.join("\0")}\0`)),
     })
-  }
-})
-
-/** The largest file a worktree write accepts, as when each blob was read by its own call. */
-const MAX_WORKTREE_BLOB_BYTES = 200 * 1024 * 1024
-/** How many blob bytes one `cat-file --batch` call may buffer. A larger blob is read alone. */
-const WORKTREE_BLOB_BATCH_BYTES = 64 * 1024 * 1024
-
-/**
- * Sizes of the blobs a worktree write needs, from one `cat-file --batch-check`. Each blob used to be
- * read by a `cat-file` process of its own, and starting one costs ~10 ms: a 3,000-file winner spent
- * half a minute in process startup before the vote finished.
- */
-const readBlobSizes = Effect.fn("ArenaGit.readBlobSizes")(function* (
-  git: Git.Interface,
-  root: string,
-  oids: readonly string[],
-) {
-  const sizes = new Map<string, number>()
-  const unique = [...new Set(oids)]
-  if (unique.length === 0) return sizes
-  const listing = yield* read(git, root, "read_worktree_blob_sizes", ["cat-file", "--batch-check"], {
-    stdin: Stream.make(new TextEncoder().encode(`${unique.join("\n")}\n`)),
-    maxOutputBytes: 64 * 1024 * 1024,
-  })
-  for (const line of listing.split("\n")) {
-    const [oid, type, size] = line.split(" ")
-    const bytes = Number(size)
-    if (!oid || type !== "blob" || !Number.isSafeInteger(bytes)) {
-      return yield* Effect.fail(new OperationError("read_worktree_blob", `Git could not read blob ${oid || line}`))
-    }
-    if (bytes > MAX_WORKTREE_BLOB_BYTES) {
-      return yield* Effect.fail(new OperationError("read_worktree_blob", `Blob ${oid} is larger than 200 MB`))
-    }
-    sizes.set(oid, bytes)
-  }
-  const missing = unique.find((oid) => !sizes.has(oid))
-  if (missing) return yield* Effect.fail(new OperationError("read_worktree_blob", `Git could not read blob ${missing}`))
-  return sizes
-})
-
-/** The blobs of the changes from `start` on that fit in one batch; always at least the first. */
-function nextBlobBatch(changes: readonly { oid?: string }[], start: number, sizes: ReadonlyMap<string, number>) {
-  const batch = new Set<string>()
-  let bytes = 0
-  for (const change of changes.slice(start)) {
-    if (!change.oid || batch.has(change.oid)) continue
-    const size = sizes.get(change.oid) ?? 0
-    if (batch.size > 0 && bytes + size > WORKTREE_BLOB_BATCH_BYTES) break
-    batch.add(change.oid)
-    bytes += size
-  }
-  return [...batch]
-}
-
-const readBlobBatch = Effect.fn("ArenaGit.readBlobBatch")(function* (
-  git: Git.Interface,
-  root: string,
-  oids: readonly string[],
-  sizes: ReadonlyMap<string, number>,
-) {
-  // Each answer is `<oid> blob <size>\n<content>\n`.
-  const expected = oids.reduce((total, oid) => total + oid.length + 32 + (sizes.get(oid) ?? 0), 0)
-  const result = yield* run(git, root, "read_worktree_blob", ["cat-file", "--batch"], {
-    stdin: Stream.make(new TextEncoder().encode(`${oids.join("\n")}\n`)),
-    maxOutputBytes: expected,
-  })
-  const output = result.stdout
-  const blobs = new Map<string, Buffer>()
-  let offset = 0
-  for (const oid of oids) {
-    const newline = output.indexOf(0x0a, offset)
-    const [name, type, size] = newline < 0 ? [] : output.toString("utf8", offset, newline).split(" ")
-    const end = newline + 1 + Number(size)
-    if (result.truncated || name !== oid || type !== "blob" || Number(size) !== sizes.get(oid) || end > output.length) {
-      return yield* Effect.fail(new OperationError("read_worktree_blob", `Git could not read blob ${oid}`))
-    }
-    blobs.set(oid, output.subarray(newline + 1, end))
-    offset = end + 1
-  }
-  return blobs
+  }).pipe(
+    Effect.ensuring(
+      Effect.promise(() =>
+        Promise.all([unlink(index).catch(() => undefined), unlink(`${index}.lock`).catch(() => undefined)]),
+      ),
+    ),
+  )
 })
 
 /** Complete a successful promotion after its result has been durably persisted by the service. */
