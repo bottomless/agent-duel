@@ -5,7 +5,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { expect } from "bun:test"
+import { expect, spyOn } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import fs from "fs/promises"
 import os from "os"
@@ -352,6 +352,87 @@ const taskEnvironment = Effect.fn("test.taskEnvironment")(function* (sessionID: 
 })
 
 for (const hosted of [false, true]) {
+  for (const outcome of ["completed", "error"] as const) {
+    it.instance(`Arena preserves the ${outcome} child notification interrupted during save (hosted=${hosted})`, () =>
+      Effect.gen(function* () {
+        const { chat, llm, session } = yield* outputLimitSession()
+        const inTasks = yield* taskEnvironment(chat.id, hosted)
+        const prompt = yield* SessionPrompt.Service
+        const jobs = yield* BackgroundJob.Service
+        const finishChild = yield* Deferred.make<void>()
+        const saving = yield* Deferred.make<void>()
+        const save = yield* Deferred.make<void>()
+        const child = (body: Record<string, unknown>) =>
+          Array.isArray(body.messages) &&
+          body.messages.some((message) => message.role === "user" && message.content === "child-save-only")
+        const response = reply().wait(deferredAsPromise(finishChild))
+        yield* llm.pushMatch(
+          ({ body }) => child(body),
+          outcome === "completed" ? response.text("CHILD_RESULT").stop() : response.contentFilter(),
+        )
+        yield* llm.pushMatch(
+          ({ body }) => !child(body),
+          reply().tool("task", { description: "child", prompt: "child-save-only", subagent_type: "general" }),
+          reply().hang(),
+          reply().text("Steer answered.").stop(),
+        )
+        const run = yield* prompt
+          .prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Delegate and continue." }] })
+          .pipe(Effect.forkChild)
+        yield* pollWithTimeout(
+          llm.inputs.pipe(Effect.map((inputs) => (inputs.length >= 3 ? true : undefined))),
+          "parent and child did not start",
+        )
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          noReply: true,
+          parts: [{ type: "text", text: "QUEUED_STEER" }],
+        })
+        const get = session.get
+        let pause = true
+        // Hold notification delivery before its first parent lookup can persist anything.
+        const lookup = spyOn(session, "get").mockImplementation((id) =>
+          pause && id === chat.id
+            ? Deferred.succeed(saving, undefined).pipe(Effect.andThen(Deferred.await(save)), Effect.andThen(get(id)))
+            : get(id),
+        )
+        yield* Effect.gen(function* () {
+          yield* Deferred.succeed(finishChild, undefined)
+          yield* awaitWithTimeout(Deferred.await(saving), "notification did not start saving")
+          pause = false
+          const cancel = yield* prompt.cancel(chat.id).pipe(Effect.forkChild)
+          // Send now has cancelled the job while its result is still being saved.
+          yield* pollWithTimeout(
+            inTasks(jobs.list()).pipe(
+              Effect.map((items) => (items.length === 1 && items[0]?.status === "cancelled" ? true : undefined)),
+            ),
+            "child job was not cancelled",
+          )
+          yield* Deferred.succeed(save, undefined)
+          yield* Fiber.join(cancel)
+          yield* Fiber.join(run)
+          const resumed = yield* prompt.loop({ sessionID: chat.id })
+          expect(resumed.parts.some((part) => part.type === "text" && part.text === "Steer answered.")).toBe(true)
+          const notices = (yield* session.messages({ sessionID: chat.id }))
+            .flatMap((message) => message.parts)
+            .filter((part) => part.type === "text" && part.synthetic && part.text.includes("<task id="))
+          expect(notices).toHaveLength(1)
+          expect(notices[0]).toMatchObject({ text: expect.stringContaining(`state="${outcome}"`) })
+          const input = JSON.stringify((yield* llm.inputs).at(-1))
+          expect(input).toContain("QUEUED_STEER")
+          expect(input).toContain(
+            outcome === "completed" ? "CHILD_RESULT" : "The subagent could not complete its task.",
+          )
+          expect(input).not.toContain("Subagent cancelled")
+          expect(yield* llm.misses).toHaveLength(0)
+        }).pipe(
+          Effect.ensuring(Deferred.succeed(save, undefined)),
+          Effect.ensuring(Effect.sync(() => lookup.mockRestore())),
+        )
+      }),
+    )
+  }
+
   it.instance(
     `Arena keeps parallel children alive, answers a steer, and integrates both results (hosted=${hosted})`,
     () =>

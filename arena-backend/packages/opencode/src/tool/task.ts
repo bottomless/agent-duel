@@ -270,9 +270,12 @@ export const TaskTool = Tool.define(
           Effect.gen(function* () {
             const job = yield* background.get(nextSession.id)
             if (delivered || !arenaParent || job?.metadata?.background !== true) return
-            delivered = true
             yield* inject(state, text)
-          })
+            delivered = true
+          }).pipe(
+            // Once saving starts, finish the message before cancellation can replace or suppress it.
+            Effect.uninterruptible,
+          )
         return runTask().pipe(
           Effect.matchCauseEffect({
             onSuccess: (text) => deliver("completed", text).pipe(Effect.as(text)),
