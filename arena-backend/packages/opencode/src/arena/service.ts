@@ -2469,6 +2469,15 @@ export const layer: Layer.Layer<
           })
           return chat
         }
+        // Without a git that runs, the checkout was never read: the trunk may be fine. The chat is
+        // left as it is, so a send reaches the battle's git check and says what to install. That
+        // check runs here outside the trunk, which may really be gone.
+        if (Exit.isFailure(yield* Effect.exit(withGit(requireBattleGit(process.cwd()))))) {
+          yield* Effect.logWarning("Arena skipped a canonical inspection because git does not run", {
+            chatID: chat._id,
+          })
+          return chat
+        }
         return yield* blockCanonicalCheckout(store, chat, detail)
       }
       const { state, commonGitDir } = inspection.value
