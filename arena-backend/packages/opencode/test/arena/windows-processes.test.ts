@@ -34,23 +34,29 @@ describe("Windows process groups", () => {
     row(22, 21, 7, { commandLine: "node server.js", cwd: "C:\\repo\\wt" }),
   ]
 
+  const byPid = (snapshots: readonly { pid: number; processGroupID?: number }[]) =>
+    snapshots.map((item) => [item.pid, item.processGroupID]).toSorted(([left], [right]) => left! - right!)
+
   test("groups a command's tree under the shell the engine started, and never lists the engine's ancestry", () => {
-    const snapshots = windowsSnapshots(tree, 10)
-    expect(snapshots.map((item) => [item.pid, item.processGroupID])).toEqual([
+    expect(byPid(windowsSnapshots(tree, 10))).toEqual([
       [20, 20],
       [21, 20],
       [22, 20],
     ])
-    expect(groupMembers(tree, 20, 10)).toEqual([20, 21, 22])
+    expect(groupMembers(tree, 20, 10).toSorted()).toEqual([20, 21, 22])
+  })
+
+  test("lists what a shell started ahead of the shell, newest first, so a group is named after its server", () => {
+    expect(windowsSnapshots(tree, 10).map((item) => item.pid)).toEqual([22, 21, 20])
   })
 
   test("keeps the group when its shell has exited, the way a process group outlives its leader", () => {
     const orphaned = tree.filter((item) => item.pid !== 20)
-    expect(windowsSnapshots(orphaned, 10).map((item) => [item.pid, item.processGroupID])).toEqual([
+    expect(byPid(windowsSnapshots(orphaned, 10))).toEqual([
       [21, 20],
       [22, 20],
     ])
-    expect(groupMembers(orphaned, 20, 10)).toEqual([21, 22])
+    expect(groupMembers(orphaned, 20, 10).toSorted()).toEqual([21, 22])
   })
 
   test("does not join a reused pid to the children of the process that had it", () => {
@@ -59,7 +65,7 @@ describe("Windows process groups", () => {
     const groups = new Map(windowsSnapshots(reused, 10).map((item) => [item.pid, item.processGroupID]))
     expect(groups.get(21)).toBe(20)
     expect(groups.get(20)).toBeUndefined()
-    expect(groupMembers(reused, 20, 10)).toEqual([21, 22])
+    expect(groupMembers(reused, 20, 10).toSorted()).toEqual([21, 22])
   })
 
   test("leaves the engine's own tools alone, wherever they run", () => {
@@ -69,7 +75,7 @@ describe("Windows process groups", () => {
       row(41, 3, 8, { image: "rg.exe", commandLine: "rg --files", cwd: "C:\\repo\\wt" }),
     ]
     const listed = windowsSnapshots(tools, 10).map((item) => item.pid)
-    expect(listed).toEqual([20, 21, 22])
+    expect(listed.toSorted()).toEqual([20, 21, 22])
     expect(groupMembers(tools, 40, 10)).toEqual([])
   })
 
