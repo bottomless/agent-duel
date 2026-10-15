@@ -11,6 +11,7 @@ import * as CopySnapshot from "@/arena/copy-snapshot"
 import { ArenaContestant } from "@/arena/contestant"
 import { hostRepoPath, isolatedRoot } from "@/worktree"
 import { registry, setStoreForTest } from "@/arena/runtime"
+import { SERVICE_OWNER_ENV, serviceOwnerID } from "@/arena/services"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { arenaRequest, installOpenRouterStub, json, memoryStore, type PublicSnapshot, waitForTurn } from "./harness"
@@ -1485,8 +1486,16 @@ describe("persistent contestant worktrees", () => {
       const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "preview" })
       await waitForWarmPair(memory.store, turn, 1)
       const retained = await memory.store.run((await memory.store.chat(chat.chatID))!.retainedWinner!.runID)
-      // A preview the winner started in the background, in a process group of its own.
-      server = spawnProcess("sleep", ["60"], { cwd: retained!.worktree, detached: true, stdio: "ignore" })
+      // A preview the winner started in the background, in a process group of its own. Windows has
+      // no groups: there the owner marker every contestant shell stamps is what tells it apart.
+      server = spawnProcess("sleep", ["60"], {
+        cwd: retained!.worktree,
+        detached: true,
+        stdio: "ignore",
+        ...(process.platform === "win32"
+          ? { env: { ...process.env, [SERVICE_OWNER_ENV]: serviceOwnerID(retained!.worktree) } }
+          : {}),
+      })
 
       const trimmed = await json<{ chats: number; released: number; kept: number }>(
         await arenaRequest("/arena/environments/trim", {
