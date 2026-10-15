@@ -1,3 +1,5 @@
+import { pathToFileURL } from "node:url";
+
 const ACTIVE_LOCAL_STATES = new Set(["running", "unresponsive"]);
 
 function normalizeListen(value) {
@@ -178,6 +180,8 @@ async function runCli() {
   throw new Error(`Unknown dev daemon command: ${command ?? "<missing>"}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// `file://${argv[1]}` never matches on Windows (`file:///C:/…` against `C:\…`) or for a path
+// that URL encoding changes.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await runCli();
 }
