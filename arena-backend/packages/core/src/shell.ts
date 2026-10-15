@@ -126,14 +126,23 @@ export function gitbash() {
   if (process.platform !== "win32") return
   if (Flag.OPENCODE_GIT_BASH_PATH) return Flag.OPENCODE_GIT_BASH_PATH
   const git = which("git")
-  if (!git) return
   // `git.exe` is found in `cmd\`, `bin\` or `mingw64\bin\` of the install, depending on which of
-  // them leads PATH (a Git Bash session puts `mingw64\bin` first).
-  return [
-    path.join(git, "..", "..", "bin", "bash.exe"),
-    path.join(git, "..", "bash.exe"),
-    path.join(git, "..", "..", "..", "bin", "bash.exe"),
-  ].find((file) => stat(file)?.size)
+  // them leads PATH (a Git Bash session puts `mingw64\bin` first). Another git can lead PATH, such
+  // as GitHub Desktop's, which has no bash, so Git for Windows' install folders come after it.
+  const beside = git
+    ? [
+        path.join(git, "..", "..", "bin", "bash.exe"),
+        path.join(git, "..", "bash.exe"),
+        path.join(git, "..", "..", "..", "bin", "bash.exe"),
+      ]
+    : []
+  const installed = [
+    process.env.ProgramFiles,
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs"),
+  ]
+    .filter((root): root is string => Boolean(root))
+    .map((root) => path.join(root, "Git", "bin", "bash.exe"))
+  return [...beside, ...installed].find((file) => stat(file)?.size)
 }
 
 function fallback() {
