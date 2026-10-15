@@ -381,6 +381,57 @@ describe("local Arena store", () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+  test.skipIf(process.platform !== "win32")(
+    "stores bytes it already holds while another process has that file open",
+    async () => {
+      const directory = await temporaryDirectory()
+      try {
+        const store = await connectLocalStore({ directory })
+        const artifact = (_id: string) =>
+          store.storeArtifact({
+            _id,
+            runID: "run",
+            kind: "other",
+            mimeType: "text/plain",
+            encoding: "binary",
+            compression: "none",
+            data: Buffer.from("identical diff"),
+            createdAt: now,
+          })
+        await artifact("a")
+        const file = path.join(
+          directory,
+          "artifacts",
+          "sha256",
+          createHash("sha256").update("identical diff").digest("hex"),
+        )
+        // Opened without delete sharing, as a virus scan of a new file does; Windows then refuses to
+        // rename another file over it. Both sides of a battle that made one change write these bytes.
+        const holder = Bun.spawn(
+          [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            `$h = [IO.File]::Open('${file}', 'Open', 'Read', 'Read'); 'open'; Start-Sleep -Seconds 30`,
+          ],
+          { stdout: "pipe" },
+        )
+        try {
+          const reader = holder.stdout.getReader()
+          while (!new TextDecoder().decode((await reader.read()).value).includes("open")) {}
+          await artifact("b")
+          expect((await store.artifacts.findOne({ _id: "b" }))?.data.toString()).toBe("identical diff")
+          expect(await readdir(path.dirname(file))).toEqual([path.basename(file)])
+        } finally {
+          holder.kill()
+          await holder.exited
+          await store.close()
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+  )
   test("reclaims artifact files no record names on the next start", async () => {
     const directory = await temporaryDirectory()
     try {
