@@ -1,10 +1,17 @@
 import { execFile as nodeExecFile } from "child_process"
 import { createHash, randomUUID } from "crypto"
 import { constants, createReadStream } from "fs"
-import { copyFile, cp, lstat, lutimes, mkdir, readdir, readlink, realpath, rm, symlink, writeFile } from "fs/promises"
+import { copyFile, lstat, lutimes, mkdir, readdir, readlink, realpath, rm, symlink, writeFile } from "fs/promises"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "path"
 import { promisify } from "util"
-import { cloneFile, cloneTree, type CloneMethod, type CloneOptions, type CopyMethod } from "@/util/copy-tree"
+import {
+  cloneFile,
+  cloneTree,
+  copyDirectory,
+  type CloneMethod,
+  type CloneOptions,
+  type CopyMethod,
+} from "@/util/copy-tree"
 import { discardTree, TRASH_DIRNAME } from "@/util/discard-tree"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { isolatedRoot, LOCAL_STATE_DIRNAME, localStatePath } from "@/worktree/layout"
@@ -585,7 +592,7 @@ async function seedEntry(
   if (await clone(source, target, { staging: join(dirname(trash), STAGING_DIRNAME), signal })) {
     return "cloned" as const
   }
-  await cp(source, target, { recursive: true, verbatimSymlinks: true })
+  await copyDirectory(source, target, signal)
   return "copied" as const
 }
 
@@ -1040,7 +1047,7 @@ async function patchEntry(input: {
       await lutimes(target, stats.atime, stats.mtime)
       continue
     }
-    if (!(await input.clone(source, target))) await cp(source, target, { recursive: true, verbatimSymlinks: true })
+    if (!(await input.clone(source, target))) await copyDirectory(source, target)
   }
 }
 
