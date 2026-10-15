@@ -74,10 +74,15 @@ type Record = {
   reason?: string
 }
 
+/**
+ * None on Windows: parcel's Windows backend (2.5.1) touches freed memory when a subscription is
+ * dropped while its directory is still being written to, which takes the engine down, and a slot
+ * is let go of exactly while a contestant's dev server may still be writing. Without a watcher
+ * every send re-syncs both sides (see `watcherBackendUnavailable`).
+ */
 const backend = (): ParcelWatcher.BackendType | undefined => {
   if (process.platform === "darwin") return "fs-events"
   if (process.platform === "linux") return "inotify"
-  if (process.platform === "win32") return "windows"
   return undefined
 }
 
