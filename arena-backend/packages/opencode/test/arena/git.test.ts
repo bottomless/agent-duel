@@ -199,7 +199,14 @@ for (const scenario of [
       const script = "run [qa].sh"
       const filename = `${canonical.path}/${script}`
       yield* Effect.promise(() => fs.writeFile(filename, "#!/bin/sh\necho base\n", { mode: scenario.mode }))
-      yield* Effect.promise(() => $`git add . && git commit -m base`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => $`git add .`.cwd(canonical.path).quiet())
+      // A Windows file has no mode bits, so Git for Windows takes the executable bit from the index.
+      if (process.platform === "win32" && scenario.gitMode === "100755") {
+        yield* Effect.promise(() =>
+          $`git --literal-pathspecs update-index --chmod=+x -- ${script}`.cwd(canonical.path).quiet(),
+        )
+      }
+      yield* Effect.promise(() => $`git commit -m base`.cwd(canonical.path).quiet())
       const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
       yield* Effect.promise(() =>
         $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet(),
@@ -235,7 +242,9 @@ for (const scenario of [
       expect(yield* Effect.promise(() => fs.readFile(filename, "utf8"))).toBe(
         `#!/bin/sh\n<<<<<<< ours\necho ${scenario.working}\n=======\necho winner\n>>>>>>> theirs\n`,
       )
-      expect((yield* Effect.promise(() => fs.stat(filename))).mode & 0o777).toBe(scenario.mode)
+      if (process.platform !== "win32") {
+        expect((yield* Effect.promise(() => fs.stat(filename))).mode & 0o777).toBe(scenario.mode)
+      }
       const index = (yield* Effect.promise(() =>
         $`git --literal-pathspecs ls-files --stage -- ${script}`.cwd(canonical.path).quiet().text(),
       )).trim()
@@ -247,9 +256,10 @@ for (const scenario of [
         scenario.index,
       )
       yield* Effect.promise(() => fs.writeFile(filename, "#!/bin/sh\necho resolved\n"))
-      expect(
-        (yield* Effect.promise(() => $`${scenario.command} ${script}`.cwd(canonical.path).quiet().text())).trim(),
-      ).toBe("resolved")
+      const command = process.platform === "win32" ? "sh" : scenario.command
+      expect((yield* Effect.promise(() => $`${command} ${script}`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        "resolved",
+      )
     }),
   )
 }
@@ -527,7 +537,7 @@ describe("ArenaGit", () => {
         await fs.writeFile(`${candidate.path}/same-a.txt`, "same content\n")
         await fs.writeFile(`${candidate.path}/same-b.txt`, "same content\n")
         await fs.writeFile(`${candidate.path}/run.sh`, "#!/bin/sh\necho run\n", { mode: 0o755 })
-        await fs.symlink("pages/page-000.html", `${candidate.path}/latest.html`)
+        if (FSUtil.canSymlink()) await fs.symlink("pages/page-000.html", `${candidate.path}/latest.html`)
         await fs.rm(`${candidate.path}/remove.txt`)
         await fs.rm(`${candidate.path}/tool`)
         await fs.mkdir(`${candidate.path}/tool`)
@@ -554,8 +564,12 @@ describe("ArenaGit", () => {
       for (const [index, page] of pages.entries()) expect(yield* read(page)).toBe(`<p>page ${index}</p>\n`)
       expect(yield* read("same-a.txt")).toBe("same content\n")
       expect(yield* read("same-b.txt")).toBe("same content\n")
-      expect((yield* Effect.promise(() => fs.stat(`${canonical.path}/run.sh`))).mode & 0o777).toBe(0o755)
-      expect(yield* Effect.promise(() => fs.readlink(`${canonical.path}/latest.html`))).toBe("pages/page-000.html")
+      if (process.platform !== "win32") {
+        expect((yield* Effect.promise(() => fs.stat(`${canonical.path}/run.sh`))).mode & 0o777).toBe(0o755)
+      }
+      if (FSUtil.canSymlink()) {
+        expect(yield* Effect.promise(() => fs.readlink(`${canonical.path}/latest.html`))).toBe("pages/page-000.html")
+      }
       expect(yield* read("tool/main.txt")).toBe("now a directory\n")
       expect(yield* read("notes")).toBe("now a file\n")
       expect(
@@ -2194,7 +2208,7 @@ describe("ArenaGit", () => {
       const canonical = yield* scopedTmpdir({ git: true })
       const state = yield* repositoryKey(canonical.path)
       const head = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
-      expect(state).toBe(`${canonical.path}/.git`)
+      expect(path.resolve(state)).toBe(path.join(canonical.path, ".git"))
       expect(yield* containsCommit({ repository: canonical.path, commit: head })).toBe(true)
       expect(yield* containsCommit({ repository: canonical.path, commit: "0".repeat(40) })).toBe(false)
       expect(sideBranchName("chat-123", "a")).toBe("agent-duel/chat-123-agent-a")
@@ -3232,7 +3246,7 @@ describe("ArenaGit", () => {
       const byRef = new Map(observed.refs.map((item) => [item.ref, item]))
       expect(byRef.get(`refs/heads/${feature}`)?.checkout).toBe(true)
       // git reports the worktree's real path, which may differ from the tmpdir string on macOS.
-      expect(byRef.get("refs/heads/busy")?.checkedOutAt).toMatch(/\/busy$/)
+      expect(byRef.get("refs/heads/busy")?.checkedOutAt).toMatch(/[/\\]busy$/)
       expect(byRef.get("refs/heads/rewound")).toMatchObject({ agentMove: "added", yourMove: "rewrote", fastForward: false })
       expect(byRef.get("refs/heads/edit")).toMatchObject({ agentMove: "added", yourMove: "untouched" })
       expect(byRef.get("refs/heads/both")?.fingerprint).toBe(`${base}:${agentBoth}:${yoursBoth}:-`)
@@ -3513,7 +3527,8 @@ describe("ArenaGit", () => {
       yield* sh(`git checkout -q --detach ${base} && echo agent > agent.txt && git add . && git commit -qm agent`)
       const agent = yield* sh("git rev-parse HEAD")
       yield* sh(`git checkout -q ${main} && git branch side ${base}`)
-      yield* sh(`git worktree add -q ${other.path}/side side`)
+      // Not through `sh -c`, which would read a Windows path's backslashes as escapes.
+      yield* Effect.promise(() => $`git worktree add -q ${other.path}/side side`.cwd(repo.path).quiet())
       const sideGitDir = yield* sh("git rev-parse --absolute-git-dir", `${other.path}/side`)
       const safetyRef = "refs/battles/c/turn-1/public-safety"
       const promote = promoteWinnerState({
@@ -3613,7 +3628,7 @@ describe("ArenaGit", () => {
       yield* Effect.promise(() => $`git worktree add -q -b busy ${other.path}/wt`.cwd(repo.path).quiet())
       const busy = yield* inspectBranchTarget({ canonical: repo.path, branch: "busy" })
       expect(busy.valid && busy.tip).toBe(head)
-      expect(busy.valid && busy.checkedOutAt).toEndWith("/wt")
+      expect(busy.valid && busy.checkedOutAt).toMatch(/[/\\]wt$/)
     }),
   )
 
@@ -4718,7 +4733,7 @@ describe("ArenaGit contestant worktree sync", () => {
       if (options.developer) yield* options.developer(canonical)
       const base = yield* snapshotBase({ canonical })
       const parent = options.parent ? yield* options.parent(canonical) : (yield* scopedTmpdir()).path
-      const slot = `${parent}/slot`
+      const slot = path.join(parent, "slot")
       const host = `${slot}.git`
       // What the worktree module builds: a copy of the canonical git directory, bare, without the
       // canonical index, with a worktree added for the frozen HEAD.
@@ -4772,6 +4787,8 @@ describe("ArenaGit contestant worktree sync", () => {
     readonly arrange?: Arrange
     /** Skip unless the worktree's filesystem folds case, as APFS does by default. */
     readonly foldsCase?: boolean
+    /** Skip where the filesystem cannot hold what the scenario leaves behind. */
+    readonly unsupported?: boolean
     /** The operation verification fails with before the sync. */
     readonly caught: string
     readonly leave: (fixture: Fixture) => Effect.Effect<void>
@@ -4921,7 +4938,7 @@ describe("ArenaGit contestant worktree sync", () => {
           expect(synced.nestedGitRemoved).toBe(2)
           expect(yield* exists(`${slot}/src/.git`)).toBe(false)
           expect(yield* exists(`${slot}/src/lib/.git`)).toBe(false)
-          expect(yield* git(`${slot}/src`, "rev-parse", "--show-toplevel")).toBe(slot)
+          expect(path.resolve(yield* git(`${slot}/src`, "rev-parse", "--show-toplevel"))).toBe(slot)
         }),
     },
     {
@@ -4967,6 +4984,8 @@ describe("ArenaGit contestant worktree sync", () => {
     {
       name: "a Unicode normalization-only rename",
       foldsCase: true,
+      // NTFS keeps the two forms apart, so there the rename is an ordinary one.
+      unsupported: process.platform === "win32",
       arrange: {
         developer: (canonical) =>
           Effect.gen(function* () {
@@ -5028,6 +5047,8 @@ describe("ArenaGit contestant worktree sync", () => {
     },
     {
       name: "a FIFO in a tracked directory",
+      // Git Bash's mkfifo leaves a plain file on Windows, which has no FIFOs on disk.
+      unsupported: process.platform === "win32",
       caught: "verify_contestant_special_files",
       leave: ({ slot }) => Effect.promise(() => $`mkfifo ${`${slot}/src/pipe`}`.quiet()).pipe(Effect.asVoid),
       check: ({ slot }, synced) =>
@@ -5038,6 +5059,7 @@ describe("ArenaGit contestant worktree sync", () => {
     },
     {
       name: "a symlink in place of a tracked directory",
+      unsupported: !FSUtil.canSymlink(),
       caught: "verify_contestant_worktree",
       leave: ({ slot }) =>
         Effect.gen(function* () {
@@ -5079,7 +5101,8 @@ describe("ArenaGit contestant worktree sync", () => {
   )
 
   for (const scenario of scenarios) {
-    it.live(`syncs a kept worktree after ${scenario.name}`, () =>
+    const live = scenario.unsupported ? it.live.skip : it.live
+    live(`syncs a kept worktree after ${scenario.name}`, () =>
       Effect.gen(function* () {
         const fixture = yield* arrange(scenario.arrange)
         if (scenario.foldsCase) {
