@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ProjectGitState } from "@getpaseo/protocol/messages";
@@ -10,6 +10,21 @@ type RunGit = typeof runGitCommand;
 const FALLBACK_IDENTITY = { name: "Agent Duel", email: "agent-duel@localhost" };
 const FALLBACK_BRANCH = "main";
 const INITIAL_COMMIT_MESSAGE = "Initialize project";
+
+/**
+ * Git that cannot be started fails as "spawn git ENOENT", which tells the user nothing to do.
+ * Said here the way the engine's battle check says it. A folder that is gone fails the same
+ * way, and keeps its own error.
+ */
+async function explainMissingGit(cause: unknown, directory: string): Promise<unknown> {
+  if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") return cause;
+  if (!(await stat(directory).then(Boolean, () => false))) return cause;
+  const install =
+    process.platform === "win32"
+      ? "Install Git for Windows from git-scm.com, or with winget install Git.Git, then quit and reopen Agent Duel."
+      : "Install Git, for example with xcode-select --install, then retry.";
+  return new Error(`Battles need Git, and Agent Duel couldn't find it. ${install}`);
+}
 
 /**
  * Arena needs a real HEAD to freeze a battle base and cut contestant worktrees. A folder
@@ -23,6 +38,8 @@ export async function inspectProjectGit(
   const inside = await runGit(["rev-parse", "--is-inside-work-tree"], {
     cwd: directory,
     acceptExitCodes: [0, 128],
+  }).catch(async (cause: unknown) => {
+    throw await explainMissingGit(cause, directory);
   });
   if (inside.exitCode !== 0 || inside.stdout.trim() !== "true") return "not_git";
   const head = await runGit(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], {
