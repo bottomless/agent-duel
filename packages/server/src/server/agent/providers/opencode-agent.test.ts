@@ -2769,7 +2769,8 @@ describe("OpenCode adapter startTurn error handling", () => {
       permission: [
         {
           permission: "external_directory",
-          pattern: "/home/paseo/uploads/upload_1/*",
+          // Resolved, so on Windows it gains a drive; OpenCode matches either separator.
+          pattern: `${path.resolve("/home/paseo/uploads", "upload_1")}/*`,
           action: "allow",
         },
       ],
