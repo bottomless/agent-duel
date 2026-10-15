@@ -5890,7 +5890,11 @@ export const layer: Layer.Layer<
         ? reused.copyManifest
         : ({
             ...(yield* promise(() =>
-              createIgnoredContentSnapshot({ canonical: base.root, policy: copyConfiguration }),
+              createIgnoredContentSnapshot({
+                canonical: base.root,
+                policy: copyConfiguration,
+                scan: watcherBackendUnavailable() !== undefined,
+              }),
             ).pipe(Effect.onError(() => discardBaseRef))),
             manifestID: copyManifestID,
           } satisfies CopyManifest)
@@ -7547,7 +7551,11 @@ export const layer: Layer.Layer<
           ).pipe(Effect.mapError(error))
           const configuration = yield* promise(() => arenaCopyConfiguration(base.root))
           const raw = yield* promise(() =>
-            createIgnoredContentSnapshot({ canonical: base.root, policy: configuration }),
+            createIgnoredContentSnapshot({
+              canonical: base.root,
+              policy: configuration,
+              scan: watcherBackendUnavailable() !== undefined,
+            }),
           )
           const manifest: CopyManifest = { ...raw, manifestID }
           const roots = copiedDirectoryRoots(manifest)
