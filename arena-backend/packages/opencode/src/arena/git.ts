@@ -441,6 +441,10 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
     }
     // Without the Command Line Tools, macOS's /usr/bin/git is only a stub that points at them.
     if (!gitOnPath || stderr.includes("invalid active developer path")) {
+      // A Windows install reaches PATH only for processes started after it.
+      if (process.platform === "win32") {
+        return "Battles need Git, and Agent Duel couldn't find it. Install Git for Windows from git-scm.com, or with winget install Git.Git, then quit and reopen Agent Duel."
+      }
       return "Battles need Git, and Agent Duel couldn't find it. Install Git, for example with xcode-select --install, then retry."
     }
     // Git is there but failed: its own error says why better than a guess would.
@@ -453,7 +457,8 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
   if (major !== MIN_BATTLE_GIT.major ? major > MIN_BATTLE_GIT.major : minor >= MIN_BATTLE_GIT.minor) return undefined
   // The engine keeps the git it found at startup first on PATH (`preferDirectGit`), so a newly
   // installed git is used only after a restart.
-  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with brew install git, then quit and reopen Agent Duel.`
+  const update = process.platform === "win32" ? "git update-git-for-windows" : "brew install git"
+  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with ${update}, then quit and reopen Agent Duel.`
 }
 
 // Wrapper commits are transport objects, not user-authored history. A fixed
