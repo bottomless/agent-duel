@@ -121,7 +121,7 @@ describe("Add Project options", () => {
       {
         id: "browse",
         label: "Browse",
-        description: "Choose or create a directory in Finder",
+        description: "Choose or create a directory on this computer",
         disabled: false,
       },
       {
@@ -164,7 +164,7 @@ describe("Add Project options", () => {
       {
         id: "browse",
         label: "Browse",
-        description: "Open Agent Arena in Electron to browse with Finder",
+        description: "Open Agent Arena in Electron to browse folders",
         disabled: true,
       },
       {
