@@ -1,7 +1,12 @@
 import { hydrateArenaWinner, isArenaTimelinePrefix } from "../arena/winner-hydration.js";
 import { workspaceAccess } from "../workspace-cleanup/workspace-access.js";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
-import type { ArenaActivitySource, ArenaCheckoutCleanupSource } from "./agent-sdk-types.js";
+import type {
+  ArenaActivitySource,
+  ArenaCheckoutCleanupSource,
+  GitMetadataRequest,
+  GitMetadataResult,
+} from "./agent-sdk-types.js";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { stat } from "node:fs/promises";
@@ -946,6 +951,19 @@ export class AgentManager {
       }
       return;
     }
+  }
+
+  /** Writes a commit message, pull request text or a branch name through the first provider that can. */
+  async writeGitMetadata(
+    cwd: string,
+    request: GitMetadataRequest,
+    signal: AbortSignal,
+  ): Promise<GitMetadataResult | null> {
+    for (const client of this.clients.values()) {
+      const result = await client.writeGitMetadata?.(cwd, request, signal);
+      if (result) return result;
+    }
+    return null;
   }
 
   /**

@@ -5,7 +5,12 @@ import {
   parseOpenCodeTodoWriteState,
   type OpenCodeTodo,
 } from "@getpaseo/protocol/arena/todo";
-import type { ArenaActivitySource, ArenaCheckoutCleanupSource } from "../agent-sdk-types.js";
+import type {
+  ArenaActivitySource,
+  ArenaCheckoutCleanupSource,
+  GitMetadataRequest,
+  GitMetadataResult,
+} from "../agent-sdk-types.js";
 import {
   ArenaStreamFrameSchema,
   type ArenaStreamFrame,
@@ -1498,6 +1503,12 @@ function createSdkOpenCodeClient(options: {
   } satisfies OpencodeClientConfig & { directory: string });
 }
 
+const GitMetadataResultSchema = z.union([
+  z.object({ message: z.string().min(1) }),
+  z.object({ title: z.string().min(1), body: z.string() }),
+  z.object({ branch: z.string().min(1) }),
+]);
+
 export class OpenCodeAgentClient implements AgentClient {
   readonly provider = "opencode" as const;
   readonly capabilities = OPENCODE_CAPABILITIES;
@@ -2020,6 +2031,42 @@ export class OpenCodeAgentClient implements AgentClient {
         const text = await response.text().catch(() => "");
         throw new Error(`Arena worktree seed failed with status ${response.status}: ${text}`);
       }
+    } finally {
+      await acquisition.release();
+    }
+  }
+
+  /**
+   * Commit messages, pull request text and branch names come from the Arena backend's metadata route, on the
+   * comparison's model: the user's own agents and the paid battle pool stay out of it.
+   */
+  async writeGitMetadata(
+    cwd: string,
+    request: GitMetadataRequest,
+    signal: AbortSignal,
+  ): Promise<GitMetadataResult | null> {
+    if (!this.arenaMode) return null;
+    const acquisition = await this.serverManager.acquireCurrent();
+    try {
+      const response = await fetch(
+        new URL("/arena/metadata", `${acquisition.server.url.replace(/\/$/, "")}/`),
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-opencode-directory": cwd,
+            "x-paseo-control-token": acquisition.server.controlToken,
+          },
+          body: JSON.stringify(request),
+          signal,
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`Arena metadata failed with status ${response.status}: ${text}`);
+      }
+      return GitMetadataResultSchema.parse(await response.json());
     } finally {
       await acquisition.release();
     }

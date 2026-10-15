@@ -52,12 +52,6 @@ export interface CreateWorktreeCoreResult {
   intent: WorktreeCreationIntent;
   repoRoot: string;
   created: boolean;
-  /**
-   * Whether the branch name was invented here rather than asked for. A caller that names a
-   * branch gets that name and keeps it; everything else starts on a stand-in that the first
-   * prompt is allowed to replace.
-   */
-  branchNameIsPlaceholder: boolean;
 }
 
 export async function createWorktreeCore(
@@ -142,10 +136,6 @@ async function createWorktreeCoreWithPriority(
     intent,
     repoRoot,
     created: true,
-    // Read from the branch that exists rather than from the request: a requested name that
-    // was already taken lands on the generated slug instead, and that slug is a placeholder
-    // like any other.
-    branchNameIsPlaceholder: worktree.branchName !== requestedBranchName,
   };
 }
 

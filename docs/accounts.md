@@ -109,7 +109,8 @@ The daemon password and account session are separate credentials; a remote clien
   services. None of these credentials is installed in environment variables or command-line
   arguments.
 - The daemon's Arena runtime proxy accepts that local capability only on an explicit allowlist:
-  assignments, comparison, research upload, and assigned OpenRouter chat/responses. It exchanges the
+  assignments, comparison, commit, pull request and branch name text, research upload, and assigned
+  OpenRouter chat/responses. It exchanges the
   capability for the account session when forwarding the request. Account changes, signing out the
   account's last usable session, child exit, and daemon shutdown revoke the local capability.
 - The control-plane OpenRouter route replaces the account session with the server's real OpenRouter
@@ -134,7 +135,9 @@ and still unresolved. The server selects the model and provider from that assign
 authorizing it after resolution without deleting its permanent identity
 record. There is no unassigned OpenRouter route.
 Comparison uses a separate endpoint with a
-fixed server-selected model and an unresolved battle scope. Alternative model lists, presets,
+fixed server-selected model and an unresolved battle scope. Commit, pull request and branch name text use
+the same model through their own endpoint, which builds its prompt from the changes it is sent and limits each
+account's requests. Alternative model lists, presets,
 provider overrides, server-side tools, and query
 parameters are rejected.
 
@@ -240,7 +243,7 @@ OAuth callbacks and magic links cannot attach the daemon password. The daemon by
 for its auth routes; each callback instead carries a single-use OAuth state or hashed magic-link
 capability. The control plane validates those values before issuing a session.
 
-The research, Arena assignment, comparison, and OpenRouter routes accept only an account session. They verify
+The research, Arena assignment, comparison, metadata, and OpenRouter routes accept only an account session. They verify
 the signed token, confirm its live session on the server, and scope research records and assignments
 through the owning account. No shared upload token, contestant catalog, assignment mapping,
 or OpenRouter key is shipped in the desktop app.
@@ -250,8 +253,8 @@ end-to-end encrypted relay does not provide.
 
 ## Testing
 
-- `arena-backend/packages/arena-service/src/*.test.ts` covers assignments, OpenRouter streaming, and
-  comparison against an injected caller.
+- `arena-backend/packages/arena-service/src/*.test.ts` covers assignments, OpenRouter streaming,
+  comparison, and commit, pull request and branch name text against an injected caller.
 - `packages/server/src/server/accounts/routes.test.ts` covers the daemon proxy, local token
   verification, Arena credential installation, sign-out, and unavailable-versus-rejected behavior.
 - `packages/server/src/server/accounts/config.test.ts` covers choosing hosted, BYOK, or no Arena;

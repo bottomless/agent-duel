@@ -646,9 +646,10 @@ export function useGitActions({ serverId, cwd, icons }: UseGitActionsInput): Use
 
   // The name is typed in the dialog, so this action only opens it; the create itself runs
   // from there.
+  const workspaceId = activeWorkspaceSelection?.workspaceId;
   const handleCreateBranch = useCallback(() => {
-    openGitCreateBranchDialog({ serverId, cwd });
-  }, [cwd, serverId]);
+    openGitCreateBranchDialog({ serverId, cwd, ...(workspaceId ? { workspaceId } : {}) });
+  }, [cwd, serverId, workspaceId]);
 
   const handleArchiveWorkspace = useCallback(() => {
     archiveController.archive();

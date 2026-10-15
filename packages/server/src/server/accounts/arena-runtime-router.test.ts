@@ -206,6 +206,28 @@ describe("Arena runtime proxy", () => {
     expect((await send("/api/arena/assignments")).status).toBe(502);
   });
 
+  it("forwards commit message and pull request requests to the control plane's metadata route", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    upstream.mockResolvedValue(Response.json({ message: "Add retries" }));
+
+    const response = await fetch(`${baseUrl}/api/arena-runtime/api/arena/metadata`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${runtime.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "commit_message", changes: "diff" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ message: "Add retries" });
+    const [url, init] = upstream.mock.calls[0]!;
+    expect(url).toBe("https://control.agentduel.test/api/arena/metadata");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer account-session-token");
+  });
+
   it("rejects routes outside the Arena allowlist", async () => {
     installArenaCredentials({
       mode: "hosted",

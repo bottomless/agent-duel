@@ -1,44 +1,60 @@
-import { describe, expect, it } from "vitest";
-import {
-  StructuredAgentFallbackError,
-  StructuredAgentResponseError,
-} from "../../agent/agent-response-loop.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import pino from "pino";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GitMetadataRequest, GitMetadataResult } from "../../agent/agent-sdk-types.js";
 import type { CheckoutDiffCompare, CheckoutDiffResult } from "../../../utils/checkout-git.js";
 import type { WorkspaceGitService } from "../../workspace-git-service.js";
-import {
-  createGitMetadataGenerator,
-  type StructuredTextGeneration,
-  type StructuredTextGenerationRequest,
-} from "./git-metadata-generator.js";
+import { createGitMetadataGenerator, type GitMetadataWriter } from "./git-metadata-generator.js";
 
 type DiffSource = Pick<WorkspaceGitService, "getCheckoutDiff" | "resolveRepoRoot">;
 
-function createDiffSource(result: CheckoutDiffResult) {
+const roots: string[] = [];
+
+afterEach(() => {
+  vi.useRealTimers();
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function createDiffSource(
+  result: CheckoutDiffResult | Error,
+  repoRoot = "/tmp/no-paseo-json-here",
+) {
   const diffCalls: Array<{ cwd: string; options: CheckoutDiffCompare }> = [];
   const diffSource: DiffSource = {
     getCheckoutDiff: async (cwd, options) => {
       diffCalls.push({ cwd, options });
+      if (result instanceof Error) throw result;
       return result;
     },
-    // buildMetadataPrompt reads paseo.json overrides from here; an unknown root
-    // means no override applies, so the default style is used.
-    resolveRepoRoot: async () => "/tmp/git-metadata-generator-test-missing-root",
+    resolveRepoRoot: async () => repoRoot,
   };
   return { diffSource, diffCalls };
 }
 
-function createGeneration(handler: (request: StructuredTextGenerationRequest<unknown>) => unknown) {
-  const generateCalls: Array<StructuredTextGenerationRequest<unknown>> = [];
-  const generation: StructuredTextGeneration = {
-    generate: async <T>(request: StructuredTextGenerationRequest<T>): Promise<T> => {
-      generateCalls.push(request as StructuredTextGenerationRequest<unknown>);
-      return handler(request as StructuredTextGenerationRequest<unknown>) as T;
+function createWriter(
+  handler: (request: GitMetadataRequest, signal: AbortSignal) => Promise<GitMetadataResult | null>,
+) {
+  const requests: Array<{ cwd: string; request: GitMetadataRequest }> = [];
+  const writer: GitMetadataWriter = {
+    write: async (cwd, request, signal) => {
+      requests.push({ cwd, request });
+      return handler(request, signal);
     },
   };
-  return { generation, generateCalls };
+  return { writer, requests };
 }
 
-const DIFF_WITH_ONE_FILE: CheckoutDiffResult = {
+function generatorFor(diffSource: DiffSource, writer: GitMetadataWriter) {
+  return createGitMetadataGenerator({
+    workspaceGitService: diffSource,
+    writer,
+    logger: pino({ level: "silent" }),
+  });
+}
+
+const DIFF_WITH_TWO_FILES: CheckoutDiffResult = {
   diff: "diff --git a/src/foo.ts b/src/foo.ts\n+added\n",
   structured: [
     {
@@ -50,75 +66,159 @@ const DIFF_WITH_ONE_FILE: CheckoutDiffResult = {
       hunks: [],
       status: "ok",
     },
+    {
+      path: "src/bar.ts",
+      isNew: true,
+      isDeleted: false,
+      additions: 5,
+      deletions: 0,
+      hunks: [],
+      status: "ok",
+    },
   ],
 };
 
 describe("createGitMetadataGenerator", () => {
-  it("generateCommitMessage returns the generated message from an uncommitted-diff prompt", async () => {
-    const { diffSource, diffCalls } = createDiffSource(DIFF_WITH_ONE_FILE);
-    const { generation, generateCalls } = createGeneration(() => ({
+  it("writes a commit message from the uncommitted changes", async () => {
+    const { diffSource, diffCalls } = createDiffSource(DIFF_WITH_TWO_FILES);
+    const { writer, requests } = createWriter(async () => ({
       message: "Fix the flaky retry test",
     }));
-    const generator = createGitMetadataGenerator({ workspaceGitService: diffSource, generation });
 
-    const message = await generator.generateCommitMessage("/repo");
+    const message = await generatorFor(diffSource, writer).generateCommitMessage("/repo");
 
     expect(message).toBe("Fix the flaky retry test");
     expect(diffCalls).toEqual([
       { cwd: "/repo", options: { mode: "uncommitted", includeStructured: true } },
     ]);
-    expect(generateCalls[0]).toMatchObject({
-      cwd: "/repo",
-      schemaName: "CommitMessage",
-      agentTitle: "Commit generator",
-    });
-    expect(generateCalls[0].prompt).toContain("Write a concise git commit message");
-    expect(generateCalls[0].prompt).toContain("M\tsrc/foo.ts\t(+3 -1)");
-    expect(generateCalls[0].prompt).toContain("diff --git a/src/foo.ts");
+    expect(requests).toEqual([
+      {
+        cwd: "/repo",
+        request: {
+          kind: "commit_message",
+          changes: [
+            "Files changed:",
+            "M\tsrc/foo.ts\t(+3 -1)",
+            "A\tsrc/bar.ts\t(+5 -0)",
+            "",
+            "diff --git a/src/foo.ts b/src/foo.ts\n+added\n",
+          ].join("\n"),
+        },
+      },
+    ]);
   });
 
-  it("generateCommitMessage falls back to a default message when generation exhausts its providers", async () => {
-    const { diffSource } = createDiffSource(DIFF_WITH_ONE_FILE);
-    const { generation } = createGeneration(() => {
-      throw new StructuredAgentFallbackError([]);
-    });
-    const generator = createGitMetadataGenerator({ workspaceGitService: diffSource, generation });
+  it("sends the project's commit message instructions from paseo.json", async () => {
+    const root = mkdtempSync(join(tmpdir(), "git-metadata-generator-"));
+    roots.push(root);
+    writeFileSync(
+      join(root, "paseo.json"),
+      JSON.stringify({
+        metadataGeneration: { commitMessage: { instructions: " Use Conventional Commits " } },
+      }),
+    );
+    const { diffSource } = createDiffSource(DIFF_WITH_TWO_FILES, root);
+    const { writer, requests } = createWriter(async () => ({ message: "fix: retry" }));
 
-    await expect(generator.generateCommitMessage("/repo")).resolves.toBe("Update files");
+    await generatorFor(diffSource, writer).generateCommitMessage("/repo");
+
+    expect(requests[0]?.request.instructions).toBe("Use Conventional Commits");
   });
 
-  it("generateCommitMessage falls back when the generated response cannot be validated", async () => {
-    const { diffSource } = createDiffSource(DIFF_WITH_ONE_FILE);
-    const { generation } = createGeneration(() => {
-      throw new StructuredAgentResponseError("invalid", {
-        lastResponse: "{}",
-        validationErrors: ["message: required"],
-      });
-    });
-    const generator = createGitMetadataGenerator({ workspaceGitService: diffSource, generation });
-
-    await expect(generator.generateCommitMessage("/repo")).resolves.toBe("Update files");
+  it("answers a fixed message naming the file count whenever writing fails", async () => {
+    const failures: Array<() => Promise<GitMetadataResult | null>> = [
+      async () => {
+        throw new Error("Arena metadata failed with status 429");
+      },
+      async () => null,
+      async () => ({ title: "Wrong kind", body: "" }),
+    ];
+    for (const failure of failures) {
+      const { diffSource } = createDiffSource(DIFF_WITH_TWO_FILES);
+      const { writer } = createWriter(failure);
+      await expect(generatorFor(diffSource, writer).generateCommitMessage("/repo")).resolves.toBe(
+        "Update 2 files",
+      );
+    }
   });
 
-  it("generateCommitMessage rethrows errors that are not structured-generation failures", async () => {
-    const { diffSource } = createDiffSource(DIFF_WITH_ONE_FILE);
-    const { generation } = createGeneration(() => {
-      throw new Error("network down");
-    });
-    const generator = createGitMetadataGenerator({ workspaceGitService: diffSource, generation });
+  it("answers a fixed message when the diff cannot be read", async () => {
+    const { diffSource } = createDiffSource(new Error("not a git repository"));
+    const { writer, requests } = createWriter(async () => ({ message: "unused" }));
 
-    await expect(generator.generateCommitMessage("/repo")).rejects.toThrow("network down");
+    await expect(generatorFor(diffSource, writer).generateCommitMessage("/repo")).resolves.toBe(
+      "Update files",
+    );
+    expect(requests).toEqual([]);
   });
 
-  it("generatePullRequestText returns the generated title and body from a base-diff prompt", async () => {
-    const { diffSource, diffCalls } = createDiffSource(DIFF_WITH_ONE_FILE);
-    const { generation, generateCalls } = createGeneration(() => ({
+  it("stops waiting for a writer that does not answer and aborts it", async () => {
+    vi.useFakeTimers();
+    const { diffSource } = createDiffSource(DIFF_WITH_TWO_FILES);
+    let signal: AbortSignal | undefined;
+    const { writer } = createWriter((_request, received) => {
+      signal = received;
+      return new Promise(() => {});
+    });
+
+    const message = generatorFor(diffSource, writer).generateCommitMessage("/repo");
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(message).resolves.toBe("Update 2 files");
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("suggests a branch name from the chat title and the uncommitted changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "git-metadata-generator-"));
+    roots.push(root);
+    writeFileSync(
+      join(root, "paseo.json"),
+      JSON.stringify({ metadataGeneration: { branchName: { instructions: "Prefix with feat/" } } }),
+    );
+    const { diffSource } = createDiffSource(DIFF_WITH_TWO_FILES, root);
+    const { writer, requests } = createWriter(async () => ({ branch: "feat/retry-backoff" }));
+
+    const branch = await generatorFor(diffSource, writer).suggestBranchName("/repo", "Add retries");
+
+    expect(branch).toBe("feat/retry-backoff");
+    expect(requests[0]?.request).toMatchObject({
+      kind: "branch_name",
+      instructions: "Prefix with feat/",
+    });
+    expect(requests[0]?.request.changes).toMatch(/^Chat: Add retries\n\nFiles changed:\n/);
+  });
+
+  it("offers no branch name without a title or changes, or when the answer is unusable", async () => {
+    const empty = createDiffSource({ diff: "", structured: [] });
+    const unused = createWriter(async () => ({ branch: "unused" }));
+    await expect(
+      generatorFor(empty.diffSource, unused.writer).suggestBranchName("/repo", null),
+    ).resolves.toBeNull();
+    expect(unused.requests).toEqual([]);
+
+    const { diffSource } = createDiffSource(DIFF_WITH_TWO_FILES);
+    for (const answer of [
+      async () => ({ branch: "Not A Slug" }),
+      async () => ({ message: "wrong kind" }),
+      async () => {
+        throw new Error("Arena metadata failed with status 502");
+      },
+    ]) {
+      const { writer } = createWriter(answer);
+      await expect(
+        generatorFor(diffSource, writer).suggestBranchName("/repo", "Add retries"),
+      ).resolves.toBeNull();
+    }
+  });
+
+  it("writes pull request text from the changes against the base", async () => {
+    const { diffSource, diffCalls } = createDiffSource(DIFF_WITH_TWO_FILES);
+    const { writer, requests } = createWriter(async () => ({
       title: "Add retry with backoff",
       body: "Retries transient failures up to twice.",
     }));
-    const generator = createGitMetadataGenerator({ workspaceGitService: diffSource, generation });
 
-    const result = await generator.generatePullRequestText("/repo", "main");
+    const result = await generatorFor(diffSource, writer).generatePullRequestText("/repo", "main");
 
     expect(result).toEqual({
       title: "Add retry with backoff",
@@ -127,23 +227,26 @@ describe("createGitMetadataGenerator", () => {
     expect(diffCalls).toEqual([
       { cwd: "/repo", options: { mode: "base", baseRef: "main", includeStructured: true } },
     ]);
-    expect(generateCalls[0]).toMatchObject({
-      cwd: "/repo",
-      schemaName: "PullRequest",
-      agentTitle: "PR generator",
-    });
-    expect(generateCalls[0].prompt).toContain("Write a pull request title and body");
+    expect(requests[0]?.request.kind).toBe("pull_request");
   });
 
-  it("generatePullRequestText falls back to default PR text when generation fails", async () => {
-    const { diffSource } = createDiffSource(DIFF_WITH_ONE_FILE);
-    const { generation } = createGeneration(() => {
-      throw new StructuredAgentFallbackError([]);
+  it("answers fixed pull request text when writing fails, and fills an empty body", async () => {
+    const { diffSource } = createDiffSource(DIFF_WITH_TWO_FILES);
+    const failed = createWriter(async () => {
+      throw new Error("Arena metadata credentials are unavailable");
     });
-    const generator = createGitMetadataGenerator({ workspaceGitService: diffSource, generation });
+    const bodyless = createWriter(async () => ({ title: "Add retry", body: "" }));
 
-    await expect(generator.generatePullRequestText("/repo")).resolves.toEqual({
-      title: "Update changes",
+    await expect(
+      generatorFor(diffSource, failed.writer).generatePullRequestText("/repo"),
+    ).resolves.toEqual({
+      title: "Update 2 files",
+      body: "Automated PR generated by Agent Duel.",
+    });
+    await expect(
+      generatorFor(diffSource, bodyless.writer).generatePullRequestText("/repo"),
+    ).resolves.toEqual({
+      title: "Add retry",
       body: "Automated PR generated by Agent Duel.",
     });
   });

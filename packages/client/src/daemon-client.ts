@@ -27,6 +27,7 @@ import {
   AgentResumedStatusPayloadSchema,
   CheckoutRenameBranchResponseSchema,
   CheckoutCreateBranchResponseSchema,
+  CheckoutSuggestBranchNameResponseSchema,
   parseServerInfoStatusPayload,
   RenameTerminalResponseSchema,
   RehomeTerminalResponseSchema,
@@ -443,6 +444,9 @@ type PullRequestTimelinePayload = PullRequestTimelineResponse["payload"];
 type CheckoutSwitchBranchPayload = CheckoutSwitchBranchResponse["payload"];
 export type RenameBranchResult = z.infer<typeof CheckoutRenameBranchResponseSchema>["payload"];
 export type CreateBranchResult = z.infer<typeof CheckoutCreateBranchResponseSchema>["payload"];
+export type SuggestBranchNameResult = z.infer<
+  typeof CheckoutSuggestBranchNameResponseSchema
+>["payload"];
 type StashSavePayload = StashSaveResponse["payload"];
 type StashPopPayload = StashPopResponse["payload"];
 type StashListPayload = StashListResponse["payload"];
@@ -4402,6 +4406,24 @@ export class DaemonClient {
         ...(input.baseRef ? { baseRef: input.baseRef } : {}),
       },
       responseType: "checkout.create_branch.response",
+    });
+  }
+
+  async suggestBranchName(input: {
+    cwd: string;
+    workspaceId?: string;
+    requestId?: string;
+  }): Promise<SuggestBranchNameResult> {
+    return this.sendCorrelatedSessionRequest({
+      requestId: input.requestId,
+      message: {
+        type: "checkout.suggest_branch_name.request",
+        cwd: input.cwd,
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      },
+      responseType: "checkout.suggest_branch_name.response",
+      // The summary model answers in a few seconds; a name that comes later is not offered.
+      timeout: 30_000,
     });
   }
 

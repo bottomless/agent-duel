@@ -1,10 +1,6 @@
-import pino from "pino";
 import { expect, test } from "vitest";
-import type { AgentManager } from "./agent/agent-manager.js";
-import type { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { createPersistedWorkspaceRecord, type WorkspaceRegistry } from "./workspace-registry.js";
-import type { WorkspaceGitService } from "./workspace-git-service.js";
 
 function deferred(): { promise: Promise<void>; resolve(): void } {
   let resolve!: () => void;
@@ -14,19 +10,19 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
   return { promise, resolve };
 }
 
-test("auto-name preserves workspace archival that lands during its metadata write", async () => {
+test("a title preserves workspace archival that lands during its metadata write", async () => {
   let workspace = createPersistedWorkspaceRecord({
     workspaceId: "workspace-auto-name",
     projectId: "project-auto-name",
     cwd: "/workspace",
     kind: "directory",
     displayName: "workspace",
+    title: "Name this workspace",
     createdAt: "2026-08-08T00:00:00.000Z",
     updatedAt: "2026-08-08T00:00:00.000Z",
   });
   const mutationStarted = deferred();
   const allowMutation = deferred();
-  const updateEmitted = deferred();
   const workspaceRegistry = {
     get: async () => workspace,
     update: async (_workspaceId, updater) => {
@@ -37,31 +33,56 @@ test("auto-name preserves workspace archival that lands during its metadata writ
     },
   } satisfies Pick<WorkspaceRegistry, "get" | "update">;
   const autoName = new WorkspaceAutoName({
-    agentManager: {} as AgentManager,
     workspaceRegistry,
-    workspaceGitService: {} as WorkspaceGitService,
-    providerSnapshotManager: {} as ProviderSnapshotManager,
-    readDaemonConfig: () => ({}),
-    gitMutation: { notifyGitMutation: async () => {} },
-    emitWorkspaceUpdateForCwd: async () => {},
-    emitWorkspaceUpdateForWorkspaceId: async () => updateEmitted.resolve(),
-    logger: pino({ level: "silent" }),
-    generateWorkspaceName: async () => ({ title: "generated", branch: null }),
+    emitWorkspaceUpdateForWorkspaceId: async () => {},
   });
 
-  autoName.scheduleForDirectory({
-    workspaceId: workspace.workspaceId,
-    cwd: workspace.cwd,
-    firstAgentContext: { prompt: "Name this workspace" },
+  const applying = autoName.applyTitle(workspace.workspaceId, {
+    title: "generated",
+    promptTitle: "Name this workspace",
   });
   await mutationStarted.promise;
   const archivedAt = "2026-08-08T00:01:00.000Z";
   workspace = { ...workspace, updatedAt: archivedAt, archivedAt };
   allowMutation.resolve();
-  await updateEmitted.promise;
+  await applying;
 
   expect(workspace).toMatchObject({
     title: "generated",
     archivedAt,
   });
+});
+
+test("a title never replaces one the user typed", async () => {
+  let workspace = createPersistedWorkspaceRecord({
+    workspaceId: "workspace-typed",
+    projectId: "project-auto-name",
+    cwd: "/workspace",
+    kind: "directory",
+    displayName: "workspace",
+    title: "My own name",
+    createdAt: "2026-08-08T00:00:00.000Z",
+    updatedAt: "2026-08-08T00:00:00.000Z",
+  });
+  const emitted: string[] = [];
+  const autoName = new WorkspaceAutoName({
+    workspaceRegistry: {
+      get: async () => workspace,
+      update: async (_workspaceId, updater) => {
+        workspace = updater(workspace);
+        return workspace;
+      },
+    },
+    emitWorkspaceUpdateForWorkspaceId: async (workspaceId) => {
+      emitted.push(workspaceId);
+    },
+  });
+
+  await autoName.applyTitle(workspace.workspaceId, {
+    title: "generated",
+    promptTitle: "Name this workspace",
+  });
+
+  expect(workspace.title).toBe("My own name");
+  expect(emitted).toEqual([]);
 });
