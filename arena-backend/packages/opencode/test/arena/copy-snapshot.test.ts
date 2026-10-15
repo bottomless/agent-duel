@@ -642,6 +642,48 @@ describe("Arena ignored-content resync", () => {
     })
     expect(slotOnly.reasons["cache"]).toBe("not watched in the worktree for the whole window (not a directory)")
   })
+  test("keeps a root no watch covered while both trees scan as they were copied", async () => {
+    const root = await repository("deps/\n")
+    await mkdir(join(root, "deps", "pkg"), { recursive: true })
+    await writeFile(join(root, "deps", "pkg", "index.js"), "one\n")
+    const directory = join(await mkdtemp(join(tmpdir(), "arena-slot-test-")), "slot")
+    await $`git clone -q ${root} ${directory}`
+    // One manifest throughout, as a warm pair's is reused at the next send.
+    const manifest = await createIgnoredContentSnapshot({ canonical: root, scan: true })
+    expect(manifest.scan).toBe(true)
+    // What every window reads as where no watcher runs.
+    const unwatched: RootObservation = { complete: false, changed: new Set(), reason: "no filesystem watcher" }
+    const resync = async (records?: ReadonlyMap<string, SlotRootRecord>) => {
+      const decided = await planIgnoredResync({
+        targetRoot: directory,
+        manifest,
+        slotRoots: await listed(directory),
+        ...(records ? { records } : {}),
+        canonical: unwatched,
+        slot: unwatched,
+      })
+      const applied = await applyIgnoredResync({ targetRoot: directory, manifest, plan: decided })
+      return { decided, records: applied.records }
+    }
+
+    const seeded = await resync()
+    expect(seeded.decided.reclone).toEqual(["deps"])
+    expect(seeded.records.get("deps")?.targetTree).toBeDefined()
+    const untouched = await resync(seeded.records)
+    expect(untouched.decided.keep).toEqual(["deps"])
+
+    // A file deep inside leaves either root's own identity as it was; the scan sees the write.
+    await writeFile(join(root, "deps", "pkg", "index.js"), "two\n")
+    const checkoutWrote = await resync(untouched.records)
+    expect(checkoutWrote.decided.reclone).toEqual(["deps"])
+    expect(await readFile(join(directory, "deps", "pkg", "index.js"), "utf8")).toBe("two\n")
+
+    await writeFile(join(directory, "deps", "pkg", "index.js"), "contestant\n")
+    const contestantWrote = await resync(checkoutWrote.records)
+    expect(contestantWrote.decided.reclone).toEqual(["deps"])
+    expect(await readFile(join(directory, "deps", "pkg", "index.js"), "utf8")).toBe("two\n")
+  })
+
   test("patches a root the checkout wrote to: brings over only the named paths, and keeps the rest", async () => {
     const root = await repository("ignored/\n")
     await mkdir(join(root, "ignored", "pkg"), { recursive: true })
