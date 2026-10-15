@@ -65,6 +65,10 @@ const git239 = () =>
     ].join("\n"),
   )
 
+// The fake git is a sh script, which Windows does not start as `git`; there every git these tests
+// run would be the real one.
+const withFakeGit = process.platform === "win32" ? it.live.skip : it.live
+
 const mergeTreeCalls = (log: string) =>
   Effect.promise(() => fs.readFile(log, "utf8")).pipe(Effect.map((text) => text.split("\n").filter(Boolean)))
 
@@ -75,7 +79,7 @@ const refusal = (exit: Exit.Exit<unknown, unknown>) => {
 }
 
 describe("ArenaGit on git 2.39", () => {
-  it.live("classifies divergence without merge-tree --merge-base", () =>
+  withFakeGit("classifies divergence without merge-tree --merge-base", () =>
     Effect.gen(function* () {
       const { log } = yield* git239()
       const canonical = yield* scopedTmpdir({ git: true })
@@ -126,7 +130,7 @@ describe("ArenaGit on git 2.39", () => {
     }),
   )
 
-  it.live("applies a result over a changed checkout without merge-tree --merge-base", () =>
+  withFakeGit("applies a result over a changed checkout without merge-tree --merge-base", () =>
     Effect.gen(function* () {
       const { log } = yield* git239()
       const canonical = yield* scopedTmpdir({ git: true })
@@ -180,7 +184,7 @@ describe("ArenaGit on git 2.39", () => {
     }),
   )
 
-  it.live("promotes a winner over public edits without merge-tree --merge-base", () =>
+  withFakeGit("promotes a winner over public edits without merge-tree --merge-base", () =>
     Effect.gen(function* () {
       const { log } = yield* git239()
       const canonical = yield* scopedTmpdir({ git: true })
@@ -229,7 +233,7 @@ describe("ArenaGit on git 2.39", () => {
     }),
   )
 
-  it.live("labels the diff3 base in a promoted winner's markers instead of naming a wrapper commit", () =>
+  withFakeGit("labels the diff3 base in a promoted winner's markers instead of naming a wrapper commit", () =>
     Effect.gen(function* () {
       yield* git239()
       const canonical = yield* scopedTmpdir({ git: true })
@@ -280,7 +284,7 @@ describe("ArenaGit battle git check", () => {
     return refusal(yield* Effect.exit(requireBattleGit(cwd.path)))
   })
 
-  it.live("admits git 2.39 and newer", () =>
+  withFakeGit("admits git 2.39 and newer", () =>
     Effect.gen(function* () {
       for (const version of ["2.39.0", "2.39.5 (Apple Git-154)", "2.54.0", "3.0.0", "2.45.1.windows.1"]) {
         yield* Effect.scoped(
@@ -293,7 +297,7 @@ describe("ArenaGit battle git check", () => {
     }),
   )
 
-  it.live("refuses git older than 2.39 with the version it found", () =>
+  withFakeGit("refuses git older than 2.39 with the version it found", () =>
     Effect.gen(function* () {
       for (const version of ["2.37.1 (Apple Git-137.1)", "2.38.5"]) {
         yield* Effect.scoped(
@@ -310,7 +314,7 @@ describe("ArenaGit battle git check", () => {
     }),
   )
 
-  it.live("asks for the Xcode license when git refuses to run without it", () =>
+  withFakeGit("asks for the Xcode license when git refuses to run without it", () =>
     Effect.gen(function* () {
       yield* fakeGit(
         "echo \"You have not agreed to the Xcode license agreements. Please run 'sudo xcodebuild -license' from within a Terminal window to review and agree to the Xcode and Apple SDKs license.\" >&2\nexit 69",
@@ -319,7 +323,7 @@ describe("ArenaGit battle git check", () => {
     }),
   )
 
-  it.live("asks to install git when the Command Line Tools are missing", () =>
+  withFakeGit("asks to install git when the Command Line Tools are missing", () =>
     Effect.gen(function* () {
       yield* fakeGit(
         'echo "xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), missing xcrun at: /Library/Developer/CommandLineTools/usr/bin/xcrun" >&2\nexit 1',
@@ -328,7 +332,7 @@ describe("ArenaGit battle git check", () => {
     }),
   )
 
-  it.live("reports git's own error when git is there but fails", () =>
+  withFakeGit("reports git's own error when git is there but fails", () =>
     Effect.gen(function* () {
       yield* fakeGit('echo "fatal: unable to access \'/etc/gitconfig\': Permission denied" >&2\nexit 128')
       const message = yield* check
@@ -344,6 +348,11 @@ describe("ArenaGit battle git check", () => {
       process.env.PATH = empty.path
       const message = yield* check.pipe(Effect.ensuring(Effect.sync(() => (process.env.PATH = previous))))
       expect(message).toContain("Install Git")
+      // Windows has no xcode-select, and a git installed there reaches only processes started after.
+      if (process.platform === "win32") {
+        expect(message).toContain("git-scm.com")
+        expect(message).toContain("quit and reopen Agent Duel")
+      }
     }),
   )
 })
