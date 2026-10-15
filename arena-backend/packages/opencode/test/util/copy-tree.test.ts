@@ -15,7 +15,7 @@ import {
 } from "fs"
 import os from "os"
 import path from "path"
-import { cloneTree, copyTree } from "@/util/copy-tree"
+import { cloneTree, copyDirectory, copyTree } from "@/util/copy-tree"
 
 const directories: string[] = []
 
@@ -143,5 +143,48 @@ describe("copyTree", () => {
       cloneTree(path.join(root, "source"), path.join(root, "target"), { signal: controller.signal }),
     ).rejects.toThrow("stopped first")
     expect(() => lstatSync(path.join(root, "target"))).toThrow()
+  })
+})
+
+describe("copyDirectory", () => {
+  test("copies a tree with its empty directories and keeps links as links", async () => {
+    const root = workspace()
+    // A name robocopy has to be handed whole, as a contestant's project can have.
+    const source = path.join(root, "şube dosyası", "node_modules")
+    write(source, "pkg/lib/index.js", "module.exports = 1")
+    write(source, ".bin/tool.cmd", "@echo tool")
+    mkdirSync(path.join(source, "empty"))
+    // npm links a workspace package with a junction on Windows, which needs no privilege.
+    symlinkSync(path.join(source, "pkg"), path.join(source, "linked"), "junction")
+    const target = path.join(root, "copy", "node_modules")
+    mkdirSync(path.dirname(target))
+
+    await copyDirectory(source, target)
+
+    expect(readFileSync(path.join(target, "pkg/lib/index.js"), "utf8")).toBe("module.exports = 1")
+    expect(readFileSync(path.join(target, ".bin/tool.cmd"), "utf8")).toBe("@echo tool")
+    expect(readdirSync(path.join(target, "empty"))).toEqual([])
+    expect(lstatSync(path.join(target, "linked")).isSymbolicLink()).toBe(true)
+    expect(readFileSync(path.join(target, "linked/lib/index.js"), "utf8")).toBe("module.exports = 1")
+  })
+
+  test("copies a single file", async () => {
+    const root = workspace()
+    write(root, "source.txt", "one file")
+
+    await copyDirectory(path.join(root, "source.txt"), path.join(root, "target.txt"))
+
+    expect(readFileSync(path.join(root, "target.txt"), "utf8")).toBe("one file")
+  })
+
+  test("does not copy once stopped", async () => {
+    const root = workspace()
+    write(root, "source/file.txt", "never copied")
+    const controller = new AbortController()
+    controller.abort(new Error("stopped first"))
+
+    await expect(
+      copyDirectory(path.join(root, "source"), path.join(root, "target"), controller.signal),
+    ).rejects.toThrow()
   })
 })
