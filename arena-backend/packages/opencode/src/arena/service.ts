@@ -1519,8 +1519,7 @@ export const layer: Layer.Layer<
                     _id: manifest?.artifactIDs[0] ?? `${run._id}|transcript`,
                   })
                   if (!artifact) throw new Error(`Arena transcript archive not found: ${run._id}`)
-                  // With its images: the battle card shows the prompt's from this copy.
-                  const payload = await ArenaTranscriptArtifact.read(store, artifact)
+                  const payload = ArenaTranscriptArtifact.decode(artifact)
                   if (!Array.isArray(payload)) throw new Error(`Arena transcript archive is invalid: ${run._id}`)
                   const root = payload.find(
                     (item): item is Record<string, unknown> =>
@@ -1532,11 +1531,17 @@ export const layer: Layer.Layer<
                   if (!root || !Array.isArray(root.messages)) {
                     throw new Error(`Arena root transcript archive is missing: ${run._id}`)
                   }
-                  const transcript = ArenaTranscript.project(
-                    payload.flatMap((item) =>
-                      typeof item === "object" && item !== null && "messages" in item && Array.isArray(item.messages)
-                        ? item.messages
-                        : [],
+                  // The projection leaves out tool results' images; the battle card shows the prompt's,
+                  // so those come back from the archive.
+                  const transcript = await ArenaTranscriptArtifact.withImages(
+                    store,
+                    run._id,
+                    ArenaTranscript.project(
+                      payload.flatMap((item) =>
+                        typeof item === "object" && item !== null && "messages" in item && Array.isArray(item.messages)
+                          ? item.messages
+                          : [],
+                      ),
                     ),
                   )
                   const permissions = Array.isArray(root.permissionState)

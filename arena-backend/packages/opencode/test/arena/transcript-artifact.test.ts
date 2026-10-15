@@ -128,7 +128,9 @@ describe("ArenaTranscriptArtifact", () => {
 
       const stored = (await store.artifact("run-a|transcript"))!
       expect(JSON.stringify(ArenaTranscriptArtifact.decode(stored))).not.toContain("data:image")
-      expect(await ArenaTranscriptArtifact.read(store, stored)).toEqual(archived)
+      expect(await ArenaTranscriptArtifact.withImages(store, "run-a", ArenaTranscriptArtifact.decode(stored))).toEqual(
+        archived,
+      )
     })
   })
 
@@ -164,7 +166,10 @@ describe("ArenaTranscriptArtifact", () => {
         createdAt: new Date(),
       })
       await ArenaTranscriptArtifact.write(store, { runID: "run-a", turnID: "turn", archived })
-      expect(await ArenaTranscriptArtifact.read(store, (await store.artifact("run-a|transcript"))!)).toEqual(archived)
+      const stored = (await store.artifact("run-a|transcript"))!
+      expect(await ArenaTranscriptArtifact.withImages(store, "run-a", ArenaTranscriptArtifact.decode(stored))).toEqual(
+        archived,
+      )
     })
   })
 })

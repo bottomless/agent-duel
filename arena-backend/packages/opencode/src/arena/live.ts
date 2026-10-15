@@ -32,6 +32,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function readRecord(value: unknown): Record<string, unknown> | undefined {
   if (isRecord(value)) return value
 }
+
+/**
+ * A tool result's attachments, the screenshots and PDFs a contestant reads, go to the model, but the
+ * app shows none of them. Sent along, a run that read many put one snapshot past the daemon's 64 MiB
+ * socket limit, and the window lost its connection after a vote or a reply. The rest is kept.
+ */
+export function withoutAttachmentData<T>(part: T): T {
+  const record = readRecord(part)
+  const state = readRecord(record?.state)
+  if (record?.type !== "tool" || !state || !Array.isArray(state.attachments)) return part
+  const attachments = state.attachments.map((attachment) => {
+    const value = readRecord(attachment)
+    return value ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== "url")) : attachment
+  })
+  return { ...record, state: { ...state, attachments } } as T
+}
+
+/** A stored event as `withoutAttachmentData` leaves the part it carries. */
+export function eventWithoutAttachmentData<T extends { readonly payload: Readonly<Record<string, unknown>> }>(
+  event: T,
+): T {
+  const properties = readRecord(event.payload.properties)
+  if (!properties?.part) return event
+  const part = withoutAttachmentData(properties.part)
+  return part === properties.part
+    ? event
+    : { ...event, payload: { ...event.payload, properties: { ...properties, part } } }
+}
 function readMessage(value: unknown): LiveRecord | undefined {
   const item = readRecord(value)
   if (item && typeof item.id === "string" && typeof item.sessionID === "string")
@@ -95,7 +123,7 @@ export class ArenaLive {
         current.set(part.id, part)
         this.pending.set(runId, current)
       } else this.pending.get(runId)?.delete(part.id)
-      change = { kind: "part", runId, part }
+      change = { kind: "part", runId, part: withoutAttachmentData(part) }
     } else if (type === "message.part.delta") {
       if (properties.field !== "text" || typeof properties.delta !== "string" || typeof properties.partID !== "string")
         return

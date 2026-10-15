@@ -1,5 +1,10 @@
 import { gunzipSync, gzipSync } from "node:zlib"
-import { externalizeImages, imageArtifactID, inlineImages } from "@agent-duel/arena-service/research-protocol"
+import {
+  externalizeImages,
+  imageArtifactID,
+  inlineImages,
+  namedImages,
+} from "@agent-duel/arena-service/research-protocol"
 import type { Store } from "./mongo"
 import type { ArtifactDocument } from "./records"
 
@@ -77,18 +82,17 @@ export async function write(
   }
 }
 
-/** A run's archived sessions with their images back in place, for a reader that shows them. */
-export async function read(store: Store, artifact: TranscriptArtifact & Pick<ArtifactDocument, "runID" | "imageIDs">) {
-  const transcript = decode(artifact)
-  const runID = artifact.runID
-  if (!runID || !artifact.imageIDs?.length) return transcript
+/** Puts back the images `value` still names, from the run's archive, for a reader that shows them. */
+export async function withImages<T>(store: Store, runID: string, value: T): Promise<T> {
+  const ids = namedImages(value)
+  if (!ids.length) return value
   const images = await Promise.all(
-    artifact.imageIDs.map(async (id) => {
+    ids.map(async (id) => {
       const image = await store.artifact(imageArtifactID(runID, id))
       return image && !image.truncated ? [[id, { mimeType: image.mimeType, bytes: bytes(image.data) }] as const] : []
     }),
   )
-  return inlineImages(transcript, new Map(images.flat()))
+  return inlineImages(value, new Map(images.flat())) as T
 }
 
 export * as ArenaTranscriptArtifact from "./transcript-artifact"

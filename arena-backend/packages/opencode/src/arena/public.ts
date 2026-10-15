@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { basename } from "path"
 import { canDiscardBattle, canRetryRun, canTie, type Resolution, type Side } from "./domain"
+import { eventWithoutAttachmentData } from "./live"
 import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument } from "./records"
 import { ArenaSchema } from "./schema"
@@ -409,7 +410,8 @@ export function project(snapshot: BattleSnapshot) {
         ...(revealed && turn ? { identity: identity(turn.placement[run.side]) } : {}),
       }),
     ),
-    events: snapshot.events,
+    // Every part update the turn stored, a read screenshot each time: without their data, as the runs.
+    events: snapshot.events.map(eventWithoutAttachmentData),
     ...(snapshot.comparison
       ? {
           comparison: {

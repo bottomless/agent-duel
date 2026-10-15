@@ -1009,21 +1009,23 @@ describe("Arena service vertical slice", () => {
     }
   }, 30_000)
 
-  test("a run that reads large screenshots still reaches the vote", async () => {
+  test("a run that reads large screenshots reaches the vote, and no snapshot carries them", async () => {
     await using directory = await tmpdir({
       git: true,
       config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
     })
-    // Noise does not compress, and each screenshot is just within the read tool's image limits, so it
-    // is kept as read. Held inline, the four put each side's transcript over the artifact limit, so
-    // neither was kept and the turn had nothing to compare: it stopped instead of asking for a vote.
     const photon = await import("@silvia-odwyer/photon-node")
-    const screenshots = Array.from({ length: 4 }, () => {
-      const image = new photon.PhotonImage(new Uint8Array(randomBytes(900 * 900 * 4)), 900, 900)
-      const png = Buffer.from(image.get_bytes())
+    // Noise does not compress, like a real screenshot.
+    const png = (side: number) => {
+      const image = new photon.PhotonImage(new Uint8Array(randomBytes(side * side * 4)), side, side)
+      const bytes = Buffer.from(image.get_bytes())
       image.free()
-      return png
-    })
+      return bytes
+    }
+    // Each is just within the read tool's image limits, so it is kept as read. Held inline, the four
+    // put each side's transcript over the artifact limit, so neither was kept and the turn had nothing
+    // to compare: it stopped instead of asking for a vote.
+    const screenshots = Array.from({ length: 4 }, () => png(900))
     const files = screenshots.map((_, index) => `screenshot-${index + 1}.png`)
     for (const [index, file] of files.entries()) await writeFile(`${directory.path}/${file}`, screenshots[index]!)
     await $`git add opencode.json ${files}`.cwd(directory.path).quiet()
@@ -1032,6 +1034,20 @@ describe("Arena service vertical slice", () => {
     const router = installOpenRouterStub({ contestantReads: { 1: files, 2: files } })
     process.env.OPENCODE_ARENA = "1"
     setStoreForTest(memory.store)
+
+    // The window gets none of the screenshots' bytes: sent along, each snapshot below was over 34 MB,
+    // and the daemon closes a socket that has more than 64 MiB waiting. The pasted image stays, since
+    // the battle card shows it.
+    const screenshotData = screenshots.map((bytes) => bytes.subarray(0, 3000).toString("base64"))
+    const expectLight = (snapshot: PublicSnapshot) => {
+      const text = JSON.stringify(snapshot)
+      expect(text.length).toBeLessThan(1024 * 1024)
+      expect(screenshotData.filter((data) => text.includes(data))).toEqual([])
+      for (const run of snapshot.runs) {
+        const prompt = (run.messages ?? []).find((message) => message.role === "user")
+        expect(JSON.stringify(run.parts?.[String(prompt?.id)])).toContain("data:image/")
+      }
+    }
 
     try {
       const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
@@ -1047,7 +1063,10 @@ describe("Arena service vertical slice", () => {
         await request(`/arena/chats/${attached.chat.id}/turns`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ prompt: "Check the screenshot." }),
+          body: JSON.stringify({
+            prompt: "Make the page match this.",
+            attachments: [{ type: "image", mimeType: "image/png", data: png(64).toString("base64") }],
+          }),
         }),
       )
       const turnID = admitted.turn?.id
@@ -1064,10 +1083,11 @@ describe("Arena service vertical slice", () => {
       }
       expect(settled?.state).toBe("awaiting_vote")
 
-      const imageIDs = screenshots.map((png) => createHash("sha256").update(png).digest("hex"))
+      const imageIDs = screenshots.map((bytes) => createHash("sha256").update(bytes).digest("hex"))
       for (const run of await memory.store.runsForTurn(turnID)) {
         const transcript = await memory.store.artifact(`${run._id}|transcript`)
-        expect(transcript).toMatchObject({ truncated: false, imageIDs })
+        expect(transcript?.truncated).toBe(false)
+        expect(transcript?.imageIDs).toEqual(expect.arrayContaining(imageIDs))
         expect(transcript!.storedSize).toBeLessThan(1024 * 1024)
         for (const [index, id] of imageIDs.entries()) {
           expect(await memory.store.artifact(imageArtifactID(run._id, id))).toMatchObject({
@@ -1078,24 +1098,30 @@ describe("Arena service vertical slice", () => {
         }
       }
 
-      await json<PublicSnapshot>(
+      const followedUp = await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/reply`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Check them once more.", target: "both" }),
+        }),
+      )
+      expectLight(followedUp)
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+
+      const voted = await json<PublicSnapshot>(
         await request(`/arena/turns/${turnID}/vote`, {
           method: "POST",
           headers,
           body: JSON.stringify({ vote: "a" }),
         }),
       )
+      expectLight(voted)
       await waitForTurn(memory.store, turnID, "complete")
-      // The archived battle reads each side's thread back with its screenshots in place.
-      const archived = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
-      for (const run of archived.runs) {
-        const parts = JSON.stringify(run.parts)
-        for (const png of screenshots) expect(parts).toContain(`data:image/png;base64,${png.toString("base64")}`)
-      }
+      expectLight(await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers })))
     } finally {
       router.restore()
     }
-  }, 60_000)
+  }, 90_000)
 
   test("honors an already committed valid decision instead of applying a later choice", async () => {
     await using directory = await tmpdir({

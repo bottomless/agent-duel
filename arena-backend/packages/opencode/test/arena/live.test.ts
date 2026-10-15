@@ -88,6 +88,42 @@ describe("Arena live transcript", () => {
     })
     expect(values[1]).toEqual({ kind: "remove_part", runId: "run", messageId: "m", partId: "p" })
   })
+  test("publishes a tool result without its attachments' data", () => {
+    const live = new ArenaLive()
+    const values: unknown[] = []
+    live.subscribe((event) => values.push(event.change))
+    const screenshot = `data:image/png;base64,${"A".repeat(4096)}`
+    live.capture(
+      { runID: "run", turnID: "turn", rootSessionID: "root" },
+      {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "p",
+            messageID: "m",
+            sessionID: "root",
+            type: "tool",
+            tool: "read",
+            callID: "call",
+            state: {
+              status: "completed",
+              input: { filePath: "shot.png" },
+              output: "Image read successfully",
+              title: "shot.png",
+              metadata: {},
+              time: { start: 1, end: 2 },
+              attachments: [{ type: "file", mime: "image/png", url: screenshot }],
+            },
+          },
+        },
+      },
+    )
+    expect(values[0]).toMatchObject({
+      kind: "part",
+      part: { state: { output: "Image read successfully", attachments: [{ type: "file", mime: "image/png" }] } },
+    })
+    expect(JSON.stringify(values)).not.toContain(screenshot)
+  })
   test("redacts identities in both parent and child transcripts", () => {
     const live = new ArenaLive()
     const values: unknown[] = []

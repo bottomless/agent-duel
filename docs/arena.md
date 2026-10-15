@@ -53,10 +53,13 @@ run's transcript is then mostly images, and over the 10 MB artifact limit it is 
 which stops the turn instead of asking for a vote. So the archive keeps each image as its own `image`
 artifact, named by the SHA-256 of its bytes, and the transcript refers to it as
 `arena-image:sha256:<hash>`, with `imageIDs` listing them (`arena/transcript-artifact.ts`). Reading an
-archived battle puts the images back, since the battle card shows the prompt's images from that copy.
-Research gets the same transcript, sent first so a full upload buffer drops images rather than the
-transcript, and each image as an `images` record; both sides share a battle's images, so each is
-uploaded once. The control plane refuses a whole batch that names a collection it does not know, so
+archived battle puts the prompt's images back, since the battle card shows them from that copy. A
+tool result's attachments, the screenshots and PDFs a contestant reads, never go to the window: the
+app shows none of them, and a run that read many put one snapshot past the daemon's 64 MiB socket
+limit, which dropped the window's connection after a vote or a reply (`withoutAttachmentData` in
+`arena/live.ts`). Research gets the same transcript, sent first so a full upload buffer drops images
+rather than the transcript, and each image as an `images` record; both sides share a battle's images,
+so each is uploaded once. The control plane refuses a whole batch that names a collection it does not know, so
 deploy it before a desktop build that sends a new one.
 
 ## Live synchronization

@@ -1,7 +1,10 @@
-import { readRecord } from "./live"
+import { readRecord, withoutAttachmentData } from "./live"
 import { ArenaPrivacy } from "./privacy"
 
-/** Shared by live snapshots and archives so reconnecting preserves descendant activity. */
+/**
+ * Shared by live snapshots and archives so reconnecting preserves descendant activity. Tool results
+ * leave out their attachments' data, which the app does not show.
+ */
 export function project(transcript: readonly unknown[]) {
   const messages = transcript
     .flatMap((value) => {
@@ -25,7 +28,7 @@ export function project(transcript: readonly unknown[]) {
             }),
           )?.properties,
         )
-        return properties?.part ? [properties.part] : []
+        return properties?.part ? [withoutAttachmentData(properties.part)] : []
       })
       const created = readRecord(record.time)?.created
       return [{ info: { ...record, id: record.id }, parts, created: typeof created === "number" ? created : 0 }]

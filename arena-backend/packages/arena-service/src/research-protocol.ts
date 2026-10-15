@@ -134,6 +134,16 @@ export function externalizeImages(value: unknown) {
   return { value: externalized, images: [...images.values()] }
 }
 
+/** The IDs of the images a transcript names in place of their bytes, once each. */
+export function namedImages(value: unknown) {
+  const ids = new Set<string>()
+  replaceUrls(value, (url) => {
+    if (url.startsWith(RESEARCH_IMAGE_REFERENCE)) ids.add(url.slice(RESEARCH_IMAGE_REFERENCE.length))
+    return undefined
+  })
+  return [...ids]
+}
+
 /** Puts back each image `externalizeImages` named. A name `images` does not hold stays as it is. */
 export function inlineImages(value: unknown, images: ReadonlyMap<string, Omit<TranscriptImage, "id">>) {
   return replaceUrls(value, (url) => {
