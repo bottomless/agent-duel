@@ -28,6 +28,8 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-node@v4
         with:
@@ -49,11 +51,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
           import fs from 'node:fs';
+          import {
+            compareReleaseVersions,
+            getHighestCanonicalReleaseVersion,
+            parseReleaseVersion,
+          } from './scripts/release-version-utils.mjs';
           const version = process.env.RELEASE_VERSION;
-          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid release version');
+          parseReleaseVersion(version);
           for (const file of ['package.json', 'packages/desktop/package.json']) {
             if (JSON.parse(fs.readFileSync(file)).version !== version) throw new Error(`Commit the requested version in ${file} first`);
+          }
+          const tags = execFileSync('git', ['tag', '--list', 'v*'], { encoding: 'utf8' })
+            .split(/\r?\n/)
+            .filter(Boolean);
+          const highestVersion = getHighestCanonicalReleaseVersion(tags);
+          if (highestVersion !== null && compareReleaseVersions(version, highestVersion) <= 0) {
+            throw new Error(`Release version ${version} must be newer than the highest canonical tag v${highestVersion}`);
           }
           for (const name of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID']) {
             if (!process.env[name]) throw new Error(`Missing release secret: ${name}`);
@@ -85,10 +100,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          AGENT_DUEL_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           npm run build:app-deps:clean
           (cd packages/app && npx expo export --platform web --max-workers 1)
-          npm run build --workspace=@getpaseo/desktop -- --publish never --mac --arm64 -c.mac.type=distribution -c.forceCodeSigning=true
+          npm run build --workspace=@getpaseo/desktop -- --publish never --mac --arm64 -c.mac.type=distribution -c.forceCodeSigning=true -c.buildVersion="$AGENT_DUEL_BUILD_NUMBER"
 
       - name: Typecheck
         run: npm run typecheck
@@ -99,8 +115,13 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           RELEASE_VERSION: ${{ inputs.version }}
+          AGENT_DUEL_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           APP='packages/desktop/release/mac-arm64/Agent Duel.app'
+          SHORT_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
+          BUILD_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")
+          [[ "$SHORT_VERSION" == "$RELEASE_VERSION" ]] || { echo "CFBundleShortVersionString $SHORT_VERSION does not match $RELEASE_VERSION" >&2; exit 1; }
+          [[ "$BUILD_VERSION" == "$AGENT_DUEL_BUILD_NUMBER" ]] || { echo "CFBundleVersion $BUILD_VERSION does not match $AGENT_DUEL_BUILD_NUMBER" >&2; exit 1; }
           codesign --verify --deep --strict "$APP"
           codesign --display --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/signing.txt"
           grep -F 'Authority=Developer ID Application: Bottomless Supply Inc (LGVJP2HNM2)' "$RUNNER_TEMP/signing.txt"

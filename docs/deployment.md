@@ -63,6 +63,17 @@ The build reads Arena provenance from the repository `HEAD`. In an exported sour
 Git metadata, set `OPENCODE_ARENA_BUILD_SHA` to the source commit. Packaged Arena passes this value
 to the compiled runtime because it cannot inspect a source checkout at run time.
 
+The OpenCode version comes from the vendored engine's package manifest. Agent Duel uses the root
+package version, synchronized to the desktop and other npm workspaces by the version tooling.
+Research chat records carry `opencodeVersion`, `agentDuelVersion`, `agentDuelBuildNumber`, and
+`agentDuelCommit`. Each new battle turn also captures these fields in `build`, since a chat can
+outlive an app upgrade. Existing history keeps its original metadata.
+
+The runtime embeds the version values and build number at compilation. Local builds use build
+number `0`; set `AGENT_DUEL_BUILD_NUMBER` for a numbered build and pass the same value to
+electron-builder's `buildVersion`. The [desktop release workflow](desktop-releases.md) uses its
+GitHub run number for both; retries keep that number. It also enforces increasing release versions.
+
 The resulting application contains no database, OpenRouter, OAuth, email, or
 private signing credential.
 

@@ -2,6 +2,7 @@ const versionPattern =
   /^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)(?:-(?<prerelease>[0-9A-Za-z.-]+))?$/;
 const sourceTagPattern =
   /^(?:desktop(?:-(?:windows|linux|macos))?-)?v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
+const canonicalReleaseTagPattern = /^v\d+\.\d+\.\d+(?:-beta\.\d+)?$/;
 
 function assertInteger(value, label) {
   if (!Number.isInteger(value) || value < 0) {
@@ -56,6 +57,43 @@ export function formatReleaseVersion({ major, minor, patch, prerelease = null })
   assertInteger(minor, "minor version");
   assertInteger(patch, "patch version");
   return prerelease ? `${major}.${minor}.${patch}-${prerelease}` : `${major}.${minor}.${patch}`;
+}
+
+export function compareReleaseVersions(leftVersion, rightVersion) {
+  const left = parseReleaseVersion(leftVersion);
+  const right = parseReleaseVersion(rightVersion);
+
+  for (const field of ["major", "minor", "patch"]) {
+    if (left[field] !== right[field]) {
+      return left[field] > right[field] ? 1 : -1;
+    }
+  }
+
+  if (left.isPrerelease !== right.isPrerelease) {
+    return left.isPrerelease ? -1 : 1;
+  }
+
+  if (left.betaNumber === right.betaNumber) {
+    return 0;
+  }
+  return left.betaNumber > right.betaNumber ? 1 : -1;
+}
+
+export function getHighestCanonicalReleaseVersion(tags) {
+  let highest = null;
+
+  for (const tag of tags) {
+    if (!canonicalReleaseTagPattern.test(tag)) {
+      continue;
+    }
+
+    const version = tag.slice(1);
+    if (highest === null || compareReleaseVersions(version, highest) > 0) {
+      highest = version;
+    }
+  }
+
+  return highest;
 }
 
 export function normalizeReleaseTag(rawTag) {

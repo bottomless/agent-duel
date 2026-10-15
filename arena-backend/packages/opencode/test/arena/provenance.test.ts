@@ -1,7 +1,18 @@
 import { describe, expect, test } from "bun:test"
-import { resolveBuildCommit } from "@/arena/provenance"
+import { resolveBuildCommit, resolveBuildMetadata } from "@/arena/provenance"
+import { version as opencodeVersion } from "../../package.json"
+import { version as agentDuelVersion } from "../../../../../package.json"
 
 describe("ArenaProvenance", () => {
+  test("separates the OpenCode version from the Agent Duel version and source build", async () => {
+    expect(await resolveBuildMetadata({ OPENCODE_ARENA_BUILD_SHA: "ABCDEF1234567" })).toEqual({
+      opencodeVersion,
+      agentDuelVersion,
+      agentDuelBuildNumber: 0,
+      agentDuelCommit: "abcdef1234567",
+    })
+  })
+
   test("prefers an explicit pinned build SHA", async () => {
     let detected = false
     const commit = await resolveBuildCommit({ OPENCODE_ARENA_BUILD_SHA: "ABCDEF1234567" }, async () => {

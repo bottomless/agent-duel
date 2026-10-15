@@ -25,11 +25,14 @@ separate setup steps; this workflow does not provision them.
 
 ## Start a release
 
-1. Commit the desired version to the repository using its version tooling and
-   merge it to main. Ensure CI passes on that commit.
+1. Update every workspace version with the existing version command and merge
+   its release commit to main. For the next beta, run
+   `npm run version:all:beta:next`; use `npm run version:all:promote` for a stable
+   release. Push the commit without the local tag: Desktop Release creates the
+   remote release tag after verification. Ensure CI passes on that commit.
 2. Open GitHub → Actions → Desktop Release → Run workflow.
-3. Select main and enter the committed version without a leading `v`, for example
-   `0.4.0-beta.3`. Root and desktop package versions must match the input.
+3. Select main and enter the version produced by the command without a leading
+   `v`. Root and desktop package versions must match the input.
 4. Approve the environment deployment if required. The workflow builds, signs,
    notarizes, and verifies the app and DMG before creating a draft release.
 5. Download the DMG from the run's `signed-macos-arm64` artifact and test it on a
@@ -37,9 +40,12 @@ separate setup steps; this workflow does not provision them.
 6. Open Releases, review the draft's assets and notes, and click Publish release
    only after testing. Versions containing a hyphen are marked as prereleases.
 
-The workflow never publishes a release automatically and refuses an existing
-release version. It does not deploy the hosted backend, publish npm packages,
-create Windows/Linux/Intel installers, or enable in-app automatic updates.
+The workflow fetches the complete tag history and refuses a version that is not
+newer than the highest canonical `vX.Y.Z` or `vX.Y.Z-beta.N` tag. Stable versions
+sort after beta versions for the same base version, and beta numbers use numeric
+ordering. It also refuses an existing GitHub release version. The workflow never
+publishes a release automatically. It does not deploy the hosted backend, publish
+npm packages, create Windows/Linux/Intel installers, or enable in-app automatic updates.
 A failed build creates no draft release; retained artifacts may help diagnose
 failures after installer verification. Retry before a draft exists, or use a new
 version after a draft has been created.

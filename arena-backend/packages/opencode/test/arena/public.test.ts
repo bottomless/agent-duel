@@ -25,9 +25,10 @@ function snapshot(revealed: boolean): BattleSnapshot {
       turnCount: 1,
       activeTurnID: "turn",
       status: "battle_active",
-      opencodeCommit: "commit",
+      agentDuelCommit: "commit",
+      agentDuelBuildNumber: 0,
       opencodeVersion: "version",
-      arenaVersion: "v1",
+      agentDuelVersion: "0.4.0-beta.3",
       configuration: {
         modelPool: "private",
         agent: "private",

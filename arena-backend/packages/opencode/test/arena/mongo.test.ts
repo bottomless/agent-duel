@@ -30,9 +30,10 @@ function chat(): ChatDocument {
     canonicalTranscriptHash: "hash",
     turnCount: 0,
     status: "ready",
-    opencodeCommit: "commit",
+    agentDuelCommit: "commit",
+    agentDuelBuildNumber: 0,
     opencodeVersion: "version",
-    arenaVersion: "prototype",
+    agentDuelVersion: "0.4.0-beta.3",
     configuration: {
       modelPool: "hash",
       agent: "hash",

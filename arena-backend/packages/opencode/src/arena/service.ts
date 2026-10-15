@@ -15,7 +15,6 @@ import {
 } from "path"
 import { promisify } from "util"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
-import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
@@ -140,7 +139,7 @@ import { ArenaMetrics } from "./metrics"
 import { jsonValue, parseSnapshot, project } from "./public"
 import { ArenaSchema } from "./schema"
 import { ArenaPrivacy } from "./privacy"
-import { resolveBuildCommit } from "./provenance"
+import { resolveBuildMetadata } from "./provenance"
 import { ArenaTranscriptArtifact } from "./transcript-artifact"
 import { ArenaTranscript } from "./transcript"
 import { excludeFromBackup } from "./backup-exclusion"
@@ -2405,7 +2404,7 @@ export const layer: Layer.Layer<
           const messages = yield* sessions.messages({ sessionID }).pipe(Effect.mapError(error))
           const now = new Date()
           const chatConfiguration = yield* configuration()
-          const opencodeCommit = yield* promise(() => resolveBuildCommit())
+          const build = yield* promise(() => resolveBuildMetadata())
           yield* withRepositoryMutation(
             commonGitDir,
             promise(() =>
@@ -2439,9 +2438,7 @@ export const layer: Layer.Layer<
                 turnCount: 0,
                 status: "ready",
                 ...(state.conflicts.length > 0 ? { trunkConflicts: state.conflicts } : {}),
-                opencodeCommit,
-                opencodeVersion: InstallationVersion,
-                arenaVersion: "prototype-1",
+                ...build,
                 configuration: chatConfiguration,
                 utilityPromptVersion: "arena-comparison-v1",
                 createdAt: now,
@@ -5357,6 +5354,7 @@ export const layer: Layer.Layer<
     ) {
       const prompt = userPrompt.trim()
       if (!prompt && attachments.length === 0) return yield* Effect.fail(new Error("Arena prompt cannot be empty"))
+      const build = yield* promise(() => resolveBuildMetadata())
       const contestantPrompt = yield* ArenaAttachments.prepare(prompt, attachments, image.normalize)
       const sendStartedAt = Date.now()
       const admissionWaitMs = receivedAt === undefined ? 0 : Math.max(0, sendStartedAt - receivedAt)
@@ -5546,6 +5544,7 @@ export const layer: Layer.Layer<
       const turn: TurnDocument = {
         _id: turnID,
         chatID: chat._id,
+        build,
         ...(admittedParticipantID ? { participantID: admittedParticipantID } : {}),
         turnIndex: chat.turnCount,
         userPrompt: prompt,

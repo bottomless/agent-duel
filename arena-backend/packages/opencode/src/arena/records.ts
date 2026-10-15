@@ -3,6 +3,7 @@ import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-t
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { GenerationMetrics, UsageTotals } from "@agent-duel/arena-service/metrics"
 import type { PlannedRef, ReviewAnswer, ReviewItem } from "./branch-review"
+import type { BuildMetadata } from "./provenance"
 
 export type { GenerationMetrics, UsageTotals }
 
@@ -199,7 +200,7 @@ export type ConfigurationHashes = {
   readonly system: string
 }
 
-export type ChatDocument = {
+export type ChatDocument = BuildMetadata & {
   readonly _id: Identifier
   /**
    * The account that owns this chat and, transitively, every turn, run,
@@ -253,9 +254,6 @@ export type ChatDocument = {
   // Repo-relative unmerged paths in the trunk checkout, as Git lists them. Present only while the
   // trunk holds unresolved merge conflicts. The chat stays ready; only a battle start is refused.
   readonly trunkConflicts?: readonly string[]
-  readonly opencodeCommit: string
-  readonly opencodeVersion: string
-  readonly arenaVersion: string
   readonly configuration: ConfigurationHashes
   readonly utilityPromptVersion: string
   readonly createdAt: Date
@@ -322,6 +320,8 @@ export type AttachmentSummary = {
 export type TurnDocument = {
   readonly _id: Identifier
   readonly chatID: Identifier
+  /** Absent on historical turns recorded before per-turn build provenance. */
+  readonly build?: BuildMetadata
   readonly participantID?: string
   readonly turnIndex: number
   readonly userPrompt: string

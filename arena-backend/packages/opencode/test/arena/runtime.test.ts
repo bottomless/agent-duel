@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { closeStore, contestantFetch, recoverOnce, setStoreForTest, store } from "@/arena/runtime"
 import { setArenaCredentials } from "@/arena/credentials"
+import { resolveBuildMetadata } from "@/arena/provenance"
 import { tmpdir } from "../fixture/fixture"
 
 afterEach(async () => {
@@ -54,7 +55,7 @@ describe("ArenaRuntime local persistence", () => {
     }
   })
 
-  test("uploads a local mutation through the configured control plane", async () => {
+  test("uploads the OpenCode version and separate Agent Duel build metadata through the control plane", async () => {
     await using directory = await tmpdir()
     const originalHome = process.env.PASEO_HOME
     process.env.PASEO_HOME = directory.path
@@ -80,18 +81,33 @@ describe("ArenaRuntime local persistence", () => {
         controlTokenHash: "0".repeat(64),
       })
       const local = await store()
-      await local.saveEvent({
-        _id: "event-upload-1",
-        turnID: "turn-upload-1",
-        sequence: 1,
-        receivedAt: new Date("2026-09-14T00:00:00Z"),
-        type: "message.part.updated",
-        payload: { text: "research upload" },
-        redactionVersion: "arena-privacy-v1",
-        normalizationVersion: "arena-events-v1",
-        coalesced: false,
-        gap: false,
-      })
+      const build = await resolveBuildMetadata({ OPENCODE_ARENA_BUILD_SHA: "abcdef1234567" })
+      const createdAt = new Date("2026-09-14T00:00:00Z")
+      const chat = {
+        _id: "chat-upload-1",
+        repository: { projectID: "project", root: directory.path },
+        initialCanonicalSHA: "base",
+        currentCanonicalSHA: "base",
+        canonicalSessionID: "canonical",
+        canonicalTranscriptVersion: 1,
+        canonicalTranscriptHash: "hash",
+        turnCount: 0,
+        status: "ready" as const,
+        ...build,
+        configuration: {
+          modelPool: "pool",
+          agent: "agent",
+          plugins: "plugins",
+          mcp: "mcp",
+          skills: "skills",
+          tools: "tools",
+          system: "system",
+        },
+        utilityPromptVersion: "utility",
+        createdAt,
+        updatedAt: createdAt,
+      }
+      await local.createChat(chat)
       const upload = await Promise.race([
         received.promise,
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Research upload timed out")), 3_000)),
@@ -100,7 +116,12 @@ describe("ArenaRuntime local persistence", () => {
       expect(upload.body.version).toBe(1)
       expect(upload.body.sourceID).toEqual(expect.any(String))
       expect(upload.body.records).toEqual([
-        expect.objectContaining({ collection: "events", id: "event-upload-1", revision: 1 }),
+        {
+          collection: "chats",
+          id: chat._id,
+          revision: 1,
+          document: { ...chat, createdAt: createdAt.toISOString(), updatedAt: createdAt.toISOString() },
+        },
       ])
     } finally {
       await closeStore()

@@ -23,9 +23,10 @@ function chat(_id: string): ChatDocument {
     canonicalTranscriptHash: "hash",
     turnCount: 0,
     status: "ready",
-    opencodeCommit: "commit",
+    agentDuelCommit: "commit",
+    agentDuelBuildNumber: 0,
     opencodeVersion: "version",
-    arenaVersion: "arena",
+    agentDuelVersion: "0.4.0-beta.3",
     configuration: {
       modelPool: "model-pool",
       agent: "agent",
