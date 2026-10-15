@@ -846,7 +846,7 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
       url: "http://127.0.0.1:1234/arena/sessions/session-1/unarchive",
       method: "POST",
       headers: expect.objectContaining({
-        "x-opencode-directory": cwd,
+        "x-opencode-directory": encodeURIComponent(cwd),
         "x-paseo-control-token": "test-opencode-control-token",
       }),
     });

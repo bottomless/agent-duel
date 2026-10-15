@@ -2220,7 +2220,7 @@ export class OpenCodeAgentClient implements AgentClient {
           method: "POST",
           headers: {
             Accept: "application/json",
-            "x-opencode-directory": metadata.cwd,
+            "x-opencode-directory": openCodeDirectoryHeader(metadata.cwd),
             "x-paseo-control-token": acquisition.server.controlToken,
           },
         },
