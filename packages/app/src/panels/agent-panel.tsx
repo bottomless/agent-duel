@@ -1573,9 +1573,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   const arenaSession = useArenaSessionQuery(serverId, agentId ?? "");
   const startingBattle = useStartingArenaBattle(serverId, agentId ?? "");
   // The collapsed summary arrives in the same frame the panes leave in.
-  // A battle that has been sent counts as on screen from the moment it is sent, so the
-  // previous battle's summary moves inline once instead of vanishing and coming back when the
-  // turn finally lands.
+  // A battle that has been sent counts as on screen from the moment it is sent.
   const arenaBattleOnScreen = isArenaBattleOnScreen(arenaSession.data) || startingBattle !== null;
   const pendingPermissionList = useStoreWithEqualityFn(
     useSessionStore,
@@ -1615,8 +1613,9 @@ const AgentStreamSection = memo(function AgentStreamSection({
     streamHead: streamHead ?? EMPTY_STREAM_ITEMS,
     hasAppliedAuthoritativeHistory,
   });
-  // The newest summary sits at the end of the chat only while its battle is the last thing there.
-  // Once a later prompt follows, such as a Battle-off reply, it stays under its own turn.
+  // The newest summary sits at the end of the chat, above the next battle while that one runs,
+  // until a later prompt follows its turn; then it stays under its own turn. Placed inline any
+  // earlier, it lands above that turn's footer, which the stream draws after its last row.
   const latestSummary = useMemo(
     () => partitionArenaSummaries(arenaSession.data?.history ?? [], false).live,
     [arenaSession.data?.history],
@@ -1628,12 +1627,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
   // The feedback prompt stays at the end of the chat even after the summary moves up.
   const feedbackBattle = arenaBattleOnScreen ? null : latestSummary;
   const summaryPlacement = useMemo(
-    () =>
-      partitionArenaSummaries(
-        arenaSession.data?.history ?? [],
-        arenaBattleOnScreen || latestSummaryFollowedUp,
-      ),
-    [arenaBattleOnScreen, arenaSession.data?.history, latestSummaryFollowedUp],
+    () => partitionArenaSummaries(arenaSession.data?.history ?? [], latestSummaryFollowedUp),
+    [arenaSession.data?.history, latestSummaryFollowedUp],
   );
   // Keyed by the anchors themselves, so a streaming head does not rebuild every row.
   const summaryAnchorKey = useMemo(
@@ -1845,30 +1840,35 @@ const AgentStreamSection = memo(function AgentStreamSection({
       ) : null,
     [filesState, filesRecoveryState, restoreFiles, retryInspection],
   );
+  // The summary keeps its slot when the next battle starts, so it stays mounted above the panes.
   const liveContent = useMemo(
     () =>
-      activeBattle ??
-      (latestBattleSummary ||
+      latestBattleSummary ||
+      activeBattle ||
       chatCallouts ||
       filesRecoveryBanner ||
       queuedBattlePreview ||
       feedbackBattle ? (
         <View style={styles.arenaReadyContent}>
           {latestBattleSummary}
-          {chatCallouts}
-          {filesRecoveryBanner}
-          {queuedBattlePreview}
-          {feedbackBattle && !queuedBattlePreview ? (
-            <ChatFeedbackCard
-              key={`battle-feedback-${feedbackBattle.id}`}
-              battleId={feedbackBattle.id}
-              agentId={agent.id}
-              workspaceId={workspaceId}
-              promptEligible={feedbackPromptEligible}
-            />
-          ) : null}
+          {activeBattle ?? (
+            <>
+              {chatCallouts}
+              {filesRecoveryBanner}
+              {queuedBattlePreview}
+              {feedbackBattle && !queuedBattlePreview ? (
+                <ChatFeedbackCard
+                  key={`battle-feedback-${feedbackBattle.id}`}
+                  battleId={feedbackBattle.id}
+                  agentId={agent.id}
+                  workspaceId={workspaceId}
+                  promptEligible={feedbackPromptEligible}
+                />
+              ) : null}
+            </>
+          )}
         </View>
-      ) : null),
+      ) : null,
     [
       activeBattle,
       agent.id,
