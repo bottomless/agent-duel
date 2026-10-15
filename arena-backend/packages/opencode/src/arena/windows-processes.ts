@@ -115,9 +115,19 @@ function groups(rows: readonly WindowsProcessRow[], self: number) {
   )
 }
 
+/**
+ * `captureOwnedServices` names a group after the first of its processes it meets. A shell that
+ * started a server can outlive the command here, so what it started comes first, newest first: a
+ * group reads as `python -m http.server` or vite's node, not as the bash that launched them.
+ */
+function namingOrder(rows: readonly WindowsProcessRow[]) {
+  const shell = (row: WindowsProcessRow) => (SHELLS.has(imageName(row.image)) ? 1 : 0)
+  return rows.toSorted((left, right) => shell(left) - shell(right) || Number(right.created - left.created))
+}
+
 export function windowsSnapshots(rows: readonly WindowsProcessRow[], self = process.pid): ProcessSnapshot[] {
   const grouped = groups(rows, self)
-  return rows.flatMap((row) => {
+  return namingOrder(rows).flatMap((row) => {
     if (!grouped.has(row.pid)) return []
     const group = grouped.get(row.pid)
     const [command, ...args] = splitWindowsCommandLine(row.commandLine ?? row.image)
