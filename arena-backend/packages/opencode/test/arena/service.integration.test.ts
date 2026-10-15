@@ -409,6 +409,11 @@ function installOpenRouterStub(options?: {
   readonly contestantCommands?: Readonly<Partial<Record<number, string>>>
   /** Contestants whose first request fails with a retryable 503 the engine will not wait out. */
   readonly failFirstOrdinals?: ReadonlyArray<number>
+  /** Scripts a contestant reply outright, subagent requests included; undefined falls back to the rules above. */
+  readonly respond?: (request: {
+    readonly model: string
+    readonly messages: ReadonlyArray<{ readonly role?: string; readonly content?: unknown }>
+  }) => Response | Promise<Response> | undefined
 }) {
   const original = globalThis.fetch
   const calls = new Map<string, number>()
@@ -516,6 +521,8 @@ function installOpenRouterStub(options?: {
     calls.set(body.model, count)
     const number = ordinal.get(body.model) ?? ordinal.size + 1
     ordinal.set(body.model, number)
+    const scripted = await options?.respond?.({ model: body.model, messages: body.messages ?? [] })
+    if (scripted) return scripted
     if (options?.delayAllMs !== undefined) await Bun.sleep(options.delayAllMs)
     else if (options?.delayedOrdinal === number) await Bun.sleep(options.delayMs ?? 0)
     // A retry-after past the engine's two-minute retry window ends its own retries at once.
@@ -2870,6 +2877,162 @@ describe("Arena service vertical slice", () => {
         { method: "POST", headers },
       )
       expect(stale.status).toBe(400)
+    } finally {
+      router.restore()
+    }
+  }, 90_000)
+
+  test("interrupts a queued steer after a background subagent result lands behind it", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure subagent steer fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const turnPrompt = "Delegate the child work, then run your own command."
+    const childPrompt = "child-only work"
+    const text = (content: unknown) => (typeof content === "string" ? content : JSON.stringify(content ?? ""))
+    let releaseChildren!: () => void
+    const childrenReleased = new Promise<void>((resolve) => (releaseChildren = resolve))
+    const commandStarted = new Set<string>()
+    let generation = 0
+    const router = installOpenRouterStub({
+      respond: ({ model, messages }) => {
+        const key = `${model}-${++generation}`
+        const last = messages.at(-1)
+        if (messages.some((message) => message.role === "user" && text(message.content).includes(childPrompt))) {
+          return childrenReleased.then(() => contestantResponse(model, 1, undefined, false, undefined, key))
+        }
+        if (last?.role === "user" && text(last.content).includes(turnPrompt)) {
+          const base = { id: `chatcmpl-${key}`, object: "chat.completion.chunk", model }
+          const call = { description: "Child work", prompt: childPrompt, subagent_type: "general" }
+          return chunks([
+            { ...base, choices: [{ index: 0, delta: { role: "assistant" } }] },
+            {
+              ...base,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: `call-${key}`,
+                        type: "function",
+                        function: { name: "task", arguments: JSON.stringify(call) },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+            {
+              ...base,
+              choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 },
+            },
+            "[DONE]",
+          ])
+        }
+        // The parent keeps working on its own command while the child runs in the background.
+        if (last?.role === "tool" && !commandStarted.has(model)) {
+          commandStarted.add(model)
+          return contestantResponse(model, 2, "bash", false, "sleep 8", key)
+        }
+        return contestantResponse(model, 3, undefined, false, undefined, key)
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Interrupt steer behind a subagent result",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: turnPrompt }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted subagent turn")
+
+      const deadline = Date.now() + 60_000
+      let target: RunDocument | undefined
+      while (Date.now() < deadline) {
+        const runs = await memory.store.runsForTurn(turnID)
+        target = runs.find((run) => run.runState === "pending")
+        if (target && commandStarted.size === 2) break
+        await Bun.sleep(10)
+      }
+      if (!target || commandStarted.size !== 2) throw new Error("Contestants did not start their own commands")
+
+      expect(
+        (
+          await request(`/arena/turns/${turnID}/reply`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ prompt: "Use the queued steer.", target: target.side }),
+          })
+        ).status,
+      ).toBe(200)
+
+      type Message = {
+        info: { id: string; role: string; parentID?: string }
+        parts: ReadonlyArray<{ type?: string; synthetic?: boolean }>
+      }
+      const synthetic = (message: Message) =>
+        message.info.role === "user" && message.parts.every((part) => part.synthetic === true)
+      let steerID: string | undefined
+      while (Date.now() < deadline) {
+        const messages = await json<Message[]>(await request(`/session/${target.rootSessionID}/message`, { headers }))
+        steerID = messages.findLast(
+          (message) =>
+            message.info.role === "user" && message.info.id !== target!.promptMessageID && !synthetic(message),
+        )?.info.id
+        if (steerID) break
+        await Bun.sleep(10)
+      }
+      if (!steerID) throw new Error("Arena did not persist the queued steer")
+
+      // The child finishes while the steer waits, so its result lands behind the steer.
+      releaseChildren()
+      let resultID: string | undefined
+      while (Date.now() < deadline) {
+        const messages = await json<Message[]>(await request(`/session/${target.rootSessionID}/message`, { headers }))
+        const steerIndex = messages.findIndex((message) => message.info.id === steerID)
+        resultID = messages.slice(steerIndex + 1).find(synthetic)?.info.id
+        if (resultID) break
+        await Bun.sleep(10)
+      }
+      if (!resultID) throw new Error("The background child result did not land behind the steer")
+
+      const interrupted = await request(`/arena/runs/${target._id}/steer/${encodeURIComponent(steerID)}/interrupt`, {
+        method: "POST",
+        headers,
+      })
+      expect(interrupted.status).toBe(200)
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const messages = await json<Message[]>(await request(`/session/${target.rootSessionID}/message`, { headers }))
+      expect(
+        messages.filter((message) => message.info.role === "assistant" && message.info.parentID === resultID),
+      ).toHaveLength(1)
     } finally {
       router.restore()
     }
