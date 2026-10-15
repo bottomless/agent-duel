@@ -128,6 +128,16 @@ function killChild({ process: child, detached }, signal) {
     return;
   }
 
+  // Windows has no process groups to signal; a tree kill reaches Metro's workers and Electron's
+  // helper processes the way the group signal does elsewhere.
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    return;
+  }
+
   try {
     process.kill(resolveChildKillTarget(child.pid, detached), signal);
   } catch {
@@ -424,7 +434,9 @@ if (controlPlaneMode === "bundled") {
 if (!stopping) {
   spawnChild("metro", "npx", ["expo", "start", "--port", String(expoPort)], {
     cwd: appDir,
-    detached: true,
+    // On Windows `npx` is a .cmd, which only a shell runs, and a detached child opens a console
+    // window of its own.
+    ...(process.platform === "win32" ? { shell: true } : { detached: true }),
     env: {
       ...process.env,
       ...colorEnv,
