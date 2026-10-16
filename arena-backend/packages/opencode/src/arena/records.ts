@@ -295,6 +295,8 @@ export type SingleAgentRatingDocument = {
   readonly modelSize?: SingleAgentModelSize
   readonly assignment: HiddenAssignment
   completedAt?: Date
+  /** The user stopped the turn, so its rating is optional and never gates the chat. */
+  stoppedAt?: Date
   precedingTurnCount?: number
   resultTree?: string
   vote?: SingleAgentVote

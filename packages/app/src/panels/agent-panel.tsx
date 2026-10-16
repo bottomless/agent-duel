@@ -1,6 +1,8 @@
+import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   SINGLE_AGENT_MODELS,
   singleAgentControlsLocked,
+  singleAgentRatingOptional,
   singleAgentRatingRequired,
 } from "@/arena/single-agent";
 import { SingleAgentRatingDialog, SingleAgentComposerTooltip } from "@/arena/single-agent-rating";
@@ -1846,19 +1848,11 @@ const AgentStreamSection = memo(function AgentStreamSection({
       ) : null,
     [filesState, filesRecoveryState, restoreFiles, retryInspection],
   );
-  const singleAgent = arenaSession.data?.singleAgent;
-  const singleAgentRating = useMemo(
-    () =>
-      singleAgent?.completed && singleAgentRatingRequired(singleAgent) ? (
-        <SingleAgentRatingDialog
-          key={singleAgent.id}
-          serverId={serverId}
-          agentId={agent.id}
-          ratingId={singleAgent.id}
-        />
-      ) : null,
-    [singleAgent, serverId, agent.id],
-  );
+  const singleAgentRating = useSingleAgentRatingDialog({
+    serverId,
+    agentId: agent.id,
+    singleAgent: arenaSession.data?.singleAgent,
+  });
   // The summary keeps its slot when the next battle starts, so it stays mounted above the panes.
   const liveContent = useMemo(
     () =>
@@ -2039,6 +2033,39 @@ const AgentComposerSection = memo(function AgentComposerSection({
     </View>
   );
 });
+
+function useSingleAgentRatingDialog({
+  serverId,
+  agentId,
+  singleAgent,
+}: {
+  serverId: string;
+  agentId: string;
+  singleAgent: ArenaSnapshot["singleAgent"];
+}) {
+  // A skipped optional rating stays hidden; the next turn replaces it in the snapshot anyway.
+  const [skippedRatingId, setSkippedRatingId] = useState<string | null>(null);
+  const skip = useCallback(() => {
+    if (singleAgent) setSkippedRatingId(singleAgent.id);
+  }, [singleAgent]);
+  const offered =
+    singleAgent?.completed === true &&
+    (singleAgentRatingRequired(singleAgent) ||
+      (singleAgentRatingOptional(singleAgent) && skippedRatingId !== singleAgent.id));
+  return useMemo(
+    () =>
+      singleAgent && offered ? (
+        <SingleAgentRatingDialog
+          key={singleAgent.id}
+          serverId={serverId}
+          agentId={agentId}
+          ratingId={singleAgent.id}
+          onSkip={singleAgent.ratingRequired ? undefined : skip}
+        />
+      ) : null,
+    [singleAgent, offered, serverId, agentId, skip],
+  );
+}
 
 function useSingleAgentComposerState({
   serverId,

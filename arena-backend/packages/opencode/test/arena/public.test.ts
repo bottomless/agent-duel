@@ -246,6 +246,7 @@ describe("ArenaPublic", () => {
       modelSize: "frontier",
       ratingRequired: true,
       completed: false,
+      stopped: false,
       revealed: false,
     })
 
@@ -256,6 +257,7 @@ describe("ArenaPublic", () => {
       modelSize: "frontier",
       ratingRequired: true,
       completed: true,
+      stopped: false,
       revealed: false,
     })
     expect(JSON.stringify(hidden.singleAgent)).not.toContain("GLM 5.2")
@@ -269,6 +271,7 @@ describe("ArenaPublic", () => {
       modelSize: "frontier",
       ratingRequired: false,
       completed: true,
+      stopped: false,
       revealed: true,
       vote: "up",
       identity: { name: "GLM 5.2" },
@@ -292,9 +295,36 @@ describe("ArenaPublic", () => {
       modelSize: "medium",
       ratingRequired: false,
       completed: false,
+      stopped: false,
       revealed: true,
       identity: { name: "GPT Luna 5.6 Xhigh" },
     })
+  })
+
+  test("offers a stopped frontier rating without requiring it", () => {
+    const input = snapshot(false)
+    input.singleAgentRating = {
+      _id: "single-agent|stopped",
+      sessionID: "canonical",
+      messageID: "message",
+      modelSize: "frontier",
+      assignment: input.turn!.placement.a,
+      completedAt: input.chat.updatedAt,
+      stoppedAt: input.chat.updatedAt,
+      createdAt: input.chat.createdAt,
+      updatedAt: input.chat.updatedAt,
+    }
+
+    const stopped = project(input)
+    expect(stopped.singleAgent).toEqual({
+      id: "single-agent|stopped",
+      modelSize: "frontier",
+      ratingRequired: false,
+      completed: true,
+      stopped: true,
+      revealed: false,
+    })
+    expect(JSON.stringify(stopped.singleAgent)).not.toContain("GLM 5.2")
   })
 
   test("keeps legacy ratings visible without retroactively requiring a vote", () => {

@@ -309,6 +309,7 @@ export const Snapshot = Schema.Struct({
       modelSize: Schema.Literals(["medium", "frontier"]),
       ratingRequired: Schema.Boolean,
       completed: Schema.Boolean,
+      stopped: Schema.Boolean,
       revealed: Schema.Boolean,
       vote: Schema.optional(Schema.Literals(["up", "down"])),
       identity: Schema.optional(Identity),

@@ -95,4 +95,39 @@ describe("single-agent ratings in the local SQLite store", () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+
+  test("leaves a stopped frontier rating optional and still accepts its vote", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "single-agent-rating-"))
+    const store = await connectLocalStore({ directory })
+    const at = new Date("2026-01-01T00:00:00.000Z")
+    try {
+      const stopped = rating({ id: "rating-stopped", modelSize: "frontier", createdAt: at })
+      await store.singleAgentRatings.insertOne(stopped)
+      expect((await store.pendingSingleAgentRating(sessionID))?._id).toBe(stopped._id)
+
+      await store.completeSingleAgentRating({ sessionID, messageID: stopped.messageID, stopped: true, at })
+      expect(await store.pendingSingleAgentRating(sessionID)).toBeNull()
+      const snapshot = await store.snapshotSingleAgentRating(sessionID)
+      expect(snapshot?._id).toBe(stopped._id)
+      expect(snapshot?.stoppedAt).toEqual(at)
+
+      // A finished turn after it still gates the chat.
+      const finished = rating({ id: "rating-finished", modelSize: "frontier", createdAt: new Date(at.getTime() + 1) })
+      await store.singleAgentRatings.insertOne(finished)
+      await store.completeSingleAgentRating({ sessionID, messageID: finished.messageID, stopped: false, at })
+      expect((await store.pendingSingleAgentRating(sessionID))?._id).toBe(finished._id)
+      expect((await store.singleAgentRatingByID(sessionID, finished._id))?.stoppedAt).toBeUndefined()
+
+      const voted = await store.recordSingleAgentVote({
+        sessionID,
+        ratingID: stopped._id,
+        vote: "down",
+        model: "Contestant",
+      })
+      expect(voted.vote).toBe("down")
+    } finally {
+      await store.close()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 })

@@ -102,8 +102,9 @@ function singleAgent(rating: SingleAgentRatingDocument) {
   return {
     id: rating._id,
     modelSize,
-    ratingRequired: rating.modelSize === "frontier" && rating.vote === undefined,
+    ratingRequired: rating.modelSize === "frontier" && rating.vote === undefined && rating.stoppedAt === undefined,
     completed: rating.completedAt !== undefined,
+    stopped: rating.stoppedAt !== undefined,
     revealed: medium || rating.vote !== undefined,
     ...(revealedIdentity ? { identity: revealedIdentity } : {}),
     ...(rating.vote ? { vote: rating.vote } : {}),

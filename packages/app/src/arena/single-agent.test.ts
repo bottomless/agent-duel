@@ -3,6 +3,7 @@ import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   SINGLE_AGENT_MODELS,
   singleAgentControlsLocked,
+  singleAgentRatingOptional,
   singleAgentRatingRequired,
 } from "./single-agent";
 
@@ -11,6 +12,7 @@ const frontier: NonNullable<ArenaSnapshot["singleAgent"]> = {
   modelSize: "frontier",
   ratingRequired: true,
   completed: true,
+  stopped: false,
   revealed: false,
 };
 
@@ -35,6 +37,17 @@ describe("single-agent rating gate", () => {
         singleAgentControlsLocked({ singleAgent: rated, modelSize: "frontier", running: false }),
       ).toBe(false);
     }
+  });
+
+  it("offers a stopped frontier rating without locking the chat", () => {
+    const stopped = { ...frontier, ratingRequired: false, stopped: true };
+    expect(singleAgentRatingRequired(stopped)).toBe(false);
+    expect(singleAgentRatingOptional(stopped)).toBe(true);
+    expect(
+      singleAgentControlsLocked({ singleAgent: stopped, modelSize: "frontier", running: false }),
+    ).toBe(false);
+    expect(singleAgentRatingOptional({ ...stopped, vote: "up", revealed: true })).toBe(false);
+    expect(singleAgentRatingOptional(frontier)).toBe(false);
   });
 
   it("lets Medium continue without rating", () => {

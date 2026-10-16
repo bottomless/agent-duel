@@ -15,6 +15,16 @@ export function singleAgentRatingRequired(singleAgent: ArenaSnapshot["singleAgen
   return singleAgent?.ratingRequired === true && singleAgent.vote === undefined;
 }
 
+/** A stopped frontier result offers the rating without gating the chat. */
+export function singleAgentRatingOptional(singleAgent: ArenaSnapshot["singleAgent"]): boolean {
+  return (
+    singleAgent?.modelSize === "frontier" &&
+    singleAgent.stopped &&
+    singleAgent.completed &&
+    singleAgent.vote === undefined
+  );
+}
+
 export function singleAgentControlsLocked(input: {
   singleAgent: ArenaSnapshot["singleAgent"];
   modelSize: SingleAgentModelSize;

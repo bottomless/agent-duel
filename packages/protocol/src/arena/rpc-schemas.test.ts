@@ -220,6 +220,7 @@ describe("Arena RPC schemas", () => {
         modelSize: "frontier",
         ratingRequired: true,
         completed: true,
+        stopped: false,
         revealed: false,
       },
     });
@@ -228,6 +229,7 @@ describe("Arena RPC schemas", () => {
       modelSize: "frontier",
       ratingRequired: true,
       completed: true,
+      stopped: false,
       revealed: false,
     });
 
@@ -238,6 +240,7 @@ describe("Arena RPC schemas", () => {
         modelSize: "frontier",
         ratingRequired: true,
         completed: true,
+        stopped: false,
         revealed: true,
         vote: "down",
         identity: { name: "Qwen 3.8 Max" },
@@ -248,6 +251,7 @@ describe("Arena RPC schemas", () => {
       modelSize: "frontier",
       ratingRequired: true,
       completed: true,
+      stopped: false,
       revealed: true,
       vote: "down",
       identity: { name: "Qwen 3.8 Max" },

@@ -3501,15 +3501,18 @@ export const layer: Layer.Layer<
         yield* promise(() => store.abandonSingleAgentRating(input))
         return
       }
-      if (
-        !transcript.some(
-          (candidate) => candidate.info.role === "assistant" && candidate.info.parentID === message.info.id,
-        )
-      ) {
+      const responses = transcript.filter(
+        (candidate) => candidate.info.role === "assistant" && candidate.info.parentID === message.info.id,
+      )
+      const last = responses.at(-1)
+      if (!last) {
         yield* promise(() => store.abandonSingleAgentRating(input))
         return
       }
-      yield* promise(() => store.completeSingleAgentRating(input))
+      // Stop ends the response with `MessageAbortedError`; the user chose not to finish it, so its
+      // rating is optional.
+      const stopped = last.info.role === "assistant" && last.info.error?.name === "MessageAbortedError"
+      yield* promise(() => store.completeSingleAgentRating({ ...input, stopped }))
       const chat = yield* promise(() => store.chatForSession(input.sessionID))
       if (!chat || chat.status !== "ready" || chat.canonicalSessionID !== input.sessionID) return
       const state = yield* withGit(inspectCanonical(chat.repository.root)).pipe(Effect.mapError(error))
@@ -6053,9 +6056,7 @@ export const layer: Layer.Layer<
               )
             }
             yield* promise(() => store.resetRunForReply(failed._id))
-            return yield* promise(() =>
-              store.updateRun(failed._id, { manualRetries: (failed.manualRetries ?? 0) + 1 }),
-            )
+            return yield* promise(() => store.updateRun(failed._id, { manualRetries: (failed.manualRetries ?? 0) + 1 }))
           }),
         failure: { message: "Arena contestant retry failed", runID },
       })

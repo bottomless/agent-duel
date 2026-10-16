@@ -579,6 +579,7 @@ export class Store {
       sessionID,
       modelSize: "frontier",
       vote: { $exists: false },
+      stoppedAt: { $exists: false },
     })
   }
 
@@ -588,6 +589,7 @@ export class Store {
         sessionID,
         modelSize: "frontier",
         vote: { $exists: false },
+        stoppedAt: { $exists: false },
       })
       .sort({ createdAt: 1, _id: 1 })
       .limit(1)
@@ -595,11 +597,11 @@ export class Store {
       .then((pending) => pending ?? this.latestSingleAgentRating(sessionID))
   }
 
-  async completeSingleAgentRating(input: { sessionID: string; messageID: string; at?: Date }) {
+  async completeSingleAgentRating(input: { sessionID: string; messageID: string; stopped?: boolean; at?: Date }) {
     const at = input.at ?? new Date()
     const updated = await this.singleAgentRatings.findOneAndUpdate(
       { sessionID: input.sessionID, messageID: input.messageID, completedAt: { $exists: false } },
-      { $set: { completedAt: at, updatedAt: at } },
+      { $set: { completedAt: at, updatedAt: at, ...(input.stopped ? { stoppedAt: at } : {}) } },
       { returnDocument: "after" },
     )
     if (updated) this.changed()

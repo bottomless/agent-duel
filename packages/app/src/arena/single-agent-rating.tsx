@@ -13,12 +13,15 @@ interface SingleAgentRatingDialogProps {
   serverId: string;
   agentId: string;
   ratingId: string;
+  /** Present when the rating is optional (the user stopped the turn); it hides the dialog. */
+  onSkip?: () => void;
 }
 
 export function SingleAgentRatingDialog({
   serverId,
   agentId,
   ratingId,
+  onSkip,
 }: SingleAgentRatingDialogProps) {
   const rating = useArenaTurnMutation(serverId, agentId);
   const connected = useSessionStore((state) => Boolean(state.sessions[serverId]?.client));
@@ -44,9 +47,11 @@ export function SingleAgentRatingDialog({
         style={[settingsStyles.card, styles.dialog]}
       >
         <View style={styles.heading}>
-          <Text style={styles.title}>Rating required</Text>
+          <Text style={styles.title}>{onSkip ? "Rate this response?" : "Rating required"}</Text>
           <Text style={styles.description}>
-            How did this response do? Rate it to reveal the model and continue.
+            {onSkip
+              ? "You stopped this response, so a rating is optional. Rate it to reveal the model."
+              : "How did this response do? Rate it to reveal the model and continue."}
           </Text>
         </View>
         <View style={styles.actions}>
@@ -72,6 +77,17 @@ export function SingleAgentRatingDialog({
           >
             Thumbs down
           </Button>
+          {onSkip ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={rating.isPending}
+              onPress={onSkip}
+              testID="arena-single-agent-rating-skip"
+            >
+              Skip
+            </Button>
+          ) : null}
         </View>
         {rating.isPending ? <Text style={styles.description}>Saving rating…</Text> : null}
         {rating.isError ? (

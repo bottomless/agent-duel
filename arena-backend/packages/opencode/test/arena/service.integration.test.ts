@@ -2440,6 +2440,7 @@ describe("Arena service vertical slice", () => {
         modelSize: "frontier",
         ratingRequired: true,
         completed: true,
+        stopped: false,
         revealed: false,
       })
       expect(secondHidden.singleAgent?.id).not.toBe(firstRating._id)
@@ -3335,10 +3336,10 @@ describe("Arena service vertical slice", () => {
         ),
       ).toHaveLength(1)
       expect(router.contestantRequests.length).toBeGreaterThanOrEqual(4)
-      const stale = await request(
-        `/arena/runs/${target._id}/steer/${encodeURIComponent(pendingMessageID)}/interrupt`,
-        { method: "POST", headers },
-      )
+      const stale = await request(`/arena/runs/${target._id}/steer/${encodeURIComponent(pendingMessageID)}/interrupt`, {
+        method: "POST",
+        headers,
+      })
       expect(stale.status).toBe(400)
     } finally {
       router.restore()
@@ -3638,9 +3639,9 @@ describe("Arena service vertical slice", () => {
       expect(router.contestantRequests.some((request) => JSON.stringify(request).includes("Discard this first"))).toBe(
         false,
       )
-      expect(
-        router.contestantRequests.some((request) => JSON.stringify(request).includes("Discard this second")),
-      ).toBe(false)
+      expect(router.contestantRequests.some((request) => JSON.stringify(request).includes("Discard this second"))).toBe(
+        false,
+      )
     } finally {
       router.restore()
     }

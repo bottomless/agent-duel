@@ -982,6 +982,11 @@ closed for retry. The gate belongs to the persisted result, so changing the loca
 reconnecting, or starting a battle cannot bypass it. If an older frontier result still needs a
 rating, surface that result first.
 
+A turn the user stops is the exception: its rating is optional. The engine reads Stop from the
+response's `MessageAbortedError`, sets `stoppedAt` on the rating, and leaves the gate open. The
+dialog offers Skip, and the next turn replaces it. Keep `stoppedAt` on the record so analysis can
+separate votes on stopped turns from votes on finished ones.
+
 Both sizes use the assignment boundary, and `reconcileNormalTurn` (`arena/service.ts`) folds the
 resulting Git and transcript state back into the canonical spine. A process-local reservation
 keeps a battle and an ordinary turn from racing for the same session. The shared arena-service
