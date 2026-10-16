@@ -200,6 +200,11 @@ export type ConfigurationHashes = {
   readonly system: string
 }
 
+/**
+ * The build metadata fields are required for new chats only. Chats stored before them lack these
+ * fields and carry the legacy `opencodeCommit`, `opencodeVersion: "local"` and `arenaVersion`
+ * instead; code that reads stored chats must handle both shapes.
+ */
 export type ChatDocument = BuildMetadata & {
   readonly _id: Identifier
   /**
