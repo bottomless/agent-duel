@@ -428,23 +428,26 @@ export async function treeDigest(root: string): Promise<string> {
   return createHash("sha256").update(lines.sort().join("\n")).digest("hex")
 }
 
-/** Bytes under a tree, giving up as soon as the total is known to exceed `limit`. */
+/**
+ * Bytes under a tree, giving up as soon as the total is known to exceed `limit`. Every entry is
+ * measured at once, as `treeDigest` reads them: one `lstat` after another took 1s for a 14k-file
+ * `node_modules` on Windows, the one platform that measures before every cold send.
+ */
 async function treeBytes(root: string, limit: number) {
   let total = 0
-  const pending = [root]
-  while (pending.length > 0) {
-    const directory = pending.pop()!
+  const walk = async (directory: string): Promise<void> => {
+    if (total > limit) return
     const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
-    for (const entry of entries) {
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) {
-        pending.push(path)
-      } else if (entry.isFile()) {
-        total += Number((await lstat(path).catch(() => undefined))?.size ?? 0)
-        if (total > limit) return total
-      }
-    }
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (total > limit) return
+        const path = join(directory, entry.name)
+        if (entry.isDirectory()) return walk(path)
+        if (entry.isFile()) total += Number((await lstat(path).catch(() => undefined))?.size ?? 0)
+      }),
+    )
   }
+  await walk(root)
   return total
 }
 
