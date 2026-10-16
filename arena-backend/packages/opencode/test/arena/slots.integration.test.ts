@@ -276,6 +276,7 @@ async function openChat(root: string) {
 afterEach(async () => {
   delete process.env.OPENCODE_ARENA
   delete process.env.OPENCODE_ARENA_INITIAL_WARM
+  process.env.OPENCODE_ARENA_PROJECT_SPARES = "0"
   delete process.env.OPENROUTER_API_KEY
   setStoreForTest(undefined)
   registry.assignments.clear()
@@ -1746,6 +1747,52 @@ describe("persistent contestant worktrees", () => {
       router.restore()
     }
   }, 120_000)
+
+  test("a new chat's first send adopts the spare pair an earlier chat built for its repository", async () => {
+    process.env.OPENCODE_ARENA_PROJECT_SPARES = "1"
+    await using directory = await nestedFixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    const archives: (() => Promise<unknown>)[] = []
+    const spareSyncs = async () =>
+      (await readFile(`${Global.Path.log}/opencode.log`, "utf8").catch(() => ""))
+        .split("\n")
+        .filter((line) => line.includes("Arena slot sync") && line.includes("_spares")).length
+    try {
+      const first = await openChat(root)
+      archives.push(first.archive)
+      const before = await spareSyncs()
+      const turn1 = await battle({ store: memory.store, directory: root, chatID: first.chatID, prompt: "first chat" })
+      const timings1 = (await memory.store.turn(turn1))?.setupTimings
+      expect([timings1?.sides?.a?.syncPath, timings1?.sides?.b?.syncPath]).toEqual(["created", "created"])
+      // The pair is built in the background from the moment the first battle waits for its vote.
+      const deadline = Date.now() + 60_000
+      while ((await spareSyncs()) - before < 2) {
+        if (Date.now() > deadline) throw new Error("Arena did not build the repository's spare pair")
+        await Bun.sleep(100)
+      }
+      await Bun.sleep(200)
+
+      const second = await openChat(root)
+      archives.push(second.archive)
+      const turn2 = await battle({ store: memory.store, directory: root, chatID: second.chatID, prompt: "second chat" })
+      const timings2 = (await memory.store.turn(turn2))?.setupTimings
+      expect(timings2?.warmPath).toBe("cold")
+      for (const side of [timings2?.sides?.a, timings2?.sides?.b]) {
+        expect(side).toMatchObject({ syncPath: "adopted", recloned: 0 })
+      }
+      // Each side moved into the second chat's own pool, with the checkout's ignored content.
+      for (const run of await memory.store.runsForTurn(turn2)) {
+        expect(path.relative(isolatedRoot(root), run.worktree).split(path.sep)[0]).not.toBe("_spares")
+      }
+    } finally {
+      for (const archive of archives) await archive()
+      router.restore()
+    }
+  }, 180_000)
 
   test("archiving a chat just opened removes its first pair, whatever stage the pair reached", async () => {
     process.env.OPENCODE_ARENA_INITIAL_WARM = "1"
