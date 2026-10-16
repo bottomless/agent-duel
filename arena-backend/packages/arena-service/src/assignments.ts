@@ -74,7 +74,9 @@ async function createSet(db: ArenaDb, context: ArenaContext, userId: string, inp
   const kind = input.kind
   if (kind !== "battle" && kind !== "single") throw new Error("Arena assignment kind is invalid")
   const scopeID = requiredString(input.scopeID, "scopeID")
-  const modelSize = (input.modelSize === undefined ? "medium" : input.modelSize) as SingleAgentModelSize
+  // Desktop builds released before model sizes send none and route as `contestant`, so the
+  // default keeps them on the frontier pool.
+  const modelSize = (input.modelSize === undefined ? "frontier" : input.modelSize) as SingleAgentModelSize
   if (kind === "battle" && input.modelSize !== undefined) {
     throw new Error("Arena battle assignments do not support modelSize")
   }

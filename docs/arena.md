@@ -986,7 +986,8 @@ Both sizes use the assignment boundary, and `reconcileNormalTurn` (`arena/servic
 resulting Git and transcript state back into the canonical spine. A process-local reservation
 keeps a battle and an ordinary turn from racing for the same session. The shared arena-service
 assignment route accepts `modelSize` for single-agent turns; deploy that contract in the hosted
-control plane before shipping a desktop build that sends it.
+control plane before shipping a desktop build that sends it. A request without `modelSize` gets a
+frontier assignment, because released desktop builds send none and route as `contestant`.
 
 ## States and failure
 

@@ -268,6 +268,48 @@ describe("Arena assignment control plane", () => {
     })
   })
 
+  test("keeps a single-agent assignment without modelSize on the contestant route", async () => {
+    // Desktop builds released before model sizes send no modelSize and route as `contestant`.
+    const created = await service({ ids: ["legacy-assignment"] }).assignments(
+      request({ action: "create", kind: "single", scopeID: "rating-legacy" }),
+    )
+    expect(await created.json()).toEqual({ assignments: [{ assignmentID: "legacy-assignment" }] })
+    const stored = await mongo.db
+      .collection<{
+        _id: string
+        assignments: readonly { modelSize?: string; model: { displayName: string } }[]
+      }>("arenaAssignmentSets")
+      .findOne({ scopeID: "rating-legacy" })
+    expect(stored?.assignments[0]?.modelSize).toBe("frontier")
+    expect(pool.some((profile) => profile.displayName === stored?.assignments[0]?.model.displayName)).toBe(true)
+
+    let upstreamBody: Record<string, unknown> | undefined
+    const proxied = await createArenaService({
+      resolveCaller: async () => ({ id: "user-1" }),
+      db: async () => mongo.db,
+      pool,
+      openRouterApiKey: "server-secret",
+      validateModels: async () => undefined,
+      fetch: async (_input, init) => {
+        upstreamBody = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+        return Response.json({ choices: [] })
+      },
+    }).openrouter(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer session",
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "legacy-assignment",
+          "X-Arena-Scope-ID": "rating-legacy",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [] }),
+      }),
+    )
+    expect(proxied.status).toBe(200)
+    expect(upstreamBody).toMatchObject({ reasoning: { effort: "high" } })
+  })
+
   test("rejects client-directed assignment exclusions", async () => {
     const response = await service().assignments(
       request({
