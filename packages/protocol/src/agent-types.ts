@@ -356,6 +356,18 @@ export type AgentTimelineItem =
       /** Images the message carried, as base64, so a replayed message shows what was sent. */
       images?: Array<{ mimeType: string; data: string }>;
       /**
+       * Images a history page names instead of carrying; the app fetches each one with
+       * `agent.timeline.get_image`. Pages count messages, not bytes, and a long chat's pasted
+       * screenshots made one page tens of megabytes, near the daemon's 64 MiB socket limit.
+       */
+      imageRefs?: Array<{
+        agentId: string;
+        messageId: string;
+        index: number;
+        mimeType: string;
+        byteSize: number;
+      }>;
+      /**
        * Attachments sent as text beside the message, shown as chips rather than prompt text: an
        * uploaded file or a text attachment, by its label. A message recorded before the kind was
        * kept has none.

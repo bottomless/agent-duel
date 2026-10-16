@@ -6,9 +6,15 @@ import type {
 
 /**
  * `inline` holds the image itself as a data URL in `storageKey`: an image a replayed message carried,
- * which this device never stored.
+ * which this device never stored. `daemon-history` names one a history page left on the daemon
+ * (`attachments/history-image.ts`).
  */
-export type AttachmentStorageType = "web-indexeddb" | "desktop-file" | "native-file" | "inline";
+export type AttachmentStorageType =
+  | "web-indexeddb"
+  | "desktop-file"
+  | "native-file"
+  | "inline"
+  | "daemon-history";
 
 export interface AttachmentMetadata {
   id: string;

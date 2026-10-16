@@ -53,6 +53,7 @@ import {
   buildWorkspaceAgentActivityIndex,
   type WorkspaceAgentActivity,
 } from "@/utils/workspace-agent-activity";
+import { setHistoryImageFetcher } from "@/attachments/history-image";
 import {
   applyTurnLivenessTransition,
   resolveTurnPresentation,
@@ -2016,3 +2017,13 @@ export function useWorkspaceRestoreStatus(
       : null,
   );
 }
+
+// A history page names a replayed message's images; each comes from the daemon holding the agent.
+setHistoryImageFetcher(async (ref) => {
+  for (const session of Object.values(useSessionStore.getState().sessions)) {
+    if (session.client && session.agents.has(ref.agentId)) {
+      return await session.client.fetchAgentTimelineImage(ref.agentId, ref.messageId, ref.index);
+    }
+  }
+  return null;
+});

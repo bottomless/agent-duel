@@ -8,6 +8,7 @@ import {
 import { workspaceAccess } from "./workspace-cleanup/workspace-access.js";
 import type { ArenaActivity } from "@getpaseo/protocol/arena/activity";
 import { arenaStreamHub, type ArenaStreamHandle } from "./arena-stream-hub.js";
+import { findHistoryImage, withHistoryImageRefs } from "./arena/history-images.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
 import { lstat, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
@@ -2042,6 +2043,8 @@ export class Session {
     switch (msg.type) {
       case "agent.rewind.request":
         return this.handleAgentRewindRequest(msg);
+      case "agent.timeline.get_image.request":
+        return this.handleAgentTimelineGetImageRequest(msg);
       default:
         return undefined;
     }
@@ -4398,6 +4401,36 @@ export class Session {
       } else {
         this.handleAgentRunError(agentId, error, "Failed to cancel running agent on request");
       }
+    }
+  }
+
+  private async handleAgentTimelineGetImageRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.timeline.get_image.request" }>,
+  ): Promise<void> {
+    try {
+      await ensureAgentLoaded(msg.agentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      const image = findHistoryImage(
+        this.agentManager.getTimeline(msg.agentId),
+        msg.messageId,
+        msg.index,
+      );
+      this.emit({
+        type: "agent.timeline.get_image.response",
+        payload: {
+          requestId: msg.requestId,
+          image,
+          error: image ? null : "This image is no longer in the chat's history",
+        },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.timeline.get_image.response",
+        payload: { requestId: msg.requestId, image: null, error: getErrorMessage(error) },
+      });
     }
   }
 
@@ -7364,7 +7397,7 @@ export class Session {
             ...(msg.mergeWindow === true ? { mergeWindow: true } : {}),
             entries: selectedTimeline.entries.map((entry) => ({
               provider: snapshot.provider,
-              item: entry.item,
+              item: withHistoryImageRefs(msg.agentId, entry.item),
               timestamp: entry.timestamp,
               seqStart: entry.seqStart,
               seqEnd: entry.seqEnd,

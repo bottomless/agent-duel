@@ -2,6 +2,7 @@ import type { AgentProvider, ToolCallDetail } from "@getpaseo/protocol/agent-typ
 import type { AgentAttachment, AgentStreamEventPayload } from "@getpaseo/protocol/messages";
 import type { AttachmentMetadata } from "@/attachments/types";
 import { labeledAttachmentKind } from "@/attachments/labeled-attachment";
+import { historyImageAttachment } from "@/attachments/history-image";
 import { extractTaskEntriesFromToolCall } from "../utils/tool-call-parsers";
 import { splitMarkdownBlocks } from "@/utils/split-markdown-blocks";
 
@@ -857,15 +858,17 @@ function replayedUserMessageContent(
     { type: "user_message" }
   >,
 ): ReplayedUserMessageContent {
-  const images = item.images?.map(
-    (image, index): UserMessageImageAttachment => ({
-      id: `${item.messageId ?? item.clientMessageId ?? "message"}:image:${index}`,
-      mimeType: image.mimeType,
-      storageType: "inline",
-      storageKey: `data:${image.mimeType};base64,${image.data}`,
-      createdAt: 0,
-    }),
-  );
+  // A history page names the images instead (`imageRefs`); they load as they are shown.
+  const images =
+    item.images?.map(
+      (image, index): UserMessageImageAttachment => ({
+        id: `${item.messageId ?? item.clientMessageId ?? "message"}:image:${index}`,
+        mimeType: image.mimeType,
+        storageType: "inline",
+        storageKey: `data:${image.mimeType};base64,${image.data}`,
+        createdAt: 0,
+      }),
+    ) ?? item.imageRefs?.map(historyImageAttachment);
   // Shown, never sent again: history keeps an attachment's label and kind, not its bytes or path.
   const attachments = item.labeledAttachments?.map(
     (attachment, index): AgentAttachment =>

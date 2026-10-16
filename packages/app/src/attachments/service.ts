@@ -1,5 +1,6 @@
 import { collectRetainedAttachmentIds } from "@/attachments/gc-retention";
 import { getAttachmentStore } from "@/attachments/store";
+import { resolveHistoryImage } from "@/attachments/history-image";
 import type { AttachmentMetadata, SaveAttachmentInput } from "@/attachments/types";
 
 const activePersistence = new Set<Promise<AttachmentMetadata>>();
@@ -92,6 +93,21 @@ export async function persistAttachmentFromFileUri(input: {
   });
 }
 
+function dataUrlBase64(url: string): string {
+  return url.slice(url.indexOf(",") + 1);
+}
+
+async function attachmentBase64(
+  attachment: AttachmentMetadata,
+  store: Awaited<ReturnType<typeof getAttachmentStore>>,
+): Promise<string> {
+  if (attachment.storageType === "inline") return dataUrlBase64(attachment.storageKey);
+  if (attachment.storageType === "daemon-history") {
+    return dataUrlBase64(await resolveHistoryImage(attachment));
+  }
+  return await store.encodeBase64({ attachment });
+}
+
 export async function encodeAttachmentsForSend(
   attachments: readonly AttachmentMetadata[] | undefined,
 ): Promise<Array<{ data: string; mimeType: string }> | undefined> {
@@ -103,10 +119,7 @@ export async function encodeAttachmentsForSend(
   const encoded = await Promise.all(
     attachments.map(async (attachment) => {
       try {
-        const data =
-          attachment.storageType === "inline"
-            ? attachment.storageKey.slice(attachment.storageKey.indexOf(",") + 1)
-            : await store.encodeBase64({ attachment });
+        const data = await attachmentBase64(attachment, store);
         return {
           data,
           mimeType: attachment.mimeType,
@@ -129,6 +142,7 @@ export async function encodeAttachmentsForSend(
 
 export async function resolveAttachmentPreviewUrl(attachment: AttachmentMetadata): Promise<string> {
   if (attachment.storageType === "inline") return attachment.storageKey;
+  if (attachment.storageType === "daemon-history") return await resolveHistoryImage(attachment);
   const store = await getAttachmentStore();
   return await store.resolvePreviewUrl({ attachment });
 }
@@ -138,6 +152,7 @@ export async function releaseAttachmentPreviewUrl(input: {
   url: string;
 }): Promise<void> {
   if (input.attachment.storageType === "inline") return;
+  if (input.attachment.storageType === "daemon-history") return;
   const store = await getAttachmentStore();
   if (!store.releasePreviewUrl) {
     return;
@@ -154,7 +169,8 @@ export async function deleteAttachments(
   const store = await getAttachmentStore();
   await Promise.all(
     attachments.map(async (attachment) => {
-      if (attachment.storageType === "inline") return;
+      if (attachment.storageType === "inline" || attachment.storageType === "daemon-history")
+        return;
       try {
         await store.delete({ attachment });
       } catch (error) {
