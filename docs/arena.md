@@ -52,8 +52,7 @@ A session holds its images inline: a pasted one and every screenshot a contestan
 run's transcript is then mostly images, and over the 10 MB artifact limit it is not kept at all,
 which stops the turn instead of asking for a vote. So the archive keeps each image as its own `image`
 artifact, named by the SHA-256 of its bytes, and the transcript refers to it as
-`arena-image:sha256:<hash>`, with `imageIDs` listing them (`arena/transcript-artifact.ts`). Reading an
-archived battle puts the prompt's images back, since the battle card shows them from that copy. A
+`arena-image:sha256:<hash>`, with `imageIDs` listing them (`arena/transcript-artifact.ts`). A
 tool result's attachments, the screenshots and PDFs a contestant reads, never go to the window: the
 app shows none of them, and a run that read many put one snapshot past the daemon's 64 MiB socket
 limit, which dropped the window's connection after a vote or a reply (`withoutAttachmentData` in
@@ -61,10 +60,15 @@ limit, which dropped the window's connection after a vote or a reply (`withoutAt
 goes to the window from its prompt on (`fromPrompt` in `arena/transcript.ts`); sent whole, a long
 chat's two forks passed the same limit whenever it was opened or sent to. Within the turn, a tool
 call's large fields (command output, a read or written file, an edit's text) go as their start and
-end, listed in `state.previewed`, and the app fetches the part whole when the call is opened
-(`withToolPreviews` in `arena/live.ts`, `arena.run.get_part`). Snapshots carry no stored `events`; no
-window reads them. An Arena answer still over half the socket limit is refused with `chat_too_large`
-rather than dropping the socket, and the app tells the user to start a new chat
+end, listed in `state.previewed`, and the app fetches the part whole when the call is opened. An image
+pasted into the prompt or a follow-up goes without its data, live or archived, listed in the part's
+`previewed`, and the app loads it from its run when it shows it (`withPartPreviews` in
+`arena/live.ts`, `arena.run.get_part`, storage type `arena-part` in the app); sent whole, a turn of
+follow-ups with four photos each passed the limit at its eighth. Snapshots carry no stored `events`;
+no window reads them. A run's thread past 8 MiB goes without its oldest messages, counted in
+`activityOmitted`, and its pane says so, so voting and replying keep working (`withinBudget` in
+`arena/transcript.ts`). An Arena answer still over half the socket limit is refused with
+`chat_too_large`, or `arena_diff_too_large` for a comparison, rather than dropping the socket
 (`server/arena/payload-limit.ts`). Research gets the same transcript, sent first so a full upload buffer drops images
 rather than the transcript, and each image as an `images` record; both sides share a battle's images,
 so each is uploaded once. The control plane refuses a whole batch that names a collection it does not know, so

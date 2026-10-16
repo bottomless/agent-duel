@@ -368,6 +368,8 @@ export const ArenaRunSchema = z
     identity: ArenaIdentitySchema.optional(),
     messages: z.array(z.unknown()).optional(),
     parts: z.record(z.string(), z.array(z.unknown())).optional(),
+    /** How many of the thread's oldest messages the engine left out to keep the battle loadable. */
+    activityOmitted: z.number().optional(),
     status: z.unknown().optional(),
     permissions: z.array(z.unknown()).optional(),
     questions: z.array(z.unknown()).optional(),

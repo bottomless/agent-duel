@@ -282,6 +282,8 @@ const PublicRun = Schema.Struct({
   identity: Schema.optional(Identity),
   messages: Schema.optional(Schema.Array(Schema.Unknown)),
   parts: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.Unknown))),
+  // How many of the thread's oldest messages were left out to keep the snapshot loadable.
+  activityOmitted: Schema.optional(Schema.Number),
   status: Schema.optional(Schema.Unknown),
   permissions: Schema.optional(Schema.Array(Schema.Unknown)),
   questions: Schema.optional(Schema.Array(Schema.Unknown)),

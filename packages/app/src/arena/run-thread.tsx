@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -30,7 +30,7 @@ import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
 import { arenaQueuedSteering, arenaToolOutput } from "./steering";
-import { arenaToolPartPreviewed, useFullToolPart } from "./full-tool-part";
+import { ArenaPartSourceContext, arenaToolPartPreviewed, useFullToolPart } from "./full-tool-part";
 import { arenaSubagentRunState, projectArenaSessions, type ArenaSessionThread } from "./subagents";
 import {
   arenaPartIsWork,
@@ -611,6 +611,11 @@ function ArenaTaskPrompt({ text }: { text: string }) {
 function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
   const { run } = context;
   const isSubagent = context.sessionPath.length > 1;
+  const chat = useContext(ArenaPartSourceContext);
+  const imageSource = useMemo(
+    () => (chat ? { ...chat, runId: run.id } : undefined),
+    [chat, run.id],
+  );
   const renderGroups = useMemo(
     () => buildRenderGroups({ messages: run.messages, parts: run.parts, id: run.id }),
     [run.messages, run.parts, run.id],
@@ -636,7 +641,7 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
     if (group.kind === "user") {
       const message = group.message;
       const id = messageId(message) ?? fallbackMessageId(run.id, message);
-      const content = arenaUserMessageContent(id, run.parts?.[id] ?? []);
+      const content = arenaUserMessageContent(id, run.parts?.[id] ?? [], imageSource);
       if (!content.text && content.images.length === 0 && content.attachments.length === 0) {
         return null;
       }
@@ -668,6 +673,10 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
     );
   });
 }
+
+// The engine leaves out a run's oldest messages when the battle grows past what a window can load
+// (engine `withinBudget`), so voting and replying keep working.
+const ACTIVITY_OMITTED_NOTE = "Earlier activity in this run is too large to show.";
 
 export function ArenaRunThread({
   run,
@@ -737,6 +746,11 @@ export function ArenaRunThread({
 
   return (
     <View style={styles.thread}>
+      {run.activityOmitted ? (
+        <Text style={styles.muted} testID="arena-run-activity-omitted">
+          {ACTIVITY_OMITTED_NOTE}
+        </Text>
+      ) : null}
       <ArenaSessionMessages context={assistantPartsContext} />
       {sessions.unattached.map((session) => (
         <ArenaSubagent key={session.id} session={session} context={assistantPartsContext} />

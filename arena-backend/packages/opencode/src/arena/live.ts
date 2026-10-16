@@ -1,3 +1,4 @@
+import { RESEARCH_IMAGE_REFERENCE } from "@agent-duel/arena-service/research-protocol"
 import { ArenaPrivacy } from "./privacy"
 
 export interface LiveBinding {
@@ -49,7 +50,8 @@ export function withoutAttachmentData<T>(part: T): T {
   return { ...record, state: { ...state, attachments } } as T
 }
 
-// A tool field past this is sent as its start and end; see `withToolPreviews`.
+// A tool field past this is sent as its start and end, and an attached file past it without its data;
+// see `withPartPreviews`.
 const PREVIEW_LIMIT = 6 * 1024
 const PREVIEW_HEAD = 3 * 1024
 const PREVIEW_TAIL = 1024
@@ -60,15 +62,25 @@ function preview(value: string): string {
 }
 
 /**
- * A tool call's large fields go to the window as their start and end: command output, a read file, a
- * written file, an edit's text, and their copies in `metadata`. Sent whole, a long turn made every
- * snapshot, vote and reply answer, and part update as large as everything its runs had printed. The
- * part lists what it shortened in `state.previewed`, and the app fetches it whole when the call is
- * opened (`arena.run.get_part`). Small fields, such as a subagent's `sessionId` or a question's
- * `answers`, are never this long and stay as they are.
+ * A part's large fields go to the window shortened. A tool call sends its start and end: command
+ * output, a read file, a written file, an edit's text, and their copies in `metadata`. An image or file
+ * pasted into the prompt or a follow-up goes without its data, as does one an archive names by its
+ * content. Sent whole, a long turn made every snapshot, vote and reply answer, and part update as large
+ * as everything its runs had printed and been sent: a turn of follow-ups with four photos each passed
+ * the daemon's limit at its eighth. The part lists what was shortened in `previewed` (`state.previewed`
+ * for a tool call), and the app fetches it whole when it shows the image or opens the call
+ * (`arena.run.get_part`). Small fields, such as a subagent's `sessionId` or a question's `answers`, are
+ * never this long and stay as they are.
  */
-export function withToolPreviews<T>(part: T): T {
+export function withPartPreviews<T>(part: T): T {
   const record = readRecord(part)
+  if (record?.type === "file") {
+    const url = record.url
+    const large =
+      typeof url === "string" &&
+      (url.startsWith(RESEARCH_IMAGE_REFERENCE) || (url.startsWith("data:") && url.length > PREVIEW_LIMIT))
+    return large ? ({ ...record, url: "", previewed: ["url"] } as T) : part
+  }
   const state = readRecord(record?.state)
   if (record?.type !== "tool" || !state) return part
   const previewed: string[] = []
@@ -158,7 +170,7 @@ export class ArenaLive {
         current.set(part.id, part)
         this.pending.set(runId, current)
       } else this.pending.get(runId)?.delete(part.id)
-      change = { kind: "part", runId, part: withToolPreviews(withoutAttachmentData(part)) }
+      change = { kind: "part", runId, part: withPartPreviews(withoutAttachmentData(part)) }
     } else if (type === "message.part.delta") {
       if (properties.field !== "text" || typeof properties.delta !== "string" || typeof properties.partID !== "string")
         return

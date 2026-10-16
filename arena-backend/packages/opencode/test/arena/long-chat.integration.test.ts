@@ -47,7 +47,9 @@ async function firstFrame(response: Response) {
 // chat's snapshot grew by two copies of each turn until it passed the daemon's 64 MiB socket limit.
 function expectOnlyTurn(text: string, turn: number) {
   expect(text).toContain(prompt(turn))
-  expect(text).toContain("data:image/")
+  // The screenshot goes without its data, which the pane fetches when it shows it.
+  expect(text).toContain('"previewed":["url"]')
+  expect(text).not.toContain("data:image/")
   for (let earlier = 1; earlier < turn; earlier++) expect(text).not.toContain(prompt(earlier))
   const data = text.startsWith("{")
     ? text
@@ -64,6 +66,17 @@ function expectOnlyTurn(text: string, turn: number) {
 }
 
 type ToolPart = { id: string; type: string; state?: { output?: string; previewed?: string[] } }
+type FilePart = { id: string; type: string; url: string; previewed?: string[] }
+
+function imageParts(snapshot: PublicSnapshot) {
+  return snapshot.runs.flatMap((run) =>
+    Object.values(run.parts ?? {})
+      .flat()
+      .map((part) => part as unknown as FilePart)
+      .filter((part) => part.type === "file")
+      .map((part) => ({ run, part })),
+  )
+}
 
 function bashParts(snapshot: PublicSnapshot) {
   return snapshot.runs.flatMap((run) =>
@@ -225,4 +238,112 @@ describe("a long Arena chat", () => {
       await store.close()
     }
   }, 120_000)
+
+  test("sends a turn of follow-ups with photos without their data, and each photo on request", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure follow-up photos fixture"`.cwd(directory.path).quiet()
+    await using arenaDirectory = await tmpdir()
+    const store = await connectLocalStore({ directory: arenaDirectory.path })
+    const photon = await import("@silvia-odwyer/photon-node")
+    // About 420 KB of noise each, under the size the engine shrinks, as in the report.
+    const photo = () => {
+      const image = new photon.PhotonImage(new Uint8Array(randomBytes(324 * 324 * 4)), 324, 324)
+      const bytes = Buffer.from(image.get_bytes())
+      image.free()
+      return bytes.toString("base64")
+    }
+    const sent = new Set<string>()
+    const photos = () =>
+      Array.from({ length: 4 }, () => {
+        const data = photo()
+        sent.add(data)
+        return { type: "image", mimeType: "image/png", data }
+      })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await arenaRequest("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Follow-up photos",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await arenaRequest(`/arena/sessions/${source.id}`, { headers }))
+      const ask = "Reply with just OK. Do not use any tools."
+      const admitted = await json<PublicSnapshot>(
+        await arenaRequest(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: ask, attachments: photos() }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not admit the turn")
+      await waitForTurn(store, turnID, "awaiting_vote")
+      for (let followUp = 1; followUp <= 3; followUp++) {
+        const before = router.contestantRequests.length
+        const reply = await arenaRequest(`/arena/turns/${turnID}/reply`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: ask, target: "both", attachments: photos() }),
+        })
+        const answer = await reply.text()
+        expect(reply.status).toBe(200)
+        expect(answer).not.toContain("data:image/")
+        const deadline = Date.now() + 30_000
+        while (router.contestantRequests.length < before + 2 && Date.now() < deadline) await Bun.sleep(20)
+        await waitForTurn(store, turnID, "awaiting_vote")
+      }
+
+      const expectPhotosOnRequest = async () => {
+        const text = await (await arenaRequest(`/arena/sessions/${source.id}`, { headers })).text()
+        // Sent whole, these 16 photos on two sides were about 18 MB.
+        expect(Buffer.byteLength(text)).toBeLessThan(200_000)
+        const snapshot = JSON.parse(text) as PublicSnapshot
+        const shown = imageParts(snapshot)
+        expect(shown).toHaveLength(32)
+        for (const { part } of shown) expect(part).toMatchObject({ url: "", previewed: ["url"] })
+        const fetched = await Promise.all(
+          shown.slice(0, 4).map(async ({ run, part }) =>
+            json<{ part: FilePart }>(
+              await arenaRequest(`/arena/runs/${encodeURIComponent(run.id)}/parts/${encodeURIComponent(part.id)}`, {
+                headers,
+              }),
+            ),
+          ),
+        )
+        for (const { part } of fetched) {
+          expect(part.previewed).toBeUndefined()
+          expect(sent.has(part.url.slice("data:image/png;base64,".length))).toBe(true)
+        }
+      }
+
+      // While the runs are live, then from their archives once the vote applied.
+      await expectPhotosOnRequest()
+      await json<PublicSnapshot>(
+        await arenaRequest(`/arena/turns/${turnID}/vote`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ vote: "a" }),
+        }),
+      )
+      await waitForTurn(store, turnID, "complete")
+      await waitForReady(store, attached.chat.id)
+      await expectPhotosOnRequest()
+    } finally {
+      router.restore()
+      await store.close()
+    }
+  }, 180_000)
 })

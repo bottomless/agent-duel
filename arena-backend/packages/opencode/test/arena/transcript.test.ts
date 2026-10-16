@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { fromPrompt, project, wholePart } from "../../src/arena/transcript"
+import { fromPrompt, project, wholePart, withinBudget } from "../../src/arena/transcript"
 
 const original = process.env.OPENCODE_ARENA
 beforeEach(() => {
@@ -153,4 +153,53 @@ test("sends a tool call's large fields as their start and end, and the whole par
   expect(whole.state.input.content).toBe(big)
   expect(whole.state.previewed).toBeUndefined()
   expect(wholePart([message], "missing")).toBeNull()
+})
+
+test("sends a pasted image without its data, and the whole part on request", () => {
+  const photo = `data:image/png;base64,${"A".repeat(560_000)}`
+  const icon = `data:image/png;base64,${"A".repeat(100)}`
+  const filePart = (id: string, url: string) => ({
+    id,
+    messageID: "steer",
+    sessionID: "root",
+    type: "file",
+    mime: "image/png",
+    filename: `${id}.png`,
+    url,
+  })
+  const message = {
+    info: { id: "steer", sessionID: "root", role: "user", time: { created: 1 } },
+    parts: [
+      filePart("photo", photo),
+      filePart("icon", icon),
+      filePart("archived", "arena-image:sha256:0123"),
+    ],
+  }
+  const [shownPhoto, shownIcon, shownArchived] = project([message]).parts.steer as Record<string, unknown>[]
+
+  expect(shownPhoto).toMatchObject({ type: "file", mime: "image/png", filename: "photo.png", url: "", previewed: ["url"] })
+  expect(shownIcon).toMatchObject({ url: icon })
+  expect(shownIcon?.previewed).toBeUndefined()
+  expect(shownArchived).toMatchObject({ url: "", previewed: ["url"] })
+  expect(wholePart([message], "photo")).toMatchObject({ url: photo })
+})
+
+test("leaves out a thread's oldest messages past its limit, keeping the prompt", () => {
+  const message = (id: string, role: string, created: number) => ({
+    info: { id, sessionID: "root", role, time: { created } },
+    parts: [{ id: `${id}-text`, messageID: id, sessionID: "root", type: "text", text: "x".repeat(1_000) }],
+  })
+  const thread = project([
+    message("prompt", "user", 1),
+    message("first", "assistant", 2),
+    message("steer", "user", 3),
+    message("second", "assistant", 4),
+  ])
+
+  expect(withinBudget(thread, "prompt", 10_000)).toBe(thread)
+  // Each message is a little over 1 KB, so two of them fit.
+  const kept = withinBudget(thread, "prompt", 3_000)
+  expect(kept.messages.map((item) => item.id)).toEqual(["prompt", "second"])
+  expect(Object.keys(kept.parts)).toEqual(["prompt", "second"])
+  expect(kept.activityOmitted).toBe(2)
 })

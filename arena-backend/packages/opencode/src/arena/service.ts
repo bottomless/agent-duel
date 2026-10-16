@@ -1008,7 +1008,7 @@ export interface Interface {
   readonly trimEnvironments: (keep: number, volumeOf?: string) => Effect.Effect<ArenaEnvironmentTrim, Error>
   readonly snapshot: (chatID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly turn: (turnID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
-  /** One of a run's parts whole; a snapshot sends its large tool fields shortened (`withToolPreviews`). */
+  /** One of a run's parts whole; a snapshot sends its large fields shortened (`withPartPreviews`). */
   readonly runPart: (runID: string, partID: string) => Effect.Effect<{ readonly part: unknown }, Error>
   readonly diff: (turnID: string) => Effect.Effect<ArenaSchema.ComparisonDiff, Error>
   readonly inspect: (chatID: string, turnID: string, side: Side) => Effect.Effect<ArenaSchema.Snapshot, Error>
@@ -1551,17 +1551,15 @@ export const layer: Layer.Layer<
                   if (!root || !Array.isArray(root.messages)) {
                     throw new Error(`Arena root transcript archive is missing: ${run._id}`)
                   }
-                  // The projection leaves out tool results' images; the battle card shows the prompt's,
-                  // so those come back from the archive. The archive holds the whole chat the run was
-                  // forked from; only this turn's part is read back.
-                  const transcript = await ArenaTranscriptArtifact.withImages(
-                    store,
-                    run._id,
+                  // The archive holds the whole chat the run was forked from; only this turn's part is
+                  // read back. Its images stay named, and the window fetches the ones it shows.
+                  const transcript = ArenaTranscript.withinBudget(
                     ArenaTranscript.fromPrompt(
                       ArenaTranscript.project(archivedMessages(payload)),
                       run.rootSessionID,
                       run.promptMessageID,
                     ),
+                    run.promptMessageID,
                   )
                   const permissions = Array.isArray(root.permissionState)
                     ? root.permissionState.map((request) => safeRequest("permission.asked", request))
@@ -1592,9 +1590,12 @@ export const layer: Layer.Layer<
                         concurrency: 4,
                       }).pipe(
                         Effect.map((transcripts) =>
-                          ArenaTranscript.fromPrompt(
-                            ArenaTranscript.project(transcripts.flat()),
-                            run.rootSessionID,
+                          ArenaTranscript.withinBudget(
+                            ArenaTranscript.fromPrompt(
+                              ArenaTranscript.project(transcripts.flat()),
+                              run.rootSessionID,
+                              run.promptMessageID,
+                            ),
                             run.promptMessageID,
                           ),
                         ),
@@ -1785,7 +1786,12 @@ export const layer: Layer.Layer<
             Effect.map((transcripts) => transcripts.flat()),
             Effect.mapError(error),
           )
-      return { part: jsonValue(ArenaTranscript.wholePart(transcript, partID)) }
+      const part = ArenaTranscript.wholePart(transcript, partID)
+      // An archive names its images by their content; the whole part carries the image itself.
+      const whole = run.archiveComplete
+        ? yield* promise(() => ArenaTranscriptArtifact.withImages(store, run._id, part))
+        : part
+      return { part: jsonValue(whole) }
     })
 
     const comparisonDiff = Effect.fn("Arena.comparisonDiff")(function* (id: string) {

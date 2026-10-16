@@ -1,9 +1,9 @@
-import { readRecord, withToolPreviews, withoutAttachmentData } from "./live"
+import { readRecord, withPartPreviews, withoutAttachmentData } from "./live"
 import { ArenaPrivacy } from "./privacy"
 
 /**
  * Shared by live snapshots and archives so reconnecting preserves descendant activity. Tool results
- * leave out their attachments' data, which the app does not show, and large tool fields go as a preview.
+ * leave out their attachments' data, which the app does not show, and large fields go as a preview.
  */
 export function project(transcript: readonly unknown[]) {
   const messages = transcript
@@ -28,7 +28,7 @@ export function project(transcript: readonly unknown[]) {
             }),
           )?.properties,
         )
-        return properties?.part ? [withToolPreviews(withoutAttachmentData(properties.part))] : []
+        return properties?.part ? [withPartPreviews(withoutAttachmentData(properties.part))] : []
       })
       const created = readRecord(record.time)?.created
       return [{ info: { ...record, id: record.id }, parts, created: typeof created === "number" ? created : 0 }]
@@ -68,7 +68,41 @@ export function fromPrompt(
   }
 }
 
-/** One part as a window gets it, but whole: what `withToolPreviews` shortened in a snapshot. */
+// A run's thread past this goes without its oldest messages; see `withinBudget`.
+const ACTIVITY_LIMIT = 8 * 1024 * 1024
+
+/**
+ * A run's thread at most `limit` long. Every snapshot, vote and reply answer carries both runs'
+ * threads, and past the daemon's limit the window could not load the battle, vote on it or reply to it.
+ * Images and large tool fields already go as previews, so only an extreme turn comes near this. It
+ * keeps the prompt and the newest messages, and counts the ones it left out in `activityOmitted` for
+ * the pane to say so.
+ */
+export function withinBudget(
+  transcript: ReturnType<typeof project>,
+  promptMessageID: string | undefined,
+  limit = ACTIVITY_LIMIT,
+): ReturnType<typeof project> & { readonly activityOmitted?: number } {
+  const sizes = transcript.messages.map(
+    (message) => JSON.stringify(message).length + JSON.stringify(transcript.parts[message.id] ?? []).length,
+  )
+  let total = sizes.reduce((sum, size) => sum + size, 0)
+  if (total <= limit) return transcript
+  const omitted = new Set<string>()
+  transcript.messages.forEach((message, index) => {
+    if (total <= limit || message.id === promptMessageID) return
+    omitted.add(message.id)
+    total -= sizes[index] ?? 0
+  })
+  const messages = transcript.messages.filter((message) => !omitted.has(message.id))
+  return {
+    messages,
+    parts: Object.fromEntries(messages.map((message) => [message.id, transcript.parts[message.id] ?? []])),
+    activityOmitted: omitted.size,
+  }
+}
+
+/** One part as a window gets it, but whole: what `withPartPreviews` shortened in a snapshot. */
 export function wholePart(transcript: readonly unknown[], partID: string): unknown {
   for (const value of transcript) {
     const parts = readRecord(value)?.parts

@@ -15,7 +15,7 @@ function record(value: unknown): UnknownRecord | null {
     : null;
 }
 
-/** A snapshot sends a tool call's large fields shortened and lists them (engine `withToolPreviews`). */
+/** A snapshot sends a tool call's large fields shortened and lists them (engine `withPartPreviews`). */
 export function arenaToolPartPreviewed(part: UnknownRecord): boolean {
   const previewed = record(part.state)?.previewed;
   return Array.isArray(previewed) && previewed.length > 0;

@@ -53,6 +53,7 @@ import {
   buildWorkspaceAgentActivityIndex,
   type WorkspaceAgentActivity,
 } from "@/utils/workspace-agent-activity";
+import { setArenaPartImageFetcher } from "@/attachments/arena-part-image";
 import {
   applyTurnLivenessTransition,
   resolveTurnPresentation,
@@ -2016,3 +2017,10 @@ export function useWorkspaceRestoreStatus(
       : null,
   );
 }
+
+// A battle snapshot names the images pasted into its prompt and follow-ups; each comes from the
+// daemon holding the battle chat.
+setArenaPartImageFetcher(async (ref) => {
+  const client = useSessionStore.getState().sessions[ref.serverId]?.client;
+  return client ? await client.arenaRunPart(ref.agentId, ref.runId, ref.partId) : null;
+});
