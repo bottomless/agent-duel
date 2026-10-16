@@ -592,7 +592,9 @@ project took 8.7 s per side. There a repository also keeps a spare pair for its 
 the background when it is short, synced to that battle's base, and a new chat's first send adopts
 it, so the scan keeps the ignored roots instead of copying them (4.0 s per side). The records that
 let the scan keep a root belong to the process that built the spare, so the first build in a
-process retires whatever an earlier one left there. `OPENCODE_ARENA_PROJECT_SPARES` turns spares
+process retires whatever an earlier one left there, and after a restart the repository of the
+latest chat that battled gets its pair again, from that chat's last turn, once the latest pair is
+re-warmed. `OPENCODE_ARENA_PROJECT_SPARES` turns spares
 on (`1`) or off (`0`) on any platform; tests run with them off.
 
 Arena runs no project start command and no `paseo.json` hook in a slot, so a created slot and an

@@ -5329,7 +5329,7 @@ export const layer: Layer.Layer<
           const metadataFingerprint = yield* promise(() => hostMetadataFingerprint(commonGitDir))
           const stageSlot = Effect.fnUntraced(function* (previous?: WarmWorktreeRecord) {
             const started = performance.now()
-            const spare = previous ? undefined : takeProjectSpare(chat)
+            const spare = previous ? undefined : takeProjectSpare(store, chat)
             const adopted = previous
               ? yield* adoptSlot({
                   chat,
@@ -7306,20 +7306,36 @@ export const layer: Layer.Layer<
       })
     })
 
-    // A repository's spare pair for its next new chat, by `directoryIdentity` of the checkout:
-    // the ready worktrees, the build filling them, and whether this process cleared what an
-    // earlier one left.
-    const projectSpares = new Map<string, string[]>()
-    const projectSpareBuilds = new Map<string, Fiber.Fiber<void>>()
-    const projectSparesCleared = new Set<string>()
+    // Each repository's spare pair for its next new chat, by `directoryIdentity` of the checkout:
+    // the ready worktrees, the build filling them, and whether what an earlier process left was
+    // cleared. Kept per store, as trust is (`trustedWarmPairs`), so a restart starts it over.
+    const projectSpareStates = new WeakMap<
+      Store,
+      {
+        readonly ready: Map<string, string[]>
+        readonly builds: Map<string, Fiber.Fiber<void>>
+        readonly cleared: Set<string>
+      }
+    >()
+    const projectSpareState = (store: Store) => {
+      const existing = projectSpareStates.get(store)
+      if (existing) return existing
+      const created = {
+        ready: new Map<string, string[]>(),
+        builds: new Map<string, Fiber.Fiber<void>>(),
+        cleared: new Set<string>(),
+      }
+      projectSpareStates.set(store, created)
+      return created
+    }
 
     /**
      * A ready spare for a new chat's first send in this repository, taken so nothing else adopts it.
      * Undefined when spares are off or none is ready.
      */
-    const takeProjectSpare = (chat: ChatDocument) => {
+    const takeProjectSpare = (store: Store, chat: ChatDocument) => {
       if (!projectSparesEnabled()) return undefined
-      return projectSpares.get(directoryIdentity(chat.repository.root))?.shift()
+      return projectSpareState(store).ready.get(directoryIdentity(chat.repository.root))?.shift()
     }
 
     /**
@@ -7333,12 +7349,13 @@ export const layer: Layer.Layer<
     const ensureProjectSpares = Effect.fn("Arena.ensureProjectSpares")(function* (store: Store, turn: TurnDocument) {
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return
+      const state = projectSpareState(store)
       const key = directoryIdentity(chat.repository.root)
       const root = join(isolatedRoot(chat.repository.root), PROJECT_SPARE_DIRNAME)
-      const ready = projectSpares.get(key) ?? []
-      projectSpares.set(key, ready)
-      if (!projectSparesCleared.has(key)) {
-        projectSparesCleared.add(key)
+      const ready = state.ready.get(key) ?? []
+      state.ready.set(key, ready)
+      if (!state.cleared.has(key)) {
+        state.cleared.add(key)
         const entries = yield* Effect.promise(() => readdir(root, { withFileTypes: true }).catch(() => []))
         for (const entry of entries) {
           if (!entry.isDirectory() || entry.name === TRASH_DIRNAME || hostedWorktree(entry.name) !== undefined) continue
@@ -7369,18 +7386,42 @@ export const layer: Layer.Layer<
       if (!projectSparesEnabled()) return
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return
+      const state = projectSpareState(store)
       const key = directoryIdentity(chat.repository.root)
-      if (projectSpareBuilds.has(key) || (projectSpares.get(key)?.length ?? 0) >= PROJECT_SPARE_TARGET) return
+      if (state.builds.has(key) || (state.ready.get(key)?.length ?? 0) >= PROJECT_SPARE_TARGET) return
       const fiber = yield* ensureProjectSpares(store, turn).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Arena project spare creation failed", { chatID: chat._id, cause }),
         ),
         Effect.forkIn(scope),
       )
-      projectSpareBuilds.set(key, fiber)
+      state.builds.set(key, fiber)
       fiber.addObserver(() => {
-        if (projectSpareBuilds.get(key) === fiber) projectSpareBuilds.delete(key)
+        if (state.builds.get(key) === fiber) state.builds.delete(key)
       })
+    })
+
+    /**
+     * A restart takes every spare's records with it. The repository of the latest chat that
+     * battled gets its pair again, synced to that chat's last turn: a new chat there is as likely
+     * a next send as the latest chat itself. Other repositories wait for their next battle.
+     */
+    const respareLatestRepository = Effect.fnUntraced(function* (store: Store) {
+      if (!projectSparesEnabled()) return
+      const chats = yield* promise(() => store.chats.find({}).toArray())
+      const latest = chats
+        .filter((chat) => chat.status !== "archived" && !chat.checkoutEvicted && chat.turnCount > 0)
+        .toSorted((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())[0]
+      if (!latest) return
+      const [turn] = yield* promise(() =>
+        store.turns.find({ chatID: latest._id }).sort({ turnIndex: -1 }).limit(1).toArray(),
+      )
+      yield* Effect.logInfo("Arena rebuilding the latest repository's spare pair after a restart", {
+        chatID: latest._id,
+        turnID: turn?._id,
+        manifestID: turn?.copySnapshot?.manifestID,
+      })
+      if (turn?.copySnapshot?.manifestID) yield* forkProjectSpares(store, turn)
     })
 
     const releaseRetainedInBackground = Effect.fn("Arena.releaseRetainedInBackground")(function* (
@@ -9264,6 +9305,12 @@ export const layer: Layer.Layer<
       yield* rewarmLatestPair(store).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Arena could not re-warm the latest pair after a restart", { cause }),
+        ),
+        // After the re-warm, so the two do not share the disk while the app reads its chats.
+        Effect.andThen(Effect.sleep(Duration.millis(RESTART_REWARM_DELAY_MS))),
+        Effect.andThen(respareLatestRepository(store)),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not rebuild the latest repository's spare pair", { cause }),
         ),
         Effect.forkIn(scope),
       )
