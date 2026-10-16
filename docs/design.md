@@ -138,7 +138,7 @@ One row off the rail makes the whole card look unconsidered.
 
 ## 9. Responsiveness
 
-Compact-first. The small case is designed; the large case adds chrome around it.
+Compact-first. The small case is designed; the large case adds chrome around it. The smallest case is the desktop window's minimum, 480×600 (`MIN_WINDOW_WIDTH` and `MIN_WINDOW_HEIGHT` in `packages/desktop/src/settings/window-state.ts`), so a compact layout has to fit there.
 
 The list+detail pattern is canonical and reused across surfaces. The settings shell (`packages/app/src/screens/settings-screen.tsx`) and the projects screen (`packages/app/src/screens/projects-screen.tsx`) implement it identically:
 

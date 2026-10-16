@@ -3,8 +3,13 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export const MIN_WINDOW_WIDTH = 400;
-export const MIN_WINDOW_HEIGHT = 300;
+// The smallest window the app lays out without overlap, enforced on the BrowserWindow and on
+// restored state. Width: with Battle off and "Model size: frontier", the composer's controls
+// start to overlap below about 460 px; 480 leaves some slack. Height: a long prompt grows the
+// composer's text box to half the window, and at 600 about 120 px of a battle (five lines) stays
+// visible between the header and the vote row; at 500 only about 65 px does.
+export const MIN_WINDOW_WIDTH = 480;
+export const MIN_WINDOW_HEIGHT = 600;
 
 // Smallest slice of the window that must remain on a display for the saved
 // position to count as "still reachable" after the monitor layout changes.
