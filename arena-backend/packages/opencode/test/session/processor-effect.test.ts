@@ -476,9 +476,10 @@ it.live("session.processor keeps deferred step snapshots in the execution enviro
           tools: {},
         })
 
-        // Baseline, step-finish, and patch all use the execution environment. The asynchronous
-        // summary may have entered it too by the time this assertion runs.
-        expect(provided).toBeGreaterThanOrEqual(3)
+        // The baseline, and the step-finish snapshot with its patch read in one pass, both use the
+        // execution environment. The asynchronous summary may have entered it too by the time
+        // this assertion runs.
+        expect(provided).toBeGreaterThanOrEqual(2)
       }),
     { git: true, config: (url) => providerCfg(url) },
   ),

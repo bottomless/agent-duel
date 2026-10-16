@@ -58,6 +58,8 @@ export interface Interface {
   readonly cleanup: () => Effect.Effect<void>
   readonly track: () => Effect.Effect<string | undefined>
   readonly patch: (hash: string) => Effect.Effect<Patch>
+  /** `track` and then `patch(hash)` in one go; undefined when a separate `track` is needed. */
+  readonly trackPatch: (hash: string) => Effect.Effect<{ readonly snapshot: string; readonly patch: Patch } | undefined>
   readonly restore: (snapshot: string) => Effect.Effect<void>
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
   readonly diff: (hash: string) => Effect.Effect<string>
@@ -410,6 +412,53 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           )
         })
 
+        /**
+         * `track` and then `patch(hash)` as one: the worktree is added once, and the tree and the
+         * diff against `hash` are read beside each other. A step ends with both, and each of their
+         * git processes is tens of milliseconds on Windows. Undefined when snapshots are off or
+         * the snapshot repository does not exist yet, which `track` alone sets up.
+         */
+        const trackPatch = Effect.fnUntraced(function* (hash: string) {
+          return yield* locked(
+            Effect.gen(function* () {
+              if (!(yield* enabled())) return undefined
+              if (!(yield* exists(state.gitdir))) return undefined
+              yield* add()
+              const [tree, diff] = yield* Effect.all(
+                [
+                  git(args(["write-tree"]), { cwd: state.directory }),
+                  git([...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."])], {
+                    cwd: state.directory,
+                  }),
+                ],
+                { concurrency: 2 },
+              )
+              const snapshot = tree.text.trim()
+              yield* Effect.logInfo("tracking", { hash: snapshot, cwd: state.directory, git: state.gitdir })
+              if (diff.code !== 0) {
+                yield* Effect.logWarning("failed to get diff", { hash, exitCode: diff.code })
+                return { snapshot, patch: { hash, files: [] } }
+              }
+              const files = diff.text
+                .trim()
+                .split("\n")
+                .map((x) => x.trim())
+                .filter(Boolean)
+              // Hide ignored-file removals from the user-facing patch output.
+              const ignored = yield* ignore(files)
+              return {
+                snapshot,
+                patch: {
+                  hash,
+                  files: files
+                    .filter((item) => !ignored.has(item))
+                    .map((x) => path.join(state.worktree, x).replaceAll("\\", "/")),
+                },
+              }
+            }),
+          )
+        })
+
         const restore = Effect.fnUntraced(function* (snapshot: string) {
           return yield* locked(
             Effect.gen(function* () {
@@ -665,7 +714,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           Effect.forkScoped,
         )
 
-        return { cleanup, track, patch, restore, revert, diff, diffFull }
+        return { cleanup, track, patch, trackPatch, restore, revert, diff, diffFull }
       }),
     )
 
@@ -681,6 +730,9 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
       }),
       patch: Effect.fn("Snapshot.patch")(function* (hash: string) {
         return yield* InstanceState.useEffect(state, (s) => s.patch(hash))
+      }),
+      trackPatch: Effect.fn("Snapshot.trackPatch")(function* (hash: string) {
+        return yield* InstanceState.useEffect(state, (s) => s.trackPatch(hash))
       }),
       restore: Effect.fn("Snapshot.restore")(function* (snapshot: string) {
         return yield* InstanceState.useEffect(state, (s) => s.restore(snapshot))
