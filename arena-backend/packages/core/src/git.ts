@@ -6,6 +6,7 @@ import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AbsolutePath, RelativePath } from "./schema"
 import { FSUtil } from "./fs-util"
+import { GitLayout } from "./git-layout"
 import { AppProcess } from "./process"
 import { makeGlobalNode } from "./effect/app-node"
 import { File } from "./file"
@@ -194,6 +195,8 @@ const layer = Layer.effect(
     const locks = KeyedMutex.makeUnsafe<string>()
     const locked = <A, E, R>(repository: Repository, effect: Effect.Effect<A, E, R>) =>
       locks.withLock(repository.gitDirectory)(effect)
+    // What discovery found for each `.git`, by `GitLayout.layoutKey`.
+    const layouts = new Map<string, Repository>()
 
     const discover = Effect.fn("Git.repo.discover")(function* (input: AbsolutePath) {
       const dotgit = yield* fs.up({ targets: [".git"], start: input }).pipe(
@@ -203,17 +206,39 @@ const layer = Layer.effect(
       if (!dotgit) return undefined
 
       const cwd = path.dirname(dotgit)
+      const key = yield* Effect.promise(() => GitLayout.layoutKey(dotgit))
+      const known = key === undefined ? undefined : layouts.get(key)
+      if (known) return known
       const git = run(cwd, proc)
-      const topLevel = yield* git(["rev-parse", "--show-toplevel"])
-      const gitDir = yield* git(["rev-parse", "--git-dir"])
-      const commonDir = yield* git(["rev-parse", "--git-common-dir"])
+      // One process where the checkout has a working tree, which is every case but a bare
+      // repository or a cwd inside `.git`: each process start costs tens of milliseconds on
+      // Windows, and every instance and snapshot location asks.
+      const combined = yield* git(["rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"])
+      const lines = combined.text.split(/\r?\n/)
+      const [topLevel, gitDir, commonDir] =
+        combined.exitCode === 0 && lines.length >= 3
+          ? [
+              { exitCode: 0, text: lines[0]! },
+              { exitCode: 0, text: lines[1]! },
+              { exitCode: 0, text: lines[2]! },
+            ]
+          : [
+              yield* git(["rev-parse", "--show-toplevel"]),
+              yield* git(["rev-parse", "--git-dir"]),
+              yield* git(["rev-parse", "--git-common-dir"]),
+            ]
       if (gitDir.exitCode !== 0 || commonDir.exitCode !== 0) return undefined
 
-      return new Repository({
+      const repository = new Repository({
         worktree: AbsolutePath.make(topLevel.exitCode === 0 ? resolvePath(cwd, topLevel.text) : cwd),
         gitDirectory: AbsolutePath.make(resolvePath(cwd, gitDir.text)),
         commonDirectory: AbsolutePath.make(resolvePath(cwd, commonDir.text)),
       })
+      if (key !== undefined) {
+        if (layouts.size >= LAYOUT_CACHE_SIZE) layouts.delete(layouts.keys().next().value!)
+        layouts.set(key, repository)
+      }
+      return repository
     })
 
     const remote = Effect.fn("Git.remote.get")(function* (repository: Repository, name = "origin") {
@@ -1048,6 +1073,8 @@ function execute(cwd: string, proc: AppProcess.Interface) {
         ),
       )
 }
+
+const LAYOUT_CACHE_SIZE = 512
 
 function resolvePath(cwd: string, value: string) {
   const trimmed = value.replace(/[\r\n]+$/, "")
