@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "os"
 import { basename, dirname, join, resolve } from "path"
 import { Git } from "@/git"
+import { PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { IGNORED_PATHS_COMMAND, parseIgnoredPaths } from "./warm"
 import { identicalNumberedCopies } from "./sync-conflict-copy"
 import type { RefChange, RefOutcome } from "./ref-types"
@@ -666,6 +667,107 @@ const advanceRef = Effect.fn("ArenaGit.advanceRef")(function* (
   if (verified !== commit) {
     return yield* Effect.fail(new OperationError("verify_ref", "Pre-vote battle ref verification failed"))
   }
+})
+
+/** What a run's permanent ref and its index ref hold in the run's own repository, if anything. */
+export const readResultRefs = Effect.fn("ArenaGit.readResultRefs")(function* (worktree: string, permanentRef: string) {
+  const git = yield* Git.Service
+  const value = Effect.fnUntraced(function* (ref: string) {
+    const current = yield* git.run(["rev-parse", "--verify", "--quiet", ref], { cwd: worktree })
+    if (current.exitCode === 0) return output(current)
+    if (current.exitCode === 1) return undefined
+    const detail = current.stderr.toString("utf8").trim() || "Failed to inspect permanent battle ref"
+    return yield* Effect.fail(new OperationError("read_result_ref", detail))
+  })
+  return { commit: yield* value(permanentRef), indexTree: yield* value(`${permanentRef}-index`) }
+})
+
+const REF_VALUE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\n?$|^ref: /
+
+/** Names of the loose ref files under `prefixes`, lock files aside. */
+async function looseRefNames(commonGitDir: string, prefixes: readonly string[]) {
+  const names: string[] = []
+  const walk = async (name: string): Promise<void> => {
+    const entries = await readdir(join(commonGitDir, name), { withFileTypes: true }).catch(
+      (cause: NodeJS.ErrnoException) => {
+        if (cause.code === "ENOENT" || cause.code === "ENOTDIR") return []
+        throw cause
+      },
+    )
+    for (const entry of entries) {
+      const child = `${name}/${entry.name}`
+      if (entry.isDirectory()) await walk(child)
+      else if (entry.isFile() && !entry.name.endsWith(".lock")) names.push(child)
+    }
+  }
+  for (const prefix of prefixes) await walk(prefix.replace(/\/$/, ""))
+  return names
+}
+
+/**
+ * Remove Arena's private refs that no longer name an object, and return their names.
+ *
+ * Git fsyncs neither refs nor loose objects by default, so a machine that goes down moments after
+ * Arena wrote a ref can come back with the file empty, zeroed, or naming an object that never
+ * reached the disk. Git reads that as repository damage: every fetch into the checkout then fails
+ * its connectivity check with `bad object <ref>`, which fails every later battle's result import
+ * and the developer's own `git fetch`. The object is gone either way, so the ref goes too. Refs
+ * outside Arena's namespaces are the developer's and stay as they are.
+ */
+export const removeBrokenPrivateRefs = Effect.fn("ArenaGit.removeBrokenPrivateRefs")(function* (canonical: string) {
+  const git = yield* Git.Service
+  const commonGitDir = yield* read(git, canonical, "read_common_git_dir", [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ])
+  const listed = (yield* read(git, canonical, "list_private_refs", [
+    "for-each-ref",
+    "--format=%(objectname) %(refname)",
+    ...PRIVATE_REF_PREFIXES,
+  ]))
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => ({ oid: line.slice(0, line.indexOf(" ")), ref: line.slice(line.indexOf(" ") + 1) }))
+  const oids = [...new Set(listed.map((item) => item.oid))]
+  const present = new Set<string>()
+  if (oids.length > 0) {
+    // A corrupt object reads as missing too, and the listing goes on past it.
+    const checked = yield* read(git, canonical, "check_private_ref_objects", ["cat-file", "--batch-check"], {
+      stdin: Stream.make(new TextEncoder().encode(`${oids.join("\n")}\n`)),
+      maxOutputBytes: 16 * 1024 * 1024,
+    })
+    for (const line of checked.split("\n")) {
+      const [oid, type] = line.split(" ")
+      if (oid && type && type !== "missing") present.add(oid)
+    }
+  }
+  const missing = listed.filter((item) => !present.has(item.oid)).map((item) => item.ref)
+  if (missing.length > 0) {
+    yield* run(git, canonical, "remove_broken_private_refs", ["update-ref", "--stdin"], {
+      stdin: Stream.make(new TextEncoder().encode(missing.map((ref) => `delete ${ref}\n`).join(""))),
+    })
+  }
+  // `for-each-ref` skips a file it cannot parse, and `update-ref` refuses to delete one, so those
+  // are the files it did not list. The content is read again first: a ref written since the
+  // listing is not one of them.
+  const known = new Set(listed.map((item) => item.ref))
+  const unreadable = yield* Effect.tryPromise({
+    try: async () => {
+      const removed: string[] = []
+      for (const ref of await looseRefNames(commonGitDir, PRIVATE_REF_PREFIXES)) {
+        if (known.has(ref)) continue
+        const file = join(commonGitDir, ref)
+        const content = await readFile(file, "latin1").catch(() => undefined)
+        if (content === undefined || REF_VALUE.test(content)) continue
+        await unlink(file)
+        removed.push(ref)
+      }
+      return removed
+    },
+    catch: (cause) => new OperationError("remove_unreadable_private_refs", String(cause)),
+  })
+  return [...missing, ...unreadable]
 })
 
 /** Remove an unadmitted battle ref only when it still points at the expected object. */

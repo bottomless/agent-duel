@@ -2989,6 +2989,96 @@ describe("Arena service vertical slice", () => {
     }
   }, 40_000)
 
+  test("retries a failed contestant whose first finalization wrote its refs but could not import them", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure partial finalization fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    // The side that fails first does real work on its retry, so its second result differs from
+    // the one its failed finalization already wrote.
+    const requests = new Map<string, number>()
+    let failing: string | undefined
+    const router = installOpenRouterStub({
+      failFirstOrdinals: [1],
+      delayedOrdinal: 2,
+      delayMs: 6_000,
+      respond: ({ model }) => {
+        failing ??= model
+        const count = (requests.get(model) ?? 0) + 1
+        requests.set(model, count)
+        if (model !== failing || count !== 2) return undefined
+        return contestantResponse("contestant", 1, "bash", false, "printf 'retried\\n' > retried.txt", "1-2")
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Retry after a partial finalization",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      // A ref file a crash left empty makes every fetch into the checkout fail, so the failed
+      // side's finalization writes its own refs and then cannot import them.
+      const brokenDirectory = `${directory.path}/.git/refs/battles/crashed/turn-0`
+      const broken = `${brokenDirectory}/base`
+      await fs.mkdir(brokenDirectory, { recursive: true })
+      await writeFile(broken, "")
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Fail once on one side." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+
+      const deadline = Date.now() + 20_000
+      let found: RunDocument | undefined
+      while (Date.now() < deadline && !found) {
+        found = (await memory.store.runsForTurn(turnID)).find((run) => run.runState === "error" && run.finalizedAt)
+        if (!found) await Bun.sleep(10)
+      }
+      if (!found) throw new Error("No contestant failed")
+      const failed = structuredClone(found)
+      expect(failed.error).toContain("did not send all necessary objects")
+      expect(failed.finalCommit).toBeUndefined()
+
+      await rm(broken)
+      const retried = await json<PublicSnapshot>(
+        await request(`/arena/runs/${encodeURIComponent(failed._id)}/retry`, { method: "POST", headers }),
+      )
+      expect(retried.turn?.state).toBe("running")
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const finalRuns = await memory.store.runsForTurn(turnID)
+      expect(finalRuns.map((run) => ({ side: run.side, runState: run.runState, error: run.error }))).toEqual(
+        finalRuns.map((run) => ({ side: run.side, runState: "complete", error: undefined })),
+      )
+      const finalRetried = finalRuns.find((run) => run.side === failed.side)
+      if (!finalRetried?.finalCommit || !finalRetried.permanentRef) throw new Error("The retried side has no result")
+      const files = await $`git ls-tree -r --name-only ${finalRetried.permanentRef}`.cwd(directory.path).text()
+      expect(files.split("\n")).toContain("retried.txt")
+    } finally {
+      router.restore()
+    }
+  }, 40_000)
+
   test("discards a battle whose contestants both failed instead of calling it a tie", async () => {
     await using directory = await tmpdir({
       git: true,

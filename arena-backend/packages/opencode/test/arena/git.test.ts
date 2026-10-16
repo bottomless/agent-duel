@@ -22,6 +22,7 @@ import {
   recoverFailedPromotion,
   refLabel,
   refreshAttachedSide,
+  removeBrokenPrivateRefs,
   repositoryKey,
   resetSideBranch,
   restorePublicChanges,
@@ -2081,6 +2082,67 @@ describe("ArenaGit", () => {
       expect((yield* Effect.promise(() => $`git branch --show-current`.cwd(canonical.path).quiet().text())).trim()).toBe(branch)
       expect((yield* Effect.promise(() => $`git write-tree`.cwd(canonical.path).quiet().text())).trim()).toBe(indexTree)
       expect(yield* Effect.promise(() => fs.readFile(`${canonical.path}/conflict.txt`, "utf8"))).toContain("<<<<<<<")
+    }),
+  )
+
+  it.live("removes Arena refs a crash left broken, so fetches into the checkout work again", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const source = yield* scopedTmpdir({ git: true })
+      const git = (command: string) =>
+        Effect.promise(() => $`sh -c ${command}`.cwd(canonical.path).quiet().nothrow())
+      const head = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      const missing = "1234567890123456789012345678901234567890"
+      const refs = `${canonical.path}/.git/refs`
+      yield* Effect.promise(async () => {
+        await fs.mkdir(`${refs}/battles/crashed/turn-0`, { recursive: true })
+        await fs.mkdir(`${refs}/agent-duel/start/heads`, { recursive: true })
+        await fs.mkdir(`${refs}/heads/agent-duel`, { recursive: true })
+        // What an interrupted write leaves: an empty file, a block of zeros, a name of an object
+        // that never reached the disk.
+        await fs.writeFile(`${refs}/battles/crashed/turn-0/base`, "")
+        await fs.writeFile(`${refs}/agent-duel/start/heads/main`, Buffer.alloc(41))
+        await fs.writeFile(`${refs}/heads/agent-duel/side-a`, `${missing}\n`)
+      })
+      yield* git(`git update-ref refs/battles/kept/turn-0/base ${head}`)
+      // The developer's own refs are theirs to repair, broken or not.
+      yield* Effect.promise(() => fs.writeFile(`${refs}/heads/broken-by-user`, ""))
+      const blocked = yield* git(`git fetch --no-tags --no-write-fetch-head ${source.path} HEAD:refs/probe`)
+      expect(blocked.stderr.toString()).toContain("bad object")
+
+      const removed = yield* removeBrokenPrivateRefs(canonical.path)
+
+      expect(removed.toSorted((a, b) => a.localeCompare(b))).toEqual([
+        "refs/agent-duel/start/heads/main",
+        "refs/battles/crashed/turn-0/base",
+        "refs/heads/agent-duel/side-a",
+      ])
+      expect((yield* git("git rev-parse refs/battles/kept/turn-0/base")).text().trim()).toBe(head)
+      expect(yield* Effect.promise(() => fs.readFile(`${refs}/heads/broken-by-user`, "utf8"))).toBe("")
+      yield* Effect.promise(() => fs.rm(`${refs}/heads/broken-by-user`))
+      const fetched = yield* git(`git fetch --quiet --no-tags --no-write-fetch-head ${source.path} HEAD:refs/probe`)
+      expect({ exitCode: fetched.exitCode, stderr: fetched.stderr.toString() }).toEqual({ exitCode: 0, stderr: "" })
+      expect(yield* removeBrokenPrivateRefs(canonical.path)).toEqual([])
+    }),
+  )
+
+  it.live("removes a packed Arena ref whose object is missing", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const head = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() => $`git update-ref refs/battles/packed/turn-0/base ${head}`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => $`git pack-refs --all`.cwd(canonical.path).quiet())
+      const packed = `${canonical.path}/.git/packed-refs`
+      const missing = "1234567890123456789012345678901234567890"
+      yield* Effect.promise(async () =>
+        fs.writeFile(
+          packed,
+          (await fs.readFile(packed, "utf8")).replace(`${head} refs/battles/packed`, `${missing} refs/battles/packed`),
+        ),
+      )
+
+      expect(yield* removeBrokenPrivateRefs(canonical.path)).toEqual(["refs/battles/packed/turn-0/base"])
+      expect(yield* Effect.promise(() => fs.readFile(packed, "utf8"))).not.toContain("refs/battles/packed")
     }),
   )
 

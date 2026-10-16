@@ -91,6 +91,8 @@ import {
   importWinnerRef,
   inspectCanonical,
   readCanonicalBranch,
+  readResultRefs,
+  removeBrokenPrivateRefs,
   mirrorCanonicalRefs,
   OperationError,
   inspectBranchTarget,
@@ -3791,18 +3793,21 @@ export const layer: Layer.Layer<
         }),
       )
       const permanentRef = `${refRoot(turn)}/${run.side}`
+      // A finalization that failed after writing the run's refs, on an import below for one,
+      // recorded nothing, and the run can still be retried. Only this run writes those refs, so
+      // what they hold is its own earlier result, and this result moves them on from it.
+      const previous =
+        stored?.permanentRef === permanentRef && stored.finalCommit
+          ? { commit: stored.finalCommit, indexTree: stored.finalIndexTree }
+          : yield* withGit(readResultRefs(run.worktree.directory, permanentRef)).pipe(Effect.mapError(error))
       const result = yield* withGit(
         finalize({
           worktree: run.worktree.directory,
           baseSHA: turn.frozenBaseSHA,
           frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
           permanentRef,
-          ...(stored?.permanentRef === permanentRef && stored.finalCommit
-            ? {
-                expectedPermanentCommit: stored.finalCommit,
-                ...(stored.finalIndexTree ? { expectedFinalIndexTree: stored.finalIndexTree } : {}),
-              }
-            : {}),
+          ...(previous.commit ? { expectedPermanentCommit: previous.commit } : {}),
+          ...(previous.indexTree ? { expectedFinalIndexTree: previous.indexTree } : {}),
         }),
       ).pipe(Effect.mapError(error))
       const chat = yield* promise(() => store.chat(turn.chatID))
@@ -3814,7 +3819,7 @@ export const layer: Layer.Layer<
           sourceRef: result.permanentRef,
           destinationRef: result.permanentRef,
           expectedCommit: result.finalCommit,
-          ...(stored?.finalCommit ? { expectedDestinationCommit: stored.finalCommit } : {}),
+          ...(previous.commit ? { expectedDestinationCommit: previous.commit } : {}),
         }),
       ).pipe(Effect.mapError(error))
       yield* withGit(
@@ -3825,7 +3830,7 @@ export const layer: Layer.Layer<
           destinationRef: result.finalIndexRef,
           expectedCommit: result.finalIndexTree,
           objectType: "tree",
-          ...(stored?.finalIndexTree ? { expectedDestinationCommit: stored.finalIndexTree } : {}),
+          ...(previous.indexTree ? { expectedDestinationCommit: previous.indexTree } : {}),
         }),
       ).pipe(Effect.mapError(error))
       // The contestant's real HEAD, which a detached winner's commits hang from and which the
@@ -5125,7 +5130,12 @@ export const layer: Layer.Layer<
         outcomeA: Exit.Exit<FinalizedSide, unknown>,
         outcomeB: Exit.Exit<FinalizedSide, unknown>,
       ) {
-        if (Exit.isFailure(outcomeA) || Exit.isFailure(outcomeB)) {
+        // A side retried after its failure is settled again by the retry, which finalizes the turn
+        // once both sides are done. A run can be retried only after this settlement, so any retry
+        // it counts came later.
+        const runs = yield* promise(() => store.runsForTurn(turn._id))
+        const retried = (side: Side) => (runs.find((run) => run.side === side)?.manualRetries ?? 0) > 0
+        if ((Exit.isFailure(outcomeA) && !retried("a")) || (Exit.isFailure(outcomeB) && !retried("b"))) {
           const currentRecorder = recorder
           if (currentRecorder) yield* promise(() => currentRecorder.flush(turn._id))
           const current = yield* promise(() => store.turn(turn._id))
@@ -8132,6 +8142,27 @@ export const layer: Layer.Layer<
     recoverInterrupted = Effect.fn("Arena.recoverInterrupted")(function* (store: Store) {
       yield* reconcileComparisons(store)
       const chats = yield* promise(() => store.chats.find({}).toArray())
+      // A restart can follow a crash that left one of Arena's refs empty or naming a lost object, and
+      // git then fails every fetch into that repository. Repaired first, since recovering an
+      // interrupted turn below imports its results.
+      const repositories = new Map(
+        chats.map((chat) => [chat.canonicalCheckout?.commonGitDir ?? chat.repository.root, chat.repository.root]),
+      )
+      yield* Effect.forEach(
+        repositories.values(),
+        (root) =>
+          withGit(removeBrokenPrivateRefs(root)).pipe(
+            Effect.tap((removed) =>
+              removed.length > 0
+                ? Effect.logWarning("Arena removed refs a crash left broken", { root, refs: removed.join(", ") })
+                : Effect.void,
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Arena could not check a repository's refs", { root, cause }),
+            ),
+          ),
+        { discard: true },
+      )
       yield* Effect.forEach(
         chats,
         (chat) =>

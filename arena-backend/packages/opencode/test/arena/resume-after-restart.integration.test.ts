@@ -1,5 +1,6 @@
 import { $ } from "bun"
 import { afterEach, describe, expect, test } from "bun:test"
+import fs from "fs/promises"
 import { connectLocalStore } from "@/arena/local-store"
 import type { Store } from "@/arena/mongo"
 import type { RunDocument } from "@/arena/records"
@@ -157,6 +158,63 @@ describe("Arena after an engine restart", () => {
         }),
       )
       await waitForTurn(store, turnID, "complete")
+    } finally {
+      router.restore()
+      await store.close()
+    }
+  }, 60_000)
+
+  test("a battle ref a crash left empty is removed at startup, so the next battle still reaches the vote", async () => {
+    await using directory = await fixture()
+    await using arenaDirectory = await tmpdir()
+    let store = await connectLocalStore({ directory: arenaDirectory.path })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const first = await startBattle(headers, "Battle before a crash", "Create two results.")
+      await waitForTurn(store, first, "awaiting_vote")
+      await waitForSettledComparison(store, first)
+      await json<PublicSnapshot>(
+        await arenaRequest(`/arena/turns/${first}/vote`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ vote: "a" }),
+        }),
+      )
+      await waitForTurn(store, first, "complete")
+      const chatID = (await store.turn(first))?.chatID
+      if (!chatID) throw new Error("The first battle has no chat")
+
+      // Another chat's freeze was the last write before the machine went down: its base ref file
+      // came back empty, and git now fails every fetch into the checkout on it.
+      const crashed = `${directory.path}/.git/refs/battles/crashed/turn-0`
+      await fs.mkdir(crashed, { recursive: true })
+      await fs.writeFile(`${crashed}/base`, "")
+      store = await restartEngine(store, arenaDirectory.path)
+
+      const admitted = await json<PublicSnapshot>(
+        await arenaRequest(`/arena/chats/${chatID}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Create two more results." }),
+        }),
+      )
+      const second = admitted.turn?.id
+      if (!second) throw new Error("Arena did not admit the battle after the restart")
+      await waitForTurn(store, second, "awaiting_vote")
+      expect((await store.runsForTurn(second)).map((run) => [run.side, run.runState, run.selectable])).toEqual([
+        ["a", "complete", true],
+        ["b", "complete", true],
+      ])
+      expect(await fs.readdir(crashed)).toEqual([])
+      const fetched = await $`git fetch --quiet --no-tags --no-write-fetch-head . HEAD:refs/probe`
+        .cwd(directory.path)
+        .quiet()
+        .nothrow()
+      expect({ exitCode: fetched.exitCode, stderr: fetched.stderr.toString() }).toEqual({ exitCode: 0, stderr: "" })
     } finally {
       router.restore()
       await store.close()
