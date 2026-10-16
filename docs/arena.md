@@ -498,6 +498,17 @@ short (the first battle creates a spare in the background while it waits for the
 both at once. Only the pool scan, the host copies, and the final mirror of the hosts take the
 repository lock; the file sync, the instances, and the forks run outside it under the chat's start
 lock, so a vote, a send, or a prompt in another chat of the same repository does not wait for them.
+
+A new chat has no pool to adopt from, so its first send claims two worktrees and copies every
+ignored root into both. With a copy-on-write clone that is cheap; Windows has none, and a 14k-file
+project took 8.7 s per side. There a repository also keeps a spare pair for its next new chat in
+`.agent-duel/worktrees/_spares/` (`ensureProjectSpares`): a battle reaching its vote builds it in
+the background when it is short, synced to that battle's base, and a new chat's first send adopts
+it, so the scan keeps the ignored roots instead of copying them (4.0 s per side). The records that
+let the scan keep a root belong to the process that built the spare, so the first build in a
+process retires whatever an earlier one left there. `OPENCODE_ARENA_PROJECT_SPARES` turns spares
+on (`1`) or off (`0`) on any platform; tests run with them off.
+
 Arena runs no project start command and no `paseo.json` hook in a slot, so a created slot and an
 adopted one start identical. Warm preparation also allocates each successor's port bank and forks
 the canonical session into it, paths retargeted, so the send has no transcript to copy. A send uses

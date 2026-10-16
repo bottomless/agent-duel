@@ -4,7 +4,7 @@ import { createArenaStream, type Frame as ArenaStreamFrame } from "./stream"
 import { execFile as nodeExecFile } from "child_process"
 import { createHash, randomBytes } from "crypto"
 import { realpathSync, type BigIntStats } from "fs"
-import { lstat, mkdir, readdir, readFile, readlink, realpath, rm } from "fs/promises"
+import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, statfs } from "fs/promises"
 import {
   basename,
   dirname,
@@ -590,6 +590,25 @@ const SLOT_PROCESS_RELIST_MS = 500
 
 /** The next pair plus the retained winner, which keeps its worktree until the next send. */
 const SLOT_POOL_TARGET = 3
+
+/** Where a repository keeps the spare pair for its next new chat, under its isolated root. */
+const PROJECT_SPARE_DIRNAME = "_spares"
+const PROJECT_SPARE_TARGET = 2
+/**
+ * A spare pair is two more copies of every ignored root. Below this much free space the daemon keeps
+ * only the latest chat's worktrees (`LOW_DISK_BYTES` in its workspace cleanup), and no spare is built.
+ */
+const PROJECT_SPARE_MIN_FREE_BYTES = 10_000_000_000
+
+/**
+ * Whether a repository keeps a spare pair for its next new chat (`ensureProjectSpares`). On by
+ * default only on Windows, which has no copy-on-write clone; `OPENCODE_ARENA_PROJECT_SPARES`
+ * turns them on (`1`) or off (`0`) anywhere.
+ */
+const projectSparesEnabled = () => {
+  const setting = process.env.OPENCODE_ARENA_PROJECT_SPARES
+  return setting === undefined ? process.platform === "win32" : setting === "1"
+}
 /** How long removing a chat's pool waits for background deletes into its trash to finish. */
 const POOL_EMPTY_WAIT_MS = 10_000
 
@@ -4493,6 +4512,7 @@ export const layer: Layer.Layer<
       if (!inputs) return
       yield* promise(() => store.transitionTurn(turn._id, "awaiting_vote"))
       yield* forkSpareSlot(store, turn, canonical)
+      yield* forkProjectSpares(store, turn)
       yield* startUtility(store, turn, inputs[0], inputs[1], canonical).pipe(
         Effect.catchCause((cause) =>
           promise(() =>
@@ -4981,6 +5001,7 @@ export const layer: Layer.Layer<
           const metadataFingerprint = yield* promise(() => hostMetadataFingerprint(commonGitDir))
           const stageSlot = Effect.fnUntraced(function* (previous?: WarmWorktreeRecord) {
             const started = performance.now()
+            const spare = previous ? undefined : takeProjectSpare(chat)
             const adopted = previous
               ? yield* adoptSlot({
                   chat,
@@ -4993,7 +5014,30 @@ export const layer: Layer.Layer<
                   roots: copiedDirectoryRoots(copyManifest),
                   metadataFingerprint,
                 })
-              : undefined
+              : spare
+                ? yield* adoptSlot({
+                    chat,
+                    from: spare,
+                    to: plannedDirectory,
+                    name: relativePath(slotRoot, plannedDirectory),
+                    branch,
+                    head: contestantSnapshot.frozenHead,
+                    baseTree: contestantSnapshot.workingTree,
+                    roots: copiedDirectoryRoots(copyManifest),
+                    metadataFingerprint,
+                  }).pipe(
+                    // Whatever the adopt left goes; the claim below trashes anything at the path.
+                    Effect.catchCause((cause) =>
+                      Cause.hasInterrupts(cause)
+                        ? Effect.failCause(cause)
+                        : Effect.logWarning("Arena could not adopt a project spare; creating a worktree instead", {
+                            ...context,
+                            spare,
+                            cause,
+                          }).pipe(Effect.andThen(retireSlot(chat, spare).pipe(Effect.ignore)), Effect.as(undefined)),
+                    ),
+                  )
+                : undefined
             const staged = adopted
               ? adopted.info
               : yield* claimSlot({
@@ -5019,7 +5063,7 @@ export const layer: Layer.Layer<
               indexRebuilt: adopted ? !adopted.info.indexKept : undefined,
               signal: copyStop.signal,
             })
-            const syncPath: SlotSyncTimings["syncPath"] = previous ? "refreshed" : "created"
+            const syncPath: SlotSyncTimings["syncPath"] = previous ? "refreshed" : adopted ? "adopted" : "created"
             const complete = pending.complete.pipe(
               Effect.map((synced) => ({
                 timings: { syncPath, syncMs: Math.round(performance.now() - started), adoptMs, ...synced.timings },
@@ -6820,6 +6864,20 @@ export const layer: Layer.Layer<
         (entry) => Effect.promise(() => isPoolWorktree(join(slotPool(chat), entry.name))),
       )
       if (linked.filter(Boolean).length >= SLOT_POOL_TARGET) return
+      yield* buildSpareSlot(store, chat, turn, name)
+    })
+
+    /**
+     * Build a worktree at `name` that nothing owns yet, synced to `turn`'s base: claimed under the
+     * repository lock, synced outside it. Returns its directory. A failure is logged, what it left
+     * is retired, and nothing is returned.
+     */
+    const buildSpareSlot = Effect.fnUntraced(function* (
+      store: Store,
+      chat: ChatDocument,
+      turn: TurnDocument,
+      name: string,
+    ) {
       const manifestID = turn.copySnapshot?.manifestID
       if (!manifestID) return
       const manifest = yield* copyManifestByID(store, manifestID, turn._id)
@@ -6873,9 +6931,10 @@ export const layer: Layer.Layer<
           })
         }),
       )
-      if (Exit.isSuccess(outcome)) return
+      if (Exit.isSuccess(outcome)) return directory
       yield* Effect.logWarning("Arena spare worktree creation failed", { ...context, name, cause: outcome.cause })
       yield* retireSlot(chat, directory ?? join(isolatedRoot(chat.repository.root), name)).pipe(Effect.ignore)
+      return undefined
     })
 
     const forkSpareSlot = Effect.fnUntraced(function* (store: Store, turn: TurnDocument, canonical: string) {
@@ -6890,6 +6949,83 @@ export const layer: Layer.Layer<
       spareCreations.set(turn.chatID, { fiber, directory: join(isolatedRoot(canonical), name) })
       fiber.addObserver(() => {
         if (spareCreations.get(turn.chatID)?.fiber === fiber) spareCreations.delete(turn.chatID)
+      })
+    })
+
+    // A repository's spare pair for its next new chat, by `directoryIdentity` of the checkout:
+    // the ready worktrees, the build filling them, and whether this process cleared what an
+    // earlier one left.
+    const projectSpares = new Map<string, string[]>()
+    const projectSpareBuilds = new Map<string, Fiber.Fiber<void>>()
+    const projectSparesCleared = new Set<string>()
+
+    /**
+     * A ready spare for a new chat's first send in this repository, taken so nothing else adopts it.
+     * Undefined when spares are off or none is ready.
+     */
+    const takeProjectSpare = (chat: ChatDocument) => {
+      if (!projectSparesEnabled()) return undefined
+      return projectSpares.get(directoryIdentity(chat.repository.root))?.shift()
+    }
+
+    /**
+     * Fill a repository's spare pair, synced to `turn`'s base. Without a copy-on-write clone a new
+     * chat's first send copies every ignored root into two new worktrees, 8.7s per side for 14k
+     * files on Windows; adopting a spare moves it in, and its scan keeps every root that has not
+     * changed (4.0s).
+     * The records that let it keep them are this process's (`slotStates`), so what an earlier
+     * process left in the directory is retired before the first build.
+     */
+    const ensureProjectSpares = Effect.fn("Arena.ensureProjectSpares")(function* (store: Store, turn: TurnDocument) {
+      const chat = yield* promise(() => store.chat(turn.chatID))
+      if (!chat) return
+      const key = directoryIdentity(chat.repository.root)
+      const root = join(isolatedRoot(chat.repository.root), PROJECT_SPARE_DIRNAME)
+      const ready = projectSpares.get(key) ?? []
+      projectSpares.set(key, ready)
+      if (!projectSparesCleared.has(key)) {
+        projectSparesCleared.add(key)
+        const entries = yield* Effect.promise(() => readdir(root, { withFileTypes: true }).catch(() => []))
+        for (const entry of entries) {
+          if (!entry.isDirectory() || entry.name === TRASH_DIRNAME || hostedWorktree(entry.name) !== undefined) continue
+          yield* retireSlot(chat, join(root, entry.name)).pipe(Effect.ignore)
+        }
+      }
+      const free = yield* Effect.promise(() =>
+        statfs(chat.repository.root).then(
+          (stats) => Number(stats.bavail) * Number(stats.bsize),
+          () => Number.POSITIVE_INFINITY,
+        ),
+      )
+      while (ready.length < PROJECT_SPARE_TARGET && free >= PROJECT_SPARE_MIN_FREE_BYTES) {
+        const directory = yield* buildSpareSlot(
+          store,
+          chat,
+          turn,
+          `${PROJECT_SPARE_DIRNAME}/spare-${randomBytes(4).toString("hex")}`,
+        )
+        if (!directory) break
+        ready.push(directory)
+      }
+      const trash = yield* Effect.promise(() => lstat(join(root, TRASH_DIRNAME)).catch(() => undefined))
+      if (trash?.isDirectory()) yield* worktrees.sweepTrash(root)
+    })
+
+    const forkProjectSpares = Effect.fnUntraced(function* (store: Store, turn: TurnDocument) {
+      if (!projectSparesEnabled()) return
+      const chat = yield* promise(() => store.chat(turn.chatID))
+      if (!chat) return
+      const key = directoryIdentity(chat.repository.root)
+      if (projectSpareBuilds.has(key) || (projectSpares.get(key)?.length ?? 0) >= PROJECT_SPARE_TARGET) return
+      const fiber = yield* ensureProjectSpares(store, turn).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena project spare creation failed", { chatID: chat._id, cause }),
+        ),
+        Effect.forkIn(scope),
+      )
+      projectSpareBuilds.set(key, fiber)
+      fiber.addObserver(() => {
+        if (projectSpareBuilds.get(key) === fiber) projectSpareBuilds.delete(key)
       })
     })
 
