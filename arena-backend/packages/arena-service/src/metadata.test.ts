@@ -154,6 +154,18 @@ describe("Arena metadata route", () => {
     expect((await send()).status).toBe(200)
   })
 
+  test("counts each kind on its own, so branch names never use up commit messages", async () => {
+    const arena = service({
+      metadataRateLimit: { max: 1, windowMs: 60_000 },
+      now: () => new Date("2026-10-15T10:00:00Z"),
+      fetch: async () => reply("feat/retry"),
+    })
+
+    expect((await arena.metadata(request({ kind: "branch_name", changes: "diff" }))).status).toBe(200)
+    expect((await arena.metadata(request({ kind: "branch_name", changes: "diff" }))).status).toBe(429)
+    expect((await arena.metadata(request({ kind: "commit_message", changes: "diff" }))).status).toBe(200)
+  })
+
   test("a null limit never reads the database", async () => {
     const response = await service({
       metadataRateLimit: null,

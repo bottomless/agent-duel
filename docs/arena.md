@@ -833,7 +833,8 @@ kind, the file list and patch (for a branch name, the chat's title and its uncom
 the project's own instructions from Project Settings; the service builds the prompt around them, so
 the route is not a general model endpoint. It takes at most 60,000 characters of changes and 1,000
 of instructions, caps the reply, folds a branch name into the slug the desktop accepts, and allows
-each hosted account 60 requests an hour; a BYOK build runs it on the user's key without a limit.
+each hosted account 60 requests an hour of each kind, so branch names never use up commit
+messages; a BYOK build runs it on the user's key without a limit.
 Any failure, a missing control-plane route included, gives a fixed message such as `Update 3 files`
 (`git-metadata-generator.ts`), so a commit never waits on the model; the branch dialog stays empty.
 Deploy the control plane with the route before the desktop release that calls it.

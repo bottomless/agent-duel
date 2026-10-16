@@ -88,6 +88,7 @@ function prompt(input: Input) {
 type LimitDocument = {
   readonly _id: string
   readonly userId: string
+  readonly kind: MetadataKind
   readonly window: number
   readonly count: number
 }
@@ -96,19 +97,23 @@ function limits(db: ArenaDb): ArenaCollection<LimitDocument> {
   return db.collection<LimitDocument>("arenaMetadataLimits")
 }
 
-/** Counts a request against the caller's window and answers whether it is within the limit. */
-async function admit(db: ArenaDb, userId: string, limit: MetadataRateLimit, now: Date) {
+/**
+ * Counts a request against the caller's window for its kind and answers whether it is within the
+ * limit. Each kind counts on its own, so branch names offered every time a dialog opens never use
+ * up the commit messages.
+ */
+async function admit(db: ArenaDb, userId: string, kind: MetadataKind, limit: MetadataRateLimit, now: Date) {
   const window = Math.floor(now.getTime() / limit.windowMs)
-  const _id = createHash("sha256").update(`${userId.length}:${userId}`).digest("hex")
+  const _id = createHash("sha256").update(`${userId.length}:${userId}|${kind}`).digest("hex")
   const counted = await limits(db).findOneAndUpdate(
     { _id, window },
     { $inc: { count: 1 } },
     { returnDocument: "after" },
   )
   if (counted) return counted.count <= limit.max
-  // A new window replaces the account's last one, so each account keeps one document. Two
+  // A new window replaces the last one, so each account keeps one document per kind. Two
   // requests that open a window at once can both start it at one, which lets one extra through.
-  await limits(db).replaceOne({ _id }, { _id, userId, window, count: 1 }, { upsert: true })
+  await limits(db).replaceOne({ _id }, { _id, userId, kind, window, count: 1 }, { upsert: true })
   return limit.max >= 1
 }
 
@@ -210,7 +215,7 @@ export async function handleMetadataRequest(request: Request, context: ArenaCont
   if (limit) {
     let allowed: boolean
     try {
-      allowed = await admit(await context.db(), caller.id, limit, context.now())
+      allowed = await admit(await context.db(), caller.id, input.kind, limit, context.now())
     } catch (error) {
       console.error("[arena-service] Arena metadata limit could not be read", error)
       return Response.json({ error: "Arena metadata is unavailable" }, { status: 503 })
