@@ -22,6 +22,10 @@ interface FeedbackAgentSource {
   getTimelineRows(id: string): Promise<AgentTimelineRow[]>;
 }
 
+interface FeedbackAgentStorage {
+  get(id: string): Promise<{ readonly workspaceId?: string } | null>;
+}
+
 interface FeedbackGitSource {
   getSnapshot(
     cwd: string,
@@ -31,6 +35,9 @@ interface FeedbackGitSource {
 
 export interface FeedbackContextDependencies {
   readonly agents: FeedbackAgentSource;
+  readonly storage: FeedbackAgentStorage;
+  /** Resumes a stored agent and its timeline, as opening its chat does. */
+  readonly loadAgent: (id: string) => Promise<FeedbackAgent>;
   readonly git: FeedbackGitSource;
   readonly now?: () => Date;
   readonly readGitStatus?: (cwd: string) => Promise<string>;
@@ -48,6 +55,32 @@ function failureReason(error: unknown): string {
   return error instanceof Error ? error.message.slice(0, 512) : "Git status is unavailable";
 }
 
+// The daemon holds an agent only while a chat keeps it loaded, and feedback can name a chat that
+// was archived or never reopened since a restart. Its history is stored, so it is loaded the way
+// opening the chat loads it. An unarchive can move an agent to another workspace in storage while
+// the loaded copy keeps the old one, so either may match the workspace the feedback names.
+async function feedbackAgent(
+  dependencies: FeedbackContextDependencies,
+  target: FeedbackContextTarget,
+): Promise<FeedbackAgent> {
+  const record = await dependencies.storage.get(target.agentId);
+  let agent = dependencies.agents.getAgent(target.agentId);
+  if (!agent && !record) throw new Error("Feedback agent was not found");
+  if (!agent) {
+    try {
+      agent = await dependencies.loadAgent(target.agentId);
+    } catch (error) {
+      throw new Error(`Feedback agent could not be loaded: ${failureReason(error)}`, {
+        cause: error,
+      });
+    }
+  }
+  if (agent.workspaceId !== target.workspaceId && record?.workspaceId !== target.workspaceId) {
+    throw new Error("Feedback agent belongs to another workspace");
+  }
+  return agent;
+}
+
 export function createFeedbackContextCapture(
   dependencies: FeedbackContextDependencies,
 ): FeedbackContextCapture {
@@ -55,10 +88,7 @@ export function createFeedbackContextCapture(
   const status = dependencies.readGitStatus ?? readGitStatus;
   return {
     async capture(target) {
-      const agent = dependencies.agents.getAgent(target.agentId);
-      if (!agent || agent.workspaceId !== target.workspaceId) {
-        throw new Error("Feedback session is unavailable");
-      }
+      const agent = await feedbackAgent(dependencies, target);
       const rows = await dependencies.agents.getTimelineRows(agent.id);
       const timeline = rows.map((row) =>
         row.providerMessageId

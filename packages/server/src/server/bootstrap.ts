@@ -211,6 +211,7 @@ import { createRequireSessionMiddleware } from "./accounts/middleware.js";
 import { createArenaRuntimeRouter } from "./accounts/arena-runtime-router.js";
 import { FeedbackBackend } from "./feedback/backend.js";
 import { createFeedbackContextCapture, type FeedbackContextCapture } from "./feedback/context.js";
+import { ensureAgentLoaded } from "./agent/agent-loading.js";
 import { createFeedbackRouter } from "./feedback/routes.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { createGitMutationService } from "./session/git-mutation/git-mutation-service.js";
@@ -923,6 +924,8 @@ export async function createPaseoDaemon(
   });
   feedbackContextCapture = createFeedbackContextCapture({
     agents: agentManager,
+    storage: agentStorage,
+    loadAgent: (agentId) => ensureAgentLoaded(agentId, { agentManager, agentStorage, logger }),
     git: workspaceGitService,
   });
 

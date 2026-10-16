@@ -10,6 +10,43 @@ const feedback = {
   workspaceId: "workspace-1",
 };
 
+function agent(workspaceId: string) {
+  return {
+    id: "agent-1",
+    workspaceId,
+    provider: "opencode" as const,
+    cwd: "/repo",
+    persistence: { sessionId: "session-1" },
+  };
+}
+
+const userMessage = {
+  seq: 1,
+  timestamp: "2026-09-22T09:58:00.000Z",
+  item: { type: "user_message" as const, text: "bug" },
+};
+
+const notGit = {
+  getSnapshot: async () => ({
+    git: {
+      isGit: false,
+      repoRoot: null,
+      mainRepoRoot: null,
+      currentBranch: null,
+      remoteUrl: null,
+      isPaseoOwnedWorktree: false,
+      isDirty: null,
+      baseRef: null,
+      aheadBehind: null,
+      upstreamRef: null,
+      aheadOfOrigin: null,
+      behindOfOrigin: null,
+      hasRemote: false,
+      diffStat: null,
+    },
+  }),
+};
+
 describe("feedback context", () => {
   it("captures the canonical timeline and a fresh git status", async () => {
     const capture = createFeedbackContextCapture({
@@ -35,6 +72,10 @@ describe("feedback context", () => {
             },
           },
         ],
+      },
+      storage: { get: async () => ({ workspaceId: "workspace-1" }) },
+      loadAgent: async () => {
+        throw new Error("The agent is already loaded");
       },
       git: {
         getSnapshot: async () => ({
@@ -91,40 +132,80 @@ describe("feedback context", () => {
     });
   });
 
-  it("refuses to capture a different workspace", async () => {
+  it("loads an agent the daemon does not hold, such as one archived since the battle", async () => {
+    const loaded: string[] = [];
+    let live: ReturnType<typeof agent> | null = null;
     const capture = createFeedbackContextCapture({
       agents: {
-        getAgent: () => ({
-          id: "agent-1",
-          workspaceId: "workspace-2",
-          provider: "codex",
-          cwd: "/repo",
-          persistence: null,
-        }),
-        getTimelineRows: async () => [],
+        getAgent: () => live,
+        getTimelineRows: async () => (live ? [userMessage] : []),
       },
-      git: {
-        getSnapshot: async () => ({
-          git: {
-            isGit: false,
-            repoRoot: null,
-            mainRepoRoot: null,
-            currentBranch: null,
-            remoteUrl: null,
-            isPaseoOwnedWorktree: false,
-            isDirty: null,
-            baseRef: null,
-            aheadBehind: null,
-            upstreamRef: null,
-            aheadOfOrigin: null,
-            behindOfOrigin: null,
-            hasRemote: false,
-            diffStat: null,
-          },
-        }),
+      storage: { get: async () => ({ workspaceId: "workspace-1" }) },
+      loadAgent: async (id) => {
+        loaded.push(id);
+        live = agent("workspace-1");
+        return live;
       },
+      git: notGit,
+      now: () => new Date("2026-09-22T10:00:00.000Z"),
     });
 
-    await expect(capture.capture(feedback)).rejects.toThrow("Feedback session is unavailable");
+    const context = await capture.capture(feedback);
+
+    expect(loaded).toEqual(["agent-1"]);
+    expect(context.timeline).toEqual([userMessage]);
+    expect(context.git).toEqual({ kind: "not_git" });
+  });
+
+  it("accepts the workspace an unarchive moved the agent to", async () => {
+    const capture = createFeedbackContextCapture({
+      agents: { getAgent: () => agent("workspace-2"), getTimelineRows: async () => [userMessage] },
+      storage: { get: async () => ({ workspaceId: "workspace-1" }) },
+      loadAgent: async () => {
+        throw new Error("The agent is already loaded");
+      },
+      git: notGit,
+    });
+
+    await expect(capture.capture(feedback)).resolves.toMatchObject({ timeline: [userMessage] });
+  });
+
+  it("refuses to capture a different workspace", async () => {
+    const capture = createFeedbackContextCapture({
+      agents: { getAgent: () => agent("workspace-2"), getTimelineRows: async () => [] },
+      storage: { get: async () => ({ workspaceId: "workspace-2" }) },
+      loadAgent: async () => agent("workspace-2"),
+      git: notGit,
+    });
+
+    await expect(capture.capture(feedback)).rejects.toThrow(
+      "Feedback agent belongs to another workspace",
+    );
+  });
+
+  it("says when the agent does not exist", async () => {
+    const capture = createFeedbackContextCapture({
+      agents: { getAgent: () => null, getTimelineRows: async () => [] },
+      storage: { get: async () => null },
+      loadAgent: async () => agent("workspace-1"),
+      git: notGit,
+    });
+
+    await expect(capture.capture(feedback)).rejects.toThrow("Feedback agent was not found");
+  });
+
+  it("says why an agent could not be loaded", async () => {
+    const capture = createFeedbackContextCapture({
+      agents: { getAgent: () => null, getTimelineRows: async () => [] },
+      storage: { get: async () => ({ workspaceId: "workspace-1" }) },
+      loadAgent: async () => {
+        throw new Error("OpenCode session is gone");
+      },
+      git: notGit,
+    });
+
+    await expect(capture.capture(feedback)).rejects.toThrow(
+      "Feedback agent could not be loaded: OpenCode session is gone",
+    );
   });
 });
