@@ -1,5 +1,5 @@
 import type { ComparisonFileFact } from "./comparison-evidence"
-import { Effect, Semaphore, Stream } from "effect"
+import { Effect, Exit, Semaphore, Stream } from "effect"
 import { randomUUID } from "crypto"
 import { spawn } from "child_process"
 import {
@@ -3203,33 +3203,52 @@ export const readCanonicalBranch = Effect.fn("ArenaGit.readCanonicalBranch")(fun
 export const inspectCanonical = Effect.fn("ArenaGit.inspectCanonical")(function* (directory: string) {
   const git = yield* Git.Service
   const root = yield* readRoot(git, directory, "find_canonical_root")
-  const commonGitDir = yield* read(git, root, "read_common_git_dir", [
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ])
-  const head = yield* read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])
-  const branch = yield* readBranch(git, root)
-  const status = yield* read(git, root, "read_canonical_status", [
-    "status",
-    "--porcelain=v1",
-    "--untracked-files=all",
-    "--no-renames",
-    "--",
-    ".",
-  ])
-  const conflicts = yield* conflictPaths(git, root)
+  // Given the root, every question is independent, and on Windows each is a process start of tens
+  // of milliseconds, so they are asked at once. A failure still surfaces in the order they were
+  // asked one by one. The index tree is read beside them and kept only when nothing is unmerged,
+  // the one case where `write-tree` can answer.
+  const asked = yield* Effect.all(
+    {
+      commonGitDir: Effect.exit(
+        read(git, root, "read_common_git_dir", ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+      ),
+      head: Effect.exit(read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])),
+      branch: Effect.exit(readBranch(git, root)),
+      status: Effect.exit(
+        read(git, root, "read_canonical_status", [
+          "status",
+          "--porcelain=v1",
+          "--untracked-files=all",
+          "--no-renames",
+          "--",
+          ".",
+        ]),
+      ),
+      conflicts: Effect.exit(conflictPaths(git, root)),
+      indexTree: Effect.exit(readIndexTree(git, root, "read_canonical_index")),
+    },
+    { concurrency: "unbounded" },
+  )
+  const commonGitDir = yield* settled(asked.commonGitDir)
+  const head = yield* settled(asked.head)
+  const branch = yield* settled(asked.branch)
+  const status = yield* settled(asked.status)
+  const conflicts = yield* settled(asked.conflicts)
   return {
     root,
     commonGitDir,
     head,
     branch,
     detached: branch === undefined,
-    ...(conflicts.length > 0 ? {} : { indexTree: yield* readIndexTree(git, root, "read_canonical_index") }),
+    ...(conflicts.length > 0 ? {} : { indexTree: yield* settled(asked.indexTree) }),
     conflicts,
     clean: status.length === 0,
   } satisfies CanonicalState
 })
+
+/** What an exit held, as the effect that produced it would have ended. */
+const settled = <A, E>(exit: Exit.Exit<A, E>) =>
+  Exit.isSuccess(exit) ? Effect.succeed(exit.value) : Effect.failCause(exit.cause)
 
 const conflictPaths = Effect.fn("ArenaGit.conflictPaths")(function* (git: Git.Interface, root: string) {
   const files = yield* read(git, root, "read_conflicts", ["diff", "--name-only", "--diff-filter=U"])
