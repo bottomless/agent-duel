@@ -1064,6 +1064,12 @@ closed. A stream that ended but never closed stalled inside the engine, not upst
 with the control plane's `arenaAssignmentGenerationMetrics` record for the same `generationID`,
 whose `createdAt` is when the hosted function reached the end of the response.
 
+A request OpenRouter refuses reaches the contestant as the same neutral error, and only the service
+sees why. It logs `[arena-service] OpenRouter refused a contestant request` with the battle ID
+(`scopeID`), assignment, generation, model, status and OpenRouter's answer. For a hosted build that
+line is in the control plane's Vercel runtime logs, which keep about a day:
+`vercel logs --query '"<battleID>"' --since 1d`. A BYOK build writes it to the engine log.
+
 `No recent activity` means the run has emitted no event for 90 seconds; it is not proof of a
 stalled process. Explicit retry and user-input waits take precedence. A tool call that is still
 running reads `Running a command` or `Running a tool` instead: a long command emits nothing until it

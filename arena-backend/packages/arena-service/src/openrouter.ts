@@ -254,16 +254,44 @@ function assignmentHeaders(request: Request) {
   return { assignmentID, scopeID }
 }
 
+// Enough of an upstream error to name the cause; some provider errors quote the request.
+const MAX_LOGGED_REFUSAL = 4_000
+
+interface RefusalContext {
+  readonly userId: string
+  readonly scopeID: string
+  readonly assignmentID: string
+  readonly generationID: string
+  readonly model: string
+}
+
+// The client only ever gets a neutral answer, so the reason OpenRouter gave is logged here, the one
+// place that sees it. `scopeID` is the battle ID a feedback report carries, which finds the line.
+function logRefusal(context: RefusalContext, status: number, upstream: string) {
+  console.error(
+    "[arena-service] OpenRouter refused a contestant request",
+    JSON.stringify({ ...context, status, upstream: upstream.slice(0, MAX_LOGGED_REFUSAL) }),
+  )
+}
+
 async function sanitizeAssignedResponse(
   response: Response,
-  generationID: string,
+  refusal: RefusalContext,
   startedAt: number,
   complete: (metrics: GenerationMetrics | undefined) => Promise<void>,
 ) {
+  const { generationID } = refusal
   const headers = assignedHeaders(response.headers)
   if (!response.ok) {
+    const upstream = await response.text().catch(() => "")
+    logRefusal(refusal, response.status, upstream)
     if (response.status === 402) {
-      const payload: unknown = await response.json().catch(() => null)
+      let payload: unknown = null
+      try {
+        payload = JSON.parse(upstream)
+      } catch {
+        payload = null
+      }
       return Response.json(classifyPaymentError(payload), { status: 402, headers })
     }
     return Response.json(
@@ -365,7 +393,14 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       signal: request.signal,
     })
     // Awaited so a body that fails to read or parse still gets the 502 below.
-    return await sanitizeAssignedResponse(response, generationID, startedAt, async (metrics) => {
+    const refusal = {
+      userId: caller.id,
+      scopeID: assignment.scopeID,
+      assignmentID: assignment.assignmentID,
+      generationID,
+      model: routeAssignment.model.slug,
+    }
+    return await sanitizeAssignedResponse(response, refusal, startedAt, async (metrics) => {
       if (!metrics || !requestedGenerationID) return
       try {
         await recordAssignmentGenerationMetrics(db, {

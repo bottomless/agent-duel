@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import type { ArenaDb } from "./collection"
 import type { ModelPool } from "./pool"
 import { createArenaService, type ArenaServiceOptions } from "./service"
@@ -380,6 +380,82 @@ describe("OpenRouter proxy", () => {
     }
     upstreamFailure = new Response("not JSON", { status: 402 })
     expect(await (await invoke()).text()).toContain("arena_payment_required")
+  })
+
+  test("logs why OpenRouter refused a contestant request, and keeps the client's answer neutral", async () => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn|38:chat|30:ses_refused|1:4",
+          assignments: [{ assignmentID: "opaque-id", model: pool[2] }],
+        },
+      ],
+    })
+    let upstreamFailure: Response = new Response()
+    const invoke = openrouter({ db: async () => db, fetch: async () => upstreamFailure })
+    const request = () =>
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn|38:chat|30:ses_refused|1:4",
+          "X-Arena-Generation-ID": "gen_00000000000000000000000000000009",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+      })
+    const logged: Array<{ readonly message: unknown; readonly detail: unknown }> = []
+    const error = spyOn(console, "error").mockImplementation((message: unknown, detail: unknown) => {
+      logged.push({ message, detail })
+    })
+    const lastRecord = () => JSON.parse(String(logged.at(-1)?.detail))
+    try {
+      upstreamFailure = Response.json(
+        {
+          error: {
+            code: 400,
+            message: "Provider returned error",
+            metadata: { provider_name: "xAI", raw: `{"error":"Too many images: ${"x".repeat(10_000)}"}` },
+          },
+        },
+        { status: 400 },
+      )
+      const refused = await invoke(request())
+      expect(refused.status).toBe(400)
+      expect(await refused.text()).toBe(
+        JSON.stringify({ error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }),
+      )
+      expect(logged).toHaveLength(1)
+      expect(logged[0]?.message).toBe("[arena-service] OpenRouter refused a contestant request")
+      const record = lastRecord()
+      expect(record).toMatchObject({
+        scopeID: "turn|38:chat|30:ses_refused|1:4",
+        assignmentID: "opaque-id",
+        generationID: "gen_00000000000000000000000000000009",
+        userId: "user-1",
+        model: "x-ai/grok-4.6",
+        status: 400,
+      })
+      expect(String(record.upstream)).toContain("Provider returned error")
+      expect(String(record.upstream)).toContain("Too many images")
+      expect(String(logged[0]?.detail).length).toBeLessThan(5_000)
+
+      upstreamFailure = new Response("upstream gateway text", { status: 400 })
+      await invoke(request())
+      expect(lastRecord()).toMatchObject({ status: 400, upstream: "upstream gateway text" })
+
+      upstreamFailure = Response.json(
+        { error: { message: "Insufficient credits", metadata: { limit_source: "openrouter_credits" } } },
+        { status: 402 },
+      )
+      const payment = await invoke(request())
+      expect(await payment.text()).toContain("arena_credit_limit")
+      expect(lastRecord()).toMatchObject({ status: 402 })
+      expect(String(lastRecord().upstream)).toContain("openrouter_credits")
+    } finally {
+      error.mockRestore()
+    }
   })
 
   test.each([
