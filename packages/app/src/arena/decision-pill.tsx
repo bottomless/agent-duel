@@ -1,11 +1,16 @@
 import { useCallback, useEffect } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { Button } from "@/components/ui/button";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
-import { ArenaSideChoiceButton, DiscardDecision, VoteDecision } from "./decision-bar";
+import {
+  ArenaRunningPillButton,
+  ArenaSideChoiceButton,
+  DiscardDecision,
+  VoteDecision,
+} from "./decision-bar";
 import {
   arenaDecisionPhase,
+  arenaRunningDecisionHint,
   arenaRunningDecisionOrder,
   type ArenaDecisionPhase,
 } from "./decision-state";
@@ -101,18 +106,15 @@ function BattleStopDecision({
     void actions.stop();
   }, [actions]);
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      style={styles.stopChoice}
+    <ArenaRunningPillButton
+      hoverSide={null}
+      label="Stop"
       loading={actions.pendingAction?.kind === "stop"}
       disabled={actions.pending || !phase.canStop}
       onPress={handleStop}
       accessibilityLabel="Stop battle"
       testID="arena-stop-battle"
-    >
-      Stop
-    </Button>
+    />
   );
 }
 
@@ -132,6 +134,7 @@ export function ArenaDecisionPill({
   const phase = arenaDecisionPhase(snapshot);
   const stopped = phase.kind === "awaiting_stop_resolution";
   const bothFailed = phase.kind === "awaiting_vote" && phase.canDiscard;
+  const runningHint = arenaRunningDecisionHint(phase);
   const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
   const visible = isArenaBattleOnScreen(snapshot) && showChoices;
   const handleLayout = useCallback(
@@ -157,6 +160,7 @@ export function ArenaDecisionPill({
           {phase.canRetry ? "Both agents failed · retry or discard" : "Both agents failed"}
         </Text>
       ) : null}
+      {runningHint ? <Text style={styles.hint}>{runningHint}</Text> : null}
       <View style={styles.pill} testID="arena-battle-choice-row">
         {phase.kind === "running"
           ? arenaRunningDecisionOrder(phase).map((choice) =>
@@ -205,10 +209,6 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border,
     borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.surface2,
-  },
-  stopChoice: {
-    minWidth: 96,
-    borderRadius: theme.borderRadius.full,
   },
   hint: {
     color: theme.colors.foregroundMuted,

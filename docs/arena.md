@@ -247,8 +247,9 @@ Anchor it over the transcript above the composer, with a gray surface inside the
 transparent, click-through area around it. It stays reachable while reviewing either thread or
 the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep B`; an early
 choice while the battle runs sits there too. While neither result is selectable, show one `Stop`
-button. When one result becomes selectable, put `Choose A now` or `Choose B now` in its side
-and `Stop` in the other side. `Tie` is disabled unless both results can be chosen. When neither
+button. When one result becomes selectable, put `Choose A early` or `Choose B early` in its side
+and `Stop` in the other side, and name the side still working above the pill
+(`Agent A is still working`). `Tie` is disabled unless both results can be chosen. When neither
 can, both sides failed: `Discard` takes Tie's place, under `Both agents failed · retry or
 discard` while a side can still be retried and `Both agents failed` once neither can.
 Choosing early stops the other side, so it confirms first. Discarding a battle also requires
@@ -256,7 +257,11 @@ confirmation. Action failures remain on the battle until another attempt; the no
 action controls provide the retry so a destructive operation is never retried automatically.
 `Choose A` and `Choose B` carry their side's colour as a tint, the blue and amber of the diff's
 column headings, so the vote reads as picking that column; two choices of equal weight mean
-neither can be the accent. `Tie`, `Stop`, and `Discard` stay plain. Transitional and recovery
+neither can be the accent. `Tie` and `Discard` stay plain. While the battle runs, `Stop` and the
+early pick share one neutral outline, and the early pick takes its side's tint only on hover. An
+uneven pair, one filled or brighter, read as a switch already set to that side, since the reply
+target fills its selected segment with the same tint, and voters felt pushed to take it before
+the other side finished. Transitional and recovery
 states use the **decision bar** (`packages/app/src/arena/decision-bar.tsx`) in the composer's
 slot, except setup and application progress, which stay in the conversation.
 
