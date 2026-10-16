@@ -59,9 +59,13 @@ app shows none of them, and a run that read many put one snapshot past the daemo
 limit, which dropped the window's connection after a vote or a reply (`withoutAttachmentData` in
 `arena/live.ts`). Nor do earlier turns: a contestant session is a fork of the whole chat, so a run
 goes to the window from its prompt on (`fromPrompt` in `arena/transcript.ts`); sent whole, a long
-chat's two forks passed the same limit whenever it was opened or sent to. An Arena answer still over
-half that limit is refused with `chat_too_large` rather than dropping the socket, and the app tells
-the user to start a new chat (`server/arena/payload-limit.ts`). Research gets the same transcript, sent first so a full upload buffer drops images
+chat's two forks passed the same limit whenever it was opened or sent to. Within the turn, a tool
+call's large fields (command output, a read or written file, an edit's text) go as their start and
+end, listed in `state.previewed`, and the app fetches the part whole when the call is opened
+(`withToolPreviews` in `arena/live.ts`, `arena.run.get_part`). Snapshots carry no stored `events`; no
+window reads them. An Arena answer still over half the socket limit is refused with `chat_too_large`
+rather than dropping the socket, and the app tells the user to start a new chat
+(`server/arena/payload-limit.ts`). Research gets the same transcript, sent first so a full upload buffer drops images
 rather than the transcript, and each image as an `images` record; both sides share a battle's images,
 so each is uploaded once. The control plane refuses a whole batch that names a collection it does not know, so
 deploy it before a desktop build that sends a new one.

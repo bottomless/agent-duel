@@ -3938,6 +3938,13 @@ class OpenCodeAgentSession implements AgentSession {
           body: { ...(mode ? { mode } : {}), ...(answers?.length ? { answers } : {}) },
         }),
       diff: (turnId) => this.arenaDiff(`/arena/turns/${encodeURIComponent(turnId)}/diff`),
+      runPart: async (runId, partId) =>
+        (
+          await this.arenaFetch(
+            `/arena/runs/${encodeURIComponent(runId)}/parts/${encodeURIComponent(partId)}`,
+            z.object({ part: z.unknown() }),
+          )
+        ).part,
       replyQuestion: (runId, requestId, answers) =>
         this.arenaRequest(
           `/arena/runs/${encodeURIComponent(

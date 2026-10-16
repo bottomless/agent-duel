@@ -216,7 +216,7 @@ describe("Arena UI subscription", () => {
     await Promise.resolve();
   });
 
-  it("stops retrying a chat too long to load and says so, until Retry", async () => {
+  it("stops retrying a battle too large to load and says so, until Retry", async () => {
     vi.useFakeTimers();
     try {
       const client = new Client();

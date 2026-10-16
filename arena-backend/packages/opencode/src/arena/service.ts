@@ -313,6 +313,26 @@ class PartialApplyError extends Error {
   }
 }
 
+/** The sessions a run's transcript archive holds, as `Arena.archive` wrote them. */
+async function archivedSessions(store: Store, run: RunDocument): Promise<unknown[]> {
+  const manifest = run.transcriptArchiveID
+    ? await store.sessionArchives.findOne({ _id: run.transcriptArchiveID, runID: run._id })
+    : undefined
+  const artifact = await store.artifacts.findOne({ _id: manifest?.artifactIDs[0] ?? `${run._id}|transcript` })
+  if (!artifact) throw new Error(`Arena transcript archive not found: ${run._id}`)
+  const payload = ArenaTranscriptArtifact.decode(artifact)
+  if (!Array.isArray(payload)) throw new Error(`Arena transcript archive is invalid: ${run._id}`)
+  return payload
+}
+
+function archivedMessages(payload: readonly unknown[]): unknown[] {
+  return payload.flatMap((item) =>
+    typeof item === "object" && item !== null && "messages" in item && Array.isArray(item.messages)
+      ? item.messages
+      : [],
+  )
+}
+
 function promise<A>(run: () => Promise<A>) {
   return Effect.tryPromise({ try: run, catch: error })
 }
@@ -988,6 +1008,8 @@ export interface Interface {
   readonly trimEnvironments: (keep: number, volumeOf?: string) => Effect.Effect<ArenaEnvironmentTrim, Error>
   readonly snapshot: (chatID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly turn: (turnID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
+  /** One of a run's parts whole; a snapshot sends its large tool fields shortened (`withToolPreviews`). */
+  readonly runPart: (runID: string, partID: string) => Effect.Effect<{ readonly part: unknown }, Error>
   readonly diff: (turnID: string) => Effect.Effect<ArenaSchema.ComparisonDiff, Error>
   readonly inspect: (chatID: string, turnID: string, side: Side) => Effect.Effect<ArenaSchema.Snapshot, Error>
   readonly inspectTree: (chatID: string, turnID: string, side: Side) => Effect.Effect<ArenaSchema.InspectTree, Error>
@@ -1517,23 +1539,13 @@ export const layer: Layer.Layer<
             if (run.archiveComplete) {
               const archived = yield* bestEffort(
                 promise(async () => {
-                  const manifest = run.transcriptArchiveID
-                    ? await store.sessionArchives.findOne({
-                        _id: run.transcriptArchiveID,
-                        runID: run._id,
-                      })
-                    : undefined
-                  const artifact = await store.artifacts.findOne({
-                    _id: manifest?.artifactIDs[0] ?? `${run._id}|transcript`,
-                  })
-                  if (!artifact) throw new Error(`Arena transcript archive not found: ${run._id}`)
-                  const payload = ArenaTranscriptArtifact.decode(artifact)
-                  if (!Array.isArray(payload)) throw new Error(`Arena transcript archive is invalid: ${run._id}`)
+                  const payload = await archivedSessions(store, run)
                   const root = payload.find(
                     (item): item is Record<string, unknown> =>
                       typeof item === "object" &&
                       item !== null &&
                       !Array.isArray(item) &&
+                      "sessionID" in item &&
                       item.sessionID === run.rootSessionID,
                   )
                   if (!root || !Array.isArray(root.messages)) {
@@ -1546,16 +1558,7 @@ export const layer: Layer.Layer<
                     store,
                     run._id,
                     ArenaTranscript.fromPrompt(
-                      ArenaTranscript.project(
-                        payload.flatMap((item) =>
-                          typeof item === "object" &&
-                          item !== null &&
-                          "messages" in item &&
-                          Array.isArray(item.messages)
-                            ? item.messages
-                            : [],
-                        ),
-                      ),
+                      ArenaTranscript.project(archivedMessages(payload)),
                       run.rootSessionID,
                       run.promptMessageID,
                     ),
@@ -1750,7 +1753,7 @@ export const layer: Layer.Layer<
       const store = yield* available()
       const chat = yield* promise(() => store.chat(id))
       if (chat) yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
-      const current = yield* promise(() => store.snapshot(id, afterSequence))
+      const current = yield* promise(() => store.snapshot(id))
       return yield* projectSnapshot(current, afterSequence)
     })
 
@@ -1761,8 +1764,28 @@ export const layer: Layer.Layer<
         const chat = yield* promise(() => store.chat(turn.chatID))
         if (chat) yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
       }
-      const current = yield* promise(() => store.snapshotTurn(id, afterSequence))
+      const current = yield* promise(() => store.snapshotTurn(id))
       return yield* projectSnapshot(current, afterSequence)
+    })
+
+    const runPart = Effect.fn("Arena.runPart")(function* (runID: string, partID: string) {
+      const store = yield* available()
+      const run = yield* promise(() => store.run(runID))
+      if (!run) return yield* Effect.fail(new Error(`Arena run not found: ${runID}`))
+      const transcript: unknown[] = run.archiveComplete
+        ? archivedMessages(yield* promise(() => archivedSessions(store, run)))
+        : yield* inDirectory(
+            run.worktree,
+            Effect.forEach(
+              [run.rootSessionID, ...run.descendantSessionIDs],
+              (id) => sessions.messages({ sessionID: SessionID.make(id) }),
+              { concurrency: 4 },
+            ),
+          ).pipe(
+            Effect.map((transcripts) => transcripts.flat()),
+            Effect.mapError(error),
+          )
+      return { part: jsonValue(ArenaTranscript.wholePart(transcript, partID)) }
     })
 
     const comparisonDiff = Effect.fn("Arena.comparisonDiff")(function* (id: string) {
@@ -10034,6 +10057,7 @@ export const layer: Layer.Layer<
       trimEnvironments,
       snapshot,
       turn: turnSnapshot,
+      runPart,
       diff: comparisonDiff,
       inspect,
       inspectTree,

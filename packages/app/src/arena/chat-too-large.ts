@@ -1,11 +1,11 @@
 /**
- * A chat whose battle state is past what the daemon sends a window. Reconnecting gets the same
- * answer, so the stream stops retrying and the composer says what to do instead of failing quietly.
+ * A battle whose state is past what the daemon sends a window. Reconnecting gets the same answer, so
+ * the stream stops retrying and the chat says what to do instead of failing quietly.
  */
 export class ArenaChatTooLargeError extends Error {
   constructor() {
     super(
-      "This chat is too long to load. Start a new chat to keep going. Your code changes are already in your project.",
+      "This battle is too large to show. Start a new chat to keep going. Your code changes are already in your project.",
     );
     this.name = "ArenaChatTooLargeError";
   }

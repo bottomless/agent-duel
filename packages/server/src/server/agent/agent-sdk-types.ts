@@ -761,6 +761,7 @@ export interface AgentSession {
       answers?: readonly ArenaReviewAnswer[],
     ): Promise<ArenaSnapshot>;
     diff(turnId: string): Promise<ArenaComparisonDiff>;
+    runPart(runId: string, partId: string): Promise<unknown>;
     replyQuestion(runId: string, requestId: string, answers: string[][]): Promise<ArenaSnapshot>;
     rejectQuestion(runId: string, requestId: string): Promise<ArenaSnapshot>;
     replyPermission(

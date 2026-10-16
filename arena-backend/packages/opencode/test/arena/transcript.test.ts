@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { fromPrompt, project } from "../../src/arena/transcript"
+import { fromPrompt, project, wholePart } from "../../src/arena/transcript"
 
 const original = process.env.OPENCODE_ARENA
 beforeEach(() => {
@@ -112,4 +112,45 @@ test("keeps none of the forked chat before the prompt is written", () => {
 test("keeps a run without a boundary from its last user message, as the app reads it", () => {
   const result = fromPrompt(forkedRun(), "root", undefined)
   expect(result.messages.map((message) => message.id)).toEqual(["prompt", "child-work", "reply"])
+})
+
+test("sends a tool call's large fields as their start and end, and the whole part on request", () => {
+  const big = `first line\n${"x".repeat(20_000)}\nlast line`
+  const message = {
+    info: { id: "reply", sessionID: "root", role: "assistant", time: { created: 1 } },
+    parts: [
+      {
+        id: "call",
+        messageID: "reply",
+        sessionID: "root",
+        type: "tool",
+        tool: "write",
+        callID: "call-1",
+        state: {
+          status: "completed",
+          input: { filePath: "big.txt", content: big },
+          output: big,
+          metadata: { output: big, sessionId: "child", answers: [["Yes"]] },
+          time: { start: 1, end: 2 },
+        },
+      },
+    ],
+  }
+  const state = project([message]).parts.reply[0].state as Record<string, any>
+
+  expect(state.previewed).toEqual(["output", "input.content", "metadata.output"])
+  for (const value of [state.output, state.input.content, state.metadata.output]) {
+    expect(value.length).toBeLessThan(5_000)
+    expect(value.startsWith("first line")).toBe(true)
+    expect(value.endsWith("last line")).toBe(true)
+    expect(value).toContain("more characters")
+  }
+  expect(state.input.filePath).toBe("big.txt")
+  expect(state.metadata).toMatchObject({ sessionId: "child", answers: [["Yes"]] })
+
+  const whole = wholePart([message], "call") as Record<string, any>
+  expect(whole.state.output).toBe(big)
+  expect(whole.state.input.content).toBe(big)
+  expect(whole.state.previewed).toBeUndefined()
+  expect(wholePart([message], "missing")).toBeNull()
 })

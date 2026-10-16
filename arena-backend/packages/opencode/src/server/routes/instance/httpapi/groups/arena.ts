@@ -284,6 +284,20 @@ const group = HttpApiGroup.make("arena")
     ),
   )
   .add(
+    HttpApiEndpoint.get("runPart", "/arena/runs/:runID/parts/:partID", {
+      params: { runID: Schema.String, partID: Schema.String },
+      query: WorkspaceRoutingQuery,
+      success: Schema.Struct({ part: Schema.Unknown }),
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.run.part",
+        summary: "Read one part of a run whole",
+        description: "Return a run part with the large tool fields a snapshot sends shortened.",
+      }),
+    ),
+  )
+  .add(
     HttpApiEndpoint.get("diff", "/arena/turns/:turnID/diff", {
       params: { turnID: Schema.String },
       query: WorkspaceRoutingQuery,

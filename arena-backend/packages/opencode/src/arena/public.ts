@@ -1,7 +1,6 @@
 import { Schema } from "effect"
 import { basename } from "path"
 import { canDiscardBattle, canRetryRun, canTie, type Resolution, type Side } from "./domain"
-import { eventWithoutAttachmentData } from "./live"
 import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument, SingleAgentRatingDocument } from "./records"
 import { ArenaSchema } from "./schema"
@@ -423,8 +422,9 @@ export function project(snapshot: BattleSnapshot) {
         ...(revealed && turn ? { identity: identity(turn.placement[run.side]) } : {}),
       }),
     ),
-    // Every part update the turn stored, a read screenshot each time: without their data, as the runs.
-    events: snapshot.events.map(eventWithoutAttachmentData),
+    // No window reads the turn's stored part updates. Carried along, a long turn's every vote, reply
+    // and open sent each part again for every update it had.
+    events: [],
     ...(snapshot.comparison
       ? {
           comparison: {

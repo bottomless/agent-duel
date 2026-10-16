@@ -1,9 +1,9 @@
-import { readRecord, withoutAttachmentData } from "./live"
+import { readRecord, withToolPreviews, withoutAttachmentData } from "./live"
 import { ArenaPrivacy } from "./privacy"
 
 /**
  * Shared by live snapshots and archives so reconnecting preserves descendant activity. Tool results
- * leave out their attachments' data, which the app does not show.
+ * leave out their attachments' data, which the app does not show, and large tool fields go as a preview.
  */
 export function project(transcript: readonly unknown[]) {
   const messages = transcript
@@ -28,7 +28,7 @@ export function project(transcript: readonly unknown[]) {
             }),
           )?.properties,
         )
-        return properties?.part ? [withoutAttachmentData(properties.part)] : []
+        return properties?.part ? [withToolPreviews(withoutAttachmentData(properties.part))] : []
       })
       const created = readRecord(record.time)?.created
       return [{ info: { ...record, id: record.id }, parts, created: typeof created === "number" ? created : 0 }]
@@ -66,6 +66,21 @@ export function fromPrompt(
     messages: kept,
     parts: Object.fromEntries(kept.map((message) => [message.id, transcript.parts[message.id] ?? []])),
   }
+}
+
+/** One part as a window gets it, but whole: what `withToolPreviews` shortened in a snapshot. */
+export function wholePart(transcript: readonly unknown[], partID: string): unknown {
+  for (const value of transcript) {
+    const parts = readRecord(value)?.parts
+    if (!Array.isArray(parts)) continue
+    const part = parts.find((item: unknown) => readRecord(item)?.id === partID)
+    if (part === undefined) continue
+    const properties = readRecord(
+      readRecord(ArenaPrivacy.event({ type: "message.part.updated", properties: { part } }))?.properties,
+    )
+    return properties?.part ? withoutAttachmentData(properties.part) : null
+  }
+  return null
 }
 
 export * as ArenaTranscript from "./transcript"

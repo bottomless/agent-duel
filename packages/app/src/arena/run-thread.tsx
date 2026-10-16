@@ -30,6 +30,7 @@ import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
 import { arenaQueuedSteering, arenaToolOutput } from "./steering";
+import { arenaToolPartPreviewed, useFullToolPart } from "./full-tool-part";
 import { arenaSubagentRunState, projectArenaSessions, type ArenaSessionThread } from "./subagents";
 import {
   arenaPartIsWork,
@@ -68,7 +69,17 @@ function stringifyBounded(value: unknown, maxLength = 8_000): string {
   }
 }
 
-function ArenaToolPart({ part, cwd }: { part: UnknownRecord; cwd?: string }) {
+function ArenaToolPart({
+  part: shown,
+  cwd,
+  runId,
+}: {
+  part: UnknownRecord;
+  cwd?: string;
+  runId?: string;
+}) {
+  const [opened, setOpened] = useState(false);
+  const part = useFullToolPart(shown, runId, opened);
   const state = asRecord(part.state);
   const tool = typeof part.tool === "string" ? part.tool : "tool";
   const input = state?.input;
@@ -93,6 +104,7 @@ function ArenaToolPart({ part, cwd }: { part: UnknownRecord; cwd?: string }) {
       cwd={cwd}
       disableOuterSpacing
       compactLabel
+      onInlineDetailsExpandedChange={arenaToolPartPreviewed(shown) ? setOpened : undefined}
     />
   );
 }
@@ -100,6 +112,7 @@ function ArenaToolPart({ part, cwd }: { part: UnknownRecord; cwd?: string }) {
 function ArenaPart({
   value,
   cwd,
+  runId,
   question,
   permission,
   questionResponding,
@@ -109,6 +122,7 @@ function ArenaPart({
 }: {
   value: unknown;
   cwd?: string;
+  runId?: string;
   question?: ArenaPendingQuestion;
   permission?: ArenaPendingPermission;
   questionResponding: boolean;
@@ -169,7 +183,7 @@ function ArenaPart({
     if (questionResult) return <ArenaQuestionResultView result={questionResult} />;
     const tasks = arenaTodoWriteTasks(part);
     if (tasks !== null) return <ArenaTaskProgressCard tasks={tasks} state="snapshot" />;
-    return <ArenaToolPart part={part} cwd={cwd} />;
+    return <ArenaToolPart part={part} cwd={cwd} runId={runId} />;
   }
   return null;
 }
@@ -337,6 +351,7 @@ function ArenaActivityPartView({
     <ArenaPart
       value={entry.part}
       cwd={context.run.worktree}
+      runId={context.run.id}
       question={question}
       permission={permission}
       questionResponding={question?.id === respondingQuestionId}

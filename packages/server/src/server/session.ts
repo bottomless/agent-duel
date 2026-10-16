@@ -1882,7 +1882,7 @@ export class Session {
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.sessionLogger.error({ err }, "Error handling message");
-        // The app explains a chat too long to load in its own words, so it gets the code alone.
+        // The app explains a battle too large to load in its own words, so it gets the code alone.
         const tooLarge = err instanceof ArenaChatTooLargeError;
         const failure = {
           error: tooLarge ? err.message : `Request failed: ${err.message}`,
@@ -2142,6 +2142,8 @@ export class Session {
       case "arena.turn.retry_resolution.request":
       case "arena.turn.diff.request":
         return this.runArenaRequest(msg);
+      case "arena.run.get_part.request":
+        return this.handleArenaRunGetPart(msg);
       default:
         return undefined;
     }
@@ -4086,6 +4088,18 @@ export class Session {
       images: msg.images,
       attachments: normalizeAgentAttachments(msg.attachments),
       paseoHome: this.paseoHome,
+    });
+  }
+
+  /** A run part whole, for a tool call a snapshot sent shortened. Reads it; changes nothing. */
+  private async handleArenaRunGetPart(
+    msg: Extract<SessionInboundMessage, { type: "arena.run.get_part.request" }>,
+  ): Promise<void> {
+    const { arena } = await this.loadArenaAgent(msg.agentId);
+    const part = await arena.runPart(msg.runId, msg.partId);
+    this.emit({
+      type: "arena.run.get_part.response",
+      payload: { requestId: msg.requestId, part },
     });
   }
 

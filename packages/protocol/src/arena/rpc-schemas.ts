@@ -874,6 +874,17 @@ export const ArenaTurnDiffResponseSchema = z.object({
   type: z.literal("arena.turn.diff.response"),
   payload: z.object({ requestId: z.string(), diff: ArenaComparisonDiffSchema }),
 });
+/** A run part whole: a snapshot sends its large tool fields shortened and lists them in `state.previewed`. */
+export const ArenaRunGetPartRequestSchema = z.object({
+  type: z.literal("arena.run.get_part.request"),
+  ...ArenaAgentRequestFields,
+  runId: z.string(),
+  partId: z.string(),
+});
+export const ArenaRunGetPartResponseSchema = z.object({
+  type: z.literal("arena.run.get_part.response"),
+  payload: z.object({ requestId: z.string(), part: z.unknown() }),
+});
 export const ArenaRunQuestionReplyRequestSchema = z.object({
   type: z.literal("arena.run.question.reply.request"),
   ...ArenaAgentRequestFields,

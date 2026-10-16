@@ -63,6 +63,18 @@ function expectOnlyTurn(text: string, turn: number) {
   }
 }
 
+type ToolPart = { id: string; type: string; state?: { output?: string; previewed?: string[] } }
+
+function bashParts(snapshot: PublicSnapshot) {
+  return snapshot.runs.flatMap((run) =>
+    Object.values(run.parts ?? {})
+      .flat()
+      .map((part) => part as unknown as ToolPart)
+      .filter((part) => part.type === "tool")
+      .map((part) => ({ run, part })),
+  )
+}
+
 describe("a long Arena chat", () => {
   test("sends only the current turn of each contestant, so its snapshots do not grow", async () => {
     await using directory = await tmpdir({
@@ -132,6 +144,82 @@ describe("a long Arena chat", () => {
       }
       // Without the trim each turn added about two copies of its screenshot (~1 MB here).
       expect(sizes[2]!).toBeLessThan(sizes[0]! * 1.3)
+    } finally {
+      router.restore()
+      await store.close()
+    }
+  }, 120_000)
+
+  test("sends a large command output as a preview and the whole part on request", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure large output fixture"`.cwd(directory.path).quiet()
+    await using arenaDirectory = await tmpdir()
+    const store = await connectLocalStore({ directory: arenaDirectory.path })
+    const router = installOpenRouterStub({
+      promptCommands: (text) =>
+        text.includes("Print a long log") ? "head -c 40000 /dev/zero | tr '\\0' 'x'" : undefined,
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await arenaRequest("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Large output",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await arenaRequest(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await arenaRequest(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Print a long log." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not admit the turn")
+      await waitForTurn(store, turnID, "awaiting_vote")
+
+      const expectPreviewedAndWhole = async () => {
+        const text = await (await arenaRequest(`/arena/chats/${attached.chat.id}`, { headers })).text()
+        const snapshot = JSON.parse(text) as PublicSnapshot & { events: unknown[] }
+        expect(snapshot.events).toEqual([])
+        const calls = bashParts(snapshot).filter(({ part }) => part.state?.previewed?.includes("output"))
+        expect(calls).toHaveLength(2)
+        for (const { run, part } of calls) {
+          expect(part.state!.output!.length).toBeLessThan(6_000)
+          const whole = await json<{ part: ToolPart }>(
+            await arenaRequest(`/arena/runs/${encodeURIComponent(run.id)}/parts/${encodeURIComponent(part.id)}`, {
+              headers,
+            }),
+          )
+          expect(whole.part.state!.output!).toContain("x".repeat(40_000))
+          expect(whole.part.state!.previewed).toBeUndefined()
+        }
+        return Buffer.byteLength(text)
+      }
+
+      // While the runs are live, then from their archives once the vote applied.
+      expect(await expectPreviewedAndWhole()).toBeLessThan(200_000)
+      await json<PublicSnapshot>(
+        await arenaRequest(`/arena/turns/${turnID}/vote`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ vote: "a" }),
+        }),
+      )
+      await waitForTurn(store, turnID, "complete")
+      expect(await expectPreviewedAndWhole()).toBeLessThan(200_000)
     } finally {
       router.restore()
       await store.close()
