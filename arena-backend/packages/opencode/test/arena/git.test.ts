@@ -2255,6 +2255,14 @@ describe("ArenaGit", () => {
       const source = yield* scopedTmpdir({ git: true })
       const git = (command: string) =>
         Effect.promise(() => $`sh -c ${command}`.cwd(canonical.path).quiet().nothrow())
+      // Not through `sh -c`, which would read a Windows path's backslashes as escapes.
+      const fetch = (...flags: string[]) =>
+        Effect.promise(() =>
+          $`git fetch ${flags} --no-tags --no-write-fetch-head ${source.path} HEAD:refs/probe`
+            .cwd(canonical.path)
+            .quiet()
+            .nothrow(),
+        )
       const head = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
       const missing = "1234567890123456789012345678901234567890"
       const refs = `${canonical.path}/.git/refs`
@@ -2271,7 +2279,7 @@ describe("ArenaGit", () => {
       yield* git(`git update-ref refs/battles/kept/turn-0/base ${head}`)
       // The developer's own refs are theirs to repair, broken or not.
       yield* Effect.promise(() => fs.writeFile(`${refs}/heads/broken-by-user`, ""))
-      const blocked = yield* git(`git fetch --no-tags --no-write-fetch-head ${source.path} HEAD:refs/probe`)
+      const blocked = yield* fetch()
       expect(blocked.stderr.toString()).toContain("bad object")
 
       const removed = yield* removeBrokenPrivateRefs(canonical.path)
@@ -2284,7 +2292,7 @@ describe("ArenaGit", () => {
       expect((yield* git("git rev-parse refs/battles/kept/turn-0/base")).text().trim()).toBe(head)
       expect(yield* Effect.promise(() => fs.readFile(`${refs}/heads/broken-by-user`, "utf8"))).toBe("")
       yield* Effect.promise(() => fs.rm(`${refs}/heads/broken-by-user`))
-      const fetched = yield* git(`git fetch --quiet --no-tags --no-write-fetch-head ${source.path} HEAD:refs/probe`)
+      const fetched = yield* fetch("--quiet")
       expect({ exitCode: fetched.exitCode, stderr: fetched.stderr.toString() }).toEqual({ exitCode: 0, stderr: "" })
       expect(yield* removeBrokenPrivateRefs(canonical.path)).toEqual([])
     }),
