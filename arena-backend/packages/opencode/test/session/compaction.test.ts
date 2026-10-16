@@ -2160,3 +2160,95 @@ describe("SessionNs.getUsage", () => {
     expect(result.tokens.cache.write).toBe(300)
   })
 })
+
+itCompaction.instance(
+  "keeps Arena overflow replay invisible while retaining prompt and attachment content for the model",
+  () => {
+    const routing = compactionRouting()
+    return Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      ArenaRuntime.registry.assign(session.id, {
+        runID: "run-replay",
+        rootSessionID: session.id,
+        scopeID: "turn-replay",
+        assignmentID: "assignment-replay",
+        telemetry: true,
+      })
+      yield* createUserMessage(session.id, "earlier conversation")
+      const original = yield* createUserMessage(session.id, "Run this request once.")
+      const attachedTexts = [
+        { text: "Uploaded file: notes.txt\nPath: /tmp/notes.txt", label: "notes.txt", kind: "file" },
+        { text: "Selected source content: http://localhost:3100", label: "selection", kind: "text" },
+      ]
+      for (const attachment of attachedTexts) {
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: original.id,
+          sessionID: session.id,
+          type: "text",
+          synthetic: true,
+          text: attachment.text,
+          metadata: { arenaAttachment: { label: attachment.label, kind: attachment.kind } },
+        })
+      }
+      for (const mime of ["image/png", "application/pdf", "text/plain"]) {
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: original.id,
+          sessionID: session.id,
+          type: "file",
+          mime,
+          filename: `${mime.split("/")[1]}.fixture`,
+          url: `data:${mime};base64,MzEwMA==`,
+        })
+      }
+      const originalBefore = (yield* ssn.messages({ sessionID: session.id })).find(
+        (message) => message.info.id === original.id,
+      )!
+      const parent = yield* createUserMessage(session.id, "compaction trigger")
+      expect(
+        yield* SessionCompaction.use.process({
+          parentID: parent.id,
+          messages: yield* ssn.messages({ sessionID: session.id }),
+          sessionID: session.id,
+          auto: true,
+          overflow: true,
+        }),
+      ).toBe("continue")
+      const messages = yield* ssn.messages({ sessionID: session.id })
+      const replay = messages.at(-1)!
+      expect(replay.info.role).toBe("user")
+      expect(messages.find((message) => message.info.id === original.id)).toEqual(originalBefore)
+      const textParts = replay.parts.filter((part) => part.type === "text")
+      expect(textParts.map((part) => part.text)).toEqual([
+        "Run this request once.",
+        ...attachedTexts.map((part) => part.text),
+        "[Attached image/png: png.fixture]",
+        "[Attached application/pdf: pdf.fixture]",
+        "Continue the request above after compaction.",
+      ])
+      expect(textParts.map((part) => part.synthetic)).toEqual([true, true, true, true, true, true])
+      expect(textParts.map((part) => part.metadata?.arenaAttachment)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ])
+      expect(textParts.at(-1)?.metadata?.arena_compaction_replay).toBe(true)
+      expect(
+        replay.parts.filter((part) => part.type === "file").map((part) => ({ mime: part.mime, url: part.url })),
+      ).toEqual([{ mime: "text/plain", url: "data:text/plain;base64,MzEwMA==" }])
+      const modelMessages = yield* MessageV2.toModelMessagesEffect(
+        [replay],
+        createModel({ context: 100_000, output: 32_000 }),
+      )
+      expect(modelMessages).toEqual([
+        { role: "user", content: textParts.map((part) => ({ type: "text", text: part.text })) },
+      ])
+    }).pipe(withCompaction({ provider: routing.provider, config: routing.config }))
+  },
+  { git: true },
+)

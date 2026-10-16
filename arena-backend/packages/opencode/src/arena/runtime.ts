@@ -7,6 +7,15 @@ import { ResearchUploader } from "./research"
 import { arenaCredentials, type ArenaCredentials } from "./credentials"
 import { markInitialDispatch } from "./dispatch"
 import { createArenaBackend, type ArenaBackend } from "./backend"
+import type { SessionV1 } from "@opencode-ai/core/v1/session"
+import type { RunDocument } from "./records"
+import {
+  environmentReferences,
+  isEnvironmentTool,
+  retargetMessages,
+  retargetToolInput,
+  type Environment,
+} from "./environment-context"
 
 export const providerID = "arena"
 export const registry = new AssignmentRegistry()
@@ -74,6 +83,49 @@ export async function closeStore() {
   persistence = undefined
   recovery = undefined
   if (current) await (await current).close()
+}
+
+async function sessionEnvironment(sessionID: string) {
+  if (!enabled()) return undefined
+  const assigned = registry.assignments.get(sessionID)
+  if (assigned && !assigned.telemetry) return undefined
+  const database = await store()
+  const run = assigned
+    ? await database.run(assigned.runID)
+    : await database.runs.findOne({ $or: [{ rootSessionID: sessionID }, { descendantSessionIDs: sessionID }] })
+  if (!run) return undefined
+  const turn = await database.turn(run.turnID)
+  if (!turn) return undefined
+  const environment = (entry: RunDocument): Environment => ({
+    portAliases: entry.portAliases,
+    previewUrls: Object.fromEntries(
+      (entry.services ?? []).flatMap((service) =>
+        service.proxyRoutes.flatMap((route) => (route.alias && route.url ? [[route.alias, route.url]] : [])),
+      ),
+    ),
+  })
+  const history = (await database.runsForChat(turn.chatID))
+    .filter((entry) => entry.createdAt.getTime() < run.createdAt.getTime())
+    .map(environment)
+  return { run, turn, history, current: environment(run) }
+}
+
+/** Build each request from the untouched session, including retries and compaction requests. */
+export async function projectEnvironment(input: SessionV1.WithParts[]) {
+  if (input.length === 0) return input
+  const context = await sessionEnvironment(input[0].info.sessionID)
+  if (!context) return input
+  return retargetMessages(input, context.history, context.current, context.run.createdAt.getTime())
+}
+
+/** Opaque historical outputs may still contain old ports. Enforce known endpoint arguments at execution too. */
+export async function projectToolEnvironment(sessionID: string, tool: string, args: Record<string, unknown>) {
+  if (!isEnvironmentTool(tool)) return args
+  const context = await sessionEnvironment(sessionID)
+  if (!context || isFinalState(context.turn.state)) return args
+  // A current port can reuse a different historical alias; an already-current command must stay current.
+  const mapping = environmentReferences([...context.history, context.current], context.current)
+  return retargetToolInput(tool, args, mapping)
 }
 
 export async function isUnresolvedContestantSession(sessionID: string) {
