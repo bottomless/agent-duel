@@ -5,6 +5,7 @@ import path from "path"
 import { AppProcess } from "@opencode-ai/core/process"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { GitLayout } from "@opencode-ai/core/git-layout"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { Config } from "@/config/config"
 import { Global } from "@opencode-ai/core/global"
@@ -188,12 +189,19 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           return (yield* config.get()).snapshot !== false
         })
 
+        // Where the worktree's exclude file is, by its layout: every track and patch syncs it, and
+        // asking git is a process start of tens of milliseconds on Windows, three times a step.
+        const excludeFiles = new Map<string, string>()
         const excludes = Effect.fnUntraced(function* () {
-          const result = yield* git(["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], {
-            cwd: state.worktree,
-          })
-          const file = result.text.trim()
+          const layout = yield* Effect.promise(() => GitLayout.checkoutLayoutKey(state.worktree))
+          const known = layout === undefined ? undefined : excludeFiles.get(layout)
+          const file =
+            known ??
+            (yield* git(["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], {
+              cwd: state.worktree,
+            })).text.trim()
           if (!file) return
+          if (layout !== undefined) excludeFiles.set(layout, file)
           if (!(yield* exists(file))) return
           return file
         })
@@ -311,7 +319,8 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
             )).filter((item): item is string => Boolean(item)),
           )
           const block = new Set(untracked.filter((item) => large.has(item)))
-          yield* sync(Array.from(block))
+          // The sync at the start already wrote the excludes without a block list.
+          if (block.size > 0) yield* sync(Array.from(block))
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
           yield* stage(allow.filter((item) => !block.has(item)))
         })
