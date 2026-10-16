@@ -558,7 +558,10 @@ A send reuses the pair when it is trusted in this process and nothing moved sinc
 the checkout's HEAD, branch, index and working tree, its ignored content, the git metadata a host
 copies once (config, hooks, `info`, and the stash, notes and replace refs the ref mirror skips), and
 both slots. Otherwise it adopts the same two slots again in place, which rebuilds their hosts and
-rewrites only the difference.
+rewrites only the difference. The watches answer whether the ignored content moved
+(`warmPairIsUsable`). Without a watcher backend (Windows) the digests a scanned sync records for each
+copied directory root, in the checkout and in the copy, answer it instead (`scannedPairIsUsable`):
+the pair is reused while both still match, which took a second message from 4.0 s to 0.7 s.
 
 A cold or refreshed side does not wait for its worktree before the model starts. Its path is known
 before staging (the planned slot, or the warm slot it refreshes in place), so the side forks its

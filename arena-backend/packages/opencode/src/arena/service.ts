@@ -209,6 +209,7 @@ import {
   listIgnoredRoots,
   matchesIgnoredContentSnapshot,
   planIgnoredResync,
+  treeDigest,
   type CopyManifest,
   type CopyManifestEntry,
   type RootObservation,
@@ -1611,6 +1612,46 @@ export const layer: Layer.Layer<
       }
       return { usable: true as const }
     }
+
+    /**
+     * Without a watcher backend (Windows) nothing observed the moments since the pair was synced,
+     * but a sync taken with `scan` recorded each copied directory root's digest on both sides of
+     * the copy (`treeDigest`). The checkout's roots and both worktrees' copies still digesting as
+     * they did account for what the watches would have.
+     */
+    const scannedPairIsUsable = Effect.fnUntraced(function* (
+      store: Store,
+      chatID: string,
+      generation: number,
+      canonical: string,
+      directories: readonly string[],
+      roots: readonly string[],
+    ) {
+      if (!isWarmPairTrusted(store, chatID, generation)) {
+        return { usable: false as const, reason: "warm pair is not trusted in this process" }
+      }
+      const records = directories.map((directory) => slotStates.get(slotKey(directory))?.ignored)
+      const unscanned = directories.find((_, index) =>
+        roots.some((root) => !records[index]?.get(root)?.sourceTree || !records[index]?.get(root)?.targetTree),
+      )
+      if (unscanned) return { usable: false as const, reason: `${basename(unscanned)} has no scan of its copied roots` }
+      // Every tree at once; a root that cannot be read digests as nothing, which matches no record.
+      const digestAll = (base: string) => Promise.all(roots.map((root) => treeDigest(join(base, root)).catch(() => "")))
+      const [checkout, ...slots] = yield* Effect.promise(() => Promise.all([canonical, ...directories].map(digestAll)))
+      for (const [index, directory] of directories.entries()) {
+        for (const [position, root] of roots.entries()) {
+          const record = records[index]?.get(root)
+          if (record?.sourceTree !== checkout?.[position]) {
+            return { usable: false as const, reason: `ignored content changed in the checkout: ${root}` }
+          }
+          if (record?.targetTree !== slots[index]?.[position]) {
+            return { usable: false as const, reason: `ignored content changed in ${basename(directory)}: ${root}` }
+          }
+        }
+      }
+      return { usable: true as const }
+    })
+
     const discoverRunServices = Effect.fn("Arena.discoverRunServices")(function* (run: RunDocument) {
       const preview = previewRoute(run.worktree)
       const routes = preview ? previewRoutes(preview) : persistedProxyRoutes(run.services)
@@ -7530,13 +7571,19 @@ export const layer: Layer.Layer<
           if (!sameBase(a) || !sameBase(b)) return "the checkout's git state changed since warm-up"
           if (a.copyManifestID !== b.copyManifestID) return "the warm sides were copied from different manifests"
           const sourceManifest = yield* copyManifestByID(store, a.copyManifestID, ownerTurnID)
-          const usable = warmPairIsUsable(
-            store,
-            chat._id,
-            chat.turnCount,
-            [a.directory, b.directory],
-            copiedDirectoryRoots(sourceManifest),
-          )
+          const directories = [a.directory, b.directory]
+          const roots = copiedDirectoryRoots(sourceManifest)
+          const usable =
+            sourceManifest.scan && watcherBackendUnavailable() !== undefined
+              ? yield* scannedPairIsUsable(
+                  store,
+                  chat._id,
+                  chat.turnCount,
+                  sourceManifest.canonicalRoot,
+                  directories,
+                  roots,
+                )
+              : warmPairIsUsable(store, chat._id, chat.turnCount, directories, roots)
           if (!usable.usable) return usable.reason
           // Independent reads of the checkout and of both worktrees, so the send waits for the
           // slowest rather than their sum.
