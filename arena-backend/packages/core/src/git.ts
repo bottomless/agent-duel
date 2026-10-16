@@ -2,6 +2,7 @@ export * as Git from "./git"
 
 import path from "path"
 import { randomUUID } from "crypto"
+import { stat } from "fs/promises"
 import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AbsolutePath, RelativePath } from "./schema"
@@ -197,6 +198,9 @@ const layer = Layer.effect(
       locks.withLock(repository.gitDirectory)(effect)
     // What discovery found for each `.git`, by `GitLayout.layoutKey`.
     const layouts = new Map<string, Repository>()
+    // Each remote's URL, or that there is none, by `remoteKey`: `Project.resolve` asks at every
+    // instance, and the answer moves only with the repository's configuration.
+    const remotes = new Map<string, string | undefined>()
 
     const discover = Effect.fn("Git.repo.discover")(function* (input: AbsolutePath) {
       const dotgit = yield* fs.up({ targets: [".git"], start: input }).pipe(
@@ -242,9 +246,16 @@ const layer = Layer.effect(
     })
 
     const remote = Effect.fn("Git.remote.get")(function* (repository: Repository, name = "origin") {
+      const key = yield* Effect.promise(() => remoteKey(repository, name))
+      if (key !== undefined && remotes.has(key)) return remotes.get(key)
       const result = yield* run(repository.worktree, proc)(["remote", "get-url", name])
-      if (result.exitCode !== 0) return undefined
-      return result.text.trim() || undefined
+      const url = result.exitCode === 0 ? result.text.trim() || undefined : undefined
+      // Exit 2 is git's "No such remote", as much an answer as a URL; any other failure is asked again.
+      if (key !== undefined && (result.exitCode === 0 || result.exitCode === 2)) {
+        if (remotes.size >= LAYOUT_CACHE_SIZE) remotes.delete(remotes.keys().next().value!)
+        remotes.set(key, url)
+      }
+      return url
     })
 
     const roots = Effect.fn("Git.history.rootCommits")(function* (repository: Repository) {
@@ -1075,6 +1086,26 @@ function execute(cwd: string, proc: AppProcess.Interface) {
 }
 
 const LAYOUT_CACHE_SIZE = 512
+
+/**
+ * A remote's URL lives in the repository's `config`, or in a worktree's `config.worktree`. Their
+ * inodes, modification times and sizes key what was read from them; a configuration that cannot
+ * be read keys nothing.
+ */
+async function remoteKey(repository: Repository, name: string) {
+  const version = (file: string) =>
+    stat(file).then(
+      // Git rewrites a configuration through a lock file, so a write also moves its inode.
+      (stats) => `${stats.ino}:${stats.mtimeMs}:${stats.size}`,
+      (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? "none" : undefined),
+    )
+  const [shared, worktree] = await Promise.all([
+    version(path.join(repository.commonDirectory, "config")),
+    version(path.join(repository.gitDirectory, "config.worktree")),
+  ])
+  if (shared === undefined || shared === "none" || worktree === undefined) return undefined
+  return [repository.commonDirectory, repository.gitDirectory, name, shared, worktree].join("\0")
+}
 
 function resolvePath(cwd: string, value: string) {
   const trimmed = value.replace(/[\r\n]+$/, "")
