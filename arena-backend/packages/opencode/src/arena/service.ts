@@ -7573,22 +7573,26 @@ export const layer: Layer.Layer<
           const sourceManifest = yield* copyManifestByID(store, a.copyManifestID, ownerTurnID)
           const directories = [a.directory, b.directory]
           const roots = copiedDirectoryRoots(sourceManifest)
-          const usable =
+          const watched =
             sourceManifest.scan && watcherBackendUnavailable() !== undefined
-              ? yield* scannedPairIsUsable(
-                  store,
-                  chat._id,
-                  chat.turnCount,
-                  sourceManifest.canonicalRoot,
-                  directories,
-                  roots,
-                )
+              ? undefined
               : warmPairIsUsable(store, chat._id, chat.turnCount, directories, roots)
-          if (!usable.usable) return usable.reason
-          // Independent reads of the checkout and of both worktrees, so the send waits for the
-          // slowest rather than their sum.
-          const [metadata, unchanged, heldA, heldB] = yield* Effect.all(
+          if (watched && !watched.usable) return watched.reason
+          // Independent reads of the checkout and of both worktrees, the scan of their copied
+          // roots among them where no watch answers, so the send waits for the slowest rather
+          // than their sum.
+          const [usable, metadata, unchanged, heldA, heldB] = yield* Effect.all(
             [
+              watched
+                ? Effect.succeed(watched)
+                : scannedPairIsUsable(
+                    store,
+                    chat._id,
+                    chat.turnCount,
+                    sourceManifest.canonicalRoot,
+                    directories,
+                    roots,
+                  ),
               promise(() => hostMetadataFingerprint(base.commonGitDir)),
               promise(() =>
                 matchesIgnoredContentSnapshot({
@@ -7602,6 +7606,7 @@ export const layer: Layer.Layer<
             ],
             { concurrency: "unbounded" },
           )
+          if (!usable.usable) return usable.reason
           if ([a, b].some((slot) => slotStates.get(slotKey(slot.directory))?.metadataFingerprint !== metadata)) {
             return "the checkout's git config, hooks or info changed since warm-up"
           }
