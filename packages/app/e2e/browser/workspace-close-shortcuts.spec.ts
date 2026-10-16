@@ -1,6 +1,7 @@
 import { devices } from "@playwright/test";
 import { expect, test } from "../support/fixtures";
 import { composerLocator } from "../support/helpers/composer";
+import { confirmDialogLocator, confirmIfAsked } from "../support/helpers/confirm-dialog";
 import { openFileExplorer } from "../support/helpers/file-explorer";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 import { sidePanelTab } from "../support/helpers/side-panel";
@@ -27,12 +28,6 @@ for (const placement of ["right", "bottom"] as const) {
         initialPrompt:
           "Generate a title and a git branch name for a coding agent from the user prompt and attachments. Return JSON only with fields 'title' and 'branch'.",
       });
-      const dialogs: string[] = [];
-      page.on("dialog", async (dialog) => {
-        dialogs.push(dialog.message());
-        await dialog.accept();
-      });
-
       try {
         await openAgentRoute(page, session);
         const timelineMessage = page.getByTestId("assistant-message").first();
@@ -43,10 +38,11 @@ for (const placement of ["right", "bottom"] as const) {
         await page.keyboard.press(shortcut);
         await expect(timelineMessage).toBeVisible();
         await expect(filesTab).toBeVisible();
-        expect(dialogs).toEqual([]);
+        await expect(confirmDialogLocator(page)).toHaveCount(0);
 
         await filesTab.click();
         await page.keyboard.press(shortcut);
+        await confirmIfAsked(page, async () => (await filesTab.count()) === 0);
         await expect(filesTab).toHaveCount(0);
         await expect(timelineMessage).toBeVisible();
         await expect(page.getByTestId("workspace-side-panel-launcher-files")).toBeVisible();

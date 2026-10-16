@@ -7,6 +7,7 @@ import {
   openFileFromExplorer,
 } from "../support/helpers/file-explorer";
 import type { WithWorkspace } from "../support/helpers/with-workspace";
+import { answerConfirmDialog } from "../support/helpers/confirm-dialog";
 import { installDaemonWebSocketGate } from "../support/helpers/daemon-websocket-gate";
 import {
   expectFileCalloutWasRendered,
@@ -107,8 +108,8 @@ async function expectDirtyConflictCanReload(page: Page): Promise<void> {
   await expectOnlyFileCallout(page, "Changed on disk");
   await expect(fileCallout(page).getByRole("button", { name: "Overwrite" })).toBeEnabled();
   await expect(fileCallout(page).getByRole("button", { name: "Reload" })).toBeEnabled();
-  page.once("dialog", (dialog) => dialog.accept());
   await fileCallout(page).getByRole("button", { name: "Reload" }).click();
+  await answerConfirmDialog(page, "confirm");
   await expect(visibleEditor(page)).toContainText("const external = true;");
   await expect(fileCallout(page)).toHaveCount(0);
 }

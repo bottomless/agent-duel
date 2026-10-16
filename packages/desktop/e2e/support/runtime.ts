@@ -19,12 +19,6 @@ export interface DesktopRuntimeConfig {
   hangDaemonStart?: boolean;
   /** Delay the desktop settings IPC response to exercise startup ordering. */
   desktopSettingsDelayMs?: number;
-  /**
-   * Controls what dialog.ask returns when the daemon management confirm dialog
-   * fires. True = confirm (proceed with the action), false = cancel. Defaults to
-   * false so tests that only assert copy don't inadvertently trigger state changes.
-   */
-  confirmShouldAccept?: boolean;
   dialogOpenResult?: string | string[] | null;
   editorTargets?: DesktopEditorTargetConfig[];
   editorRecordPath?: string;
@@ -45,14 +39,8 @@ interface DesktopEditorOpenRecord {
   column?: number;
 }
 
-export interface ConfirmDialogCall {
-  message: string;
-  title: string | undefined;
-}
-
 declare global {
   interface Window {
-    __capturedDialogCall: ConfirmDialogCall | undefined;
     __capturedDialogOpenCalls: Array<Record<string, unknown> | undefined>;
     __recordDesktopEditorOpen?: (input: DesktopEditorOpenRecord) => Promise<void>;
     __desktopDaemonStartRequested?: boolean;
@@ -65,8 +53,6 @@ declare global {
  * auto-updater never fires. Daemon start/stop commands are stateful: the mock
  * tracks running state and assigns a fresh PID on each start, letting tests
  * observe PID changes without touching the real E2E daemon process.
- * dialog.ask captures call arguments on window.__capturedDialogCall so tests
- * can assert dialog copy without depending on window.confirm concatenation.
  */
 export async function installDesktopRuntime(
   page: Page,
@@ -127,7 +113,6 @@ export async function installDesktopRuntime(
       platform: string;
       invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
       dialog: {
-        ask: (message: string, options?: Record<string, unknown>) => Promise<boolean>;
         open: (options?: Record<string, unknown>) => Promise<string | string[] | null>;
       };
       getPendingOpenProject: () => Promise<string | null>;
@@ -215,13 +200,6 @@ export async function installDesktopRuntime(
         return null;
       },
       dialog: {
-        ask: async (message: string, options?: Record<string, unknown>) => {
-          window.__capturedDialogCall = {
-            message,
-            title: typeof options?.title === "string" ? options.title : undefined,
-          };
-          return cfg.confirmShouldAccept ?? false;
-        },
         open: async (options?: Record<string, unknown>) => {
           window.__capturedDialogOpenCalls.push(options);
           return cfg.dialogOpenResult ?? null;

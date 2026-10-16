@@ -1,6 +1,4 @@
-import { Alert } from "react-native";
-import { getDesktopHost, type DesktopDialogAskOptions } from "@/desktop/host";
-import { isNative } from "@/constants/platform";
+import { create } from "zustand";
 
 export interface ConfirmDialogInput {
   title: string;
@@ -10,113 +8,73 @@ export interface ConfirmDialogInput {
   destructive?: boolean;
 }
 
-interface ConfirmButtonConfig {
-  confirmLabel: string;
-  cancelLabel: string;
+export interface ConfirmDialogRequest extends ConfirmDialogInput {
+  id: number;
 }
 
-function resolveButtonLabels(input: ConfirmDialogInput): ConfirmButtonConfig {
-  return {
-    confirmLabel: input.confirmLabel ?? "Confirm",
-    cancelLabel: input.cancelLabel ?? "Cancel",
-  };
+interface PendingConfirmDialog {
+  request: ConfirmDialogRequest;
+  resolve: (confirmed: boolean) => void;
 }
 
-async function showNativeConfirmDialog(input: ConfirmDialogInput): Promise<boolean> {
-  const labels = resolveButtonLabels(input);
+interface ConfirmDialogStoreState {
+  /** First in, first shown: a second confirm waits until the first one is answered. */
+  pending: PendingConfirmDialog[];
+  hostCount: number;
+}
 
+export const useConfirmDialogStore = create<ConfirmDialogStoreState>(() => ({
+  pending: [],
+  hostCount: 0,
+}));
+
+let nextRequestId = 1;
+
+export function selectActiveConfirmDialog(
+  state: ConfirmDialogStoreState,
+): ConfirmDialogRequest | null {
+  return state.pending[0]?.request ?? null;
+}
+
+/**
+ * Asks the user to confirm in an in-app modal and resolves with their answer.
+ * `ConfirmDialogHost` renders the modal; Escape, the backdrop and Cancel all
+ * answer `false`.
+ */
+export function confirmDialog(input: ConfirmDialogInput): Promise<boolean> {
+  if (useConfirmDialogStore.getState().hostCount === 0) {
+    return Promise.reject(new Error("[ConfirmDialog] No confirm dialog host is mounted."));
+  }
   return new Promise<boolean>((resolve) => {
-    Alert.alert(
-      input.title,
-      input.message,
-      [
-        {
-          text: labels.cancelLabel,
-          style: "cancel",
-          onPress: () => resolve(false),
-        },
-        {
-          text: labels.confirmLabel,
-          style: input.destructive ? "destructive" : "default",
-          onPress: () => resolve(true),
-        },
-      ],
-      {
-        cancelable: true,
-        onDismiss: () => resolve(false),
-      },
-    );
+    const request: ConfirmDialogRequest = { ...input, id: nextRequestId++ };
+    useConfirmDialogStore.setState((state) => ({
+      pending: [...state.pending, { request, resolve }],
+    }));
   });
 }
 
-function getDesktopApi() {
-  if (isNative) {
-    return null;
-  }
-  return getDesktopHost();
+export function answerConfirmDialog(id: number, confirmed: boolean): void {
+  const entry = useConfirmDialogStore.getState().pending.find((item) => item.request.id === id);
+  if (!entry) return;
+  useConfirmDialogStore.setState((state) => ({
+    pending: state.pending.filter((item) => item.request.id !== id),
+  }));
+  entry.resolve(confirmed);
 }
 
-function buildDesktopAskOptions(input: ConfirmDialogInput): DesktopDialogAskOptions {
-  const labels = resolveButtonLabels(input);
-
-  return {
-    title: input.title,
-    okLabel: labels.confirmLabel,
-    cancelLabel: labels.cancelLabel,
-    kind: input.destructive ? "warning" : "info",
+/** Returns the unregister function. The last host to leave cancels whatever is still waiting. */
+export function registerConfirmDialogHost(): () => void {
+  useConfirmDialogStore.setState((state) => ({ hostCount: state.hostCount + 1 }));
+  let registered = true;
+  return () => {
+    if (!registered) return;
+    registered = false;
+    const { hostCount, pending } = useConfirmDialogStore.getState();
+    const remaining = hostCount - 1;
+    useConfirmDialogStore.setState(
+      remaining > 0 ? { hostCount: remaining } : { hostCount: 0, pending: [] },
+    );
+    if (remaining > 0) return;
+    for (const entry of pending) entry.resolve(false);
   };
 }
-
-function blurActiveWebElement(): void {
-  if (isNative) {
-    return;
-  }
-  const activeElement = (globalThis as { document?: Document }).document?.activeElement;
-  (activeElement as HTMLElement | null)?.blur?.();
-}
-
-async function showDesktopConfirmDialog(input: ConfirmDialogInput): Promise<boolean | null> {
-  const desktopApi = getDesktopApi();
-  if (!desktopApi) {
-    return null;
-  }
-
-  blurActiveWebElement();
-  const options = buildDesktopAskOptions(input);
-  const desktopAsk = desktopApi.dialog?.ask;
-
-  if (typeof desktopAsk === "function") {
-    return await desktopAsk(input.message, options);
-  }
-
-  return null;
-}
-
-function showWebConfirmDialog(input: ConfirmDialogInput): boolean {
-  const browserConfirm = (globalThis as { confirm?: (message?: string) => boolean }).confirm;
-  if (typeof browserConfirm !== "function") {
-    throw new Error("[ConfirmDialog] No web confirmation backend is available.");
-  }
-
-  blurActiveWebElement();
-  const promptMessage = `${input.title}\n\n${input.message}`;
-  return browserConfirm(promptMessage);
-}
-
-export async function confirmDialog(input: ConfirmDialogInput): Promise<boolean> {
-  if (isNative) {
-    return showNativeConfirmDialog(input);
-  }
-
-  const desktopResult = await showDesktopConfirmDialog(input);
-  if (desktopResult !== null) {
-    return desktopResult;
-  }
-
-  return showWebConfirmDialog(input);
-}
-
-export const __private__ = {
-  blurActiveWebElement,
-  buildDesktopAskOptions,
-};
