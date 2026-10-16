@@ -452,8 +452,13 @@ const layer = Layer.effect(
             // A gated Arena request starts in the canonical instance so its provider request can
             // leave before the contestant checkout exists. Once a filesystem tool has established
             // a contestant baseline, all following snapshots must stay in that same environment.
-            const completedSnapshot =
-              input.snapshotProvider && !ctx.snapshot ? undefined : yield* inSnapshotEnvironment(snapshot.track())
+            // With a baseline the step's patch is wanted too, read in the same pass as its snapshot.
+            const combined = ctx.snapshot ? yield* inSnapshotEnvironment(snapshot.trackPatch(ctx.snapshot)) : undefined
+            const completedSnapshot = combined
+              ? combined.snapshot
+              : input.snapshotProvider && !ctx.snapshot
+                ? undefined
+                : yield* inSnapshotEnvironment(snapshot.track())
             yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
             const usage = Session.getUsage({
               model: ctx.model,
@@ -475,7 +480,7 @@ const layer = Layer.effect(
             })
             yield* session.updateMessage(ctx.assistantMessage)
             if (ctx.snapshot) {
-              const patch = yield* inSnapshotEnvironment(snapshot.patch(ctx.snapshot))
+              const patch = combined?.patch ?? (yield* inSnapshotEnvironment(snapshot.patch(ctx.snapshot)))
               if (patch.files.length) {
                 yield* session.updatePart({
                   id: PartID.ascending(),
