@@ -3079,6 +3079,95 @@ describe("Arena service vertical slice", () => {
     }
   }, 40_000)
 
+  test("keeps the battle running while the other contestant works after a retry fails to finalize", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure failed retry fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ failFirstOrdinals: [1], delayedOrdinal: 2, delayMs: 8_000 })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "A retry that cannot finalize",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      // An empty ref file fails every import into the checkout until it is removed, so the failed
+      // side cannot finalize, before its retry or after it.
+      const brokenDirectory = `${directory.path}/.git/refs/battles/crashed/turn-0`
+      const broken = `${brokenDirectory}/base`
+      await fs.mkdir(brokenDirectory, { recursive: true })
+      await writeFile(broken, "")
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Fail once on one side." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+
+      const settledWith = async (predicate: (run: RunDocument) => boolean) => {
+        const deadline = Date.now() + 20_000
+        while (Date.now() < deadline) {
+          const found = (await memory.store.runsForTurn(turnID)).find(predicate)
+          if (found) return structuredClone(found)
+          await Bun.sleep(10)
+        }
+        throw new Error("No contestant settled as expected")
+      }
+      const failed = await settledWith((run) => run.runState === "error" && !!run.finalizedAt)
+      expect(failed.errorRetryable).toBe(true)
+
+      await json<PublicSnapshot>(
+        await request(`/arena/runs/${encodeURIComponent(failed._id)}/retry`, { method: "POST", headers }),
+      )
+      await settledWith(
+        (run) => run._id === failed._id && run.manualRetries === 1 && run.runState === "error" && !!run.finalizedAt,
+      )
+      const working = (await memory.store.runsForTurn(turnID)).find((run) => run.side !== failed.side)
+      expect(working?.runState).toBe("pending")
+      // The other side is still working, so the battle has not stopped.
+      expect((await memory.store.turn(turnID))?.state).toBe("running")
+
+      await rm(broken)
+      await waitForTurn(memory.store, turnID, "awaiting_stop_resolution")
+      const runs = await memory.store.runsForTurn(turnID)
+      expect(runs.map((run) => [run.side, run.runState, run.selectable])).toEqual(
+        runs.map((run) =>
+          run.side === failed.side ? [run.side, "error", false] : [run.side, "complete", true],
+        ),
+      )
+      const keep = failed.side === "a" ? "apply_b" : "apply_a"
+      await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/stop-resolution`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ resolution: keep }),
+        }),
+      )
+      await waitForTurn(memory.store, turnID, "complete")
+    } finally {
+      router.restore()
+    }
+  }, 60_000)
+
   test("discards a battle whose contestants both failed instead of calling it a tie", async () => {
     await using directory = await tmpdir({
       git: true,

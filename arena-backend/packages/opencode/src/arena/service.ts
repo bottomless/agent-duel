@@ -5843,6 +5843,14 @@ export const layer: Layer.Layer<
         )
         const current = yield* promise(() => store.turn(turn._id))
         if (outcomes.some(Exit.isFailure)) {
+          // A side that is still working settles the turn when it finishes, as the battle's first
+          // settlement waits for both sides. Stopping now would show a stopped battle with that
+          // side still running and nothing either side could keep.
+          const resumedSides = new Set(resumedRuns.map((run) => run.side))
+          const working = (["a", "b"] as const).some(
+            (side) => !resumedSides.has(side) && !current?.finalizedSides?.includes(side),
+          )
+          if (current?.state === "running" && working) return
           yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
           if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
           yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
