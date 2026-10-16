@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -105,14 +105,17 @@ function ConfirmDialog({ request, open }: { request: ConfirmDialogRequest; open:
         tabIndex={-1}
         style={styles.surface}
       >
-        <View style={styles.body}>
-          <Text nativeID={titleId} style={styles.title} testID="confirm-dialog-title">
-            {request.title}
-          </Text>
-          <Text nativeID={messageId} style={styles.message} testID="confirm-dialog-message">
-            {request.message}
-          </Text>
-        </View>
+        {/* A message taller than the window scrolls here, so the buttons below stay on screen. */}
+        <ScrollView style={styles.bodyScroll}>
+          <View style={styles.body}>
+            <Text nativeID={titleId} style={styles.title} testID="confirm-dialog-title">
+              {request.title}
+            </Text>
+            <Text nativeID={messageId} style={styles.message} testID="confirm-dialog-message">
+              {request.message}
+            </Text>
+          </View>
+        </ScrollView>
         {/* Keyed per request so each new question remounts its buttons and takes focus again. */}
         <View key={id} style={styles.footer}>
           <Button
@@ -154,12 +157,18 @@ const styles = StyleSheet.create((theme) => ({
   surface: {
     width: "100%",
     maxWidth: 420,
+    maxHeight: "100%",
     backgroundColor: theme.colors.surface1,
     borderWidth: 1,
     borderColor: theme.colors.borderAccent,
     borderRadius: theme.borderRadius.lg,
     overflow: "hidden",
     ...theme.shadow.md,
+  },
+  bodyScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
+    minHeight: 0,
   },
   body: {
     gap: theme.spacing[1.5],
