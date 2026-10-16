@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { createTestLogger } from "../../../test-utils/test-logger.js";
+import {
+  ARENA_PAYLOAD_LIMIT_BYTES,
+  ArenaChatTooLargeError,
+  ArenaDiffTooLargeError,
+} from "../../arena/payload-limit.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/client";
 import {
   __openCodeInternals,
@@ -716,6 +721,31 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     try {
       await expect(session.arena?.archive()).resolves.toBeNull();
       await expect(session.arena?.archive()).rejects.toThrow("archive failed");
+    } finally {
+      fetchMock.mockRestore();
+      await session.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("says a comparison too large to send is the comparison, not the battle", async () => {
+    const cwd = tmpCwd();
+    const runtime = new TestOpenCodeHarness();
+    runtime.enqueueClient(new TestOpenCodeClient());
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const session = await client.createSession(buildConfig(cwd));
+    const oversized = " ".repeat(ARENA_PAYLOAD_LIMIT_BYTES + 1);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(oversized));
+
+    try {
+      await expect(session.arena?.diff("turn-1")).rejects.toBeInstanceOf(ArenaDiffTooLargeError);
+      await expect(session.arena?.resolve()).rejects.toBeInstanceOf(ArenaChatTooLargeError);
     } finally {
       fetchMock.mockRestore();
       await session.close();

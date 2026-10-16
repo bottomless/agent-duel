@@ -8,7 +8,7 @@ import {
 import { workspaceAccess } from "./workspace-cleanup/workspace-access.js";
 import type { ArenaActivity } from "@getpaseo/protocol/arena/activity";
 import { arenaStreamHub, type ArenaStreamHandle } from "./arena-stream-hub.js";
-import { ArenaChatTooLargeError } from "./arena/payload-limit.js";
+import { ArenaPayloadTooLargeError } from "./arena/payload-limit.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
 import { lstat, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
@@ -1882,8 +1882,8 @@ export class Session {
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.sessionLogger.error({ err }, "Error handling message");
-        // The app explains a battle too large to load in its own words, so it gets the code alone.
-        const tooLarge = err instanceof ArenaChatTooLargeError;
+        // An Arena answer too large to send says so in its own words, without the generic prefix.
+        const tooLarge = err instanceof ArenaPayloadTooLargeError;
         const failure = {
           error: tooLarge ? err.message : `Request failed: ${err.message}`,
           code: tooLarge ? err.code : "handler_error",

@@ -113,7 +113,11 @@ import {
   type OpenCodeSubagentPresentationState,
 } from "./opencode/subagent-presentation.js";
 import type { ManagedProcessRegistry } from "../../managed-processes/managed-processes.js";
-import { ARENA_PAYLOAD_LIMIT_BYTES, ArenaChatTooLargeError } from "../../arena/payload-limit.js";
+import {
+  ARENA_PAYLOAD_LIMIT_BYTES,
+  ArenaChatTooLargeError,
+  ArenaDiffTooLargeError,
+} from "../../arena/payload-limit.js";
 import {
   buildOpenCodePermissionRules,
   OpenCodeProviderOptionsSchema,
@@ -1409,6 +1413,21 @@ interface OpenCodeMoveSessionInput {
   sourceCwd: string;
   targetCwd: string;
   copyChanges: boolean;
+}
+
+/** The engine's own words for a refused Arena request, or its status. */
+function arenaErrorMessage(value: unknown, status: number): string {
+  const data =
+    value &&
+    typeof value === "object" &&
+    "data" in value &&
+    value.data &&
+    typeof value.data === "object"
+      ? value.data
+      : null;
+  return data && "message" in data && typeof data.message === "string"
+    ? data.message
+    : `Arena request failed with status ${status}`;
 }
 
 class OpenCodeMoveSessionError extends Error {
@@ -4082,16 +4101,20 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   private async arenaDiff(path: string): Promise<ArenaComparisonDiff> {
-    return this.arenaFetch(path, ArenaComparisonDiffSchema);
+    return this.arenaFetch(path, ArenaComparisonDiffSchema, {
+      tooLarge: () => new ArenaDiffTooLargeError(),
+    });
   }
 
   private async arenaFetch<T>(
     path: string,
     schema: z.ZodType<T>,
     options?: {
-      method: "POST";
+      method?: "POST";
       body?: Record<string, unknown>;
       allowNotFound?: boolean;
+      /** What an answer past the limit is, when it is not the battle's state. */
+      tooLarge?: () => Error;
     },
   ): Promise<T> {
     await this.ensureArenaRuntime();
@@ -4107,24 +4130,14 @@ class OpenCodeAgentSession implements AgentSession {
       ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
     });
     const text = await response.text().catch(() => "");
-    if (text.length > ARENA_PAYLOAD_LIMIT_BYTES) throw new ArenaChatTooLargeError();
+    if (text.length > ARENA_PAYLOAD_LIMIT_BYTES) {
+      throw options?.tooLarge?.() ?? new ArenaChatTooLargeError();
+    }
     const value = parseJsonOrNull(text);
     if (response.status === 404 && options?.allowNotFound) {
       return schema.parse(null);
     }
-    if (!response.ok) {
-      const message =
-        value &&
-        typeof value === "object" &&
-        "data" in value &&
-        value.data &&
-        typeof value.data === "object" &&
-        "message" in value.data &&
-        typeof value.data.message === "string"
-          ? value.data.message
-          : `Arena request failed with status ${response.status}`;
-      throw new Error(message);
-    }
+    if (!response.ok) throw new Error(arenaErrorMessage(value, response.status));
     return schema.parse(value);
   }
 
