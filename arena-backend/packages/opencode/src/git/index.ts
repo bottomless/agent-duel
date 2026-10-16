@@ -31,8 +31,8 @@ const LAYOUT_FLAGS = new Set([
 ])
 
 /**
- * A `rev-parse` that asks only where the checkout, its git directory, its common directory or its
- * shared exclude file are. The answer follows from the checkout's `.git` (`GitLayout.layoutKey`)
+ * A `rev-parse` that asks only where the checkout, its git directory, its common directory, its
+ * shared exclude file or its index are. The answer follows from the checkout's `.git` (`GitLayout.layoutKey`)
  * and the directory asked from, and each ask is a process start: tens of milliseconds on Windows,
  * for questions the engine repeats for every worktree at every turn.
  */
@@ -40,7 +40,8 @@ function layoutQuery(args: readonly string[]) {
   if (args[0] !== "rev-parse" || args.length < 2) return false
   for (let index = 1; index < args.length; index++) {
     if (LAYOUT_FLAGS.has(args[index]!)) continue
-    if (args[index] === "--git-path" && args[index + 1] === "info/exclude") {
+    // Without GIT_INDEX_FILE, which `opts.env` would carry, the index is where the layout puts it.
+    if (args[index] === "--git-path" && (args[index + 1] === "info/exclude" || args[index + 1] === "index")) {
       index++
       continue
     }
