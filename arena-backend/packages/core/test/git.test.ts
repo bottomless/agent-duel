@@ -32,6 +32,25 @@ describe("Git", () => {
     ),
   )
 
+  it.live("reads a remote again once the configuration changes it", () =>
+    withRemote((fixture) =>
+      Effect.gen(function* () {
+        const git = yield* Git.Service
+        const target = AbsolutePath.make(path.join(fixture.root, "checkout"))
+        const repository = yield* git.repo.clone({ remote: fixture.remote, directory: target })
+        expect(yield* git.remote.get(repository)).toBe(fixture.remote)
+        expect(yield* git.remote.get(repository)).toBe(fixture.remote)
+
+        // The same length, so only the configuration's identity tells the two apart.
+        const moved = fixture.remote.slice(0, -1) + (fixture.remote.endsWith("x") ? "y" : "x")
+        yield* Effect.promise(() => $`git remote set-url origin ${moved}`.cwd(target).quiet())
+        expect(yield* git.remote.get(repository)).toBe(moved)
+        yield* Effect.promise(() => $`git remote remove origin`.cwd(target).quiet())
+        expect(yield* git.remote.get(repository)).toBeUndefined()
+      }),
+    ),
+  )
+
   it.live("fetches, checks out, and resets remote changes", () =>
     withRemote((fixture) =>
       Effect.gen(function* () {
