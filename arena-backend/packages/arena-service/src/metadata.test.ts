@@ -105,6 +105,20 @@ describe("Arena metadata route", () => {
     expect(content).toContain("Prefix with feat/ or fix/")
   })
 
+  test("names a chat from its first prompt", async () => {
+    let content = ""
+    const response = await service({
+      fetch: async (_url, init) => {
+        content = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[0]?.content ?? ""
+        return reply("Explain the retry policy")
+      },
+    }).metadata(request({ kind: "chat_title", changes: "Explain what retry.js does\nin two sentences" }))
+
+    expect(await response.json()).toEqual({ title: "Explain the retry policy" })
+    expect(content).toStartWith("Name the task in the user prompt below")
+    expect(content).toEndWith("## User prompt\nExplain what retry.js does\nin two sentences")
+  })
+
   test("refuses fields the route does not build into its prompt", async () => {
     let contacted = false
     const fetch = async () => {
@@ -221,6 +235,12 @@ describe("parseMetadataReply", () => {
     expect(long.branch.length).toBeLessThanOrEqual(60)
     expect(long.branch).not.toEndWith("-")
     expect(parseMetadataReply("branch_name", "***")).toBeUndefined()
+  })
+
+  test("keeps one line of a chat title without its label or trailing period", () => {
+    expect(parseMetadataReply("chat_title", '**Title:** "Retry policy explained."\nmore')).toEqual({
+      title: "Retry policy explained",
+    })
   })
 
   test("answers nothing for a blank reply", () => {

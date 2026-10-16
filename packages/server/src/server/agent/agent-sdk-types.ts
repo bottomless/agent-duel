@@ -829,7 +829,7 @@ export interface ArenaCheckoutCleanupSource {
 }
 
 export interface GitMetadataRequest {
-  kind: "commit_message" | "pull_request" | "branch_name";
+  kind: "commit_message" | "pull_request" | "branch_name" | "chat_title";
   /** The file list and patch, as text. */
   changes: string;
   /** The project's own style for this kind of text, from Project Settings. */
@@ -839,7 +839,8 @@ export interface GitMetadataRequest {
 export type GitMetadataResult =
   | { message: string }
   | { title: string; body: string }
-  | { branch: string };
+  | { branch: string }
+  | { title: string };
 
 export interface AgentClient {
   openArenaActivitySource?(cwd: string): Promise<ArenaActivitySource | null>;

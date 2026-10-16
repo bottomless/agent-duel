@@ -15,6 +15,7 @@ export type Result =
   | { readonly message: string }
   | { readonly title: string; readonly body: string }
   | { readonly branch: string }
+  | { readonly title: string }
 
 const truncated = "\n\n... (changes truncated)"
 
@@ -30,15 +31,18 @@ function result(kind: MetadataKind, value: unknown): Result | undefined {
   if (kind === "branch_name") {
     return typeof value.branch === "string" && value.branch ? { branch: value.branch } : undefined
   }
+  if (kind === "chat_title") {
+    return typeof value.title === "string" && value.title ? { title: value.title } : undefined
+  }
   if (typeof value.title !== "string" || !value.title || typeof value.body !== "string") return undefined
   return { title: value.title, body: value.body }
 }
 
 /**
- * Writes a commit message, pull request text or a branch name on the comparison's model, through
- * the same backend as the battle routes: the control plane when hosted, the in-process service
- * with the user's key when BYOK. The route caps what it accepts, so the changes are trimmed to fit
- * here.
+ * Writes a commit message, pull request text, a branch name or a chat title on the comparison's
+ * model, through the same backend as the battle routes: the control plane when hosted, the
+ * in-process service with the user's key when BYOK. The route caps what it accepts, so the source
+ * text is trimmed to fit here.
  */
 export async function generate(input: Request, signal?: AbortSignal): Promise<Result> {
   const target = backend()

@@ -3,9 +3,10 @@ import type { ArenaCollection, ArenaDb } from "./collection"
 import { authorize, type ArenaContext } from "./context"
 import { comparisonModel } from "./utility-model"
 
-// Commit messages, pull request text and branch name suggestions, written by the comparison's cheap
-// model. The caller sends only what to write and the changes; the prompt is built here, so the
-// route cannot be used as a general model endpoint, and both the input and the reply are capped.
+// Commit messages, pull request text, branch name suggestions and the names of chats started with
+// Battle off, written by the comparison's cheap model. The caller sends only what to write and its
+// source (the changes, or the chat's first prompt); the prompt is built here, so the route cannot be
+// used as a general model endpoint, and both the input and the reply are capped.
 
 export const MAX_METADATA_CHANGES_CHARS = 60_000
 export const MAX_METADATA_INSTRUCTIONS_CHARS = 1_000
@@ -14,8 +15,9 @@ const MAX_COMMIT_MESSAGE_CHARS = 72
 const MAX_PULL_REQUEST_TITLE_CHARS = 72
 const MAX_PULL_REQUEST_BODY_CHARS = 6_000
 const MAX_BRANCH_NAME_CHARS = 60
+const MAX_CHAT_TITLE_CHARS = 80
 
-const kinds = ["commit_message", "pull_request", "branch_name"] as const
+const kinds = ["commit_message", "pull_request", "branch_name", "chat_title"] as const
 export type MetadataKind = (typeof kinds)[number]
 
 export type MetadataRateLimit = {
@@ -25,23 +27,33 @@ export type MetadataRateLimit = {
 
 export const defaultMetadataRateLimit: MetadataRateLimit = { max: 60, windowMs: 60 * 60_000 }
 
-const specs: Record<MetadataKind, { task: string; style: string; reply: string; maxTokens: number }> = {
+const specs: Record<MetadataKind, { task: string; style: string; reply: string; source: string; maxTokens: number }> = {
   commit_message: {
     task: "Write a git commit message for the changes below.",
     style: "Concise, imperative mood, no trailing period.",
     reply: `Reply with the commit message alone, on one line of at most ${MAX_COMMIT_MESSAGE_CHARS} characters.`,
+    source: "Changes",
     maxTokens: 1_024,
   },
   pull_request: {
     task: "Write a pull request title and description for the changes below.",
     style: "Clear, descriptive title; a description explaining what changed and why.",
     reply: `Reply with the title alone on the first line, at most ${MAX_PULL_REQUEST_TITLE_CHARS} characters, then a blank line, then the description in Markdown.`,
+    source: "Changes",
     maxTokens: 4_096,
   },
   branch_name: {
     task: "Suggest a git branch name for the work below.",
     style: "A short task-shaped slug that keeps the operation, the target and any issue or PR number.",
     reply: `Reply with the branch name alone, at most ${MAX_BRANCH_NAME_CHARS} characters of lowercase letters, digits, hyphens and slashes.`,
+    source: "Changes",
+    maxTokens: 1_024,
+  },
+  chat_title: {
+    task: "Name the task in the user prompt below, as the title of the chat it starts.",
+    style: "Sentence case, at most six words. Name the task, not its result.",
+    reply: `Reply with the name alone, at most ${MAX_CHAT_TITLE_CHARS} characters.`,
+    source: "User prompt",
     maxTokens: 1_024,
   },
 }
@@ -80,7 +92,7 @@ function prompt(input: Input) {
     "",
     `${spec.reply} No preamble, no quotes, no code fences.`,
     "",
-    "## Changes",
+    `## ${spec.source}`,
     input.changes,
   ].join("\n")
 }
@@ -171,6 +183,10 @@ export function parseMetadataReply(kind: MetadataKind, reply: string) {
   if (kind === "commit_message") {
     const message = line(head, /^commit message\s*:\s*/i, MAX_COMMIT_MESSAGE_CHARS)
     return message ? { message } : undefined
+  }
+  if (kind === "chat_title") {
+    const title = line(head, /^(title|name)\s*:\s*/i, MAX_CHAT_TITLE_CHARS).replace(/\.$/, "")
+    return title ? { title } : undefined
   }
   if (kind === "branch_name") {
     const branch = branchName(line(head, /^branch(\s+name)?\s*:\s*/i, MAX_BRANCH_NAME_CHARS * 2))

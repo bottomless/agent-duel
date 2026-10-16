@@ -6207,6 +6207,13 @@ export class Session {
       descriptor,
       request.firstAgentContext ? "running" : undefined,
     );
+    if (request.firstAgentContext) {
+      void this.workspaceAutoName.nameFromPrompt({
+        workspaceId: workspace.workspaceId,
+        cwd: workspace.cwd,
+        firstAgentContext: request.firstAgentContext,
+      });
+    }
     void this.workspaceGitService
       .getSnapshot(workspace.cwd, {
         force: true,
@@ -6278,6 +6285,13 @@ export class Session {
       descriptor,
       request.firstAgentContext ? "running" : undefined,
     );
+    if (request.firstAgentContext) {
+      void this.workspaceAutoName.nameFromPrompt({
+        workspaceId: result.workspace.workspaceId,
+        cwd: result.workspace.cwd,
+        firstAgentContext: request.firstAgentContext,
+      });
+    }
   }
 
   private async handleOpenProjectRequest(

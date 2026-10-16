@@ -166,6 +166,7 @@ function makeCheckoutSession(options?: {
       return { title: "", body: "" };
     },
     suggestBranchName: async () => null,
+    suggestChatTitle: async () => null,
     ...options?.gitMetadataGenerator,
   };
   const github: ForgeService = { ...createGitHubService(), ...options?.github };

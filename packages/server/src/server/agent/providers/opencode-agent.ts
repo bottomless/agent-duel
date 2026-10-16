@@ -1507,6 +1507,7 @@ const GitMetadataResultSchema = z.union([
   z.object({ message: z.string().min(1) }),
   z.object({ title: z.string().min(1), body: z.string() }),
   z.object({ branch: z.string().min(1) }),
+  z.object({ title: z.string().min(1) }),
 ]);
 
 export class OpenCodeAgentClient implements AgentClient {

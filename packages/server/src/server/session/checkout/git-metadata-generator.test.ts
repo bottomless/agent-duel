@@ -211,6 +211,55 @@ describe("createGitMetadataGenerator", () => {
     }
   });
 
+  it("names a chat from the start of its first prompt with the project's title style", async () => {
+    const root = mkdtempSync(join(tmpdir(), "git-metadata-generator-"));
+    roots.push(root);
+    writeFileSync(
+      join(root, "paseo.json"),
+      JSON.stringify({ metadataGeneration: { title: { instructions: "Use lowercase" } } }),
+    );
+    const { diffSource, diffCalls } = createDiffSource(DIFF_WITH_TWO_FILES, root);
+    const { writer, requests } = createWriter(async () => ({
+      title: " Explain the retry policy ",
+    }));
+
+    const title = await generatorFor(diffSource, writer).suggestChatTitle(
+      "/repo",
+      `  Explain what retry.js does\n${"log line\n".repeat(1_000)}`,
+    );
+
+    expect(title).toBe("Explain the retry policy");
+    expect(diffCalls).toEqual([]);
+    expect(requests[0]?.request).toMatchObject({
+      kind: "chat_title",
+      instructions: "Use lowercase",
+    });
+    expect(requests[0]?.request.changes).toMatch(/^Explain what retry\.js does\n/);
+    expect(requests[0]?.request.changes.length).toBe(4_000);
+  });
+
+  it("offers no chat title for a blank prompt or a failed answer", async () => {
+    const { diffSource } = createDiffSource(DIFF_WITH_TWO_FILES);
+    const unused = createWriter(async () => ({ title: "unused" }));
+    await expect(
+      generatorFor(diffSource, unused.writer).suggestChatTitle("/repo", "  "),
+    ).resolves.toBeNull();
+    expect(unused.requests).toEqual([]);
+
+    for (const answer of [
+      async () => ({ title: "Add retry", body: "a pull request" }),
+      async () => null,
+      async () => {
+        throw new Error("Arena metadata failed with status 429");
+      },
+    ]) {
+      const { writer } = createWriter(answer);
+      await expect(
+        generatorFor(diffSource, writer).suggestChatTitle("/repo", "Add retries"),
+      ).resolves.toBeNull();
+    }
+  });
+
   it("writes pull request text from the changes against the base", async () => {
     const { diffSource, diffCalls } = createDiffSource(DIFF_WITH_TWO_FILES);
     const { writer, requests } = createWriter(async () => ({

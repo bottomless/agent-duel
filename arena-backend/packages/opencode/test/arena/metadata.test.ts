@@ -90,6 +90,15 @@ describe("ArenaMetadata", () => {
     })
   })
 
+  test("answers a chat title", async () => {
+    hosted()
+    fakeNetwork(() => Response.json({ title: "Explain the retry policy" }))
+
+    expect(await generate({ kind: "chat_title", changes: "Explain what retry.js does" })).toEqual({
+      title: "Explain the retry policy",
+    })
+  })
+
   test("throws on a refusal or a malformed answer, so the daemon writes its fixed text", async () => {
     hosted()
     fakeNetwork(() => Response.json({ error: "Too many Arena metadata requests" }, { status: 429 }))

@@ -147,9 +147,11 @@ new battle chat's workspace shows the prompt's first line from the send and that
 comparison arrives; a workspace with any other name keeps it
 (`arena-workspace-auto-name.ts`). When both sides leave identical trees there is no report to write,
 so the first turn sends the comparison route a request for the title alone; if it fails, the chat
-keeps its prompt's first line. Nothing else names a chat, and a chat with Battle off keeps its
-prompt's first line: Paseo named workspaces with an agent, which here meant the user's installed
-Claude Code or a paid contestant with the full agent setup (up to $0.25 per new chat).
+keeps its prompt's first line. A chat started with Battle off also shows its prompt's first line
+from the send, and the same model renames it from that prompt through the metadata route below; if
+that fails it keeps the line. Nothing else names a chat: Paseo named workspaces with an agent, which
+here meant the user's installed Claude Code or a paid contestant with the full agent setup (up to
+$0.25 per new chat).
 The card shows it whole; only a report that measures longer than a screen of the card folds to its
 opening with `Show full summary` (`verdict-body.tsx`). Trimming at the prompt was Michael's call:
 the fold spent latency on prose the voter then had to unfold. The status is `git merge-tree
@@ -827,9 +829,10 @@ unresolved battle scope and always selects `minimax/minimax-m2.7` via groq in th
 proxy.
 
 The Commit and Create PR buttons get their text from the same model through
-`POST /api/arena/metadata` (`arena-service/src/metadata.ts`), never from an agent, and so does the
-name the Create branch dialog offers. The daemon sends the engine's `/arena/metadata` route the
-kind, the file list and patch (for a branch name, the chat's title and its uncommitted changes), and
+`POST /api/arena/metadata` (`arena-service/src/metadata.ts`), never from an agent, and so do the
+name the Create branch dialog offers and the title of a chat started with Battle off. The daemon
+sends the engine's `/arena/metadata` route the kind, the file list and patch (for a branch name, the
+chat's title and its uncommitted changes; for a chat title, the start of its first prompt), and
 the project's own instructions from Project Settings; the service builds the prompt around them, so
 the route is not a general model endpoint. It takes at most 60,000 characters of changes and 1,000
 of instructions, caps the reply, folds a branch name into the slug the desktop accepts, and allows

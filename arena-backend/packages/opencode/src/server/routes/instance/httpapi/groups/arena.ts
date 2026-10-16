@@ -130,7 +130,7 @@ export const SeedWorktreeResult = Schema.Struct({
   copied: Schema.Number,
 })
 export const MetadataPayload = Schema.Struct({
-  kind: Schema.Literals(["commit_message", "pull_request", "branch_name"]),
+  kind: Schema.Literals(["commit_message", "pull_request", "branch_name", "chat_title"]),
   changes: Schema.String,
   instructions: Schema.optional(Schema.String),
 })
@@ -138,6 +138,7 @@ export const MetadataResult = Schema.Union([
   Schema.Struct({ message: Schema.String }),
   Schema.Struct({ title: Schema.String, body: Schema.String }),
   Schema.Struct({ branch: Schema.String }),
+  Schema.Struct({ title: Schema.String }),
 ])
 export const CheckoutCleanupPayload = Schema.Struct({ root: Schema.String })
 export const CheckoutCleanupResult = Schema.Struct({
@@ -652,9 +653,9 @@ const group = HttpApiGroup.make("arena")
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "arena.metadata",
-        summary: "Write a commit message, pull request text or branch name",
+        summary: "Write a commit message, pull request text, branch name or chat title",
         description:
-          "Ask the comparison's model for a commit message, pull request text or a suggested branch name from a checkout's changes, through the Arena backend, so none of them runs on an agent.",
+          "Ask the comparison's model for a commit message, pull request text or a suggested branch name from a checkout's changes, or a title from a chat's first prompt, through the Arena backend, so none of them runs on an agent.",
       }),
     ),
   )
