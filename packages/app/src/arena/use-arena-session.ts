@@ -21,6 +21,7 @@ import { activeTrunkConflicts, arenaParkedPromotion } from "./conflict-guard";
 import { ensureBattleRepository } from "./battle-repository";
 import type { ComposerAttachment } from "@/attachments/types";
 import { resolveAndStartArenaTurn } from "./start";
+import { ArenaChatTooLargeError, chatTooLargeOr } from "./chat-too-large";
 import { encodeArenaPromptAttachments } from "./prompt-attachments";
 import { startingPromptImages } from "./prompt-images";
 import type { UserMessageImageAttachment } from "@/types/stream";
@@ -107,6 +108,24 @@ export const arenaStartMutationKey = (serverId: string, agentId: string) =>
   ["arena", "start", serverId, agentId] as const;
 
 /**
+ * What the chat's status row shows: the stream's error, or else the latest send, when it was refused
+ * because the chat is too long to load. The composer that sent it remounts while a battle starts and
+ * loses its own error, so the chat shows this one.
+ */
+export function useArenaStatusError(
+  serverId: string,
+  agentId: string | undefined,
+  streamError: Error | null,
+): Error | null {
+  const errors = useMutationState({
+    filters: { mutationKey: arenaStartMutationKey(serverId, agentId ?? "") },
+    select: (mutation) => mutation.state.error,
+  });
+  const latest = errors.at(-1);
+  return streamError ?? (latest instanceof ArenaChatTooLargeError ? latest : null);
+}
+
+/**
  * The prompt of a battle that has been sent and not yet answered, or null.
  *
  * Keyed rather than lifted because the composer owns the mutation and the stream renders the
@@ -162,6 +181,8 @@ export function useArenaStartMutation(serverId: string, agentId: string) {
         onResolved: (current) => {
           queryClient.setQueryData(arenaSessionQueryKey(serverId, agentId), current);
         },
+      }).catch((error: unknown) => {
+        throw chatTooLargeOr(error);
       });
     },
     onSuccess: (snapshot) => {

@@ -6,6 +6,8 @@ import {
 } from "@getpaseo/protocol/arena/stream";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
+type ResetFrame = Extract<ArenaStreamFrame, { kind: "reset" }>;
+
 interface Subscriber {
   readonly deliver: (packet: ArenaStreamPacket) => void;
   pending: ArenaStreamPacket[];
@@ -115,12 +117,18 @@ export class ArenaStreamHub {
     if (this.entries.get(key) === entry) this.entries.delete(key);
   }
 
-  private reset(key: string, entry: Entry, subscriber: Subscriber, reason: string) {
+  private reset(
+    key: string,
+    entry: Entry,
+    subscriber: Subscriber,
+    reason: string,
+    code?: ResetFrame["code"],
+  ) {
     try {
       subscriber.deliver({
         generation: entry.generation,
         sequence: entry.sequence + 1,
-        frame: { kind: "reset", reason },
+        frame: { kind: "reset", reason, ...(code ? { code } : {}) },
       });
     } catch {
       // A failed socket must not interrupt delivery to other subscribers.
@@ -158,14 +166,19 @@ export class ArenaStreamHub {
   }
 
   private async pump(key: string, entry: Entry, open: Subscription["open"]) {
+    let ended: ResetFrame | undefined;
     try {
       for await (const frame of open(entry.abort.signal)) {
         if (entry.abort.signal.aborted) return;
+        if (frame.kind === "reset") {
+          ended = frame;
+          return;
+        }
         if (frame.kind === "snapshot") entry.snapshot = frame.snapshot;
-        else if (frame.kind === "changes") {
+        else {
           if (!entry.snapshot) throw new Error("Arena updates arrived before their snapshot");
           entry.snapshot = applyArenaChanges(entry.snapshot, frame.changes);
-        } else throw new Error(frame.reason);
+        }
         const packet = { generation: entry.generation, sequence: ++entry.sequence, frame };
         for (const subscriber of entry.subscribers) this.enqueue(key, entry, subscriber, packet);
       }
@@ -174,7 +187,13 @@ export class ArenaStreamHub {
     } finally {
       if (!entry.abort.signal.aborted)
         for (const subscriber of entry.subscribers)
-          this.reset(key, entry, subscriber, "Arena stream disconnected");
+          this.reset(
+            key,
+            entry,
+            subscriber,
+            ended?.reason ?? "Arena stream disconnected",
+            ended?.code,
+          );
     }
   }
 }

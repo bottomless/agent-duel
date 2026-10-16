@@ -147,6 +147,23 @@ describe("shared Arena upstream", () => {
     expect(packets.filter((packet) => packet.frame.kind === "reset")).toHaveLength(2);
     expect(hub.counts().streams).toBe(0);
   });
+  it("passes on why the backend ended, so a window can stop retrying a chat too long to load", async () => {
+    const hub = new ArenaStreamHub();
+    const packets: ArenaStreamPacket[] = [];
+    async function* tooLarge() {
+      yield {
+        kind: "reset" as const,
+        reason: "This chat is too long to load",
+        code: "chat_too_large" as const,
+      };
+    }
+    hub.subscribe({ key: "current", open: tooLarge, deliver: (packet) => packets.push(packet) });
+    await settle();
+    expect(packets.map((packet) => packet.frame)).toEqual([
+      { kind: "reset", reason: "This chat is too long to load", code: "chat_too_large" },
+    ]);
+    expect(hub.counts().streams).toBe(0);
+  });
   it("keeps the initial snapshot outside the 4 MiB pending-change limit", async () => {
     const hub = new ArenaStreamHub();
     const upstream = source();

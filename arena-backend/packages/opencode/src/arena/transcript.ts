@@ -40,4 +40,32 @@ export function project(transcript: readonly unknown[]) {
   }
 }
 
+/**
+ * A contestant session is a fork of the whole chat, so its transcript opens with every earlier turn,
+ * and the app shows a run only from its prompt on (`arenaThreadMessages`). Sent along, the earlier
+ * turns put two copies of a long chat in every snapshot, past the daemon's 64 MiB socket limit: the
+ * window lost its connection whenever it opened the chat or sent to it. Until the prompt is written,
+ * the root session holds only the copy. A run recorded without a boundary keeps what follows its last
+ * user message, as the app reads it. Descendant sessions belong to this turn and are kept whole.
+ */
+export function fromPrompt(
+  transcript: ReturnType<typeof project>,
+  rootSessionID: string,
+  promptMessageID: string | undefined,
+): ReturnType<typeof project> {
+  const root = (message: unknown) => {
+    const sessionID = readRecord(message)?.sessionID
+    return sessionID === undefined || sessionID === rootSessionID
+  }
+  const start = promptMessageID
+    ? transcript.messages.findIndex((message) => message.id === promptMessageID)
+    : transcript.messages.findLastIndex((message) => root(message) && readRecord(message)?.role === "user")
+  const kept = transcript.messages.filter((message, index) => !root(message) || (start >= 0 && index >= start))
+  if (kept.length === transcript.messages.length) return transcript
+  return {
+    messages: kept,
+    parts: Object.fromEntries(kept.map((message) => [message.id, transcript.parts[message.id] ?? []])),
+  }
+}
+
 export * as ArenaTranscript from "./transcript"

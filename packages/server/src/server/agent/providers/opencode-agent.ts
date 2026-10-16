@@ -113,11 +113,20 @@ import {
   type OpenCodeSubagentPresentationState,
 } from "./opencode/subagent-presentation.js";
 import type { ManagedProcessRegistry } from "../../managed-processes/managed-processes.js";
+import { ARENA_PAYLOAD_LIMIT_BYTES, ArenaChatTooLargeError } from "../../arena/payload-limit.js";
 import {
   buildOpenCodePermissionRules,
   OpenCodeProviderOptionsSchema,
   type OpenCodeProviderOptions,
 } from "./opencode/options.js";
+
+function parseJsonOrNull(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
 
 const OPENCODE_CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: true,
@@ -4032,6 +4041,15 @@ class OpenCodeAgentSession implements AgentSession {
             .join("\n");
           if (data) yield ArenaStreamFrameSchema.parse(JSON.parse(data));
         }
+        // Stop reading a frame that could not reach the window anyway.
+        if (buffer.length > ARENA_PAYLOAD_LIMIT_BYTES) {
+          yield {
+            kind: "reset",
+            reason: new ArenaChatTooLargeError().message,
+            code: "chat_too_large",
+          };
+          return;
+        }
       }
     } finally {
       await reader.cancel().catch(() => {});
@@ -4081,7 +4099,9 @@ class OpenCodeAgentSession implements AgentSession {
       },
       ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
     });
-    const value: unknown = await response.json().catch(() => null);
+    const text = await response.text().catch(() => "");
+    if (text.length > ARENA_PAYLOAD_LIMIT_BYTES) throw new ArenaChatTooLargeError();
+    const value = parseJsonOrNull(text);
     if (response.status === 404 && options?.allowNotFound) {
       return schema.parse(null);
     }
