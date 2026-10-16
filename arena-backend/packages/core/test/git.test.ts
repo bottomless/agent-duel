@@ -80,6 +80,49 @@ async function initRepo(directory: string) {
 }
 
 describe("Git worktrees", () => {
+  it.live("discovers a checkout again once its .git names another worktree", () =>
+    Effect.gen(function* () {
+      const git = yield* Git.Service
+      const root = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      const main = path.join(root.path, "main")
+      const [a, b] = [path.join(root.path, "a"), path.join(root.path, "b")]
+      yield* Effect.promise(async () => {
+        await fs.mkdir(main)
+        await initRepo(main)
+        await $`git worktree add -q --detach ${a}`.cwd(main).quiet()
+        await $`git worktree add -q --detach ${b}`.cwd(main).quiet()
+      })
+      const admin = (name: string) => Effect.promise(() => fs.realpath(path.join(main, ".git", "worktrees", name)))
+      const discovered = (directory: string) =>
+        git.repo.discover(AbsolutePath.make(directory)).pipe(
+          Effect.flatMap((repository) =>
+            Effect.promise(async () => ({
+              worktree: await fs.realpath(repository!.worktree),
+              gitDirectory: await fs.realpath(repository!.gitDirectory),
+              commonDirectory: await fs.realpath(repository!.commonDirectory),
+            })),
+          ),
+        )
+
+      const first = yield* discovered(a)
+      expect(first).toEqual({
+        worktree: yield* Effect.promise(() => fs.realpath(a)),
+        gitDirectory: yield* admin("a"),
+        commonDirectory: yield* Effect.promise(() => fs.realpath(path.join(main, ".git"))),
+      })
+      // Asked again, the same checkout answers the same.
+      expect(yield* discovered(a)).toEqual(first)
+
+      // A worktree moved behind a new administration directory keeps its path but not its link.
+      const link = yield* Effect.promise(() => fs.readFile(path.join(b, ".git"), "utf8"))
+      yield* Effect.promise(() => fs.writeFile(path.join(a, ".git"), link))
+      expect((yield* discovered(a)).gitDirectory).toBe(yield* admin("b"))
+    }),
+  )
+
   it.live("creates, lists, and removes linked worktrees", () =>
     Effect.gen(function* () {
       const root = yield* Effect.acquireRelease(
