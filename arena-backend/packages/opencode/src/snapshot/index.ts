@@ -24,6 +24,26 @@ const limit = 2 * 1024 * 1024
 const core = ["-c", "core.longpaths=true", "-c", `core.symlinks=${FSUtil.canSymlink()}`]
 const cfg = ["-c", "core.autocrlf=false", ...core]
 const quote = [...cfg, "-c", "core.quotepath=false"]
+
+/**
+ * What a snapshot repository is set to when it is created: line endings and paths kept as they
+ * are, and the tuning that keeps the first add of a very large worktree bounded.
+ */
+const snapshotConfig = () =>
+  [
+    "[core]",
+    "\tautocrlf = false",
+    "\tlongpaths = true",
+    `\tsymlinks = ${FSUtil.canSymlink()}`,
+    "\tfsmonitor = false",
+    "\tuntrackedCache = true",
+    "[feature]",
+    "\tmanyFiles = true",
+    "[index]",
+    "\tversion = 4",
+    "\tthreads = true",
+    "",
+  ].join("\n")
 interface GitResult {
   readonly code: ChildProcessSpawner.ExitCode
   readonly text: string
@@ -324,15 +344,18 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 yield* git(["init"], {
                   env: { GIT_DIR: state.gitdir, GIT_WORK_TREE: state.worktree },
                 })
-                yield* git(["--git-dir", state.gitdir, "config", "core.autocrlf", "false"])
-                yield* git(["--git-dir", state.gitdir, "config", "core.longpaths", "true"])
-                yield* git(["--git-dir", state.gitdir, "config", "core.symlinks", String(FSUtil.canSymlink())])
-                yield* git(["--git-dir", state.gitdir, "config", "core.fsmonitor", "false"])
-                // Tuning for very large worktrees so the first add stays bounded.
-                yield* git(["--git-dir", state.gitdir, "config", "feature.manyFiles", "true"])
-                yield* git(["--git-dir", state.gitdir, "config", "index.version", "4"])
-                yield* git(["--git-dir", state.gitdir, "config", "index.threads", "true"])
-                yield* git(["--git-dir", state.gitdir, "config", "core.untrackedCache", "true"])
+                // Written after what `git init` wrote, in one go: a git process per key costs tens
+                // of milliseconds on Windows, and an Arena contestant's worktree moves to a new path
+                // every turn, so this runs before each side's first step of every turn. A section
+                // may repeat in a config file, and of a repeated key the last one counts.
+                const config = path.join(state.gitdir, "config")
+                const written = yield* fs.readFileString(config).pipe(Effect.catch(() => Effect.succeed("")))
+                yield* fs
+                  .writeFileString(
+                    config,
+                    `${written}${written.endsWith("\n") || !written ? "" : "\n"}${snapshotConfig()}`,
+                  )
+                  .pipe(Effect.orDie)
                 yield* seed()
                 yield* Effect.logInfo("initialized")
               }
