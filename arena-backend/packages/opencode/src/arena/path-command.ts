@@ -20,6 +20,7 @@ const parser = lazy(async () => {
 function literal(node: Node | null): string | undefined {
   if (!node) return undefined
   if (node.type === "command_name") return node.firstNamedChild ? literal(node.firstNamedChild) : undefined
+  if (node.type === "number") return node.text
   if (node.type === "raw_string") return node.text.slice(1, -1)
   if (node.type === "string") {
     if (node.namedChildren.some((child) => child?.type !== "string_content")) return undefined
@@ -143,6 +144,335 @@ export async function rewritePathCommand(
     return edits
       .sort((left, right) => right.start - left.start)
       .reduce((text, edit) => text.slice(0, edit.start) + edit.value + text.slice(edit.end), command)
+  } finally {
+    tree.delete()
+  }
+}
+
+interface NetworkOptions {
+  flags: string[]
+  values: string[]
+  shortFlags: string
+  shortValues: string
+}
+
+function networkEndpoints(args: (string | undefined)[], first: number, executable: string) {
+  const commands: Record<string, NetworkOptions> = {
+    curl: {
+      flags: [
+        "silent",
+        "show-error",
+        "fail",
+        "fail-with-body",
+        "location",
+        "head",
+        "verbose",
+        "compressed",
+        "insecure",
+        "get",
+        "globoff",
+        "no-progress-meter",
+        "http1.1",
+        "http2",
+        "ipv4",
+        "ipv6",
+        "next",
+      ],
+      values: [
+        "header",
+        "data",
+        "data-raw",
+        "data-binary",
+        "data-urlencode",
+        "json",
+        "form",
+        "request",
+        "request-target",
+        "output",
+        "write-out",
+        "user",
+        "user-agent",
+        "cookie",
+        "cookie-jar",
+        "referer",
+        "upload-file",
+        "proxy",
+        "noproxy",
+        "resolve",
+        "connect-to",
+        "connect-timeout",
+        "max-time",
+        "retry",
+        "config",
+        "cert",
+        "key",
+        "cacert",
+      ],
+      shortFlags: "fsSLIvkqGgN#046V",
+      shortValues: "dHXoAubceFTxwEKm",
+    },
+    wget: {
+      flags: ["quiet", "verbose", "no-verbose", "spider", "no-check-certificate", "continue", "server-response"],
+      values: [
+        "output-document",
+        "output-file",
+        "append-output",
+        "header",
+        "post-data",
+        "post-file",
+        "body-data",
+        "body-file",
+        "method",
+        "user-agent",
+        "user",
+        "password",
+        "timeout",
+        "tries",
+        "directory-prefix",
+      ],
+      shortFlags: "qvcS",
+      shortValues: "OoaUtTP",
+    },
+    open: {
+      flags: ["wait-apps", "new", "background", "hide", "fresh"],
+      values: ["env"],
+      shortFlags: "WngjFRtef",
+      shortValues: "ab",
+    },
+  }
+  const options = commands[executable]
+  if (!options) return []
+  const endpoints: { index: number; prefix: string }[] = []
+  let positional = false
+  for (let index = first; index < args.length; index++) {
+    const value = args[index]
+    if (value === undefined) return []
+    if (positional || !value.startsWith("-") || value === "-") {
+      endpoints.push({ index, prefix: "" })
+      continue
+    }
+    if (value === "--") {
+      positional = true
+      continue
+    }
+    if (executable === "open" && value === "--args") break
+    if (executable === "curl" && (value === "--url" || value.startsWith("--url="))) {
+      if (value === "--url") endpoints.push({ index: ++index, prefix: "" })
+      else endpoints.push({ index, prefix: "--url=" })
+      continue
+    }
+    if (value.startsWith("--")) {
+      const name = value.slice(2).split("=", 1)[0]
+      if (options.flags.includes(name) && !value.includes("=")) continue
+      if (!options.values.includes(name)) return []
+      if (!value.includes("=")) index++
+      continue
+    }
+    for (let offset = 1; offset < value.length; offset++) {
+      const flag = value[offset]
+      if (options.shortFlags.includes(flag)) continue
+      if (!options.shortValues.includes(flag)) return []
+      if (offset === value.length - 1) index++
+      break
+    }
+  }
+  return endpoints
+}
+
+/** Retarget only literal network arguments; scripts, bodies and shell expansions stay opaque. */
+export async function rewritePortCommand(
+  command: string,
+  mapping: { port: (value: string) => string; endpoint: (value: string) => string },
+) {
+  const tree = (await parser()).parse(command + "\n")
+  if (!tree) return { command, server: false }
+  try {
+    if (tree.rootNode.hasError) return { command, server: false }
+    const edits: { start: number; end: number; value: string }[] = []
+    let server = false
+    let otherOutput = false
+    const edit = (node: Node, value: string) => {
+      if (value !== literal(node)) edits.push({ start: node.startIndex, end: node.endIndex, value: quote(value, node) })
+    }
+    const assignment = (node: Node) => {
+      // Substitutions can emit arbitrary stderr even when stdout goes into the variable.
+      if (node.descendantsOfType(["command_substitution", "process_substitution"]).length) otherOutput = true
+      const name = node.childForFieldName("name")?.text
+      const value = node.childForFieldName("value")
+      if (!name || !value || !/^(?:PORT|PASEO_PORT[23]?|DEV_SERVER_PORT|SERVER_PORT)$/.test(name)) return
+      const original = literal(value)
+      if (original !== undefined) edit(value, mapping.port(original))
+    }
+    const visit = (node: Node | null) => {
+      if (!node) return
+      if (node.type === "variable_assignment") return assignment(node)
+      if (node.type === "command") {
+        for (const child of node.namedChildren) if (child?.type === "variable_assignment") assignment(child)
+        const nodes = [node.childForFieldName("name"), ...node.childrenForFieldName("argument")].filter(
+          (child): child is Node => child !== null,
+        )
+        const args = nodes.map(literal)
+        let start = 0
+        // These wrappers forward literal argv; never descend into `sh -c`, eval or inline programs.
+        while (["env", "nohup", "npx", "bunx"].includes(args[start] ?? "")) {
+          const wrapper = args[start++]
+          if (wrapper === "npx" || wrapper === "bunx") {
+            while (["-y", "--yes", "--no", "--no-install", "--offline"].includes(args[start] ?? "")) start++
+          }
+          if (args[start] === "--") start++
+          if (wrapper !== "env") continue
+          while (start < args.length) {
+            const value = args[start]
+            if (value === undefined || !/^[A-Za-z_][A-Za-z_0-9]*=/.test(value)) break
+            const match = /^(PORT|PASEO_PORT[23]?|DEV_SERVER_PORT|SERVER_PORT)=(\d+)$/.exec(value)
+            if (match) edit(nodes[start], `${match[1]}=${mapping.port(match[2])}`)
+            start++
+          }
+        }
+        let executable = args[start]?.split("/").at(-1)
+        let first = start + 1
+        let packageScript = false
+        if (["npm", "pnpm", "yarn", "bun"].includes(executable ?? "")) {
+          // Skip only known valueless options; unknown options may consume the next word.
+          while (["--silent", "-s", "--quiet", "-q", "--offline"].includes(args[first] ?? "")) first++
+          if (["exec", "dlx"].includes(args[first] ?? "")) {
+            first++
+            if (args[first] === "--") first++
+            executable = args[first++]
+          } else {
+            if (args[first] === "run") first++
+            if (!["dev", "start", "serve", "preview"].includes(args[first] ?? "")) {
+              otherOutput = true
+              return
+            }
+            executable = "package-script"
+            first++
+            packageScript = true
+          }
+        }
+        const python =
+          /^python(?:3(?:\.\d+)?)?$/.test(executable ?? "") && args[first] === "-m" && args[first + 1] === "http.server"
+        const launch =
+          python ||
+          [
+            "vite",
+            "next",
+            "astro",
+            "nuxt",
+            "webpack",
+            "webpack-dev-server",
+            "react-scripts",
+            "expo",
+            "http-server",
+            "serve",
+            "uvicorn",
+            "gunicorn",
+            "flask",
+            "package-script",
+          ].includes(executable ?? "") ||
+          (executable === "node" && /\.[cm]?js$/.test(args[first] ?? ""))
+        server ||= launch
+        otherOutput ||= !launch && executable !== "cd"
+        if (["curl", "wget", "open"].includes(executable ?? "")) {
+          for (const endpoint of networkEndpoints(args, first, executable!)) {
+            const value = args[endpoint.index]
+            if (value !== undefined)
+              edit(nodes[endpoint.index], endpoint.prefix + mapping.endpoint(value.slice(endpoint.prefix.length)))
+          }
+          return
+        }
+        if (python) first += 2
+        if (packageScript && args[first] === "--") first++
+        for (let index = first; index < args.length; index++) {
+          const value = args[index]
+          if (value === undefined) continue
+          const previous = args[index - 1]
+          if (launch && value === "--") break
+          const portOption =
+            launch &&
+            (value === "--port" || (["next", "http-server", "flask"].includes(executable ?? "") && value === "-p"))
+          const listenOption = executable === "serve" && ["-l", "--listen"].includes(value)
+          const bindOption = executable === "gunicorn" && ["-b", "--bind"].includes(value)
+          if (portOption || listenOption || bindOption) {
+            const target = args[++index]
+            if (target !== undefined) {
+              const endpoint = target.startsWith("tcp://")
+                ? mapping.endpoint(target.replace(/^tcp:/, "http:")).replace(/^http:/, "tcp:")
+                : mapping.endpoint(target)
+              edit(nodes[index], mapping.port(target) === target ? endpoint : mapping.port(target))
+            }
+            continue
+          }
+          // -p is a port only for these commands; e.g. node -p evaluates JavaScript.
+          const flag = launch && /^(--port=)(\d+)$/.exec(value)
+          const addressFlag = /^(--listen=|--bind=)(.+)$/.exec(value)
+          const probe = executable === "nc" && ["localhost", "127.0.0.1", "::1"].includes(previous ?? "")
+          const socket = executable === "lsof" && /^(?:-i(?:TCP|UDP)?|(?:TCP|UDP)?):([0-9]+)$/.exec(value)
+          if (socket && (value.startsWith("-i") || previous === "-i")) {
+            edit(nodes[index], value.slice(0, -socket[1].length) + mapping.port(socket[1]))
+          } else if (
+            addressFlag &&
+            ((executable === "serve" && addressFlag[1] === "--listen=") ||
+              (executable === "gunicorn" && addressFlag[1] === "--bind="))
+          ) {
+            const target = addressFlag[2]
+            const endpoint = target.startsWith("tcp://")
+              ? mapping.endpoint(target.replace(/^tcp:/, "http:")).replace(/^http:/, "tcp:")
+              : mapping.endpoint(target)
+            edit(nodes[index], addressFlag[1] + (mapping.port(target) === target ? endpoint : mapping.port(target)))
+          } else if (probe) {
+            edit(nodes[index], mapping.port(value) === value ? mapping.endpoint(value) : mapping.port(value))
+          } else if (flag) {
+            edit(nodes[index], flag[1] + mapping.port(flag[2]))
+          } else if (value === "--host" && ["vite", "package-script"].includes(executable ?? "")) {
+            // Vite accepts --host without a value, including through package scripts.
+            if (args[index + 1] !== undefined && !args[index + 1]!.startsWith("-")) index++
+          } else if (launch && value.startsWith("-")) {
+            // Unknown options can consume the next word. Never treat that payload as a port.
+            if (
+              !value.includes("=") &&
+              !["--strictPort", "--reload", "--debug", "--verbose", "--help", "--version"].includes(value)
+            )
+              index++
+          } else if (python) {
+            edit(nodes[index], mapping.port(value))
+          }
+        }
+        return
+      }
+      if (
+        [
+          "declaration_command",
+          "unset_command",
+          "test_command",
+          "arithmetic_expansion",
+          "command_substitution",
+          "process_substitution",
+          "function_definition",
+        ].includes(node.type)
+      )
+        otherOutput = true
+      if (
+        [
+          "string",
+          "raw_string",
+          "concatenation",
+          "heredoc_redirect",
+          "heredoc_body",
+          "comment",
+          "command_substitution",
+        ].includes(node.type)
+      )
+        return
+      for (const child of node.namedChildren) visit(child)
+    }
+    visit(tree.rootNode)
+    return {
+      command: edits
+        .sort((a, b) => b.start - a.start)
+        .reduce((value, edit) => value.slice(0, edit.start) + edit.value + value.slice(edit.end), command),
+      server: server && !otherOutput,
+    }
   } finally {
     tree.delete()
   }

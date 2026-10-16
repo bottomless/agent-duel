@@ -23,6 +23,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-event"
 import { ArenaRuntime } from "@/arena/runtime"
+import { ArenaAttachments } from "@/arena/attachments"
 import { contestant as arenaContestant, medium as arenaMedium } from "@/arena/model-profile"
 import type { Assignment } from "@/arena/proxy"
 import type { ModelMessage } from "ai"
@@ -520,8 +521,14 @@ const layer = Layer.effect(
               part.type === "file" && MessageV2.isMedia(part.mime)
                 ? { type: "text" as const, text: `[Attached ${part.mime}: ${part.filename ?? "file"}]` }
                 : part
+            // Arena replay content still reaches the model but must not add another user turn or attachment row.
+            const hiddenArenaReplay = assignment !== undefined && replayPart.type === "text"
+            const replayMetadata =
+              hiddenArenaReplay && part.type === "text" && part.metadata ? { ...part.metadata } : undefined
+            if (replayMetadata) delete replayMetadata[ArenaAttachments.METADATA_KEY]
             yield* session.updatePart({
               ...replayPart,
+              ...(hiddenArenaReplay ? { synthetic: true, metadata: replayMetadata } : {}),
               id: PartID.ascending(),
               messageID: replayMsg.id,
               sessionID: input.sessionID,

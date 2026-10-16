@@ -53,7 +53,7 @@ import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { generate as generateComparison } from "./comparison"
-import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
+import { canonicalizeTranscriptPaths } from "./canonical-path"
 import { comparisonTimeline } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
 import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
@@ -4106,12 +4106,6 @@ export const layer: Layer.Layer<
           ),
         )
       }
-      if (Exit.isSuccess(result) && result.value?.info.role === "assistant") {
-        const env = previewEnvironment(run.worktree.directory)
-        yield* Effect.forEach(result.value.parts, (part) => sessions.updatePart(localizeArenaEnvironment(part, env)), {
-          discard: true,
-        })
-      }
       yield* promise(() => store.updateRun(run.runID, { completedAt: new Date() }))
       ArenaPrivacy.clearDiscardedMessages(run.sessionID)
       return result
@@ -4481,21 +4475,6 @@ export const layer: Layer.Layer<
       )
     })
 
-    /** Every past run's port bank and preview URLs, so a copied transcript can be retargeted. */
-    const historicalEnvironmentsForChat = Effect.fn("Arena.historicalEnvironmentsForChat")(function* (
-      store: Store,
-      chatID: string,
-    ) {
-      return (yield* promise(() => store.runsForChat(chatID))).map((run) => ({
-        portAliases: run.portAliases,
-        previewUrls: Object.fromEntries(
-          (run.services ?? []).flatMap((service) =>
-            service.proxyRoutes.flatMap((route) => (route.alias && route.url ? [[route.alias, route.url]] : [])),
-          ),
-        ),
-      }))
-    })
-
     /** Sessions forked at warm-up that no turn will ever use. */
     const disposeWarmSessions = (ids: readonly (string | undefined)[]) =>
       Effect.forEach(
@@ -4569,7 +4548,6 @@ export const layer: Layer.Layer<
       const transcriptHash = digest(transcript.value)
       const agent = source.value.agent ?? "build"
       const branch = current.canonicalCheckout?.branch ?? current.arenaBranch
-      const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
       // Both forks at once: each writes its own session into its own directory.
       return yield* Effect.forEach(
         slots,
@@ -4590,7 +4568,6 @@ export const layer: Layer.Layer<
                     },
                   }),
                 )
-                const env = previewEnvironment(slot.directory)
                 const messageMapping = new Map<string, string>()
                 const session = yield* forkInto({
                   sessionID: sourceID,
@@ -4599,14 +4576,6 @@ export const layer: Layer.Layer<
                   pathMode: "transcript",
                   onMessageMapping(mapping) {
                     mapping.forEach((target, from) => messageMapping.set(from, target))
-                  },
-                  part(part, message) {
-                    if (message.role === "user") return part
-                    const canonicalEnvironment = historicalEnvironments.reduce(
-                      (value, historical) => canonicalizeArenaEnvironment(value, historical),
-                      part,
-                    )
-                    return localizeArenaEnvironment(canonicalEnvironment, env)
                   },
                 }).pipe(Effect.mapError(error))
                 forked(session.id)
@@ -4778,7 +4747,6 @@ export const layer: Layer.Layer<
           }),
         )
         previewWorktrees.add(info.directory)
-        const env = previewEnvironment(info.directory)
         const forkStartedAt = Date.now()
         const warmFork = warm
           ? usableWarmFork(warmForksTrusted, turn, warm, info.directory, sourceID, preview.portAliases)
@@ -4793,9 +4761,6 @@ export const layer: Layer.Layer<
           forkedID = SessionID.make(warmFork.forkedSessionID)
           forkedAtWarmup = true
         } else {
-          // Keep concrete URLs in the canonical chat for the reader. Contestant copies normalize
-          // every historical run here, then retarget those references to this side's environment.
-          const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
           const forked = yield* forkInto({
             sessionID: sourceID,
             destination: info.directory,
@@ -4803,14 +4768,6 @@ export const layer: Layer.Layer<
             pathMode: "transcript",
             onMessageMapping(mapping) {
               mapping.forEach((target, source) => messageMapping.set(source, target))
-            },
-            part(part, message) {
-              if (message.role === "user") return part
-              const canonicalEnvironment = historicalEnvironments.reduce(
-                (current, historical) => canonicalizeArenaEnvironment(current, historical),
-                part,
-              )
-              return localizeArenaEnvironment(canonicalEnvironment, env)
             },
           }).pipe(Effect.mapError(error))
           yield* sessions.setAgentModel({
