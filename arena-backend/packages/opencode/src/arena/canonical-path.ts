@@ -256,11 +256,19 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
+// A data URL carries encoded bytes, a screenshot a contestant read for one. Its base64 text can hold a
+// port's digits between two letters, and rewriting them corrupted the image, so every later battle
+// of the chat sent an image no provider would decode.
+function encodedBytes(value: string) {
+  return value.startsWith("data:")
+}
+
 function rewriteEnvironment(
   value: unknown,
   replacements: readonly { readonly literal: string; readonly variable: string; readonly numeric: boolean }[],
 ): unknown {
   if (typeof value === "string") {
+    if (encodedBytes(value)) return value
     return replacements.reduce((current, replacement) => {
       if (!replacement.numeric) return current.split(replacement.literal).join(replacement.variable)
       const pattern = new RegExp(`(?<!\\d)${escapeRegExp(replacement.literal)}(?!\\d)`, "g")
@@ -279,6 +287,7 @@ function rewriteVariables(
   replacements: readonly { readonly variable: string; readonly literal: string }[],
 ): unknown {
   if (typeof value === "string") {
+    if (encodedBytes(value)) return value
     return replacements.reduce(
       (current, replacement) => current.split(replacement.variable).join(replacement.literal),
       value,

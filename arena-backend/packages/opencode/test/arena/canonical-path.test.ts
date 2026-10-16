@@ -61,6 +61,26 @@ describe("Arena canonical path", () => {
     })
   })
 
+  test("retargets ports in a screenshot's tool output but never inside its image bytes", () => {
+    // A screenshot whose base64 text holds the old port's digits between two letters, as the one
+    // that left every later battle of a chat failing with "Invalid PNG image".
+    const image = "data:image/png;base64,iVBORw0KGgoqzp8CLI6cButwH+oUre55556u33/ld5uALUtI8+eD8mN"
+    const part = {
+      type: "tool",
+      tool: "read",
+      state: {
+        output: "Screenshot of http://localhost:55556",
+        attachments: [{ type: "file", mime: "image/png", url: image }],
+      },
+    }
+
+    const canonical = canonicalizeArenaEnvironment(part, { portAliases: { PASEO_PORT: 55556 } })
+    const localized = localizeArenaEnvironment(canonical, { PASEO_PORT: "54507" })
+
+    expect(localized.state.output).toBe("Screenshot of http://localhost:54507")
+    expect(localized.state.attachments[0]?.url).toBe(image)
+  })
+
   test("retargets a concrete historical URL without changing the displayed canonical value", () => {
     const displayed = "Server: http://turn1-b.localhost:6768"
     const canonical = canonicalizeArenaEnvironment(displayed, {
