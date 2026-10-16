@@ -71,7 +71,12 @@ import {
 import { parseOpenProjectPathFromArgv } from "./open-project-routing.js";
 import { PendingOpenProjectStore } from "./pending-open-project-store.js";
 import { getDesktopSettingsStore } from "./settings/desktop-settings-electron.js";
-import { clampWindowStateToWorkAreas, createWindowStateStore } from "./settings/window-state.js";
+import {
+  MIN_WINDOW_HEIGHT,
+  MIN_WINDOW_WIDTH,
+  clampWindowStateToWorkAreas,
+  createWindowStateStore,
+} from "./settings/window-state.js";
 import {
   isDesktopManagedDaemonRunningSync,
   stopDesktopDaemonViaCli,
@@ -594,6 +599,9 @@ async function createWindow(
     title: APP_NAME,
     icon: applicationIcon,
     ...resolveWindowBounds(restoredWindowState),
+    // How these were chosen is next to the constants.
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     backgroundColor: getWindowBackgroundColor(systemTheme),
     ...getMainWindowChromeOptions({
