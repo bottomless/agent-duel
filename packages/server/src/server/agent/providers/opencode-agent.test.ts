@@ -591,6 +591,7 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
         sourceCwd: "/workspace/repo",
         worktreePath: "/workspace/repo/.agent-duel/worktrees/a",
       });
+      await client.prewarmProject("/workspace/repo");
     } finally {
       fetchMock.mockRestore();
     }
@@ -598,6 +599,7 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     expect(requests).toEqual([
       { path: "/arena/activity", token: runtime.server.controlToken },
       { path: "/arena/worktrees/seed", token: runtime.server.controlToken },
+      { path: "/arena/projects/prewarm", token: runtime.server.controlToken },
     ]);
   });
 

@@ -550,6 +550,23 @@ type ContestantBase = {
   readonly workingTree: string
 }
 
+/**
+ * What claiming and syncing a worktree read of the chat it is for. A repository's spare pair
+ * built before it has a chat (`prewarmProject`) has only the checkout to go on.
+ */
+type SlotOwner = Pick<ChatDocument, "_id" | "arenaBranch"> & {
+  readonly repository: Pick<ChatDocument["repository"], "root">
+  readonly canonicalCheckout?: Pick<NonNullable<ChatDocument["canonicalCheckout"]>, "commonGitDir" | "branch">
+}
+
+/** What a spare worktree is built against: a turn's base, or a checkout with no battle yet. */
+type SpareTarget = {
+  readonly base: ContestantBase
+  readonly manifest: CopyManifest
+  readonly branch?: string
+  readonly turnID?: string
+}
+
 /** `wait` deletes a chat's trash before returning instead of in the background. */
 type SlotTrashOptions = { readonly wait?: boolean }
 
@@ -600,6 +617,8 @@ const PROJECT_SPARE_TARGET = 2
  * only the latest chat's worktrees (`LOW_DISK_BYTES` in its workspace cleanup), and no spare is built.
  */
 const PROJECT_SPARE_MIN_FREE_BYTES = 10_000_000_000
+/** The longest a new chat's first send waits for a prewarm still building its spare pair. */
+const PROJECT_PREWARM_WAIT_MS = 30_000
 
 /**
  * Whether a repository keeps a spare pair for its next new chat (`ensureProjectSpares`). On by
@@ -1022,6 +1041,8 @@ export interface Interface {
   readonly prepareCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
   readonly releaseCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
   readonly trimEnvironments: (keep: number, volumeOf?: string) => Effect.Effect<ArenaEnvironmentTrim, Error>
+  /** Build a repository's spare pair for its first battle in the background; see `prewarmProject`. */
+  readonly prewarmProject: (directory: string) => Effect.Effect<void, Error>
   readonly snapshot: (chatID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly turn: (turnID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly diff: (turnID: string) => Effect.Effect<ArenaSchema.ComparisonDiff, Error>
@@ -1305,8 +1326,39 @@ export const layer: Layer.Layer<
       repositoryMutationLocks.set(commonGitDir, created)
       return created
     }
+    // Requests for a repository's lock that someone is waiting on, by repository, from the moment
+    // they ask until they let go: a send, a vote, a chat being opened.
+    const repositoryForeground = new Map<string, number>()
+    const repositoryBackgroundLocks = new Map<string, Semaphore.Semaphore>()
+    const countForeground = (commonGitDir: string, by: number) => {
+      const count = (repositoryForeground.get(commonGitDir) ?? 0) + by
+      if (count > 0) repositoryForeground.set(commonGitDir, count)
+      else repositoryForeground.delete(commonGitDir)
+    }
     const withRepositoryMutation = <A, E, R>(commonGitDir: string, effect: Effect.Effect<A, E, R>) =>
-      repositoryMutationLock(commonGitDir).withPermits(1)(effect)
+      Effect.acquireUseRelease(
+        Effect.sync(() => countForeground(commonGitDir, 1)),
+        () => repositoryMutationLock(commonGitDir).withPermits(1)(effect),
+        () => Effect.sync(() => countForeground(commonGitDir, -1)),
+      )
+    /**
+     * The repository lock for work nobody waits on: spare builds and warm preparation. Their host
+     * copies hold the lock for seconds on Windows, and the lock is first come first served, so a
+     * send or a vote arriving behind a few of them waited for all of them. This waits until no
+     * foreground request is pending and lets one background holder at a time queue, so a
+     * foreground request waits for at most the one hold already under way.
+     */
+    const withBackgroundRepositoryMutation = <A, E, R>(commonGitDir: string, effect: Effect.Effect<A, E, R>) => {
+      const existing = repositoryBackgroundLocks.get(commonGitDir)
+      const background = existing ?? Semaphore.makeUnsafe(1)
+      if (!existing) repositoryBackgroundLocks.set(commonGitDir, background)
+      return background.withPermits(1)(
+        Effect.gen(function* () {
+          while (repositoryForeground.has(commonGitDir)) yield* Effect.sleep(Duration.millis(25))
+          return yield* repositoryMutationLock(commonGitDir).withPermits(1)(effect)
+        }),
+      )
+    }
     const checkoutCleanupLock = (root: string) => {
       const existing = checkoutCleanupLocks.get(root)
       if (existing) return existing
@@ -2567,7 +2619,7 @@ export const layer: Layer.Layer<
     )
 
     /** Where a chat keeps its contestant worktrees and their hosts: every generation's pair and the spare. */
-    const slotPool = (chat: Pick<ChatDocument, "_id" | "repository">) =>
+    const slotPool = (chat: Pick<SlotOwner, "_id" | "repository">) =>
       join(isolatedRoot(chat.repository.root), chatSlug(chat._id))
     const slotKey = (directory: string) => resolvePath(directory)
     /** One answer for every spelling of a directory, so an owned worktree is never taken for a free one. */
@@ -2578,7 +2630,7 @@ export const layer: Layer.Layer<
         return resolvePath(directory)
       }
     }
-    const canonicalCommonDir = Effect.fnUntraced(function* (chat: ChatDocument) {
+    const canonicalCommonDir = Effect.fnUntraced(function* (chat: SlotOwner) {
       if (chat.canonicalCheckout?.commonGitDir) return chat.canonicalCheckout.commonGitDir
       const located = yield* git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], {
         cwd: chat.repository.root,
@@ -2606,7 +2658,7 @@ export const layer: Layer.Layer<
     })
 
     /** Put a worktree nothing vouches for in the trash with its host, without asking git about either. */
-    const retireSlot = Effect.fnUntraced(function* (chat: ChatDocument, directory: string) {
+    const retireSlot = Effect.fnUntraced(function* (chat: SlotOwner, directory: string) {
       yield* forgetSlot(directory)
       yield* inDirectory(chat.repository.root, worktrees.retire(directory)).pipe(Effect.mapError(error))
     })
@@ -3000,7 +3052,7 @@ export const layer: Layer.Layer<
      * while git works.
      */
     const prepareSlotContent = Effect.fn("Arena.prepareSlotContent")(function* (input: {
-      readonly chat: ChatDocument
+      readonly chat: SlotOwner
       readonly directory: string
       readonly branch?: string
       readonly base: ContestantBase
@@ -3244,9 +3296,12 @@ export const layer: Layer.Layer<
         Effect.forkIn(scope),
       )
 
-    /** Keep a chat's worktrees out of Time Machine, in the background: nothing waits on it. */
-    const excludePoolFromBackup = (chat: Pick<ChatDocument, "_id" | "repository">) =>
-      Effect.promise(() => excludeFromBackup(slotPool(chat))).pipe(
+    /**
+     * Keep a chat's worktrees, or the directory a worktree was claimed in, out of Time Machine, in
+     * the background: nothing waits on it.
+     */
+    const excludePoolFromBackup = (chat: Pick<SlotOwner, "_id" | "repository">, pool = slotPool(chat)) =>
+      Effect.promise(() => excludeFromBackup(pool)).pipe(
         Effect.flatMap((written) =>
           written
             ? Effect.void
@@ -3261,7 +3316,7 @@ export const layer: Layer.Layer<
      * repository lock: the host is a copy of the checkout's git directory.
      */
     const claimSlot = Effect.fnUntraced(function* (input: {
-      readonly chat: ChatDocument
+      readonly chat: SlotOwner
       readonly name: string
       readonly branch?: string
       readonly head: string
@@ -3289,7 +3344,7 @@ export const layer: Layer.Layer<
         marks: new Map(),
         metadataFingerprint: input.metadataFingerprint,
       })
-      yield* excludePoolFromBackup(input.chat)
+      yield* excludePoolFromBackup(input.chat, dirname(info.directory))
       return info
     })
 
@@ -5229,6 +5284,9 @@ export const layer: Layer.Layer<
         ],
         { discard: true },
       ).pipe(Effect.ignore)
+      // Sides with no warm worktree take a project spare, which may still be building.
+      const waitForPrewarm =
+        turn.warmPreparation?.state === "ready" || refreshing ? Effect.void : awaitProjectPrewarm(store, chat)
       // Both sides are prepared at once: each has its own host repository and its own session. The
       // claim's shared steps tolerate a concurrent twin: the trash sweep removes with `force`, and
       // the exclude and config-boundary writes are serialized per file. The whole setup still runs under
@@ -5238,17 +5296,25 @@ export const layer: Layer.Layer<
           store,
           turn._id,
           "preparing_workspaces",
-          withRepositoryMutation(
-            repositoryLock,
-            Effect.all(
-              [
-                makeSide("a").pipe(preparationPhase("prepare-side", { chatID: chat._id, turnID: turn._id, side: "a" })),
-                makeSide("b").pipe(preparationPhase("prepare-side", { chatID: chat._id, turnID: turn._id, side: "b" })),
-              ],
-              {
-                concurrency: 2,
-              },
-            ).pipe(Effect.onError(() => discardSetup)),
+          waitForPrewarm.pipe(
+            Effect.andThen(
+              withRepositoryMutation(
+                repositoryLock,
+                Effect.all(
+                  [
+                    makeSide("a").pipe(
+                      preparationPhase("prepare-side", { chatID: chat._id, turnID: turn._id, side: "a" }),
+                    ),
+                    makeSide("b").pipe(
+                      preparationPhase("prepare-side", { chatID: chat._id, turnID: turn._id, side: "b" }),
+                    ),
+                  ],
+                  {
+                    concurrency: 2,
+                  },
+                ).pipe(Effect.onError(() => discardSetup)),
+              ),
+            ),
           ),
         ),
       )
@@ -6905,38 +6971,43 @@ export const layer: Layer.Layer<
         (entry) => Effect.promise(() => isPoolWorktree(join(slotPool(chat), entry.name))),
       )
       if (linked.filter(Boolean).length >= SLOT_POOL_TARGET) return
-      yield* buildSpareSlot(store, chat, turn, name)
+      const target = yield* spareTargetForTurn(store, chat, turn)
+      if (target) yield* buildSpareSlot(chat, target, name)
+    })
+
+    /** A spare synced to `turn`'s base, or undefined when the turn has no copy manifest. */
+    const spareTargetForTurn = Effect.fnUntraced(function* (store: Store, chat: ChatDocument, turn: TurnDocument) {
+      const manifestID = turn.copySnapshot?.manifestID
+      if (!manifestID) return undefined
+      const manifest = yield* copyManifestByID(store, manifestID, turn._id)
+      return {
+        base: {
+          frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
+          indexTree: turn.baseSnapshot?.indexTree ?? turn.frozenBaseSHA,
+          workingTree: turn.baseSnapshot?.tree ?? turn.frozenBaseSHA,
+        },
+        manifest,
+        branch: (chat.canonicalCheckout?.branch ?? chat.arenaBranch) || undefined,
+        turnID: turn._id,
+      } satisfies SpareTarget
     })
 
     /**
-     * Build a worktree at `name` that nothing owns yet, synced to `turn`'s base: claimed under the
+     * Build a worktree at `name` that nothing owns yet, synced to `target`: claimed under the
      * repository lock, synced outside it. Returns its directory. A failure is logged, what it left
      * is retired, and nothing is returned.
      */
-    const buildSpareSlot = Effect.fnUntraced(function* (
-      store: Store,
-      chat: ChatDocument,
-      turn: TurnDocument,
-      name: string,
-    ) {
-      const manifestID = turn.copySnapshot?.manifestID
-      if (!manifestID) return
-      const manifest = yield* copyManifestByID(store, manifestID, turn._id)
-      const base = {
-        frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
-        indexTree: turn.baseSnapshot?.indexTree ?? turn.frozenBaseSHA,
-        workingTree: turn.baseSnapshot?.tree ?? turn.frozenBaseSHA,
-      }
-      const branch = (chat.canonicalCheckout?.branch ?? chat.arenaBranch) || undefined
+    const buildSpareSlot = Effect.fnUntraced(function* (chat: SlotOwner, target: SpareTarget, name: string) {
+      const { base, manifest, branch } = target
       const commonGitDir = yield* canonicalCommonDir(chat)
-      const context = { chatID: chat._id, turnID: turn._id }
+      const context = { chatID: chat._id, ...(target.turnID ? { turnID: target.turnID } : {}) }
       const started = performance.now()
       let directory: string | undefined
       const outcome = yield* Effect.exit(
         Effect.gen(function* () {
           // Only the host copy and the registration need the lock; a vote arriving now waits
           // on the lock for its promotion, so the checkout and the clones run after it.
-          const info = yield* withRepositoryMutation(
+          const info = yield* withBackgroundRepositoryMutation(
             chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
             Effect.gen(function* () {
               const metadataFingerprint = yield* promise(() => hostMetadataFingerprint(commonGitDir))
@@ -6994,13 +7065,15 @@ export const layer: Layer.Layer<
     })
 
     // Each repository's spare pair for its next new chat, by `directoryIdentity` of the checkout:
-    // the ready worktrees, the build filling them, and whether what an earlier process left was
-    // cleared. Kept per store, as trust is (`trustedWarmPairs`), so a restart starts it over.
+    // the ready worktrees, the build filling them and whether a send waits for it, and whether
+    // what an earlier process left was cleared. Kept per store, as trust is (`trustedWarmPairs`),
+    // so a restart starts it over.
+    type ProjectSpareBuild = { readonly fiber: Fiber.Fiber<void>; readonly prewarm: boolean }
     const projectSpareStates = new WeakMap<
       Store,
       {
         readonly ready: Map<string, string[]>
-        readonly builds: Map<string, Fiber.Fiber<void>>
+        readonly builds: Map<string, ProjectSpareBuild>
         readonly cleared: Set<string>
       }
     >()
@@ -7009,7 +7082,7 @@ export const layer: Layer.Layer<
       if (existing) return existing
       const created = {
         ready: new Map<string, string[]>(),
-        builds: new Map<string, Fiber.Fiber<void>>(),
+        builds: new Map<string, ProjectSpareBuild>(),
         cleared: new Set<string>(),
       }
       projectSpareStates.set(store, created)
@@ -7026,19 +7099,22 @@ export const layer: Layer.Layer<
     }
 
     /**
-     * Fill a repository's spare pair, synced to `turn`'s base. Without a copy-on-write clone a new
-     * chat's first send copies every ignored root into two new worktrees, 8.7s per side for 14k
-     * files on Windows; adopting a spare moves it in, and its scan keeps every root that has not
-     * changed (4.0s).
+     * Fill a repository's spare pair, synced to `target`, `concurrency` worktrees at a time.
+     * Without a copy-on-write clone a new chat's first send copies every ignored root into two new
+     * worktrees, 8.7s per side for 14k files on Windows; adopting a spare moves it in, and its scan
+     * keeps every root that has not changed (4.0s).
      * The records that let it keep them are this process's (`slotStates`), so what an earlier
      * process left in the directory is retired before the first build.
      */
-    const ensureProjectSpares = Effect.fn("Arena.ensureProjectSpares")(function* (store: Store, turn: TurnDocument) {
-      const chat = yield* promise(() => store.chat(turn.chatID))
-      if (!chat) return
+    const ensureProjectSpares = Effect.fn("Arena.ensureProjectSpares")(function* (
+      store: Store,
+      owner: SlotOwner,
+      target: SpareTarget,
+      concurrency: number,
+    ) {
       const state = projectSpareState(store)
-      const key = directoryIdentity(chat.repository.root)
-      const root = join(isolatedRoot(chat.repository.root), PROJECT_SPARE_DIRNAME)
+      const key = directoryIdentity(owner.repository.root)
+      const root = join(isolatedRoot(owner.repository.root), PROJECT_SPARE_DIRNAME)
       const ready = state.ready.get(key) ?? []
       state.ready.set(key, ready)
       if (!state.cleared.has(key)) {
@@ -7046,46 +7122,133 @@ export const layer: Layer.Layer<
         const entries = yield* Effect.promise(() => readdir(root, { withFileTypes: true }).catch(() => []))
         for (const entry of entries) {
           if (!entry.isDirectory() || entry.name === TRASH_DIRNAME || hostedWorktree(entry.name) !== undefined) continue
-          yield* retireSlot(chat, join(root, entry.name)).pipe(Effect.ignore)
+          yield* retireSlot(owner, join(root, entry.name)).pipe(Effect.ignore)
         }
       }
       const free = yield* Effect.promise(() =>
-        statfs(chat.repository.root).then(
+        statfs(owner.repository.root).then(
           (stats) => Number(stats.bavail) * Number(stats.bsize),
           () => Number.POSITIVE_INFINITY,
         ),
       )
       while (ready.length < PROJECT_SPARE_TARGET && free >= PROJECT_SPARE_MIN_FREE_BYTES) {
-        const directory = yield* buildSpareSlot(
-          store,
-          chat,
-          turn,
-          `${PROJECT_SPARE_DIRNAME}/spare-${randomBytes(4).toString("hex")}`,
+        const built = yield* Effect.forEach(
+          Array.from({ length: Math.min(concurrency, PROJECT_SPARE_TARGET - ready.length) }),
+          () => buildSpareSlot(owner, target, `${PROJECT_SPARE_DIRNAME}/spare-${randomBytes(4).toString("hex")}`),
+          { concurrency: "unbounded" },
         )
-        if (!directory) break
-        ready.push(directory)
+        const directories = built.filter((directory) => directory !== undefined)
+        ready.push(...directories)
+        if (directories.length < built.length) break
       }
       const trash = yield* Effect.promise(() => lstat(join(root, TRASH_DIRNAME)).catch(() => undefined))
       if (trash?.isDirectory()) yield* worktrees.sweepTrash(root)
+    })
+
+    /** Run `build` in the background unless the repository's pair is full or already being filled. */
+    const forkProjectSpareBuild = Effect.fnUntraced(function* (
+      store: Store,
+      owner: SlotOwner,
+      build: Effect.Effect<void, unknown>,
+      prewarm = false,
+    ) {
+      const state = projectSpareState(store)
+      const key = directoryIdentity(owner.repository.root)
+      if (state.builds.has(key) || (state.ready.get(key)?.length ?? 0) >= PROJECT_SPARE_TARGET) return
+      const fiber = yield* build.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena project spare creation failed", { chatID: owner._id, cause }),
+        ),
+        Effect.forkIn(scope),
+      )
+      state.builds.set(key, { fiber, prewarm })
+      fiber.addObserver(() => {
+        if (state.builds.get(key)?.fiber === fiber) state.builds.delete(key)
+      })
+    })
+
+    /**
+     * Wait for a prewarm still building the repository's spare pair. It builds both worktrees at
+     * once and began before this send, so its pair is ready sooner than the send could copy its
+     * own. Waited for outside the repository lock, which its claims take; a stuck build is waited
+     * for no longer than PROJECT_PREWARM_WAIT_MS.
+     */
+    const awaitProjectPrewarm = Effect.fnUntraced(function* (store: Store, chat: ChatDocument) {
+      if (!projectSparesEnabled()) return
+      const build = projectSpareState(store).builds.get(directoryIdentity(chat.repository.root))
+      if (!build?.prewarm) return
+      yield* Fiber.await(build.fiber).pipe(Effect.timeoutOption(Duration.millis(PROJECT_PREWARM_WAIT_MS)))
     })
 
     const forkProjectSpares = Effect.fnUntraced(function* (store: Store, turn: TurnDocument) {
       if (!projectSparesEnabled()) return
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return
-      const state = projectSpareState(store)
-      const key = directoryIdentity(chat.repository.root)
-      if (state.builds.has(key) || (state.ready.get(key)?.length ?? 0) >= PROJECT_SPARE_TARGET) return
-      const fiber = yield* ensureProjectSpares(store, turn).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Arena project spare creation failed", { chatID: chat._id, cause }),
-        ),
-        Effect.forkIn(scope),
+      yield* forkProjectSpareBuild(
+        store,
+        chat,
+        Effect.gen(function* () {
+          const target = yield* spareTargetForTurn(store, chat, turn)
+          if (target) yield* ensureProjectSpares(store, chat, target, 1)
+        }),
       )
-      state.builds.set(key, fiber)
-      fiber.addObserver(() => {
-        if (state.builds.get(key) === fiber) state.builds.delete(key)
-      })
+    })
+
+    /**
+     * Build a repository's spare pair before its first battle, from the checkout as it stands,
+     * both worktrees at once. The app opens a chat only when its first prompt is sent, so a new
+     * project's first send would otherwise copy every ignored root into both sides while the user
+     * waits; the daemon asks for this when a project is added. Returns at once: nothing waits on
+     * the build and nothing fails with it. A repository with chats gets its pair from their
+     * battles (`forkProjectSpares`).
+     */
+    const prewarmProject = Effect.fn("Arena.prewarmProject")(function* (directory: string) {
+      if (!projectSparesEnabled()) return
+      const store = yield* available()
+      const inspected = yield* Effect.exit(withGit(inspectCanonical(directory)))
+      if (Exit.isFailure(inspected)) {
+        yield* Effect.logInfo("Arena skipped a project prewarm", { directory, cause: inspected.cause })
+        return
+      }
+      const checkout = inspected.value
+      // Unresolved conflicts leave no index tree, and a battle cannot start until they are resolved.
+      if (!checkout.indexTree || !checkout.head) return
+      if (yield* promise(() => store.checkoutEviction(checkout.root))) return
+      const owner: SlotOwner = {
+        _id: `project:${directoryIdentity(checkout.root)}`,
+        repository: { root: checkout.root },
+        canonicalCheckout: { commonGitDir: checkout.commonGitDir, branch: checkout.branch },
+      }
+      const indexTree = checkout.indexTree
+      yield* forkProjectSpareBuild(
+        store,
+        owner,
+        Effect.gen(function* () {
+          const policy = yield* promise(() => arenaCopyConfiguration(checkout.root))
+          const manifest = yield* promise(() =>
+            createIgnoredContentSnapshot({
+              canonical: checkout.root,
+              policy,
+              scan: watcherBackendUnavailable() !== undefined,
+            }),
+          )
+          yield* ensureProjectSpares(
+            store,
+            owner,
+            {
+              // The index rather than the working tree: a send syncs whatever the checkout holds then.
+              base: { frozenHead: checkout.head, indexTree, workingTree: indexTree },
+              manifest: { ...manifest, manifestID: `${owner._id}|copy-manifest` },
+              branch: checkout.branch,
+            },
+            PROJECT_SPARE_TARGET,
+          )
+        }).pipe(
+          // The build's syncs follow the checkout under the owner's key; no chat stops it later.
+          Effect.ensuring(promise(() => journal.stop(owner._id)).pipe(Effect.ignore)),
+        ),
+        true,
+      )
     })
 
     /**
@@ -7437,7 +7600,7 @@ export const layer: Layer.Layer<
           )
           // Followed from before the snapshot, so the manifest's identities are covered.
           yield* promise(() => journal.begin(chat._id, chat.repository.root, []))
-          const base = yield* withRepositoryMutation(
+          const base = yield* withBackgroundRepositoryMutation(
             lock,
             withGit(snapshotBase({ canonical: chat.repository.root })),
           ).pipe(Effect.mapError(error))
@@ -7487,7 +7650,7 @@ export const layer: Layer.Layer<
           // repository writes. The file sync, the instances and the forks touch only this chat's
           // pool and sessions, which the start lock the caller holds keeps to this preparation, so a
           // vote, a send or an agent prompt in another chat does not wait for them.
-          const claimed = yield* withRepositoryMutation(
+          const claimed = yield* withBackgroundRepositoryMutation(
             lock,
             Effect.gen(function* () {
               if (yield* warmPairIsSuperseded(store, chat._id, generation, yieldToPrompts)) {
@@ -7605,7 +7768,7 @@ export const layer: Layer.Layer<
               cause: synced.cause,
             })
             const started = performance.now()
-            const info = yield* withRepositoryMutation(
+            const info = yield* withBackgroundRepositoryMutation(
               lock,
               Effect.gen(function* () {
                 yield* retireSlot(chat, slot.info.directory).pipe(Effect.ignore)
@@ -7694,7 +7857,7 @@ export const layer: Layer.Layer<
               ),
             )
           // The mirror reads the checkout's refs, so it takes the lock again, as the retirements do.
-          const mirrored = yield* withRepositoryMutation(
+          const mirrored = yield* withBackgroundRepositoryMutation(
             lock,
             Effect.gen(function* () {
               const mirrored = yield* Effect.forEach(records, mirrorWarmHost, { concurrency: 2 })
@@ -7756,7 +7919,7 @@ export const layer: Layer.Layer<
         return
       }
       if (Exit.isFailure(outcome)) {
-        yield* withRepositoryMutation(
+        yield* withBackgroundRepositoryMutation(
           lock,
           Effect.forEach(touched, (directory) => retireSlot(chat, directory).pipe(Effect.ignore), {
             concurrency: 2,
@@ -10288,6 +10451,7 @@ export const layer: Layer.Layer<
       prepareCheckout,
       releaseCheckout,
       trimEnvironments,
+      prewarmProject,
       snapshot,
       turn: turnSnapshot,
       diff: comparisonDiff,

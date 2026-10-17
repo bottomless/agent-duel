@@ -6432,6 +6432,8 @@ export class Session {
           error: null,
         },
       });
+      // The first battle's worktrees are prepared while the first prompt is being written.
+      void this.agentManager.prewarmProject(cwd);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to add project";
       this.sessionLogger.error({ err: error, cwd }, "Failed to add project");
