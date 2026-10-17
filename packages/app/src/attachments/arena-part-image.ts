@@ -47,9 +47,16 @@ export function arenaPartImageAttachment(
   };
 }
 
-/** The image as a data URL. */
-export function resolveArenaPartImage(attachment: AttachmentMetadata): Promise<string> {
-  return cache.resolve(attachment.storageKey);
+/** The image as a data URL; `show` keeps it while it is on screen, until `hideArenaPartImage`. */
+export function resolveArenaPartImage(
+  attachment: AttachmentMetadata,
+  show = false,
+): Promise<string> {
+  return cache.resolve(attachment.storageKey, show);
+}
+
+export function hideArenaPartImage(attachment: AttachmentMetadata): void {
+  cache.hide(attachment.storageKey);
 }
 
 async function load(key: string): Promise<string> {

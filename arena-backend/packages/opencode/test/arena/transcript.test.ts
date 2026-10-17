@@ -234,6 +234,29 @@ test("keeps the messages a trimmed pane still acts on: a waiting tool call and t
   expect(kept.activityOmitted).toBe(1)
 })
 
+test("keeps what a trimmed pane's subagent cards read: the task call and each session's newest message", () => {
+  const filler = "x".repeat(1_000)
+  const message = (id: string, sessionID: string, role: string, created: number, parts: Record<string, unknown>[]) => ({
+    info: { id, sessionID, role, time: { created } },
+    parts: parts.map((part, index) => ({ id: `${id}-${index}`, messageID: id, sessionID, ...part })),
+  })
+  const thread = project([
+    message("prompt", "root", "user", 1, [{ type: "text", text: "Do it" }]),
+    message("delegate", "root", "assistant", 2, [
+      { type: "tool", tool: "task", callID: "task-1", state: { status: "completed", input: {}, metadata: { sessionId: "child" } } },
+      { type: "text", text: filler },
+    ]),
+    message("child-early", "child", "assistant", 3, [{ type: "text", text: filler }]),
+    message("child-done", "child", "assistant", 4, [{ type: "text", text: filler }]),
+    message("root-old", "root", "assistant", 5, [{ type: "text", text: filler }]),
+    message("root-latest", "root", "assistant", 6, [{ type: "text", text: filler }]),
+  ])
+
+  const kept = withinBudget(thread, "root", "prompt", 2_000)
+  expect(kept.messages.map((item) => item.id)).toEqual(["prompt", "delegate", "child-done", "root-latest"])
+  expect(kept.activityOmitted).toBe(2)
+})
+
 test("keeps none of the forked chat for a run that has not written its prompt", () => {
   expect(fromPrompt(forkedRun(), "root", null).messages.map((message) => message.id)).toEqual(["child-work"])
 })

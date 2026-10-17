@@ -104,8 +104,9 @@ const ACTIVITY_LIMIT = 8 * 1024 * 1024
  * A run's thread at most `limit` long. Every snapshot, vote and reply answer carries both runs'
  * threads, and past the daemon's limit the window could not load the battle, vote on it or reply to it.
  * Images and large tool fields already go as previews, so only an extreme turn comes near this. It
- * leaves out the oldest messages first, but never the prompt, the newest message, or one the pane
- * still acts on: a tool call waiting on a question or permission, which the pane answers inline, and
+ * leaves out the oldest messages first, but never the prompt or one the pane still acts on: each
+ * session's newest message, which a subagent card reads its state from; a subagent's task call, which
+ * places its card; a tool call waiting on a question or permission, which the pane answers inline; and
  * the latest task list. It counts the messages it left out in `activityOmitted` for the pane to say so.
  */
 export function withinBudget(
@@ -132,14 +133,18 @@ export function withinBudget(
       const record = readRecord(part)
       if (record?.type !== "tool") continue
       const status = readRecord(record.state)?.status
-      if (status === "pending" || status === "running") kept.add(message.id)
+      if (status === "pending" || status === "running" || record.tool === "task") kept.add(message.id)
       // The pane's task list is the latest one the run finished writing.
       if (record.tool === "todowrite" && status === "completed") tasks = message.id
     }
   }
   if (tasks) kept.add(tasks)
-  const newest = transcript.messages.at(-1)
-  if (newest) kept.add(newest.id)
+  const newestBySession = new Map<string, string>()
+  for (const message of transcript.messages) {
+    const sessionID = readRecord(message)?.sessionID
+    newestBySession.set(typeof sessionID === "string" ? sessionID : rootSessionID, message.id)
+  }
+  for (const id of newestBySession.values()) kept.add(id)
   const omitted = new Set<string>()
   transcript.messages.forEach((message, index) => {
     if (total <= limit || kept.has(message.id)) return

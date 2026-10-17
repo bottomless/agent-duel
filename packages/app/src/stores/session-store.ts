@@ -54,8 +54,8 @@ import {
   type WorkspaceAgentActivity,
 } from "@/utils/workspace-agent-activity";
 import { setHistoryImageFetcher } from "@/attachments/history-image";
-import { setArenaPartImageFetcher } from "@/attachments/arena-part-image";
 import { watchDaemonClients } from "@/attachments/daemon-image-cache";
+import { setArenaPartImageFetcher } from "@/attachments/arena-part-image";
 import {
   applyTurnLivenessTransition,
   resolveTurnPresentation,
