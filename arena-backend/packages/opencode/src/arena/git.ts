@@ -2806,12 +2806,34 @@ export const ignoredPaths = Effect.fn("ArenaGit.ignoredPaths")(function* (direct
 export const snapshotBase = Effect.fn("ArenaGit.snapshotBase")(function* (input: SnapshotBaseInput) {
   const git = yield* Git.Service
   const root = yield* readRoot(git, input.canonical, "find_canonical_root")
-  const commonGitDir = yield* read(git, root, "read_common_git_dir", [
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ])
-  const trunkConflicts = yield* conflictPaths(git, root)
+  // Asked at once, as `inspectCanonical` does, since the send waits on this under the repository
+  // lock. The working tree is read beside the rest and kept only when the checkout has changes; a
+  // failure surfaces in the order these were asked one by one, unmerged paths first.
+  const asked = yield* Effect.all(
+    {
+      commonGitDir: Effect.exit(
+        read(git, root, "read_common_git_dir", ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+      ),
+      conflicts: Effect.exit(conflictPaths(git, root)),
+      head: Effect.exit(read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])),
+      branch: Effect.exit(readBranch(git, root)),
+      status: Effect.exit(
+        read(git, root, "read_canonical_status", [
+          "status",
+          "--porcelain=v1",
+          "--untracked-files=all",
+          "--no-renames",
+          "--",
+          ".",
+        ]),
+      ),
+      indexTree: Effect.exit(readIndexTree(git, root, "read_canonical_index")),
+      workingTree: Effect.exit(readWorkingTree(git, root)),
+    },
+    { concurrency: "unbounded" },
+  )
+  const commonGitDir = yield* settled(asked.commonGitDir)
+  const trunkConflicts = yield* settled(asked.conflicts)
   if (trunkConflicts.length > 0) {
     return yield* Effect.fail(
       new OperationError(
@@ -2821,19 +2843,14 @@ export const snapshotBase = Effect.fn("ArenaGit.snapshotBase")(function* (input:
       ),
     )
   }
-  const canonicalHead = yield* read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])
-  const branch = yield* readBranch(git, root)
-  const status = yield* read(git, root, "read_canonical_status", [
-    "status",
-    "--porcelain=v1",
-    "--untracked-files=all",
-    "--no-renames",
-    "--",
-    ".",
-  ])
-  const indexTree = yield* readIndexTree(git, root, "read_canonical_index")
+  const canonicalHead = yield* settled(asked.head)
+  const branch = yield* settled(asked.branch)
+  const status = yield* settled(asked.status)
+  const indexTree = yield* settled(asked.indexTree)
+  // A clean checkout's tree is read from the head itself, so a commit landing meanwhile cannot
+  // pair one commit's tree with another's head.
   const baseTree = status
-    ? yield* readWorkingTree(git, root)
+    ? yield* settled(asked.workingTree)
     : yield* read(git, root, "read_head_tree", ["rev-parse", `${canonicalHead}^{tree}`])
   if (!status) {
     if (input.permanentRef) yield* preserveRef(git, root, input.permanentRef, canonicalHead)
