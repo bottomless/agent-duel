@@ -855,6 +855,36 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     expect(runtime.acquisitions.every((acquisition) => acquisition.releaseCount === 1)).toBe(true);
   });
 
+  test("encodes the directory when asking Arena for git metadata", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    // A Windows profile folder outside ASCII cannot go into a header as it is.
+    const cwd = "C:\\Users\\Kullanıcı\\Masaüstü\\proje";
+    const directories: Array<string | null> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      directories.push(new Headers(init?.headers).get("x-opencode-directory"));
+      return Response.json({ message: "fix: read the right file" });
+    });
+
+    try {
+      const result = await client.writeGitMetadata(
+        cwd,
+        { kind: "commit_message", changes: "M a.txt" },
+        new AbortController().signal,
+      );
+      expect(result).toEqual({ message: "fix: read the right file" });
+    } finally {
+      fetchMock.mockRestore();
+    }
+
+    expect(directories).toEqual([encodeURIComponent(cwd)]);
+    expect(runtime.acquisitions.every((acquisition) => acquisition.releaseCount === 1)).toBe(true);
+  });
+
   test("single turn completes with streaming deltas", async () => {
     const cwd = tmpCwd();
     const runtime = new TestOpenCodeHarness();
