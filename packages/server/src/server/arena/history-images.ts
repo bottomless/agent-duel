@@ -1,4 +1,10 @@
 import type { AgentTimelineItem } from "../agent/agent-sdk-types.js";
+import type { SessionOutboundMessage } from "../messages.js";
+
+type AgentStreamEvent = Extract<
+  SessionOutboundMessage,
+  { type: "agent_stream" }
+>["payload"]["event"];
 
 /**
  * A history page names a replayed message's images instead of carrying them, and the app fetches
@@ -20,6 +26,17 @@ export function withHistoryImageRefs(agentId: string, item: AgentTimelineItem): 
       byteSize: Math.floor((image.data.length * 3) / 4),
     })),
   };
+}
+
+/**
+ * A streamed user message names its images too. Reload, Unarchive, a rewind or a rebuilt winner
+ * history replays every row at once, and a long chat's pasted screenshots sent inline passed the
+ * socket limit. The window that sent a message keeps its own copies of its images.
+ */
+export function withStreamImageRefs(agentId: string, event: AgentStreamEvent): AgentStreamEvent {
+  if (event.type !== "timeline") return event;
+  const item = withHistoryImageRefs(agentId, event.item);
+  return item === event.item ? event : { ...event, item };
 }
 
 export function findHistoryImage(

@@ -1,4 +1,5 @@
 import type { AttachmentMetadata } from "@/attachments/types";
+import { DaemonImageCache, MissingImageError } from "@/attachments/daemon-image-cache";
 
 export interface HistoryImageRef {
   agentId: string;
@@ -11,9 +12,8 @@ type HistoryImageFetcher = (
 ) => Promise<{ mimeType: string; data: string } | null>;
 
 let fetcher: HistoryImageFetcher | null = null;
-// Scrolling back through a chat shows the same images again; keep the latest few.
-const CACHE_LIMIT = 32;
-const cache = new Map<string, Promise<string>>();
+// Scrolling back through a chat shows the same images again; keep the latest 64 MB of them.
+const cache = new DaemonImageCache(load, 64 * 1024 * 1024);
 
 /** The session store says how to reach the daemon that holds an agent's history. */
 export function setHistoryImageFetcher(next: HistoryImageFetcher | null): void {
@@ -41,28 +41,12 @@ export function historyImageAttachment(
 
 /** The image as a data URL. */
 export function resolveHistoryImage(attachment: AttachmentMetadata): Promise<string> {
-  const key = attachment.storageKey;
-  const cached = cache.get(key);
-  if (cached) {
-    cache.delete(key);
-    cache.set(key, cached);
-    return cached;
-  }
-  const pending = load(key).catch((error: unknown) => {
-    cache.delete(key);
-    throw error;
-  });
-  cache.set(key, pending);
-  for (const oldest of cache.keys()) {
-    if (cache.size <= CACHE_LIMIT) break;
-    cache.delete(oldest);
-  }
-  return pending;
+  return cache.resolve(attachment.storageKey);
 }
 
 async function load(key: string): Promise<string> {
   if (!fetcher) throw new Error("Chat history images are unavailable");
   const image = await fetcher(JSON.parse(key) as HistoryImageRef);
-  if (!image) throw new Error("This image is no longer in the chat's history");
+  if (!image) throw new MissingImageError("This image is no longer in the chat's history");
   return `data:${image.mimeType};base64,${image.data}`;
 }
