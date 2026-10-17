@@ -913,6 +913,12 @@ export interface AgentClient {
     request: GitMetadataRequest,
     signal: AbortSignal,
   ): Promise<GitMetadataResult | null>;
+  /**
+   * Start preparing a project's first battle in the background, so the battle does not copy the
+   * checkout's ignored content while the user waits. Only a provider that owns that clone
+   * machinery implements it.
+   */
+  prewarmProject?(cwd: string): Promise<void>;
   /** Drop what the provider cached about a directory's repository after Git changed under it. */
   refreshProjectDirectory?(cwd: string): Promise<void>;
   importSession?(

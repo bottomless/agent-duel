@@ -2111,6 +2111,37 @@ export class OpenCodeAgentClient implements AgentClient {
   }
 
   /**
+   * The Arena backend keeps spare contestant worktrees per repository where it has no
+   * copy-on-write clone; asking for them when a project is added lets its first battle adopt
+   * them. The backend answers at once and decides whether this platform keeps spares.
+   */
+  async prewarmProject(cwd: string): Promise<void> {
+    if (!this.arenaMode) return;
+    const acquisition = await this.serverManager.acquireCurrent();
+    try {
+      const response = await fetch(
+        new URL("/arena/projects/prewarm", `${acquisition.server.url.replace(/\/$/, "")}/`),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-directory": openCodeDirectoryHeader(cwd),
+            "x-paseo-control-token": acquisition.server.controlToken,
+          },
+          body: JSON.stringify({ root: cwd }),
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`Arena project prewarm failed with status ${response.status}: ${text}`);
+      }
+    } finally {
+      await acquisition.release();
+    }
+  }
+
+  /**
    * OpenCode caches each directory's project, Git or not, for the life of the server, and
    * refuses worktrees for a directory it cached as non-Git. Dispose that directory's instance
    * after Git is set up under it so the next request detects the repository. OpenCode's own
