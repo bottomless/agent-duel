@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { createTestLogger } from "../../../test-utils/test-logger.js";
+import {
+  ARENA_PAYLOAD_LIMIT_BYTES,
+  ArenaChatTooLargeError,
+  ArenaDiffTooLargeError,
+} from "../../arena/payload-limit.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/client";
 import {
   __openCodeInternals,
@@ -753,6 +758,88 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     try {
       await expect(session.arena?.archive()).resolves.toBeNull();
       await expect(session.arena?.archive()).rejects.toThrow("archive failed");
+    } finally {
+      fetchMock.mockRestore();
+      await session.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("says a comparison too large to send is the comparison, not the battle", async () => {
+    const cwd = tmpCwd();
+    const runtime = new TestOpenCodeHarness();
+    runtime.enqueueClient(new TestOpenCodeClient());
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const session = await client.createSession(buildConfig(cwd));
+    const oversized = " ".repeat(ARENA_PAYLOAD_LIMIT_BYTES + 1);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(oversized));
+
+    try {
+      await expect(session.arena?.diff("turn-1")).rejects.toBeInstanceOf(ArenaDiffTooLargeError);
+      await expect(session.arena?.resolve()).rejects.toBeInstanceOf(ArenaChatTooLargeError);
+    } finally {
+      fetchMock.mockRestore();
+      await session.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("archives a chat whose answer is past the window limit, since that answer stays here", async () => {
+    const cwd = tmpCwd();
+    const runtime = new TestOpenCodeHarness();
+    runtime.enqueueClient(new TestOpenCodeClient());
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const session = await client.createSession(buildConfig(cwd));
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(" ".repeat(ARENA_PAYLOAD_LIMIT_BYTES + 1)));
+
+    try {
+      await expect(session.arena?.archive()).resolves.toBeNull();
+    } finally {
+      fetchMock.mockRestore();
+      await session.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("ends a battle stream whose frame passes the window limit with chat_too_large", async () => {
+    const cwd = tmpCwd();
+    const runtime = new TestOpenCodeHarness();
+    runtime.enqueueClient(new TestOpenCodeClient());
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const session = await client.createSession(buildConfig(cwd));
+    const chunk = new TextEncoder().encode(`data: ${"x".repeat(ARENA_PAYLOAD_LIMIT_BYTES + 1)}`);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(chunk);
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+
+    try {
+      const stream = session.arena!.stream({ kind: "current" }, new AbortController().signal);
+      const first = await stream[Symbol.asyncIterator]().next();
+      expect(first.value).toMatchObject({ kind: "reset", code: "chat_too_large" });
     } finally {
       fetchMock.mockRestore();
       await session.close();

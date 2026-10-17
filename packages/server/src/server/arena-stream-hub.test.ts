@@ -73,6 +73,24 @@ describe("shared Arena upstream", () => {
     expect(upstream.counts().closed).toBe(1);
   });
 
+  it("starts every window over instead of handing a late one a cache past the window limit", async () => {
+    const hub = new ArenaStreamHub();
+    const upstream = source();
+    const first: ArenaStreamPacket[] = [];
+    const second: ArenaStreamPacket[] = [];
+    hub.subscribe({ key: "same", open: upstream.open, deliver: (packet) => first.push(packet) });
+    const oversized = { ...fixture(), history: [{ text: "x".repeat(33 * 1024 * 1024) }] };
+    upstream.push({ kind: "snapshot", snapshot: oversized as ReturnType<typeof fixture> });
+    await settle();
+    expect(first.at(-1)?.frame.kind).toBe("snapshot");
+
+    hub.subscribe({ key: "same", open: upstream.open, deliver: (packet) => second.push(packet) });
+    await settle();
+    expect(first.at(-1)?.frame).toMatchObject({ kind: "reset" });
+    expect(second.some((packet) => packet.frame.kind === "snapshot")).toBe(false);
+    expect(upstream.counts()).toEqual({ opened: 2, closed: 1 });
+  });
+
   it("gives a late window the current snapshot and closes upstream only after the last window", async () => {
     const hub = new ArenaStreamHub();
     const upstream = source();
@@ -145,6 +163,23 @@ describe("shared Arena upstream", () => {
     hub.subscribe({ key: "historical", open: closed, deliver: (packet) => packets.push(packet) });
     await settle();
     expect(packets.filter((packet) => packet.frame.kind === "reset")).toHaveLength(2);
+    expect(hub.counts().streams).toBe(0);
+  });
+  it("passes on why the backend ended, so a window can stop retrying a chat too long to load", async () => {
+    const hub = new ArenaStreamHub();
+    const packets: ArenaStreamPacket[] = [];
+    async function* tooLarge() {
+      yield {
+        kind: "reset" as const,
+        reason: "This chat is too long to load",
+        code: "chat_too_large" as const,
+      };
+    }
+    hub.subscribe({ key: "current", open: tooLarge, deliver: (packet) => packets.push(packet) });
+    await settle();
+    expect(packets.map((packet) => packet.frame)).toEqual([
+      { kind: "reset", reason: "This chat is too long to load", code: "chat_too_large" },
+    ]);
     expect(hub.counts().streams).toBe(0);
   });
   it("keeps the initial snapshot outside the 4 MiB pending-change limit", async () => {

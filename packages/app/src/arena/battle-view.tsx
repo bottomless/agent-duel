@@ -24,6 +24,7 @@ import { useSessionStore } from "@/stores/session-store";
 import { useFetchQuery } from "@/data/query";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { ArenaRunThread } from "./run-thread";
+import { arenaSizeErrorOr, isArenaSizeError } from "./chat-too-large";
 import { ArenaRunTaskFooter } from "./task-progress-card";
 import { openArenaWorktreeChanges } from "./explorer-selection";
 import { ARENA_RUN_META_HEIGHT, ArenaRunMeta } from "./run-meta";
@@ -380,10 +381,15 @@ function useBattleDiff(serverId: string, agentId: string, turnId: string) {
     staleTimeMs: 0,
     queryFn: async () => {
       if (!client) throw new Error("Arena daemon connection is unavailable");
-      return client.arenaDiff(agentId, turnId);
+      try {
+        return await client.arenaDiff(agentId, turnId);
+      } catch (error) {
+        throw arenaSizeErrorOr(error);
+      }
     },
     enabled: Boolean(client),
-    retry: 2,
+    // A comparison too large to send is refused the same way every time.
+    retry: (failures, error) => failures < 2 && !isArenaSizeError(error),
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
   });
 }

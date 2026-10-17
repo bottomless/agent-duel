@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ArenaSnapshotSchema } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ArenaStreamPacket } from "@getpaseo/protocol/arena/stream";
 import { ArenaSubscription, type ArenaStreamClient } from "./stream-subscription";
+import { ArenaChatTooLargeError } from "./chat-too-large";
 import { arenaRunStatusLabel } from "./run-stats";
 
 class Client implements ArenaStreamClient {
@@ -213,6 +214,32 @@ describe("Arena UI subscription", () => {
     expect(client.unsubscriptions).toHaveLength(1);
     off();
     await Promise.resolve();
+  });
+
+  it("stops retrying a chat too long to load and says so, until Retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new Client();
+      const stream = new ArenaSubscription(client, "agent", { kind: "current" }, () => {});
+      const off = stream.retain();
+      await Promise.resolve();
+      client.emit({
+        generation: "g",
+        sequence: 1,
+        frame: { kind: "reset", reason: "too long", code: "chat_too_large" },
+      });
+      expect(stream.getError()).toBeInstanceOf(ArenaChatTooLargeError);
+      expect(stream.getError()?.message).toContain("Start a new chat");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(client.subscriptions).toHaveLength(1);
+      stream.retry();
+      expect(client.subscriptions).toHaveLength(2);
+      expect(stream.getError()).toBeNull();
+      off();
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shares ownership and keeps the connection until the last consumer leaves", async () => {

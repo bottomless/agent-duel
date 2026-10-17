@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { project } from "../../src/arena/transcript"
+import { fromPrompt, project } from "../../src/arena/transcript"
 
 const original = process.env.OPENCODE_ARENA
 beforeEach(() => {
@@ -78,4 +78,38 @@ test("leaves out a tool result's attachment data and keeps the prompt's images",
     state: { output: "Image read successfully", attachments: [{ type: "file", mime: "image/png" }] },
   })
   expect(JSON.stringify(result)).not.toContain(screenshot)
+})
+
+// A contestant session is a fork of the chat: two earlier turns, then this turn's prompt and work.
+function forkedRun() {
+  const message = (id: string, sessionID: string, role: string, created: number) => ({
+    info: { id, sessionID, role, time: { created } },
+    parts: [{ id: `part-${id}`, messageID: id, sessionID, type: "text", text: id }],
+  })
+  return project([
+    message("turn-1-prompt", "root", "user", 1),
+    message("turn-1-reply", "root", "assistant", 2),
+    message("turn-2-prompt", "root", "user", 3),
+    message("turn-2-reply", "root", "assistant", 4),
+    message("prompt", "root", "user", 5),
+    message("child-work", "child", "assistant", 6),
+    message("reply", "root", "assistant", 7),
+  ])
+}
+
+test("keeps a run's transcript from its prompt on, with its descendants", () => {
+  const result = fromPrompt(forkedRun(), "root", "prompt")
+  expect(result.messages.map((message) => message.id)).toEqual(["prompt", "child-work", "reply"])
+  expect(Object.keys(result.parts)).toEqual(["prompt", "child-work", "reply"])
+  expect(JSON.stringify(result)).not.toContain("turn-1")
+})
+
+test("keeps none of the forked chat before the prompt is written", () => {
+  const result = fromPrompt(forkedRun(), "root", "not-written-yet")
+  expect(result.messages.map((message) => message.id)).toEqual(["child-work"])
+})
+
+test("keeps a run without a boundary from its last user message, as the app reads it", () => {
+  const result = fromPrompt(forkedRun(), "root", undefined)
+  expect(result.messages.map((message) => message.id)).toEqual(["prompt", "child-work", "reply"])
 })
