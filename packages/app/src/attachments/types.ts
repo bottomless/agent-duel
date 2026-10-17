@@ -6,9 +6,15 @@ import type {
 
 /**
  * `inline` holds the image itself as a data URL in `storageKey`: an image a replayed message carried,
- * which this device never stored.
+ * which this device never stored. `arena-part` names one a battle snapshot left in its run
+ * (`attachments/arena-part-image.ts`).
  */
-export type AttachmentStorageType = "web-indexeddb" | "desktop-file" | "native-file" | "inline";
+export type AttachmentStorageType =
+  | "web-indexeddb"
+  | "desktop-file"
+  | "native-file"
+  | "inline"
+  | "arena-part";
 
 export interface AttachmentMetadata {
   id: string;

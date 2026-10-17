@@ -1035,21 +1035,32 @@ describe("Arena service vertical slice", () => {
     setStoreForTest(memory.store)
 
     // The window gets none of the screenshots' bytes: sent along, each snapshot below was over 34 MB,
-    // and the daemon closes a socket that has more than 64 MiB waiting. The pasted image stays, since
-    // the battle card shows it.
+    // and the daemon closes a socket that has more than 64 MiB waiting. The pasted image goes without
+    // its data too, and the battle card loads it from the run when it shows it.
     const screenshotData = screenshots.map((bytes) => bytes.subarray(0, 3000).toString("base64"))
-    const expectLight = (snapshot: PublicSnapshot) => {
+    const pasted = png(64).toString("base64")
+    const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+    const expectLight = async (snapshot: PublicSnapshot) => {
       const text = JSON.stringify(snapshot)
       expect(text.length).toBeLessThan(1024 * 1024)
       expect(screenshotData.filter((data) => text.includes(data))).toEqual([])
+      expect(text).not.toContain(pasted.slice(0, 3000))
       for (const run of snapshot.runs) {
         const prompt = (run.messages ?? []).find((message) => message.role === "user")
-        expect(JSON.stringify(run.parts?.[String(prompt?.id)])).toContain("data:image/")
+        const image = (run.parts?.[String(prompt?.id)] ?? [])
+          .map((part) => part as unknown as { id: string; type: string; url: string; previewed?: string[] })
+          .find((part) => part.type === "file")
+        expect(image).toMatchObject({ url: "", previewed: ["url"] })
+        const whole = await json<{ part: { url: string } }>(
+          await request(`/arena/runs/${encodeURIComponent(run.id)}/parts/${encodeURIComponent(image!.id)}`, {
+            headers,
+          }),
+        )
+        expect(whole.part.url).toStartWith("data:image/")
       }
     }
 
     try {
-      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
       const source = await json<{ id: string }>(
         await request("/session", {
           method: "POST",
@@ -1064,7 +1075,7 @@ describe("Arena service vertical slice", () => {
           headers,
           body: JSON.stringify({
             prompt: "Make the page match this.",
-            attachments: [{ type: "image", mimeType: "image/png", data: png(64).toString("base64") }],
+            attachments: [{ type: "image", mimeType: "image/png", data: pasted }],
           }),
         }),
       )
@@ -1104,7 +1115,7 @@ describe("Arena service vertical slice", () => {
           body: JSON.stringify({ prompt: "Check them once more.", target: "both" }),
         }),
       )
-      expectLight(followedUp)
+      await expectLight(followedUp)
       await waitForTurn(memory.store, turnID, "awaiting_vote")
 
       const voted = await json<PublicSnapshot>(
@@ -1114,9 +1125,9 @@ describe("Arena service vertical slice", () => {
           body: JSON.stringify({ vote: "a" }),
         }),
       )
-      expectLight(voted)
+      await expectLight(voted)
       await waitForTurn(memory.store, turnID, "complete")
-      expectLight(await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers })))
+      await expectLight(await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers })))
     } finally {
       router.restore()
     }

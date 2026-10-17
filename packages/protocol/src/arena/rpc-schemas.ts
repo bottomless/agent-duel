@@ -368,6 +368,8 @@ export const ArenaRunSchema = z
     identity: ArenaIdentitySchema.optional(),
     messages: z.array(z.unknown()).optional(),
     parts: z.record(z.string(), z.array(z.unknown())).optional(),
+    /** How many of the thread's oldest messages the engine left out to keep the battle loadable. */
+    activityOmitted: z.number().optional(),
     status: z.unknown().optional(),
     permissions: z.array(z.unknown()).optional(),
     questions: z.array(z.unknown()).optional(),
@@ -873,6 +875,20 @@ export const ArenaTurnDiffRequestSchema = z.object({
 export const ArenaTurnDiffResponseSchema = z.object({
   type: z.literal("arena.turn.diff.response"),
   payload: z.object({ requestId: z.string(), diff: ArenaComparisonDiffSchema }),
+});
+/** A run part whole: a snapshot sends its large tool fields shortened and lists them in `state.previewed`. */
+export const ArenaRunGetPartRequestSchema = z.object({
+  type: z.literal("arena.run.get_part.request"),
+  ...ArenaAgentRequestFields,
+  runId: z.string(),
+  partId: z.string(),
+  // Where the part lives, so the engine reads one row instead of the run's whole transcript.
+  sessionId: z.string().optional(),
+  messageId: z.string().optional(),
+});
+export const ArenaRunGetPartResponseSchema = z.object({
+  type: z.literal("arena.run.get_part.response"),
+  payload: z.object({ requestId: z.string(), part: z.unknown() }),
 });
 export const ArenaRunQuestionReplyRequestSchema = z.object({
   type: z.literal("arena.run.question.reply.request"),

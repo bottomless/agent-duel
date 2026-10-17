@@ -112,7 +112,7 @@ export const arenaStartMutationKey = (serverId: string, agentId: string) =>
 
 /**
  * What the chat's status row shows: the stream's error, or else the latest send, when it was refused
- * because the chat is too long to load. The composer that sent it remounts while a battle starts and
+ * because the battle is too large to load. The composer that sent it remounts while a battle starts and
  * loses its own error, so the chat shows this one.
  */
 export function useArenaStatusError(

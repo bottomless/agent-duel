@@ -53,6 +53,8 @@ import {
   buildWorkspaceAgentActivityIndex,
   type WorkspaceAgentActivity,
 } from "@/utils/workspace-agent-activity";
+import { setArenaPartImageFetcher } from "@/attachments/arena-part-image";
+import { watchDaemonClients } from "@/attachments/daemon-image-cache";
 import {
   applyTurnLivenessTransition,
   resolveTurnPresentation,
@@ -2016,3 +2018,26 @@ export function useWorkspaceRestoreStatus(
       : null,
   );
 }
+
+// An image that failed while its daemon was away is asked again once that daemon is reachable: its
+// connection comes back, or the session gets a new client that connects.
+watchDaemonClients(
+  () =>
+    Object.entries(useSessionStore.getState().sessions).map(
+      ([serverId, session]) => [serverId, session.client] as const,
+    ),
+  (listener) => {
+    useSessionStore.subscribe(listener);
+  },
+);
+
+// A battle snapshot names the images pasted into its prompt and follow-ups; each comes from the
+// daemon holding the battle chat.
+setArenaPartImageFetcher(async (ref) => {
+  const client = useSessionStore.getState().sessions[ref.serverId]?.client;
+  if (!client) throw new Error("Battle images are unavailable");
+  return await client.arenaRunPart(ref.agentId, ref.runId, ref.partId, {
+    sessionId: ref.sessionId,
+    messageId: ref.messageId,
+  });
+});

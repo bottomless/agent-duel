@@ -1588,7 +1588,8 @@ export class Store {
     })
   }
 
-  async snapshot(chatID: string, afterSequence = -1): Promise<BattleSnapshot> {
+  /** `afterSequence` reads the turn's stored events after it; by default none are read (see `project`). */
+  async snapshot(chatID: string, afterSequence = Number.MAX_SAFE_INTEGER): Promise<BattleSnapshot> {
     const chat = await this.chats.findOne({ _id: chatID })
     if (!chat) throw new Error(`Arena chat not found: ${chatID}`)
     const singleAgentRating = await this.snapshotSingleAgentRating(chat.canonicalSessionID)
@@ -1617,7 +1618,7 @@ export class Store {
     }
   }
 
-  async snapshotTurn(turnID: string, afterSequence = -1): Promise<BattleSnapshot> {
+  async snapshotTurn(turnID: string, afterSequence = Number.MAX_SAFE_INTEGER): Promise<BattleSnapshot> {
     const turn = await this.turns.findOne({ _id: turnID })
     if (!turn) throw new Error(`Arena turn not found: ${turnID}`)
     const [chat, history, runs, events, comparison] = await Promise.all([

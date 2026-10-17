@@ -1968,7 +1968,7 @@ export class Session {
       this.dispatchAgentRelationshipMessage(msg) ??
       this.dispatchAgentTimelineMessage(msg, source) ??
       this.dispatchArenaStreamMessage(msg, source) ??
-      this.dispatchArenaMessage(msg) ??
+      this.dispatchArenaMessage(msg, source) ??
       this.dispatchArenaRunMessage(msg) ??
       this.dispatchArenaEnvironmentsMessage(msg) ??
       this.dispatchArenaByokMessage(msg) ??
@@ -2124,7 +2124,10 @@ export class Session {
     }
   }
 
-  private dispatchArenaMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+  private dispatchArenaMessage(
+    msg: SessionInboundMessage,
+    source?: object,
+  ): Promise<void> | undefined {
     switch (msg.type) {
       case "arena.activity.subscribe.request":
         return this.subscribeArenaActivity(msg.requestId);
@@ -2142,6 +2145,8 @@ export class Session {
       case "arena.turn.retry_resolution.request":
       case "arena.turn.diff.request":
         return this.runArenaRequest(msg);
+      case "arena.run.get_part.request":
+        return this.handleArenaRunGetPart(msg, source);
       default:
         return undefined;
     }
@@ -4087,6 +4092,23 @@ export class Session {
       attachments: normalizeAgentAttachments(msg.attachments),
       paseoHome: this.paseoHome,
     });
+  }
+
+  /** A run part whole, for a tool call a snapshot sent shortened. Reads it; changes nothing. */
+  private async handleArenaRunGetPart(
+    msg: Extract<SessionInboundMessage, { type: "arena.run.get_part.request" }>,
+    source?: object,
+  ): Promise<void> {
+    const { arena } = await this.loadArenaAgent(msg.agentId);
+    const part = await arena.runPart(msg.runId, msg.partId, {
+      sessionId: msg.sessionId,
+      messageId: msg.messageId,
+    });
+    // Only the window that asked shows it; a photo copied to every window fills their sockets too.
+    this.emitForSource(
+      { type: "arena.run.get_part.response", payload: { requestId: msg.requestId, part } },
+      source,
+    );
   }
 
   private async loadArenaAgent(agentId: string) {

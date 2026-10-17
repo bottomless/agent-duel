@@ -3,15 +3,16 @@ import { MAX_PHYSICAL_SOCKET_BUFFERED_BYTES } from "../websocket/physical-socket
 /**
  * The largest Arena answer the daemon passes on to a window. Past 64 MiB waiting on a socket the
  * daemon drops it, and a long chat's snapshot did that on every open and every send, so the chat
- * could never load again and the window reconnected forever. Half the socket limit leaves room for
- * the other frames the socket carries.
+ * could never load again and the window reconnected forever. Snapshots now carry one turn with its
+ * large tool fields shortened, so only an extreme battle comes near this. Half the socket limit
+ * leaves room for the other frames the socket carries.
  */
 export const ARENA_PAYLOAD_LIMIT_BYTES = MAX_PHYSICAL_SOCKET_BUFFERED_BYTES / 2;
 
 /** An Arena answer past `ARENA_PAYLOAD_LIMIT_BYTES`; the window gets its code and message as they are. */
 export class ArenaPayloadTooLargeError extends Error {
   constructor(
-    readonly code: "arena_chat_too_large" | "arena_diff_too_large",
+    readonly code: "arena_chat_too_large" | "arena_diff_too_large" | "arena_part_too_large",
     message: string,
   ) {
     super(message);
@@ -21,7 +22,7 @@ export class ArenaPayloadTooLargeError extends Error {
 
 export class ArenaChatTooLargeError extends ArenaPayloadTooLargeError {
   constructor() {
-    super("arena_chat_too_large", "This chat is too long to load");
+    super("arena_chat_too_large", "This battle is too large to load");
     this.name = "ArenaChatTooLargeError";
   }
 }
@@ -34,5 +35,13 @@ export class ArenaDiffTooLargeError extends ArenaPayloadTooLargeError {
   constructor() {
     super("arena_diff_too_large", "This comparison is too large to show.");
     this.name = "ArenaDiffTooLargeError";
+  }
+}
+
+/** One part of a run fetched whole, such as a huge pasted image; the battle itself still loads. */
+export class ArenaPartTooLargeError extends ArenaPayloadTooLargeError {
+  constructor() {
+    super("arena_part_too_large", "This item is too large to show.");
+    this.name = "ArenaPartTooLargeError";
   }
 }

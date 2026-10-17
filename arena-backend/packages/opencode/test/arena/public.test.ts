@@ -1,7 +1,7 @@
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { describe, expect, test } from "bun:test"
 import type { ArenaActiveOperation } from "../../src/arena/operation-tracker"
-import { jsonValue, project } from "../../src/arena/public"
+import { jsonValue, parseSnapshot, project } from "../../src/arena/public"
 import type { BattleSnapshot } from "../../src/arena/records"
 
 function snapshot(revealed: boolean): BattleSnapshot {
@@ -701,4 +701,14 @@ describe("ArenaPublic", () => {
     expect(containsUndefined(value)).toBe(false)
     expect(() => JSON.stringify(value)).not.toThrow()
   })
+})
+
+test("keeps a trimmed run's count of left-out messages through the public snapshot schema", () => {
+  // `hydrateRuns` merges the thread, with `activityOmitted`, into each run before this parse.
+  const projected = project(snapshot(false))
+  const parsed = parseSnapshot(
+    jsonValue({ ...projected, runs: projected.runs.map((run) => ({ ...run, messages: [], parts: {}, activityOmitted: 7 })) }),
+  )
+  expect(projected.runs.length).toBeGreaterThan(0)
+  expect(parsed.runs.map((run) => run.activityOmitted)).toEqual(projected.runs.map(() => 7))
 })

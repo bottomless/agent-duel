@@ -637,7 +637,10 @@ export function ArenaBattleView({
   const paneMaxHeight = useArenaPaneMaxHeight();
   const runA = snapshot.runs.find((run) => run.side === "a");
   const runB = snapshot.runs.find((run) => run.side === "b");
-  const promptImages = useMemo(() => arenaPromptImages(snapshot.runs), [snapshot.runs]);
+  const promptImages = useMemo(
+    () => arenaPromptImages(snapshot.runs, { serverId, agentId }),
+    [snapshot.runs, serverId, agentId],
+  );
   const promptAttachments = turn?.attachments;
   // An image shows as its thumbnail when the runs still hold it, and as a labelled pill otherwise.
   const promptAttachmentPills = useMemo(
