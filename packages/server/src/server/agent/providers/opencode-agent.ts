@@ -4087,9 +4087,12 @@ class OpenCodeAgentSession implements AgentSession {
     path: string,
     options: { method: "POST"; body?: Record<string, unknown> },
   ): Promise<ArenaSnapshot | null> {
+    // Only archive asks this way, and its answer stays in the daemon (preview routes), so it is read
+    // whatever its size: refused, the archive the engine already made could never finish here.
     return this.arenaFetch(path, ArenaSnapshotSchema.nullable(), {
       ...options,
       allowNotFound: true,
+      unbounded: true,
     });
   }
 
@@ -4108,6 +4111,8 @@ class OpenCodeAgentSession implements AgentSession {
       allowNotFound?: boolean;
       /** What an answer past the limit is, when it is not the battle's state. */
       tooLarge?: () => Error;
+      /** The answer never goes to a window, so the window's limit does not apply. */
+      unbounded?: true;
     },
   ): Promise<T> {
     await this.ensureArenaRuntime();
@@ -4123,7 +4128,7 @@ class OpenCodeAgentSession implements AgentSession {
       ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
     });
     const text = await response.text().catch(() => "");
-    if (text.length > ARENA_PAYLOAD_LIMIT_BYTES) {
+    if (!options?.unbounded && text.length > ARENA_PAYLOAD_LIMIT_BYTES) {
       throw options?.tooLarge?.() ?? new ArenaChatTooLargeError();
     }
     const value = parseJsonOrNull(text);

@@ -5,6 +5,7 @@ import {
   type ArenaStreamPacket,
 } from "@getpaseo/protocol/arena/stream";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import { ARENA_PAYLOAD_LIMIT_BYTES } from "./arena/payload-limit.js";
 
 type ResetFrame = Extract<ArenaStreamFrame, { kind: "reset" }>;
 
@@ -46,6 +47,14 @@ export class ArenaStreamHub {
       timeout: null,
     };
     let entry = this.entries.get(key);
+    // The cache grows with every live change, and only the engine trims a battle to what a window can
+    // take. A cache past that is not handed out: every window starts over from a fresh engine snapshot.
+    // Measured as the stream reader measures a frame, so a fresh snapshot it passed never trips this.
+    if (entry?.snapshot && JSON.stringify(entry.snapshot).length > ARENA_PAYLOAD_LIMIT_BYTES) {
+      for (const other of entry.subscribers)
+        this.reset(key, entry, other, "Arena state changed; resynchronize");
+      entry = this.entries.get(key);
+    }
     const fresh = !entry;
     if (!entry) {
       entry = {
