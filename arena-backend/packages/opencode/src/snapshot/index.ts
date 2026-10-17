@@ -75,6 +75,9 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
     const locks = new Map<string, Semaphore.Semaphore>()
+    // The tree each snapshot repository's index last wrote, by git directory, shared like `locks`
+    // because instances of one worktree share its repository. Whatever moves the index drops it.
+    const trees = new Map<string, string>()
 
     const lock = (key: string) => {
       const hit = locks.get(key)
@@ -281,13 +284,16 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
               otherCode: other.code,
               otherStderr: other.stderr,
             })
-            return
+            trees.delete(state.gitdir)
+            return true
           }
 
           const tracked = diff.text.split("\0").filter(Boolean)
           const untracked = other.text.split("\0").filter(Boolean)
           const all = Array.from(new Set([...tracked, ...untracked]))
-          if (!all.length) return
+          // Nothing differs from the index, so it still writes the tree it last wrote.
+          if (!all.length) return false
+          trees.delete(state.gitdir)
 
           // Resolve source-repo ignore rules against the exact candidate set.
           // --no-index keeps this pattern-based even when a path is already tracked.
@@ -301,7 +307,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           }
 
           const allow = all.filter((item) => !ignored.has(item))
-          if (!allow.length) return
+          if (!allow.length) return true
 
           const large = new Set(
             (yield* Effect.all(
@@ -325,6 +331,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           if (block.size > 0) yield* sync(Array.from(block))
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
           yield* stage(allow.filter((item) => !block.has(item)))
+          return true
         })
 
         const cleanup = Effect.fnUntraced(function* () {
@@ -352,6 +359,8 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
               const existed = yield* exists(state.gitdir)
               yield* fs.ensureDir(state.gitdir).pipe(Effect.orDie)
               if (!existed) {
+                // A tree kept for an earlier repository at this path is not in the new one.
+                trees.delete(state.gitdir)
                 yield* git(["init"], {
                   env: { GIT_DIR: state.gitdir, GIT_WORK_TREE: state.worktree },
                 })
@@ -370,9 +379,10 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 yield* seed()
                 yield* Effect.logInfo("initialized")
               }
-              yield* add()
-              const result = yield* git(args(["write-tree"]), { cwd: state.directory })
-              const hash = result.text.trim()
+              const kept = (yield* add()) ? undefined : trees.get(state.gitdir)
+              const result = kept ? undefined : yield* git(args(["write-tree"]), { cwd: state.directory })
+              const hash = kept ?? result?.text.trim() ?? ""
+              if (result?.code === 0 && hash) trees.set(state.gitdir, hash)
               yield* Effect.logInfo("tracking", { hash, cwd: state.directory, git: state.gitdir })
               return hash
             }),
@@ -423,17 +433,18 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
             Effect.gen(function* () {
               if (!(yield* enabled())) return undefined
               if (!(yield* exists(state.gitdir))) return undefined
-              yield* add()
+              const kept = (yield* add()) ? undefined : trees.get(state.gitdir)
               const [tree, diff] = yield* Effect.all(
                 [
-                  git(args(["write-tree"]), { cwd: state.directory }),
+                  kept ? Effect.succeed(undefined) : git(args(["write-tree"]), { cwd: state.directory }),
                   git([...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."])], {
                     cwd: state.directory,
                   }),
                 ],
                 { concurrency: 2 },
               )
-              const snapshot = tree.text.trim()
+              const snapshot = kept ?? tree?.text.trim() ?? ""
+              if (tree?.code === 0 && snapshot) trees.set(state.gitdir, snapshot)
               yield* Effect.logInfo("tracking", { hash: snapshot, cwd: state.directory, git: state.gitdir })
               if (diff.code !== 0) {
                 yield* Effect.logWarning("failed to get diff", { hash, exitCode: diff.code })
@@ -462,6 +473,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
         const restore = Effect.fnUntraced(function* (snapshot: string) {
           return yield* locked(
             Effect.gen(function* () {
+              trees.delete(state.gitdir)
               yield* Effect.logInfo("restore", { commit: snapshot })
               const result = yield* git([...core, ...args(["read-tree", snapshot])], { cwd: state.worktree })
               if (result.code === 0) {
@@ -488,6 +500,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
         const revert = Effect.fnUntraced(function* (patches: Patch[]) {
           return yield* locked(
             Effect.gen(function* () {
+              trees.delete(state.gitdir)
               const ops: { hash: string; file: string; rel: string }[] = []
               const seen = new Set<string>()
               for (const item of patches) {
