@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Modal, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, Text, View } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image as ExpoImage } from "expo-image";
 import { X } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import type { AttachmentMetadata } from "@/attachments/types";
-import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
+import { useAttachmentPreview } from "@/attachments/use-attachment-preview-url";
 import { isWeb } from "@/constants/platform";
 import { WindowChromeRootRegion, WindowChromeSafeArea } from "@/utils/desktop-window";
 
@@ -19,7 +19,7 @@ export function AttachmentLightbox({ metadata, onClose }: AttachmentLightboxProp
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
-  const url = useAttachmentPreviewUrl(metadata);
+  const { url, failed } = useAttachmentPreview(metadata);
   const [errored, setErrored] = useState(false);
 
   useEffect(() => {
@@ -61,7 +61,7 @@ export function AttachmentLightbox({ metadata, onClose }: AttachmentLightboxProp
     return null;
   }
 
-  const hasError = errored || !url;
+  const hasError = errored || failed;
 
   return (
     <Modal transparent animationType="fade" statusBarTranslucent visible onRequestClose={onClose}>
@@ -78,7 +78,15 @@ export function AttachmentLightbox({ metadata, onClose }: AttachmentLightboxProp
             <View style={styles.imageArea}>
               {hasError ? (
                 <Text style={styles.errorText}>{t("message.attachments.imageLoadFailed")}</Text>
-              ) : (
+              ) : null}
+              {!hasError && !url ? (
+                // An image a page names is still loading from the daemon.
+                <ActivityIndicator
+                  testID="attachment-lightbox-loading"
+                  color={theme.colors.foregroundMuted}
+                />
+              ) : null}
+              {!hasError && url ? (
                 <Pressable onPress={noopPress} style={styles.imagePressable}>
                   <ExpoImage
                     testID="attachment-lightbox-image"
@@ -88,7 +96,7 @@ export function AttachmentLightbox({ metadata, onClose }: AttachmentLightboxProp
                     style={imageFillStyle}
                   />
                 </Pressable>
-              )}
+              ) : null}
             </View>
             <WindowChromeSafeArea placement="inline" style={closeButtonRowStyle}>
               <Pressable

@@ -677,10 +677,12 @@ reply takes the same attachments as a chat message, and both contestants get ide
   the way a single agent's message shows its uploads; the judge, which reads text only, gets them listed
   with the excerpts.
 - After the vote the chat's history is the winner's session, which holds the images. The daemon's
-  replay sends them with the user message, and each attachment text part carries its label under
+  replay keeps them with the user message, and each attachment text part carries its label under
   the `arenaAttachment` metadata key, the one text metadata `ArenaPrivacy` keeps, so the history
-  shows a chip instead of gluing that text onto the prompt. The app holds replayed images inline and
-  leaves them out of the replica cache.
+  shows a chip instead of gluing that text onto the prompt. A history page names each image
+  (`imageRefs`) instead of carrying it, and the app fetches one when it shows it
+  (`agent.timeline.get_image`): pages count messages, not bytes, and a long chat's screenshots made
+  one tens of megabytes. Replayed images stay out of the replica cache.
 
 **Setup** (`arena/service.ts`, `executeBattle`). Per side: a slot from the pool (see above) at the
 chat/generation path, on the exact developer branch name (or detached `HEAD`), synced to the frozen

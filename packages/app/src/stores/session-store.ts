@@ -53,6 +53,8 @@ import {
   buildWorkspaceAgentActivityIndex,
   type WorkspaceAgentActivity,
 } from "@/utils/workspace-agent-activity";
+import { setHistoryImageFetcher } from "@/attachments/history-image";
+import { watchDaemonClients } from "@/attachments/daemon-image-cache";
 import {
   applyTurnLivenessTransition,
   resolveTurnPresentation,
@@ -2016,3 +2018,45 @@ export function useWorkspaceRestoreStatus(
       : null,
   );
 }
+
+// An image that failed while its daemon was away is asked again once that daemon is reachable: its
+// connection comes back, or the session gets a new client that connects.
+watchDaemonClients(
+  () =>
+    Object.entries(useSessionStore.getState().sessions).map(
+      ([serverId, session]) => [serverId, session.client] as const,
+    ),
+  (listener) => {
+    useSessionStore.subscribe(listener);
+  },
+);
+
+// A history page names a replayed message's images; each comes from the daemon holding the agent.
+// An archived chat's agent is in `agentDetails` or, read only, in neither map, so when no daemon is
+// known to hold it, each connected one is asked.
+setHistoryImageFetcher(async (ref) => {
+  const sessions = Object.values(useSessionStore.getState().sessions);
+  const owner = sessions.find(
+    (session) =>
+      session.client && (session.agents.has(ref.agentId) || session.agentDetails.has(ref.agentId)),
+  );
+  if (owner?.client) {
+    return await owner.client.fetchAgentTimelineImage(ref.agentId, ref.messageId, ref.index);
+  }
+  let failure: unknown = null;
+  for (const session of sessions) {
+    if (!session.client) continue;
+    try {
+      const image = await session.client.fetchAgentTimelineImage(
+        ref.agentId,
+        ref.messageId,
+        ref.index,
+      );
+      if (image) return image;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  if (failure) throw failure;
+  return null;
+});
