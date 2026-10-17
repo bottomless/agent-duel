@@ -1,12 +1,10 @@
 import type { ComparisonFileFact } from "./comparison-evidence"
-import { Effect, Semaphore, Stream } from "effect"
+import { Effect, Exit, Semaphore, Stream } from "effect"
 import { randomUUID } from "crypto"
 import { spawn } from "child_process"
 import {
-  chmod,
   copyFile,
   lstat,
-  mkdir,
   mkdtemp,
   readdir,
   readFile,
@@ -14,7 +12,6 @@ import {
   rename,
   rm,
   stat,
-  symlink,
   unlink,
   utimes,
   writeFile,
@@ -22,6 +19,7 @@ import {
 import { tmpdir } from "os"
 import { basename, dirname, join, resolve } from "path"
 import { Git } from "@/git"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { IGNORED_PATHS_COMMAND, parseIgnoredPaths } from "./warm"
 import { identicalNumberedCopies } from "./sync-conflict-copy"
@@ -430,6 +428,10 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
     }
     // Without the Command Line Tools, macOS's /usr/bin/git is only a stub that points at them.
     if (!gitOnPath || stderr.includes("invalid active developer path")) {
+      // A Windows install reaches PATH only for processes started after it.
+      if (process.platform === "win32") {
+        return "Battles need Git, and Agent Duel couldn't find it. Install Git for Windows from git-scm.com, or with winget install Git.Git, then quit and reopen Agent Duel."
+      }
       return "Battles need Git, and Agent Duel couldn't find it. Install Git, for example with xcode-select --install, then retry."
     }
     // Git is there but failed: its own error says why better than a guess would.
@@ -442,7 +444,8 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
   if (major !== MIN_BATTLE_GIT.major ? major > MIN_BATTLE_GIT.major : minor >= MIN_BATTLE_GIT.minor) return undefined
   // The engine keeps the git it found at startup first on PATH (`preferDirectGit`), so a newly
   // installed git is used only after a restart.
-  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with brew install git, then quit and reopen Agent Duel.`
+  const update = process.platform === "win32" ? "git update-git-for-windows" : "brew install git"
+  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with ${update}, then quit and reopen Agent Duel.`
 }
 
 // Wrapper commits are transport objects, not user-authored history. A fixed
@@ -497,6 +500,11 @@ const read = Effect.fn("ArenaGit.read")(function* (
   options?: Pick<Git.Options, "env" | "stdin" | "maxOutputBytes">,
 ) {
   return output(yield* run(git, cwd, operation, args, options))
+})
+
+// Git prints `C:/` paths on Windows, where Node's are `C:\`; elsewhere the path stays as printed.
+const readRoot = Effect.fn("ArenaGit.readRoot")(function* (git: Git.Interface, cwd: string, operation: string) {
+  return FSUtil.normalizePath(yield* read(git, cwd, operation, ["rev-parse", "--show-toplevel"]))
 })
 
 const readBranch = Effect.fn("ArenaGit.readBranch")(function* (git: Git.Interface, root: string) {
@@ -777,7 +785,7 @@ export const removeRef = Effect.fn("ArenaGit.removeRef")(function* (input: {
   readonly expectedCommit: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_repository_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_repository_root")
   const current = yield* git.run(["rev-parse", "--verify", "--quiet", input.ref], { cwd: root })
   if (current.exitCode === 1) return false
   if (current.exitCode !== 0 || output(current) !== input.expectedCommit) {
@@ -827,7 +835,7 @@ function parseWorktrees(text: string): WorktreeRecord[] {
       flush()
       continue
     }
-    if (line.startsWith("worktree ")) current.path = line.slice("worktree ".length).trim()
+    if (line.startsWith("worktree ")) current.path = FSUtil.normalizePath(line.slice("worktree ".length).trim())
     else if (line.startsWith("branch refs/heads/")) current.branch = line.slice("branch refs/heads/".length).trim()
     else if (line.trim() === "bare") current.bare = true
   }
@@ -931,7 +939,7 @@ export const editsFingerprint = Effect.fn("ArenaGit.editsFingerprint")(function*
   paths: readonly string[],
 ) {
   const git = yield* Git.Service
-  const root = yield* read(git, canonical, "find_edits_fingerprint_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, canonical, "find_edits_fingerprint_root")
   const staged = new Map<string, string>()
   const listed = yield* run(git, root, "read_edits_index", ["--literal-pathspecs", "ls-files", "-s", "-z", "--", ...paths])
   for (const entry of listed.text().split("\0")) {
@@ -1229,7 +1237,7 @@ export const importWinnerRef = Effect.fn("ArenaGit.importWinnerRef")(function* (
   readonly expected: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_import_winner_ref_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_import_winner_ref_root")
   yield* run(git, root, "validate_winner_ref", ["check-ref-format", input.destinationRef])
   const current = yield* git.run(["rev-parse", "--verify", "--quiet", input.destinationRef], { cwd: root })
   if (current.exitCode === 0 && output(current) === input.expected) return
@@ -1335,7 +1343,7 @@ export const observeWinnerRefs = Effect.fn("ArenaGit.observeWinnerRefs")(functio
   readonly checkoutBranch?: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_observe_refs_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_observe_refs_root")
   const trunk = resolve(root)
   const checkedOut = new Map<string, string>(
     (yield* inspectWorktrees(git, root)).flatMap((item) =>
@@ -1466,7 +1474,7 @@ export const inspectBranchTarget = Effect.fn("ArenaGit.inspectBranchTarget")(fun
   readonly branch: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_branch_target_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_branch_target_root")
   const ref = `${HEADS_PREFIX}${input.branch}`
   const valid = yield* git.run(["check-ref-format", ref], { cwd: root })
   if (valid.exitCode !== 0) return { valid: false as const }
@@ -1518,7 +1526,7 @@ export const reportCheckoutMove = Effect.fn("ArenaGit.reportCheckoutMove")(funct
   const { ref, before, how } = input.move
   if (before === input.after) return undefined
   if (!before) return { ref, action: "created" } satisfies RefOutcome
-  const root = yield* read(git, input.canonical, "find_report_checkout_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_report_checkout_root")
   const removed = (yield* isAncestor(git, root, before, input.after))
     ? 0
     : Number.parseInt(yield* read(git, root, "count_replaced_checkout_commits", ["rev-list", "--count", `${input.after}..${before}`]), 10)
@@ -1570,7 +1578,7 @@ export const holdWinnerRefs = Effect.fn("ArenaGit.holdWinnerRefs")(function* (in
   if (input.writes.length === 0) {
     return { commit: Effect.succeed([] as readonly RefOutcome[]), abort: Effect.void } satisfies HeldWinnerRefs
   }
-  const root = yield* read(git, input.canonical, "find_write_refs_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_write_refs_root")
   const lines: string[] = []
   const outcomes: RefOutcome[] = []
   for (const write of input.writes) {
@@ -1643,7 +1651,7 @@ export const resetSideBranch = Effect.fn("ArenaGit.resetSideBranch")(function* (
   input: Omit<SideBranchInput, "worktree">,
 ) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.repository, "find_repository_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.repository, "find_repository_root")
   yield* run(git, root, "validate_side_branch", ["check-ref-format", input.branch])
   const worktrees = yield* inspectWorktrees(git, root)
   const checkedOut = worktrees.find((item) => item.branch === input.branch)
@@ -1675,15 +1683,17 @@ export const attachSideBranch = Effect.fn("ArenaGit.attachSideBranch")(function*
   if (!worktree) {
     return yield* Effect.fail(new OperationError("attach_side_branch", "A worktree is required to attach a side branch"))
   }
-  const root = yield* read(git, input.repository, "find_repository_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.repository, "find_repository_root")
   const worktrees = yield* inspectWorktrees(git, root)
-  const target = worktrees.find((item) => item.path === worktree)
+  // `inspectWorktrees` normalizes its paths; on Windows the caller's may differ in separator or case.
+  const registeredPath = FSUtil.normalizePath(worktree)
+  const target = worktrees.find((item) => item.path === registeredPath)
   if (!target) {
     return yield* Effect.fail(
       new OperationError("attach_side_branch", `Worktree is not registered: ${worktree}`),
     )
   }
-  const checkedOut = worktrees.find((item) => item.branch === input.branch && item.path !== worktree)
+  const checkedOut = worktrees.find((item) => item.branch === input.branch && item.path !== registeredPath)
   if (checkedOut) {
     return yield* Effect.fail(
       new OperationError("attach_side_branch", `Side branch ${input.branch} is checked out at ${checkedOut.path}`),
@@ -1718,7 +1728,7 @@ export const detachAtResult = Effect.fn("ArenaGit.detachAtResult")(function* (in
   readonly resultCommit: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.worktree, "find_retained_worktree", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.worktree, "find_retained_worktree")
   yield* run(git, root, "detach_retained_worktree", ["checkout", "--detach", "--force", input.resultCommit])
   const head = yield* read(git, root, "verify_retained_head", ["rev-parse", "--verify", "HEAD"])
   const branch = yield* readBranch(git, root)
@@ -1738,7 +1748,7 @@ export const refreshAttachedSide = Effect.fn("ArenaGit.refreshAttachedSide")(fun
   if (!input.worktree) {
     return yield* Effect.fail(new OperationError("refresh_attached_side", "A worktree is required"))
   }
-  const root = yield* read(git, input.worktree, "find_warm_worktree", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.worktree, "find_warm_worktree")
   const branch = yield* readBranch(git, root)
   if (branch !== input.branch) {
     return yield* Effect.fail(
@@ -1771,7 +1781,7 @@ export const refreshWorktree = Effect.fn("ArenaGit.refreshWorktree")(function* (
   readonly baseCommit: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.worktree, "find_isolated_worktree", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.worktree, "find_isolated_worktree")
   yield* run(git, root, "refresh_isolated_worktree", ["reset", "--hard", input.baseCommit])
   yield* run(git, root, "clean_isolated_worktree", ["clean", "-ffdx", "--", "."])
   const head = yield* read(git, root, "verify_isolated_head", ["rev-parse", "--verify", "HEAD"])
@@ -1836,7 +1846,7 @@ export const prepareContestantState = Effect.fn("ArenaGit.prepareContestantState
   input: PrepareContestantStateInput,
 ) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.worktree, "find_contestant_worktree", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.worktree, "find_contestant_worktree")
   const beforeBranch = yield* readBranch(git, root)
   const indexTree = yield* read(git, root, "verify_contestant_index_tree", ["rev-parse", `${input.indexTree}^{tree}`])
   const workingTree = yield* read(git, root, "verify_contestant_working_tree", ["rev-parse", `${input.workingTree}^{tree}`])
@@ -1937,13 +1947,29 @@ const probeContestant = Effect.fn("ArenaGit.probeContestant")(function* (
           ...(yield* read(git, input.worktree, "find_contestant_worktree", CONTESTANT_LOCATION)).split(/\r?\n/),
           ...(yield* read(git, input.worktree, "verify_contestant_objects", ["rev-parse", ...objects])).split(/\r?\n/),
         ]
-  const [root, gitDir, commonDir, indexFile, indexTree, workingTree, frozenHead, headTree, head, headRef] = lines
-  if (!root || !gitDir || !commonDir || !indexFile || !indexTree || !workingTree || !frozenHead || !headTree) {
+  const [shownRoot, shownGitDir, shownCommonDir, shownIndexFile, indexTree, workingTree, frozenHead, headTree, head, headRef] =
+    lines
+  if (
+    !shownRoot ||
+    !shownGitDir ||
+    !shownCommonDir ||
+    !shownIndexFile ||
+    !indexTree ||
+    !workingTree ||
+    !frozenHead ||
+    !headTree
+  ) {
     return yield* Effect.fail(
       new OperationError("find_contestant_worktree", `Unexpected rev-parse output: ${lines.join(" ")}`),
     )
   }
-  const expected = yield* Effect.promise(() => realpath(input.worktree).catch(() => resolve(input.worktree)))
+  // Git prints `C:/` paths on Windows, where Node's are `C:\`; elsewhere this keeps them as printed.
+  const [root, gitDir, commonDir, indexFile] = [shownRoot, shownGitDir, shownCommonDir, shownIndexFile].map((path) =>
+    FSUtil.normalizePath(path),
+  )
+  const expected = FSUtil.normalizePath(
+    yield* Effect.promise(() => realpath(input.worktree).catch(() => resolve(input.worktree))),
+  )
   if (root !== expected) {
     return yield* Effect.fail(
       new OperationError("verify_contestant_location", `Contestant worktree ${expected} resolves to ${root}`),
@@ -1954,6 +1980,7 @@ const probeContestant = Effect.fn("ArenaGit.probeContestant")(function* (
   const registered = yield* Effect.promise(() =>
     readFile(join(gitDir, "gitdir"), "utf8")
       .then((text) => realpath(dirname(resolve(gitDir, text.trim()))))
+      .then((path) => FSUtil.normalizePath(path))
       .catch(() => undefined),
   )
   if (basename(dirname(gitDir)) !== "worktrees" || dirname(dirname(gitDir)) !== commonDir || registered !== root) {
@@ -2496,7 +2523,9 @@ export const verifyContestantState = Effect.fn("ArenaGit.verifyContestantState")
   }
   const registered = parseWorktrees(yield* succeeded(worktrees, "verify_contestant_host_worktrees"))
   const [main, only] = registered
-  const linked = only ? yield* Effect.promise(() => realpath(only.path).catch(() => only.path)) : undefined
+  const linked = only
+    ? FSUtil.normalizePath(yield* Effect.promise(() => realpath(only.path).catch(() => only.path)))
+    : undefined
   if (registered.length !== 2 || !main?.bare || linked !== root) {
     return yield* Effect.fail(
       new OperationError(
@@ -2524,7 +2553,7 @@ export const verifyContestantState = Effect.fn("ArenaGit.verifyContestantState")
 
 export const inspectWorktree = Effect.fn("ArenaGit.inspectWorktree")(function* (worktree: string) {
   const git = yield* Git.Service
-  const root = yield* read(git, worktree, "find_worktree", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, worktree, "find_worktree")
   const head = yield* read(git, root, "read_worktree_head", ["rev-parse", "--verify", "HEAD"])
   return {
     worktree: root,
@@ -2541,7 +2570,7 @@ export const selectResult = Effect.fn("ArenaGit.selectResult")(function* (input:
   readonly resultCommit: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_repository_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_repository_root")
   yield* preserveRef(git, root, input.selectedRef, input.resultCommit)
   return input.resultCommit
 })
@@ -2776,13 +2805,35 @@ export const ignoredPaths = Effect.fn("ArenaGit.ignoredPaths")(function* (direct
 
 export const snapshotBase = Effect.fn("ArenaGit.snapshotBase")(function* (input: SnapshotBaseInput) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
-  const commonGitDir = yield* read(git, root, "read_common_git_dir", [
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ])
-  const trunkConflicts = yield* conflictPaths(git, root)
+  const root = yield* readRoot(git, input.canonical, "find_canonical_root")
+  // Asked at once, as `inspectCanonical` does, since the send waits on this under the repository
+  // lock. The working tree is read beside the rest and kept only when the checkout has changes; a
+  // failure surfaces in the order these were asked one by one, unmerged paths first.
+  const asked = yield* Effect.all(
+    {
+      commonGitDir: Effect.exit(
+        read(git, root, "read_common_git_dir", ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+      ),
+      conflicts: Effect.exit(conflictPaths(git, root)),
+      head: Effect.exit(read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])),
+      branch: Effect.exit(readBranch(git, root)),
+      status: Effect.exit(
+        read(git, root, "read_canonical_status", [
+          "status",
+          "--porcelain=v1",
+          "--untracked-files=all",
+          "--no-renames",
+          "--",
+          ".",
+        ]),
+      ),
+      indexTree: Effect.exit(readIndexTree(git, root, "read_canonical_index")),
+      workingTree: Effect.exit(readWorkingTree(git, root)),
+    },
+    { concurrency: "unbounded" },
+  )
+  const commonGitDir = yield* settled(asked.commonGitDir)
+  const trunkConflicts = yield* settled(asked.conflicts)
   if (trunkConflicts.length > 0) {
     return yield* Effect.fail(
       new OperationError(
@@ -2792,19 +2843,14 @@ export const snapshotBase = Effect.fn("ArenaGit.snapshotBase")(function* (input:
       ),
     )
   }
-  const canonicalHead = yield* read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])
-  const branch = yield* readBranch(git, root)
-  const status = yield* read(git, root, "read_canonical_status", [
-    "status",
-    "--porcelain=v1",
-    "--untracked-files=all",
-    "--no-renames",
-    "--",
-    ".",
-  ])
-  const indexTree = yield* readIndexTree(git, root, "read_canonical_index")
+  const canonicalHead = yield* settled(asked.head)
+  const branch = yield* settled(asked.branch)
+  const status = yield* settled(asked.status)
+  const indexTree = yield* settled(asked.indexTree)
+  // A clean checkout's tree is read from the head itself, so a commit landing meanwhile cannot
+  // pair one commit's tree with another's head.
   const baseTree = status
-    ? yield* readWorkingTree(git, root)
+    ? yield* settled(asked.workingTree)
     : yield* read(git, root, "read_head_tree", ["rev-parse", `${canonicalHead}^{tree}`])
   if (!status) {
     if (input.permanentRef) yield* preserveRef(git, root, input.permanentRef, canonicalHead)
@@ -2855,7 +2901,7 @@ export const snapshotBase = Effect.fn("ArenaGit.snapshotBase")(function* (input:
 
 export const reanchor = Effect.fn("ArenaGit.reanchor")(function* (input: ReanchorInput) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_canonical_root")
   const tree = yield* read(git, root, "read_reanchored_tree", ["rev-parse", `${input.resultCommit}^{tree}`])
   const commit = yield* read(
     git,
@@ -2879,7 +2925,7 @@ export const reanchor = Effect.fn("ArenaGit.reanchor")(function* (input: Reancho
 
 export const finalize = Effect.fn("ArenaGit.finalize")(function* (input: FinalizeInput) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.worktree, "find_worktree_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.worktree, "find_worktree_root")
   const rawHead = yield* read(git, root, "read_raw_head", ["rev-parse", "--verify", "HEAD"])
   const branchResult = yield* git.run(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: root })
   const branch = branchResult.exitCode === 0 ? output(branchResult) || undefined : undefined
@@ -2978,7 +3024,7 @@ export const finalize = Effect.fn("ArenaGit.finalize")(function* (input: Finaliz
 
 export const applyFastForward = Effect.fn("ArenaGit.applyFastForward")(function* (input: ApplyInput) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_canonical_root")
   const previousHead = yield* read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])
   if (previousHead !== input.expectedBaseSHA) {
     return yield* Effect.fail(
@@ -3028,7 +3074,7 @@ export const applyFastForward = Effect.fn("ArenaGit.applyFastForward")(function*
 
 export const applySnapshot = Effect.fn("ArenaGit.applySnapshot")(function* (input: ApplySnapshotInput) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_canonical_root")
   const previousHead = yield* read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])
   const branch = yield* readBranch(git, root)
   if (!(yield* isAncestor(git, root, input.expectedBaseCommit, input.resultCommit))) {
@@ -3154,7 +3200,7 @@ export const containsCommit = Effect.fn("ArenaGit.containsCommit")(function* (in
 /** Return Git's primary checkout path, repairing stale worktree registrations first. */
 export const repositoryOwner = Effect.fn("ArenaGit.repositoryOwner")(function* (directory: string) {
   const git = yield* Git.Service
-  const root = yield* read(git, directory, "find_repository_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, directory, "find_repository_root")
   yield* run(git, root, "repair_repository_worktrees", ["worktree", "repair"])
   const worktrees = yield* inspectWorktrees(git, root)
   const owner = worktrees[0]?.path
@@ -3173,34 +3219,53 @@ export const readCanonicalBranch = Effect.fn("ArenaGit.readCanonicalBranch")(fun
 
 export const inspectCanonical = Effect.fn("ArenaGit.inspectCanonical")(function* (directory: string) {
   const git = yield* Git.Service
-  const root = yield* read(git, directory, "find_canonical_root", ["rev-parse", "--show-toplevel"])
-  const commonGitDir = yield* read(git, root, "read_common_git_dir", [
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ])
-  const head = yield* read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])
-  const branch = yield* readBranch(git, root)
-  const status = yield* read(git, root, "read_canonical_status", [
-    "status",
-    "--porcelain=v1",
-    "--untracked-files=all",
-    "--no-renames",
-    "--",
-    ".",
-  ])
-  const conflicts = yield* conflictPaths(git, root)
+  const root = yield* readRoot(git, directory, "find_canonical_root")
+  // Given the root, every question is independent, and on Windows each is a process start of tens
+  // of milliseconds, so they are asked at once. A failure still surfaces in the order they were
+  // asked one by one. The index tree is read beside them and kept only when nothing is unmerged,
+  // the one case where `write-tree` can answer.
+  const asked = yield* Effect.all(
+    {
+      commonGitDir: Effect.exit(
+        read(git, root, "read_common_git_dir", ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+      ),
+      head: Effect.exit(read(git, root, "read_canonical_head", ["rev-parse", "--verify", "HEAD"])),
+      branch: Effect.exit(readBranch(git, root)),
+      status: Effect.exit(
+        read(git, root, "read_canonical_status", [
+          "status",
+          "--porcelain=v1",
+          "--untracked-files=all",
+          "--no-renames",
+          "--",
+          ".",
+        ]),
+      ),
+      conflicts: Effect.exit(conflictPaths(git, root)),
+      indexTree: Effect.exit(readIndexTree(git, root, "read_canonical_index")),
+    },
+    { concurrency: "unbounded" },
+  )
+  const commonGitDir = yield* settled(asked.commonGitDir)
+  const head = yield* settled(asked.head)
+  const branch = yield* settled(asked.branch)
+  const status = yield* settled(asked.status)
+  const conflicts = yield* settled(asked.conflicts)
   return {
     root,
     commonGitDir,
     head,
     branch,
     detached: branch === undefined,
-    ...(conflicts.length > 0 ? {} : { indexTree: yield* readIndexTree(git, root, "read_canonical_index") }),
+    ...(conflicts.length > 0 ? {} : { indexTree: yield* settled(asked.indexTree) }),
     conflicts,
     clean: status.length === 0,
   } satisfies CanonicalState
 })
+
+/** What an exit held, as the effect that produced it would have ended. */
+const settled = <A, E>(exit: Exit.Exit<A, E>) =>
+  Exit.isSuccess(exit) ? Effect.succeed(exit.value) : Effect.failCause(exit.cause)
 
 const conflictPaths = Effect.fn("ArenaGit.conflictPaths")(function* (git: Git.Interface, root: string) {
   const files = yield* read(git, root, "read_conflicts", ["diff", "--name-only", "--diff-filter=U"])
@@ -3210,14 +3275,14 @@ const conflictPaths = Effect.fn("ArenaGit.conflictPaths")(function* (git: Git.In
 /** Read the checkout's standard unmerged paths without changing its Git state. */
 export const inspectConflicts = Effect.fn("ArenaGit.inspectConflicts")(function* (canonical: string) {
   const git = yield* Git.Service
-  const root = yield* read(git, canonical, "find_conflict_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, canonical, "find_conflict_root")
   return yield* conflictPaths(git, root)
 })
 
 /** A replayed winner commit is not applied until Git's cherry-pick has been continued. */
 export const hasCherryPickInProgress = Effect.fn("ArenaGit.hasCherryPickInProgress")(function* (canonical: string) {
   const git = yield* Git.Service
-  const root = yield* read(git, canonical, "find_cherry_pick_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, canonical, "find_cherry_pick_root")
   const result = yield* git.run(["rev-parse", "--verify", "--quiet", "CHERRY_PICK_HEAD"], { cwd: root })
   if (result.exitCode === 0) return true
   if (result.exitCode === 1) return false
@@ -3232,7 +3297,7 @@ export const hasCherryPickInProgress = Effect.fn("ArenaGit.hasCherryPickInProgre
  */
 export const repositoryOperation = Effect.fn("ArenaGit.repositoryOperation")(function* (canonical: string) {
   const git = yield* Git.Service
-  const root = yield* read(git, canonical, "find_operation_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, canonical, "find_operation_root")
   for (const [path, operation] of [
     ["rebase-merge", "rebase"],
     ["rebase-apply", "rebase"],
@@ -3270,7 +3335,7 @@ export const unresolvedConflictPaths = Effect.fn("ArenaGit.unresolvedConflictPat
 }) {
   if (input.paths.length === 0) return [] as readonly string[]
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_conflict_marker_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_conflict_marker_root")
   const unresolved = yield* Effect.forEach(
     input.paths,
     (path) =>
@@ -3301,7 +3366,7 @@ export const acceptWinnerConflicts = Effect.fn("ArenaGit.acceptWinnerConflicts")
   readonly materialize?: boolean
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_accepted_conflict_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_accepted_conflict_root")
   const conflicts = yield* conflictPaths(git, root)
 
   // Some conflicts originate from cached-only patches, so explicitly materialize the
@@ -3397,7 +3462,7 @@ export const resultPatch = Effect.fn("ArenaGit.resultPatch")(function* (input: {
   readonly resultCommit: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_result_patch_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_result_patch_root")
   return yield* diffTrees(git, root, input.baseCommit, input.resultCommit)
 })
 
@@ -3413,7 +3478,7 @@ export const importResultRef = Effect.fn("ArenaGit.importResultRef")(function* (
   readonly expectedDestinationCommit?: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_import_result_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_import_result_root")
   const objectType = input.objectType ?? "commit"
   const sourceCommit = yield* read(git, input.sourceRepository, "read_source_result_commit", [
     "rev-parse",
@@ -3517,7 +3582,7 @@ export const preparePromotion = Effect.fn("ArenaGit.preparePromotion")(function*
   readonly safetyRef: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_promotion_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_promotion_root")
   const branch = yield* readBranch(git, root)
   if (input.expectedBranch !== undefined && branch !== input.expectedBranch) {
     return yield* Effect.fail(
@@ -3650,7 +3715,7 @@ export const applyPromotionState = Effect.fn("ArenaGit.applyPromotionState")(fun
   readonly fullyCommitted?: boolean
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_promotion_state_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_promotion_state_root")
   const head = yield* read(git, root, "read_precommit_head", ["rev-parse", "--verify", "HEAD"])
   if (head !== input.expectedHead) {
     return yield* Effect.fail(
@@ -3733,7 +3798,7 @@ export const promoteWinnerState = Effect.fn("ArenaGit.promoteWinnerState")(funct
   input: PromoteWinnerStateInput,
 ) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_winner_promotion_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_winner_promotion_root")
   const branch = yield* readBranch(git, root)
   if (
     (input.expectedBranch !== undefined && branch !== input.expectedBranch) ||
@@ -4362,6 +4427,12 @@ const replaceTreeEntry = Effect.fn("ArenaGit.replaceTreeEntry")(function* (
  * Bring the working tree from one snapshot to another by touching only the paths that differ.
  * Untracked files in the snapshots are ordinary entries; ignored files are in neither and are
  * never touched.
+ *
+ * Git writes the files, from a scratch index holding `to`, so each one is checked out the way a
+ * `git checkout` would write it: line endings under `core.autocrlf` or `eol`, smudge filters such
+ * as LFS, the executable bit, and links per `core.symlinks`. The blobs hold normalized content, so
+ * writing them as they are turned a Windows checkout's CRLF files into LF ones. It also runs two
+ * processes however many files change.
  */
 const writeTreeToWorktree = Effect.fn("ArenaGit.writeTreeToWorktree")(function* (
   git: Git.Interface,
@@ -4372,123 +4443,37 @@ const writeTreeToWorktree = Effect.fn("ArenaGit.writeTreeToWorktree")(function* 
   if (from === to) return
   const listing = yield* read(git, root, "read_worktree_delta", ["diff-tree", "-r", "-z", "--no-renames", from, to])
   const fields = listing.split("\0")
-  const changes: { path: string; mode?: string; oid?: string }[] = []
+  const removed: string[] = []
+  const written: string[] = []
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const meta = fields[i]
     const path = fields[i + 1]
     if (!meta || !path) continue
     const [, dstMode, , dstOid, status] = meta.slice(1).split(" ")
-    if (status === "D" || !dstMode || !dstOid) changes.push({ path })
-    else if (dstMode !== "160000") changes.push({ path, mode: dstMode, oid: dstOid })
+    if (status === "D" || !dstMode || !dstOid) removed.push(path)
+    else if (dstMode !== "160000") written.push(path)
   }
-  const sizes = yield* readBlobSizes(
-    git,
-    root,
-    changes.flatMap((change) => (change.oid ? [change.oid] : [])),
-  )
-  let blobs = new Map<string, Buffer>()
-  for (const [index, change] of changes.entries()) {
-    const target = join(root, change.path)
-    if (!change.oid || !change.mode) {
-      yield* Effect.promise(() => rm(target, { force: true, recursive: false }).catch(() => undefined))
-      continue
-    }
-    const mode = change.mode
-    // Blobs are read ahead in batches but written in the delta's order: a file that replaces a
-    // directory, or the reverse, depends on the entry before it having been applied.
-    if (!blobs.has(change.oid)) blobs = yield* readBlobBatch(git, root, nextBlobBatch(changes, index, sizes), sizes)
-    const blob = blobs.get(change.oid)!
-    yield* Effect.promise(async () => {
-      await mkdir(dirname(target), { recursive: true })
-      await rm(target, { force: true, recursive: true }).catch(() => undefined)
-      if (mode === "120000") {
-        await symlink(blob.toString("utf8"), target)
-        return
-      }
-      await writeFile(target, blob, { mode: mode === "100755" ? 0o755 : 0o644 })
-      if (mode === "100755") await chmod(target, 0o755)
+  // Removals first: a file that replaces a directory, or the reverse, finds the old entry gone,
+  // and `checkout-index --force` clears whatever is still in its way.
+  for (const path of removed) {
+    yield* Effect.promise(() => rm(join(root, path), { force: true, recursive: false }).catch(() => undefined))
+  }
+  if (written.length === 0) return
+  const index = join(tmpdir(), `opencode-arena-index-${randomUUID()}`)
+  yield* Effect.gen(function* () {
+    const env = { GIT_INDEX_FILE: index }
+    yield* run(git, root, "load_worktree_tree", ["read-tree", to], { env })
+    yield* run(git, root, "write_worktree_files", ["checkout-index", "--force", "-z", "--stdin"], {
+      env,
+      stdin: Stream.make(new TextEncoder().encode(`${written.join("\0")}\0`)),
     })
-  }
-})
-
-/** The largest file a worktree write accepts, as when each blob was read by its own call. */
-const MAX_WORKTREE_BLOB_BYTES = 200 * 1024 * 1024
-/** How many blob bytes one `cat-file --batch` call may buffer. A larger blob is read alone. */
-const WORKTREE_BLOB_BATCH_BYTES = 64 * 1024 * 1024
-
-/**
- * Sizes of the blobs a worktree write needs, from one `cat-file --batch-check`. Each blob used to be
- * read by a `cat-file` process of its own, and starting one costs ~10 ms: a 3,000-file winner spent
- * half a minute in process startup before the vote finished.
- */
-const readBlobSizes = Effect.fn("ArenaGit.readBlobSizes")(function* (
-  git: Git.Interface,
-  root: string,
-  oids: readonly string[],
-) {
-  const sizes = new Map<string, number>()
-  const unique = [...new Set(oids)]
-  if (unique.length === 0) return sizes
-  const listing = yield* read(git, root, "read_worktree_blob_sizes", ["cat-file", "--batch-check"], {
-    stdin: Stream.make(new TextEncoder().encode(`${unique.join("\n")}\n`)),
-    maxOutputBytes: 64 * 1024 * 1024,
-  })
-  for (const line of listing.split("\n")) {
-    const [oid, type, size] = line.split(" ")
-    const bytes = Number(size)
-    if (!oid || type !== "blob" || !Number.isSafeInteger(bytes)) {
-      return yield* Effect.fail(new OperationError("read_worktree_blob", `Git could not read blob ${oid || line}`))
-    }
-    if (bytes > MAX_WORKTREE_BLOB_BYTES) {
-      return yield* Effect.fail(new OperationError("read_worktree_blob", `Blob ${oid} is larger than 200 MB`))
-    }
-    sizes.set(oid, bytes)
-  }
-  const missing = unique.find((oid) => !sizes.has(oid))
-  if (missing) return yield* Effect.fail(new OperationError("read_worktree_blob", `Git could not read blob ${missing}`))
-  return sizes
-})
-
-/** The blobs of the changes from `start` on that fit in one batch; always at least the first. */
-function nextBlobBatch(changes: readonly { oid?: string }[], start: number, sizes: ReadonlyMap<string, number>) {
-  const batch = new Set<string>()
-  let bytes = 0
-  for (const change of changes.slice(start)) {
-    if (!change.oid || batch.has(change.oid)) continue
-    const size = sizes.get(change.oid) ?? 0
-    if (batch.size > 0 && bytes + size > WORKTREE_BLOB_BATCH_BYTES) break
-    batch.add(change.oid)
-    bytes += size
-  }
-  return [...batch]
-}
-
-const readBlobBatch = Effect.fn("ArenaGit.readBlobBatch")(function* (
-  git: Git.Interface,
-  root: string,
-  oids: readonly string[],
-  sizes: ReadonlyMap<string, number>,
-) {
-  // Each answer is `<oid> blob <size>\n<content>\n`.
-  const expected = oids.reduce((total, oid) => total + oid.length + 32 + (sizes.get(oid) ?? 0), 0)
-  const result = yield* run(git, root, "read_worktree_blob", ["cat-file", "--batch"], {
-    stdin: Stream.make(new TextEncoder().encode(`${oids.join("\n")}\n`)),
-    maxOutputBytes: expected,
-  })
-  const output = result.stdout
-  const blobs = new Map<string, Buffer>()
-  let offset = 0
-  for (const oid of oids) {
-    const newline = output.indexOf(0x0a, offset)
-    const [name, type, size] = newline < 0 ? [] : output.toString("utf8", offset, newline).split(" ")
-    const end = newline + 1 + Number(size)
-    if (result.truncated || name !== oid || type !== "blob" || Number(size) !== sizes.get(oid) || end > output.length) {
-      return yield* Effect.fail(new OperationError("read_worktree_blob", `Git could not read blob ${oid}`))
-    }
-    blobs.set(oid, output.subarray(newline + 1, end))
-    offset = end + 1
-  }
-  return blobs
+  }).pipe(
+    Effect.ensuring(
+      Effect.promise(() =>
+        Promise.all([unlink(index).catch(() => undefined), unlink(`${index}.lock`).catch(() => undefined)]),
+      ),
+    ),
+  )
 })
 
 /** Complete a successful promotion after its result has been durably persisted by the service. */
@@ -4503,7 +4488,7 @@ export const finishWinnerPromotion = Effect.fn("ArenaGit.finishWinnerPromotion")
   readonly retainSafetyRef?: boolean
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_finish_winner_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_finish_winner_root")
   const conflicts = yield* conflictPaths(git, root)
   if (conflicts.length > 0) {
     return yield* Effect.fail(new OperationError("verify_winner_conflicts", `Unresolved files: ${conflicts.join(", ")}`))
@@ -4527,7 +4512,7 @@ export const restorePublicChanges = Effect.fn("ArenaGit.restorePublicChanges")(f
   readonly safetyIndexRef?: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_restore_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_restore_root")
   const indexRef = input.safetyIndexRef ?? safetyIndexRef(input.safetyRef)
   const originalHead = yield* read(git, root, "read_public_safety_parent", ["rev-parse", `${input.safetyRef}^`])
   const indexTree = yield* read(git, root, "read_public_index_snapshot", ["rev-parse", `${indexRef}^{tree}`])
@@ -4545,7 +4530,7 @@ export const finishPublicRestore = Effect.fn("ArenaGit.finishPublicRestore")(fun
   readonly retainSafetyRef?: boolean
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_finish_restore_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_finish_restore_root")
   const conflicts = yield* conflictPaths(git, root)
   if (conflicts.length > 0) {
     return yield* Effect.fail(new OperationError("verify_public_restore", `Unresolved files: ${conflicts.join(", ")}`))
@@ -4565,7 +4550,7 @@ export const recoverFailedPromotion = Effect.fn("ArenaGit.recoverFailedPromotion
   readonly targetBranch?: string
 }) {
   const git = yield* Git.Service
-  const root = yield* read(git, input.canonical, "find_failed_promotion_root", ["rev-parse", "--show-toplevel"])
+  const root = yield* readRoot(git, input.canonical, "find_failed_promotion_root")
   const safety = yield* git.run(["show-ref", "--verify", "--quiet", input.safetyRef], { cwd: root })
   if (safety.exitCode === 1) return false
   if (safety.exitCode !== 0) return yield* Effect.fail(new OperationError("inspect_public_safety_ref", "Failed to inspect public safety ref"))
@@ -4994,7 +4979,7 @@ export const compare = Effect.fn("ArenaGit.compare")(
     readonly maxOutputBytes?: number
   }) {
     const git = yield* Git.Service
-    const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+    const root = yield* readRoot(git, input.canonical, "find_canonical_root")
     const readDiffMetadata = Effect.fnUntraced(function* (operation: string, args: string[]) {
       const result = yield* run(git, root, operation, args, { maxOutputBytes: 16 * 1024 * 1024 })
       if (result.truncated) {

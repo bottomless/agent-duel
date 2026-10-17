@@ -87,7 +87,7 @@ describe("Arena contestant permissions", () => {
     })
 
     expect(outside).toBe(
-      `Arena contestants can access only the worktree, ${sandbox.tmp}, attached files, and skill directories (read-only). /repo is outside them.`,
+      `Arena contestants can access only the worktree, ${sandbox.tmp}, attached files, and skill directories (read-only). ${path.join("/repo")} is outside them.`,
     )
     expect(
       ArenaContestant.denial({

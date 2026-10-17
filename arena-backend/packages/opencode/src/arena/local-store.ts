@@ -605,7 +605,12 @@ class LocalDatabase implements ArenaDb, ArenaClient {
       } finally {
         await handle.close()
       }
-      await rename(temporary, destination)
+      await rename(temporary, destination).catch(async (error: unknown) => {
+        // The name is the hash of the bytes, so a file already there holds them. Windows refuses to
+        // rename over a file another process opened without delete sharing, as a virus scan does.
+        if (!(await stat(destination).then(Boolean, () => false))) throw error
+        await rm(temporary, { force: true })
+      })
       // Windows does not support opening directories for fsync.
       if (process.platform !== "win32") {
         const directoryHandle = await open(this.artifactsRoot, "r")

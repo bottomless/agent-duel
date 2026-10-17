@@ -498,6 +498,28 @@ short (the first battle creates a spare in the background while it waits for the
 both at once. Only the pool scan, the host copies, and the final mirror of the hosts take the
 repository lock; the file sync, the instances, and the forks run outside it under the chat's start
 lock, so a vote, a send, or a prompt in another chat of the same repository does not wait for them.
+Those holds and a spare's claim take the lock as background work
+(`withBackgroundRepositoryMutation`): one at a time, and only while no send, vote or chat opening is
+waiting on it. The lock is otherwise first come first served, and on Windows each host copy holds it
+for one to three seconds, so a vote queued behind two spare claims waited 3.6 s.
+
+A new chat has no pool to adopt from, so its first send claims two worktrees and copies every
+ignored root into both. With a copy-on-write clone that is cheap; Windows has none, and a 14k-file
+project took 8.7 s per side. There a repository also keeps a spare pair for its next new chat in
+`.agent-duel/worktrees/_spares/` (`ensureProjectSpares`): a battle reaching its vote builds it in
+the background when it is short, synced to that battle's base, and a new chat's first send adopts
+it, so the scan keeps the ignored roots instead of copying them (4.0 s per side). A project gets its
+pair before its first battle too: adding it makes the daemon call `/arena/projects/prewarm`, and the
+engine builds both spares at once from the checkout's index (`prewarmProject`). The app opens a chat
+only when its first prompt is sent, so this is the earliest moment the engine can start. A first
+send that arrives while that build runs waits for it before taking the repository lock, which the
+build's claims need; it began earlier, so it finishes sooner than the send's own copy would. The
+records that let the scan keep a root belong to the process that built the spare, so the first build
+in a process retires whatever an earlier one left there, and after a restart the repository of the
+latest chat that battled gets its pair again, from that chat's last turn, once the latest pair is
+re-warmed. `OPENCODE_ARENA_PROJECT_SPARES` turns spares on (`1`) or off (`0`) on any platform; tests
+run with them off.
+
 Arena runs no project start command and no `paseo.json` hook in a slot, so a created slot and an
 adopted one start identical. Warm preparation also allocates each successor's port bank and forks
 the canonical session into it, paths retargeted, so the send has no transcript to copy. A send uses
@@ -511,7 +533,14 @@ A send reuses the pair when it is trusted in this process and nothing moved sinc
 the checkout's HEAD, branch, index and working tree, its ignored content, the git metadata a host
 copies once (config, hooks, `info`, and the stash, notes and replace refs the ref mirror skips), and
 both slots. Otherwise it adopts the same two slots again in place, which rebuilds their hosts and
-rewrites only the difference.
+rewrites only the difference. The watches answer whether the ignored content moved
+(`warmPairIsUsable`). Without a watcher backend (Windows) the digests a scanned sync records for each
+copied directory root, in the checkout and in the copy, answer it instead (`scannedPairIsUsable`):
+the pair is reused while both still match, which took a second message from 4.0 s to 0.7 s. A copy
+records the checkout's digest from the walk that measured the root for the copy manifest
+(`sourceTree` on its entries) instead of walking it again. A resync deciding whether to keep a root
+reads the checkout's digest afresh, because a warm pair's manifest is reused at a later send; the two
+sides resyncing at once share that walk.
 
 A cold or refreshed side does not wait for its worktree before the model starts. Its path is known
 before staging (the planned slot, or the warm slot it refreshes in place), so the side forks its

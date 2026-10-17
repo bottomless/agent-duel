@@ -4,6 +4,24 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 type CanonicalPaths = { readonly worktrees: readonly string[]; readonly canonical: string }
 type LocalPaths = { readonly canonical: string; readonly worktree: string }
 
+// Windows paths compare case-insensitively and take either separator, and a model writes both
+// `C:\repo\src` and `c:/repo/src`.
+const WINDOWS = process.platform === "win32"
+const SEPARATORS = WINDOWS ? /[\\/]/ : "/"
+
+const separator = (char: string | undefined) => char === "/" || (WINDOWS && char === "\\")
+
+// Folding keeps every character's index, so a match in folded text is the same span in the original.
+function fold(value: string) {
+  if (!WINDOWS) return value
+  let folded = ""
+  for (const char of value) {
+    const lower = char.toLowerCase()
+    folded += char === "\\" ? "/" : lower.length === char.length ? lower : char
+  }
+  return folded
+}
+
 // These helpers accept declared path values, not commands or serialized transcript text.
 export function canonicalizeWorktreePaths<T>(
   value: T,
@@ -26,7 +44,9 @@ export function localizeCanonicalPaths<T>(
 // Ordinary session forks relocate every path mention in their copied objects.
 export function localizeEmbeddedPaths<T>(value: T, input: LocalPaths): T {
   if (!input.canonical) return value
-  const pattern = new RegExp(`${input.canonical.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=/|$)`, "g")
+  const pattern = WINDOWS
+    ? new RegExp(`${input.canonical.split(SEPARATORS).map(escapeRegExp).join("[\\\\/]")}(?=[\\\\/]|$)`, "gi")
+    : new RegExp(`${escapeRegExp(input.canonical)}(?=/|$)`, "g")
   const visit = (entry: unknown): unknown => {
     if (typeof entry === "string") return entry.replace(pattern, () => input.worktree)
     if (Array.isArray(entry)) return entry.map(visit)
@@ -128,8 +148,13 @@ async function transcript<T>(
     return { ...value, state: { ...state, input: fields(input, ["path", "filePath", "directory"]) } }
   }
   // This adapter owns POSIX bash inputs. Other tools and free-form text retain their original bytes.
-  if (value.tool !== "bash" || process.platform === "win32" || typeof input.command !== "string") {
+  if (value.tool !== "bash" || typeof input.command !== "string") {
     return state === value.state ? value : { ...value, state }
+  }
+  // The Windows shell is PowerShell, Git Bash or cmd, which the POSIX parser cannot read. Retarget
+  // complete path references in the command and keep the output as recorded.
+  if (WINDOWS) {
+    return { ...value, state: { ...state, input: { ...fields(input, ["workdir"]), command: text(input.command) } } }
   }
   const command = await rewritePathCommand(input.command, path)
   let output = state.output
@@ -197,12 +222,14 @@ function pathRoots(worktrees: readonly string[]) {
 }
 
 function mapPath(value: string, roots: readonly string[], destination: string): string {
+  const folded = fold(value)
   for (const root of roots) {
-    if (value === root) return destination
-    if (!value.startsWith(root === "/" ? "/" : `${root}/`)) continue
+    const key = fold(root)
+    if (folded === key) return destination
+    if (!folded.startsWith(key === "/" ? "/" : `${key}/`)) continue
     const suffix = value.slice(root.length)
     // Resolving .. across a relocated root (or a symlink) can change which directory it names.
-    if (suffix.split("/").includes("..")) return value
+    if (suffix.split(SEPARATORS).includes("..")) return value
     return root === "/" ? `${destination.replace(/\/$/, "")}/${suffix}` : destination + suffix
   }
   return value
@@ -213,13 +240,14 @@ function mapPath(value: string, roots: readonly string[], destination: string): 
 function rewritePathReferences(value: string, worktrees: readonly string[], destination: string): string {
   const roots = pathRoots(worktrees)
   if (!roots) return value
+  const folded = fold(value)
   let result = ""
   let cursor = 0
   while (cursor < value.length) {
     let start = -1
     let root = ""
     for (const candidate of roots) {
-      const found = value.indexOf(candidate, cursor)
+      const found = folded.indexOf(fold(candidate), cursor)
       if (found !== -1 && (start === -1 || found < start || (found === start && candidate.length > root.length))) {
         start = found
         root = candidate
@@ -230,7 +258,7 @@ function rewritePathReferences(value: string, worktrees: readonly string[], dest
     const after = value[start + root.length]
     if (
       (before !== undefined && !/[\s"'`([{=:]/.test(before)) ||
-      (after !== undefined && after !== "/" && !/[\s"'`)\]};,!?]/.test(after))
+      (after !== undefined && !separator(after) && !/[\s"'`)\]};,!?]/.test(after))
     ) {
       result += value.slice(cursor, start + root.length)
       cursor = start + root.length

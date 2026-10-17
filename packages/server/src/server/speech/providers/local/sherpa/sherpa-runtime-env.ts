@@ -47,6 +47,17 @@ export function prependEnvPath(existing: string | undefined, value: string): str
   return [value, ...parts].join(path.delimiter);
 }
 
+/**
+ * The directory on disk for a path Electron resolves inside an `.asar` archive. Native libraries
+ * cannot be loaded from the archive and are unpacked beside it, so the loader path has to name the
+ * `.asar.unpacked` copy. A path into the archive file is also no directory at all: on Windows it
+ * went first in PATH, which the daemon's children inherit, and cmd.exe then failed to find `node`
+ * for every npm shim a contestant or a terminal ran.
+ */
+export function asarUnpackedPath(directory: string): string {
+  return directory.replace(/\.asar(?=[\\/])/, ".asar.unpacked");
+}
+
 export function resolveSherpaLoaderEnv(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
@@ -62,7 +73,7 @@ export function resolveSherpaLoaderEnv(
     const pkgJson = require.resolve(`${packageName}/package.json`);
     return {
       key,
-      libDir: path.dirname(pkgJson),
+      libDir: asarUnpackedPath(path.dirname(pkgJson)),
       packageName,
     };
   } catch {

@@ -966,6 +966,19 @@ export class AgentManager {
     return null;
   }
 
+  /** Start preparing a project's first battle through the first provider that can. Best effort. */
+  async prewarmProject(cwd: string): Promise<void> {
+    for (const [provider, client] of this.clients.entries()) {
+      if (!client.prewarmProject) continue;
+      try {
+        await client.prewarmProject(cwd);
+      } catch (error) {
+        this.logger.warn({ err: error, provider, cwd }, "Failed to prewarm project");
+      }
+      return;
+    }
+  }
+
   /**
    * Tell every provider that caches a directory's repository to read it again. Best effort:
    * a provider that keeps a stale answer refuses the next battle with its own error.

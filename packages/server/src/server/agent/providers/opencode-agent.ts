@@ -172,6 +172,13 @@ function getOpenCodeChildSessionServerUrl(sessionId: string): string | undefined
   return openCodeChildSessionServerUrls.get(sessionId);
 }
 
+// OpenCode reads this header URI-encoded, as its own SDK sends it. Raw, a path outside Latin-1
+// ("ş", "王", an emoji) fails the request before it is sent, and a "%41" in a name decodes to
+// another directory.
+function openCodeDirectoryHeader(directory: string): string {
+  return encodeURIComponent(directory);
+}
+
 const DEFAULT_MODES: AgentMode[] = [
   {
     id: OPENCODE_BUILD_MODE_ID,
@@ -1441,7 +1448,7 @@ async function forkArenaOpenCodeSession(input: OpenCodeArenaForkInput): Promise<
         Accept: "application/json",
         "Content-Type": "application/json",
         "x-paseo-control-token": input.controlToken,
-        "x-opencode-directory": input.sourceCwd,
+        "x-opencode-directory": openCodeDirectoryHeader(input.sourceCwd),
       },
       body: JSON.stringify({
         destination: input.targetCwd,
@@ -1469,7 +1476,7 @@ async function moveOpenCodeSession(input: OpenCodeMoveSessionInput): Promise<voi
         Accept: "application/json",
         "Content-Type": "application/json",
         "x-paseo-control-token": input.controlToken,
-        "x-opencode-directory": input.sourceCwd,
+        "x-opencode-directory": openCodeDirectoryHeader(input.sourceCwd),
       },
       body: JSON.stringify({
         sessionID: input.sessionId,
@@ -1579,7 +1586,7 @@ export class OpenCodeAgentClient implements AgentClient {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-opencode-directory": cwd,
+            "x-opencode-directory": openCodeDirectoryHeader(cwd),
             "x-paseo-control-token": acquisition.server.controlToken,
           },
           body: JSON.stringify({ sessionIDs }),
@@ -1608,7 +1615,7 @@ export class OpenCodeAgentClient implements AgentClient {
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
-            "x-opencode-directory": sourceRepoRoot,
+            "x-opencode-directory": openCodeDirectoryHeader(sourceRepoRoot),
             "x-paseo-control-token": acquisition.server.controlToken,
           },
           body: JSON.stringify({ root: worktreeRoot }),
@@ -1664,7 +1671,7 @@ export class OpenCodeAgentClient implements AgentClient {
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
-            "x-opencode-directory": sourceRepoRoot,
+            "x-opencode-directory": openCodeDirectoryHeader(sourceRepoRoot),
             "x-paseo-control-token": acquisition.server.controlToken,
           },
           body: JSON.stringify({ keep, volumeOf }),
@@ -2019,7 +2026,7 @@ export class OpenCodeAgentClient implements AgentClient {
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
-            "x-opencode-directory": input.sourceCwd,
+            "x-opencode-directory": openCodeDirectoryHeader(input.sourceCwd),
             "x-paseo-control-token": acquisition.server.controlToken,
           },
           body: JSON.stringify({
@@ -2056,7 +2063,7 @@ export class OpenCodeAgentClient implements AgentClient {
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
-            "x-opencode-directory": cwd,
+            "x-opencode-directory": openCodeDirectoryHeader(cwd),
             "x-paseo-control-token": acquisition.server.controlToken,
           },
           body: JSON.stringify(request),
@@ -2068,6 +2075,37 @@ export class OpenCodeAgentClient implements AgentClient {
         throw new Error(`Arena metadata failed with status ${response.status}: ${text}`);
       }
       return GitMetadataResultSchema.parse(await response.json());
+    } finally {
+      await acquisition.release();
+    }
+  }
+
+  /**
+   * The Arena backend keeps spare contestant worktrees per repository where it has no
+   * copy-on-write clone; asking for them when a project is added lets its first battle adopt
+   * them. The backend answers at once and decides whether this platform keeps spares.
+   */
+  async prewarmProject(cwd: string): Promise<void> {
+    if (!this.arenaMode) return;
+    const acquisition = await this.serverManager.acquireCurrent();
+    try {
+      const response = await fetch(
+        new URL("/arena/projects/prewarm", `${acquisition.server.url.replace(/\/$/, "")}/`),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-directory": openCodeDirectoryHeader(cwd),
+            "x-paseo-control-token": acquisition.server.controlToken,
+          },
+          body: JSON.stringify({ root: cwd }),
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`Arena project prewarm failed with status ${response.status}: ${text}`);
+      }
     } finally {
       await acquisition.release();
     }
@@ -2088,7 +2126,7 @@ export class OpenCodeAgentClient implements AgentClient {
           method: "POST",
           headers: {
             Accept: "application/json",
-            "x-opencode-directory": cwd,
+            "x-opencode-directory": openCodeDirectoryHeader(cwd),
             ...(this.arenaMode ? { "x-paseo-control-token": acquisition.server.controlToken } : {}),
           },
         },
@@ -2213,7 +2251,7 @@ export class OpenCodeAgentClient implements AgentClient {
           method: "POST",
           headers: {
             Accept: "application/json",
-            "x-opencode-directory": metadata.cwd,
+            "x-opencode-directory": openCodeDirectoryHeader(metadata.cwd),
             "x-paseo-control-token": acquisition.server.controlToken,
           },
         },
@@ -4056,7 +4094,7 @@ class OpenCodeAgentSession implements AgentSession {
       signal,
       headers: {
         Accept: "text/event-stream",
-        "x-opencode-directory": this.config.cwd,
+        "x-opencode-directory": openCodeDirectoryHeader(this.config.cwd),
         ...(this.controlToken ? { "x-paseo-control-token": this.controlToken } : {}),
       },
     });
@@ -4124,7 +4162,7 @@ class OpenCodeAgentSession implements AgentSession {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-        "x-opencode-directory": this.config.cwd,
+        "x-opencode-directory": openCodeDirectoryHeader(this.config.cwd),
         ...(this.controlToken ? { "x-paseo-control-token": this.controlToken } : {}),
       },
       ...(options?.body ? { body: JSON.stringify(options.body) } : {}),

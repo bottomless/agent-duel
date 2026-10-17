@@ -18,6 +18,35 @@ const scopedTmpdir = (options?: Parameters<typeof tmpdir>[0]) =>
   )
 
 describe("Git", () => {
+  it.live("run() asks again where a checkout's git directory is once its .git names another", () =>
+    Effect.gen(function* () {
+      const tmp = yield* scopedTmpdir({ git: true })
+      const git = yield* Git.Service
+      const [a, b] = [path.join(tmp.path, "a"), path.join(tmp.path, "b")]
+      yield* Effect.promise(async () => {
+        await $`git worktree add -q --detach ${a}`.cwd(tmp.path).quiet()
+        await $`git worktree add -q --detach ${b}`.cwd(tmp.path).quiet()
+      })
+      const gitDir = (cwd: string) =>
+        git
+          .run(["rev-parse", "--absolute-git-dir"], { cwd })
+          .pipe(Effect.flatMap((result) => Effect.promise(() => fs.realpath(result.text().trim()))))
+      const admin = (name: string) => Effect.promise(() => fs.realpath(path.join(tmp.path, ".git", "worktrees", name)))
+
+      expect(yield* gitDir(a)).toBe(yield* admin("a"))
+      expect(yield* gitDir(a)).toBe(yield* admin("a"))
+      // The same directory behind another link answers for that link.
+      const link = yield* Effect.promise(() => fs.readFile(path.join(b, ".git"), "utf8"))
+      yield* Effect.promise(() => fs.writeFile(path.join(a, ".git"), link))
+      expect(yield* gitDir(a)).toBe(yield* admin("b"))
+      // A question the layout does not answer is never kept.
+      const head = () => git.run(["rev-parse", "HEAD"], { cwd: b }).pipe(Effect.map((result) => result.text().trim()))
+      const before = yield* head()
+      yield* Effect.promise(() => $`git commit -q --allow-empty -m next`.cwd(b).quiet())
+      expect(yield* head()).not.toBe(before)
+    }),
+  )
+
   it.live("branch() returns current branch name", () =>
     Effect.gen(function* () {
       const tmp = yield* scopedTmpdir({ git: true })

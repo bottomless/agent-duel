@@ -239,8 +239,10 @@ describe("Arena after an engine restart", () => {
       const failedModel = router.modelForAssignment(failed.assignment.assignmentID)
       if (!failedModel) throw new Error("Failed run did not retain an opaque assignment")
       expect(router.calls.get(failedModel)).toBe(1)
-      const settledTurn = await store.turn(turnID)
-      if (settledTurn?.state === "awaiting_vote") await waitForSettledComparison(store, turnID)
+      // Both sides finished, but the turn still passes through `finalizing`. A restart there leaves the
+      // turn to startup recovery, which this restart does not run.
+      await waitForTurn(store, turnID, "awaiting_vote")
+      await waitForSettledComparison(store, turnID)
       const before = await recorded(store, [failed])
 
       store = await restartEngine(store, arenaDirectory.path)

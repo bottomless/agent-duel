@@ -31,7 +31,8 @@ export function refDisplayName(ref: string): string {
 }
 
 function folderName(path: string): string {
-  const parts = path.split("/").filter(Boolean);
+  // The engine reports a Windows worktree with backslashes.
+  const parts = path.split(/[\\/]/).filter(Boolean);
   return parts.at(-1) ?? path;
 }
 

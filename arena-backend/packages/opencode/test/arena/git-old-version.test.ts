@@ -345,6 +345,11 @@ describe("ArenaGit battle git check", () => {
       process.env.PATH = empty.path
       const message = yield* check.pipe(Effect.ensuring(Effect.sync(() => (process.env.PATH = previous))))
       expect(message).toContain("Install Git")
+      // Windows has no xcode-select, and a git installed there reaches only processes started after.
+      if (process.platform === "win32") {
+        expect(message).toContain("git-scm.com")
+        expect(message).toContain("quit and reopen Agent Duel")
+      }
     }),
   )
 })

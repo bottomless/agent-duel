@@ -134,6 +134,9 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
         map(arena.releaseCheckout(ctx.payload.root).pipe(Effect.as(HttpApiSchema.NoContent.make()))),
       )
       .handle("trimEnvironments", (ctx) => map(arena.trimEnvironments(ctx.payload.keep, ctx.payload.volumeOf)))
+      .handle("prewarmProject", (ctx) =>
+        map(arena.prewarmProject(ctx.payload.root).pipe(Effect.as(HttpApiSchema.NoContent.make()))),
+      )
       .handle("seedWorktree", (ctx) =>
         map(
           Effect.tryPromise({

@@ -211,4 +211,21 @@ describe("review callout", () => {
   it("quotes Arena's reason when an agent applies a stopped winner", () => {
     expect(stoppedPrompt("The winner moved.")).toContain('Arena said: "The winner moved."');
   });
+
+  it("names the folder a branch is checked out in, on Windows too", () => {
+    const occupied = (path: string): ArenaReviewItem => ({
+      kind: "occupied",
+      key: "@occupied",
+      fingerprint: "o",
+      branch: "feat",
+      path,
+      proposal: "take",
+      choices: ["take", "stay"],
+    });
+    for (const path of ["/Users/dev/other-wt", "C:\\Users\\dev\\other-wt"]) {
+      const copy = reviewCallout([occupied(path)]);
+      expect(copy.detail).toContain("and other-wt stays");
+      expect(copy.detail).not.toContain("Users");
+    }
+  });
 });

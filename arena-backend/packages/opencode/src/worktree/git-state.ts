@@ -56,7 +56,10 @@ export async function copyGitState(input: CopyGitStateInput) {
   const clone = input.clone ?? cloneTree
   await rm(partial, { recursive: true, force: true })
   const { mode } = await stat(input.source)
-  if (!(await cloneGitDirectory(input.source, partial, clone))) {
+  if (
+    !(await cloneGitDirectory(input.source, partial, clone)) &&
+    !(await robocopyGitDirectory(input.source, partial))
+  ) {
     // cloneTree creates its parent first; preserve the mode cp would give a new git directory.
     await mkdir(partial, { recursive: true, mode })
     const clonedObjects = await cloneObjects(input.source, partial, clone)
@@ -156,6 +159,33 @@ async function cloneGitDirectory(source: string, target: string, clone: typeof c
       return true
     }
   }
+  await rm(target, { recursive: true, force: true })
+  return false
+}
+
+/**
+ * Copy the git directory with robocopy, skipping what the filtered copy skips: the excluded
+ * top-level entries, named by full path so that a branch directory called `worktrees` deeper down
+ * is kept, and every lock file. Windows has no clone, and `cp` copies one file at a time while an
+ * antivirus scans each new one, so the copy under the repository lock took up to a second for a
+ * repository of a few files. A failed copy is removed and `false` returned.
+ */
+async function robocopyGitDirectory(source: string, target: string) {
+  if (process.platform !== "win32") return false
+  const child = Bun.spawn(
+    [
+      path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "robocopy.exe"),
+      source,
+      target,
+      ...["/E", "/COPY:DAT", "/DCOPY:T", "/MT:16", "/R:0", "/W:0"],
+      ...["/XD", path.join(source, "worktrees"), path.join(source, "fsmonitor--daemon")],
+      ...["/XF", path.join(source, "config.worktree"), path.join(source, "fsmonitor--daemon"), "*.lock"],
+      ...["/NFL", "/NDL", "/NJH", "/NJS", "/NP"],
+    ],
+    { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+  )
+  // Below 8 every file was copied.
+  if ((await child.exited) < 8) return true
   await rm(target, { recursive: true, force: true })
   return false
 }

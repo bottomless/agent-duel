@@ -591,6 +591,7 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
         sourceCwd: "/workspace/repo",
         worktreePath: "/workspace/repo/.agent-duel/worktrees/a",
       });
+      await client.prewarmProject("/workspace/repo");
     } finally {
       fetchMock.mockRestore();
     }
@@ -598,6 +599,7 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     expect(requests).toEqual([
       { path: "/arena/activity", token: runtime.server.controlToken },
       { path: "/arena/worktrees/seed", token: runtime.server.controlToken },
+      { path: "/arena/projects/prewarm", token: runtime.server.controlToken },
     ]);
   });
 
@@ -626,9 +628,44 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     }
 
     expect(requests).toEqual([
-      { method: "POST", path: "/instance/dispose", directory: "/workspace/folder" },
+      {
+        method: "POST",
+        path: "/instance/dispose",
+        directory: encodeURIComponent("/workspace/folder"),
+      },
     ]);
     expect(runtime.acquisitions[0]?.releaseCount).toBe(1);
+  });
+
+  test("sends any directory name in a header OpenCode decodes back to it", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const directories: Array<string | null> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      // Headers rejects a value it cannot send, as fetch does.
+      directories.push(new Headers(init?.headers).get("x-opencode-directory"));
+      return Response.json(true);
+    });
+    const names = [
+      "C:\\Users\\Şule\\Masaüstü\\proje ı",
+      "/Users/王芳/项目",
+      "/home/иван/Проекты",
+      "/work/🚀 launch",
+      // Sent raw, OpenCode would decode the escape and open another directory.
+      "/work/a%41b",
+    ];
+
+    try {
+      for (const name of names) await client.refreshProjectDirectory(name);
+    } finally {
+      fetchMock.mockRestore();
+    }
+
+    expect(directories.map((value) => value && decodeURIComponent(value))).toEqual(names);
   });
 
   test("recovers Arena streams and canonical reads after the managed backend changes ports", async () => {
@@ -811,10 +848,40 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
       url: "http://127.0.0.1:1234/arena/sessions/session-1/unarchive",
       method: "POST",
       headers: expect.objectContaining({
-        "x-opencode-directory": cwd,
+        "x-opencode-directory": encodeURIComponent(cwd),
         "x-paseo-control-token": "test-opencode-control-token",
       }),
     });
+    expect(runtime.acquisitions.every((acquisition) => acquisition.releaseCount === 1)).toBe(true);
+  });
+
+  test("encodes the directory when asking Arena for git metadata", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    // A Windows profile folder outside ASCII cannot go into a header as it is.
+    const cwd = "C:\\Users\\Kullanıcı\\Masaüstü\\proje";
+    const directories: Array<string | null> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      directories.push(new Headers(init?.headers).get("x-opencode-directory"));
+      return Response.json({ message: "fix: read the right file" });
+    });
+
+    try {
+      const result = await client.writeGitMetadata(
+        cwd,
+        { kind: "commit_message", changes: "M a.txt" },
+        new AbortController().signal,
+      );
+      expect(result).toEqual({ message: "fix: read the right file" });
+    } finally {
+      fetchMock.mockRestore();
+    }
+
+    expect(directories).toEqual([encodeURIComponent(cwd)]);
     expect(runtime.acquisitions.every((acquisition) => acquisition.releaseCount === 1)).toBe(true);
   });
 
@@ -2644,7 +2711,8 @@ describe("OpenCode adapter startTurn error handling", () => {
       permission: [
         {
           permission: "external_directory",
-          pattern: "/home/paseo/uploads/upload_1/*",
+          // Resolved, so on Windows it gains a drive; OpenCode matches either separator.
+          pattern: `${path.resolve("/home/paseo/uploads", "upload_1")}/*`,
           action: "allow",
         },
       ],
