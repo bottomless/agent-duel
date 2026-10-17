@@ -1,6 +1,6 @@
 import { execFile as nodeExecFile } from "child_process"
 import { createHash, randomUUID } from "crypto"
-import { constants, createReadStream } from "fs"
+import { type BigIntStats, constants, createReadStream } from "fs"
 import {
   access,
   chmod,
@@ -71,6 +71,11 @@ export type CopyManifestEntry = {
   readonly state: "copied" | "omitted"
   readonly omissionReason?: CopyOmissionReason
   readonly sourceIdentity?: SourceIdentity
+  /**
+   * A copied tree's `treeDigest`, from the walk that measured it, in a manifest that scans. A copy
+   * records it as the checkout's tree from before the copy instead of walking the tree again.
+   */
+  readonly sourceTree?: string
 }
 
 export type CopyManifest = {
@@ -419,13 +424,63 @@ export async function treeDigest(root: string): Promise<string> {
         const path = join(directory, name)
         const child = relativePath ? `${relativePath}/${name}` : name
         const stats = await lstat(path, { bigint: true })
-        lines.push([child, stats.mode, stats.size, stats.mtimeNs, stats.ctimeNs, stats.ino].join("\0"))
+        lines.push(digestLine(child, stats))
         if (stats.isDirectory()) await walk(path, child)
       }),
     )
   }
   await walk(root, "")
-  return createHash("sha256").update(lines.sort().join("\n")).digest("hex")
+  return digestOf(lines)
+}
+
+/** Walks of a checkout's roots under way, by path: both sides of a send resync at once. */
+const digestsUnderWay = new Map<string, Promise<string>>()
+
+/** `treeDigest`, joining a walk of the same tree already under way rather than starting another. */
+function sharedTreeDigest(root: string) {
+  const underWay = digestsUnderWay.get(root)
+  if (underWay) return underWay
+  const walk = treeDigest(root).finally(() => digestsUnderWay.delete(root))
+  digestsUnderWay.set(root, walk)
+  return walk
+}
+
+const digestLine = (relativePath: string, stats: BigIntStats) =>
+  [relativePath, stats.mode, stats.size, stats.mtimeNs, stats.ctimeNs, stats.ino].join("\0")
+const digestOf = (lines: string[]) => createHash("sha256").update(lines.sort().join("\n")).digest("hex")
+
+/**
+ * The bytes under a tree and its `treeDigest`, from one walk. Like `treeBytes` it stops once the
+ * total is known to exceed `limit`, and then, or when an entry could not be read, has no digest.
+ */
+async function measureTree(root: string, limit: number) {
+  const lines: string[] = []
+  let total = 0
+  let complete = true
+  const walk = async (directory: string, relativePath: string): Promise<void> => {
+    if (total > limit) return
+    const children = await readdir(directory).catch(() => {
+      complete = false
+      return [] as string[]
+    })
+    await Promise.all(
+      children.map(async (name) => {
+        if (total > limit) return
+        const path = join(directory, name)
+        const child = relativePath ? `${relativePath}/${name}` : name
+        const stats = await lstat(path, { bigint: true }).catch(() => undefined)
+        if (!stats) {
+          complete = false
+          return
+        }
+        lines.push(digestLine(child, stats))
+        if (stats.isFile()) total += Number(stats.size)
+        if (stats.isDirectory()) await walk(path, child)
+      }),
+    )
+  }
+  await walk(root, "")
+  return { bytes: total, digest: complete && total <= limit ? digestOf(lines) : undefined }
 }
 
 /**
@@ -557,9 +612,16 @@ export async function createIgnoredContentSnapshot(input: IgnoredContentSnapshot
       continue
     }
     // A plain copy is the one path where size costs something, so it is the one path that
-    // measures. A tree is walked only far enough to know it does not fit.
-    const bytes =
-      type === "file" ? sourceIdentity.size : await treeBytes(source, policy.ignoredTotalMaxBytes - copiedBytes)
+    // measures. A tree is walked only far enough to know it does not fit; where nothing watches
+    // the checkout, the walk that measures it digests it too.
+    const limit = policy.ignoredTotalMaxBytes - copiedBytes
+    const measured =
+      type === "file"
+        ? { bytes: sourceIdentity.size, digest: undefined }
+        : input.scan
+          ? await measureTree(source, limit)
+          : { bytes: await treeBytes(source, limit), digest: undefined }
+    const bytes = measured.bytes
     const decision =
       type === "file"
         ? decideIgnoredCopy(relativePath, bytes, copiedBytes, policy)
@@ -569,7 +631,10 @@ export async function createIgnoredContentSnapshot(input: IgnoredContentSnapshot
       continue
     }
     copiedBytes += bytes
-    entries.push(copied(relativePath, type, bytes, "copy", sourceIdentity))
+    entries.push({
+      ...copied(relativePath, type, bytes, "copy", sourceIdentity),
+      ...(measured.digest ? { sourceTree: measured.digest } : {}),
+    })
   }
 
   return {
@@ -1068,12 +1133,16 @@ export async function planIgnoredResync(input: IgnoredResyncPlanInput): Promise<
       unobserved(input.canonical, entry.relativePath, "the checkout") ??
       unobserved(input.slot, entry.relativePath, "the worktree")
     if (unseen !== undefined) {
-      // With no watch to say what was written, a scan does: both trees as they were recorded.
+      // With no watch to say what was written, a scan does: both trees as they were recorded. The
+      // checkout's is read now, not taken from the manifest, which a warm pair reuses at a later
+      // send; the two sides resyncing at once share that walk.
       const scanned =
         record.sourceTree !== undefined &&
         record.targetTree !== undefined &&
-        (await treeDigest(join(input.manifest.canonicalRoot, entry.relativePath))) === record.sourceTree &&
-        (await treeDigest(target)) === record.targetTree
+        (await Promise.all([
+          sharedTreeDigest(join(input.manifest.canonicalRoot, entry.relativePath)),
+          treeDigest(target),
+        ]).then(([source, worktree]) => source === record.sourceTree && worktree === record.targetTree))
       return scanned ? undefined : reclone(unseen)
     }
     const fromCheckout = input.canonical.paths?.get(entry.relativePath) ?? new Set<string>()
@@ -1375,7 +1444,10 @@ export async function applyIgnoredResync(input: IgnoredResyncApplyInput): Promis
     if (!(await ensureParentInside(realRoot, targetRoot, target))) {
       throw new Error(`Copied-content parent escaped the worktree: ${entry.relativePath}`)
     }
-    const sourceTree = input.manifest.scan && entry.type === "directory" ? await treeDigest(source) : undefined
+    // The manifest's digest was taken before any copy started, as this one would be. Should the
+    // checkout have moved since, its change times did too, so the next scan reads it as changed.
+    const sourceTree =
+      input.manifest.scan && entry.type === "directory" ? (entry.sourceTree ?? (await treeDigest(source))) : undefined
     await seedEntry(source, target, entry, clone, trash, input.signal)
     const stats = await lstat(target)
     if (entryType(stats) !== entry.type) throw new Error(`Copied-content type changed for ${entry.relativePath}`)
