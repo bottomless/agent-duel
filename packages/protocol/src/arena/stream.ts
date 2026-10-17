@@ -172,11 +172,17 @@ export function applyArenaChanges(snapshot: ArenaSnapshot, changes: ArenaChange[
           previous.promptMessageID !== run.promptMessageID
         )
           throw new ArenaStreamMismatch();
-        const { messages: _messages, parts: _parts, ...previousState } = previous;
+        // A state change carries no thread, so the thread and what it left out stay as they were.
+        const { messages, parts, activityOmitted, ...previousState } = previous;
         runs.push(
           JSON.stringify(previousState) === JSON.stringify(run)
             ? previous
-            : { ...run, messages: previous.messages, parts: previous.parts },
+            : {
+                ...run,
+                messages,
+                parts,
+                ...(activityOmitted === undefined ? {} : { activityOmitted }),
+              },
         );
       }
       current = { ...next, runs };

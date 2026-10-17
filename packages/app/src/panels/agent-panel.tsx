@@ -8,6 +8,7 @@ import {
 import { SingleAgentRatingDialog, SingleAgentComposerTooltip } from "@/arena/single-agent-rating";
 import { usePendingArenaPrompt } from "@/arena/use-pending-arena-prompt";
 import { ArenaStreamStatus } from "@/arena/stream-status";
+import { ArenaPartSourceContext } from "@/arena/full-tool-part";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { TFunction } from "i18next";
@@ -1581,6 +1582,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   );
   const arenaSession = useArenaSessionQuery(serverId, agentId ?? "");
   const arenaStatusError = useArenaStatusError(serverId, agentId, arenaSession.error);
+  const arenaPartSource = useMemo(() => ({ serverId, agentId: agent.id }), [agent.id, serverId]);
   const startingBattle = useStartingArenaBattle(serverId, agentId ?? "");
   // The collapsed summary arrives in the same frame the panes leave in.
   // A battle that has been sent counts as on screen from the moment it is sent.
@@ -1914,25 +1916,27 @@ const AgentStreamSection = memo(function AgentStreamSection({
   );
 
   return (
-    <AgentStreamView
-      ref={streamViewRef}
-      agentId={agent.id}
-      serverId={serverId}
-      context={agent}
-      streamItems={presentedStream.tail}
-      streamHead={presentedStream.head}
-      pendingPermissions={pendingPermissions}
-      routeBottomAnchorRequest={routeBottomAnchorRequest}
-      isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
-      toast={toast}
-      pendingMessageSubmissions={pendingMessageSubmissions}
-      turnPresentation={turnPresentation}
-      onOpenWorkspaceFile={onOpenWorkspaceFile}
-      afterItems={arenaAfterItems}
-      forkBoundaryAfterItemId={forkBoundaryAfterItemId}
-      liveContent={liveContentWithConnection}
-      bottomOverlayHeight={bottomOverlayHeight}
-    />
+    <ArenaPartSourceContext.Provider value={arenaPartSource}>
+      <AgentStreamView
+        ref={streamViewRef}
+        agentId={agent.id}
+        serverId={serverId}
+        context={agent}
+        streamItems={presentedStream.tail}
+        streamHead={presentedStream.head}
+        pendingPermissions={pendingPermissions}
+        routeBottomAnchorRequest={routeBottomAnchorRequest}
+        isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
+        toast={toast}
+        pendingMessageSubmissions={pendingMessageSubmissions}
+        turnPresentation={turnPresentation}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+        afterItems={arenaAfterItems}
+        forkBoundaryAfterItemId={forkBoundaryAfterItemId}
+        liveContent={liveContentWithConnection}
+        bottomOverlayHeight={bottomOverlayHeight}
+      />
+    </ArenaPartSourceContext.Provider>
   );
 });
 

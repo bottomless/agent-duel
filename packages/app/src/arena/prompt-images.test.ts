@@ -6,6 +6,8 @@ function run(input: Partial<ArenaRun>): ArenaRun {
   return { id: "run-a", side: "a", runState: "pending", ...input } as ArenaRun;
 }
 
+const chat = { serverId: "server", agentId: "agent" };
+
 const image = {
   type: "file",
   mime: "image/png",
@@ -15,15 +17,18 @@ const image = {
 
 describe("arenaPromptImages", () => {
   it("reads the prompt's images from a contestant's copy of the prompt", () => {
-    const images = arenaPromptImages([
-      run({
-        promptMessageID: "msg_prompt",
-        parts: {
-          msg_prompt: [{ type: "text", text: "Use this design system" }, image],
-          msg_reply: [{ type: "file", mime: "image/png", url: "data:image/png;base64,AAAA" }],
-        },
-      }),
-    ]);
+    const images = arenaPromptImages(
+      [
+        run({
+          promptMessageID: "msg_prompt",
+          parts: {
+            msg_prompt: [{ type: "text", text: "Use this design system" }, image],
+            msg_reply: [{ type: "file", mime: "image/png", url: "data:image/png;base64,AAAA" }],
+          },
+        }),
+      ],
+      chat,
+    );
 
     expect(images).toEqual([
       {
@@ -37,29 +42,72 @@ describe("arenaPromptImages", () => {
   });
 
   it("skips files that are not inline images", () => {
-    const images = arenaPromptImages([
-      run({
-        promptMessageID: "msg_prompt",
-        parts: {
-          msg_prompt: [
-            { type: "file", mime: "application/pdf", url: "data:application/pdf;base64,JVBERi0=" },
-            { type: "file", mime: "image/png", url: "file:///tmp/shot.png" },
-          ],
-        },
-      }),
-    ]);
+    const images = arenaPromptImages(
+      [
+        run({
+          promptMessageID: "msg_prompt",
+          parts: {
+            msg_prompt: [
+              {
+                type: "file",
+                mime: "application/pdf",
+                url: "data:application/pdf;base64,JVBERi0=",
+              },
+              { type: "file", mime: "image/png", url: "file:///tmp/shot.png" },
+            ],
+          },
+        }),
+      ],
+      chat,
+    );
 
     expect(images).toEqual([]);
   });
 
   it("waits for a run whose prompt has arrived", () => {
-    expect(arenaPromptImages([run({ parts: {} })])).toEqual([]);
+    expect(arenaPromptImages([run({ parts: {} })], chat)).toEqual([]);
     expect(
-      arenaPromptImages([
-        run({ promptMessageID: "msg_missing", parts: {} }),
-        run({ id: "run-b", side: "b", promptMessageID: "msg_b", parts: { msg_b: [image] } }),
-      ]),
+      arenaPromptImages(
+        [
+          run({ promptMessageID: "msg_missing", parts: {} }),
+          run({ id: "run-b", side: "b", promptMessageID: "msg_b", parts: { msg_b: [image] } }),
+        ],
+        chat,
+      ),
     ).toHaveLength(1);
+  });
+
+  it("loads a photo the snapshot sent without its data from the run that holds it", () => {
+    const images = arenaPromptImages(
+      [
+        run({
+          id: "run-b",
+          promptMessageID: "msg_prompt",
+          parts: {
+            msg_prompt: [
+              { type: "text", text: "Match this" },
+              { id: "prt_photo", type: "file", mime: "image/png", url: "", previewed: ["url"] },
+            ],
+          },
+        }),
+      ],
+      chat,
+    );
+
+    expect(images).toEqual([
+      {
+        id: "msg_prompt:image:1",
+        mimeType: "image/png",
+        storageType: "arena-part",
+        storageKey: JSON.stringify({
+          serverId: "server",
+          agentId: "agent",
+          runId: "run-b",
+          partId: "prt_photo",
+        }),
+        createdAt: 0,
+      },
+    ]);
   });
 });
 

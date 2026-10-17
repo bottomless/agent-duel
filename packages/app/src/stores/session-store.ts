@@ -54,6 +54,7 @@ import {
   type WorkspaceAgentActivity,
 } from "@/utils/workspace-agent-activity";
 import { setHistoryImageFetcher } from "@/attachments/history-image";
+import { setArenaPartImageFetcher } from "@/attachments/arena-part-image";
 import {
   applyTurnLivenessTransition,
   resolveTurnPresentation,
@@ -2046,4 +2047,15 @@ setHistoryImageFetcher(async (ref) => {
   }
   if (failure) throw failure;
   return null;
+});
+
+// A battle snapshot names the images pasted into its prompt and follow-ups; each comes from the
+// daemon holding the battle chat.
+setArenaPartImageFetcher(async (ref) => {
+  const client = useSessionStore.getState().sessions[ref.serverId]?.client;
+  if (!client) throw new Error("Battle images are unavailable");
+  return await client.arenaRunPart(ref.agentId, ref.runId, ref.partId, {
+    sessionId: ref.sessionId,
+    messageId: ref.messageId,
+  });
 });

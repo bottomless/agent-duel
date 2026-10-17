@@ -26,6 +26,7 @@ function fixture() {
       durationMs: null,
       selectable: false,
       applicable: false,
+      canRetry: false,
       messages: [{ id: "m", sessionID: side, role: "assistant" }],
       parts: { m: [{ id: "p", messageID: "m", sessionID: side, type: "text", text: "hello" }] },
     })),
@@ -92,6 +93,27 @@ describe("Arena push changes", () => {
     expect(() => applyArenaChanges(before, [{ kind: "state", snapshot: other }])).toThrow(
       ArenaStreamMismatch,
     );
+  });
+  it("keeps a trimmed thread's note through a state change", () => {
+    const fixed = fixture();
+    const before = {
+      ...fixed,
+      runs: fixed.runs.map((run) => Object.assign({}, run, { activityOmitted: 8 })),
+    };
+    const state = {
+      ...fixed,
+      runs: fixed.runs.map((run) =>
+        Object.assign({}, run, {
+          messages: undefined,
+          parts: undefined,
+          runState: "complete" as const,
+        }),
+      ),
+    };
+    const after = applyArenaChanges(before, [{ kind: "state", snapshot: state }]);
+    expect(after.runs.map((run) => run.activityOmitted)).toEqual([8, 8]);
+    expect(after.runs[0].runState).toBe("complete");
+    expect(after.runs[0].messages).toBe(before.runs[0].messages);
   });
   it("merges descendant activity into its assigned run before the descendant list catches up", () => {
     const before = fixture();

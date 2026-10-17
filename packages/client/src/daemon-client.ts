@@ -2258,6 +2258,20 @@ export class DaemonClient {
     return payload.snapshot;
   }
 
+  /** A run part whole, for a tool call whose snapshot copy lists shortened fields in `state.previewed`. */
+  async arenaRunPart(
+    agentId: string,
+    runId: string,
+    partId: string,
+    location?: { sessionId?: string; messageId?: string },
+  ): Promise<unknown> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"arena.run.get_part.response">({
+        message: { type: "arena.run.get_part.request", agentId, runId, partId, ...location },
+      });
+    return payload.part;
+  }
+
   async arenaDiff(agentId: string, turnId: string): Promise<ArenaComparisonDiff> {
     const payload = await this.sendNamespacedCorrelatedSessionRequest<"arena.turn.diff.response">({
       message: { type: "arena.turn.diff.request", agentId, turnId },

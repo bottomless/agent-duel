@@ -1,6 +1,7 @@
 import { collectRetainedAttachmentIds } from "@/attachments/gc-retention";
 import { getAttachmentStore } from "@/attachments/store";
 import { resolveHistoryImage } from "@/attachments/history-image";
+import { resolveArenaPartImage } from "@/attachments/arena-part-image";
 import type { AttachmentMetadata, SaveAttachmentInput } from "@/attachments/types";
 
 const activePersistence = new Set<Promise<AttachmentMetadata>>();
@@ -105,6 +106,9 @@ async function attachmentBase64(
   if (attachment.storageType === "daemon-history") {
     return dataUrlBase64(await resolveHistoryImage(attachment));
   }
+  if (attachment.storageType === "arena-part") {
+    return dataUrlBase64(await resolveArenaPartImage(attachment));
+  }
   return await store.encodeBase64({ attachment });
 }
 
@@ -143,6 +147,7 @@ export async function encodeAttachmentsForSend(
 export async function resolveAttachmentPreviewUrl(attachment: AttachmentMetadata): Promise<string> {
   if (attachment.storageType === "inline") return attachment.storageKey;
   if (attachment.storageType === "daemon-history") return await resolveHistoryImage(attachment);
+  if (attachment.storageType === "arena-part") return await resolveArenaPartImage(attachment);
   const store = await getAttachmentStore();
   return await store.resolvePreviewUrl({ attachment });
 }
@@ -153,6 +158,7 @@ export async function releaseAttachmentPreviewUrl(input: {
 }): Promise<void> {
   if (input.attachment.storageType === "inline") return;
   if (input.attachment.storageType === "daemon-history") return;
+  if (input.attachment.storageType === "arena-part") return;
   const store = await getAttachmentStore();
   if (!store.releasePreviewUrl) {
     return;
@@ -169,7 +175,11 @@ export async function deleteAttachments(
   const store = await getAttachmentStore();
   await Promise.all(
     attachments.map(async (attachment) => {
-      if (attachment.storageType === "inline" || attachment.storageType === "daemon-history")
+      if (
+        attachment.storageType === "inline" ||
+        attachment.storageType === "daemon-history" ||
+        attachment.storageType === "arena-part"
+      )
         return;
       try {
         await store.delete({ attachment });

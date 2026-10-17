@@ -2,6 +2,7 @@ import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ComposerAttachment } from "@/attachments/types";
 import type { UserMessageImageAttachment } from "@/types/stream";
 import type { LabeledAttachment } from "@/attachments/labeled-attachment";
+import { arenaPartImageAttachment } from "@/attachments/arena-part-image";
 
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -9,10 +10,17 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** The daemon, chat and run a message comes from, which an image sent without its data loads from. */
+export interface ArenaImageSource {
+  serverId: string;
+  agentId: string;
+  runId: string;
+}
+
 export interface ArenaUserMessageContent {
   /** The words the user wrote, without the text the engine added for each attachment. */
   text: string;
-  /** Held inline, since this device may never have stored them. */
+  /** Held inline or in the run, since this device may never have stored them. */
   images: UserMessageImageAttachment[];
   /** Each uploaded file or text attachment, by the label and kind the engine tagged it with. */
   attachments: LabeledAttachment[];
@@ -26,14 +34,45 @@ function labeledAttachment(part: Record<string, unknown>): LabeledAttachment | u
     : { label: tag.label };
 }
 
+function previewed(part: Record<string, unknown>): boolean {
+  return Array.isArray(part.previewed) && part.previewed.includes("url");
+}
+
+/** An image part as the message shows it: inline, or named and loaded from its run when shown. */
+function imageAttachment(
+  part: Record<string, unknown>,
+  id: string,
+  source: ArenaImageSource | undefined,
+): UserMessageImageAttachment | undefined {
+  if (part.type !== "file" || typeof part.mime !== "string" || !part.mime.startsWith("image/")) {
+    return undefined;
+  }
+  if (typeof part.url === "string" && part.url.startsWith("data:")) {
+    return { id, mimeType: part.mime, storageType: "inline", storageKey: part.url, createdAt: 0 };
+  }
+  if (!previewed(part) || typeof part.id !== "string") return undefined;
+  return arenaPartImageAttachment({
+    id,
+    mimeType: part.mime,
+    serverId: source?.serverId ?? "",
+    agentId: source?.agentId ?? "",
+    runId: source?.runId ?? "",
+    partId: part.id,
+    ...(typeof part.sessionID === "string" ? { sessionId: part.sessionID } : {}),
+    ...(typeof part.messageID === "string" ? { messageId: part.messageID } : {}),
+  });
+}
+
 /**
  * What one user message in a contestant's session carried, read from its parts: the user's text,
  * its images, and its attachments. The engine sends an attachment as a text part tagged with its
- * label, so that text stays out of the message and the label shows instead.
+ * label, so that text stays out of the message and the label shows instead. A large image comes
+ * without its data and loads from `source` when shown; without a source it is only counted.
  */
 export function arenaUserMessageContent(
   messageID: string,
   parts: readonly unknown[],
+  source?: ArenaImageSource,
 ): ArenaUserMessageContent {
   const text: string[] = [];
   const images: UserMessageImageAttachment[] = [];
@@ -46,21 +85,8 @@ export function arenaUserMessageContent(
       else if (part.synthetic !== true) text.push(part.text);
       return;
     }
-    if (
-      part?.type === "file" &&
-      typeof part.mime === "string" &&
-      part.mime.startsWith("image/") &&
-      typeof part.url === "string" &&
-      part.url.startsWith("data:")
-    ) {
-      images.push({
-        id: `${messageID}:image:${index}`,
-        mimeType: part.mime,
-        storageType: "inline",
-        storageKey: part.url,
-        createdAt: 0,
-      });
-    }
+    const image = part ? imageAttachment(part, `${messageID}:image:${index}`, source) : undefined;
+    if (image) images.push(image);
   });
   return { text: text.join("\n\n"), images, attachments };
 }
@@ -70,11 +96,14 @@ export function arenaUserMessageContent(
  * turn keeps only their labels, but each contestant session holds the images it was sent, and
  * both hold the same ones.
  */
-export function arenaPromptImages(runs: readonly ArenaRun[]): UserMessageImageAttachment[] {
+export function arenaPromptImages(
+  runs: readonly ArenaRun[],
+  chat: Omit<ArenaImageSource, "runId">,
+): UserMessageImageAttachment[] {
   for (const run of runs) {
     const parts = run.promptMessageID ? run.parts?.[run.promptMessageID] : undefined;
     if (!parts || !run.promptMessageID) continue;
-    return arenaUserMessageContent(run.promptMessageID, parts).images;
+    return arenaUserMessageContent(run.promptMessageID, parts, { ...chat, runId: run.id }).images;
   }
   return [];
 }

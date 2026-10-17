@@ -83,6 +83,14 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
       .handle("forkSession", (ctx) => map(forkSession(ctx)))
       .handle("snapshot", (ctx) => map(arena.snapshot(ctx.params.chatID, ctx.query.afterSequence)))
       .handle("turn", (ctx) => map(arena.turn(ctx.params.turnID, ctx.query.afterSequence)))
+      .handle("runPart", (ctx) =>
+        map(
+          arena.runPart(ctx.params.runID, ctx.params.partID, {
+            sessionID: ctx.query.sessionID,
+            messageID: ctx.query.messageID,
+          }),
+        ),
+      )
       .handle("diff", (ctx) => map(arena.diff(ctx.params.turnID)))
       .handle("inspect", (ctx) => map(arena.inspect(ctx.params.chatID, ctx.params.turnID, ctx.params.side)))
       .handle("inspectTree", (ctx) => map(arena.inspectTree(ctx.params.chatID, ctx.params.turnID, ctx.params.side)))
