@@ -27,7 +27,12 @@ export const ArenaChangeSchema = z.discriminatedUnion("kind", [
 export const ArenaStreamFrameSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("snapshot"), snapshot: ArenaSnapshotSchema }),
   z.object({ kind: z.literal("changes"), changes: z.array(ArenaChangeSchema) }),
-  z.object({ kind: z.literal("reset"), reason: z.string() }),
+  z.object({
+    kind: z.literal("reset"),
+    reason: z.string(),
+    // The chat's snapshot is past what a window's socket carries; resubscribing cannot help.
+    code: z.literal("chat_too_large").optional(),
+  }),
 ]);
 export const ArenaStreamTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("current") }),

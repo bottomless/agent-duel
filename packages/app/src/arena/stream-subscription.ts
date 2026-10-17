@@ -5,6 +5,7 @@ import {
 } from "@getpaseo/protocol/arena/stream";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import { ArenaChatTooLargeError } from "./chat-too-large";
 
 export interface ArenaStreamClient {
   readonly isConnected: boolean;
@@ -190,6 +191,13 @@ export class ArenaSubscription {
     }
     if (packet.frame.kind === "reset") {
       if (this.generation !== null && packet.generation !== this.generation) return;
+      if (packet.frame.code === "chat_too_large") {
+        // Every reconnect would rebuild the same snapshot and be refused again; Retry still can.
+        this.disconnect();
+        this.failures = 0;
+        this.setError(new ArenaChatTooLargeError());
+        return;
+      }
       this.recover(new Error(packet.frame.reason));
       return;
     }

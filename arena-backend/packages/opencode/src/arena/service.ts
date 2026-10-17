@@ -1540,16 +1540,24 @@ export const layer: Layer.Layer<
                     throw new Error(`Arena root transcript archive is missing: ${run._id}`)
                   }
                   // The projection leaves out tool results' images; the battle card shows the prompt's,
-                  // so those come back from the archive.
+                  // so those come back from the archive. The archive holds the whole chat the run was
+                  // forked from; only this turn's part is read back.
                   const transcript = await ArenaTranscriptArtifact.withImages(
                     store,
                     run._id,
-                    ArenaTranscript.project(
-                      payload.flatMap((item) =>
-                        typeof item === "object" && item !== null && "messages" in item && Array.isArray(item.messages)
-                          ? item.messages
-                          : [],
+                    ArenaTranscript.fromPrompt(
+                      ArenaTranscript.project(
+                        payload.flatMap((item) =>
+                          typeof item === "object" &&
+                          item !== null &&
+                          "messages" in item &&
+                          Array.isArray(item.messages)
+                            ? item.messages
+                            : [],
+                        ),
                       ),
+                      run.rootSessionID,
+                      run.promptMessageID,
                     ),
                   )
                   const permissions = Array.isArray(root.permissionState)
@@ -1580,7 +1588,13 @@ export const layer: Layer.Layer<
                       Effect.forEach([...sessionIDs], (id) => sessions.messages({ sessionID: SessionID.make(id) }), {
                         concurrency: 4,
                       }).pipe(
-                        Effect.map((transcripts) => ArenaTranscript.project(transcripts.flat())),
+                        Effect.map((transcripts) =>
+                          ArenaTranscript.fromPrompt(
+                            ArenaTranscript.project(transcripts.flat()),
+                            run.rootSessionID,
+                            run.promptMessageID,
+                          ),
+                        ),
                         Effect.mapError(error),
                       ),
                     ),

@@ -177,6 +177,7 @@ import { applyArenaPreferencePatch, useArenaPreferences } from "@/arena/preferen
 import {
   useArenaSessionQuery,
   useArenaStartMutation,
+  useArenaStatusError,
   useArenaTurnMutation,
   useStartingArenaBattle,
 } from "@/arena/use-arena-session";
@@ -1579,6 +1580,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
       : null,
   );
   const arenaSession = useArenaSessionQuery(serverId, agentId ?? "");
+  const arenaStatusError = useArenaStatusError(serverId, agentId, arenaSession.error);
   const startingBattle = useStartingArenaBattle(serverId, agentId ?? "");
   // The collapsed summary arrives in the same frame the panes leave in.
   // A battle that has been sent counts as on screen from the moment it is sent.
@@ -1900,15 +1902,15 @@ const AgentStreamSection = memo(function AgentStreamSection({
 
   const liveContentWithConnection = useMemo(
     () =>
-      arenaSession.error ? (
+      arenaStatusError ? (
         <View>
-          <ArenaStreamStatus error={arenaSession.error} retry={arenaSession.refetch} />
+          <ArenaStreamStatus error={arenaStatusError} retry={arenaSession.refetch} />
           {liveContent}
         </View>
       ) : (
         liveContent
       ),
-    [arenaSession.error, arenaSession.refetch, liveContent],
+    [arenaStatusError, arenaSession.refetch, liveContent],
   );
 
   return (

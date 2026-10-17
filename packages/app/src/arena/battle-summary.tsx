@@ -1,4 +1,5 @@
 import { arenaSubscription } from "./stream-subscription";
+import { arenaSizeErrorOr } from "./chat-too-large";
 import { ArenaStreamStatus } from "./stream-status";
 import { useArenaStream } from "./use-arena-stream";
 import { useCallback, useMemo, useState } from "react";
@@ -514,7 +515,11 @@ function ExpandedBattleSummary({
     staleTimeMs: 0,
     queryFn: async () => {
       if (!client) throw new Error("Arena daemon connection is unavailable");
-      return client.arenaDiff(agentId, item.id);
+      try {
+        return await client.arenaDiff(agentId, item.id);
+      } catch (error) {
+        throw arenaSizeErrorOr(error);
+      }
     },
     enabled: Boolean(client) && bothFinal,
     retry: false,

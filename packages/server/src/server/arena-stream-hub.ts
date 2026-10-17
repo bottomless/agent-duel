@@ -5,6 +5,9 @@ import {
   type ArenaStreamPacket,
 } from "@getpaseo/protocol/arena/stream";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import { ARENA_PAYLOAD_LIMIT_BYTES } from "./arena/payload-limit.js";
+
+type ResetFrame = Extract<ArenaStreamFrame, { kind: "reset" }>;
 
 interface Subscriber {
   readonly deliver: (packet: ArenaStreamPacket) => void;
@@ -44,6 +47,14 @@ export class ArenaStreamHub {
       timeout: null,
     };
     let entry = this.entries.get(key);
+    // The cache grows with every live change, and only the engine trims a battle to what a window can
+    // take. A cache past that is not handed out: every window starts over from a fresh engine snapshot.
+    // Measured as the stream reader measures a frame, so a fresh snapshot it passed never trips this.
+    if (entry?.snapshot && JSON.stringify(entry.snapshot).length > ARENA_PAYLOAD_LIMIT_BYTES) {
+      for (const other of entry.subscribers)
+        this.reset(key, entry, other, "Arena state changed; resynchronize");
+      entry = this.entries.get(key);
+    }
     const fresh = !entry;
     if (!entry) {
       entry = {
@@ -115,12 +126,18 @@ export class ArenaStreamHub {
     if (this.entries.get(key) === entry) this.entries.delete(key);
   }
 
-  private reset(key: string, entry: Entry, subscriber: Subscriber, reason: string) {
+  private reset(
+    key: string,
+    entry: Entry,
+    subscriber: Subscriber,
+    reason: string,
+    code?: ResetFrame["code"],
+  ) {
     try {
       subscriber.deliver({
         generation: entry.generation,
         sequence: entry.sequence + 1,
-        frame: { kind: "reset", reason },
+        frame: { kind: "reset", reason, ...(code ? { code } : {}) },
       });
     } catch {
       // A failed socket must not interrupt delivery to other subscribers.
@@ -158,14 +175,19 @@ export class ArenaStreamHub {
   }
 
   private async pump(key: string, entry: Entry, open: Subscription["open"]) {
+    let ended: ResetFrame | undefined;
     try {
       for await (const frame of open(entry.abort.signal)) {
         if (entry.abort.signal.aborted) return;
+        if (frame.kind === "reset") {
+          ended = frame;
+          return;
+        }
         if (frame.kind === "snapshot") entry.snapshot = frame.snapshot;
-        else if (frame.kind === "changes") {
+        else {
           if (!entry.snapshot) throw new Error("Arena updates arrived before their snapshot");
           entry.snapshot = applyArenaChanges(entry.snapshot, frame.changes);
-        } else throw new Error(frame.reason);
+        }
         const packet = { generation: entry.generation, sequence: ++entry.sequence, frame };
         for (const subscriber of entry.subscribers) this.enqueue(key, entry, subscriber, packet);
       }
@@ -174,7 +196,13 @@ export class ArenaStreamHub {
     } finally {
       if (!entry.abort.signal.aborted)
         for (const subscriber of entry.subscribers)
-          this.reset(key, entry, subscriber, "Arena stream disconnected");
+          this.reset(
+            key,
+            entry,
+            subscriber,
+            ended?.reason ?? "Arena stream disconnected",
+            ended?.code,
+          );
     }
   }
 }
