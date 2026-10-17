@@ -55,6 +55,7 @@ import {
 } from "@/utils/workspace-agent-activity";
 import { setHistoryImageFetcher } from "@/attachments/history-image";
 import { setArenaPartImageFetcher } from "@/attachments/arena-part-image";
+import { watchDaemonClients } from "@/attachments/daemon-image-cache";
 import {
   applyTurnLivenessTransition,
   resolveTurnPresentation,
@@ -2018,6 +2019,18 @@ export function useWorkspaceRestoreStatus(
       : null,
   );
 }
+
+// An image that failed while its daemon was away is asked again once that daemon is reachable: its
+// connection comes back, or the session gets a new client that connects.
+watchDaemonClients(
+  () =>
+    Object.entries(useSessionStore.getState().sessions).map(
+      ([serverId, session]) => [serverId, session.client] as const,
+    ),
+  (listener) => {
+    useSessionStore.subscribe(listener);
+  },
+);
 
 // A history page names a replayed message's images; each comes from the daemon holding the agent.
 // An archived chat's agent is in `agentDetails` or, read only, in neither map, so when no daemon is
