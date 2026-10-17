@@ -147,6 +147,7 @@ export const MetadataResult = Schema.Union([
   Schema.Struct({ title: Schema.String }),
 ])
 export const CheckoutCleanupPayload = Schema.Struct({ root: Schema.String })
+export const ProjectPrewarmPayload = Schema.Struct({ root: Schema.String })
 export const CheckoutCleanupResult = Schema.Struct({
   eligible: Schema.Boolean,
   lastActivityAt: Schema.NullOr(Schema.String),
@@ -674,6 +675,21 @@ const group = HttpApiGroup.make("arena")
         summary: "Release idle chats' contestant worktrees",
         description:
           "Keep contestant worktrees for the chats with the latest battle activity and release the others' while they are idle. Covers every chat, whichever directory routes the request, or with `volumeOf` only the chats whose worktrees are on that path's volume.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("prewarmProject", "/arena/projects/prewarm", {
+      query: WorkspaceRoutingQuery,
+      payload: ProjectPrewarmPayload,
+      success: HttpApiSchema.NoContent,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.project.prewarm",
+        summary: "Prepare a project's first battle",
+        description:
+          "Build the repository's spare contestant worktrees in the background, so its first battle adopts them instead of copying every ignored root. Returns at once, and does nothing where spares are off.",
       }),
     ),
   )
