@@ -3122,6 +3122,19 @@ export class DaemonClient {
     });
   }
 
+  /** One image a history page named in `imageRefs`; null when the chat no longer holds it. */
+  async fetchAgentTimelineImage(
+    agentId: string,
+    messageId: string,
+    index: number,
+  ): Promise<{ mimeType: string; data: string } | null> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"agent.timeline.get_image.response">({
+        message: { type: "agent.timeline.get_image.request", agentId, messageId, index },
+      });
+    return payload.image;
+  }
+
   async fetchAgentTimeline(
     agentId: string,
     options: FetchAgentTimelineOptions = {},

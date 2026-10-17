@@ -1967,6 +1967,35 @@ describe("replayed user message attachments", () => {
     });
   });
 
+  it("shows the images a history page names, to load each one when it is shown", () => {
+    const event: AgentStreamEventPayload = {
+      type: "timeline",
+      provider: "opencode",
+      item: {
+        type: "user_message",
+        text: "Match this design",
+        messageId: "msg_user",
+        imageRefs: [
+          { agentId: "agent", messageId: "msg_user", index: 0, mimeType: "image/png", byteSize: 9 },
+        ],
+      },
+    };
+
+    const state = reduceStreamUpdate([], event, new Date("2026-09-30T10:00:00Z"));
+
+    expect(state.find((item) => item.kind === "user_message")).toMatchObject({
+      images: [
+        {
+          id: "msg_user:image:0",
+          mimeType: "image/png",
+          storageType: "daemon-history",
+          storageKey: JSON.stringify({ agentId: "agent", messageId: "msg_user", index: 0 }),
+          byteSize: 9,
+        },
+      ],
+    });
+  });
+
   it("keeps a replayed message that is only an image", () => {
     const event: AgentStreamEventPayload = {
       type: "timeline",

@@ -5,7 +5,19 @@ import { releaseAttachmentPreviewUrl, resolveAttachmentPreviewUrl } from "@/atta
 export function useAttachmentPreviewUrl(
   attachment: AttachmentMetadata | null | undefined,
 ): string | null {
+  return useAttachmentPreview(attachment).url;
+}
+
+/**
+ * The preview URL, and whether resolving it failed. An image a page names loads from the daemon, so
+ * `url` stays null for a while before it arrives, which is not a failure.
+ */
+export function useAttachmentPreview(attachment: AttachmentMetadata | null | undefined): {
+  url: string | null;
+  failed: boolean;
+} {
   const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   const activeAttachmentRef = useRef<AttachmentMetadata | null>(null);
   const attachmentRef = useRef(attachment);
   attachmentRef.current = attachment;
@@ -21,6 +33,7 @@ export function useAttachmentPreviewUrl(
     const current = attachmentRef.current;
 
     activeAttachmentRef.current = current ?? null;
+    setFailed(false);
     if (!current) {
       setUrl(null);
       return;
@@ -42,6 +55,7 @@ export function useAttachmentPreviewUrl(
         });
         if (!disposed) {
           setUrl(null);
+          setFailed(true);
         }
       }
     })();
@@ -59,5 +73,5 @@ export function useAttachmentPreviewUrl(
     };
   }, [id, storageType, storageKey, mimeType]);
 
-  return url;
+  return { url, failed };
 }

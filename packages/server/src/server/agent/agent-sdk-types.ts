@@ -399,6 +399,14 @@ export type AgentTimelineItem =
       messageId?: string;
       clientMessageId?: string;
       images?: Array<{ mimeType: string; data: string }>;
+      /** What a history page sends in place of `images`; see `withHistoryImageRefs`. */
+      imageRefs?: Array<{
+        agentId: string;
+        messageId: string;
+        index: number;
+        mimeType: string;
+        byteSize: number;
+      }>;
       labeledAttachments?: Array<{ label: string; kind?: "file" | "text" }>;
     }
   | { type: "assistant_message"; text: string; messageId?: string }
