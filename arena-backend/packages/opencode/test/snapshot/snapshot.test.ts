@@ -461,6 +461,39 @@ it.live(
 )
 
 it.live(
+  "track keeps its tree while nothing changes, and follows a change, a revert and a restore",
+  Effect.gen(function* () {
+    const dir = yield* scopedGitTmpdir()
+    yield* write(`${dir}/a.txt`, "one")
+    yield* Effect.gen(function* () {
+      const snapshot = yield* Snapshot.Service
+      const first = yield* snapshot.track()
+      expect(first).toBeTruthy()
+      expect(yield* snapshot.track()).toBe(first)
+
+      yield* write(`${dir}/a.txt`, "two")
+      const second = yield* snapshot.track()
+      expect(second).toBeTruthy()
+      expect(second).not.toBe(first)
+      expect(yield* snapshot.track()).toBe(second)
+
+      // A revert checks the file out with fresh index stats, so the worktree lists as unchanged;
+      // the tree it leaves is still the earlier one, not the one kept before it.
+      yield* snapshot.revert([yield* snapshot.patch(first!)])
+      expect(yield* readText(`${dir}/a.txt`)).toBe("one")
+      expect(yield* snapshot.track()).toBe(first)
+
+      yield* write(`${dir}/a.txt`, "two")
+      expect(yield* snapshot.track()).toBe(second)
+      // The restore moves the index back without a track, so the next track writes the tree again.
+      yield* snapshot.restore(first!)
+      expect(yield* readText(`${dir}/a.txt`)).toBe("one")
+      expect(yield* snapshot.track()).toBe(first)
+    }).pipe(provideInstance(dir))
+  }),
+)
+
+it.live(
   "source project gitignore is respected - ignored files are not snapshotted",
   Effect.gen(function* () {
     const dir = yield* scopedGitTmpdir()
