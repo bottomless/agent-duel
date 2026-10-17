@@ -8,6 +8,7 @@ import {
   ARENA_PAYLOAD_LIMIT_BYTES,
   ArenaChatTooLargeError,
   ArenaDiffTooLargeError,
+  ArenaPartTooLargeError,
 } from "../../arena/payload-limit.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/client";
 import {
@@ -769,6 +770,43 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
 
     try {
       await expect(session.arena?.archive()).resolves.toBeNull();
+    } finally {
+      fetchMock.mockRestore();
+      await session.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("asks for one part by its session and message, and refuses a part too large to send", async () => {
+    const cwd = tmpCwd();
+    const runtime = new TestOpenCodeHarness();
+    runtime.enqueueClient(new TestOpenCodeClient());
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+      arenaMode: true,
+    });
+    const session = await client.createSession(buildConfig(cwd));
+    const urls: URL[] = [];
+    let body = JSON.stringify({ part: { id: "prt", url: "data:image/png;base64,AA==" } });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      urls.push(new URL(String(input)));
+      return new Response(body);
+    });
+
+    try {
+      await expect(
+        session.arena?.runPart("run|1", "prt", { sessionId: "ses", messageId: "msg" }),
+      ).resolves.toEqual({ id: "prt", url: "data:image/png;base64,AA==" });
+      expect(urls[0]?.pathname).toBe("/arena/runs/run%7C1/parts/prt");
+      expect(Object.fromEntries(urls[0]!.searchParams)).toEqual({
+        sessionID: "ses",
+        messageID: "msg",
+      });
+      body = " ".repeat(ARENA_PAYLOAD_LIMIT_BYTES + 1);
+      await expect(session.arena?.runPart("run|1", "prt")).rejects.toBeInstanceOf(
+        ArenaPartTooLargeError,
+      );
     } finally {
       fetchMock.mockRestore();
       await session.close();

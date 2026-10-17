@@ -23,6 +23,12 @@ export const SnapshotQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   afterSequence: Schema.optional(Schema.NumberFromString),
 })
+// The part's session and message, which let the engine read one row instead of the run.
+export const RunPartQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  sessionID: Schema.optional(Schema.String),
+  messageID: Schema.optional(Schema.String),
+})
 export const InspectFileQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   path: Schema.String,
@@ -286,7 +292,7 @@ const group = HttpApiGroup.make("arena")
   .add(
     HttpApiEndpoint.get("runPart", "/arena/runs/:runID/parts/:partID", {
       params: { runID: Schema.String, partID: Schema.String },
-      query: WorkspaceRoutingQuery,
+      query: RunPartQuery,
       success: Schema.Struct({ part: Schema.Unknown }),
       error: ArenaApiError,
     }).annotateMerge(

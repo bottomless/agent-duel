@@ -12,7 +12,7 @@ export const ARENA_PAYLOAD_LIMIT_BYTES = MAX_PHYSICAL_SOCKET_BUFFERED_BYTES / 2;
 /** An Arena answer past `ARENA_PAYLOAD_LIMIT_BYTES`; the window gets its code and message as they are. */
 export class ArenaPayloadTooLargeError extends Error {
   constructor(
-    readonly code: "arena_chat_too_large" | "arena_diff_too_large",
+    readonly code: "arena_chat_too_large" | "arena_diff_too_large" | "arena_part_too_large",
     message: string,
   ) {
     super(message);
@@ -35,5 +35,13 @@ export class ArenaDiffTooLargeError extends ArenaPayloadTooLargeError {
   constructor() {
     super("arena_diff_too_large", "This comparison is too large to show.");
     this.name = "ArenaDiffTooLargeError";
+  }
+}
+
+/** One part of a run fetched whole, such as a huge pasted image; the battle itself still loads. */
+export class ArenaPartTooLargeError extends ArenaPayloadTooLargeError {
+  constructor() {
+    super("arena_part_too_large", "This item is too large to show.");
+    this.name = "ArenaPartTooLargeError";
   }
 }

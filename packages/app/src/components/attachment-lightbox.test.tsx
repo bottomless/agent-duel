@@ -99,8 +99,10 @@ vi.mock("react-native", async () => {
 });
 
 vi.mock("@/attachments/use-attachment-preview-url", () => ({
-  useAttachmentPreviewUrl: (metadata: AttachmentMetadata | null) =>
-    useAttachmentPreviewUrlMock(metadata),
+  useAttachmentPreview: (metadata: AttachmentMetadata | null) => {
+    const url = useAttachmentPreviewUrlMock(metadata);
+    return { url: url === "failed" ? null : url, failed: url === "failed" };
+  },
 }));
 
 let root: Root | null = null;
@@ -207,12 +209,20 @@ describe("AttachmentLightbox", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("shows error text when the preview URL resolves to null", () => {
-    useAttachmentPreviewUrlMock.mockReturnValue(null);
+  it("shows error text when resolving the preview fails", () => {
+    useAttachmentPreviewUrlMock.mockReturnValue("failed");
     render(<AttachmentLightbox metadata={imageMetadata} onClose={vi.fn()} />);
 
     expect(queryByTestId("attachment-lightbox-image")).toBeNull();
     expect(document.body.textContent ?? "").toContain("Couldn't load image");
+  });
+
+  it("waits for an image still loading from the daemon instead of calling it failed", () => {
+    useAttachmentPreviewUrlMock.mockReturnValue(null);
+    render(<AttachmentLightbox metadata={imageMetadata} onClose={vi.fn()} />);
+
+    expect(queryByTestId("attachment-lightbox-image")).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain("Couldn't load image");
   });
 
   it("closes on Escape key on web", () => {

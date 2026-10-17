@@ -268,7 +268,21 @@ const OUTPUT_LIMIT_RUN: ArenaRun = {
   parts: { assistant: [{ type: "text", text: "Saved progress before the limit." }] },
 };
 
+const TRIMMED_RUN: ArenaRun = { ...OUTPUT_LIMIT_RUN, activityOmitted: 12 };
+
 describe("ArenaRunThread", () => {
+  it("says so when the engine left out the oldest activity of a very large run", () => {
+    const trimmed = render(<ArenaRunThread run={TRIMMED_RUN} />);
+    expect(trimmed.getByTestId("arena-run-activity-omitted").textContent).toBe(
+      "Earlier activity in this run is too large to show.",
+    );
+    expect(trimmed.getByText("Saved progress before the limit.")).toBeTruthy();
+    trimmed.unmount();
+
+    const whole = render(<ArenaRunThread run={OUTPUT_LIMIT_RUN} />);
+    expect(whole.queryByTestId("arena-run-activity-omitted")).toBeNull();
+  });
+
   it("shows output-limit exhaustion while retaining partial text", () => {
     const view = render(<ArenaRunThread run={OUTPUT_LIMIT_RUN} />);
     expect(view.getByText(OUTPUT_LIMIT_ERROR).textContent).toBe(OUTPUT_LIMIT_ERROR);

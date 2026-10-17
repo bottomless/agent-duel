@@ -29,6 +29,8 @@ export function arenaSizeErrorOr(error: unknown): unknown {
   if (code === "arena_diff_too_large") {
     return new ArenaItemTooLargeError("This comparison is too large to show.");
   }
+  if (code === "arena_part_too_large")
+    return new ArenaItemTooLargeError("This item is too large to show.");
   return error;
 }
 

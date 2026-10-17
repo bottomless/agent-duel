@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import { useFetchQuery } from "@/data/query";
 import { useSessionStore } from "@/stores/session-store";
+import { arenaSizeErrorOr, isArenaSizeError } from "./chat-too-large";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -40,8 +41,19 @@ export function useFullToolPart(part: UnknownRecord, runId: string | undefined, 
     gcTime: 5 * 60_000,
     queryFn: async () => {
       if (!client || !source || !runId || !partId) return null;
-      return record(await client.arenaRunPart(source.agentId, runId, partId));
+      try {
+        return record(
+          await client.arenaRunPart(source.agentId, runId, partId, {
+            ...(typeof part.sessionID === "string" ? { sessionId: part.sessionID } : {}),
+            ...(typeof part.messageID === "string" ? { messageId: part.messageID } : {}),
+          }),
+        );
+      } catch (error) {
+        throw arenaSizeErrorOr(error);
+      }
     },
+    // A part too large to send is refused the same way every time.
+    retry: (failures, error) => failures < 2 && !isArenaSizeError(error),
     enabled:
       opened &&
       status !== "running" &&

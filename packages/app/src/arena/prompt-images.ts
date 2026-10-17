@@ -38,6 +38,31 @@ function previewed(part: Record<string, unknown>): boolean {
   return Array.isArray(part.previewed) && part.previewed.includes("url");
 }
 
+/** An image part as the message shows it: inline, or named and loaded from its run when shown. */
+function imageAttachment(
+  part: Record<string, unknown>,
+  id: string,
+  source: ArenaImageSource | undefined,
+): UserMessageImageAttachment | undefined {
+  if (part.type !== "file" || typeof part.mime !== "string" || !part.mime.startsWith("image/")) {
+    return undefined;
+  }
+  if (typeof part.url === "string" && part.url.startsWith("data:")) {
+    return { id, mimeType: part.mime, storageType: "inline", storageKey: part.url, createdAt: 0 };
+  }
+  if (!previewed(part) || typeof part.id !== "string") return undefined;
+  return arenaPartImageAttachment({
+    id,
+    mimeType: part.mime,
+    serverId: source?.serverId ?? "",
+    agentId: source?.agentId ?? "",
+    runId: source?.runId ?? "",
+    partId: part.id,
+    ...(typeof part.sessionID === "string" ? { sessionId: part.sessionID } : {}),
+    ...(typeof part.messageID === "string" ? { messageId: part.messageID } : {}),
+  });
+}
+
 /**
  * What one user message in a contestant's session carried, read from its parts: the user's text,
  * its images, and its attachments. The engine sends an attachment as a text part tagged with its
@@ -60,30 +85,8 @@ export function arenaUserMessageContent(
       else if (part.synthetic !== true) text.push(part.text);
       return;
     }
-    if (part?.type !== "file" || typeof part.mime !== "string" || !part.mime.startsWith("image/")) {
-      return;
-    }
-    const id = `${messageID}:image:${index}`;
-    if (typeof part.url === "string" && part.url.startsWith("data:")) {
-      images.push({
-        id,
-        mimeType: part.mime,
-        storageType: "inline",
-        storageKey: part.url,
-        createdAt: 0,
-      });
-    } else if (previewed(part) && typeof part.id === "string") {
-      images.push(
-        arenaPartImageAttachment({
-          id,
-          mimeType: part.mime,
-          serverId: source?.serverId ?? "",
-          agentId: source?.agentId ?? "",
-          runId: source?.runId ?? "",
-          partId: part.id,
-        }),
-      );
-    }
+    const image = part ? imageAttachment(part, `${messageID}:image:${index}`, source) : undefined;
+    if (image) images.push(image);
   });
   return { text: text.join("\n\n"), images, attachments };
 }

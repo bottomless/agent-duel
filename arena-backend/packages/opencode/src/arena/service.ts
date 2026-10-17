@@ -143,6 +143,7 @@ import { ArenaSchema } from "./schema"
 import { ArenaPrivacy } from "./privacy"
 import { resolveBuildMetadata } from "./provenance"
 import { ArenaTranscriptArtifact } from "./transcript-artifact"
+import { readRecord, withPartPreviews } from "./live"
 import { ArenaTranscript } from "./transcript"
 import { excludeFromBackup } from "./backup-exclusion"
 import { Global } from "@opencode-ai/core/global"
@@ -331,6 +332,56 @@ function archivedMessages(payload: readonly unknown[]): unknown[] {
       ? item.messages
       : [],
   )
+}
+
+/**
+ * Where a run's thread starts for `ArenaTranscript.fromPrompt`. A run writes its prompt when it starts,
+ * so until then its root session is only the forked chat (`null`), and the window, which shows nothing
+ * before the start, gets none of it. A run that started without recording a boundary is older.
+ */
+function promptBoundary(run: RunDocument): string | undefined | null {
+  return run.promptMessageID ?? (run.startedAt ? undefined : null)
+}
+
+// A pane asks for every photo it shows, and a turn of photo follow-ups shows dozens at once, so an
+// archive is decoded once and the parts a window can ask for are kept by ID: this turn's, and only
+// those a snapshot shortened, since the archive also holds the whole chat the run was forked from.
+// A reply or Retry archives the run again under the same ID, so the key carries when it was archived.
+const ARCHIVED_PART_CACHE_LIMIT = 4
+const archivedPartCache = new Map<string, Promise<Map<string, unknown>>>()
+
+function archivedParts(store: Store, run: RunDocument): Promise<Map<string, unknown>> {
+  const key = `${run._id}|${run.transcriptArchiveID ?? ""}|${run.archivedAt?.getTime() ?? ""}`
+  const cached = archivedPartCache.get(key)
+  if (cached) {
+    archivedPartCache.delete(key)
+    archivedPartCache.set(key, cached)
+    return cached
+  }
+  const loading = archivedSessions(store, run).then((payload) => {
+    const parts = new Map<string, unknown>()
+    for (const message of ArenaTranscript.fromPromptMessages(
+      archivedMessages(payload),
+      run.rootSessionID,
+      promptBoundary(run),
+    )) {
+      const list = readRecord(message)?.parts
+      if (!Array.isArray(list)) continue
+      for (const part of list) {
+        const id = readRecord(part)?.id
+        const whole = ArenaTranscript.windowPart(part)
+        if (typeof id === "string" && whole && withPartPreviews(whole) !== whole) parts.set(id, whole)
+      }
+    }
+    return parts
+  })
+  loading.catch(() => archivedPartCache.delete(key))
+  archivedPartCache.set(key, loading)
+  for (const oldest of archivedPartCache.keys()) {
+    if (archivedPartCache.size <= ARCHIVED_PART_CACHE_LIMIT) break
+    archivedPartCache.delete(oldest)
+  }
+  return loading
 }
 
 function promise<A>(run: () => Promise<A>) {
@@ -1009,7 +1060,11 @@ export interface Interface {
   readonly snapshot: (chatID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly turn: (turnID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
   /** One of a run's parts whole; a snapshot sends its large fields shortened (`withPartPreviews`). */
-  readonly runPart: (runID: string, partID: string) => Effect.Effect<{ readonly part: unknown }, Error>
+  readonly runPart: (
+    runID: string,
+    partID: string,
+    location?: { readonly sessionID?: string; readonly messageID?: string },
+  ) => Effect.Effect<{ readonly part: unknown }, Error>
   readonly diff: (turnID: string) => Effect.Effect<ArenaSchema.ComparisonDiff, Error>
   readonly inspect: (chatID: string, turnID: string, side: Side) => Effect.Effect<ArenaSchema.Snapshot, Error>
   readonly inspectTree: (chatID: string, turnID: string, side: Side) => Effect.Effect<ArenaSchema.InspectTree, Error>
@@ -1557,9 +1612,10 @@ export const layer: Layer.Layer<
                     ArenaTranscript.fromPrompt(
                       ArenaTranscript.project(archivedMessages(payload)),
                       run.rootSessionID,
-                      run.promptMessageID,
+                      promptBoundary(run),
                     ),
-                    run.promptMessageID,
+                    run.rootSessionID,
+                    promptBoundary(run),
                   )
                   const permissions = Array.isArray(root.permissionState)
                     ? root.permissionState.map((request) => safeRequest("permission.asked", request))
@@ -1594,9 +1650,10 @@ export const layer: Layer.Layer<
                             ArenaTranscript.fromPrompt(
                               ArenaTranscript.project(transcripts.flat()),
                               run.rootSessionID,
-                              run.promptMessageID,
+                              promptBoundary(run),
                             ),
-                            run.promptMessageID,
+                            run.rootSessionID,
+                            promptBoundary(run),
                           ),
                         ),
                         Effect.mapError(error),
@@ -1769,29 +1826,51 @@ export const layer: Layer.Layer<
       return yield* projectSnapshot(current, afterSequence)
     })
 
-    const runPart = Effect.fn("Arena.runPart")(function* (runID: string, partID: string) {
+    const runPart = Effect.fn("Arena.runPart")(function* (
+      runID: string,
+      partID: string,
+      location?: { readonly sessionID?: string; readonly messageID?: string },
+    ) {
       const store = yield* available()
       const run = yield* promise(() => store.run(runID))
       if (!run) return yield* Effect.fail(new Error(`Arena run not found: ${runID}`))
-      const transcript: unknown[] = run.archiveComplete
-        ? archivedMessages(yield* promise(() => archivedSessions(store, run)))
-        : yield* inDirectory(
-            run.worktree,
-            Effect.forEach(
-              [run.rootSessionID, ...run.descendantSessionIDs],
-              (id) => sessions.messages({ sessionID: SessionID.make(id) }),
-              { concurrency: 4 },
-            ),
-          ).pipe(
-            Effect.map((transcripts) => transcripts.flat()),
-            Effect.mapError(error),
-          )
-      const part = ArenaTranscript.wholePart(transcript, partID)
-      // An archive names its images by their content; the whole part carries the image itself.
-      const whole = run.archiveComplete
-        ? yield* promise(() => ArenaTranscriptArtifact.withImages(store, run._id, part))
-        : part
-      return { part: jsonValue(whole) }
+      if (run.archiveComplete) {
+        const part = (yield* promise(() => archivedParts(store, run))).get(partID)
+        if (part === undefined) return { part: null }
+        // An archive names its images by their content; the whole part carries the image itself.
+        const whole = yield* promise(() => ArenaTranscriptArtifact.withImages(store, run._id, part))
+        return { part: jsonValue(whole) }
+      }
+      // A live part is one row when the window names its message. Reading the run instead loads the
+      // whole forked chat, every earlier image inline, once for each photo a pane shows.
+      const sessionID = location?.sessionID
+      if (
+        sessionID &&
+        location.messageID &&
+        (sessionID === run.rootSessionID || run.descendantSessionIDs.includes(sessionID))
+      ) {
+        const part = yield* inDirectory(
+          run.worktree,
+          sessions.getPart({
+            sessionID: SessionID.make(sessionID),
+            messageID: MessageID.make(location.messageID),
+            partID: PartID.make(partID),
+          }),
+        )
+        if (part) return { part: jsonValue(ArenaTranscript.windowPart(part)) }
+      }
+      const transcript: unknown[] = yield* inDirectory(
+        run.worktree,
+        Effect.forEach(
+          [run.rootSessionID, ...run.descendantSessionIDs],
+          (id) => sessions.messages({ sessionID: SessionID.make(id) }),
+          { concurrency: 4 },
+        ),
+      ).pipe(
+        Effect.map((transcripts) => transcripts.flat()),
+        Effect.mapError(error),
+      )
+      return { part: jsonValue(ArenaTranscript.wholePart(transcript, partID)) }
     })
 
     const comparisonDiff = Effect.fn("Arena.comparisonDiff")(function* (id: string) {

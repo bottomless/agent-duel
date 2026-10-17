@@ -158,4 +158,41 @@ describe("Arena live transcript", () => {
     live.capture(binding, { type: "permission.asked", properties: { sessionID: "root", id: "late" } })
     expect(refreshes).toBe(4)
   })
+
+  test("pushes a part with its large fields shortened, as a snapshot sends it", () => {
+    const live = new ArenaLive()
+    const values: Array<{ kind: string; part?: Record<string, unknown> }> = []
+    live.subscribe((event) => values.push(event.change as (typeof values)[number]))
+    const binding = { runID: "run", turnID: "turn", rootSessionID: "root" }
+    const output = `start\n${"x".repeat(20_000)}\nend`
+    const photo = `data:image/png;base64,${"A".repeat(20_000)}`
+    live.capture(binding, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "call",
+          messageID: "m",
+          sessionID: "root",
+          type: "tool",
+          tool: "bash",
+          callID: "call-1",
+          state: { status: "completed", input: { command: "cat log" }, output, metadata: {}, time: { start: 1, end: 2 } },
+        },
+      },
+    })
+    live.capture(binding, {
+      type: "message.part.updated",
+      properties: {
+        part: { id: "photo", messageID: "steer", sessionID: "root", type: "file", mime: "image/png", url: photo },
+      },
+    })
+
+    const [call, image] = values.map((value) => value.part)
+    const state = call?.state as { output: string; previewed: string[] }
+    expect(state.previewed).toEqual(["output"])
+    expect(state.output.length).toBeLessThan(5_000)
+    expect(state.output.startsWith("start")).toBe(true)
+    expect(image).toMatchObject({ type: "file", url: "", previewed: ["url"] })
+    expect(JSON.stringify(values)).not.toContain("A".repeat(1_000))
+  })
 })

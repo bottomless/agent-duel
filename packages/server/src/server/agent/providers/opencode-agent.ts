@@ -117,6 +117,7 @@ import {
   ARENA_PAYLOAD_LIMIT_BYTES,
   ArenaChatTooLargeError,
   ArenaDiffTooLargeError,
+  ArenaPartTooLargeError,
 } from "../../arena/payload-limit.js";
 import {
   buildOpenCodePermissionRules,
@@ -3957,13 +3958,20 @@ class OpenCodeAgentSession implements AgentSession {
           body: { ...(mode ? { mode } : {}), ...(answers?.length ? { answers } : {}) },
         }),
       diff: (turnId) => this.arenaDiff(`/arena/turns/${encodeURIComponent(turnId)}/diff`),
-      runPart: async (runId, partId) =>
-        (
-          await this.arenaFetch(
-            `/arena/runs/${encodeURIComponent(runId)}/parts/${encodeURIComponent(partId)}`,
-            z.object({ part: z.unknown() }),
-          )
-        ).part,
+      runPart: async (runId, partId, location) => {
+        // The part's session and message let the engine read one row instead of the whole run.
+        const query = new URLSearchParams({
+          ...(location?.sessionId ? { sessionID: location.sessionId } : {}),
+          ...(location?.messageId ? { messageID: location.messageId } : {}),
+        }).toString();
+        const path = `/arena/runs/${encodeURIComponent(runId)}/parts/${encodeURIComponent(partId)}`;
+        const answer = await this.arenaFetch(
+          query ? `${path}?${query}` : path,
+          z.object({ part: z.unknown() }),
+          { tooLarge: () => new ArenaPartTooLargeError() },
+        );
+        return answer.part;
+      },
       replyQuestion: (runId, requestId, answers) =>
         this.arenaRequest(
           `/arena/runs/${encodeURIComponent(

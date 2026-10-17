@@ -2022,5 +2022,9 @@ export function useWorkspaceRestoreStatus(
 // daemon holding the battle chat.
 setArenaPartImageFetcher(async (ref) => {
   const client = useSessionStore.getState().sessions[ref.serverId]?.client;
-  return client ? await client.arenaRunPart(ref.agentId, ref.runId, ref.partId) : null;
+  if (!client) throw new Error("Battle images are unavailable");
+  return await client.arenaRunPart(ref.agentId, ref.runId, ref.partId, {
+    sessionId: ref.sessionId,
+    messageId: ref.messageId,
+  });
 });

@@ -16,6 +16,8 @@ vi.mock("@/stores/session-store", () => ({
 
 const shortened = {
   id: "call",
+  sessionID: "ses",
+  messageID: "msg",
   type: "tool",
   tool: "bash",
   state: {
@@ -52,7 +54,11 @@ describe("a shortened tool call", () => {
 
     const opened = render(shortened, true);
     await waitFor(() => expect(opened.result.current).toEqual(whole));
-    expect(arenaRunPart).toHaveBeenCalledWith("agent", "run", "call");
+    // Its session and message let the engine read the one row.
+    expect(arenaRunPart).toHaveBeenCalledWith("agent", "run", "call", {
+      sessionId: "ses",
+      messageId: "msg",
+    });
   });
 
   it("keeps the preview of a running call, whose end is its latest output", () => {

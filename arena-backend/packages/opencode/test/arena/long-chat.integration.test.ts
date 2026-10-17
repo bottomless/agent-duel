@@ -66,7 +66,7 @@ function expectOnlyTurn(text: string, turn: number) {
 }
 
 type ToolPart = { id: string; type: string; state?: { output?: string; previewed?: string[] } }
-type FilePart = { id: string; type: string; url: string; previewed?: string[] }
+type FilePart = { id: string; type: string; url: string; previewed?: string[]; sessionID: string; messageID: string }
 
 function imageParts(snapshot: PublicSnapshot) {
   return snapshot.runs.flatMap((run) =>
@@ -291,6 +291,24 @@ describe("a long Arena chat", () => {
       const turnID = admitted.turn?.id
       if (!turnID) throw new Error("Arena did not admit the turn")
       await waitForTurn(store, turnID, "awaiting_vote")
+      // Each answer archives both runs again under the same IDs; each follow-up's photos must load
+      // from the new archive, not one read before the follow-up.
+      const fetchedOnce = new Set<string>()
+      const expectNewPhotos = async () => {
+        const snapshot = await json<PublicSnapshot>(await arenaRequest(`/arena/sessions/${source.id}`, { headers }))
+        const fresh = imageParts(snapshot).filter(({ part }) => !fetchedOnce.has(part.id))
+        expect(fresh).toHaveLength(8)
+        for (const { run, part } of fresh) {
+          fetchedOnce.add(part.id)
+          const whole = await json<{ part: FilePart | null }>(
+            await arenaRequest(`/arena/runs/${encodeURIComponent(run.id)}/parts/${encodeURIComponent(part.id)}`, {
+              headers,
+            }),
+          )
+          expect(sent.has(whole.part?.url.slice("data:image/png;base64,".length) ?? "")).toBe(true)
+        }
+      }
+      await expectNewPhotos()
       for (let followUp = 1; followUp <= 3; followUp++) {
         const before = router.contestantRequests.length
         const reply = await arenaRequest(`/arena/turns/${turnID}/reply`, {
@@ -304,6 +322,7 @@ describe("a long Arena chat", () => {
         const deadline = Date.now() + 30_000
         while (router.contestantRequests.length < before + 2 && Date.now() < deadline) await Bun.sleep(20)
         await waitForTurn(store, turnID, "awaiting_vote")
+        await expectNewPhotos()
       }
 
       const expectPhotosOnRequest = async () => {
@@ -314,14 +333,17 @@ describe("a long Arena chat", () => {
         const shown = imageParts(snapshot)
         expect(shown).toHaveLength(32)
         for (const { part } of shown) expect(part).toMatchObject({ url: "", previewed: ["url"] })
+        // Every photo at once, as two panes ask when they open; the last few by run and part alone.
         const fetched = await Promise.all(
-          shown.slice(0, 4).map(async ({ run, part }) =>
-            json<{ part: FilePart }>(
-              await arenaRequest(`/arena/runs/${encodeURIComponent(run.id)}/parts/${encodeURIComponent(part.id)}`, {
-                headers,
-              }),
-            ),
-          ),
+          shown.map(async ({ run, part }, index) => {
+            const location = index < shown.length - 4 ? `?${new URLSearchParams({ sessionID: part.sessionID, messageID: part.messageID })}` : ""
+            return json<{ part: FilePart }>(
+              await arenaRequest(
+                `/arena/runs/${encodeURIComponent(run.id)}/parts/${encodeURIComponent(part.id)}${location}`,
+                { headers },
+              ),
+            )
+          }),
         )
         for (const { part } of fetched) {
           expect(part.previewed).toBeUndefined()

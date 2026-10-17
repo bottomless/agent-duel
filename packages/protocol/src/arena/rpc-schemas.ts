@@ -882,6 +882,9 @@ export const ArenaRunGetPartRequestSchema = z.object({
   ...ArenaAgentRequestFields,
   runId: z.string(),
   partId: z.string(),
+  // Where the part lives, so the engine reads one row instead of the run's whole transcript.
+  sessionId: z.string().optional(),
+  messageId: z.string().optional(),
 });
 export const ArenaRunGetPartResponseSchema = z.object({
   type: z.literal("arena.run.get_part.response"),

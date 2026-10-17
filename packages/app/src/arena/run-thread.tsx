@@ -104,6 +104,9 @@ function ArenaToolPart({
       cwd={cwd}
       disableOuterSpacing
       compactLabel
+      // A narrow window opens a call in a sheet that keeps the detail it opened with, so a shortened
+      // call expands in place, where it loads whole.
+      forceInline={arenaToolPartPreviewed(shown)}
       onInlineDetailsExpandedChange={arenaToolPartPreviewed(shown) ? setOpened : undefined}
     />
   );

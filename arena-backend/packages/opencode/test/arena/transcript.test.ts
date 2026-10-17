@@ -196,10 +196,44 @@ test("leaves out a thread's oldest messages past its limit, keeping the prompt",
     message("second", "assistant", 4),
   ])
 
-  expect(withinBudget(thread, "prompt", 10_000)).toBe(thread)
+  expect(withinBudget(thread, "root", "prompt", 10_000)).toBe(thread)
   // Each message is a little over 1 KB, so two of them fit.
-  const kept = withinBudget(thread, "prompt", 3_000)
+  const kept = withinBudget(thread, "root", "prompt", 3_000)
   expect(kept.messages.map((item) => item.id)).toEqual(["prompt", "second"])
   expect(Object.keys(kept.parts)).toEqual(["prompt", "second"])
   expect(kept.activityOmitted).toBe(2)
+  // A run without a recorded boundary keeps its first user message, where `fromPrompt` started it.
+  expect(withinBudget(thread, "root", undefined, 3_000).messages.map((item) => item.id)).toEqual([
+    "prompt",
+    "second",
+  ])
+})
+
+test("keeps the messages a trimmed pane still acts on: a waiting tool call and the latest task list", () => {
+  const filler = "x".repeat(1_000)
+  const message = (id: string, role: string, created: number, parts: Record<string, unknown>[]) => ({
+    info: { id, sessionID: "root", role, time: { created } },
+    parts: parts.map((part, index) => ({ id: `${id}-${index}`, messageID: id, sessionID: "root", ...part })),
+  })
+  const tool = (tool: string, status: string) => ({
+    type: "tool",
+    tool,
+    callID: `${tool}-call`,
+    state: { status, input: {}, time: { start: 1 } },
+  })
+  const thread = project([
+    message("prompt", "user", 1, [{ type: "text", text: "Do it" }]),
+    message("plan", "assistant", 2, [tool("todowrite", "completed"), { type: "text", text: filler }]),
+    message("asking", "assistant", 3, [tool("bash", "running"), { type: "text", text: filler }]),
+    message("old", "assistant", 4, [{ type: "text", text: filler }]),
+    message("latest", "assistant", 5, [{ type: "text", text: filler }]),
+  ])
+
+  const kept = withinBudget(thread, "root", "prompt", 2_000)
+  expect(kept.messages.map((item) => item.id)).toEqual(["prompt", "plan", "asking", "latest"])
+  expect(kept.activityOmitted).toBe(1)
+})
+
+test("keeps none of the forked chat for a run that has not written its prompt", () => {
+  expect(fromPrompt(forkedRun(), "root", null).messages.map((message) => message.id)).toEqual(["child-work"])
 })
