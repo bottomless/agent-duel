@@ -2093,7 +2093,7 @@ export class OpenCodeAgentClient implements AgentClient {
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
-            "x-opencode-directory": cwd,
+            "x-opencode-directory": openCodeDirectoryHeader(cwd),
             "x-paseo-control-token": acquisition.server.controlToken,
           },
           body: JSON.stringify(request),
