@@ -1,6 +1,6 @@
 import { collectRetainedAttachmentIds } from "@/attachments/gc-retention";
 import { getAttachmentStore } from "@/attachments/store";
-import { resolveHistoryImage } from "@/attachments/history-image";
+import { hideHistoryImage, resolveHistoryImage } from "@/attachments/history-image";
 import type { AttachmentMetadata, SaveAttachmentInput } from "@/attachments/types";
 
 const activePersistence = new Set<Promise<AttachmentMetadata>>();
@@ -142,7 +142,9 @@ export async function encodeAttachmentsForSend(
 
 export async function resolveAttachmentPreviewUrl(attachment: AttachmentMetadata): Promise<string> {
   if (attachment.storageType === "inline") return attachment.storageKey;
-  if (attachment.storageType === "daemon-history") return await resolveHistoryImage(attachment);
+  if (attachment.storageType === "daemon-history") {
+    return await resolveHistoryImage(attachment, true);
+  }
   const store = await getAttachmentStore();
   return await store.resolvePreviewUrl({ attachment });
 }
@@ -152,7 +154,10 @@ export async function releaseAttachmentPreviewUrl(input: {
   url: string;
 }): Promise<void> {
   if (input.attachment.storageType === "inline") return;
-  if (input.attachment.storageType === "daemon-history") return;
+  if (input.attachment.storageType === "daemon-history") {
+    hideHistoryImage(input.attachment);
+    return;
+  }
   const store = await getAttachmentStore();
   if (!store.releasePreviewUrl) {
     return;
