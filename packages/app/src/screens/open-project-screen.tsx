@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import { View, Text, Pressable } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
@@ -6,12 +6,8 @@ import { FolderOpen } from "lucide-react-native";
 import { MenuHeader } from "@/components/headers/menu-header";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
 import { usePanelStore } from "@/stores/panel-store";
-import {
-  useIsCompactFormFactor,
-  HEADER_INNER_HEIGHT,
-  HEADER_INNER_HEIGHT_MOBILE,
-  HEADER_TOP_PADDING_MOBILE,
-} from "@/constants/layout";
+import { useHeaderMetrics, useIsCompactFormFactor } from "@/constants/layout";
+import { SPACING } from "@/styles/theme";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 
 export function OpenProjectScreen() {
@@ -20,6 +16,12 @@ export function OpenProjectScreen() {
   const openProjectPicker = useOpenAddProject();
 
   const isCompactLayout = useIsCompactFormFactor();
+  const { innerHeight, topPadding } = useHeaderMetrics();
+  // Room for the header's height at the bottom too, so the tiles sit centred in the window.
+  const contentStyle = useMemo(
+    () => [styles.content, { paddingBottom: topPadding + innerHeight + SPACING[6] }],
+    [innerHeight, topPadding],
+  );
 
   useEffect(() => {
     if (!isCompactLayout) {
@@ -34,7 +36,7 @@ export function OpenProjectScreen() {
   return (
     <View style={styles.container}>
       <MenuHeader borderless />
-      <View style={styles.content}>
+      <View style={contentStyle}>
         <TitlebarDragRegion />
         <View style={styles.tiles}>
           <HomeTile
@@ -109,10 +111,6 @@ const styles = StyleSheet.create((theme) => ({
     gap: 0,
     padding: theme.spacing[6],
     paddingTop: { xs: theme.spacing[12], md: theme.spacing[6] },
-    paddingBottom: {
-      xs: HEADER_INNER_HEIGHT_MOBILE + HEADER_TOP_PADDING_MOBILE + theme.spacing[6],
-      md: HEADER_INNER_HEIGHT + theme.spacing[6],
-    },
   },
   tiles: {
     marginTop: { xs: theme.spacing[6], md: theme.spacing[12] },

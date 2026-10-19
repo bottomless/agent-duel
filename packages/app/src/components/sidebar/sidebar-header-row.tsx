@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { LucideIcon } from "lucide-react-native";
-import { HEADER_INNER_HEIGHT, HEADER_INNER_HEIGHT_MOBILE } from "@/constants/layout";
+import { HEADER_INNER_HEIGHT } from "@/constants/layout";
 import { ICON_SIZE } from "@/styles/theme";
 import type { Theme } from "@/styles/theme";
 import { Shortcut } from "@/components/ui/shortcut";
@@ -110,10 +110,8 @@ function SidebarHeaderRowLabel({
 
 const styles = StyleSheet.create((theme) => ({
   container: {
-    height: {
-      xs: HEADER_INNER_HEIGHT_MOBILE,
-      md: HEADER_INNER_HEIGHT,
-    },
+    // Only the desktop settings sidebar renders this row, so it is always the desktop header height.
+    height: HEADER_INNER_HEIGHT,
     paddingHorizontal: theme.spacing[2],
     justifyContent: "center",
     borderBottomWidth: 1,

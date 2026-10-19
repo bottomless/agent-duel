@@ -39,6 +39,7 @@ import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Theme } from "@/styles/theme";
 import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
+import { getIsElectron } from "@/constants/platform";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import {
@@ -529,6 +530,10 @@ function MobileSidebar({
     }),
     [insetsTop, insetsBottom, theme.colors.surfaceSidebar],
   );
+  const closeButtonRowStyle = useMemo(
+    () => [styles.mobileCloseButtonRow, getIsElectron() && styles.mobileCloseButtonRowElectron],
+    [],
+  );
 
   return (
     <MobilePanelOverlay
@@ -542,7 +547,7 @@ function MobileSidebar({
         <View style={styles.sidebarHeaderGroup}>
           <View style={styles.mobileCloseButtonSlot} />
         </View>
-        <WindowChromeSafeArea placement="inline" style={styles.mobileCloseButtonRow}>
+        <WindowChromeSafeArea placement="inline" style={closeButtonRowStyle}>
           <Pressable
             style={styles.mobileCloseButton}
             onPress={closeSidebar}
@@ -1018,6 +1023,11 @@ const styles = StyleSheet.create((theme) => ({
     zIndex: 2,
     alignItems: "flex-end",
     pointerEvents: "box-none",
+  },
+  // In Electron the X shares the title bar line with the window controls: its 32px target centred
+  // 23.5px down, like the header's buttons and the macOS traffic lights.
+  mobileCloseButtonRowElectron: {
+    top: 7.5,
   },
   mobileCloseButton: {
     // The 16px X paints farther inside its 32px hit target than the 14px Settings2 glyph.
