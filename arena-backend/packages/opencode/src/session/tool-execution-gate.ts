@@ -35,7 +35,7 @@ const gates = new Map<SessionID, PendingGate>()
 // Outlives the gate: a request hosted elsewhere keeps running its tools in the contestant instance.
 const environments = new Map<SessionID, PendingEnvironment>()
 
-const ENVIRONMENT_INDEPENDENT_TOOLS = new Set(["invalid", "question", "todowrite", "webfetch", "websearch"])
+const ENVIRONMENT_INDEPENDENT_TOOLS = new Set(["invalid", "ports", "question", "todowrite", "webfetch", "websearch"])
 const READ_ONLY_GIT_COMMANDS = new Set(["diff", "log", "ls-files", "rev-parse", "show", "status"])
 
 function isInside(root: string, candidate: string) {

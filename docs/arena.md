@@ -501,11 +501,10 @@ lock, so a vote, a send, or a prompt in another chat of the same repository does
 Arena runs no project start command and no `paseo.json` hook in a slot, so a created slot and an
 adopted one start identical. Warm preparation also allocates each successor's port bank and forks
 the canonical session into it, paths retargeted, so the send has no transcript to copy. A send uses
-that fork only when the pair is trusted in this process and the canonical session, its transcript
-hash, and the port bank are unchanged; otherwise it forks then and disposes of the warm one. The
-bank is reserved only inside this process, so the send first checks that no other program has taken
-one of its ports; a taken port means a fresh bank and a fork at send. The send itself overlaps the
-assignment draw with the freeze.
+that fork only when the pair is trusted in this process and the canonical session and its transcript
+hash are unchanged; otherwise it forks then and disposes of the warm one. The bank is reserved only
+inside this process, so the send first checks that no other program has taken one of its ports; a
+taken port means a fresh bank. The send itself overlaps the assignment draw with the freeze.
 
 A send reuses the pair when it is trusted in this process and nothing moved since warm preparation:
 the checkout's HEAD, branch, index and working tree, its ignored content, the git metadata a host
@@ -572,11 +571,44 @@ Arena keeps snapshots for recovery but skips OpenCode's automatic per-step diff 
 A branch switch can make a JavaScript diff block both contestants for minutes. Snapshot
 patches use native Git with time and output limits; battle review owns its separate comparison.
 
-Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
-`.localhost` hostnames, and never retarget an old URL to a later process.
-
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
+
+### Ports
+
+Every side of every turn receives a fresh port bank: `PASEO_PORT` (also `PORT`), `PASEO_PORT2` and
+`PASEO_PORT3`, with the matching `ARENA_PREVIEW_URL`, `ARENA_PREVIEW_URL2` and `ARENA_PREVIEW_URL3`.
+Proxy routes are keyed by turn, side, and service, use `.localhost` hostnames, and never retarget an
+old URL to a later process.
+
+The winner's transcript becomes the chat's history with its literal ports and URLs in it, and Arena
+never rewrites them. A rewrite of port numbers cannot tell a port from the same digits in a
+screenshot's base64, a reasoning signature, a hash, an ID, a PID, or an `edit` input that must still
+match the file on disk, and it damaged each of those. Contestants translate old values instead:
+
+- Ports come from 20000–29999 (`PORT_RANGE` in `arena/preview.ts`), below every OS ephemeral range,
+  in sequence from a cursor kept in the Arena store (`portCursors`), skipping ports that are in use
+  and a few well-known defaults. A number the history shows goes to no later contestant until the
+  range wraps, after about 1,600 battles, so "closed" is a true answer about it. A store without a
+  cursor starts at a random point, so two installs on one machine do not walk the same numbers.
+- Contestant sessions, subagents included, get a `ports` tool (`tool/ports.ts`; the registry offers it
+  only for the `arena` provider with a contestant sandbox). With no input it lists the current
+  values, whether each port is listening, and each earlier turn's values beside their replacements.
+  With `port` or `url` it translates one value. It reads only each earlier turn's winning run
+  (`arena/ports.ts`): a loser's ports never reached the history, and naming them would tell the
+  contestant about a run it cannot see. A chat started in a forked session also reads the source
+  chat's winners up to the fork boundary: the fork route records the copy in `sessionForks`,
+  because nothing else links the two chats.
+- The contestant prompt tells the model to call `ports` before it uses a port or URL from earlier
+  messages.
+- A `bash` command or `webfetch` URL that names a retired port number or preview host of the chat
+  gets a short note after its output with the old alias, the turn, and the current value
+  (`retiredPortNote`, appended in `session/tools.ts`). This covers `open <url>` through the shell. The
+  note is new output; the stored history stays as it was. The exact number with no letter, digit, or
+  dot beside it is enough, so a chance match adds a note and nothing else.
+
+This depends on the model reading the note or calling the tool, and the first request to an old URL
+still fails.
 
 ### Automatic workspace cleanup
 
@@ -1133,6 +1165,7 @@ or restart a contestant.
 - Contestant worktrees are reused across turns. Never assume a run's directory is fresh or that it
   is removed after the vote; `worktreeRemovedAt` means the run released its slot.
 - Never give a host `alternates` to the checkout's objects; see the contestant environments above.
-- New turns use a fresh port bank and never retarget old `.localhost` routes.
+- New turns use a fresh port bank and never retarget old `.localhost` routes. Never rewrite the port
+  numbers in a forked transcript; see [Ports](#ports).
 - The production pool lives only in the control-plane package; never import it from the engine.
   The engine bundles `defaultPool` for BYOK, and a hosted runtime must never read it.

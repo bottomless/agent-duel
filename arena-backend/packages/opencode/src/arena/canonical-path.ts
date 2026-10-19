@@ -152,45 +152,6 @@ async function transcript<T>(
   }
 }
 
-const ARENA_PORT_ALIASES = ["PASEO_PORT", "PASEO_PORT2", "PASEO_PORT3"] as const
-type ArenaPortAlias = (typeof ARENA_PORT_ALIASES)[number]
-
-export function canonicalizeArenaEnvironment<T>(
-  value: T,
-  input: {
-    readonly portAliases?: Partial<Record<ArenaPortAlias, number>>
-    readonly previewUrls?: Partial<Record<ArenaPortAlias, string>>
-  },
-): T {
-  const replacements = ARENA_PORT_ALIASES.flatMap((alias) => {
-    const suffix = alias === "PASEO_PORT" ? "" : alias.slice("PASEO_PORT".length)
-    const url = input.previewUrls?.[alias]
-    const port = input.portAliases?.[alias]
-    return [
-      ...(url ? [{ literal: url, variable: `$ARENA_PREVIEW_URL${suffix}`, numeric: false }] : []),
-      ...(port ? [{ literal: String(port), variable: `$${alias}`, numeric: true }] : []),
-    ]
-  }).toSorted((left, right) => right.literal.length - left.literal.length)
-  if (replacements.length === 0) return value
-  return rewriteEnvironment(value, replacements) as T
-}
-
-export function localizeArenaEnvironment<T>(value: T, env: Readonly<Record<string, string>>): T {
-  const replacements = [
-    ...ARENA_PORT_ALIASES.map((alias) => ({ variable: `$${alias}`, literal: env[alias] })),
-    ...ARENA_PORT_ALIASES.map((alias) => {
-      const suffix = alias === "PASEO_PORT" ? "" : alias.slice("PASEO_PORT".length)
-      const name = `ARENA_PREVIEW_URL${suffix}`
-      return { variable: `$${name}`, literal: env[name] }
-    }),
-  ]
-    .filter((replacement): replacement is { variable: string; literal: string } => !!replacement.literal)
-    // `$PASEO_PORT` is a prefix of `$PASEO_PORT2`; replace the longest names first.
-    .toSorted((left, right) => right.variable.length - left.variable.length)
-  if (replacements.length === 0) return value
-  return rewriteVariables(value, replacements) as T
-}
-
 function pathRoots(worktrees: readonly string[]) {
   const roots = worktrees.filter(Boolean).toSorted((left, right) => right.length - left.length)
   return roots.length ? roots : undefined
@@ -250,54 +211,6 @@ function rewrite(value: unknown, roots: readonly string[], canonical: string): u
   if (Array.isArray(value)) return value.map((entry) => rewrite(entry, roots, canonical))
   if (!plainObject(value)) return value
   return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, rewrite(entry, roots, canonical)]))
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-// A data URL carries encoded bytes, a screenshot a contestant read for one. Its base64 text can hold a
-// port's digits between two letters, and rewriting them corrupted the image, so every later battle
-// of the chat sent an image no provider would decode.
-function encodedBytes(value: string) {
-  return value.startsWith("data:")
-}
-
-function rewriteEnvironment(
-  value: unknown,
-  replacements: readonly { readonly literal: string; readonly variable: string; readonly numeric: boolean }[],
-): unknown {
-  if (typeof value === "string") {
-    if (encodedBytes(value)) return value
-    return replacements.reduce((current, replacement) => {
-      if (!replacement.numeric) return current.split(replacement.literal).join(replacement.variable)
-      const pattern = new RegExp(`(?<!\\d)${escapeRegExp(replacement.literal)}(?!\\d)`, "g")
-      return current.replace(pattern, () => replacement.variable)
-    }, value)
-  }
-  if (Array.isArray(value)) return value.map((entry) => rewriteEnvironment(entry, replacements))
-  if (!plainObject(value)) return value
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, rewriteEnvironment(entry, replacements)]),
-  )
-}
-
-function rewriteVariables(
-  value: unknown,
-  replacements: readonly { readonly variable: string; readonly literal: string }[],
-): unknown {
-  if (typeof value === "string") {
-    if (encodedBytes(value)) return value
-    return replacements.reduce(
-      (current, replacement) => current.split(replacement.variable).join(replacement.literal),
-      value,
-    )
-  }
-  if (Array.isArray(value)) return value.map((entry) => rewriteVariables(entry, replacements))
-  if (!plainObject(value)) return value
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, rewriteVariables(entry, replacements)]),
-  )
 }
 
 // Anything with a non-trivial prototype (Date, Uint8Array, BSON values) is passed through untouched

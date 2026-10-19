@@ -116,15 +116,13 @@ export type WarmWorktreeRecord = {
   readonly refsMirrored?: boolean
   /**
    * The canonical session forked into this worktree at warm-up, with the transcript hash and
-   * source it was copied from and the port bank its paths were localized against. A send uses
-   * it only when all three still match and the pair is trusted in this process; otherwise it
-   * forks again and disposes of this one.
+   * source it was copied from. A send uses it only when both still match and the pair is trusted
+   * in this process; otherwise it forks again and disposes of this one.
    */
   readonly forkedSessionID?: string
   readonly forkSourceSessionID?: string
   readonly forkTranscriptHash?: string
   readonly forkMessageMap?: Readonly<Record<string, string>>
-  readonly portAliases?: Readonly<Record<ArenaPortAlias, number>>
   /** How this worktree was last brought to its base, and where that time went. */
   readonly sync?: SlotSyncTimings
 }
@@ -270,6 +268,27 @@ export type CheckoutEvictionDocument = {
   readonly _id: string
   readonly root: string
   readonly createdAt: Date
+  updatedAt: Date
+}
+
+/**
+ * A session forked from another through the Arena fork route ("Fork chat from here"). The copy
+ * carries the source chat's battle history, ports included, and nothing else links the two chats,
+ * so the ports history of a chat started in the copy reads the source chat's winners through this.
+ */
+export type SessionForkDocument = {
+  /** The forked session. */
+  readonly _id: string
+  readonly sourceSessionID: string
+  /** Exclusive boundary of the copy, as `Session.fork` takes it; absent when the whole transcript was copied. */
+  readonly beforeMessageID?: string
+  readonly createdAt: Date
+}
+
+/** Where the next search for contestant ports starts; one document per store. */
+export type PortCursorDocument = {
+  readonly _id: string
+  next: number
   updatedAt: Date
 }
 

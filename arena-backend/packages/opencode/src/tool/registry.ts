@@ -17,6 +17,7 @@ import { ArenaRuntime } from "@/arena/runtime"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
+import { PortsTool } from "./ports"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
@@ -105,6 +106,7 @@ const layer = Layer.effect(
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
+    const ports = yield* PortsTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
     const globtool = yield* GlobTool
@@ -215,6 +217,7 @@ const layer = Layer.effect(
           write: Tool.init(writetool),
           task: Tool.init(task),
           fetch: Tool.init(webfetch),
+          ports: Tool.init(ports),
           todo: Tool.init(todo),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
@@ -238,6 +241,7 @@ const layer = Layer.effect(
             tool.write,
             tool.task,
             tool.fetch,
+            tool.ports,
             tool.todo,
             tool.search,
             tool.skill,
@@ -288,7 +292,10 @@ const layer = Layer.effect(
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
+      const contestantTmp = ArenaContestant.sandboxTmp(Permission.merge(input.agent.permission, input.permission ?? []))
       const filtered = (yield* all()).filter((tool) => {
+        // Only a battle contestant has a port environment; its sandbox is how a session shows it.
+        if (tool.id === PortsTool.id) return input.providerID === ArenaRuntime.providerID && !!contestantTmp
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
         }
@@ -305,7 +312,6 @@ const layer = Layer.effect(
         ? yield* describeCodeMode(input)
         : undefined
       const visible = filtered.filter((tool) => tool.id !== "execute" || codeModeDescription)
-      const contestantTmp = ArenaContestant.sandboxTmp(Permission.merge(input.agent.permission, input.permission ?? []))
 
       return yield* Effect.forEach(
         visible,
