@@ -45,6 +45,7 @@ function snapshot(input: {
     canVote: false,
     canTie: false,
     canDiscardBattle: false,
+    canResumeBattle: false,
     canRetryResolution: false,
     revealed: false,
     createdAt: "2026-09-03T10:00:00.000Z",
@@ -179,6 +180,7 @@ describe("arenaDecisionPhase", () => {
       canTie: false,
       canDiscard: false,
       canRetry: false,
+      canResume: false,
     });
   });
 
@@ -201,6 +203,28 @@ describe("arenaDecisionPhase", () => {
       canTie: false,
       canDiscard: true,
       canRetry: true,
+      canResume: false,
+    });
+  });
+
+  it("offers Resume when the engine's restart cut off the battle", () => {
+    expect(
+      arenaDecisionPhase(
+        snapshot({
+          state: "awaiting_vote",
+          turn: { canDiscardBattle: true, canResumeBattle: true },
+          runs: [
+            run({ id: "run-a", side: "a", runState: "complete", selectable: true }),
+            run({ id: "run-b", side: "b", runState: "interrupted" }),
+          ],
+        }),
+      ),
+    ).toMatchObject({
+      kind: "awaiting_vote",
+      canChooseA: false,
+      canChooseB: false,
+      canDiscard: true,
+      canResume: true,
     });
   });
 

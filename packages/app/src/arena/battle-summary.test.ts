@@ -18,7 +18,7 @@ import {
   resolutionRetryDetail,
   RESOLVING_BATTLE_STATES,
 } from "./battle-result";
-import { canRequestBattleDiff, hasBattleDiff } from "./comparison-visibility";
+import { canRequestBattleDiff, canReviewBattle, hasBattleDiff } from "./comparison-visibility";
 import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
 import {
   arenaSummaryAnchor,
@@ -292,6 +292,36 @@ describe("canRequestBattleDiff", () => {
     expect(canRequestBattleDiff("applying")).toBe(true);
     expect(canRequestBattleDiff("complete")).toBe(true);
     expect(canRequestBattleDiff("discarded")).toBe(true);
+  });
+});
+
+describe("canReviewBattle", () => {
+  const turn = (input: Partial<NonNullable<ArenaSnapshot["turn"]>>): ArenaSnapshot["turn"] => ({
+    id: "turn-1",
+    index: 0,
+    state: "awaiting_vote",
+    prompt: "make it faster",
+    baseSHA: "abc",
+    comparisonState: "complete",
+    canVote: true,
+    canTie: true,
+    canDiscardBattle: false,
+    canResumeBattle: false,
+    canRetryResolution: false,
+    revealed: false,
+    createdAt: "2026-10-14T10:00:00.000Z",
+    updatedAt: "2026-10-14T10:00:00.000Z",
+    ...input,
+  });
+
+  it("shows the summary and changes once the vote opens", () => {
+    expect(canReviewBattle(turn({}))).toBe(true);
+  });
+
+  it("hides them while a battle the restart cut off waits to resume", () => {
+    expect(
+      canReviewBattle(turn({ canVote: false, canDiscardBattle: true, canResumeBattle: true })),
+    ).toBe(false);
   });
 });
 

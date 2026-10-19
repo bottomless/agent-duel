@@ -458,6 +458,11 @@ export type RunDocument = {
   retention?: "none" | "retained_until_next_send" | "cleanup_failed"
   readonly worktreeCreatedAt: Date
   readyAt?: Date
+  /**
+   * The side's environment setup (the copy of ignored content) finished. Only an environment
+   * that finished can be resumed after an engine restart; see `canReopenInterruptedBattle`.
+   */
+  environmentReadyAt?: Date
   startedAt?: Date
   firstEventAt?: Date
   lastEventAt?: Date

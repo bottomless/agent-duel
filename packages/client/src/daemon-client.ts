@@ -2209,6 +2209,15 @@ export class DaemonClient {
     return payload.snapshot;
   }
 
+  async arenaResumeBattle(agentId: string, turnId: string): Promise<ArenaSnapshot> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"arena.turn.resume.response">(
+      {
+        message: { type: "arena.turn.resume.request", agentId, turnId },
+      },
+    );
+    return payload.snapshot;
+  }
+
   async arenaResolveStop(
     agentId: string,
     turnId: string,

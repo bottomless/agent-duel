@@ -454,6 +454,8 @@ export const ArenaSnapshotSchema = z
       canTie: z.boolean(),
       // Discard instead of applying a result: after a stop, or when neither result can be chosen.
       canDiscardBattle: z.boolean(),
+      // Every side an engine restart cut off resumes together (`canResumeBattle`).
+      canResumeBattle: z.boolean(),
       canRetryResolution: z.boolean(),
       canDiscardWinner: z.boolean().optional(),
       revealed: z.boolean(),
@@ -833,6 +835,15 @@ export const ArenaTurnStopRequestSchema = z.object({
 });
 export const ArenaTurnStopResponseSchema = z.object({
   type: z.literal("arena.turn.stop.response"),
+  payload: ArenaSnapshotResponsePayloadSchema,
+});
+export const ArenaTurnResumeRequestSchema = z.object({
+  type: z.literal("arena.turn.resume.request"),
+  ...ArenaAgentRequestFields,
+  turnId: z.string(),
+});
+export const ArenaTurnResumeResponseSchema = z.object({
+  type: z.literal("arena.turn.resume.response"),
   payload: ArenaSnapshotResponsePayloadSchema,
 });
 export const ArenaTurnResolveStopRequestSchema = z.object({

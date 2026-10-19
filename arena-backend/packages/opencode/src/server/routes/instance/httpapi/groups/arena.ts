@@ -499,6 +499,20 @@ const group = HttpApiGroup.make("arena")
     ),
   )
   .add(
+    HttpApiEndpoint.post("resumeBattle", "/arena/turns/:turnID/resume", {
+      params: { turnID: Schema.String },
+      query: WorkspaceRoutingQuery,
+      success: ArenaSchema.Snapshot,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.turn.resume",
+        summary: "Resume an interrupted battle",
+        description: "Continue every contestant an engine restart cut off, together, from where it stopped.",
+      }),
+    ),
+  )
+  .add(
     HttpApiEndpoint.post("reply", "/arena/turns/:turnID/reply", {
       params: { turnID: Schema.String },
       query: WorkspaceRoutingQuery,

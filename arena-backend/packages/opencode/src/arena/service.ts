@@ -52,6 +52,7 @@ import { hostRepoPath, isolatedRoot, Worktree } from "@/worktree"
 import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
+import { isRecord } from "@/util/record"
 import { generate as generateComparison } from "./comparison"
 import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
 import { comparisonTimeline } from "./comparison-timeline"
@@ -62,10 +63,13 @@ import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
 import {
   canDiscardBattle,
+  canReopenInterruptedBattle,
+  canResumeBattle,
   canRetryRun,
   canTie,
   earlyResolution,
   generationName,
+  INTERRUPTED_RUN_MESSAGE,
   isFinalState,
   isParkedPromotion,
   isStopAbort,
@@ -1121,6 +1125,8 @@ export interface Interface {
   ) => Effect.Effect<ReturnType<typeof project>, Error>
   /** Run a failed contestant again from its last finished step; see `canRetryRun`. */
   readonly retryRun: (runID: string) => Effect.Effect<ReturnType<typeof project>, Error>
+  /** Resume every contestant the engine's restart cut off, together; see `canResumeBattle`. */
+  readonly resumeBattle: (turnID: string) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly vote: (
     turnID: string,
     vote: Vote,
@@ -4576,6 +4582,11 @@ export const layer: Layer.Layer<
       }
       const claimed = yield* promise(() => store.claimTurnFinalization(turn._id))
       if (!claimed.claimed) return
+      yield* openVote(store, turn, canonical)
+    })
+
+    /** Take a finalizing turn whose sides have all settled to the vote, and start its comparison. */
+    const openVote = Effect.fn("Arena.openVote")(function* (store: Store, turn: TurnDocument, canonical: string) {
       const inputs = yield* Effect.all([comparisonInput(store, turn, "a"), comparisonInput(store, turn, "b")]).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -5337,8 +5348,10 @@ export const layer: Layer.Layer<
       // mutate files. Cold sides retain their independent completion gates.
       const settleEnvironment = Effect.fnUntraced(function* (run: SideRuntime, outcome: Exit.Exit<void, unknown>) {
         const gate = executionGates.get(run.side)
-        if (Exit.isSuccess(outcome)) gate?.release()
-        else gate?.fail(Cause.squash(outcome.cause))
+        if (Exit.isSuccess(outcome)) {
+          gate?.release()
+          yield* promise(() => store.updateRun(run.runID, { environmentReadyAt: new Date() })).pipe(Effect.ignore)
+        } else gate?.fail(Cause.squash(outcome.cause))
         yield* Deferred.succeed(environmentSettled[run.side], undefined)
         // Stop cancels both runs itself.
         if (Exit.isFailure(outcome) && !copyStopped(outcome.cause)) {
@@ -6198,6 +6211,41 @@ export const layer: Layer.Layer<
             return yield* promise(() => store.updateRun(failed._id, { manualRetries: (failed.manualRetries ?? 0) + 1 }))
           }),
         failure: { message: "Arena contestant retry failed", runID },
+      })
+      return yield* respond(store, turn.chatID)
+    })
+
+    /**
+     * Resume every side the engine's restart cut off, together; see `canResumeBattle`. Each continues
+     * its session from the response the restart cut off, which keeps the work it did, and adds no
+     * message, so the battle stays blind.
+     */
+    const resumeBattle = Effect.fn("Arena.resumeBattle")(function* (turnID: string) {
+      const store = yield* available()
+      const turn = yield* promise(() => store.turn(turnID))
+      if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${turnID}`))
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      if (!canResumeBattle(turn, runs)) return yield* Effect.fail(new Error("This battle cannot be resumed"))
+      const interrupted = runs.filter((run) => run.runState === "interrupted")
+      const chat = yield* promise(() => store.chat(turn.chatID))
+      if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
+      const source = yield* sessions.get(SessionID.make(turn.sourceCanonicalSessionID)).pipe(Effect.mapError(error))
+      const claimed = yield* promise(() =>
+        store.claimReplyContinuation(
+          turn._id,
+          interrupted.map((run) => run.side),
+        ),
+      )
+      if (!claimed.claimed) {
+        return yield* Effect.fail(new Error("The battle changed before it resumed. Try again."))
+      }
+      yield* resumeSettledRuns(store, turn, chat.repository.root, interrupted, {
+        comparisonID: claimed.comparisonID,
+        prompt: undefined,
+        agent: source.agent ?? "build",
+        reset: (run) =>
+          closeInterruptedResponses(run).pipe(Effect.andThen(promise(() => store.resetRunForReply(run._id)))),
+        failure: { message: "Arena battle resume failed", turnID },
       })
       return yield* respond(store, turn.chatID)
     })
@@ -8029,6 +8077,164 @@ export const layer: Layer.Layer<
       return yield* respond(store, chat._id)
     })
 
+    /**
+     * Close the responses an engine restart cut off, the way a stop closes them: unfinished tool
+     * calls end interrupted and the message ends aborted. A resumed loop then replays what the
+     * response did without running its unfinished calls again, and the pane stops showing it live.
+     */
+    const closeInterruptedResponses = Effect.fn("Arena.closeInterruptedResponses")(function* (run: RunDocument) {
+      const root = SessionID.make(run.rootSessionID)
+      const ids = [root, ...(yield* descendants(root))]
+      yield* inDirectory(
+        run.worktree,
+        Effect.forEach(
+          ids,
+          (sessionID) =>
+            Effect.gen(function* () {
+              const messages = yield* sessions.messages({ sessionID })
+              for (const message of messages) {
+                if (message.info.role !== "assistant" || message.info.time.completed) continue
+                const end = Date.now()
+                for (const part of message.parts) {
+                  if (part.type !== "tool") continue
+                  if (part.state.status !== "pending" && part.state.status !== "running") continue
+                  const metadata =
+                    "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
+                  yield* sessions.updatePart({
+                    ...part,
+                    state: {
+                      ...part.state,
+                      status: "error",
+                      error: "Tool execution aborted",
+                      metadata: { ...metadata, interrupted: true },
+                      time: { start: "time" in part.state ? part.state.time.start : end, end },
+                    },
+                  })
+                }
+                yield* sessions.updateMessage({
+                  ...message.info,
+                  error: message.info.error ?? new SessionV1.AbortedError({ message: "Aborted" }).toObject(),
+                  time: { ...message.info.time, completed: end },
+                })
+              }
+            }),
+          { discard: true },
+        ),
+      ).pipe(Effect.mapError(error))
+    })
+
+    /**
+     * Take a battle the engine's restart cut off back to the vote, as if both sides had settled: a
+     * side that had finished keeps its result, and one that was working is committed as
+     * interrupted, and the voter resumes the battle (`resumeBattle`). See `canReopenInterruptedBattle`.
+     */
+    const reopenInterruptedTurn = Effect.fn("Arena.reopenInterruptedTurn")(function* (
+      store: Store,
+      turn: TurnDocument,
+      runs: readonly RunDocument[],
+      canonical: string,
+    ) {
+      if (turn.state !== "interrupted_recovery") {
+        yield* promise(() => store.transitionTurn(turn._id, "interrupted_recovery"))
+      }
+      yield* Effect.forEach(
+        runs.filter((run) => !run.finalizedAt),
+        (saved) =>
+          Effect.gen(function* () {
+            const runtime: SideRuntime = {
+              side: saved.side,
+              turnID: saved.turnID,
+              runID: saved._id,
+              sessionID: SessionID.make(saved.rootSessionID),
+              worktree: { name: `turn-${turn.turnIndex}-${saved.side}`, directory: saved.worktree },
+              assignment: saved.assignment,
+            }
+            // Finalization had already committed and archived this side's finished result; only
+            // its settlement was lost.
+            const finished = saved.runState === "complete" && saved.archiveComplete === true && !!saved.finalCommit
+            if (!finished) {
+              yield* closeInterruptedResponses(saved)
+              yield* finalizeSide(
+                store,
+                turn,
+                runtime,
+                Exit.fail(new Error(INTERRUPTED_RUN_MESSAGE)),
+                true,
+                "interrupted",
+              )
+            }
+            const settled = yield* promise(() => store.run(saved._id))
+            const selectable =
+              finished && !!settled?.finalCommit && !!settled.finalTree && !!settled.permanentRef
+            yield* promise(() => store.updateRun(saved._id, { selectable, finalizedAt: new Date() }))
+            yield* promise(() =>
+              store.markRunFinalized({ turnID: turn._id, side: saved.side, selectable, at: new Date() }),
+            )
+          }).pipe(
+            // Committed anyway, so the voter can still resume the side or discard the battle.
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning("Arena could not settle an interrupted side", {
+                  turnID: turn._id,
+                  runID: saved._id,
+                  cause,
+                })
+                yield* promise(() =>
+                  store.updateRun(saved._id, {
+                    runState: "interrupted",
+                    durationMs: null,
+                    selectable: false,
+                    error: Cause.pretty(cause),
+                    completedAt: new Date(),
+                    finalizedAt: new Date(),
+                  }),
+                )
+                yield* promise(() =>
+                  store.markRunFinalized({ turnID: turn._id, side: saved.side, selectable: false, at: new Date() }),
+                )
+              }),
+            ),
+          ),
+        { concurrency: 2, discard: true },
+      )
+      yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
+      yield* openVote(store, turn, canonical)
+    })
+
+    /**
+     * Engines before `reopenInterruptedTurn` parked a battle their restart cut off as a stopped one,
+     * with its working sides never settled, and the voter could only keep one as it was or discard
+     * it. Reopen such a battle to the vote so those sides can be resumed. Every side is settled
+     * here, so a battle is reopened once.
+     */
+    const reopenParkedInterruptedTurn = Effect.fn("Arena.reopenParkedInterruptedTurn")(function* (
+      store: Store,
+      turn: TurnDocument,
+    ) {
+      if (turn.resolution || turn.transitionTimestamps.stopping) return
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      if (!runs.some((run) => run.runState === "interrupted" && !run.finalizedAt)) return
+      yield* Effect.forEach(
+        runs.filter((run) => !run.finalizedAt),
+        (run) =>
+          Effect.gen(function* () {
+            yield* closeInterruptedResponses(run).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Arena could not close an interrupted side's responses", { runID: run._id, cause }),
+              ),
+            )
+            const selectable = run.selectable === true
+            yield* promise(() => store.updateRun(run._id, { selectable, finalizedAt: new Date() }))
+            yield* promise(() =>
+              store.markRunFinalized({ turnID: turn._id, side: run.side, selectable, at: new Date() }),
+            )
+          }),
+        { concurrency: 2, discard: true },
+      )
+      yield* promise(() => store.transitionTurn(turn._id, "awaiting_vote"))
+      yield* Effect.logInfo("Arena reopened a battle an earlier restart had parked", { turnID: turn._id })
+    })
+
     const recoverExecutingTurn = Effect.fn("Arena.recoverExecutingTurn")(function* (
       store: Store,
       turn: TurnDocument,
@@ -8089,10 +8295,11 @@ export const layer: Layer.Layer<
           ),
         )
       }
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      if (canReopenInterruptedBattle(turn, runs)) return yield* reopenInterruptedTurn(store, turn, runs, canonical)
       if (turn.state !== "interrupted_recovery") {
         yield* promise(() => store.transitionTurn(turn._id, "interrupted_recovery"))
       }
-      const runs = yield* promise(() => store.runsForTurn(turn._id))
       const recovered = new Map<
         Side,
         { result: Pick<FinalizedResult, "finalCommit">; transcript: string; artifactID: string }
@@ -8427,6 +8634,11 @@ export const layer: Layer.Layer<
               turn.state === "interrupted_recovery"
             ) {
               yield* recoverExecutingTurn(store, turn, chat.repository.root)
+              return
+            }
+
+            if (turn.state === "awaiting_stop_resolution") {
+              yield* reopenParkedInterruptedTurn(store, turn)
               return
             }
 
@@ -9540,6 +9752,9 @@ export const layer: Layer.Layer<
         return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
       }
       if (turn.state !== "awaiting_vote") return yield* Effect.fail(new Error("Arena turn is not ready for a vote"))
+      if (canResumeBattle(turn, yield* promise(() => store.runsForTurn(turn._id)))) {
+        return yield* Effect.fail(new Error("Resume or discard this battle before choosing"))
+      }
       const resolved = voteResolution(selected)
       return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
     })
@@ -10159,6 +10374,7 @@ export const layer: Layer.Layer<
       interruptSteer,
       discardSteer,
       retryRun,
+      resumeBattle,
       vote,
       recordReview,
       retryResolution,

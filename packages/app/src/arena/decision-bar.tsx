@@ -88,7 +88,35 @@ export function VoteDecision({
   );
 }
 
-/** The third choice after a stop, or in Tie's place when neither result can be chosen. */
+/**
+ * The battle's way on after the engine's restart cut it off; continues both agents together. The
+ * one filled choice in the pill, so it reads apart from Discard beside it.
+ */
+export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
+  const { pending, pendingAction } = actions;
+  const resume = useCallback(() => {
+    void actions.resume();
+  }, [actions]);
+  return (
+    <Button
+      variant="default"
+      size="sm"
+      style={styles.pillChoice}
+      loading={pendingAction?.kind === "resume_battle"}
+      disabled={pending}
+      onPress={resume}
+      accessibilityLabel="Resume battle"
+      testID="arena-resume-interrupted"
+    >
+      Resume
+    </Button>
+  );
+}
+
+/**
+ * The third choice after a stop, in Tie's place when neither result can be chosen, or beside Resume
+ * after the engine's restart cut the battle off.
+ */
 export function DiscardDecision({ actions }: { actions: ArenaBattleActions }) {
   const { pending, pendingAction } = actions;
   const discard = useCallback(() => {

@@ -610,6 +610,7 @@ export type PublicSnapshot = {
     readonly canVote: boolean
     readonly canTie: boolean
     readonly canDiscardBattle: boolean
+    readonly canResumeBattle?: boolean
     readonly revealed: boolean
     readonly identities?: {
       readonly a: { readonly name: string }
@@ -619,7 +620,10 @@ export type PublicSnapshot = {
   readonly runs: ReadonlyArray<{
     readonly id: string
     readonly side: "a" | "b"
+    readonly runState?: string
     readonly selectable: boolean
+    readonly canRetry?: boolean
+    readonly error?: string
     readonly diff?: { readonly files: number; readonly additions: number; readonly deletions: number }
     readonly identity?: { readonly name: string }
     readonly messages?: ReadonlyArray<Readonly<Record<string, unknown>>>

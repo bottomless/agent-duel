@@ -206,6 +206,7 @@ export type ArenaTurnAction =
   | { kind: "interrupt_steer"; runId: string; messageId: string }
   | { kind: "discard_steer"; runId: string; messageIds: string[] }
   | { kind: "retry_run"; runId: string }
+  | { kind: "resume_battle"; turnId: string }
   | { kind: "vote"; turnId: string; vote: ArenaVote }
   | { kind: "stop"; turnId: string }
   | {
@@ -295,6 +296,8 @@ async function runArenaTurnAction(client: DaemonClient, agentId: string, action:
       return client.arenaDiscardSteer(agentId, action.runId, action.messageIds);
     case "retry_run":
       return client.arenaRetryRun(agentId, action.runId);
+    case "resume_battle":
+      return client.arenaResumeBattle(agentId, action.turnId);
     case "vote":
       return client.arenaVote(agentId, action.turnId, action.vote);
     case "stop":
