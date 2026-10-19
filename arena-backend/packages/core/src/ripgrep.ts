@@ -63,6 +63,7 @@ export interface GlobInput {
   readonly cwd: string
   readonly pattern: string
   readonly limit: number
+  readonly exclude?: readonly string[]
   readonly hidden?: boolean
   readonly follow?: boolean
   readonly signal?: AbortSignal
@@ -73,6 +74,7 @@ export interface GrepInput {
   readonly pattern: string
   readonly file?: string
   readonly include?: string
+  readonly exclude?: readonly string[]
   readonly limit: number
   readonly signal?: AbortSignal
 }
@@ -164,6 +166,7 @@ const layer = Layer.effect(
             ...(input.hidden ? ["--hidden"] : []),
             ...(input.follow ? ["--follow"] : []),
             `--glob=${input.pattern}`,
+            ...(input.exclude ?? []).map((pattern) => `--glob=!${pattern}`),
             "--glob=!**/.git/**",
             ".",
           ],
@@ -226,6 +229,7 @@ const layer = Layer.effect(
             "--hidden",
             "--no-messages",
             ...(input.include ? [`--glob=${input.include}`] : []),
+            ...(input.exclude ?? []).map((pattern) => `--glob=!${pattern}`),
             "--glob=!**/.git/**",
             "--",
             input.pattern,

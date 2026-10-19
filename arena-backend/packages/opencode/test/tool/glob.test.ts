@@ -129,4 +129,23 @@ describe("tool.glob", () => {
       }
     }),
   )
+
+  it.instance("leaves a contestant's blocked directory out of a search started above it", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const code = path.join(test.directory, "code")
+      const blocked = path.join(code, "project")
+      yield* Effect.promise(() => Bun.write(path.join(blocked, "AGENTS.md"), "checkout\n"))
+      yield* Effect.promise(() =>
+        Bun.write(path.join(blocked, ".agent-duel", "worktrees", "h", "generation-1-b", "AGENTS.md"), "other\n"),
+      )
+      yield* Effect.promise(() => Bun.write(path.join(code, "other", "project", "AGENTS.md"), "unrelated\n"))
+      const glob = yield* (yield* GlobTool).init()
+      const result = yield* glob.execute(
+        { pattern: "**/AGENTS.md", path: code },
+        { ...ctx, blockedDirectories: [blocked] },
+      )
+      expect(result.output).toBe(path.join(code, "other", "project", "AGENTS.md"))
+    }),
+  )
 })

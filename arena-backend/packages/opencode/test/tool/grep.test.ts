@@ -220,4 +220,18 @@ describe("tool.grep", () => {
       expect(requests.find((req) => req.permission === "external_directory")).toBeUndefined()
     }),
   )
+
+  it.instance("leaves a contestant's blocked directory out of a search started above it", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const code = path.join(test.directory, "code")
+      const blocked = path.join(code, "project")
+      yield* Effect.promise(() => Bun.write(path.join(blocked, "a.txt"), "needle\n"))
+      yield* Effect.promise(() => Bun.write(path.join(code, "other", "project", "a.txt"), "needle\n"))
+      const grep = yield* (yield* GrepTool).init()
+      const result = yield* grep.execute({ pattern: "needle", path: code }, { ...ctx, blockedDirectories: [blocked] })
+      expect(result.output).toContain(path.join(code, "other", "project", "a.txt"))
+      expect(result.output).not.toContain(path.join(blocked, "a.txt"))
+    }),
+  )
 })

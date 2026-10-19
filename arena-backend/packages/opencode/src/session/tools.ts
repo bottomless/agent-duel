@@ -76,6 +76,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
   const ruleset = Permission.merge(input.agent.permission, input.session.permission ?? [])
   const tmpDirectory = ArenaContestant.sandboxTmp(ruleset)
+  const blockedDirectories = ArenaContestant.blockedDirectories(ruleset)
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
     abort: options.abortSignal!,
@@ -108,6 +109,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         })
         .pipe(Effect.orDie),
     ...(tmpDirectory ? { tmpDirectory } : {}),
+    ...(blockedDirectories.length ? { blockedDirectories } : {}),
   })
 
   for (const item of yield* registry.tools({
