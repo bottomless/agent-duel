@@ -140,6 +140,15 @@ export function useArenaBattleActions(
     [mutateTurn, showError, turnId],
   );
 
+  const resume = useCallback(async () => {
+    if (!turnId) return;
+    try {
+      await mutateTurn({ kind: "resume_battle", turnId });
+    } catch (error) {
+      showError(error);
+    }
+  }, [mutateTurn, showError, turnId]);
+
   const retryResolution = useCallback(() => {
     if (!turnId) return;
     void mutateTurn({ kind: "retry_resolution", turnId }).catch(showError);
@@ -217,6 +226,7 @@ export function useArenaBattleActions(
       tie,
       stop,
       resolveStop,
+      resume,
       retryResolution,
       answerReview,
       discardWinner,
@@ -237,6 +247,7 @@ export function useArenaBattleActions(
       discardWinner,
       restoreWorkspace,
       resolveStop,
+      resume,
       retryComparison,
       retryResolution,
       stop,

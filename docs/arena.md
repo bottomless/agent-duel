@@ -1053,6 +1053,23 @@ Failure has first-class states rather than an abort — `creation_failed`, `fina
 so a resolution can be retried instead of losing the battle. `interrupted_recovery` is where a turn
 lands when the daemon dies mid-battle.
 
+A battle the restart cut off goes back to the vote (`reopenInterruptedTurn`), because quitting the
+app is not a decision about the battle. A side that had finished keeps its result. A side that was
+working is committed as `interrupted`: its cut-off response is closed the way a stop closes it, so
+its unfinished tool calls end interrupted and are never run again. The pill then holds only
+**Resume**, its one filled choice, and **Discard** (`canResumeBattle`). Resume (`resumeBattle`)
+claims every interrupted side at once and continues each from its cut-off response. No side resumes
+alone, and an interrupted run has no Retry, because a side that started first would get a head start
+on a battle meant to be fair. Nothing is voted on until it resumes, not even a side that had
+finished: the voter never saw the other side finish. The card hides the summary and changes until then too, since they
+compare work that is not finished. Resume costs no retry, since the models did
+nothing wrong. Never resume automatically at startup: that spends on both contestants
+before the voter is back, and a quit is sometimes meant as a stop. Two cases still recover as a
+stopped battle (`canReopenInterruptedBattle`): one the voter was already stopping, and one with a side
+whose environment never finished copying (`environmentReadyAt`), since a resumed contestant would
+work without those files. Engines before this parked every interrupted battle as stopped; startup
+reopens those once (`reopenParkedInterruptedTurn`).
+
 Payment failures belong to the service account, not the voter's account; in a BYOK build that
 account is the user's own OpenRouter key. Only a classified
 temporary request-budget failure is retried, on the same assignment and session, before any

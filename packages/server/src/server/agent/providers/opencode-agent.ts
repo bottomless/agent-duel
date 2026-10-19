@@ -3962,6 +3962,8 @@ class OpenCodeAgentSession implements AgentSession {
         }),
       retryRun: (runId) =>
         this.arenaRequest(`/arena/runs/${encodeURIComponent(runId)}/retry`, { method: "POST" }),
+      resumeBattle: (turnId) =>
+        this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/resume`, { method: "POST" }),
       interruptSteer: (runId, messageId) =>
         this.arenaRequest(
           `/arena/runs/${encodeURIComponent(runId)}/steer/${encodeURIComponent(messageId)}/interrupt`,

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import {
   abortedResolution,
   canDiscardBattle,
+  canReopenInterruptedBattle,
+  canResumeBattle,
   canRetryRun,
   canTie,
   canTransition,
@@ -153,6 +155,71 @@ describe("canRetryRun", () => {
     expect(canRetryRun({ state: "running" }, { ...failed, worktreeRemovedAt: new Date() })).toBe(false)
     expect(canRetryRun({ state: "running" }, { ...failed, manualRetries: MAX_MANUAL_RUN_RETRIES - 1 })).toBe(true)
     expect(canRetryRun({ state: "running" }, { ...failed, manualRetries: MAX_MANUAL_RUN_RETRIES })).toBe(false)
+  })
+
+  test("leaves an interrupted run to the battle's resume", () => {
+    expect(canRetryRun({ state: "awaiting_vote" }, { runState: "interrupted", finalizedAt: new Date() })).toBe(false)
+  })
+})
+
+describe("canResumeBattle", () => {
+  const interrupted = { runState: "interrupted", finalizedAt: new Date() }
+  const complete = { runState: "complete", finalizedAt: new Date() }
+
+  test("resumes an undecided battle with committed interrupted sides", () => {
+    expect(canResumeBattle({ state: "awaiting_vote" }, [interrupted, interrupted])).toBe(true)
+    expect(canResumeBattle({ state: "awaiting_vote" }, [complete, interrupted])).toBe(true)
+  })
+
+  test("refuses a battle with nothing interrupted, or one that is decided or running", () => {
+    expect(canResumeBattle({ state: "awaiting_vote" }, [complete, complete])).toBe(false)
+    expect(canResumeBattle({ state: "awaiting_vote", resolution: voteResolution("a") }, [interrupted])).toBe(false)
+    expect(canResumeBattle({ state: "running" }, [interrupted, interrupted])).toBe(false)
+    expect(canResumeBattle({ state: "awaiting_stop_resolution" }, [interrupted, interrupted])).toBe(false)
+  })
+
+  test("leaves Discard as the only other choice while the battle can resume", () => {
+    const finished = { side: "a" as const, selectable: true, ...complete }
+    const cutOff = { side: "b" as const, selectable: false, ...interrupted }
+    expect(canDiscardBattle({ state: "awaiting_vote" }, [finished, cutOff])).toBe(true)
+    expect(canTie({ state: "awaiting_vote" }, [finished, cutOff])).toBe(false)
+  })
+
+  test("refuses unless every interrupted side can resume, so none goes on alone", () => {
+    expect(canResumeBattle({ state: "awaiting_vote" }, [interrupted, { ...interrupted, finalizedAt: undefined }])).toBe(
+      false,
+    )
+    expect(
+      canResumeBattle({ state: "awaiting_vote" }, [interrupted, { ...interrupted, worktreeRemovedAt: new Date() }]),
+    ).toBe(false)
+  })
+})
+
+describe("canReopenInterruptedBattle", () => {
+  const settled = { finalizedAt: new Date() }
+  const working = { environmentReadyAt: new Date() }
+
+  test("reopens a running or finalizing battle whose sides settled or had their environment", () => {
+    expect(canReopenInterruptedBattle({ state: "running" }, [settled, working])).toBe(true)
+    expect(canReopenInterruptedBattle({ state: "running" }, [working, working])).toBe(true)
+    expect(canReopenInterruptedBattle({ state: "finalizing" }, [settled, settled])).toBe(true)
+    expect(canReopenInterruptedBattle({ state: "interrupted_recovery" }, [settled, working])).toBe(true)
+  })
+
+  test("leaves a battle the voter stopped, or one still in setup, to the stopped recovery", () => {
+    expect(
+      canReopenInterruptedBattle(
+        { state: "interrupted_recovery", transitionTimestamps: { stopping: new Date() } },
+        [settled, working],
+      ),
+    ).toBe(false)
+    expect(canReopenInterruptedBattle({ state: "stopping" }, [settled, working])).toBe(false)
+    expect(canReopenInterruptedBattle({ state: "creating" }, [working, working])).toBe(false)
+    expect(canReopenInterruptedBattle({ state: "running" }, [settled, {}])).toBe(false)
+    expect(canReopenInterruptedBattle({ state: "running" }, [settled, { ...working, worktreeRemovedAt: new Date() }])).toBe(
+      false,
+    )
+    expect(canReopenInterruptedBattle({ state: "running" }, [working])).toBe(false)
   })
 })
 
