@@ -13,6 +13,11 @@ export interface AdaptiveRenameModalProps {
   visible: boolean;
   title: string;
   initialValue: string;
+  /**
+   * A value written after the dialog opens, such as a suggested name. It fills the field only
+   * while nothing has been typed, and can be submitted unchanged.
+   */
+  suggestion?: string | null;
   placeholder?: string;
   submitLabel?: string;
   onClose: () => void;
@@ -26,6 +31,7 @@ export function AdaptiveRenameModal({
   visible,
   title,
   initialValue,
+  suggestion,
   placeholder,
   submitLabel,
   onClose,
@@ -39,18 +45,32 @@ export function AdaptiveRenameModal({
   const [draft, setDraft] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
+  // The input owns its text natively, so a suggestion reseeds it and remounts it by key.
+  const [seed, setSeed] = useState(initialValue);
+  const [seedKey, setSeedKey] = useState(0);
+  const typedRef = useRef(false);
   const inputRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (!visible) return;
     setDraft(initialValue);
+    setSeed(initialValue);
+    typedRef.current = false;
     setError(null);
     setIsPending(false);
   }, [visible, initialValue]);
 
   useEffect(() => {
+    if (!visible || !suggestion || typedRef.current) return;
+    setDraft(suggestion);
+    setSeed(suggestion);
+    setSeedKey((key) => key + 1);
+    setError(validate?.(suggestion) ?? null);
+  }, [visible, suggestion, validate]);
+
+  useEffect(() => {
     if (!visible) return;
-    const length = initialValue.length;
+    const length = seed.length;
     const timeout = setTimeout(() => {
       const node = inputRef.current;
       if (!node) return;
@@ -62,7 +82,7 @@ export function AdaptiveRenameModal({
       }
     }, 50);
     return () => clearTimeout(timeout);
-  }, [visible, initialValue]);
+  }, [visible, seed, seedKey]);
 
   const computeError = useCallback(
     (value: string): string | null => {
@@ -74,6 +94,7 @@ export function AdaptiveRenameModal({
 
   const handleChange = useCallback(
     (value: string) => {
+      typedRef.current = true;
       setDraft(value);
       // A supplied validator states its rule as you type, so a disabled submit always has a
       // reason under the field. An empty draft says nothing: nothing has been typed yet.
@@ -130,7 +151,8 @@ export function AdaptiveRenameModal({
       <View style={styles.body}>
         <FormTextInput
           ref={inputRef}
-          initialValue={initialValue}
+          initialValue={seed}
+          resetKey={seedKey}
           onChangeText={handleChange}
           placeholder={placeholder}
           autoCapitalize="none"

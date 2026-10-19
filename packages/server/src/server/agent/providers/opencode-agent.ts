@@ -5,7 +5,12 @@ import {
   parseOpenCodeTodoWriteState,
   type OpenCodeTodo,
 } from "@getpaseo/protocol/arena/todo";
-import type { ArenaActivitySource, ArenaCheckoutCleanupSource } from "../agent-sdk-types.js";
+import type {
+  ArenaActivitySource,
+  ArenaCheckoutCleanupSource,
+  GitMetadataRequest,
+  GitMetadataResult,
+} from "../agent-sdk-types.js";
 import {
   ArenaStreamFrameSchema,
   type ArenaStreamFrame,
@@ -114,10 +119,23 @@ import {
 } from "./opencode/subagent-presentation.js";
 import type { ManagedProcessRegistry } from "../../managed-processes/managed-processes.js";
 import {
+  ARENA_PAYLOAD_LIMIT_BYTES,
+  ArenaChatTooLargeError,
+  ArenaDiffTooLargeError,
+} from "../../arena/payload-limit.js";
+import {
   buildOpenCodePermissionRules,
   OpenCodeProviderOptionsSchema,
   type OpenCodeProviderOptions,
 } from "./opencode/options.js";
+
+function parseJsonOrNull(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
 
 const OPENCODE_CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: true,
@@ -1402,6 +1420,21 @@ interface OpenCodeMoveSessionInput {
   copyChanges: boolean;
 }
 
+/** The engine's own words for a refused Arena request, or its status. */
+function arenaErrorMessage(value: unknown, status: number): string {
+  const data =
+    value &&
+    typeof value === "object" &&
+    "data" in value &&
+    value.data &&
+    typeof value.data === "object"
+      ? value.data
+      : null;
+  return data && "message" in data && typeof data.message === "string"
+    ? data.message
+    : `Arena request failed with status ${status}`;
+}
+
 class OpenCodeMoveSessionError extends Error {
   constructor(
     readonly status: number,
@@ -1497,6 +1530,13 @@ function createSdkOpenCodeClient(options: {
     ...(options.controlToken ? { headers: { "x-paseo-control-token": options.controlToken } } : {}),
   } satisfies OpencodeClientConfig & { directory: string });
 }
+
+const GitMetadataResultSchema = z.union([
+  z.object({ message: z.string().min(1) }),
+  z.object({ title: z.string().min(1), body: z.string() }),
+  z.object({ branch: z.string().min(1) }),
+  z.object({ title: z.string().min(1) }),
+]);
 
 export class OpenCodeAgentClient implements AgentClient {
   readonly provider = "opencode" as const;
@@ -2020,6 +2060,42 @@ export class OpenCodeAgentClient implements AgentClient {
         const text = await response.text().catch(() => "");
         throw new Error(`Arena worktree seed failed with status ${response.status}: ${text}`);
       }
+    } finally {
+      await acquisition.release();
+    }
+  }
+
+  /**
+   * Commit messages, pull request text and branch names come from the Arena backend's metadata route, on the
+   * comparison's model: the user's own agents and the paid battle pool stay out of it.
+   */
+  async writeGitMetadata(
+    cwd: string,
+    request: GitMetadataRequest,
+    signal: AbortSignal,
+  ): Promise<GitMetadataResult | null> {
+    if (!this.arenaMode) return null;
+    const acquisition = await this.serverManager.acquireCurrent();
+    try {
+      const response = await fetch(
+        new URL("/arena/metadata", `${acquisition.server.url.replace(/\/$/, "")}/`),
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-opencode-directory": cwd,
+            "x-paseo-control-token": acquisition.server.controlToken,
+          },
+          body: JSON.stringify(request),
+          signal,
+        },
+      );
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`Arena metadata failed with status ${response.status}: ${text}`);
+      }
+      return GitMetadataResultSchema.parse(await response.json());
     } finally {
       await acquisition.release();
     }
@@ -4032,6 +4108,15 @@ class OpenCodeAgentSession implements AgentSession {
             .join("\n");
           if (data) yield ArenaStreamFrameSchema.parse(JSON.parse(data));
         }
+        // Stop reading a frame that could not reach the window anyway.
+        if (buffer.length > ARENA_PAYLOAD_LIMIT_BYTES) {
+          yield {
+            kind: "reset",
+            reason: new ArenaChatTooLargeError().message,
+            code: "chat_too_large",
+          };
+          return;
+        }
       }
     } finally {
       await reader.cancel().catch(() => {});
@@ -4050,23 +4135,32 @@ class OpenCodeAgentSession implements AgentSession {
     path: string,
     options: { method: "POST"; body?: Record<string, unknown> },
   ): Promise<ArenaSnapshot | null> {
+    // Only archive asks this way, and its answer stays in the daemon (preview routes), so it is read
+    // whatever its size: refused, the archive the engine already made could never finish here.
     return this.arenaFetch(path, ArenaSnapshotSchema.nullable(), {
       ...options,
       allowNotFound: true,
+      unbounded: true,
     });
   }
 
   private async arenaDiff(path: string): Promise<ArenaComparisonDiff> {
-    return this.arenaFetch(path, ArenaComparisonDiffSchema);
+    return this.arenaFetch(path, ArenaComparisonDiffSchema, {
+      tooLarge: () => new ArenaDiffTooLargeError(),
+    });
   }
 
   private async arenaFetch<T>(
     path: string,
     schema: z.ZodType<T>,
     options?: {
-      method: "POST";
+      method?: "POST";
       body?: Record<string, unknown>;
       allowNotFound?: boolean;
+      /** What an answer past the limit is, when it is not the battle's state. */
+      tooLarge?: () => Error;
+      /** The answer never goes to a window, so the window's limit does not apply. */
+      unbounded?: true;
     },
   ): Promise<T> {
     await this.ensureArenaRuntime();
@@ -4081,23 +4175,15 @@ class OpenCodeAgentSession implements AgentSession {
       },
       ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
     });
-    const value: unknown = await response.json().catch(() => null);
+    const text = await response.text().catch(() => "");
+    if (!options?.unbounded && text.length > ARENA_PAYLOAD_LIMIT_BYTES) {
+      throw options?.tooLarge?.() ?? new ArenaChatTooLargeError();
+    }
+    const value = parseJsonOrNull(text);
     if (response.status === 404 && options?.allowNotFound) {
       return schema.parse(null);
     }
-    if (!response.ok) {
-      const message =
-        value &&
-        typeof value === "object" &&
-        "data" in value &&
-        value.data &&
-        typeof value.data === "object" &&
-        "message" in value.data &&
-        typeof value.data.message === "string"
-          ? value.data.message
-          : `Arena request failed with status ${response.status}`;
-      throw new Error(message);
-    }
+    if (!response.ok) throw new Error(arenaErrorMessage(value, response.status));
     return schema.parse(value);
   }
 

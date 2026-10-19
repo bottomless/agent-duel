@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  buildAgentBranchNameSeed,
-  buildAgentPrompt,
-  renderPromptAttachmentAsText,
-} from "./prompt-attachments.js";
+import { buildAgentPrompt, renderPromptAttachmentAsText } from "./prompt-attachments.js";
 
 describe("prompt attachments", () => {
   it("places fork history before the new user prompt", () => {
@@ -164,34 +160,6 @@ describe("prompt attachments", () => {
         "MIME: text/plain",
         "Size: 11 bytes",
       ].join("\n"),
-    );
-  });
-
-  it("returns undefined when firstAgentContext is empty", () => {
-    expect(buildAgentBranchNameSeed(undefined)).toBeUndefined();
-    expect(buildAgentBranchNameSeed({})).toBeUndefined();
-    expect(buildAgentBranchNameSeed({ prompt: "   " })).toBeUndefined();
-    expect(buildAgentBranchNameSeed({ attachments: [] })).toBeUndefined();
-  });
-
-  it("wraps prompt and rendered attachments as tagged naming input", () => {
-    expect(
-      buildAgentBranchNameSeed({
-        prompt: "Investigate flaky test",
-        attachments: [
-          {
-            type: "github_pr",
-            mimeType: "application/github-pr",
-            number: 123,
-            title: "Fix worktree naming",
-            url: "https://github.com/getpaseo/paseo/pull/123",
-            baseRefName: "main",
-            headRefName: "fix/worktree-naming",
-          },
-        ],
-      }),
-    ).toBe(
-      "<user-prompt>\nInvestigate flaky test\n</user-prompt>\n\n<attachments>\nGitHub PR #123: Fix worktree naming\nhttps://github.com/getpaseo/paseo/pull/123\nBase: main\nHead: fix/worktree-naming\n</attachments>",
     );
   });
 });

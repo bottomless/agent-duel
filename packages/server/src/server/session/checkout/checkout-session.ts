@@ -10,6 +10,7 @@ import type {
   CheckoutRefreshRequest,
   CheckoutRenameBranchRequest,
   CheckoutCreateBranchRequest,
+  CheckoutSuggestBranchNameRequest,
   CheckoutStatusRequest,
   SessionInboundMessage,
   SessionOutboundMessage,
@@ -79,6 +80,7 @@ export interface CheckoutSessionHost {
     branch: string,
     options?: { baseRef?: string },
   ): Promise<{ currentBranch: string | null }>;
+  getWorkspaceTitle(workspaceId: string): Promise<string | null>;
 }
 
 type CurrentWorkspacePullRequest = NonNullable<
@@ -615,6 +617,20 @@ export class CheckoutSession {
         },
       });
     }
+  }
+
+  async handleCheckoutSuggestBranchNameRequest(
+    msg: CheckoutSuggestBranchNameRequest,
+  ): Promise<void> {
+    const { cwd, workspaceId, requestId } = msg;
+    const chatTitle = workspaceId
+      ? await this.host.getWorkspaceTitle(workspaceId).catch(() => null)
+      : null;
+    const branch = await this.gitMetadataGenerator.suggestBranchName(cwd, chatTitle);
+    this.host.emit({
+      type: "checkout.suggest_branch_name.response",
+      payload: { cwd, branch, requestId },
+    });
   }
 
   async handleCheckoutRenameBranchRequest(msg: CheckoutRenameBranchRequest): Promise<void> {

@@ -14,8 +14,8 @@ Arena state is canonical local data. The runtime stores it in SQLite at
 `$PASEO_HOME/arena/artifacts/sha256/`. The default home is `~/.paseo`; source development can
 override it with `PASEO_HOME`.
 
-The battle routes (assignments, the contestant OpenRouter proxy, and the comparison) live in
-`arena-backend/packages/arena-service`. Where they run depends on the build, and one build never
+The battle routes (assignments, the contestant OpenRouter proxy, the comparison, and commit, pull
+request and branch name text) live in `arena-backend/packages/arena-service`. Where they run depends on the build, and one build never
 switches between the two:
 
 - **Hosted** is the official build, configured with `PASEO_CONTROL_PLANE_URL` and the session
@@ -57,7 +57,11 @@ archived battle puts the prompt's images back, since the battle card shows them 
 tool result's attachments, the screenshots and PDFs a contestant reads, never go to the window: the
 app shows none of them, and a run that read many put one snapshot past the daemon's 64 MiB socket
 limit, which dropped the window's connection after a vote or a reply (`withoutAttachmentData` in
-`arena/live.ts`). Research gets the same transcript, sent first so a full upload buffer drops images
+`arena/live.ts`). Nor do earlier turns: a contestant session is a fork of the whole chat, so a run
+goes to the window from its prompt on (`fromPrompt` in `arena/transcript.ts`); sent whole, a long
+chat's two forks passed the same limit whenever it was opened or sent to. An Arena answer still over
+half that limit is refused with `chat_too_large` rather than dropping the socket, and the app tells
+the user to start a new chat (`server/arena/payload-limit.ts`). Research gets the same transcript, sent first so a full upload buffer drops images
 rather than the transcript, and each image as an `images` record; both sides share a battle's images,
 so each is uploaded once. The control plane refuses a whole batch that names a collection it does not know, so
 deploy it before a desktop build that sends a new one.
@@ -145,10 +149,13 @@ on the card. The judge is asked for a short report (`arena/comparison.ts`,
 On the first turn it also ends with a `Title:` line, which the engine takes out of the report. A
 new battle chat's workspace shows the prompt's first line from the send and that title once the
 comparison arrives; a workspace with any other name keeps it
-(`arena-workspace-auto-name.ts`). Nothing else names a battle chat: in Arena every OpenCode prompt
-runs on a paid contestant with the full agent setup, so Paseo's naming agent cost up to $0.25 per
-new chat. When both sides leave identical trees there is no comparison call,
-and the chat keeps its prompt's first line.
+(`arena-workspace-auto-name.ts`). When both sides leave identical trees there is no report to write,
+so the first turn sends the comparison route a request for the title alone; if it fails, the chat
+keeps its prompt's first line. A chat started with Battle off also shows its prompt's first line
+from the send, and the same model renames it from that prompt through the metadata route below; if
+that fails it keeps the line. Nothing else names a chat: Paseo named workspaces with an agent, which
+here meant the user's installed Claude Code or a paid contestant with the full agent setup (up to
+$0.25 per new chat).
 The card shows it whole; only a report that measures longer than a screen of the card folds to its
 opening with `Show full summary` (`verdict-body.tsx`). Trimming at the prompt was Michael's call:
 the fold spent latency on prose the voter then had to unfold. The status is `git merge-tree
@@ -826,6 +833,20 @@ The comparison uses base-to-agent changes, direct A/B differences, and visible t
 unresolved battle scope and always selects `minimax/minimax-m2.7` via groq in the service
 (`arena/comparison.ts`). There is no generic or unassigned comparison path through the OpenRouter
 proxy.
+
+The Commit and Create PR buttons get their text from the same model through
+`POST /api/arena/metadata` (`arena-service/src/metadata.ts`), never from an agent, and so do the
+name the Create branch dialog offers and the title of a chat started with Battle off. The daemon
+sends the engine's `/arena/metadata` route the kind, the file list and patch (for a branch name, the
+chat's title and its uncommitted changes; for a chat title, the start of its first prompt), and
+the project's own instructions from Project Settings; the service builds the prompt around them, so
+the route is not a general model endpoint. It takes at most 60,000 characters of changes and 1,000
+of instructions, caps the reply, folds a branch name into the slug the desktop accepts, and allows
+each hosted account 60 requests an hour of each kind, so branch names never use up commit
+messages; a BYOK build runs it on the user's key without a limit.
+Any failure, a missing control-plane route included, gives a fixed message such as `Update 3 files`
+(`git-metadata-generator.ts`), so a commit never waits on the model; the branch dialog stays empty.
+Deploy the control plane with the route before the desktop release that calls it.
 
 Keep complete small changes grouped by agent against the base. Do not collapse shared work
 or add a third A/B view when both base patches fit: extra directions can reverse attribution.

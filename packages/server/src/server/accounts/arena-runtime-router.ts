@@ -7,6 +7,7 @@ import { isNetworkUnavailable, networkUnavailableBody } from "./network-unavaila
 const allowedRoutes = new Set([
   "/api/arena/assignments",
   "/api/arena/comparison",
+  "/api/arena/metadata",
   "/api/research",
   "/api/openrouter/api/v1/chat/completions",
   "/api/openrouter/api/v1/responses",

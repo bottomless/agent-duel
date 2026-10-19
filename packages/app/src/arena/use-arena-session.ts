@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import {
   useIsMutating,
   useMutation,
@@ -21,6 +22,7 @@ import { activeTrunkConflicts, arenaParkedPromotion } from "./conflict-guard";
 import { ensureBattleRepository } from "./battle-repository";
 import type { ComposerAttachment } from "@/attachments/types";
 import { resolveAndStartArenaTurn } from "./start";
+import { ArenaChatTooLargeError, arenaSizeErrorOr } from "./chat-too-large";
 import { encodeArenaPromptAttachments } from "./prompt-attachments";
 import { startingPromptImages } from "./prompt-images";
 import type { UserMessageImageAttachment } from "@/types/stream";
@@ -80,11 +82,13 @@ export function useArenaSessionQuery(serverId: string, agentId: string) {
     (chat !== undefined && activeTrunkConflicts(chat) !== null) ||
     arenaParkedPromotion(snapshot)?.kind === "conflicted";
   const refresh = query.refetch;
+  // A battle too large to load answers the same on every refresh, and refreshing clears the message.
+  const tooLarge = query.error instanceof ArenaChatTooLargeError;
   useEffect(() => {
-    if (!conflicted) return;
+    if (!conflicted || tooLarge) return;
     const timer = setInterval(() => void refresh(), CONFLICT_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [conflicted, refresh]);
+  }, [conflicted, tooLarge, refresh]);
   return query;
 }
 
@@ -105,6 +109,24 @@ function pauseArena(
 
 export const arenaStartMutationKey = (serverId: string, agentId: string) =>
   ["arena", "start", serverId, agentId] as const;
+
+/**
+ * What the chat's status row shows: the stream's error, or else the latest send, when it was refused
+ * because the chat is too long to load. The composer that sent it remounts while a battle starts and
+ * loses its own error, so the chat shows this one.
+ */
+export function useArenaStatusError(
+  serverId: string,
+  agentId: string | undefined,
+  streamError: Error | null,
+): Error | null {
+  const errors = useMutationState({
+    filters: { mutationKey: arenaStartMutationKey(serverId, agentId ?? "") },
+    select: (mutation) => mutation.state.error,
+  });
+  const latest = errors.at(-1);
+  return streamError ?? (latest instanceof ArenaChatTooLargeError ? latest : null);
+}
 
 /**
  * The prompt of a battle that has been sent and not yet answered, or null.
@@ -162,6 +184,8 @@ export function useArenaStartMutation(serverId: string, agentId: string) {
         onResolved: (current) => {
           queryClient.setQueryData(arenaSessionQueryKey(serverId, agentId), current);
         },
+      }).catch((error: unknown) => {
+        throw arenaSizeErrorOr(error);
       });
     },
     onSuccess: (snapshot) => {
@@ -242,52 +266,60 @@ export function useArenaTurnMutation(serverId: string, agentId: string) {
     onSettled: (_data, _error, _variables, resume) => resume?.(),
     mutationFn: async (action: ArenaTurnAction) => {
       if (!client) throw new Error("Arena daemon connection is unavailable");
-      switch (action.kind) {
-        case "single_agent_vote":
-          return client.arenaSingleAgentVote(agentId, action.ratingId, action.vote);
-        case "reply":
-          return client.arenaReply(
-            agentId,
-            action.turnId,
-            action.prompt,
-            action.target,
-            await encodeArenaPromptAttachments(action.attachments),
-          );
-        case "interrupt_steer":
-          return client.arenaInterruptSteer(agentId, action.runId, action.messageId);
-        case "discard_steer":
-          return client.arenaDiscardSteer(agentId, action.runId, action.messageIds);
-        case "retry_run":
-          return client.arenaRetryRun(agentId, action.runId);
-        case "vote":
-          return client.arenaVote(agentId, action.turnId, action.vote);
-        case "stop":
-          return client.arenaStop(agentId, action.turnId);
-        case "resolve_stop":
-          return client.arenaResolveStop(agentId, action.turnId, action.resolution);
-        case "retry_comparison":
-          return client.arenaRetryComparison(agentId, action.turnId);
-        case "retry_resolution":
-          return client.arenaRetryResolution(agentId, action.turnId, action.mode, action.answers);
-        case "reply_question":
-          return client.arenaReplyQuestion(
-            agentId,
-            action.runId,
-            action.questionRequestId,
-            action.answers,
-          );
-        case "reject_question":
-          return client.arenaRejectQuestion(agentId, action.runId, action.questionRequestId);
-        case "reply_permission":
-          return client.arenaReplyPermission(
-            agentId,
-            action.runId,
-            action.permissionRequestId,
-            action.response,
-          );
+      try {
+        return await runArenaTurnAction(client, agentId, action);
+      } catch (error) {
+        throw arenaSizeErrorOr(error);
       }
     },
     onSuccess: (snapshot) =>
       replaceArenaSessionSnapshot({ queryClient, serverId, agentId, snapshot }),
   });
+}
+
+async function runArenaTurnAction(client: DaemonClient, agentId: string, action: ArenaTurnAction) {
+  switch (action.kind) {
+    case "single_agent_vote":
+      return client.arenaSingleAgentVote(agentId, action.ratingId, action.vote);
+    case "reply":
+      return client.arenaReply(
+        agentId,
+        action.turnId,
+        action.prompt,
+        action.target,
+        await encodeArenaPromptAttachments(action.attachments),
+      );
+    case "interrupt_steer":
+      return client.arenaInterruptSteer(agentId, action.runId, action.messageId);
+    case "discard_steer":
+      return client.arenaDiscardSteer(agentId, action.runId, action.messageIds);
+    case "retry_run":
+      return client.arenaRetryRun(agentId, action.runId);
+    case "vote":
+      return client.arenaVote(agentId, action.turnId, action.vote);
+    case "stop":
+      return client.arenaStop(agentId, action.turnId);
+    case "resolve_stop":
+      return client.arenaResolveStop(agentId, action.turnId, action.resolution);
+    case "retry_comparison":
+      return client.arenaRetryComparison(agentId, action.turnId);
+    case "retry_resolution":
+      return client.arenaRetryResolution(agentId, action.turnId, action.mode, action.answers);
+    case "reply_question":
+      return client.arenaReplyQuestion(
+        agentId,
+        action.runId,
+        action.questionRequestId,
+        action.answers,
+      );
+    case "reject_question":
+      return client.arenaRejectQuestion(agentId, action.runId, action.questionRequestId);
+    case "reply_permission":
+      return client.arenaReplyPermission(
+        agentId,
+        action.runId,
+        action.permissionRequestId,
+        action.response,
+      );
+  }
 }

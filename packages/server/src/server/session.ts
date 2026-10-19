@@ -13,6 +13,7 @@ import {
   withHistoryImageRefs,
   withStreamImageRefs,
 } from "./arena/history-images.js";
+import { ArenaPayloadTooLargeError } from "./arena/payload-limit.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
 import { lstat, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
@@ -132,7 +133,6 @@ import {
 } from "./agent/timeline-projection.js";
 import { buildAgentForkContextAttachment } from "./agent/activity-curator.js";
 import { buildAgentPrompt } from "./agent/prompt-attachments.js";
-import type { StructuredGenerationDaemonConfig } from "./agent/structured-generation-providers.js";
 import {
   getAgentStreamEventTurnId,
   type AgentPersistenceHandle,
@@ -179,10 +179,7 @@ import {
   createWorkspaceGitObserverService,
   type WorkspaceGitObserverService,
 } from "./session/workspace-git-observer/workspace-git-observer-service.js";
-import {
-  createAgentStructuredTextGeneration,
-  createGitMetadataGenerator,
-} from "./session/checkout/git-metadata-generator.js";
+import { createGitMetadataGenerator } from "./session/checkout/git-metadata-generator.js";
 import { ProviderCatalogSession } from "./session/provider/provider-catalog-session.js";
 import { WorkspaceFilesSession } from "./session/files/workspace-files-session.js";
 import { AgentConfigSession } from "./session/agent-config/agent-config-session.js";
@@ -891,6 +888,8 @@ export class Session {
           this.workspaceGitObserver.handleBranchSnapshot(cwd, branchName),
         renameCurrentBranch: (cwd, branch) => this.renameCurrentBranch(cwd, branch),
         createBranch,
+        getWorkspaceTitle: async (workspaceId) =>
+          (await this.workspaceRegistry.get(workspaceId))?.title ?? null,
       },
       gitMutation: this.gitMutation,
       workspaceGitService: this.workspaceGitService,
@@ -898,12 +897,10 @@ export class Session {
       checkoutDiffManager,
       gitMetadataGenerator: createGitMetadataGenerator({
         workspaceGitService: this.workspaceGitService,
-        generation: createAgentStructuredTextGeneration({
-          agentManager: this.agentManager,
-          providerSnapshotManager,
-          readDaemonConfig: () => this.readStructuredGenerationDaemonConfig(),
-          getFocusedSelection: (cwd) => this.getFocusedAgentSelectionForCwd(cwd),
-        }),
+        writer: {
+          write: (cwd, request, signal) => this.agentManager.writeGitMetadata(cwd, request, signal),
+        },
+        logger: this.sessionLogger,
       }),
       paseoHome: this.paseoHome,
       worktreesRoot: this.worktreesRoot,
@@ -1346,37 +1343,6 @@ export class Session {
     appVisibilityChangedAt: Date;
   } | null {
     return this.clientActivity;
-  }
-
-  private getFocusedAgentSelectionForCwd(cwd: string):
-    | {
-        provider?: string | null;
-        model?: string | null;
-        thinkingOptionId?: string | null;
-      }
-    | undefined {
-    const focusedAgentId = this.clientActivity?.focusedAgentId;
-    if (!focusedAgentId) {
-      return undefined;
-    }
-
-    const agent = this.agentManager.getAgent(focusedAgentId);
-    if (!agent || agent.cwd !== cwd) {
-      return undefined;
-    }
-
-    return {
-      provider: agent.provider,
-      model: agent.runtimeInfo?.model ?? agent.config.model ?? null,
-      thinkingOptionId:
-        agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId ?? null,
-    };
-  }
-
-  private readStructuredGenerationDaemonConfig(): StructuredGenerationDaemonConfig {
-    return {
-      metadataGeneration: this.daemonConfigStore.get().metadataGeneration,
-    };
   }
 
   public getRuntimeMetrics(): SessionRuntimeMetrics {
@@ -1887,6 +1853,12 @@ export class Session {
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.sessionLogger.error({ err }, "Error handling message");
+        // An Arena answer too large to send says so in its own words, without the generic prefix.
+        const tooLarge = err instanceof ArenaPayloadTooLargeError;
+        const failure = {
+          error: tooLarge ? err.message : `Request failed: ${err.message}`,
+          code: tooLarge ? err.code : "handler_error",
+        };
         if (
           msg.type.startsWith("arena.stream.") &&
           "requestId" in msg &&
@@ -1895,12 +1867,7 @@ export class Session {
           this.emitForSource(
             {
               type: "rpc_error",
-              payload: {
-                requestId: msg.requestId,
-                requestType: msg.type,
-                error: `Request failed: ${err.message}`,
-                code: "handler_error",
-              },
+              payload: { requestId: msg.requestId, requestType: msg.type, ...failure },
             },
             source,
           );
@@ -1913,12 +1880,7 @@ export class Session {
           try {
             this.emit({
               type: "rpc_error",
-              payload: {
-                requestId,
-                requestType: msg.type,
-                error: `Request failed: ${err.message}`,
-                code: "handler_error",
-              },
+              payload: { requestId, requestType: msg.type, ...failure },
             });
           } catch (emitError) {
             this.sessionLogger.error({ err: emitError }, "Failed to emit rpc_error");
@@ -2332,6 +2294,8 @@ export class Session {
         return this.checkoutSession.handleCheckoutRenameBranchRequest(msg);
       case "checkout.create_branch.request":
         return this.checkoutSession.handleCheckoutCreateBranchRequest(msg);
+      case "checkout.suggest_branch_name.request":
+        return this.checkoutSession.handleCheckoutSuggestBranchNameRequest(msg);
       case "checkout_commit_request":
         return this.checkoutSession.handleCheckoutCommitRequest(msg);
       case "checkout_merge_request":
@@ -3491,18 +3455,6 @@ export class Session {
         logger: this.sessionLogger,
       });
       await this.agentUpdates.forwardLiveAgent(snapshot);
-      if (resolvedIntent.createdDirectoryWorkspace && trimmedPrompt) {
-        this.workspaceAutoName.scheduleForDirectory(
-          {
-            workspaceId: resolvedIntent.intent.workspaceId,
-            cwd: resolvedIntent.config.cwd,
-            firstAgentContext,
-          },
-          {
-            currentSelection: this.getFocusedAgentSelectionForCwd(resolvedIntent.config.cwd),
-          },
-        );
-      }
       this.createAgentLifecycleDispatch.registerAutoArchiveIfRequested({
         autoArchive,
         agentId: snapshot.id,
@@ -6304,6 +6256,13 @@ export class Session {
       descriptor,
       request.firstAgentContext ? "running" : undefined,
     );
+    if (request.firstAgentContext) {
+      void this.workspaceAutoName.nameFromPrompt({
+        workspaceId: workspace.workspaceId,
+        cwd: workspace.cwd,
+        firstAgentContext: request.firstAgentContext,
+      });
+    }
     void this.workspaceGitService
       .getSnapshot(workspace.cwd, {
         force: true,
@@ -6316,17 +6275,6 @@ export class Session {
           "Background snapshot refresh failed after workspace.create",
         );
       });
-    if (request.firstAgentContext) {
-      const firstAgentContext = request.firstAgentContext;
-      this.workspaceAutoName.scheduleForDirectory(
-        {
-          workspaceId: workspace.workspaceId,
-          cwd: workspace.cwd,
-          firstAgentContext,
-        },
-        { currentSelection: this.getFocusedAgentSelectionForCwd(workspace.cwd) },
-      );
-    }
   }
 
   private async handleWorkspaceCreateWorktree(
@@ -6386,6 +6334,13 @@ export class Session {
       descriptor,
       request.firstAgentContext ? "running" : undefined,
     );
+    if (request.firstAgentContext) {
+      void this.workspaceAutoName.nameFromPrompt({
+        workspaceId: result.workspace.workspaceId,
+        cwd: result.workspace.cwd,
+        firstAgentContext: request.firstAgentContext,
+      });
+    }
   }
 
   private async handleOpenProjectRequest(
@@ -6953,10 +6908,6 @@ export class Session {
         createPaseoWorktree: (workflowInput, serviceOptions) =>
           this.createPaseoWorktree(workflowInput, serviceOptions),
         warmWorkspaceGitData: (workspace) => this.warmWorkspaceGitDataForWorkspace(workspace),
-        autoNameWorkspaceBranchForFirstAgent: (autoNameInput) =>
-          this.workspaceAutoName.scheduleForWorktree(autoNameInput, {
-            currentSelection: this.getFocusedAgentSelectionForCwd(autoNameInput.workspace.cwd),
-          }),
         startWorkspaceSetup: (workspaceId, operation) =>
           this.workspaceSetupRuntime.start(workspaceId, operation),
         emitWorkspaceUpdateForWorkspaceId: (workspaceId) =>

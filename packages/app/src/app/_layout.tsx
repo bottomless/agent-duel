@@ -32,6 +32,7 @@ import { AppearanceStyleBoundary } from "@/components/appearance-style-boundary"
 import { DownloadToast } from "@/components/download-toast";
 import { QuittingOverlay } from "@/components/quitting-overlay";
 import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
+import { ConfirmDialogHost } from "@/components/confirm-dialog-host";
 import { LeftSidebar } from "@/components/left-sidebar";
 import { WindowSidebarMenuToggle } from "@/components/headers/menu-header";
 import { SidebarModelProvider } from "@/components/sidebar/sidebar-model";
@@ -582,6 +583,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
       <WorkspaceSetupDialog />
       <GitCreateBranchDialogHost />
       <KeyboardShortcutsDialog />
+      <ConfirmDialogHost />
       <QuittingOverlay />
     </View>
   );

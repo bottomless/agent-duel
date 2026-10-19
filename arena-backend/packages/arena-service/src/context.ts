@@ -1,4 +1,5 @@
 import type { ArenaDb } from "./collection"
+import type { MetadataRateLimit } from "./metadata"
 import type { ModelPool } from "./pool"
 
 /** The only facts the battle routes read about whoever is calling. */
@@ -21,6 +22,7 @@ export type ArenaContext = {
   readonly now: () => Date
   readonly validateModels: (apiKey: string) => Promise<void>
   readonly networkUnavailable?: (error: unknown) => Promise<boolean>
+  readonly metadataRateLimit?: MetadataRateLimit
 }
 
 type Failure = (message: string, status: number) => Response

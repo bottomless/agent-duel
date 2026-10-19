@@ -4,6 +4,10 @@ import path from "node:path";
 import { expect, type Page } from "@playwright/test";
 import { buildOpenProjectRoute } from "../../../app/src/utils/host-routes";
 import { openSettings } from "../../../app/e2e/support/helpers/app";
+import {
+  answerConfirmDialog,
+  confirmDialogLocator,
+} from "../../../app/e2e/support/helpers/confirm-dialog";
 import { installDesktopRuntime } from "./runtime";
 import { getServerId } from "../../../app/e2e/support/helpers/server-id";
 import {
@@ -232,7 +236,7 @@ export async function startSkillsSandbox(
   options: SkillsSandboxOptions = {},
 ): Promise<SkillsSandbox> {
   const sandbox = await createSkillsSandbox(options);
-  await installDesktopRuntime(page, { serverId: getServerId(), confirmShouldAccept: false });
+  await installDesktopRuntime(page, { serverId: getServerId() });
   await serveRealSkillsCommands(page, sandbox);
   return sandbox;
 }
@@ -341,26 +345,27 @@ export async function expectSaveErrorKeepsSheetOpen(page: Page): Promise<void> {
   await expectSkillSelectionOpen(page);
 }
 
-/**
- * The removal warning is the desktop confirm dialog, which has no DOM to query.
- * The injected bridge records the call the same way the daemon-management tests
- * assert their confirmation copy.
- */
-export async function expectRemovalWarning(page: Page, skills: string[]): Promise<void> {
-  await page.waitForFunction(() => !!window.__capturedDialogCall, { timeout: 15_000 });
-  const call = await page.evaluate(() => window.__capturedDialogCall);
-  expect(call?.title).toBe("Remove deselected skills?");
+/** Asserts the removal warning names every skill and agent directory, then answers it. */
+export async function answerRemovalWarning(
+  page: Page,
+  skills: string[],
+  answer: "confirm" | "cancel",
+): Promise<void> {
+  const warning = await answerConfirmDialog(page, answer);
+  expect(warning.title).toBe("Remove deselected skills?");
   for (const name of skills) {
-    expect(call?.message).toContain(name);
+    expect(warning.message).toContain(name);
   }
   for (const dir of ["~/.agents", "~/.claude", "~/.codex"]) {
-    expect(call?.message).toContain(dir);
+    expect(warning.message).toContain(dir);
   }
-  expect(call?.message).toContain("Anything you added inside those skill folders is deleted too.");
+  expect(warning.message).toContain(
+    "Anything you added inside those skill folders is deleted too.",
+  );
 }
 
 export async function expectNoRemovalWarning(page: Page): Promise<void> {
-  expect(await page.evaluate(() => window.__capturedDialogCall)).toBeUndefined();
+  await expect(confirmDialogLocator(page)).toHaveCount(0);
 }
 
 export async function expectSkillPresentIn(

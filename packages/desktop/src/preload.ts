@@ -84,10 +84,6 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
     }),
   },
   dialog: {
-    ask: (message: string, options?: Record<string, unknown>) =>
-      ipcRenderer.invoke("paseo:dialog:ask", message, options),
-    askWithCheckbox: (message: string, options: Record<string, unknown>) =>
-      ipcRenderer.invoke("paseo:dialog:askWithCheckbox", message, options),
     open: (options?: Record<string, unknown>) => ipcRenderer.invoke("paseo:dialog:open", options),
   },
   notification: {

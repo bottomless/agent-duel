@@ -214,8 +214,7 @@ import { createFeedbackContextCapture, type FeedbackContextCapture } from "./fee
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
 import { createFeedbackRouter } from "./feedback/routes.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
-import { createGitMutationService } from "./session/git-mutation/git-mutation-service.js";
-import { workspaceIdsOnCheckout } from "./workspace-directory.js";
+import { createGitMetadataGenerator } from "./session/checkout/git-metadata-generator.js";
 import { configureGitProcessPolicy } from "../utils/run-git-command.js";
 import { resolveGitProcessPolicy } from "../utils/git-process-scheduler.js";
 import { resolveFirstAgentPromptTitle } from "./agent/create-agent-title.js";
@@ -1008,13 +1007,6 @@ export async function createPaseoDaemon(
       cwd,
       resolveFirstAgentPromptTitle(firstAgentContext),
     );
-    if (firstAgentContext) {
-      workspaceAutoName.scheduleForDirectory({
-        workspaceId: workspace.workspaceId,
-        cwd: workspace.cwd,
-        firstAgentContext,
-      });
-    }
     return workspace.workspaceId;
   };
   const listActiveWorkspacesExternal = async (): Promise<ActiveWorkspaceRef[]> => {
@@ -1058,27 +1050,22 @@ export async function createPaseoDaemon(
     await emitWorkspaceUpdatesExternal([workspaceId]);
     return workspaceId;
   };
-  const emitWorkspaceUpdateForCwdExternal = async (cwd: string) => {
-    const workspaceIds = workspaceIdsOnCheckout(await workspaceRegistry.list(), cwd);
-    await emitWorkspaceUpdatesExternal(workspaceIds);
-  };
   const emitExternalSessionMessage = (message: SessionOutboundMessage) => {
     wsServer?.broadcast(wrapSessionMessage(message));
   };
-  const workspaceAutoName = new WorkspaceAutoName({
-    agentManager,
-    workspaceRegistry,
+  const chatTitles = createGitMetadataGenerator({
     workspaceGitService,
-    providerSnapshotManager,
-    readDaemonConfig: () => ({ metadataGeneration: daemonConfigStore.get().metadataGeneration }),
-    gitMutation: createGitMutationService({
-      workspaceGitService,
-      logger,
-    }),
-    emitWorkspaceUpdateForCwd: emitWorkspaceUpdateForCwdExternal,
+    writer: {
+      write: (cwd, request, signal) => agentManager.writeGitMetadata(cwd, request, signal),
+    },
+    logger,
+  });
+  const workspaceAutoName = new WorkspaceAutoName({
+    workspaceRegistry,
     emitWorkspaceUpdateForWorkspaceId: async (workspaceId) => {
       await emitWorkspaceUpdatesExternal([workspaceId]);
     },
+    suggestChatTitle: (cwd, prompt) => chatTitles.suggestChatTitle(cwd, prompt),
     logger,
   });
 
@@ -1129,8 +1116,6 @@ export async function createPaseoDaemon(
               .map((session) => session.warmWorkspaceGitDataForWorkspace(workspace)) ?? [],
           );
         },
-        autoNameWorkspaceBranchForFirstAgent: (autoNameInput) =>
-          workspaceAutoName.scheduleForWorktree(autoNameInput),
         emitWorkspaceUpdateForWorkspaceId: async (workspaceId) => {
           await emitWorkspaceUpdatesExternal([workspaceId]);
         },

@@ -100,7 +100,7 @@ Five primitives. The pick is determined by option count, the need to search, and
 
 `<AdaptiveModalSheet>` owns the presentation. Its content inset — the gutter that puts sheet content on the same rails as the sheet header — and compact bottom safe-area padding are the sheet's, not the caller's. A caller declares layout intent through `contentStyle` and never branches on form factor to add its own margins. If a sheet's first snap point is shorter than its header, content, and safe-area clearance, raise that snap point rather than moving the sheet container.
 
-`confirmDialog` is for destructive yes/no and imperative confirmation. Promise-based: `await confirmDialog({ destructive: true, ... })`. Anything where a wrong click loses work.
+`confirmDialog` is for destructive yes/no and imperative confirmation. Promise-based: `await confirmDialog({ destructive: true, ... })`. Anything where a wrong click loses work. It renders in the app (`packages/app/src/components/confirm-dialog-host.tsx`), on the menu surface, never as a native dialog or `window.confirm`: native sheets look different on every OS, read as an error on macOS, and automated QA cannot click them. A destructive question opens on Cancel, so Enter alone never destroys work. Browser tests answer it with `answerConfirmDialog` (`packages/app/e2e/support/helpers/confirm-dialog.ts`).
 
 Three themes is `DropdownMenu`. Thirty hosts is `Combobox`. A label and a value is `AdaptiveModalSheet`. "Are you sure?" is `confirmDialog`.
 

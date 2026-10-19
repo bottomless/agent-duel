@@ -836,6 +836,20 @@ export interface ArenaCheckoutCleanupSource {
   close(): Promise<void>;
 }
 
+export interface GitMetadataRequest {
+  kind: "commit_message" | "pull_request" | "branch_name" | "chat_title";
+  /** The file list and patch, as text. */
+  changes: string;
+  /** The project's own style for this kind of text, from Project Settings. */
+  instructions?: string;
+}
+
+export type GitMetadataResult =
+  | { message: string }
+  | { title: string; body: string }
+  | { branch: string }
+  | { title: string };
+
 export interface AgentClient {
   openArenaActivitySource?(cwd: string): Promise<ArenaActivitySource | null>;
   openArenaCheckoutCleanupSource?(
@@ -877,6 +891,15 @@ export interface AgentClient {
    * battle contestant is seeded. Only a provider that owns that clone machinery implements it.
    */
   seedWorktreeIgnoredContent?(input: { sourceCwd: string; worktreePath: string }): Promise<void>;
+  /**
+   * Write a commit message, pull request text or a branch name on Arena's summary model, so no agent runs for
+   * it. Only the provider that runs Arena implements it; it answers null when Arena is off.
+   */
+  writeGitMetadata?(
+    cwd: string,
+    request: GitMetadataRequest,
+    signal: AbortSignal,
+  ): Promise<GitMetadataResult | null>;
   /** Drop what the provider cached about a directory's repository after Git changed under it. */
   refreshProjectDirectory?(cwd: string): Promise<void>;
   importSession?(

@@ -2118,6 +2118,15 @@ export const CheckoutCreateBranchRequestSchema = z.object({
   requestId: z.string(),
 });
 
+// A name for the Create branch dialog to offer, written from the workspace's chat title and its
+// uncommitted changes on Arena's summary model. Null when nothing could write one.
+export const CheckoutSuggestBranchNameRequestSchema = z.object({
+  type: z.literal("checkout.suggest_branch_name.request"),
+  cwd: z.string(),
+  workspaceId: z.string().optional(),
+  requestId: z.string(),
+});
+
 export const StashSaveRequestSchema = z.object({
   type: z.literal("stash_save_request"),
   cwd: z.string(),
@@ -2909,6 +2918,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   CheckoutSwitchBranchRequestSchema,
   CheckoutRenameBranchRequestSchema,
   CheckoutCreateBranchRequestSchema,
+  CheckoutSuggestBranchNameRequestSchema,
   StashSaveRequestSchema,
   StashPopRequestSchema,
   StashListRequestSchema,
@@ -5028,6 +5038,15 @@ export const CheckoutCreateBranchResponseSchema = z.object({
   }),
 });
 
+export const CheckoutSuggestBranchNameResponseSchema = z.object({
+  type: z.literal("checkout.suggest_branch_name.response"),
+  payload: z.object({
+    requestId: z.string(),
+    cwd: z.string(),
+    branch: z.string().nullable(),
+  }),
+});
+
 const StashEntrySchema = z.object({
   index: z.number().int().min(0),
   message: z.string(),
@@ -5818,6 +5837,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   CheckoutSwitchBranchResponseSchema,
   CheckoutRenameBranchResponseSchema,
   CheckoutCreateBranchResponseSchema,
+  CheckoutSuggestBranchNameResponseSchema,
   StashSaveResponseSchema,
   StashPopResponseSchema,
   StashListResponseSchema,
@@ -6193,6 +6213,12 @@ export type CheckoutRenameBranchRequest = z.infer<typeof CheckoutRenameBranchReq
 export type CheckoutRenameBranchResponse = z.infer<typeof CheckoutRenameBranchResponseSchema>;
 export type CheckoutCreateBranchRequest = z.infer<typeof CheckoutCreateBranchRequestSchema>;
 export type CheckoutCreateBranchResponse = z.infer<typeof CheckoutCreateBranchResponseSchema>;
+export type CheckoutSuggestBranchNameRequest = z.infer<
+  typeof CheckoutSuggestBranchNameRequestSchema
+>;
+export type CheckoutSuggestBranchNameResponse = z.infer<
+  typeof CheckoutSuggestBranchNameResponseSchema
+>;
 export type StashSaveRequest = z.infer<typeof StashSaveRequestSchema>;
 export type StashSaveResponse = z.infer<typeof StashSaveResponseSchema>;
 export type StashPopRequest = z.infer<typeof StashPopRequestSchema>;

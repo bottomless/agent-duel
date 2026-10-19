@@ -24,6 +24,8 @@ const PaseoWorktreeMetadataV2Schema = z.object({
   baseRefName: z.string().min(1),
   baseRef: z.string().min(1).optional(),
   changeRequestLookupTarget: ChangeRequestLookupTargetSchema.optional(),
+  // Written by worktrees whose placeholder branch the first prompt could rename. Nothing renames
+  // one any more; the field stays so their metadata still parses.
   firstAgentBranchAutoName: z
     .discriminatedUnion("status", [
       z.object({
@@ -232,51 +234,6 @@ export function writePaseoWorktreeRuntimeMetadata(
     },
   };
   writePaseoWorktreeMetadataFile(worktreeRoot, next);
-}
-
-export function writePaseoWorktreeFirstAgentBranchAutoNameMetadata(
-  worktreeRoot: string,
-  options: { placeholderBranchName: string },
-): void {
-  const placeholderBranchName = options.placeholderBranchName.trim();
-  if (!placeholderBranchName) {
-    throw new Error("Placeholder branch name is required");
-  }
-
-  const current = readPaseoWorktreeMetadata(worktreeRoot);
-  if (!current) {
-    throw new Error("Cannot persist first-agent branch auto-name metadata: missing base metadata");
-  }
-
-  writePaseoWorktreeMetadataFile(worktreeRoot, {
-    ...current,
-    version: 2,
-    firstAgentBranchAutoName: {
-      status: "pending",
-      placeholderBranchName,
-    },
-  });
-}
-
-export function markPaseoWorktreeFirstAgentBranchAutoNameAttempted(
-  worktreeRoot: string,
-  options: { attemptedAt?: string } = {},
-): PaseoWorktreeMetadata | null {
-  const current = readPaseoWorktreeMetadata(worktreeRoot);
-  if (!current || current.version !== 2 || current.firstAgentBranchAutoName?.status !== "pending") {
-    return current;
-  }
-
-  const next: PaseoWorktreeMetadata = {
-    ...current,
-    firstAgentBranchAutoName: {
-      status: "attempted",
-      placeholderBranchName: current.firstAgentBranchAutoName.placeholderBranchName,
-      attemptedAt: options.attemptedAt ?? new Date().toISOString(),
-    },
-  };
-  writePaseoWorktreeMetadataFile(worktreeRoot, next);
-  return next;
 }
 
 export function readPaseoWorktreeMetadata(worktreeRoot: string): PaseoWorktreeMetadata | null {

@@ -7,6 +7,7 @@ import {
   chooseAddProjectMethod,
   openAddProjectFlow,
 } from "../support/helpers/add-project-flow";
+import { answerConfirmDialog } from "../support/helpers/confirm-dialog";
 import { expectOpenedProject } from "../support/helpers/project-picker-ui";
 import { connectSeedClient, seedWorkspace } from "../support/helpers/seed-client";
 import { getServerId } from "../support/helpers/server-id";
@@ -42,13 +43,10 @@ async function removeProjectFromSidebar(page: Page, projectViewKey: string): Pro
   await expect(kebab).toBeVisible({ timeout: 10_000 });
   await kebab.click();
 
-  // Removing a project raises a browser confirm; accept it so the
-  // user-confirmed removal proceeds deterministically.
-  page.once("dialog", (dialog) => void dialog.accept());
-
   const removeItem = page.getByTestId(`sidebar-project-menu-remove-${projectViewKey}`);
   await expect(removeItem).toBeVisible({ timeout: 10_000 });
   await removeItem.click();
+  await answerConfirmDialog(page, "confirm");
 }
 
 async function addProjectFromPicker(page: Page, projectPath: string): Promise<string> {

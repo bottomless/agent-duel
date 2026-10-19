@@ -390,8 +390,8 @@ Agent Duel does not honour `worktree.setup`, `worktree.teardown`, `worktree.term
 A file that carries them parses fine and is preserved on save, but nothing reads them: every project
 gets the environment a project with no `paseo.json` has always got. Two keys are still read —
 `worktree.arenaCopy` (which untracked files a contestant worktree receives) and `metadataGeneration`
-(the prompts behind generated branch names, commit messages, and PR text, edited in Project
-Settings).
+(the style instructions for generated commit messages, PR text, and the name the Create branch
+dialog suggests, edited in Project Settings).
 
 The scripts and services runtime beneath those removed keys — the projection, the proxy, the port
 allocator, the health monitor, the CLI's `paseo scripts`, and the MCP script tools — is still wired

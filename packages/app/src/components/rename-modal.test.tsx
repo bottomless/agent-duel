@@ -125,7 +125,7 @@ vi.mock("@/components/ui/form-field", async () => {
     (props, ref) =>
       ReactModule.createElement(
         adaptiveInputState.factory as React.ComponentType<Record<string, unknown>>,
-        { ...props, ref },
+        { ...props, ref, key: props.resetKey as string | number | undefined },
       ),
   );
   return { FormTextInput };
@@ -195,6 +195,7 @@ afterEach(() => {
 interface RenderOptions {
   visible?: boolean;
   initialValue?: string;
+  suggestion?: string | null;
   title?: string;
   placeholder?: string;
   submitLabel?: string;
@@ -208,6 +209,7 @@ function renderModal(options: RenderOptions = {}): void {
   const {
     visible = true,
     initialValue = "",
+    suggestion,
     title = "Rename",
     placeholder,
     submitLabel,
@@ -222,6 +224,7 @@ function renderModal(options: RenderOptions = {}): void {
         visible={visible}
         title={title}
         initialValue={initialValue}
+        suggestion={suggestion}
         placeholder={placeholder}
         submitLabel={submitLabel}
         onClose={onClose}
@@ -306,6 +309,31 @@ describe("RenameModal", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit).toHaveBeenCalledWith("feature-2");
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("fills an empty field with a suggestion that arrives later and submits it unchanged", async () => {
+    const onSubmit = vi.fn();
+    renderModal({ suggestion: null, onSubmit });
+    expect(queryInput()?.value).toBe("");
+    expect(querySubmit()?.disabled).toBe(true);
+
+    renderModal({ suggestion: "feat/retry-backoff", onSubmit });
+
+    expect(queryInput()?.value).toBe("feat/retry-backoff");
+    expect(querySubmit()?.disabled).toBe(false);
+    pressEnter();
+    await flush();
+    expect(onSubmit).toHaveBeenCalledWith("feat/retry-backoff");
+  });
+
+  it("keeps what was typed when a suggestion arrives afterwards", () => {
+    renderModal({ suggestion: null });
+    typeInto("my-branch");
+
+    renderModal({ suggestion: "feat/retry-backoff" });
+
+    expect(queryInput()?.value).not.toBe("feat/retry-backoff");
+    expect(querySubmit()?.disabled).toBe(false);
   });
 
   it("calls onClose when AdaptiveModalSheet's close prop fires (cancel button / backdrop delegated)", () => {
