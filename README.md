@@ -36,10 +36,12 @@ The hosted version draws from:
 - GPT-6 Astra
 - GPT-6.1 Sol
 - Kimi K3
-- Muse Spark 1.3
+- Muse Wonder
 - Grok 4.7
 - Qwen 3.8 Max
-- Gemini 3.8 Flash
+- Gemini 4 Argon
+- DeepSeek V4.1 Flash 1017
+- MiMo-V2.6 Flash
 
 ## Architecture
 

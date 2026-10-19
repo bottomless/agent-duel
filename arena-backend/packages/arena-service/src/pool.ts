@@ -5,7 +5,8 @@ export type ModelProfile = {
   readonly contextWindow: number
   /** Sent to OpenRouter as `provider`. */
   readonly routing: Readonly<Record<string, unknown>>
-  readonly reasoningEffort?: "high" | "xhigh"
+  /** Null enables reasoning without an effort level for models that do not expose one. */
+  readonly reasoningEffort?: "high" | "xhigh" | null
 }
 
 export type ModelPool = readonly ModelProfile[]
@@ -54,9 +55,12 @@ export function validateCatalog(pool: ModelPool, value: unknown) {
     if (!inputs.has("image")) {
       throw new Error(`Arena contestant cannot read images: ${profile.displayName}`)
     }
-    const effort = profile.reasoningEffort ?? "high"
-    if (!parameters.has("reasoning") || !parameters.has("reasoning_effort") || !efforts.has(effort)) {
-      throw new Error(`Arena contestant does not support ${effort} reasoning: ${profile.displayName}`)
+    const effort = profile.reasoningEffort === undefined ? "high" : profile.reasoningEffort
+    if (
+      !parameters.has("reasoning") ||
+      (effort !== null && (!parameters.has("reasoning_effort") || !efforts.has(effort)))
+    ) {
+      throw new Error(`Arena contestant does not support ${effort ?? "enabled"} reasoning: ${profile.displayName}`)
     }
   }
 }

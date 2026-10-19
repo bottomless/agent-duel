@@ -382,7 +382,12 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       JSON.stringify({
         ...withoutSampling(input),
         model: routeAssignment.model.slug,
-        reasoning: { effort: routeAssignment.modelSize === "medium" ? "xhigh" : "high" },
+        reasoning:
+          routeAssignment.model.reasoningEffort === null
+            ? { enabled: true }
+            : {
+                effort: routeAssignment.model.reasoningEffort ?? (routeAssignment.modelSize === "medium" ? "xhigh" : "high"),
+              },
         provider: routeAssignment.model.routing,
         ...promptCache(routeAssignment.model.slug, input),
         stream_options: record(input.stream_options)

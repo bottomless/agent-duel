@@ -21,6 +21,7 @@ export const MODEL_VENDORS = [
   "openai",
   "qwen",
   "xai",
+  "xiaomi",
   "zai",
 ] as const;
 
@@ -43,6 +44,7 @@ const VENDOR_PATTERNS: ReadonlyArray<readonly [ModelVendor, RegExp]> = [
   ["google", /\b(?:google|gemini|gemma)/i],
   ["mistral", /\b(?:mistral|ministral|codestral|devstral|magistral|pixtral)/i],
   ["meta", /\b(?:meta|llama)/i],
+  ["xiaomi", /\b(?:xiaomi|mi[\s-]?mo)/i],
 ];
 
 export function arenaModelVendor(raw: string | undefined): ModelVendor | null {

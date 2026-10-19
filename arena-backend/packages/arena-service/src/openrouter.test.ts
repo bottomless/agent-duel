@@ -635,6 +635,46 @@ describe("OpenRouter proxy", () => {
     expect(upstreamBody).toMatchObject({ model: "provider/hidden-model", max_tokens: 32_000 })
   })
 
+  test.each([
+    { name: "enabled without effort", reasoningEffort: null, expected: { enabled: true } },
+    { name: "xhigh effort", reasoningEffort: "xhigh", expected: { effort: "xhigh" } },
+  ])("uses the assigned profile's reasoning setting ($name)", async ({ reasoningEffort, expected }) => {
+    let upstreamBody: Record<string, unknown> | undefined
+    const messages = [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/ui.png" } }] }]
+    const tools = [{ type: "function", function: { name: "inspect_ui", parameters: { type: "object", properties: {} } } }]
+    const proxy = openrouter({
+      db: async () =>
+        fakeDb({
+          assignmentSets: () => [
+            {
+              userId: "user-1",
+              scopeID: "turn-1",
+              assignments: [{ assignmentID: "opaque-id", model: { ...pool[0], reasoningEffort } }],
+            },
+          ],
+        }),
+      fetch: async (_input, init) => {
+        upstreamBody = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+        return Response.json({ choices: [] })
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+        },
+        body: JSON.stringify({ model: "contestant", messages, tools, reasoning: { enabled: false, effort: "low" } }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(upstreamBody?.reasoning).toEqual(expected)
+    expect(upstreamBody).toMatchObject({ messages, tools })
+  })
+
   test("forces xhigh reasoning for a medium assignment", async () => {
     let upstreamBody: Record<string, unknown> | undefined
     const proxy = openrouter({

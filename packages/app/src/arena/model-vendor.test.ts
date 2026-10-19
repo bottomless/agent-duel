@@ -9,7 +9,8 @@ describe("arenaModelVendor", () => {
     expect(arenaModelVendor("GLM 5.2")).toBe("zai");
     expect(arenaModelVendor("Qwen 3.8 Max")).toBe("qwen");
     expect(arenaModelVendor("Grok 4.6")).toBe("xai");
-    expect(arenaModelVendor("DeepSeek V4 Flash")).toBe("deepseek");
+    expect(arenaModelVendor("DeepSeek V4.1 Flash 1017")).toBe("deepseek");
+    expect(arenaModelVendor("MiMo-V2.6 Flash")).toBe("xiaomi");
   });
 
   it("reads slug-shaped names too", () => {
@@ -17,6 +18,7 @@ describe("arenaModelVendor", () => {
     expect(arenaModelVendor("qwen/qwen3.8-max-20260803")).toBe("qwen");
     expect(arenaModelVendor("x-ai/grok-4.6")).toBe("xai");
     expect(arenaModelVendor("openrouter/deepseek/deepseek-v4-flash")).toBe("deepseek");
+    expect(arenaModelVendor("xiaomi/mimo-v2.6-flash")).toBe("xiaomi");
   });
 
   it("recognises a family name without its vendor", () => {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { ArenaDb } from "./collection"
 import { sampleOne, samplePair, validateCatalog, validateOpenRouter, type ModelPool, type ModelProfile } from "./pool"
 import { createArenaService } from "./service"
+import { mediumModel } from "./default-pool"
 
 // The control plane's development profiles, so the expectations name real contestants.
 const pool = [
@@ -46,7 +47,7 @@ function catalogModel(profile: ModelProfile) {
     context_length: profile.contextWindow,
     architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] },
     supported_parameters: ["reasoning", "reasoning_effort", "tool_choice", "tools"],
-    reasoning: { supported_efforts: ["high"] },
+    reasoning: { supported_efforts: [profile.reasoningEffort ?? "high"] },
   }
 }
 
@@ -78,6 +79,28 @@ describe("Arena model pool", () => {
     expect(() => validateCatalog(pool, { data })).toThrow(`Arena contestant cannot read images: ${pool[0].displayName}`)
   })
 
+  test("requires an explicit profile opt-in for reasoning without effort control", () => {
+    const model = {
+      ...catalogModel(pool[0]),
+      supported_parameters: ["reasoning", "tool_choice", "tools"],
+      reasoning: { mandatory: false },
+    }
+    const enabled = { ...pool[0], reasoningEffort: null }
+
+    expect(() => validateCatalog([enabled], { data: [model] })).not.toThrow()
+    expect(() => validateCatalog([pool[0]], { data: [model] })).toThrow("does not support high reasoning")
+    expect(() =>
+      validateCatalog([enabled], {
+        data: [{ ...model, supported_parameters: ["tool_choice", "tools"] }],
+      }),
+    ).toThrow("does not support enabled reasoning")
+    expect(() =>
+      validateCatalog([enabled], {
+        data: [{ ...model, architecture: { input_modalities: ["text"], output_modalities: ["text"] } }],
+      }),
+    ).toThrow("cannot read images")
+  })
+
   test("the service retries a failed catalog validation and keeps a successful one", async () => {
     let calls = 0
     const existingSet = {
@@ -96,7 +119,7 @@ describe("Arena model pool", () => {
         calls++
         expect(String(input)).toBe("https://openrouter.ai/api/v1/models/user")
         expect(new Headers(init?.headers).get("authorization")).toBe("Bearer server-secret")
-        const data = pool.map(catalogModel)
+        const data = [...pool, mediumModel].map(catalogModel)
         return Response.json({ data: calls === 1 ? data.slice(0, 2) : data })
       },
     })
