@@ -134,6 +134,52 @@ describe("tool call detail-level projection", () => {
     ]);
   });
 
+  it("folds thinking into the run it leads into when asked to, as a battle pane does", () => {
+    const opening = thought("t1");
+    const call = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
+    const message = assistant("a1");
+    const between = thought("t2");
+    const next = toolCall("2", { type: "shell", command: "ls" });
+    const closing = thought("t3");
+    const tail = [opening, call, message, between, next, assistant("a2"), closing];
+
+    const prepared = prepareToolCallHistory("overview", tail, { arena: true });
+    const result = project({ level: "overview", tail, preparedHistory: prepared });
+
+    expect(result.tail).toEqual([
+      expect.objectContaining({ id: call.id }),
+      message,
+      expect.objectContaining({ id: next.id }),
+      expect.objectContaining({ id: "a2" }),
+      closing,
+    ]);
+    expect(result.groupsByHostId.get(call.id)?.run.items).toEqual([opening, call]);
+    expect(result.groupsByHostId.get(next.id)?.run.items).toEqual([between, next]);
+  });
+
+  it("lets a subagent stand alone in a battle chat instead of joining a run", () => {
+    const before = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
+    const subagent = toolCall("2", {
+      type: "sub_agent",
+      description: "Read",
+      childSessionId: "c",
+      log: "",
+    });
+    const after = toolCall("3", { type: "shell", command: "ls" });
+    const tail = [before, subagent, after];
+
+    const arena = project({
+      level: "overview",
+      tail,
+      preparedHistory: prepareToolCallHistory("overview", tail, { arena: true }),
+    });
+    const plain = project({ level: "overview", tail });
+
+    expect(arena.tail.map((item) => item.id)).toEqual([before.id, subagent.id, after.id]);
+    expect(arena.groupsByHostId.has(subagent.id)).toBe(false);
+    expect(plain.groupsByHostId.get(before.id)?.run.calls).toEqual([before, subagent, after]);
+  });
+
   it("ends a run at what the agent says, not at what it thinks", () => {
     const first = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
     const message = assistant("a1");

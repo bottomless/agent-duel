@@ -302,6 +302,17 @@ Product decisions that are settled, so they do not get relitigated per feature:
   concurrent agents cannot replace each other's current tool.
   Use the activity row for thinking and the pane heading for elapsed time, without a second
   thinking control or timer below the transcript.
+- A battle chat reads the way its panes do, so a winner's transcript keeps its shape after the
+  vote, and so does every later turn of that chat, single-agent ones included. Work before a
+  turn's first text sits beneath it (`orderArenaChat`); reasoning joins the work it leads into
+  instead of standing as its own row; and a subagent is a row of its own, a heading with its status
+  beneath, that opens its transcript in place, inline at full height as in the pane (`ArenaChatSubagent`). Rows carry the pane's words
+  (`arenaChatWorkLabel`, `Reasoned`) and its proportions at the chat's 16px: rows take the prose's
+  size, their icons too (`labelSizedIcon`), and sit flush, so one rhythm runs down the turn
+  (`getArenaGapBetweenStreamItems`): a text sits against the work it led into and every other
+  block starts one gap down. Measure a change against the pane; every gap between blocks there is
+  the same. Task checklists stay inline, where they were written. Other providers' chats keep
+  Paseo's order and spacing.
 - Show automatic context compaction as an inline status, including inside subagents. Keep its
   internal summary and synthetic continuation prompt out of the conversation; they are not
   messages from the voter. Resume the contestant's visible work after the status.
@@ -730,6 +741,13 @@ the winner's worktree path, so later turns, and the chat's own agent in the chec
 earlier turn's slot; by then that path is gone or belongs to another side. Chats copied before the
 change keep their old paths, so the fork never localizes a checkout path into `.agent-duel`: it
 would name a directory inside the contestant's own worktree that does not exist.
+
+The winner's subagent sessions are copied too, under the chat's session, and its `task` calls point
+at the copies (`canonicalSubagentSessionIDs` records them so a retried graft can remove a partial
+copy). The run's own sessions are deleted with its worktree, so without the copies the chat would
+lose every subagent transcript. Rebuilding the chat's timeline from history drops the subagents the
+daemon knew of, and OpenCode's history carries none, so loading a winner reloads them from the
+session's children (`reloadProviderSubagents`).
 
 The sandbox (`arena/contestant.ts`) keeps a contestant's own tools out of the main checkout, which
 holds every Arena worktree: the other side's and every earlier turn's. Everything else is open,

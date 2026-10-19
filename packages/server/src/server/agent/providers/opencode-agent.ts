@@ -4688,6 +4688,15 @@ class OpenCodeAgentSession implements AgentSession {
     this.startAutonomousTurn();
   }
 
+  async reloadProviderSubagents(): Promise<void> {
+    await this.childHydrationPromise?.catch(() => undefined);
+    // Detection reports a child once; the caller has dropped every child it reported.
+    this.knownChildSessionIds.clear();
+    this.childHydrationCompleted = false;
+    this.startChildSessionHydration();
+    await this.childHydrationPromise?.catch(() => undefined);
+  }
+
   private startChildSessionHydration(): void {
     if (this.childHydrationPromise) {
       return;

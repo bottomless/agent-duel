@@ -393,6 +393,11 @@ export type TurnDocument = {
    * anchor. This marker is how a retry knows the copy already happened and must not drop anything.
    */
   canonicalGraftedAt?: Date
+  /**
+   * The copies of the winner's subagent sessions made under the chat's session, recorded before
+   * their messages are copied so a retried graft can remove a partial copy.
+   */
+  canonicalSubagentSessionIDs?: string[]
   gitApplication?: {
     readonly state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
     readonly reason?: string

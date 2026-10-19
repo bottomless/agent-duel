@@ -82,3 +82,45 @@ export function getGapBetweenStreamItems(
   }
   return SPACING[4];
 }
+
+function isSubagentRow(item: StreamItem): boolean {
+  return (
+    item.kind === "tool_call" &&
+    item.payload.source === "agent" &&
+    item.payload.data.detail.type === "sub_agent"
+  );
+}
+
+/** Work that folds into a row beneath the text or subagent it follows. */
+function isWorkRow(item: StreamItem): boolean {
+  return (item.kind === "tool_call" && !isSubagentRow(item)) || item.kind === "thought";
+}
+
+/**
+ * A battle chat's spacing, which is its battle pane's (`run-thread.tsx`): one rhythm down the
+ * turn. A text and the work row it led into sit together, separated by nothing but the text's own
+ * trailing paragraph margin; every other block starts after one gap. So text, its work, the next
+ * text are evenly spaced, and a text that a new text or subagent follows gets the margin and the
+ * gap, as a new segment does in the pane. The assistant message's own padding is left out
+ * (`getArenaAssistantBlockSpacing`), and every row is flush.
+ */
+export function getArenaGapBetweenStreamItems(
+  item: StreamItem | null,
+  belowItem: StreamItem | null,
+): number {
+  if (!item || !belowItem) {
+    return 0;
+  }
+  if (isUserMessageItem(item) || isUserMessageItem(belowItem)) {
+    return getGapBetweenStreamItems(item, belowItem);
+  }
+  if (item.kind === "assistant_message") {
+    return isWorkRow(belowItem) ? 0 : SPACING[3];
+  }
+  // Work after a subagent sits the same small step below its status line as the status sits below
+  // the heading, as the pane folds that work under the subagent.
+  if (isSubagentRow(item) && isWorkRow(belowItem)) {
+    return SPACING[0.5];
+  }
+  return SPACING[3];
+}
