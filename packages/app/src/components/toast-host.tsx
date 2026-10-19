@@ -4,15 +4,10 @@ import { Animated, Easing, Platform, Text, ToastAndroid, View } from "react-nati
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
-import { useIsCompactFormFactor } from "@/constants/layout";
+import { useHeaderMetrics } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react-native";
 import { getOverlayRoot, OVERLAY_Z } from "@/lib/overlay-root";
-import {
-  HEADER_INNER_HEIGHT,
-  HEADER_INNER_HEIGHT_MOBILE,
-  HEADER_TOP_PADDING_MOBILE,
-} from "@/constants/layout";
 
 export type ToastVariant = "default" | "info" | "success" | "warning" | "error";
 
@@ -114,7 +109,7 @@ export function ToastViewport({
 }) {
   const { theme } = useUnistyles();
   const insets = useSafeAreaInsets();
-  const isMobile = useIsCompactFormFactor();
+  const { innerHeight: headerHeight, topPadding: headerTopPadding } = useHeaderMetrics();
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(-8)).current;
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -219,8 +214,6 @@ export function ToastViewport({
     };
   }, [clearTimer, opacity, scheduleDismiss, toast, translateY]);
 
-  const headerHeight = isMobile ? HEADER_INNER_HEIGHT_MOBILE : HEADER_INNER_HEIGHT;
-  const headerTopPadding = isMobile ? HEADER_TOP_PADDING_MOBILE : 0;
   const topOffset =
     placement === "app-shell"
       ? insets.top + headerTopPadding + headerHeight + theme.spacing[2]

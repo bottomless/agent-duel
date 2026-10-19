@@ -1,5 +1,5 @@
 import { useUnistyles } from "react-native-unistyles";
-import { isWeb } from "@/constants/platform";
+import { getIsElectron, isWeb } from "@/constants/platform";
 
 export const FOOTER_HEIGHT = 75;
 
@@ -86,6 +86,29 @@ export {
 export function useIsCompactFormFactor(): boolean {
   const { rt } = useUnistyles();
   return rt.breakpoint === "xs" || rt.breakpoint === "sm";
+}
+
+export interface HeaderMetrics {
+  innerHeight: number;
+  topPadding: number;
+}
+
+// Below `md` the header grows for touch, except in Electron: the window controls (macOS traffic
+// lights, Windows/Linux caption buttons) are placed for the desktop header's height, and a pointer
+// needs no taller target. The taller header left the traffic lights 12px above its buttons.
+export function resolveHeaderMetrics(input: {
+  isCompact: boolean;
+  isElectron: boolean;
+}): HeaderMetrics {
+  if (input.isCompact && !input.isElectron) {
+    return { innerHeight: HEADER_INNER_HEIGHT_MOBILE, topPadding: HEADER_TOP_PADDING_MOBILE };
+  }
+  return { innerHeight: HEADER_INNER_HEIGHT, topPadding: 0 };
+}
+
+export function useHeaderMetrics(): HeaderMetrics {
+  const isCompact = useIsCompactFormFactor();
+  return resolveHeaderMetrics({ isCompact, isElectron: getIsElectron() });
 }
 
 // SplitContainer relies on dnd-kit and DOM-backed accessibility helpers.
