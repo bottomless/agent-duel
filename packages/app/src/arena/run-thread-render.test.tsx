@@ -88,6 +88,22 @@ const PENDING_REASONING_RUN = {
   },
 } satisfies ArenaRun;
 
+const MIXED_REASONING_RUN = {
+  ...PENDING_REASONING_RUN,
+  parts: {
+    assistant: [
+      ...PENDING_REASONING_RUN.parts.assistant,
+      { type: "thought", text: "Private thought" },
+      {
+        type: "tool",
+        tool: "read",
+        state: { status: "completed", input: { filePath: "/root.md" }, output: "contents" },
+      },
+      { type: "text", text: "The file is ready." },
+    ],
+  },
+} satisfies ArenaRun;
+
 function subagentRun(status = "running"): ArenaRun {
   const task = {
     type: "tool",
@@ -327,15 +343,20 @@ describe("ArenaRunThread", () => {
     expect(view.getByText("I fixed the map labels.").textContent).toBe("I fixed the map labels.");
   });
 
-  it("reveals reasoning inside activity details without a second thinking row", () => {
+  it("keeps thinking content hidden while retaining the activity status", () => {
     const view = render(<ArenaRunThread run={PENDING_REASONING_RUN} />);
     fireEvent.click(view.getByRole("button", { name: "Reasoning…" }));
 
-    const reasoning = view.getByText("Check `grid-template-columns`.");
-    expect(reasoning.textContent).toBe("Check `grid-template-columns`.");
-    expect(reasoning.getAttribute("data-subdued")).toBe("true");
+    expect(view.queryByText("Check `grid-template-columns`.")).toBeNull();
+    expect(view.getByTestId("arena-activity-group").getAttribute("data-loading")).toBe("true");
     expect(view.queryByTestId("paseo-thinking")).toBeNull();
     expect(view.queryByTestId("paseo-turn-footer")).toBeNull();
+
+    view.rerender(<ArenaRunThread run={MIXED_REASONING_RUN} />);
+    fireEvent.click(view.getByRole("button", { name: "Read" }));
+    expect(view.queryByText("Check `grid-template-columns`.")).toBeNull();
+    expect(view.queryByText("Private thought")).toBeNull();
+    expect(view.getByText("The file is ready.").textContent).toBe("The file is ready.");
   });
 
   it("separates a subagent's latest tool from the parent and reveals its transcript", () => {

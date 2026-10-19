@@ -3,6 +3,9 @@ import { recordAssignmentGenerationMetrics, reserveRoutingAssignment } from "./a
 import { authorize, type ArenaContext } from "./context"
 import type { GenerationMetrics, UsageTotals } from "./metrics"
 import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
+import { createReasoningRedactor, InvalidReasoningContinuation } from "./reasoning"
+
+type ReasoningRedactor = ReturnType<typeof createReasoningRedactor>
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -112,17 +115,23 @@ function sanitizePayload(value: unknown, generationID: string, stream = false): 
   }
   if ("usage" in sanitized) sanitized.usage = sanitizeUsage(sanitized.usage)
   if (record(sanitized.data)) sanitized.data = sanitizePayload(sanitized.data, generationID)
+  if (record(sanitized.response)) sanitized.response = sanitizePayload(sanitized.response, generationID)
   return sanitized
 }
 
-function sanitizeLine(line: string, generationID: string, observe?: (value: unknown) => void) {
+function sanitizeLine(
+  line: string,
+  generationID: string,
+  reasoning: ReasoningRedactor,
+  observe?: (value: unknown) => void,
+) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
   if (!raw || raw === "[DONE]") return line
   try {
     const value = JSON.parse(raw) as unknown
     observe?.(value)
-    return `data: ${JSON.stringify(sanitizePayload(value, generationID, true))}`
+    return `data: ${JSON.stringify(reasoning.redact(sanitizePayload(value, generationID, true), true))}`
   } catch {
     return `data: ${JSON.stringify({
       error: { message: "Arena contestant stream failed", type: "arena_stream_error" },
@@ -133,6 +142,7 @@ function sanitizeLine(line: string, generationID: string, observe?: (value: unkn
 function sanitizeStream(
   stream: ReadableStream<Uint8Array>,
   generationID: string,
+  reasoning: ReasoningRedactor,
   startedAt: number,
   complete: (metrics: GenerationMetrics | undefined) => Promise<void>,
 ) {
@@ -151,7 +161,8 @@ function sanitizeStream(
           if (cancelled) return
           if (next.done) {
             pending += decoder.decode()
-            if (pending) controller.enqueue(encoder.encode(sanitizeLine(pending, generationID, metrics.observe)))
+            if (pending)
+              controller.enqueue(encoder.encode(sanitizeLine(pending, generationID, reasoning, metrics.observe)))
             await complete(metrics.value())
             controller.close()
             return
@@ -161,7 +172,7 @@ function sanitizeStream(
           pending = lines.pop() ?? ""
           if (!lines.length) continue
           for (const line of lines)
-            controller.enqueue(encoder.encode(`${sanitizeLine(line, generationID, metrics.observe)}\n`))
+            controller.enqueue(encoder.encode(`${sanitizeLine(line, generationID, reasoning, metrics.observe)}\n`))
           return
         }
       } catch {
@@ -277,6 +288,7 @@ function logRefusal(context: RefusalContext, status: number, upstream: string) {
 async function sanitizeAssignedResponse(
   response: Response,
   refusal: RefusalContext,
+  reasoning: ReasoningRedactor,
   startedAt: number,
   complete: (metrics: GenerationMetrics | undefined) => Promise<void>,
 ) {
@@ -300,7 +312,7 @@ async function sanitizeAssignedResponse(
     )
   }
   if ((response.headers.get("content-type") ?? "").includes("text/event-stream") && response.body) {
-    return new Response(sanitizeStream(response.body, generationID, startedAt, complete), {
+    return new Response(sanitizeStream(response.body, generationID, reasoning, startedAt, complete), {
       status: response.status,
       headers,
     })
@@ -309,7 +321,7 @@ async function sanitizeAssignedResponse(
   const metrics = metricsCollector(generationID, startedAt)
   metrics.observe(raw)
   await complete(metrics.value())
-  const payload = sanitizePayload(raw, generationID)
+  const payload = reasoning.redact(sanitizePayload(raw, generationID))
   headers.set("content-type", "application/json")
   return Response.json(payload, { status: response.status, headers })
 }
@@ -372,6 +384,12 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     if (input.model !== expectedModel) {
       return Response.json({ error: { message: "Arena contestant model is invalid" } }, { status: 400 })
     }
+    const reasoning = createReasoningRedactor(apiKey, {
+      userId: caller.id,
+      scopeID: assignment.scopeID,
+      assignmentID: assignment.assignmentID,
+    })
+    const restored = reasoning.restore(input)
     const requestedGenerationID = request.headers.get("x-arena-generation-id")?.trim()
     if (requestedGenerationID && !/^gen_[0-9a-f]{32}$/i.test(requestedGenerationID)) {
       return Response.json({ error: { message: "Arena generation ID is invalid" } }, { status: 400 })
@@ -380,7 +398,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     const startedAt = Date.now()
     body = new TextEncoder().encode(
       JSON.stringify({
-        ...withoutSampling(input),
+        ...withoutSampling(restored),
         model: routeAssignment.model.slug,
         reasoning: { effort: routeAssignment.modelSize === "medium" ? "xhigh" : "high" },
         provider: routeAssignment.model.routing,
@@ -404,7 +422,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       generationID,
       model: routeAssignment.model.slug,
     }
-    return await sanitizeAssignedResponse(response, refusal, startedAt, async (metrics) => {
+    return await sanitizeAssignedResponse(response, refusal, reasoning, startedAt, async (metrics) => {
       if (!metrics || !requestedGenerationID) return
       try {
         await recordAssignmentGenerationMetrics(db, {
@@ -418,6 +436,9 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       }
     })
   } catch (error) {
+    if (error instanceof InvalidReasoningContinuation) {
+      return Response.json({ error: { message: "Arena reasoning continuation is invalid" } }, { status: 400 })
+    }
     if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")
     return Response.json({ error: { message: "OpenRouter request failed" } }, { status: 502 })

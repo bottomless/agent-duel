@@ -87,6 +87,63 @@ function fakeDb(input: {
 }
 
 describe("OpenRouter proxy", () => {
+  test.each([false, true])(
+    "redacts nested Responses reasoning and restores it for continuation (stream=%s)",
+    async (stream) => {
+      const db = fakeDb({
+        assignmentSets: () => [
+          {
+            userId: "user-1",
+            scopeID: "turn-1",
+            assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+          },
+        ],
+      })
+      const item = {
+        type: "reasoning",
+        id: "rs_private",
+        summary: [{ type: "summary_text", text: "private deliberation" }],
+        encrypted_content: "private signature",
+      }
+      const upstream = { id: "private-response", model: "private-model", output: [item] }
+      let body: Record<string, unknown> | undefined
+      const proxy = openrouter({
+        db: async () => db,
+        fetch: async (_input, init) => {
+          body = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+          return stream
+            ? new Response(
+                `data: ${JSON.stringify({ type: "response.completed", response: upstream })}\n\ndata: [DONE]\n\n`,
+                { headers: { "content-type": "text/event-stream" } },
+              )
+            : Response.json(upstream)
+        },
+      })
+      const invoke = (input: unknown[]) =>
+        proxy(
+          new Request("https://control.test/api/openrouter/api/v1/responses", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Arena-Assignment-ID": "opaque-id",
+              "X-Arena-Scope-ID": "turn-1",
+            },
+            body: JSON.stringify({ model: "contestant", input, stream }),
+          }),
+        )
+      const response = await invoke([])
+      const text = await response.text()
+      expect(text).not.toContain("private")
+      expect(text).toContain("Thinking redacted")
+      const payload = JSON.parse(stream ? text.split("\n")[0]!.slice(6) : text) as {
+        output: unknown[]
+        response: { output: unknown[] }
+      }
+      await (await invoke(stream ? payload.response.output : payload.output)).text()
+      expect(body?.input).toEqual([item])
+    },
+  )
+
   test.each([1, 4096])(
     "reads SSE lines split across %i-byte chunks",
     async (chunkSize) => {

@@ -289,7 +289,8 @@ Product decisions that are settled, so they do not get relitigated per feature:
   even after it finishes. An older unfinished task must not replace newer activity. Animate only
   the displayed activity while it is running. Show thinking when the next model request has started
   without content. Once newer conversation content puts a block into history, show its aggregate
-  work summary without animation. Complete details remain available by expanding either row.
+  work summary without animation. Tool details remain available by expanding either row.
+  Thinking content stays hidden, including inside expanded activity and subagent rows.
   Give each subagent a static, named, expandable heading with its latest activity on an indented
   line beneath it. Animate only the activity text. When the subagent ends, replace that activity
   with its final status on the same indented line. Keep its transcript inside that group so
@@ -803,8 +804,16 @@ field. Each layer has its own file:
 - **Response** (`arena-service/src/openrouter.ts`) — before bytes return to the desktop, the control
   plane strips model, provider, fingerprint, OpenRouter metadata, and cost, replaces the generation
   id, and collapses upstream failures to a generic error. The local proxy repeats the scrub as a
-  defensive boundary. Runtime-only usage and reasoning metadata can continue through that transport,
-  but the telemetry copy never persists generation request bodies because system prompts and tool
+  defensive boundary. The shared service seals reasoning text, summaries, signatures, and encrypted
+  provider blocks before they leave the cloud (`arena-service/src/reasoning.ts`). Each reasoning
+  chunk still crosses the stream, with one neutral `Thinking redacted` marker and opaque continuation
+  envelopes, so thinking does not trigger the model-idle deadline. The service restores the original
+  blocks on the next request; tool continuation must not see the marker in place of its reasoning.
+  Envelopes are authenticated against the account, scope, and assignment using a key derived from the
+  service's OpenRouter key. Cloud instances must share that key; rotating it invalidates outstanding
+  envelopes. BYOK sealing provides no secrecy from the user who owns that key.
+  Runtime-only usage can continue through the transport, but the telemetry copy never persists
+  generation request bodies because system prompts and tool
   schemas can fingerprint the provider. It drops per-side token counts, native finish reasons,
   provider-specific reasoning metadata, identity fields, and raw upstream errors from stored
   responses, and rewrites provider-shaped tool-call ids before saving response artifacts. The
@@ -818,7 +827,9 @@ field. Each layer has its own file:
   or SQLite see them, and the Arena recorder applies the same transformation before writing raw-event
   artifacts. Live-only stream deltas bypass that work. Active execution keeps only continuation
   metadata and original tool-call IDs in memory, not message text or tool output, and releases the
-  overlay when the run is unregistered. Archives and public responses use the blinded copy. The durable copy removes
+  overlay when the run is unregistered. Archives and public responses use the blinded copy. Public
+  transcript and live-part projections also redact legacy reasoning text without
+  changing the private execution history. The durable copy removes
   provider and model metadata, cost and token usage, flattens errors, and rehashes tool-call IDs to
   `call_arena_<hash>`. Each upstream mints those IDs in a recognizable shape, and xAI's counter
   additionally counts calls the voter never saw (`arena/privacy.ts:72`).
