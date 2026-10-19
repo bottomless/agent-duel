@@ -478,15 +478,6 @@ export const ArenaSnapshotSchema = z
   })
   .passthrough();
 
-const ArenaDiffStatSchema = z
-  .object({
-    file: z.string(),
-    additions: z.number(),
-    deletions: z.number(),
-    binary: z.boolean(),
-  })
-  .passthrough();
-
 // Where one retained run of lines starts in this side's file, 1-based.
 const ArenaFileRegionSchema = z
   .object({
@@ -550,12 +541,16 @@ const ArenaDivergenceFileSchema = z
   })
   .passthrough();
 
-export const ArenaDivergenceSchema = z
+// One file either contestant changed, without contents: the Changes row.
+const ArenaComparisonFileSchema = z
   .object({
-    mergeTree: z.string(),
-    conflicted: z.boolean(),
-    // Same set and order as `files`.
-    files: z.array(ArenaDivergenceFileSchema),
+    file: z.string(),
+    binary: z.boolean(),
+    additionsA: z.number(),
+    deletionsA: z.number(),
+    additionsB: z.number(),
+    deletionsB: z.number(),
+    status: ArenaDivergenceStatusSchema,
   })
   .passthrough();
 
@@ -578,15 +573,16 @@ export const ArenaComparisonDiffSchema = z
       })
       .passthrough(),
     treesEqual: z.boolean(),
-    // Optional: an older daemon won't send per-file three-way content yet.
-    files: z.array(ArenaThreeWayFileSchema),
-    filesTruncated: z.boolean(),
-    patch: z.string(),
-    truncated: z.boolean(),
-    stats: z.array(ArenaDiffStatSchema),
-    // Absent from an older daemon, or when merge-tree could not run; the viewer then
-    // shows the three columns without file statuses or the combined view.
-    divergence: ArenaDivergenceSchema,
+    // Every file either side changed, in path order. Contents come per file, on request.
+    files: z.array(ArenaComparisonFileSchema),
+  })
+  .passthrough();
+
+export const ArenaComparisonFileDiffSchema = z
+  .object({
+    turnID: z.string(),
+    file: ArenaThreeWayFileSchema,
+    divergence: ArenaDivergenceFileSchema,
   })
   .passthrough();
 
@@ -887,6 +883,16 @@ export const ArenaTurnDiffResponseSchema = z.object({
   type: z.literal("arena.turn.diff.response"),
   payload: z.object({ requestId: z.string(), diff: ArenaComparisonDiffSchema }),
 });
+export const ArenaTurnGetFileDiffRequestSchema = z.object({
+  type: z.literal("arena.turn.get_file_diff.request"),
+  ...ArenaAgentRequestFields,
+  turnId: z.string(),
+  file: z.string(),
+});
+export const ArenaTurnGetFileDiffResponseSchema = z.object({
+  type: z.literal("arena.turn.get_file_diff.response"),
+  payload: z.object({ requestId: z.string(), fileDiff: ArenaComparisonFileDiffSchema }),
+});
 /** A run part whole: a snapshot sends its large tool fields shortened and lists them in `state.previewed`. */
 export const ArenaRunGetPartRequestSchema = z.object({
   type: z.literal("arena.run.get_part.request"),
@@ -984,7 +990,8 @@ export type ArenaEnvironmentTrim = z.infer<typeof ArenaEnvironmentTrimSchema>;
 export type ArenaRun = z.infer<typeof ArenaRunSchema>;
 export type ArenaHistoryItem = z.infer<typeof ArenaHistoryItemSchema>;
 export type ArenaComparisonDiff = z.infer<typeof ArenaComparisonDiffSchema>;
-export type ArenaDivergence = z.infer<typeof ArenaDivergenceSchema>;
+export type ArenaComparisonFile = z.infer<typeof ArenaComparisonFileSchema>;
+export type ArenaComparisonFileDiff = z.infer<typeof ArenaComparisonFileDiffSchema>;
 export type ArenaDivergenceFile = z.infer<typeof ArenaDivergenceFileSchema>;
 export type ArenaDivergenceStatus = z.infer<typeof ArenaDivergenceStatusSchema>;
 export type ArenaThreeWayFile = z.infer<typeof ArenaThreeWayFileSchema>;

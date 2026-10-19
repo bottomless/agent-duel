@@ -92,7 +92,17 @@ function chosenLabel(item: ArenaHistoryItem): string {
 /**
  * The files an archived battle touched, each opening its diff under its row.
  */
-function ArchivedChanges({ agentId, diff }: { agentId: string; diff: ArenaComparisonDiff }) {
+function ArchivedChanges({
+  serverId,
+  agentId,
+  turnId,
+  diff,
+}: {
+  serverId: string;
+  agentId: string;
+  turnId: string;
+  diff: ArenaComparisonDiff;
+}) {
   const rows = useMemo(() => arenaChangesRows(diff), [diff]);
   const { onLayout, width } = useContainerWidth();
   const measured = width > 0 ? width : null;
@@ -105,8 +115,17 @@ function ArchivedChanges({ agentId, diff }: { agentId: string; diff: ArenaCompar
     [openFiles],
   );
   const renderDiff = useCallback(
-    (file: string) => <InlineFileDiff diff={diff} file={file} layout={layout} embedded />,
-    [diff, layout],
+    (file: string) => (
+      <InlineFileDiff
+        serverId={serverId}
+        agentId={agentId}
+        turnId={turnId}
+        file={file}
+        layout={layout}
+        embedded
+      />
+    ),
+    [agentId, layout, serverId, turnId],
   );
   return (
     <View style={styles.section} onLayout={onLayout}>
@@ -123,12 +142,6 @@ function ArchivedChanges({ agentId, diff }: { agentId: string; diff: ArenaCompar
         onToggle={toggleFile}
         renderDiff={renderDiff}
       />
-      {diff.filesTruncated ? (
-        <Text style={styles.warning}>
-          This battle touched more files than the comparison view can show at once; the rest are
-          omitted here.
-        </Text>
-      ) : null}
     </View>
   );
 }
@@ -383,6 +396,7 @@ function BattleThreads({
 }
 
 function ArchivedBattleComparison({
+  serverId,
   agentId,
   turnId,
   selectedEarly,
@@ -394,6 +408,7 @@ function ArchivedBattleComparison({
   diff,
   diffError,
 }: {
+  serverId: string;
   agentId: string;
   turnId: string;
   selectedEarly: boolean;
@@ -418,7 +433,9 @@ function ArchivedBattleComparison({
     return (
       <View style={styles.section}>
         <IdenticalBattleResult hasChanges={hasBattleDiff(diff)} />
-        {hasBattleDiff(diff) ? <ArchivedChanges agentId={agentId} diff={diff} /> : null}
+        {hasBattleDiff(diff) ? (
+          <ArchivedChanges serverId={serverId} agentId={agentId} turnId={turnId} diff={diff} />
+        ) : null}
       </View>
     );
   }
@@ -454,7 +471,9 @@ function ArchivedBattleComparison({
           </Button>
         </View>
       ) : null}
-      {hasBattleDiff(diff) ? <ArchivedChanges agentId={agentId} diff={diff} /> : null}
+      {hasBattleDiff(diff) ? (
+        <ArchivedChanges serverId={serverId} agentId={agentId} turnId={turnId} diff={diff} />
+      ) : null}
       {diffError ? <Text style={styles.warning}>{toErrorMessage(diffError)}</Text> : null}
     </>
   );
@@ -545,6 +564,7 @@ function ExpandedBattleSummary({
       />
       <BattleThreads runA={runA} runB={runB} item={item} />
       <ArchivedBattleComparison
+        serverId={serverId}
         agentId={agentId}
         turnId={item.id}
         selectedEarly={item.selectedEarly === true}

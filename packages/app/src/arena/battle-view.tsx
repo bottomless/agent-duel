@@ -431,6 +431,7 @@ function BattleJudging({
   const rows = useMemo(() => arenaChangesRows(diff), [diff]);
   return (
     <BattleReview
+      serverId={serverId}
       agentId={agentId}
       turnId={turnId}
       summaryAvailable={summaryAvailable}

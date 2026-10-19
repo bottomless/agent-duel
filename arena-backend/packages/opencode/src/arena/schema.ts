@@ -353,13 +353,6 @@ export const Snapshot = Schema.Struct({
 
 const Revision = Schema.Struct({ commit: Schema.String, ref: Schema.optional(Schema.String) })
 
-const DiffStat = Schema.Struct({
-  file: Schema.String,
-  additions: Schema.Number,
-  deletions: Schema.Number,
-  binary: Schema.Boolean,
-})
-
 // Absent regions mean content is the whole file. Present, they say where each retained
 // run starts in that side's file, in order, so the viewer can number lines correctly and
 // say what sits between them.
@@ -391,19 +384,27 @@ const ThreeWayFile = Schema.Struct({
   b: Schema.optional(FileContent),
 })
 
-// git's three-way merge of A and B over the base, per file. `merged` is the file as
+const DivergenceStatus = Schema.Literals(["identical", "only_a", "only_b", "compatible", "diverging", "binary"])
+
+// git's three-way merge of A and B over the base, for one file. `merged` is the file as
 // merge-tree wrote it, conflicts left as zdiff3 blocks; sent only for compatible and
 // diverging files small enough to ship whole.
 const DivergenceFile = Schema.Struct({
   file: Schema.String,
-  status: Schema.Literals(["identical", "only_a", "only_b", "compatible", "diverging", "binary"]),
+  status: DivergenceStatus,
   merged: Schema.optional(FileContent),
 })
 
-const Divergence = Schema.Struct({
-  mergeTree: Schema.String,
-  conflicted: Schema.Boolean,
-  files: Schema.Array(DivergenceFile),
+// Every file either side changed, in path order, without contents; `ComparisonFileDiff` carries
+// one file's contents when its diff opens.
+const ComparisonFile = Schema.Struct({
+  file: Schema.String,
+  binary: Schema.Boolean,
+  additionsA: Schema.Number,
+  deletionsA: Schema.Number,
+  additionsB: Schema.Number,
+  deletionsB: Schema.Number,
+  status: DivergenceStatus,
 })
 
 export const ComparisonDiff = Schema.Struct({
@@ -412,12 +413,13 @@ export const ComparisonDiff = Schema.Struct({
   a: Schema.Struct({ commit: Schema.String, tree: Schema.String, ref: Schema.optional(Schema.String) }),
   b: Schema.Struct({ commit: Schema.String, tree: Schema.String, ref: Schema.optional(Schema.String) }),
   treesEqual: Schema.Boolean,
-  files: Schema.Array(ThreeWayFile),
-  filesTruncated: Schema.Boolean,
-  patch: Schema.String,
-  truncated: Schema.Boolean,
-  stats: Schema.Array(DiffStat),
-  divergence: Divergence,
+  files: Schema.Array(ComparisonFile),
+})
+
+export const ComparisonFileDiff = Schema.Struct({
+  turnID: Schema.String,
+  file: ThreeWayFile,
+  divergence: DivergenceFile,
 })
 
 export const InspectTree = Schema.Struct({
@@ -467,6 +469,7 @@ export const InspectFile = Schema.Struct({
 
 export type Snapshot = typeof Snapshot.Type
 export type ComparisonDiff = typeof ComparisonDiff.Type
+export type ComparisonFileDiff = typeof ComparisonFileDiff.Type
 export type InspectTree = typeof InspectTree.Type
 export type InspectFile = typeof InspectFile.Type
 

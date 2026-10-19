@@ -136,6 +136,9 @@ Review has two tabs: **Difference summary**, the generated comparison, and **Cha
 status for each pair. A row opens its file's diff right under it and closes it again, several can be open
 at once, and the first diverging file opens on arrival. Past eight rows the rest wait behind Show more, so a
 battle that touched hundreds of files does not push the threads off screen; an open row past them still shows.
+The list names every file either side changed, in path order, without contents; each diff reads its own file
+when it opens (`arena.turn.get_file_diff`). Do not cap the list to bound the response: a cap hid every file B
+alone changed whenever A changed 25.
 The chevron at the end of the tab row folds the whole review away, and a tab opens it again. A ready summary opens first. When
 the review opens before the summary is ready, Changes stays open after it arrives. Changes
 retries a failed read twice before showing a small manual retry. The summary generator retries

@@ -1,16 +1,8 @@
 import type {
-  ArenaComparisonDiff,
   ArenaDivergenceFile,
   ArenaDivergenceStatus,
   ArenaThreeWayFile,
 } from "@getpaseo/protocol/arena/rpc-schemas";
-
-export function divergenceByFile(
-  diff: ArenaComparisonDiff | undefined,
-): ReadonlyMap<string, ArenaDivergenceFile> {
-  const entries = diff?.divergence?.files ?? [];
-  return new Map(entries.map((entry) => [entry.file, entry]));
-}
 
 /**
  * The merged text the combined view reads: git's merge for files both sides

@@ -32,6 +32,11 @@ vi.mock("@/components/ui/tooltip", async () => {
   };
 });
 
+// The list carries no contents; each diff reads its file from what the fixtures served.
+vi.mock("./file-diff-query", async () =>
+  (await import("./review-fixtures.test-helpers")).fileDiffQueryStandIn(),
+);
+
 import { BattleReview } from "./battle-review";
 import { useArenaReviewStore } from "./review-state";
 import { verdictFolds } from "./verdict-body";
@@ -100,6 +105,7 @@ function render(input: {
   act(() => {
     root.render(
       <BattleReview
+        serverId="server-1"
         agentId="agent-1"
         turnId="turn-1"
         summaryAvailable={input.summaryAvailable}
@@ -263,6 +269,14 @@ describe("BattleReview", () => {
     expect(rows()).toHaveLength(9);
     expect(byTestId("arena-changes-diff-src/f11.py")).not.toBeNull();
     expect(more().textContent).toContain("Show 3 more files");
+  });
+
+  it("counts every file the battle changed, past the rows it shows", () => {
+    render({ summaryAvailable: false, diff: manyFiles(30) });
+    expect(container.textContent).toContain("Changes (30)");
+    expect((byTestId("arena-changes-more") as HTMLElement).textContent).toContain(
+      "Show 22 more files",
+    );
   });
 
   it("opens on a diverging file deep in the list without showing every row above it", () => {
