@@ -1114,7 +1114,7 @@ function buildOpenCodeReplayPartTimelineEvent(params: {
     return buildOpenCodeReplayTimelineEvent({
       item: {
         type: "assistant_message",
-        text: part.text,
+        text: openCodeDisplayText(part),
         messageId: message.id,
       },
       message,
@@ -1267,6 +1267,17 @@ function readOpenCodeMessageModel(
 
 // The Arena engine tags a battle attachment's text part with this key and the label to show.
 const ARENA_ATTACHMENT_METADATA_KEY = "arenaAttachment";
+// The Arena engine keeps a battle winner's prose here when the canonical copy names its ports by
+// variable for later contestants (`DISPLAY_METADATA_KEY` in arena/canonical-path.ts).
+const ARENA_DISPLAY_METADATA_KEY = "arenaDisplay";
+
+/** The assistant text to show: what a battle winner wrote, when the engine kept it. */
+function openCodeDisplayText(part: { text: string; metadata?: Record<string, unknown> }): string {
+  const display = part.metadata?.[ARENA_DISPLAY_METADATA_KEY];
+  if (typeof display !== "object" || display === null) return part.text;
+  const { text } = display as { text?: unknown };
+  return typeof text === "string" ? text : part.text;
+}
 
 /**
  * A replayed user message with what it carried: images as base64, and a battle's attachments by
@@ -3328,7 +3339,7 @@ function appendOpenCodeTextPart(
       provider: "opencode",
       item: {
         type: "assistant_message",
-        text: part.text,
+        text: openCodeDisplayText(part),
         messageId: part.messageID,
       },
     });

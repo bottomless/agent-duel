@@ -501,11 +501,11 @@ lock, so a vote, a send, or a prompt in another chat of the same repository does
 Arena runs no project start command and no `paseo.json` hook in a slot, so a created slot and an
 adopted one start identical. Warm preparation also allocates each successor's port bank and forks
 the canonical session into it, paths retargeted, so the send has no transcript to copy. A send uses
-that fork only when the pair is trusted in this process and the canonical session, its transcript
-hash, and the port bank are unchanged; otherwise it forks then and disposes of the warm one. The
-bank is reserved only inside this process, so the send first checks that no other program has taken
-one of its ports; a taken port means a fresh bank and a fork at send. The send itself overlaps the
-assignment draw with the freeze.
+that fork only when the pair is trusted in this process and the canonical session and its transcript
+hash are unchanged; otherwise it forks then and disposes of the warm one. The bank is reserved only
+inside this process, so the send first checks that no other program has taken one of its ports; a
+taken port means a fresh bank. The fork holds no port, so it stays usable. The send itself overlaps
+the assignment draw with the freeze.
 
 A send reuses the pair when it is trusted in this process and nothing moved since warm preparation:
 the checkout's HEAD, branch, index and working tree, its ignored content, the git metadata a host
@@ -572,8 +572,46 @@ Arena keeps snapshots for recovery but skips OpenCode's automatic per-step diff 
 A branch switch can make a JavaScript diff block both contestants for minutes. Snapshot
 patches use native Git with time and output limits; battle review owns its separate comparison.
 
-Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
-`.localhost` hostnames, and never retarget an old URL to a later process.
+Every turn receives a fresh port bank: `PORT`/`PASEO_PORT`, `PASEO_PORT2`, `PASEO_PORT3`, and a
+preview URL for each (`ARENA_PREVIEW_URL`, `2`, `3`). Proxy routes are keyed by turn, side, and
+service, use `.localhost` hostnames, and never retarget an old URL to a later process.
+
+Ports come in sequence from 20000-29999 (`PREVIEW_PORT_RANGE` in `arena/preview.ts`), skipping any
+port in use, from a cursor kept in the Arena store. The range is below the macOS and Linux
+ephemeral ranges, so the OS never hands one of them to another program, and a port number comes
+back only after the whole range has gone round. A store with no cursor yet starts at a random
+place, so two engines with separate stores (dev stacks beside the desktop app) rarely walk the same
+ports.
+
+That uniqueness is what lets the graft name ports in the winner's prose. When the winner's
+transcript is copied into the canonical session (see the vote below), its assistant text parts
+change `localhost:<port>`, `127.0.0.1:<port>`, `0.0.0.0:<port>`, `[::1]:<port>` and `[::]:<port>`
+for its own three ports to `$PASEO_PORT`, `$PASEO_PORT2` and `$PASEO_PORT3`, and its exact preview
+URLs to `$ARENA_PREVIEW_URL…` (`canonicalizeEnvironmentProse` in `arena/canonical-path.ts`). Nothing
+else changes: not reasoning (it carries signatures), tool inputs (an `edit` must still match the
+file on disk), tool output, user prompts, files, or a bare number, which can be a PID, a hash or a
+line number. Forks copy the canonical session as it is, and the contestant prompt
+(`contestantWorktreeInstruction`) says the variables in earlier messages mean the contestant's own
+values and that literal ports in earlier commands and output belong to closed environments. Do not
+rewrite ports at fork time or after a run: the earlier rewrite of every number in every part broke
+a screenshot's base64, reasoning signatures, and `edit` inputs.
+
+The reader still sees what the winner wrote. The graft keeps the original text under the part's
+`arenaDisplay` metadata, `ArenaPrivacy` lets that key through, and the daemon's OpenCode replay
+shows it in place of `text` (`openCodeDisplayText` in
+`packages/server/src/server/agent/providers/opencode-agent.ts`). The retained winner's preview is
+still live after the vote, so its link must stay clickable. Assistant text metadata reaches the
+provider as provider metadata on the next call, which must map names to objects, so the key holds
+`{ text }` rather than a string.
+
+A contestant that reads `$ARENA_PREVIEW_URL` in the history often writes it back in its own reply
+(`URL: $ARENA_PREVIEW_URL`), which is no link for the reader. When a run ends,
+`showOwnEnvironment` gives such assistant text parts an `arenaDisplay` copy with that run's values
+(`displayEnvironmentProse`) and leaves `text` alone, so the next contestant still reads the variable.
+Code spans and blocks keep the variable: there it names the variable or is a command the shell
+expands, and an expanded value would misquote it.
+The battle panes show that copy too (`arenaPartDisplayText` in `packages/app/src/arena`). The graft
+keeps a display copy the run already set.
 
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
@@ -954,9 +992,11 @@ which is what lets the checkout be written while the locks are held. A promotion
 other reason offers an agent too, with the reason in its prompt.
 
 A `conflicted` turn stays parked until the markers are cleared. After the Git
-state is applied, Arena grafts the winner's transcript into the canonical session
-(`arena/service.ts:3977`), dropping any partial remnant first so a retried graft cannot append a
-second copy. Worktrees are cleaned, the canonical transcript hash is re-recorded, and the turn
+state is applied, Arena grafts the winner's transcript into the canonical session (`graft` in
+`arena/service.ts`), dropping any partial remnant first so a retried graft cannot append a second
+copy. The graft is the one place the winner's ports become variables in its prose (see the port
+bank above); the winner's own session keeps its text, so a retried graft writes the same copy.
+Worktrees are cleaned, the canonical transcript hash is re-recorded, and the turn
 completes. The loser survives only as its permanent ref.
 
 While application is running, the composer accepts one prompt for the next turn. Send captures the

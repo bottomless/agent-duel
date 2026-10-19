@@ -10,6 +10,7 @@ import { ArenaResponseRecovery } from "./response-recovery"
 import { DateTime, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { ArenaAttachments } from "./attachments"
+import { DISPLAY_METADATA_KEY } from "./canonical-path"
 import { ArenaRuntime } from "./runtime"
 import { paymentMessage } from "@agent-duel/arena-service/request-error"
 import { ARENA_OFFLINE_MESSAGE } from "@/session/retry"
@@ -501,8 +502,8 @@ export function part(input: MessagePart): MessagePart {
       ...input,
       metadata:
         input.synthetic && input.metadata?.arena_compaction_replay === true
-          ? { ...attachmentMetadata(input.metadata), arena_compaction_replay: true }
-          : attachmentMetadata(input.metadata),
+          ? { ...engineTextMetadata(input.metadata), arena_compaction_replay: true }
+          : engineTextMetadata(input.metadata),
     }
   if (input.type === "reasoning") return { ...input, metadata: undefined }
   if (input.type === "tool") {
@@ -532,10 +533,15 @@ export function part(input: MessagePart): MessagePart {
   return input
 }
 
-/** A battle attachment's label, set by the engine and the same on both sides, is all a text part keeps. */
-function attachmentMetadata(metadata: Record<string, unknown> | undefined) {
-  const attachment = metadata?.[ArenaAttachments.METADATA_KEY]
-  return attachment === undefined ? undefined : { [ArenaAttachments.METADATA_KEY]: attachment }
+/**
+ * A text part keeps only what the engine set: a battle attachment's label, the same on both sides,
+ * and the text the reader sees where the prose names ports by variable.
+ */
+function engineTextMetadata(metadata: Record<string, unknown> | undefined) {
+  const kept = [ArenaAttachments.METADATA_KEY, DISPLAY_METADATA_KEY].flatMap((key) =>
+    metadata?.[key] === undefined ? [] : [[key, metadata[key]] as const],
+  )
+  return kept.length ? Object.fromEntries(kept) : undefined
 }
 
 export function message(input: WithParts): WithParts {

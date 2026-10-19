@@ -9,6 +9,7 @@ import { SessionEvent } from "@opencode-ai/schema/session-event"
 import { hashArenaControlToken, setArenaCredentials } from "@/arena/credentials"
 import type { Store } from "@/arena/mongo"
 import { ArenaAttachments } from "@/arena/attachments"
+import { DISPLAY_METADATA_KEY } from "@/arena/canonical-path"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { ArenaPrivacy } from "@/arena/privacy"
 import { setStoreForTest } from "@/arena/runtime"
@@ -303,6 +304,24 @@ describe("ArenaPrivacy", () => {
 
     expect(sanitized.parts[0]?.type === "text" ? sanitized.parts[0].metadata : undefined).toEqual({
       [ArenaAttachments.METADATA_KEY]: { label: "Review comment" },
+    })
+  })
+
+  test("keeps a winner's display text on a canonical text part", () => {
+    process.env.OPENCODE_ARENA = "1"
+    const source = contestantMessage()
+    const text = source.parts[0]
+    if (text?.type !== "text") throw new Error("fixture's first part is text")
+    const canonical = {
+      ...text,
+      text: "Open $ARENA_PREVIEW_URL",
+      metadata: { ...text.metadata, [DISPLAY_METADATA_KEY]: { text: "Open http://turn1-a--abc.localhost:6768" } },
+    }
+
+    const sanitized = ArenaPrivacy.message({ ...source, parts: [canonical, ...source.parts.slice(1)] })
+
+    expect(sanitized.parts[0]?.type === "text" ? sanitized.parts[0].metadata : undefined).toEqual({
+      [DISPLAY_METADATA_KEY]: { text: "Open http://turn1-a--abc.localhost:6768" },
     })
   })
 

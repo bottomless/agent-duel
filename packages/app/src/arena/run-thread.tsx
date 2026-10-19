@@ -28,6 +28,7 @@ import { arenaRunErrorToShow, STOPPED_BY_EARLY_PICK_NOTE } from "./battle-result
 import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
+import { arenaPartDisplayText } from "./display-text";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
 import { arenaQueuedSteering, arenaToolOutput } from "./steering";
 import { arenaSubagentRunState, projectArenaSessions, type ArenaSessionThread } from "./subagents";
@@ -130,7 +131,7 @@ function ArenaPart({
   const type = typeof part.type === "string" ? part.type : "unknown";
   const text = typeof part.text === "string" ? part.text : "";
   if (type === "text" && text) {
-    return <MarkdownRenderer text={text} compact />;
+    return <MarkdownRenderer text={arenaPartDisplayText(part)} compact />;
   }
   if ((type === "reasoning" || type === "thought") && text) {
     // Subdued like a Thinking block, so reasoning never reads as the contestant's reply.

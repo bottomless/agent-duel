@@ -1,6 +1,5 @@
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { AbsolutePath } from "@opencode-ai/core/schema"
-import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Effect } from "effect"
 import path from "path"
 import { Git } from "@/git"
@@ -31,11 +30,6 @@ export interface Input {
   readonly roots?: Roots
   /** Battle history keeps prompts and tool output intact while retargeting executable references. */
   readonly pathMode?: "transcript"
-  /**
-   * Runs on every copied part after its canonical paths point at the destination. Contestant
-   * copies retarget ports and preview URLs here so each part is written once.
-   */
-  readonly part?: (part: SessionV1.Part, info: SessionV1.Info) => SessionV1.Part
 }
 
 /**
@@ -61,7 +55,7 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
     canonical: yield* topLevel(source.directory),
     worktree: yield* topLevel(input.destination),
   }
-  if (roots.canonical === roots.worktree && !input.part) return forked
+  if (roots.canonical === roots.worktree) return forked
   yield* mover.moveSession({
     sessionID: forked.id,
     destination: { directory: AbsolutePath.make(input.destination) },
@@ -85,7 +79,7 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
               catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
             })
           : localizeEmbeddedPaths(part, roots)
-      yield* sessions.updatePart(input.part ? input.part(localized, message.info) : localized)
+      yield* sessions.updatePart(localized)
     }
   }
   return forked
