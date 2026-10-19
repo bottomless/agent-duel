@@ -8,6 +8,11 @@ import {
 import { workspaceAccess } from "./workspace-cleanup/workspace-access.js";
 import type { ArenaActivity } from "@getpaseo/protocol/arena/activity";
 import { arenaStreamHub, type ArenaStreamHandle } from "./arena-stream-hub.js";
+import {
+  findHistoryImage,
+  withHistoryImageRefs,
+  withStreamImageRefs,
+} from "./arena/history-images.js";
 import { ArenaPayloadTooLargeError } from "./arena/payload-limit.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
@@ -1154,8 +1159,9 @@ export class Session {
 
   private forwardAgentStream(
     event: Extract<AgentManagerEvent, { type: "agent_stream" }>,
-    serializedEvent: Extract<SessionOutboundMessage, { type: "agent_stream" }>["payload"]["event"],
+    streamedEvent: Extract<SessionOutboundMessage, { type: "agent_stream" }>["payload"]["event"],
   ): void {
+    const serializedEvent = withStreamImageRefs(event.agentId, streamedEvent);
     if (this.clientCapabilitiesBySource.size === 0 || !this.onMessageToSource) {
       if (this.usesSelectiveTimelineDelivery() && serializedEvent.type === "attention_required") {
         this.emit({
@@ -2025,6 +2031,8 @@ export class Session {
     switch (msg.type) {
       case "fetch_agent_timeline_request":
         return this.handleFetchAgentTimelineRequest(msg, source);
+      case "agent.timeline.get_image.request":
+        return this.handleAgentTimelineGetImageRequest(msg, source);
       case "agent.timeline.list_prompts.request":
         return this.handleAgentTimelineListPromptsRequest(msg, source);
       case "agent.provider_subagents.list.request":
@@ -4372,6 +4380,50 @@ export class Session {
       } else {
         this.handleAgentRunError(agentId, error, "Failed to cancel running agent on request");
       }
+    }
+  }
+
+  private async handleAgentTimelineGetImageRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.timeline.get_image.request" }>,
+    source?: object,
+  ): Promise<void> {
+    try {
+      await ensureAgentLoaded(msg.agentId, {
+        agentManager: this.agentManager,
+        agentStorage: this.agentStorage,
+        logger: this.sessionLogger,
+      });
+      const image = findHistoryImage(
+        this.agentManager.getTimeline(msg.agentId),
+        msg.messageId,
+        msg.index,
+      );
+      // Only the window that asked shows it, as with the history page it came from.
+      this.emitForSource(
+        {
+          type: "agent.timeline.get_image.response",
+          payload: {
+            requestId: msg.requestId,
+            image,
+            error: image ? null : "This image is no longer in the chat's history",
+          },
+        },
+        source,
+      );
+    } catch (error) {
+      // A failure here, unlike an image that is gone, can pass; the app asks again.
+      this.emitForSource(
+        {
+          type: "rpc_error",
+          payload: {
+            requestId: msg.requestId,
+            requestType: msg.type,
+            error: getErrorMessage(error),
+            code: "handler_error",
+          },
+        },
+        source,
+      );
     }
   }
 
@@ -7337,7 +7389,7 @@ export class Session {
             ...(msg.mergeWindow === true ? { mergeWindow: true } : {}),
             entries: selectedTimeline.entries.map((entry) => ({
               provider: snapshot.provider,
-              item: entry.item,
+              item: withHistoryImageRefs(msg.agentId, entry.item),
               timestamp: entry.timestamp,
               seqStart: entry.seqStart,
               seqEnd: entry.seqEnd,

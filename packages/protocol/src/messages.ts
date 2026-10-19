@@ -701,6 +701,14 @@ const ToolCallTimelineItemPayloadSchema: z.ZodType<ToolCallTimelineItem, unknown
     ToolCallCanceledPayloadSchema,
   ]);
 
+export const AgentTimelineImageRefSchema = z.object({
+  agentId: z.string(),
+  messageId: z.string(),
+  index: z.number().int().nonnegative(),
+  mimeType: z.string(),
+  byteSize: z.number().int().nonnegative(),
+});
+
 // zod-aot 0.20.4 miscompiles this as a nested discriminated union by omitting
 // the inner tool_call branch from the generated outer dispatch.
 export const AgentTimelineItemPayloadSchema: z.ZodType<AgentTimelineItem, unknown> = z.union([
@@ -710,6 +718,7 @@ export const AgentTimelineItemPayloadSchema: z.ZodType<AgentTimelineItem, unknow
     messageId: z.string().optional(),
     clientMessageId: z.string().optional(),
     images: z.array(z.object({ mimeType: z.string(), data: z.string() })).optional(),
+    imageRefs: z.array(AgentTimelineImageRefSchema).optional(),
     labeledAttachments: z
       .array(z.object({ label: z.string(), kind: z.enum(["file", "text"]).optional() }))
       .optional(),
@@ -1708,6 +1717,24 @@ export const AgentRewindResponseMessageSchema = z.object({
     requestId: z.string(),
     agentId: z.string(),
     ok: z.boolean(),
+    error: z.string().nullable(),
+  }),
+});
+
+/** One image a history page named in `imageRefs` instead of carrying. */
+export const AgentTimelineGetImageRequestMessageSchema = z.object({
+  type: z.literal("agent.timeline.get_image.request"),
+  requestId: z.string(),
+  agentId: z.string(),
+  messageId: z.string(),
+  index: z.number().int().nonnegative(),
+});
+
+export const AgentTimelineGetImageResponseMessageSchema = z.object({
+  type: z.literal("agent.timeline.get_image.response"),
+  payload: z.object({
+    requestId: z.string(),
+    image: z.object({ mimeType: z.string(), data: z.string() }).nullable(),
     error: z.string().nullable(),
   }),
 });
@@ -2869,6 +2896,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentConfigApplyRequestMessageSchema,
   AgentDetachRequestMessageSchema,
   AgentRewindRequestMessageSchema,
+  AgentTimelineGetImageRequestMessageSchema,
   AgentPermissionResponseMessageSchema,
   CheckoutStatusRequestSchema,
   SubscribeCheckoutDiffRequestSchema,
@@ -5773,6 +5801,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentConfigApplyResponseMessageSchema,
   AgentDetachResponseMessageSchema,
   AgentRewindResponseMessageSchema,
+  AgentTimelineGetImageResponseMessageSchema,
   UpdateAgentResponseMessageSchema,
   ProjectRenameResponseSchema,
   ProjectIconSetResponseSchema,
@@ -5965,6 +5994,9 @@ export type SetAgentFeatureResponseMessage = z.infer<typeof SetAgentFeatureRespo
 export type AgentConfigApplyResponseMessage = z.infer<typeof AgentConfigApplyResponseMessageSchema>;
 export type AgentDetachResponseMessage = z.infer<typeof AgentDetachResponseMessageSchema>;
 export type AgentRewindResponseMessage = z.infer<typeof AgentRewindResponseMessageSchema>;
+export type AgentTimelineGetImageResponseMessage = z.infer<
+  typeof AgentTimelineGetImageResponseMessageSchema
+>;
 export type UpdateAgentResponseMessage = z.infer<typeof UpdateAgentResponseMessageSchema>;
 export type ProjectRenameResponse = z.infer<typeof ProjectRenameResponseSchema>;
 export type ProjectIconSetResponse = z.infer<typeof ProjectIconSetResponseSchema>;

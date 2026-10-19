@@ -6,7 +6,8 @@ import type {
 
 /**
  * `inline` holds the image itself as a data URL in `storageKey`: an image a replayed message carried,
- * which this device never stored. `arena-part` names one a battle snapshot left in its run
+ * which this device never stored. `daemon-history` names one a history page left on the daemon
+ * (`attachments/history-image.ts`), and `arena-part` one a battle snapshot left in its run
  * (`attachments/arena-part-image.ts`).
  */
 export type AttachmentStorageType =
@@ -14,6 +15,7 @@ export type AttachmentStorageType =
   | "desktop-file"
   | "native-file"
   | "inline"
+  | "daemon-history"
   | "arena-part";
 
 export interface AttachmentMetadata {

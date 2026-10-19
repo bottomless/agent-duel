@@ -53,8 +53,9 @@ import {
   buildWorkspaceAgentActivityIndex,
   type WorkspaceAgentActivity,
 } from "@/utils/workspace-agent-activity";
-import { setArenaPartImageFetcher } from "@/attachments/arena-part-image";
+import { setHistoryImageFetcher } from "@/attachments/history-image";
 import { watchDaemonClients } from "@/attachments/daemon-image-cache";
+import { setArenaPartImageFetcher } from "@/attachments/arena-part-image";
 import {
   applyTurnLivenessTransition,
   resolveTurnPresentation,
@@ -2030,6 +2031,36 @@ watchDaemonClients(
     useSessionStore.subscribe(listener);
   },
 );
+
+// A history page names a replayed message's images; each comes from the daemon holding the agent.
+// An archived chat's agent is in `agentDetails` or, read only, in neither map, so when no daemon is
+// known to hold it, each connected one is asked.
+setHistoryImageFetcher(async (ref) => {
+  const sessions = Object.values(useSessionStore.getState().sessions);
+  const owner = sessions.find(
+    (session) =>
+      session.client && (session.agents.has(ref.agentId) || session.agentDetails.has(ref.agentId)),
+  );
+  if (owner?.client) {
+    return await owner.client.fetchAgentTimelineImage(ref.agentId, ref.messageId, ref.index);
+  }
+  let failure: unknown = null;
+  for (const session of sessions) {
+    if (!session.client) continue;
+    try {
+      const image = await session.client.fetchAgentTimelineImage(
+        ref.agentId,
+        ref.messageId,
+        ref.index,
+      );
+      if (image) return image;
+    } catch (error) {
+      failure = error;
+    }
+  }
+  if (failure) throw failure;
+  return null;
+});
 
 // A battle snapshot names the images pasted into its prompt and follow-ups; each comes from the
 // daemon holding the battle chat.
