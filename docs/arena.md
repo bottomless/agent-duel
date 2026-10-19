@@ -575,6 +575,34 @@ patches use native Git with time and output limits; battle review owns its separ
 Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
 `.localhost` hostnames, and never retarget an old URL to a later process.
 
+The canonical chat keeps the winner's literal ports and preview URLs, so the reader sees the URLs
+that worked. A contestant's copy retargets them to its own bank as it forks
+(`retargetArenaTranscriptPart`, `arena/canonical-path.ts`), within three limits:
+
+- **The run that wrote the message.** Banks are reused across turns, so matching every run's ports
+  maps a reused port to the wrong alias. The graft records the canonical messages a winner wrote
+  (`canonicalUserMessageID` through `canonicalGraftedThroughMessageID`), and the fork hands each
+  part its source message id. A turn grafted before the end marker existed counts until the next
+  battle; messages outside every range (ordinary turns, conflict resolution) stay unchanged.
+- **Fields the agent wrote:** assistant text, Bash `command` and `workdir`, and the `webfetch` URL.
+  Reasoning is signed or encrypted with its text, file edits must still match the files, and tool
+  output is what a closed environment printed, so they keep their bytes, as do IDs, hashes,
+  metadata, and any `data:` string. The contestant prompt says which ports are current and which
+  are history, and to connect only to its own ports. The cost is that an earlier command and its
+  output can name different ports, and a model can take an old port from output or reasoning.
+- **Port contexts only:** `:N` after `localhost`, `127.0.0.1`, `0.0.0.0`, `[::1]` or a
+  `*.localhost` name; `--port N`, `-p N`, `NAME_PORT=N`, `lsof -i :N`, `port N`; and whole preview
+  URLs. A bare number can be a PID, a size, or part of a hash or base64 run. `ports: N, M` is not a
+  context: only its first number would match, and a list with one value changed names two banks.
+
+The rewrite is one pass over the original text, so a new port that equals an old port of the same
+bank is not rewritten again. `$PASEO_PORT` that the agent wrote stays a variable; it already names
+whichever environment runs it. Ports a user typed, and Battle-off turns, stay literal, so a user
+command can still point a contestant at a port the other side now owns.
+
+After a run, `$ARENA_PREVIEW_URL…` in its answer text is expanded so the reader sees the URL. Port
+variables stay as written: a bare port number has no context for the next copy to retarget.
+
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
 
