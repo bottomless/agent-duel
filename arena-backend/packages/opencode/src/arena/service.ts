@@ -86,6 +86,7 @@ import {
   acceptWinnerConflicts,
   battleRefs,
   compare,
+  comparisonFiles,
   containsCommit,
   diffHostRefs,
   finalize,
@@ -94,6 +95,7 @@ import {
   importWinnerRef,
   inspectCanonical,
   readCanonicalBranch,
+  readComparisonFile,
   readResultRefs,
   removeBrokenPrivateRefs,
   mirrorCanonicalRefs,
@@ -1070,6 +1072,7 @@ export interface Interface {
     location?: { readonly sessionID?: string; readonly messageID?: string },
   ) => Effect.Effect<{ readonly part: unknown }, Error>
   readonly diff: (turnID: string) => Effect.Effect<ArenaSchema.ComparisonDiff, Error>
+  readonly fileDiff: (turnID: string, file: string) => Effect.Effect<ArenaSchema.ComparisonFileDiff, Error>
   readonly inspect: (chatID: string, turnID: string, side: Side) => Effect.Effect<ArenaSchema.Snapshot, Error>
   readonly inspectTree: (chatID: string, turnID: string, side: Side) => Effect.Effect<ArenaSchema.InspectTree, Error>
   readonly inspectFile: (
@@ -1877,7 +1880,8 @@ export const layer: Layer.Layer<
       return { part: jsonValue(ArenaTranscript.wholePart(transcript, partID)) }
     })
 
-    const comparisonDiff = Effect.fn("Arena.comparisonDiff")(function* (id: string) {
+    // The commits a battle's review compares, and the checkout holding them.
+    const comparedCommits = Effect.fn("Arena.comparedCommits")(function* (id: string) {
       const store = yield* available()
       const turn = yield* promise(() => store.turn(id))
       if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${id}`))
@@ -1898,38 +1902,44 @@ export const layer: Layer.Layer<
       // A stopped battle deliberately permits partial and failed contestants. Keep its
       // diff inspectable by representing a side without a finalized result as the
       // frozen base revision; the public run still reports that the side has no result.
-      const aCommit = a?.finalCommit ?? turn.frozenBaseSHA
-      const bCommit = b?.finalCommit ?? turn.frozenBaseSHA
-      const evidence = yield* withGit(
-        compare({
+      return {
+        turn,
+        a,
+        b,
+        input: {
           canonical: chat.repository.root,
           baseCommit: turn.frozenBaseSHA,
-          aCommit,
-          bCommit,
-          maxOutputBytes: 5 * 1024 * 1024,
-        }),
-      ).pipe(Effect.mapError(error))
+          aCommit: a?.finalCommit ?? turn.frozenBaseSHA,
+          bCommit: b?.finalCommit ?? turn.frozenBaseSHA,
+        },
+      }
+    })
+
+    const comparisonDiff = Effect.fn("Arena.comparisonDiff")(function* (id: string) {
+      const { turn, a, b, input } = yield* comparedCommits(id)
+      const listed = yield* withGit(comparisonFiles(input)).pipe(Effect.mapError(error))
       return Schema.decodeUnknownSync(ArenaSchema.ComparisonDiff)({
         turnID: turn._id,
         baseCommit: turn.frozenBaseSHA,
         a: {
-          commit: aCommit,
-          tree: evidence.aTree,
+          commit: input.aCommit,
+          tree: listed.aTree,
           ...(a?.finalCommit && a.permanentRef ? { ref: a.permanentRef } : {}),
         },
         b: {
-          commit: bCommit,
-          tree: evidence.bTree,
+          commit: input.bCommit,
+          tree: listed.bTree,
           ...(b?.finalCommit && b.permanentRef ? { ref: b.permanentRef } : {}),
         },
-        treesEqual: evidence.aTree === evidence.bTree,
-        files: evidence.files,
-        filesTruncated: evidence.filesTruncated,
-        patch: evidence.patch,
-        truncated: evidence.truncated,
-        stats: evidence.stats,
-        divergence: evidence.divergence,
+        treesEqual: listed.aTree === listed.bTree,
+        files: listed.files,
       })
+    })
+
+    const comparisonFileDiff = Effect.fn("Arena.comparisonFileDiff")(function* (id: string, file: string) {
+      const { turn, input } = yield* comparedCommits(id)
+      const contents = yield* withGit(readComparisonFile({ ...input, file })).pipe(Effect.mapError(error))
+      return Schema.decodeUnknownSync(ArenaSchema.ComparisonFileDiff)({ turnID: turn._id, ...contents })
     })
 
     const inspect = Effect.fn("Arena.inspect")(function* (requestedChatID: string, id: string, side: Side) {
@@ -10424,6 +10434,7 @@ export const layer: Layer.Layer<
       turn: turnSnapshot,
       runPart,
       diff: comparisonDiff,
+      fileDiff: comparisonFileDiff,
       inspect,
       inspectTree,
       inspectFile,

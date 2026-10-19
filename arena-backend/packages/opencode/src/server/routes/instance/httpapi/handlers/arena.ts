@@ -92,6 +92,7 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
         ),
       )
       .handle("diff", (ctx) => map(arena.diff(ctx.params.turnID)))
+      .handle("fileDiff", (ctx) => map(arena.fileDiff(ctx.params.turnID, ctx.query.path)))
       .handle("inspect", (ctx) => map(arena.inspect(ctx.params.chatID, ctx.params.turnID, ctx.params.side)))
       .handle("inspectTree", (ctx) => map(arena.inspectTree(ctx.params.chatID, ctx.params.turnID, ctx.params.side)))
       .handle("inspectFile", (ctx) =>

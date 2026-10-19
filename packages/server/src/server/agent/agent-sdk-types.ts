@@ -12,6 +12,7 @@ import type {
   ArenaRetryMode,
   ArenaReviewAnswer,
   ArenaComparisonDiff,
+  ArenaComparisonFileDiff,
   ArenaReviewEvent,
   ArenaReviewIngestResult,
   ArenaSnapshot,
@@ -775,6 +776,7 @@ export interface AgentSession {
       answers?: readonly ArenaReviewAnswer[],
     ): Promise<ArenaSnapshot>;
     diff(turnId: string): Promise<ArenaComparisonDiff>;
+    fileDiff(turnId: string, file: string): Promise<ArenaComparisonFileDiff>;
     runPart(
       runId: string,
       partId: string,

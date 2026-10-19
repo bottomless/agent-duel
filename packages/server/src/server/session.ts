@@ -2128,6 +2128,7 @@ export class Session {
       case "arena.turn.retry_comparison.request":
       case "arena.turn.retry_resolution.request":
       case "arena.turn.diff.request":
+      case "arena.turn.get_file_diff.request":
         return this.runArenaRequest(msg);
       case "arena.run.get_part.request":
         return this.handleArenaRunGetPart(msg, source);
@@ -3952,6 +3953,7 @@ export class Session {
       "arena.snapshot.get.request",
       "arena.turn.get.request",
       "arena.turn.diff.request",
+      "arena.turn.get_file_diff.request",
     ];
     if (reads.includes(msg.type)) return this.handleArenaRequest(msg);
     const finishMutation = this.arenaActivity?.beginMutation(msg.agentId);
@@ -4265,6 +4267,14 @@ export class Session {
           });
           return;
         }
+        case "arena.turn.get_file_diff.request": {
+          const fileDiff = await arena.fileDiff(msg.turnId, msg.file);
+          this.emit({
+            type: "arena.turn.get_file_diff.response",
+            payload: { requestId: msg.requestId, fileDiff },
+          });
+          return;
+        }
       }
     } finally {
       this.invalidateArenaStreamAfterRequest(arena.streamKey, msg.type);
@@ -4362,6 +4372,7 @@ export class Session {
       "arena.snapshot.get.request",
       "arena.turn.get.request",
       "arena.turn.diff.request",
+      "arena.turn.get_file_diff.request",
       "arena.turn.record_review.request",
     ].includes(type);
     if (!leavesSnapshotUnchanged) arenaStreamHub(this.agentManager).invalidateBackend(streamKey);

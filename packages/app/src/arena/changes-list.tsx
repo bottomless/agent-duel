@@ -100,7 +100,7 @@ export const ArenaChangesList = memo(function ArenaChangesList({
   );
 });
 
-function statusStyle(status: NonNullable<ArenaChangesRow["status"]>) {
+function statusStyle(status: ArenaChangesRow["status"]) {
   if (status === "identical") return styles.statusSame;
   if (status === "diverging") return styles.statusDiverging;
   return styles.statusMuted;
@@ -142,11 +142,9 @@ function ChangesRow({
         <Text style={styles.file} numberOfLines={1}>
           {row.file}
         </Text>
-        {row.status ? (
-          <Text style={[styles.status, statusStyle(row.status)]}>
-            {divergenceStatusLabel(row.status)}
-          </Text>
-        ) : null}
+        <Text style={[styles.status, statusStyle(row.status)]}>
+          {divergenceStatusLabel(row.status)}
+        </Text>
         <View style={styles.stats}>
           <SideStat side="a" row={row} />
           <SideStat side="b" row={row} />

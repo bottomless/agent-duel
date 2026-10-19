@@ -37,6 +37,7 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import {
   ArenaComparisonDiffSchema,
+  ArenaComparisonFileDiffSchema,
   ArenaReviewIngestResultSchema,
   ArenaSnapshotSchema,
   type ArenaComparisonDiff,
@@ -4008,6 +4009,11 @@ class OpenCodeAgentSession implements AgentSession {
           body: { ...(mode ? { mode } : {}), ...(answers?.length ? { answers } : {}) },
         }),
       diff: (turnId) => this.arenaDiff(`/arena/turns/${encodeURIComponent(turnId)}/diff`),
+      fileDiff: (turnId, file) =>
+        this.arenaFetch(
+          `/arena/turns/${encodeURIComponent(turnId)}/diff/file?${new URLSearchParams({ path: file })}`,
+          ArenaComparisonFileDiffSchema,
+        ),
       runPart: async (runId, partId, location) => {
         // The part's session and message let the engine read one row instead of the whole run.
         const query = new URLSearchParams({

@@ -13,7 +13,13 @@ import { ArenaChangesList } from "./changes-list";
 import type { ArenaChangesRow } from "./changes-rows";
 import { useArenaDiffLayout, type ArenaDiffLayout } from "./diff-layout";
 import { DiffLayoutControl } from "./diff-layout-control";
-import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
+import { useArenaFileDiff } from "./file-diff-query";
+import {
+  defaultChangesFile,
+  InlineFileDiff,
+  openChangesFiles,
+  toggleChangesFile,
+} from "./inline-file-diff";
 import { PaneIconAction } from "./pane-icon-action";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
 import { VerdictBody } from "./verdict-body";
@@ -68,6 +74,9 @@ function Verdict({
 }
 
 function ChangesTab({
+  serverId,
+  agentId,
+  turnId,
   diff,
   error,
   rows,
@@ -77,6 +86,9 @@ function ChangesTab({
   onRetry,
   retrying,
 }: {
+  serverId: string;
+  agentId: string;
+  turnId: string;
   diff: ArenaComparisonDiff | undefined;
   error: Error | null;
   rows: readonly ArenaChangesRow[];
@@ -87,9 +99,17 @@ function ChangesTab({
   retrying: boolean;
 }) {
   const renderDiff = useCallback(
-    (file: string) =>
-      diff ? <InlineFileDiff diff={diff} file={file} layout={layout} embedded /> : null,
-    [diff, layout],
+    (file: string) => (
+      <InlineFileDiff
+        serverId={serverId}
+        agentId={agentId}
+        turnId={turnId}
+        file={file}
+        layout={layout}
+        embedded
+      />
+    ),
+    [agentId, layout, serverId, turnId],
   );
   if (diff === undefined && !error) {
     return (
@@ -253,6 +273,7 @@ function ReviewHeader({
  * opening its diff right under its row.
  */
 export function BattleReview({
+  serverId,
   agentId,
   turnId,
   summaryAvailable,
@@ -267,6 +288,7 @@ export function BattleReview({
   onRetryDiff,
   retryingDiff,
 }: {
+  serverId: string;
   agentId: string;
   turnId: string;
   summaryAvailable: boolean;
@@ -306,6 +328,8 @@ export function BattleReview({
   }
   const tab: ArenaReviewTab = chosen.tab ?? initialTabRef.current.tab;
   const openFiles = useMemo(() => openChangesFiles(rows, chosen.files), [rows, chosen.files]);
+  // Changes opens on this file, so its contents are read while the summary is still on screen.
+  useArenaFileDiff({ serverId, agentId, turnId, file: defaultChangesFile(rows) });
   // Picking a tab on a folded section opens it on that tab.
   const setTab = useCallback(
     (next: ArenaReviewTab) => {
@@ -395,6 +419,9 @@ export function BattleReview({
             />
           ) : (
             <ChangesTab
+              serverId={serverId}
+              agentId={agentId}
+              turnId={turnId}
               diff={diff}
               error={diffError}
               rows={rows}

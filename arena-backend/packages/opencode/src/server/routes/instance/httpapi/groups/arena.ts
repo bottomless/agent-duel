@@ -324,7 +324,21 @@ const group = HttpApiGroup.make("arena")
       OpenApi.annotations({
         identifier: "arena.turn.diff",
         summary: "Compare Arena results",
-        description: "Return the bounded deterministic Git diff from result A to result B.",
+        description: "List every file either result changed, with Git's merge status for each, without contents.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.get("fileDiff", "/arena/turns/:turnID/diff/file", {
+      params: { turnID: Schema.String },
+      query: InspectFileQuery,
+      success: ArenaSchema.ComparisonFileDiff,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.turn.diff.file",
+        summary: "Read one compared file",
+        description: "Return one changed file's bounded contents at the base and in both results.",
       }),
     ),
   )
