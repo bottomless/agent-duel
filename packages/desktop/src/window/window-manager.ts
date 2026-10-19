@@ -17,6 +17,10 @@ import { DockBadgeState, readBadgeEntries } from "./dock-badge.js";
 const WINDOW_STATE_SAVE_DEBOUNCE_MS = 400;
 const MAC_TRAFFIC_LIGHT_POSITION = { x: 16, y: 14 } as const;
 const MAX_TRAFFIC_LIGHT_OFFSET_Y = 10;
+// Windows/Linux caption buttons fill the overlay's height, so it matches the app's 48px header row
+// (`HEADER_INNER_HEIGHT` in packages/app/src/constants/layout.ts). Runtime updates draw it 1px shorter
+// to keep the header's bottom border, which centres the buttons at 23.5px, on the header's buttons.
+const WINDOW_CONTROLS_OVERLAY_HEIGHT = 48;
 
 export type WindowTheme = "light" | "dark";
 export interface WindowControlsOverlayUpdate {
@@ -51,7 +55,7 @@ export function getWindowBackgroundColor(theme: WindowTheme): string {
 export function createWindowControlsOverlayState(theme: WindowTheme): WindowControlsOverlayState {
   const overlay = getTitleBarOverlayOptions(theme);
   return {
-    height: overlay.height ?? 29,
+    height: overlay.height ?? WINDOW_CONTROLS_OVERLAY_HEIGHT,
     backgroundColor: overlay.color,
     foregroundColor: overlay.symbolColor,
   };
@@ -59,10 +63,10 @@ export function createWindowControlsOverlayState(theme: WindowTheme): WindowCont
 
 export function getTitleBarOverlayOptions(theme: WindowTheme): Electron.TitleBarOverlayOptions {
   if (theme === "dark") {
-    return { color: "#181B1A", symbolColor: "#e4e4e7", height: 29 };
+    return { color: "#181B1A", symbolColor: "#e4e4e7", height: WINDOW_CONTROLS_OVERLAY_HEIGHT };
   }
 
-  return { color: "#ffffff", symbolColor: "#09090b", height: 29 };
+  return { color: "#ffffff", symbolColor: "#09090b", height: WINDOW_CONTROLS_OVERLAY_HEIGHT };
 }
 
 export function getMainWindowChromeOptions(input: {

@@ -33,7 +33,7 @@ describe("window-manager", () => {
       expect(getTitleBarOverlayOptions("light")).toEqual({
         color: "#ffffff",
         symbolColor: "#09090b",
-        height: 29,
+        height: 48,
       });
     });
 
@@ -41,7 +41,7 @@ describe("window-manager", () => {
       expect(getTitleBarOverlayOptions("dark")).toEqual({
         color: "#181B1A",
         symbolColor: "#e4e4e7",
-        height: 29,
+        height: 48,
       });
     });
   });
@@ -120,7 +120,7 @@ describe("window-manager", () => {
       expect(setTitleBarOverlay).toHaveBeenNthCalledWith(1, {
         color: "#181B1A",
         symbolColor: "#e4e4e7",
-        height: 28,
+        height: 47,
       });
       expect(setTitleBarOverlay).toHaveBeenNthCalledWith(2, {
         color: "#181B1A",
@@ -162,7 +162,7 @@ describe("window-manager", () => {
         titleBarOverlay: {
           color: "#181B1A",
           symbolColor: "#e4e4e7",
-          height: 29,
+          height: 48,
         },
       });
     });
@@ -180,7 +180,7 @@ describe("window-manager", () => {
         titleBarOverlay: {
           color: "#ffffff",
           symbolColor: "#09090b",
-          height: 29,
+          height: 48,
         },
       });
     });
