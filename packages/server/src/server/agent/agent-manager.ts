@@ -2762,9 +2762,12 @@ export class AgentManager {
 
   async hydrateArenaWinner(agentId: string, snapshot: ArenaSnapshot): Promise<void> {
     const agent = this.requireSessionAgent(agentId);
-    await hydrateArenaWinner(agent, snapshot, () =>
-      this.forceHydrateTimelineFromLegacyProviderHistory(agent, true, true),
-    );
+    await hydrateArenaWinner(agent, snapshot, async () => {
+      await this.forceHydrateTimelineFromLegacyProviderHistory(agent, true, true);
+      // Rebuilding drops the chat's subagents, and OpenCode history carries none: the winner's,
+      // copied under the chat's session at the vote, come back from the provider.
+      await agent.session.reloadProviderSubagents?.();
+    });
   }
 
   /**

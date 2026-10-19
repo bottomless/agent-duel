@@ -8856,6 +8856,50 @@ export const layer: Layer.Layer<
         )
       }
 
+      // The winner's subagents go under the chat's session too, so the chat can show their
+      // transcripts once the run's own sessions are deleted with its worktree. A partial copy from
+      // an interrupted graft goes first; its ids were recorded before anything was copied into it.
+      yield* Effect.forEach(
+        turn.canonicalSubagentSessionIDs ?? [],
+        (id) => sessions.remove(SessionID.make(id)).pipe(Effect.ignore),
+        { discard: true },
+      )
+      const winnerRoot = SessionID.make(winner.rootSessionID)
+      const sessionMap = new Map<string, SessionID>([[winnerRoot, canonical]])
+      const subagents = yield* descendants(winnerRoot)
+      for (const id of subagents) {
+        const info = yield* sessions.get(id).pipe(Effect.mapError(error))
+        const parentID = info.parentID ? sessionMap.get(info.parentID) : undefined
+        if (!parentID) continue
+        const copy = yield* inDirectory(
+          chat.repository.root,
+          sessions.create({ parentID, title: info.title, ...(info.agent ? { agent: info.agent } : {}) }),
+        )
+        sessionMap.set(id, copy.id)
+      }
+      if (sessionMap.size > 1) {
+        yield* promise(() =>
+          store.updateTurn(turn._id, {
+            canonicalSubagentSessionIDs: [...sessionMap.values()].filter((id) => id !== canonical),
+          }),
+        )
+      }
+      // A subagent's `task` call names its session; point it at the copy.
+      const retargetSessions = <T>(value: T): T => {
+        if (sessionMap.size === 1) return value
+        const visit = (entry: unknown): unknown => {
+          if (typeof entry === "string") {
+            let next = entry
+            for (const [from, to] of sessionMap) if (from !== winnerRoot) next = next.split(from).join(to)
+            return next
+          }
+          if (Array.isArray(entry)) return entry.map(visit)
+          if (!entry || typeof entry !== "object" || Object.getPrototypeOf(entry) !== Object.prototype) return entry
+          return Object.fromEntries(Object.entries(entry).map(([key, item]) => [key, visit(item)]))
+        }
+        return visit(value) as T
+      }
+
       const source = yield* sessions
         .messages({ sessionID: SessionID.make(winner.rootSessionID) })
         .pipe(Effect.mapError(error))
@@ -8866,7 +8910,7 @@ export const layer: Layer.Layer<
         home: homedir(),
       }
       const canonicalize = <T>(value: T, role?: string) =>
-        promise(() => canonicalizeTranscriptPaths(value, paths, role))
+        promise(() => canonicalizeTranscriptPaths(retargetSessions(value), paths, role))
       const idMap = new Map<string, MessageID>()
       for (const message of source) {
         if (message.info.id < boundary) continue
@@ -8893,6 +8937,29 @@ export const layer: Layer.Layer<
           )
           if (next.type === "compaction" && next.tail_start_id) next.tail_start_id = idMap.get(next.tail_start_id)
           yield* sessions.updatePart(next)
+        }
+      }
+      for (const id of subagents) {
+        const copy = sessionMap.get(id)
+        if (!copy) continue
+        const messages = yield* sessions.messages({ sessionID: id }).pipe(Effect.mapError(error))
+        const childIds = new Map<string, MessageID>()
+        for (const message of messages) {
+          const messageID = MessageID.ascending()
+          childIds.set(message.info.id, messageID)
+          const parentID =
+            message.info.role === "assistant" && message.info.parentID ? childIds.get(message.info.parentID) : undefined
+          const cloned = yield* sessions.updateMessage(
+            yield* canonicalize({ ...message.info, sessionID: copy, id: messageID, ...(parentID ? { parentID } : {}) }),
+          )
+          for (const part of message.parts) {
+            const next = yield* canonicalize(
+              { ...part, id: PartID.ascending(), messageID: cloned.id, sessionID: copy },
+              message.info.role,
+            )
+            if (next.type === "compaction" && next.tail_start_id) next.tail_start_id = childIds.get(next.tail_start_id)
+            yield* sessions.updatePart(next)
+          }
         }
       }
       yield* promise(() => store.updateTurn(turn._id, { canonicalGraftedAt: new Date() }))

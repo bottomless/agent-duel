@@ -700,6 +700,11 @@ export interface AgentSession {
   interrupt(): Promise<void>;
   /** Release live runtime resources without archiving or deleting the durable native session. */
   close(): Promise<void>;
+  /**
+   * Load the session's provider subagents again. The daemon calls it after rebuilding a timeline
+   * from history, which drops the subagents it knew of when history carries none of its own.
+   */
+  reloadProviderSubagents?(): Promise<void>;
   listCommands?(): Promise<AgentSlashCommand[]>;
   setModel?(modelId: string | null): Promise<void>;
   setThinkingOption?(thinkingOptionId: string | null): Promise<void | AgentProviderNotice>;
