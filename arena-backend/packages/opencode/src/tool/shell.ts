@@ -22,6 +22,8 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
 import { withoutArenaCredentials } from "@/arena/credentials"
+import { forgetCallerRoot, recordCallerRoot } from "@/arena/caller-roots"
+import { SERVICE_OWNER_ENV } from "@/arena/services"
 
 export { Parameters } from "./shell/prompt"
 
@@ -500,6 +502,9 @@ export const ShellTool = Tool.define(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
           const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
+          // An Arena contestant's command, for the retired-port forwarder to trace its connections.
+          recordCallerRoot(handle.pid, input.env[SERVICE_OWNER_ENV])
+          yield* Effect.addFinalizer(() => Effect.sync(() => forgetCallerRoot(handle.pid)))
 
           const drain = yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {

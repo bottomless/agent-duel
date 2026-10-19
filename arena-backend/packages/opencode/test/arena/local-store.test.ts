@@ -190,6 +190,22 @@ describe("local Arena store", () => {
     }
   })
 
+  test("keeps the port cursor across a reopen", async () => {
+    const directory = await temporaryDirectory()
+    try {
+      const store = await connectLocalStore({ directory })
+      expect(await store.portCursor()).toBeUndefined()
+      await store.setPortCursor(20_003)
+      await store.setPortCursor(20_006)
+      await store.close()
+      const reopened = await connectLocalStore({ directory })
+      expect(await reopened.portCursor()).toBe(20_006)
+      await reopened.close()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("renames persisted fields during store initialization", async () => {
     const directory = await temporaryDirectory()
     try {

@@ -245,8 +245,10 @@ export function memoryStore() {
   // request rather than the metric.
   const reviewEvents = collection<ReviewEventDocument>()
   const battleMetrics = collection<BattleMetricsDocument>()
+  const state = collection<{ readonly _id: string; readonly next: number }>()
   const restart = () =>
     Object.assign(Object.create(Store.prototype), {
+      state,
       chats,
       turns,
       runs,

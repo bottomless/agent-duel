@@ -501,11 +501,11 @@ lock, so a vote, a send, or a prompt in another chat of the same repository does
 Arena runs no project start command and no `paseo.json` hook in a slot, so a created slot and an
 adopted one start identical. Warm preparation also allocates each successor's port bank and forks
 the canonical session into it, paths retargeted, so the send has no transcript to copy. A send uses
-that fork only when the pair is trusted in this process and the canonical session, its transcript
-hash, and the port bank are unchanged; otherwise it forks then and disposes of the warm one. The
-bank is reserved only inside this process, so the send first checks that no other program has taken
-one of its ports; a taken port means a fresh bank and a fork at send. The send itself overlaps the
-assignment draw with the freeze.
+that fork only when the pair is trusted in this process and the canonical session and its transcript
+hash are unchanged; otherwise it forks then and disposes of the warm one. The bank is reserved only
+inside this process, so the send first checks that no other program has taken one of its ports; a
+taken port means a fresh bank, and the fork stays usable because it holds no port. The send itself
+overlaps the assignment draw with the freeze.
 
 A send reuses the pair when it is trusted in this process and nothing moved since warm preparation:
 the checkout's HEAD, branch, index and working tree, its ignored content, the git metadata a host
@@ -558,7 +558,8 @@ later (`REPLAY_MS`).
 
 The send releases the retained winner (stops its services, records the transition, releases its
 slot) without waiting for it, unless one of the winner's ports still accepts connections: a
-contestant must not reach the previous preview through a URL in the history. The transition goes to
+contestant must not reach the previous winner's server through a port in the history. Once the
+release ends, the engine listens on those ports itself (see ports below). The transition goes to
 the report in the UI and never into a contestant prompt, which is what lets the send skip the wait.
 A background release that fails marks the run `cleanup_failed`, and the next send retries it.
 
@@ -572,11 +573,57 @@ Arena keeps snapshots for recovery but skips OpenCode's automatic per-step diff 
 A branch switch can make a JavaScript diff block both contestants for minutes. Snapshot
 patches use native Git with time and output limits; battle review owns its separate comparison.
 
-Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
-`.localhost` hostnames, and never retarget an old URL to a later process.
-
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
+
+### Ports
+
+Every side of every turn receives a fresh bank of three ports (`PASEO_PORT`/`PORT`, `PASEO_PORT2`,
+`PASEO_PORT3`) and a preview URL for each. Proxy routes are keyed by turn, side, and service, use
+`.localhost` hostnames, and never retarget an old URL to a later process.
+
+A contestant's history is the earlier winners' transcripts byte for byte, so it shows their literal
+ports. Do not rewrite them in the copy. The engine used to replace every number that matched a port,
+and that corrupted a screenshot's base64, reasoning signatures, hashes, IDs, `edit` inputs that then
+no longer matched the file on disk, and PIDs. The engine resolves the old numbers at connect time
+instead:
+
+- **Allocation.** Ports come in sequence from 20000–29999, below every OS ephemeral range, skipping
+  ports something holds (`PORT_RANGE` in `arena/preview.ts`). The cursor is persisted in the store
+  (`arenaState`), so a number goes out once until the range wraps. An old number in a transcript is
+  then never a later contestant's. The OS ephemeral range would hand a released port to anything.
+- **Forwarding.** Once a winner is released (its run has `worktreeRemovedAt`), the engine listens on
+  its three ports on 127.0.0.1 and ::1 (`arena/retired-ports.ts`). A connection from a current
+  contestant's process is piped to that contestant's port with the same alias: an old `PASEO_PORT2`
+  reaches the caller's `PASEO_PORT2`. The caller is found from the client port's PID (`netstat
+-anv`), walking up its parents to a root the engine started for a side (shell tool commands and
+  MCP servers, `arena/caller-roots.ts`), then the owner ID or `PASEO_PORT` in a process environment,
+  then a working directory inside a side's worktree. A platform binary such as `/bin/zsh` or
+  `/usr/bin/curl` hides its environment from `ps`, which is why the roots are recorded.
+- **Unidentified callers.** An HTTP request whose `Referer` or `Origin` names a current side's
+  port or preview hostname goes to that side; any other HTTP request gets a `410` that names the
+  alias to use. Anything else is closed. When the caller is found but nothing listens on its own
+  port yet, an HTTP request gets a `502` that names that port; an empty reply sent contestants
+  hunting for a dead server.
+- **Prompt.** The system prompt lists each earlier turn's ports against the side's own and says
+  that old ports reach the side's own services, that old preview URLs do not, and to bind only the
+  current aliases, because a bind to an earlier port fails with "address already in use"
+  (`contestantSystemInstruction`). Live, a contestant told to "start it again the same way" replayed
+  `--port <old>`, got `EADDRINUSE`, and spent several tool calls on `SO_REUSEPORT` before it read
+  its own `PASEO_PORT`.
+- **`open`.** The user's browser cannot be traced to a side, so the shell's `PATH` starts with an
+  `open` shim that rewrites earlier ports and preview hostnames in its arguments to the side's own
+  (`ARENA_RETIRED_PORTS`, `ARENA_RETIRED_HOSTS`).
+
+The retired-port table is derived from the store (each applied winner's run), so nothing extra is
+persisted. Listeners start when a release ends, at each contestant prompt, and at startup for a chat
+that holds a retained winner or an active turn, once the Arena service first runs after a restart
+(until then the retired ports are unheld). They stop when the chat's slot pool is vacated:
+archive, checkout eviction, and environment release. The chat's next send listens again.
+
+Known limits: a server that binds a retired port fails with `EADDRINUSE`; a request the engine
+itself makes (the web fetch tool) has no caller process and gets the `410`; old preview URLs are
+not forwarded.
 
 ### Automatic workspace cleanup
 
@@ -1133,6 +1180,7 @@ or restart a contestant.
 - Contestant worktrees are reused across turns. Never assume a run's directory is fresh or that it
   is removed after the vote; `worktreeRemovedAt` means the run released its slot.
 - Never give a host `alternates` to the checkout's objects; see the contestant environments above.
-- New turns use a fresh port bank and never retarget old `.localhost` routes.
+- New turns use a fresh port bank and never retarget old `.localhost` routes. Old literal ports are
+  forwarded, never rewritten in a transcript; see ports above.
 - The production pool lives only in the control-plane package; never import it from the engine.
   The engine bundles `defaultPool` for BYOK, and a hosted runtime must never read it.

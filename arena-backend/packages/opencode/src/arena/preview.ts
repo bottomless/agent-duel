@@ -69,36 +69,56 @@ export function hostnameForAlias(hostname: string, alias: PortAlias) {
 }
 
 /**
- * Pick one free loopback port and retain its reservation until releasePort is called.
- * Closing the probe socket is intentional: the contestant process must be able to bind it.
+ * Arena hands out ports in sequence from a range below every OS ephemeral range (macOS 49152+,
+ * Linux 32768+), so the OS never gives one to an outgoing connection, and the cursor is persisted,
+ * so a number goes out once until the whole range has been used. A port an old transcript shows
+ * is then never a later contestant's, which is what lets the forwarder in `retired-ports.ts` own it.
  */
-export function availablePort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const probe = createServer()
-    const fail = (error: Error) => {
-      probe.close(() => reject(error))
-    }
-    probe.once("error", fail)
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address()
-      if (!address || typeof address === "string") {
-        fail(new Error("Arena preview could not allocate a port"))
-        return
-      }
-      probe.close((error) => {
-        if (error) {
-          reject(error)
-          return
-        }
-        if (allocatedPorts.has(address.port)) {
-          void availablePort().then(resolve, reject)
-          return
-        }
-        allocatedPorts.add(address.port)
-        resolve(address.port)
-      })
-    })
-  })
+export const PORT_RANGE = { first: 20_000, last: 29_999 } as const
+// Dev tools that take a fixed port in the range: Vite's HMR socket and MongoDB.
+const WELL_KNOWN_PORTS = new Set([24_678, 27_017, 27_018, 27_019, 28_017])
+
+export type PortCursorStore = {
+  readonly read: () => Promise<number | undefined>
+  readonly write: (next: number) => Promise<void>
+}
+
+let cursorStore: PortCursorStore | undefined
+let cursor: number | undefined
+let externallyReserved: (port: number) => boolean = () => false
+
+/** Persist the allocation cursor in the Arena store. Without one the cursor lives in memory. */
+export function configurePortCursor(store: PortCursorStore | undefined) {
+  if (store === cursorStore) return
+  cursorStore = store
+  cursor = undefined
+}
+
+/** Ports something else in this process holds, such as the retired-port forwarders. */
+export function configureReservedPorts(reserved: (port: number) => boolean) {
+  externallyReserved = reserved
+}
+
+function inRange(port: number | undefined): port is number {
+  return port !== undefined && Number.isInteger(port) && port >= PORT_RANGE.first && port <= PORT_RANGE.last
+}
+
+async function sequentialPorts(count: number): Promise<number[]> {
+  const stored = cursor ?? (await cursorStore?.read())
+  let next = inRange(stored) ? stored : PORT_RANGE.first
+  const size = PORT_RANGE.last - PORT_RANGE.first + 1
+  const ports: number[] = []
+  for (let scanned = 0; ports.length < count; scanned++) {
+    if (scanned >= size) throw new Error(`Arena has no free port left in ${PORT_RANGE.first}-${PORT_RANGE.last}`)
+    const port = next
+    next = port === PORT_RANGE.last ? PORT_RANGE.first : port + 1
+    if (allocatedPorts.has(port) || WELL_KNOWN_PORTS.has(port) || externallyReserved(port)) continue
+    if (await portTaken(port)) continue
+    ports.push(port)
+  }
+  cursor = next
+  await cursorStore?.write(next)
+  return ports
 }
 
 export function releasePort(port: number) {
@@ -108,16 +128,7 @@ export function releasePort(port: number) {
 function allocatorFunction(input: AllocatePortBankOptions["allocator"]): PortAllocator {
   if (!input) {
     return {
-      allocate: async (count) => {
-        const ports: number[] = []
-        try {
-          for (let index = 0; index < count; index++) ports.push(await availablePort())
-          return ports
-        } catch (error) {
-          ports.forEach(releasePort)
-          throw error
-        }
-      },
+      allocate: sequentialPorts,
       release: (ports) => ports.forEach(releasePort),
     }
   }
@@ -293,7 +304,9 @@ export async function releaseTakenBank(directory: string): Promise<boolean> {
 // A connection that is accepted proves a listener; a failed bind proves any other holder.
 async function portTaken(port: number) {
   if (await accepts(port)) return true
-  return !(await bindable(port))
+  if (!(await bindable(port))) return true
+  // A server on [::1] alone would answer `localhost` before the contestant's own on 127.0.0.1.
+  return !(await bindable(port, "::1"))
 }
 
 /** Whether any of these loopback ports accepts a connection, which only a listener can do. */
@@ -318,11 +331,12 @@ function accepts(port: number) {
   })
 }
 
-function bindable(port: number) {
+function bindable(port: number, host = "127.0.0.1") {
   return new Promise<boolean>((resolve) => {
     const probe = createServer()
-    probe.once("error", () => resolve(false))
-    probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(true)))
+    // A host without IPv6 cannot bind ::1 at all; that is no sign of another holder.
+    probe.once("error", (error: NodeJS.ErrnoException) => resolve(host === "::1" && error.code !== "EADDRINUSE"))
+    probe.listen(port, host, () => probe.close(() => resolve(true)))
   })
 }
 
@@ -352,6 +366,7 @@ export async function release(
     releasedAt: options.at ?? new Date(),
   }
   routes.delete(directory)
+  retiredMaps.delete(directory)
   routeHistory.set(directory, [...(routeHistory.get(directory) ?? []), released])
   const ports = Object.values(route.portAliases)
   for (const port of ports) releasePort(port)
@@ -364,6 +379,46 @@ export async function release(
 export function endOwnership(directory: string, at = new Date()) {
   deactivate(directory, at)
   return release(directory, { ownershipEnded: true, at })
+}
+
+/** The route a live contestant owns at this directory, never a released one. */
+export function activeRoute(directory: string): PreviewRoute | undefined {
+  const current = routes.get(directory)
+  return current?.state === "active" && current.ownership === "owned" ? snapshot(current) : undefined
+}
+
+/**
+ * Earlier turns' ports and preview hostnames, each mapped to this directory's own with the same
+ * alias. The shell gets them for the `open` shim, which retargets a URL before the user's browser
+ * opens it: the browser is not a process the forwarder can trace to a contestant.
+ */
+export type RetiredPortMap = {
+  readonly ports: Readonly<Record<number, number>>
+  readonly hosts: Readonly<Record<string, string>>
+}
+
+const retiredMaps = new Map<string, RetiredPortMap>()
+let openShimDirectory: string | undefined
+
+export function configureOpenShim(directory: string | undefined) {
+  openShimDirectory = directory
+}
+
+export function setRetiredPortMap(directory: string, map: RetiredPortMap) {
+  if (!routes.has(directory)) return
+  retiredMaps.set(directory, map)
+}
+
+function retiredEnvironment(directory: string, env: Record<string, string | undefined>): Record<string, string> {
+  const map = retiredMaps.get(directory)
+  const ports = Object.entries(map?.ports ?? {})
+  if (!map || ports.length === 0) return {}
+  const hosts = Object.entries(map.hosts)
+  return {
+    ARENA_RETIRED_PORTS: ports.map(([old, current]) => `${old}=${current}`).join(" "),
+    ...(hosts.length ? { ARENA_RETIRED_HOSTS: hosts.map(([old, current]) => `${old}=${current}`).join(" ") } : {}),
+    ...(openShimDirectory ? { PATH: [openShimDirectory, env["PATH"]].filter(Boolean).join(":") } : {}),
+  }
 }
 
 export function route(directory: string): PreviewRoute | undefined {
@@ -454,6 +509,7 @@ export function environment(
     ...(previewUrl2 ? { ARENA_PREVIEW_URL2: previewUrl2 } : {}),
     ...(previewUrl3 ? { ARENA_PREVIEW_URL3: previewUrl3 } : {}),
     BROWSER: "none",
+    ...retiredEnvironment(directory, env),
   }
 }
 
@@ -463,6 +519,11 @@ export function clearForTest() {
   pendingAllocations.clear()
   allocatedPorts.clear()
   releaseCallbacks.clear()
+  retiredMaps.clear()
+  cursorStore = undefined
+  cursor = undefined
+  externallyReserved = () => false
+  openShimDirectory = undefined
 }
 
 export * as ArenaPreview from "./preview"
