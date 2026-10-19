@@ -380,6 +380,9 @@ const layer = Layer.effect(
               })
               .pipe(Effect.orDie),
           tmpDirectory: ArenaContestant.sandboxTmp(Permission.merge(taskAgent.permission, session.permission ?? [])),
+          blockedDirectories: ArenaContestant.blockedDirectories(
+            Permission.merge(taskAgent.permission, session.permission ?? []),
+          ),
         })
         .pipe(
           Effect.catchCause((cause) => {

@@ -669,10 +669,10 @@ reply takes the same attachments as a chat message, and both contestants get ide
 - Pasted images travel as bytes and context attachments (PR comments, reviews) as text. An uploaded
   file of any type travels as Paseo sends it to a single agent: a note with its path under
   `$PASEO_HOME/uploads/<id>/`, for the contestant to open with its own tools. The daemon resolves
-  that path from the upload id, never from the client's path. An upload is outside the contestant's
-  sandbox (see **Setup**), so before each prompt and reply the engine adds an `external_directory`
-  allow for each upload's directory to the contestant session (`allowReading`). An upload sits alone
-  in its directory, so that admits the one file, and both sides get the same path.
+  that path from the upload id, never from the client's path. Before each prompt and reply the engine
+  adds an `external_directory` allow for each upload's directory to the contestant session
+  (`allowReading`). It comes after the sandbox's checkout deny (see **Setup**), so an upload stays
+  readable even when `$PASEO_HOME` sits inside the checkout. Both sides get the same path.
 - Contestants take PDFs. OpenRouter passes one natively to a model that reads PDFs and parses it
   with mistral-ocr for one that does not, so the two sides can read different renderings of the
   same file.
@@ -707,34 +707,49 @@ apply, including the contestant's sandbox.
 The session is forked from canonical, set to provider `arena` with `contestant` as its neutral model
 id, given its sandbox, and moved into the side worktree. Retarget declared file-tool paths,
 attachment paths, assistant locations, literal POSIX Bash arguments, and complete old-worktree path
-references in assistant text. Later turns can reuse a path the assistant printed. Keep user prompts,
-file contents, unknown tool inputs, and arbitrary output unchanged; a shared path prefix alone is not
-enough to rewrite a string. Bash output has two explicit adapters:
-the result of a plain `pwd`, and a complete single-line `cd <literal> [&& pwd]` command example. The latter
-keeps an executable example from referring to a worktree removed after an earlier vote.
-Shell expansions and paths crossing `..` remain unchanged; resolving them requires runtime state.
+references in assistant text. Later turns can reuse a path the assistant printed. Bash output has two
+explicit adapters: the result of a plain `pwd`, and a complete single-line `cd <literal> [&& pwd]`
+command example. Shell expansions and paths crossing `..` remain unchanged; resolving them requires
+runtime state.
 
-The sandbox (`arena/contestant.ts`) is the inherited permissions, then a hard
-`external_directory: deny`, then allows for what both sides need outside the worktree. Rules match
-last first, so the deny overrides the allows every agent gets for `$TMPDIR/opencode`, the truncation
-directory and skill directories, and only the rules after it reopen paths. Never turn the deny into
-`ask`: a prompt the user answers for one side and not the other makes the sides unequal.
+When the winner is copied into the chat (`graft`), every string the model reads again also has its
+Arena references replaced (`arenaReferences` in `arena/canonical-path.ts`): tool output of every
+tool, tool inputs and errors, reasoning, and text the engine adds to a user message. Only text the
+user typed and image bytes keep their bytes. A slot of the checkout's pool, from any turn, either
+side or a spare, becomes the checkout; its host repository, `<slot>.git`, becomes the checkout's
+`.git`; and a contestant temp directory becomes `$TMPDIR`, since it is deleted with its run. They are
+matched in every spelling a tool prints: after `file://`, under `/private`, behind `../`, and from
+`~` or `$HOME`. Before this, the read tool's `<path>` header and grep, glob and shell output kept
+the winner's worktree path, so later turns, and the chat's own agent in the checkout, re-read an
+earlier turn's slot; by then that path is gone or belongs to another side. Chats copied before the
+change keep their old paths, so the fork never localizes a checkout path into `.agent-duel`: it
+would name a directory inside the contestant's own worktree that does not exist.
 
-- Skill directories, read-only. The list comes from the canonical checkout's instance, so both sides
-  get the same one; project skills are left out because the worktree holds its own copy. An
-  `external_directory_write` deny on each keeps file tools and the shell's file commands from
-  writing there (`writes` on the permission request). Shell redirection and other programs are not
-  checked, as for any path.
-- A temp directory per side, `$TMPDIR/opencode/arena/<session id>`, readable and writable. The
-  shell exports it as `TMPDIR` and the shell tool's description names it, and truncated tool output
-  is saved under it, so the hint to read that file works. The two sides never share it, and it is
-  removed when the run gives up its worktree: released for the next pair (`releaseRunSlot`) or
-  removed by archive, eviction or an environment release (`removeStoppedRun`). Subagents inherit
-  the rules and so share their side's directory.
+The sandbox (`arena/contestant.ts`) keeps a contestant's own tools out of the main checkout, which
+holds every Arena worktree: the other side's and every earlier turn's. Everything else is open,
+`/tmp`, the home directory and skill directories included. The rules are the inherited permissions,
+then an `external_directory` allow for everything, then a deny for the checkout, then allows for the
+side's own worktree and host repository, which sit inside it. Rules match last first. The allow
+overrides the agent's own `ask`: never let a contestant ask, since a prompt the user answers for one
+side and not the other makes the sides unequal. The checkout and the side's own paths are listed in
+both their spelling and their real path, so `/private/tmp/...` cannot route around `/tmp/...`.
+Subagents inherit the rules.
 
-A contestant denied a path outside the sandbox gets one sentence that names the sandbox, not the
-generic list of matching rules, which holds dozens of home-directory paths that contestants copy
-into their answers and that reach research uploads.
+The check sees only where a tool starts, so glob and grep leave the checkout out of a search that
+starts above it, from `~/code` for example (`excludedBelow`, `tool/external-directory.ts`). Such a
+search skips the side's own worktree too; a search from inside it is unaffected. The shell checks
+only the path arguments of its file commands (`cd`, `rm`, `cp`, `mv`, `mkdir`, `touch`, `chmod`,
+`chown`, `cat`); other programs and redirection reach anything the user can.
+
+Each side has a temp directory, `$TMPDIR/opencode/arena/<session id>`. The shell exports it as
+`TMPDIR` and the shell tool's description names it, and truncated tool output is saved under it, so
+the hint to read that file works. It is removed when the run gives up its worktree: released for the
+next pair (`releaseRunSlot`) or removed by archive, eviction or an environment release
+(`removeStoppedRun`).
+
+A contestant denied the checkout gets one sentence that says so, not the generic list of matching
+rules, which holds dozens of home-directory paths that contestants copy into their answers and that
+reach research uploads.
 
 The two sides are prepared **at once**, since each has its own host repository and session, and
 the host repository is a copy-on-write clone of the checkout's git directory where the

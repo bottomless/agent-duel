@@ -9,18 +9,17 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
  */
 export const EXTERNAL_WRITE = "external_directory_write"
 
-const externalDirectoryDeny = {
-  permission: "external_directory",
-  pattern: "*",
-  action: "deny",
-} as const
-
-/** What a contestant may reach outside its worktree, besides the uploads its prompts name. */
+/** What a contestant may not reach outside its worktree, and what it reaches inside that. */
 export interface Sandbox {
-  /** The side's own temp directory, readable and writable. */
+  /** The side's own temp directory. */
   readonly tmp: string
-  /** Skill directories, readable only. */
-  readonly skills: readonly string[]
+  /**
+   * The main checkout, in each spelling of its path. Every Arena worktree lives inside it, so this
+   * covers the other side's worktree and every earlier turn's as well.
+   */
+  readonly blocked: readonly string[]
+  /** The side's own worktree and host repository, which sit inside the main checkout. */
+  readonly own: readonly string[]
 }
 
 const tmpRoot = () => path.join(Global.Path.tmp, "arena")
@@ -29,18 +28,24 @@ const GLOB_SUFFIX = path.sep + "*"
 const globDirectory = (pattern: string) =>
   pattern.endsWith(GLOB_SUFFIX) ? pattern.slice(0, -GLOB_SUFFIX.length) : pattern
 
+/** Where every contestant temp directory lives; see `tmpDirectory`. */
+export function tmpParent() {
+  return tmpRoot()
+}
+
 /**
  * The temp directory of the contestant session `sessionID`. Each side's session gets its own, so
- * the two sides never see each other's files; the shared `Global.Path.tmp` stays denied.
+ * the two sides never write into each other's.
  */
 export function tmpDirectory(sessionID: string) {
   return path.join(tmpRoot(), sessionID)
 }
 
 /**
- * The inherited rules, then a hard `external_directory` deny, then the sandbox. Rules are
- * evaluated last match first, so the deny overrides the agent's own allows (its skill directories,
- * `Global.Path.tmp`, the truncation directory) and only the sandbox rules after it reopen paths.
+ * The inherited rules, then an `external_directory` allow for everything, then the sandbox. Rules
+ * are evaluated last match first: the allow overrides the agent's own asks, since a prompt one side
+ * gets and the other does not makes the sides unequal; the main checkout's deny overrides the allow;
+ * and the side's own worktree and host repository, inside the checkout, are reopened last.
  */
 export function contestantPermissions(
   source: PermissionV1.Ruleset | undefined,
@@ -48,12 +53,19 @@ export function contestantPermissions(
 ): PermissionV1.Ruleset {
   return [
     ...(source ?? []),
-    externalDirectoryDeny,
-    ...sandbox.skills.flatMap((directory) => [
-      { permission: "external_directory", pattern: glob(directory), action: "allow" as const },
-      { permission: EXTERNAL_WRITE, pattern: glob(directory), action: "deny" as const },
-    ]),
+    { permission: "external_directory", pattern: "*", action: "allow" },
+    // Also what marks the session as a contestant's; see `sandboxTmp`.
     { permission: "external_directory", pattern: glob(sandbox.tmp), action: "allow" },
+    ...sandbox.blocked.map((directory) => ({
+      permission: "external_directory",
+      pattern: glob(directory),
+      action: "deny" as const,
+    })),
+    ...sandbox.own.map((directory) => ({
+      permission: "external_directory",
+      pattern: glob(directory),
+      action: "allow" as const,
+    })),
   ]
 }
 
@@ -74,9 +86,23 @@ export function sandboxTmp(ruleset: PermissionV1.Ruleset): string | undefined {
 }
 
 /**
- * The denial a contestant sees for a path outside its sandbox, or undefined outside Arena. The
- * generic message lists every matching rule, which for a contestant is dozens of absolute paths
- * under the home directory that end up in the transcript and the research upload.
+ * The directories a contestant may not reach, or none outside Arena. A search that starts above
+ * one of them leaves it out (see `Tool.Context.blockedDirectories`).
+ */
+export function blockedDirectories(ruleset: PermissionV1.Ruleset): readonly string[] {
+  if (!sandboxTmp(ruleset)) return []
+  return ruleset
+    .filter(
+      (rule) =>
+        rule.permission === "external_directory" && rule.action === "deny" && rule.pattern.endsWith(GLOB_SUFFIX),
+    )
+    .map((rule) => globDirectory(rule.pattern))
+}
+
+/**
+ * The denial a contestant sees for a blocked directory, or undefined outside Arena and for any other
+ * denial. The generic message lists every matching rule, which for a contestant is dozens of absolute
+ * paths under the home directory that end up in the transcript and the research upload.
  */
 export function denial(input: {
   ruleset: PermissionV1.Ruleset
@@ -85,11 +111,12 @@ export function denial(input: {
   write: boolean
 }): string | undefined {
   if (input.permission !== "external_directory") return
-  const tmp = sandboxTmp(input.ruleset)
-  if (!tmp) return
   const directory = globDirectory(input.pattern)
-  if (input.write) return `${directory} is in a skill directory, which Arena contestants can read but not change.`
-  return `Arena contestants can access only the worktree, ${tmp}, attached files, and skill directories (read-only). ${directory} is outside them.`
+  const blocked = blockedDirectories(input.ruleset).some(
+    (root) => directory === root || directory.startsWith(root + path.sep),
+  )
+  if (!blocked) return
+  return `Arena contestants cannot access the main checkout or any Arena worktree but their own. ${directory} is inside them.`
 }
 
 export * as ArenaContestant from "./contestant"

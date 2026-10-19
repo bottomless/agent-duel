@@ -52,6 +52,11 @@ export type Context<M extends Metadata = Metadata> = {
    * contestant may write.
    */
   tmpDirectory?: string
+  /**
+   * Directories an Arena contestant may not reach (`ArenaContestant.blockedDirectories`). A search
+   * that starts above one leaves it out, since the permission check sees only where it starts.
+   */
+  blockedDirectories?: readonly string[]
 }
 
 export interface ExecuteResult<M extends Metadata = Metadata> {

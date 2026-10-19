@@ -13,6 +13,7 @@ import {
   relative as relativePath,
   resolve as resolvePath,
 } from "path"
+import { homedir } from "os"
 import { promisify } from "util"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -46,7 +47,6 @@ import { MessageID, PartID, SessionID } from "@/session/schema"
 import { clearToolExecutionEnvironment, gateToolExecution, isToolExecutionGated } from "@/session/tool-execution-gate"
 import { Permission } from "@/permission"
 import { Question } from "@/question"
-import { Skill } from "@/skill"
 import { QuestionID } from "@/question/schema"
 import { hostRepoPath, isolatedRoot, Worktree } from "@/worktree"
 import { TRASH_DIRNAME } from "@/util/discard-tree"
@@ -1183,7 +1183,6 @@ export const layer: Layer.Layer<
   | Question.Service
   | Worktree.Service
   | MoveSession.Service
-  | Skill.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -1198,7 +1197,6 @@ export const layer: Layer.Layer<
     const questions = yield* Question.Service
     const worktrees = yield* Worktree.Service
     const mover = yield* MoveSession.Service
-    const skills = yield* Skill.Service
     const scope = yield* Scope.Scope
     const operationTrackers = new WeakMap<Store, ReturnType<typeof createArenaOperationTracker>>()
     const operationTrackerFor = (store: Store) => {
@@ -1316,28 +1314,28 @@ export const layer: Layer.Layer<
     const withGit = <A, E, R>(effect: Effect.Effect<A, E, R | Git.Service>) =>
       effect.pipe(Effect.provideService(Git.Service, git))
     /**
-     * What a contestant session may reach outside its worktree. Skill directories come from the
-     * canonical checkout's instance, which is loaded before either side's worktree exists, so both
-     * sides get the same list. Project skills are left out: the worktree copies them and the
-     * contestant reaches them there.
+     * What a contestant session may not reach outside its worktree: the main checkout, which holds the
+     * other side's worktree and every earlier turn's, reopened for the side's own worktree and host
+     * repository. Each path is blocked under both its spelling and its real path, so a contestant
+     * cannot reach the checkout through `/private/tmp` when it lives under `/tmp`.
      */
-    const contestantSandbox = Effect.fnUntraced(function* (repositoryRoot: string, sessionID: string) {
-      const dirs = yield* inDirectory(repositoryRoot, skills.dirs()).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Arena could not list skill directories for a contestant", { cause }).pipe(
-            Effect.as([] as string[]),
-          ),
-        ),
-      )
-      const outside = (dir: string) => {
-        const relative = relativePath(repositoryRoot, dir)
-        return relative.startsWith("..") || isAbsolutePath(relative)
+    const contestantSandbox = (repositoryRoot: string, sessionID: string, worktree: string) => {
+      const spellings = (directory: string) => {
+        const real = (() => {
+          try {
+            return realpathSync(directory)
+          } catch {
+            return directory
+          }
+        })()
+        return real === directory ? [directory] : [directory, real]
       }
       return {
         tmp: ArenaContestant.tmpDirectory(sessionID),
-        skills: dirs.filter(outside).toSorted(),
+        blocked: spellings(repositoryRoot),
+        own: [...spellings(worktree), ...spellings(hostRepoPath(worktree))],
       } satisfies ArenaContestant.Sandbox
-    })
+    }
     const forkInto = (input: ArenaFork.Input) =>
       forkSessionInto(input).pipe(
         Effect.provideService(Session.Service, sessions),
@@ -4757,7 +4755,7 @@ export const layer: Layer.Layer<
                   sessionID: session.id,
                   permission: contestantPermissions(
                     source.value.permission,
-                    yield* contestantSandbox(chat.repository.root, session.id),
+                    contestantSandbox(chat.repository.root, session.id, slot.directory),
                   ),
                 })
                 return {
@@ -4960,7 +4958,7 @@ export const layer: Layer.Layer<
             sessionID: forked.id,
             permission: contestantPermissions(
               source.permission,
-              yield* contestantSandbox(chat.repository.root, forked.id),
+              contestantSandbox(chat.repository.root, forked.id, info.directory),
             ),
           })
           forkedID = forked.id
@@ -8098,8 +8096,7 @@ export const layer: Layer.Layer<
                 for (const part of message.parts) {
                   if (part.type !== "tool") continue
                   if (part.state.status !== "pending" && part.state.status !== "running") continue
-                  const metadata =
-                    "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
+                  const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
                   yield* sessions.updatePart({
                     ...part,
                     state: {
@@ -8164,8 +8161,7 @@ export const layer: Layer.Layer<
               )
             }
             const settled = yield* promise(() => store.run(saved._id))
-            const selectable =
-              finished && !!settled?.finalCommit && !!settled.finalTree && !!settled.permanentRef
+            const selectable = finished && !!settled?.finalCommit && !!settled.finalTree && !!settled.permanentRef
             yield* promise(() => store.updateRun(saved._id, { selectable, finalizedAt: new Date() }))
             yield* promise(() =>
               store.markRunFinalized({ turnID: turn._id, side: saved.side, selectable, at: new Date() }),
@@ -8866,6 +8862,8 @@ export const layer: Layer.Layer<
       const paths = {
         worktrees: yield* promise(() => store.worktreesForChat(chat._id)),
         canonical: chat.repository.root,
+        temp: ArenaContestant.tmpParent(),
+        home: homedir(),
       }
       const canonicalize = <T>(value: T, role?: string) =>
         promise(() => canonicalizeTranscriptPaths(value, paths, role))

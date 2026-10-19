@@ -645,10 +645,19 @@ it.instance(
 )
 
 const contestantSkill = path.join(path.sep, "home", "user", ".agents", "skills", "review")
-const contestantRuleset = contestantPermissions(
-  [{ permission: "external_directory", pattern: path.join(contestantSkill, "*"), action: "allow" }],
-  { tmp: ArenaContestant.tmpDirectory("ses_contestant"), skills: [contestantSkill] },
+const contestantCheckout = path.join(path.sep, "home", "user", "project")
+const contestantWorktree = path.join(
+  contestantCheckout,
+  ".agent-duel",
+  "worktrees",
+  "1e5a93c70dbcca48",
+  "generation-2-a",
 )
+const contestantRuleset = contestantPermissions([{ permission: "external_directory", pattern: "*", action: "ask" }], {
+  tmp: ArenaContestant.tmpDirectory("ses_contestant"),
+  blocked: [contestantCheckout],
+  own: [contestantWorktree, `${contestantWorktree}.git`],
+})
 const externalAsk = (pattern: string, writes: string[], ruleset: PermissionV1.Ruleset) =>
   ask({
     sessionID: SessionID.make("session_test"),
@@ -661,18 +670,13 @@ const externalAsk = (pattern: string, writes: string[], ruleset: PermissionV1.Ru
   })
 
 it.instance(
-  "ask - lets a contestant read a skill directory but not write to it",
+  "ask - lets a contestant read and write outside the main checkout without asking",
   () =>
     Effect.gen(function* () {
-      const pattern = path.join(contestantSkill, "references", "*")
-      expect(yield* externalAsk(pattern, [], contestantRuleset)).toBeUndefined()
-      const err = yield* fail(externalAsk(pattern, [pattern], contestantRuleset))
-      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
-      expect((err as Error).message).toBe(
-        `${path.join(contestantSkill, "references")} is in a skill directory, which Arena contestants can read but not change.`,
-      )
-      const tmp = path.join(ArenaContestant.tmpDirectory("ses_contestant"), "*")
-      expect(yield* externalAsk(tmp, [tmp], contestantRuleset)).toBeUndefined()
+      for (const directory of ["/tmp", path.join(contestantSkill, "references"), "/outside"]) {
+        const pattern = path.join(directory, "*")
+        expect(yield* externalAsk(pattern, [pattern], contestantRuleset)).toBeUndefined()
+      }
     }),
   { git: true },
 )
@@ -681,10 +685,11 @@ it.instance(
   "ask - explains a contestant denial without listing the rules",
   () =>
     Effect.gen(function* () {
-      const err = yield* fail(externalAsk("/outside/*", [], contestantRuleset))
+      const other = path.join(path.dirname(contestantWorktree), "generation-2-b")
+      const err = yield* fail(externalAsk(path.join(other, "src", "*"), [], contestantRuleset))
       expect(err).toBeInstanceOf(PermissionV1.DeniedError)
       expect((err as Error).message).toBe(
-        `Arena contestants can access only the worktree, ${ArenaContestant.tmpDirectory("ses_contestant")}, attached files, and skill directories (read-only). /outside is outside them.`,
+        `Arena contestants cannot access the main checkout or any Arena worktree but their own. ${path.join(other, "src")} is inside them.`,
       )
     }),
   { git: true },
