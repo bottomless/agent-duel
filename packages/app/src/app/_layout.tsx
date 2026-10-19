@@ -112,6 +112,7 @@ import { useSessionStore } from "@/stores/session-store";
 import { installWebScrollbarStyles } from "@/styles/install-web-scrollbar-styles";
 import type { HostProfile } from "@/types/host-connection";
 import {
+  resolveWindowControlsBackground,
   useHasWindowChromeObstruction,
   WindowChromeProvider,
   WindowChromeRegion,
@@ -708,7 +709,6 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
 
 function DesktopWindowControlsSync({ enabled }: { enabled: boolean }) {
   const { theme } = useUnistyles();
-  const surface0 = theme.colors.surface0;
   const foreground = theme.colors.foreground;
   const pathname = usePathname();
   const isFocusModeEnabled = usePanelStore((state) => state.desktop.focusModeEnabled);
@@ -716,11 +716,30 @@ function DesktopWindowControlsSync({ enabled }: { enabled: boolean }) {
     getIsElectronRuntimeMac() &&
     isFocusModeEnabled &&
     parseHostWorkspaceRouteFromPathname(pathname) !== null;
+  const isCompactLayout = useIsCompactFormFactor();
+  const panelPresentation = useDesktopPanelPresentation();
+  // Both the compact drawer and the floating desktop list open through the mobile panel target.
+  const isAgentListOverlayOpen = usePanelStore((state) =>
+    selectIsAgentListOpen(state, { isCompact: true }),
+  );
+  let agentList: "pinned" | "drawer" | "floating" = "pinned";
+  if (isCompactLayout) {
+    agentList = "drawer";
+  } else if (panelPresentation.agentList === "overlay") {
+    agentList = "floating";
+  }
+  const backgroundColor = resolveWindowControlsBackground({
+    isMac: getIsElectronRuntimeMac(),
+    agentList,
+    agentListOpen: isAgentListOverlayOpen,
+    surface0: theme.colors.surface0,
+    surfaceSidebar: theme.colors.surfaceSidebar,
+  });
 
   useEffect(() => {
     if (!enabled || isNative) return;
     void updateDesktopWindowControls({
-      backgroundColor: surface0,
+      backgroundColor,
       foregroundColor: foreground,
       // The workspace header centres its controls 23.5px down; the lights'
       // default position centres them at 20. Measured, not styled: the header
@@ -729,7 +748,7 @@ function DesktopWindowControlsSync({ enabled }: { enabled: boolean }) {
     }).catch((error) => {
       console.warn("[DesktopWindow] Failed to update window controls overlay", error);
     });
-  }, [enabled, surface0, foreground, liftTrafficLights]);
+  }, [enabled, backgroundColor, foreground, liftTrafficLights]);
 
   return null;
 }

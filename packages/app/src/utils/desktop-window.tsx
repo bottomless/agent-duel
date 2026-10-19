@@ -3,6 +3,7 @@ import { View, type ViewProps } from "react-native";
 import {
   DESKTOP_TRAFFIC_LIGHT_HEIGHT,
   DESKTOP_TRAFFIC_LIGHT_WIDTH,
+  DESKTOP_WINDOW_CONTROLS_GAP,
   DESKTOP_WINDOW_CONTROLS_HEIGHT,
   DESKTOP_WINDOW_CONTROLS_WIDTH,
   getIsElectronRuntime,
@@ -80,6 +81,8 @@ export function resolveWindowChromeObstruction(input: {
   isElectron: boolean;
   isMac: boolean;
   isFullscreen: boolean;
+  /** Width the window controls overlay reports for the Windows/Linux controls, when it does. */
+  windowControlsWidth?: number | null;
 }): WindowChromeObstruction {
   if (!input.isElectron || input.isFullscreen) return EMPTY_OBSTRUCTION;
   if (input.isMac) {
@@ -88,10 +91,106 @@ export function resolveWindowChromeObstruction(input: {
       topRight: null,
     };
   }
+  const width =
+    input.windowControlsWidth != null
+      ? Math.ceil(input.windowControlsWidth) + DESKTOP_WINDOW_CONTROLS_GAP
+      : DESKTOP_WINDOW_CONTROLS_WIDTH;
   return {
     topLeft: null,
-    topRight: { width: DESKTOP_WINDOW_CONTROLS_WIDTH, height: DESKTOP_WINDOW_CONTROLS_HEIGHT },
+    topRight: { width, height: DESKTOP_WINDOW_CONTROLS_HEIGHT },
   };
+}
+
+interface WindowControlsOverlayLike {
+  visible: boolean;
+  getTitlebarAreaRect(): { x: number; width: number };
+  addEventListener(type: "geometrychange", listener: () => void): void;
+  removeEventListener(type: "geometrychange", listener: () => void): void;
+}
+
+function getWindowControlsOverlay(): WindowControlsOverlayLike | null {
+  if (typeof navigator === "undefined") return null;
+  const overlay = (navigator as { windowControlsOverlay?: WindowControlsOverlayLike })
+    .windowControlsOverlay;
+  return overlay ?? null;
+}
+
+/**
+ * The Windows/Linux controls are a native strip over the page, so the page cannot paint
+ * under them: an open agent list or its scrim stops at the strip unless its colour follows.
+ * "drawer" is the compact full-width list, "floating" the desktop one over a 50% black scrim.
+ */
+export function resolveWindowControlsBackground(input: {
+  isMac: boolean;
+  agentList: "pinned" | "drawer" | "floating";
+  agentListOpen: boolean;
+  surface0: string;
+  surfaceSidebar: string;
+}): string {
+  if (input.isMac || !input.agentListOpen || input.agentList === "pinned") return input.surface0;
+  if (input.agentList === "drawer") return input.surfaceSidebar;
+  return darkenHexColor(input.surface0, 0.5) ?? input.surface0;
+}
+
+function darkenHexColor(color: string, keep: number): string | null {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) return null;
+  const value = parseInt(match[1], 16);
+  const channels = [value >> 16, (value >> 8) & 0xff, value & 0xff];
+  return `#${channels
+    .map((channel) =>
+      Math.round(channel * keep)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+/**
+ * The controls sit right of the title bar area the overlay leaves to the page. A width beyond
+ * twice the fallback is a reading taken mid-resize, not a control strip, so it falls back.
+ */
+export function readWindowControlsWidth(input: {
+  overlayVisible: boolean;
+  titlebarArea: { x: number; width: number };
+  viewportWidth: number;
+}): number | null {
+  if (!input.overlayVisible) return null;
+  const width = input.viewportWidth - (input.titlebarArea.x + input.titlebarArea.width);
+  return width > 0 && width <= DESKTOP_WINDOW_CONTROLS_WIDTH * 2 ? width : null;
+}
+
+// Windows draws its controls 136px wide and Linux 96px; the overlay knows which, the app does not.
+// `geometrychange` fires before `innerWidth` follows a resize, so both are read a frame later.
+function useWindowControlsWidth(enabled: boolean): number | null {
+  const [width, setWidth] = useState<number | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const overlay = getWindowControlsOverlay();
+    if (!overlay) return;
+    let frame = 0;
+    const sync = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() =>
+        setWidth(
+          readWindowControlsWidth({
+            overlayVisible: overlay.visible,
+            titlebarArea: overlay.getTitlebarAreaRect(),
+            viewportWidth: window.innerWidth,
+          }),
+        ),
+      );
+    };
+    sync();
+    overlay.addEventListener("geometrychange", sync);
+    window.addEventListener("resize", sync);
+    return () => {
+      cancelAnimationFrame(frame);
+      overlay.removeEventListener("geometrychange", sync);
+      window.removeEventListener("resize", sync);
+    };
+  }, [enabled]);
+  return width;
 }
 
 export function resolveWindowChromeSafeArea(input: {
@@ -181,14 +280,18 @@ export function WindowChromeProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const windowControlsWidth = useWindowControlsWidth(
+    !isNative && isElectronReady && !getIsElectronRuntimeMac(),
+  );
   const obstruction = useMemo(
     () =>
       resolveWindowChromeObstruction({
         isElectron: isElectronReady,
         isMac: getIsElectronRuntimeMac(),
         isFullscreen,
+        windowControlsWidth,
       }),
-    [isElectronReady, isFullscreen],
+    [isElectronReady, isFullscreen, windowControlsWidth],
   );
   return (
     <WindowChromeContext.Provider value={obstruction}>

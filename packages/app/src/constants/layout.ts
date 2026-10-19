@@ -70,9 +70,13 @@ export const SETTINGS_DESKTOP_SPLIT_MIN_WIDTH =
 export const DESKTOP_TRAFFIC_LIGHT_WIDTH = 78;
 export const DESKTOP_TRAFFIC_LIGHT_HEIGHT = 45;
 
-// Windows/Linux window controls (minimize/maximize/close) — top-right
+// Windows/Linux window controls (minimize/maximize/close) — top-right. The width is the
+// fallback until the window controls overlay reports the real one: Windows draws its controls
+// 136px wide, Linux 96px, and a fixed 140 left Linux headers 44px short of the controls.
 export const DESKTOP_WINDOW_CONTROLS_WIDTH = 140;
 export const DESKTOP_WINDOW_CONTROLS_HEIGHT = 48;
+// Space kept between the reported controls and the app's own buttons; 136 + 4 keeps Windows at 140.
+export const DESKTOP_WINDOW_CONTROLS_GAP = 4;
 
 export {
   getIsElectron as getIsElectronRuntime,
