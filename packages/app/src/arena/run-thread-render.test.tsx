@@ -5,6 +5,7 @@ import React from "react";
 import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.stubGlobal("React", React);
 
@@ -57,6 +58,11 @@ vi.mock("@/arena/prompt-attachment-pills", () => ({ arenaMessageAttachmentPills:
 import { ArenaRunThread } from "./run-thread";
 
 afterEach(cleanup);
+
+function TestQueryProvider({ children }: { children: React.ReactNode }) {
+  const [client] = React.useState(() => new QueryClient());
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
 
 const PENDING_REASONING_RUN = {
   id: "run-a",
@@ -344,7 +350,9 @@ describe("ArenaRunThread", () => {
   });
 
   it("keeps thinking content hidden while retaining the activity status", () => {
-    const view = render(<ArenaRunThread run={PENDING_REASONING_RUN} />);
+    const view = render(<ArenaRunThread run={PENDING_REASONING_RUN} />, {
+      wrapper: TestQueryProvider,
+    });
     fireEvent.click(view.getByRole("button", { name: "Reasoning…" }));
 
     expect(view.queryByText("Check `grid-template-columns`.")).toBeNull();

@@ -1,0 +1,174 @@
+Reasoning redaction validation, 2026-10-19
+
+Synthetic upstream responses exercise the real OpenRouter provider and AI SDK.
+No live provider call, browser QA, desktop smoke, or cloud deployment was run.
+
+$ arena-service: bun test src/reasoning.test.ts --bail --timeout 30000
+bun test v1.3.14 (0d9b296a)
+
+src/reasoning.test.ts:
+(pass) leaves ordinary content and empty reasoning chunks alone [0.63ms]
+(pass) redacts JSON reasoning and restores the exact continuation without changing tools or text [0.36ms]
+(pass) preserves every streamed packet and late signature for the next tool step [0.17ms]
+(pass) rejects tampered reasoning and replay across users, turns, assignments, or server keys [0.23ms]
+(pass) redacts Responses items and progress events and restores their original continuation [0.13ms]
+
+ 5 pass
+ 0 fail
+ 33 expect() calls
+Ran 5 tests across 1 file. [10.00ms]
+
+$ arena-service: bun test src/openrouter.test.ts --bail --timeout 30000
+bun test v1.3.14 (0d9b296a)
+
+src/openrouter.test.ts:
+(pass) OpenRouter proxy > redacts nested Responses reasoning and restores it for continuation (stream=%s) [1.60ms]
+(pass) OpenRouter proxy > redacts nested Responses reasoning and restores it for continuation (stream=%s) [1.39ms]
+(pass) OpenRouter proxy > reads SSE lines split across 1-byte chunks [1.26ms]
+(pass) OpenRouter proxy > reads SSE lines split across 4096-byte chunks [0.89ms]
+(pass) OpenRouter proxy > rejects a request before contacting OpenRouter when the session is invalid [0.08ms]
+(pass) OpenRouter proxy > rejects a request without assignment scope before contacting OpenRouter [0.05ms]
+(pass) OpenRouter proxy > does not expose arbitrary OpenRouter paths [0.02ms]
+(pass) OpenRouter proxy > rejects every request missing assignment headers [0.05ms]
+(pass) OpenRouter proxy > rejects partial assignment headers without falling through to utility access [0.03ms]
+(pass) OpenRouter proxy > rejects query selectors and malformed JSON [0.05ms]
+[arena-service] OpenRouter refused a contestant request {"userId":"user-1","scopeID":"turn-1","assignmentID":"opaque-id","generationID":"gen_00000000000000000000000000000001","model":"provider/hidden-model","status":402,"upstream":"{\"error\":{\"message\":\"hidden-model at hidden-provider\",\"metadata\":{\"limit_source\":\"openrouter_in_flight_budget\",\"provider\":\"hidden-provider\",\"remedy_hint\":\"private\"}}}"}
+[arena-service] OpenRouter refused a contestant request {"userId":"user-1","scopeID":"turn-1","assignmentID":"opaque-id","generationID":"gen_00000000000000000000000000000001","model":"provider/hidden-model","status":402,"upstream":"{\"error\":{\"message\":\"hidden-model at hidden-provider\",\"metadata\":{\"limit_source\":\"openrouter_key_limit\",\"provider\":\"hidden-provider\",\"remedy_hint\":\"private\"}}}"}
+[arena-service] OpenRouter refused a contestant request {"userId":"user-1","scopeID":"turn-1","assignmentID":"opaque-id","generationID":"gen_00000000000000000000000000000001","model":"provider/hidden-model","status":402,"upstream":"{\"error\":{\"message\":\"hidden-model at hidden-provider\",\"metadata\":{\"limit_source\":\"openrouter_credits\",\"provider\":\"hidden-provider\",\"remedy_hint\":\"private\"}}}"}
+[arena-service] OpenRouter refused a contestant request {"userId":"user-1","scopeID":"turn-1","assignmentID":"opaque-id","generationID":"gen_00000000000000000000000000000001","model":"provider/hidden-model","status":402,"upstream":"{\"error\":{\"message\":\"hidden-model at hidden-provider\",\"metadata\":{\"limit_source\":\"unrecognized\",\"provider\":\"hidden-provider\",\"remedy_hint\":\"private\"}}}"}
+[arena-service] OpenRouter refused a contestant request {"userId":"user-1","scopeID":"turn-1","assignmentID":"opaque-id","generationID":"gen_00000000000000000000000000000001","model":"provider/hidden-model","status":402,"upstream":"not JSON"}
+(pass) OpenRouter proxy > resolves an opaque assignment and removes identity and cost before returning it [0.60ms]
+(pass) OpenRouter proxy > logs why OpenRouter refused a contestant request, and keeps the client's answer neutral [0.35ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when absent [0.12ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when null [0.04ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when zero [0.03ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when negative [0.03ms]
+(pass) OpenRouter proxy > keeps only a finite non-negative upstream inference cost when non-numeric [0.03ms]
+(pass) OpenRouter proxy > asks OpenRouter to cache Anthropic prompts and records the cache use [0.47ms]
+(pass) OpenRouter proxy > leaves sampling to each provider, because the engine cannot choose it for a hidden model [0.11ms]
+(pass) OpenRouter proxy > forces xhigh reasoning for a medium assignment [0.10ms]
+(pass) OpenRouter proxy > does not limit assigned request size [1.66ms]
+(pass) OpenRouter proxy > rejects alternate model and routing selectors and server-side tools on assigned requests [0.11ms]
+(pass) OpenRouter proxy > scrubs identity metadata from assigned event streams [0.35ms]
+(pass) OpenRouter proxy > turns an upstream stream break into a safe retryable event [0.21ms]
+[arena-service] OpenRouter proxy failed
+(pass) OpenRouter proxy > answers an unreadable upstream body with a 502 [0.18ms]
+[arena-service] OpenRouter proxy failed
+[arena-service] OpenRouter proxy failed
+(pass) OpenRouter proxy > answers an offline machine with the network body only where the service runs locally [0.15ms]
+(pass) OpenRouter proxy > rejects cross-account, cross-scope, and incomplete assignment credentials [0.10ms]
+
+ 27 pass
+ 0 fail
+ 135 expect() calls
+Ran 27 tests across 1 file. [20.00ms]
+
+$ opencode: bun run test ./test/arena/live.test.ts --bail
+$ bun test --timeout 30000 --only-failures ./test/arena/live.test.ts --bail
+bun test v1.3.14 (0d9b296a)
+
+ 9 pass
+ 0 fail
+ 32 expect() calls
+Ran 9 tests across 1 file. [619.00ms]
+
+$ opencode: bun run test ./test/arena/transcript.test.ts --bail
+$ bun test --timeout 30000 --only-failures ./test/arena/transcript.test.ts --bail
+bun test v1.3.14 (0d9b296a)
+
+ 12 pass
+ 0 fail
+ 50 expect() calls
+Ran 12 tests across 1 file. [530.00ms]
+
+$ opencode: bun run test ./test/arena/reasoning-redaction.test.ts --bail
+$ bun test --timeout 30000 --only-failures ./test/arena/reasoning-redaction.test.ts --bail
+bun test v1.3.14 (0d9b296a)
+
+ 2 pass
+ 0 fail
+ 26 expect() calls
+Ran 2 tests across 1 file. [536.00ms]
+
+$ packages/app: npx vitest run src/arena/run-thread-render.test.tsx --bail=1
+
+ RUN  v4.1.7 /Users/michaelmayer/.codex/worktrees/6bfc/agent-duel/packages/app
+
+
+ Test Files  1 passed (1)
+      Tests  13 passed (13)
+   Start at  15:52:21
+   Duration  820ms (transform 368ms, setup 18ms, import 518ms, tests 82ms, environment 120ms)
+
+
+$ arena-service: bun run typecheck
+$ tsgo --noEmit
+
+$ opencode: bun run typecheck
+$ tsgo --noEmit
+
+$ npm run typecheck
+
+> paseo@0.4.0-beta.8 typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> @getpaseo/expo-two-way-audio@0.4.0-beta.8 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/highlight@0.4.0-beta.8 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/protocol@0.4.0-beta.8 pretypecheck
+> npm run generate:validators
+
+
+> @getpaseo/protocol@0.4.0-beta.8 generate:validators
+> node scripts/generate-validation-aot.mjs
+
+generated src/generated/validation/ws-outbound.aot.ts from codegen/ws-outbound.compile.ts (WSOutboundMessageSchema)
+
+> @getpaseo/protocol@0.4.0-beta.8 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/client@0.4.0-beta.8 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/server@0.4.0-beta.8 typecheck
+> tsgo -p tsconfig.server.typecheck.json --noEmit
+
+
+> @getpaseo/app@0.4.0-beta.8 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/relay@0.4.0-beta.8 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/desktop@0.4.0-beta.8 typecheck
+> tsgo --noEmit -p tsconfig.json
+
+
+> @getpaseo/cli@0.4.0-beta.8 typecheck
+> tsgo --noEmit
+
+
+$ npm run lint
+
+> paseo@0.4.0-beta.8 lint
+> oxlint --disable-nested-config
+
+Found 0 warnings and 0 errors.
+Finished in 339ms on 3501 files with 177 rules using 18 threads.
+
+$ npm run format
+
+> paseo@0.4.0-beta.8 format
+> oxfmt .
+
+Finished in 429ms on 3651 files using 18 threads.
