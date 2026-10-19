@@ -6,8 +6,8 @@ import path from "node:path";
 // The smallest window the app lays out without overlap, enforced on the BrowserWindow and on
 // restored state. Width: with Battle off and "Model size: frontier", the composer's controls
 // start to overlap below about 460 px; 480 leaves some slack. Height: a long prompt grows the
-// composer's text box to half the window, and at 600 about 120 px of a battle (five lines) stays
-// visible between the header and the vote row; at 500 only about 65 px does.
+// composer's text box to half the window, and at 600 a battle still shows at least five lines
+// between the header and the vote row; at 500 only two or three.
 export const MIN_WINDOW_WIDTH = 480;
 export const MIN_WINDOW_HEIGHT = 600;
 
