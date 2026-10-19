@@ -75,6 +75,78 @@ describe("ArenaComparison", () => {
     expect(result.responseArtifactID).toBeUndefined()
   })
 
+  test("names a first-turn chat with identical trees from the prompt alone", async () => {
+    setArenaCredentials({
+      mode: "hosted",
+      token: "test-key",
+      controlPlaneUrl: "https://control.test",
+      controlTokenHash: "0".repeat(64),
+    })
+    let comparison: ComparisonDocument | undefined
+    const arena = store({
+      saveComparison: async (input: ComparisonDocument) => {
+        comparison = input
+        return input
+      },
+      updateComparison: async (_id: string, patch: Partial<ComparisonDocument>) => {
+        comparison = { ...comparison!, ...patch }
+        return comparison
+      },
+      storeArtifact: async (input: { _id: string }) => input,
+    })
+    const requests: Array<{ url: string; body: { scopeID: string; messages: Array<{ content: string }> } }> = []
+    const input = {
+      store: arena,
+      turnID: "equal-first",
+      turnIndex: 0,
+      userPrompt: "Explain the retry policy\nwith examples",
+      baseCommit: "base",
+      aCommit: "a",
+      bCommit: "b",
+      baseTree: "base-tree",
+      aTree: "base-tree",
+      bTree: "base-tree",
+      aToB: "",
+      aToBTruncated: false,
+      baseToA: "",
+      baseToATruncated: false,
+      baseToB: "",
+      baseToBTruncated: false,
+      transcriptA: "A explained it",
+      transcriptB: "B explained it",
+      files: [],
+      artifactIDs: [],
+    }
+
+    const named = await generate({
+      ...input,
+      execute: async (url, init) => {
+        requests.push({ url: String(url), body: JSON.parse(String(init?.body)) })
+        return Response.json({
+          choices: [{ message: { content: 'Title: "Retry policy explained."' } }],
+          usage: { prompt_tokens: 40, completion_tokens: 6, cost: 0.0001 },
+        })
+      },
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.url).toBe("https://control.test/api/arena/comparison")
+    expect(requests[0]?.body.scopeID).toBe("equal-first")
+    expect(requests[0]?.body.messages[0]?.content).toContain("Explain the retry policy\nwith examples")
+    expect(requests[0]?.body.messages[0]?.content).not.toContain("A explained it")
+    expect(named).toMatchObject({ state: "complete", title: "Retry policy explained" })
+    expect(named.output).toBeUndefined()
+    expect(named.usage).toMatchObject({ promptTokens: 40, completionTokens: 6 })
+
+    // A failed title leaves the comparison complete; the chat keeps its prompt's first line.
+    const unnamed = await generate({
+      ...input,
+      execute: async () => Response.json({ error: "Arena comparison failed" }, { status: 502 }),
+    })
+    expect(unnamed.state).toBe("complete")
+    expect(unnamed.title).toBeUndefined()
+  })
+
   test("anchors both agents on base and stores raw artifacts", async () => {
     setArenaCredentials({
       mode: "hosted",

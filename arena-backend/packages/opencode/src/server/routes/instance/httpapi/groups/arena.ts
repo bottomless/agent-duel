@@ -135,6 +135,17 @@ export const SeedWorktreeResult = Schema.Struct({
   cloned: Schema.Number,
   copied: Schema.Number,
 })
+export const MetadataPayload = Schema.Struct({
+  kind: Schema.Literals(["commit_message", "pull_request", "branch_name", "chat_title"]),
+  changes: Schema.String,
+  instructions: Schema.optional(Schema.String),
+})
+export const MetadataResult = Schema.Union([
+  Schema.Struct({ message: Schema.String }),
+  Schema.Struct({ title: Schema.String, body: Schema.String }),
+  Schema.Struct({ branch: Schema.String }),
+  Schema.Struct({ title: Schema.String }),
+])
 export const CheckoutCleanupPayload = Schema.Struct({ root: Schema.String })
 export const CheckoutCleanupResult = Schema.Struct({
   eligible: Schema.Boolean,
@@ -650,6 +661,21 @@ const group = HttpApiGroup.make("arena")
         summary: "Seed a worktree with a checkout's ignored content",
         description:
           "Clone everything the source checkout ignores into a freshly created worktree, the way a contestant is seeded, so its setup command starts from a warm dependency tree.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("metadata", "/arena/metadata", {
+      query: WorkspaceRoutingQuery,
+      payload: MetadataPayload,
+      success: MetadataResult,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.metadata",
+        summary: "Write a commit message, pull request text, branch name or chat title",
+        description:
+          "Ask the comparison's model for a commit message, pull request text or a suggested branch name from a checkout's changes, or a title from a chat's first prompt, through the Arena backend, so none of them runs on an agent.",
       }),
     ),
   )

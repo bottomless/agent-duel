@@ -5,6 +5,7 @@ import { HttpApiSchema } from "effect/unstable/httpapi"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { seedWorktreeIgnoredContent } from "@/arena/copy-snapshot"
 import { forkSessionInto } from "@/arena/fork"
+import { generate as generateMetadata } from "@/arena/metadata"
 import { ArenaService } from "@/arena/service"
 import { MessageID, SessionID } from "@/session/schema"
 import { InstanceHttpApi } from "../api"
@@ -145,6 +146,14 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
         map(
           Effect.tryPromise({
             try: () => seedWorktreeIgnoredContent({ source: ctx.payload.source, target: ctx.payload.target }),
+            catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+          }),
+        ),
+      )
+      .handle("metadata", (ctx) =>
+        map(
+          Effect.tryPromise({
+            try: (signal) => generateMetadata(ctx.payload, signal),
             catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
           }),
         ),

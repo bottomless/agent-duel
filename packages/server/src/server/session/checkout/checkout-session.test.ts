@@ -143,6 +143,7 @@ function makeCheckoutSession(options?: {
       hostCalls.createBranch.push({ cwd, branch, options: createOptions });
       return { currentBranch: branch };
     },
+    getWorkspaceTitle: async () => null,
     ...options?.host,
   };
   const gitMutation: GitMutationFake = {
@@ -164,6 +165,8 @@ function makeCheckoutSession(options?: {
       generatorCalls.generatePullRequestText.push({ cwd, baseRef });
       return { title: "", body: "" };
     },
+    suggestBranchName: async () => null,
+    suggestChatTitle: async () => null,
     ...options?.gitMetadataGenerator,
   };
   const github: ForgeService = { ...createGitHubService(), ...options?.github };
@@ -888,6 +891,53 @@ describe("CheckoutSession", () => {
             error: { code: "UNKNOWN", message: "Base branch not found: main" },
             requestId: "cb3",
           },
+        },
+      ]);
+    });
+  });
+
+  describe("suggest branch name", () => {
+    it("names the branch from the workspace's chat title and answers the suggestion", async () => {
+      const suggested: Array<{ cwd: string; chatTitle: string | null }> = [];
+      const { checkout, emitted } = makeCheckoutSession({
+        host: { getWorkspaceTitle: async (workspaceId) => `Title of ${workspaceId}` },
+        gitMetadataGenerator: {
+          suggestBranchName: async (cwd, chatTitle) => {
+            suggested.push({ cwd, chatTitle });
+            return "feat/retry-backoff";
+          },
+        },
+      });
+
+      await checkout.handleCheckoutSuggestBranchNameRequest({
+        type: "checkout.suggest_branch_name.request",
+        cwd: "/repo",
+        workspaceId: "wks_1",
+        requestId: "sb1",
+      });
+
+      expect(suggested).toEqual([{ cwd: "/repo", chatTitle: "Title of wks_1" }]);
+      expect(emitted).toEqual([
+        {
+          type: "checkout.suggest_branch_name.response",
+          payload: { cwd: "/repo", branch: "feat/retry-backoff", requestId: "sb1" },
+        },
+      ]);
+    });
+
+    it("answers null when nothing could write a name", async () => {
+      const { checkout, emitted } = makeCheckoutSession();
+
+      await checkout.handleCheckoutSuggestBranchNameRequest({
+        type: "checkout.suggest_branch_name.request",
+        cwd: "/repo",
+        requestId: "sb2",
+      });
+
+      expect(emitted).toEqual([
+        {
+          type: "checkout.suggest_branch_name.response",
+          payload: { cwd: "/repo", branch: null, requestId: "sb2" },
         },
       ]);
     });

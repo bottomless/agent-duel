@@ -12,13 +12,6 @@ type BrowserAutomationExecuteResponse = Extract<
   { type: "browser.automation.execute.response" }
 >;
 
-export interface DesktopDialogAskOptions {
-  title?: string;
-  okLabel?: string;
-  cancelLabel?: string;
-  kind?: "info" | "warning" | "error";
-}
-
 export interface DesktopDialogOpenOptions {
   title?: string;
   defaultPath?: string;
@@ -31,22 +24,7 @@ export interface DesktopDialogOpenOptions {
   }>;
 }
 
-export interface DesktopDialogAskWithCheckboxOptions extends DesktopDialogAskOptions {
-  checkboxLabel: string;
-  checkboxChecked?: boolean;
-}
-
-export interface DesktopDialogAskWithCheckboxResult {
-  confirmed: boolean;
-  dontAskAgain: boolean;
-}
-
 export interface DesktopDialogBridge {
-  ask?: (message: string, options?: DesktopDialogAskOptions) => Promise<boolean>;
-  askWithCheckbox?: (
-    message: string,
-    options: DesktopDialogAskWithCheckboxOptions,
-  ) => Promise<DesktopDialogAskWithCheckboxResult>;
   open?: (options?: DesktopDialogOpenOptions) => Promise<string | string[] | null>;
 }
 

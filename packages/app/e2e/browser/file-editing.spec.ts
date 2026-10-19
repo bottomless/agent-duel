@@ -6,6 +6,7 @@ import {
   openFileFromExplorer,
   expectFileTabOpen,
 } from "../support/helpers/file-explorer";
+import { answerConfirmDialog } from "../support/helpers/confirm-dialog";
 import { installDaemonWebSocketGate } from "../support/helpers/daemon-websocket-gate";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 
@@ -359,8 +360,8 @@ test.describe("CodeMirror workspace file editing", () => {
     await replaceEditorText(page, "const discarded = 7;\n");
     await writeFile(sourcePath, "const diskWins = 8;\n", "utf8");
     await expect(page.getByTestId("file-conflict-alert")).toBeVisible();
-    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Reload", exact: true }).click();
+    await answerConfirmDialog(page, "confirm");
     await expect(editor(page)).toContainText("const diskWins = 8;");
 
     const subscriptionCount = gate.getClientRequestCount("fs.file.subscribe.request");
@@ -408,11 +409,6 @@ test.describe("CodeMirror workspace file editing", () => {
     await expect(page.getByTestId("file-conflict-alert")).toBeVisible();
     await expect(page.getByTestId("workspace-tab-modified-file_draft.ts")).toBeVisible();
 
-    let closePrompt = "";
-    page.once("dialog", async (dialog) => {
-      closePrompt = dialog.message();
-      await dialog.dismiss();
-    });
     await page
       .getByTestId("workspace-tab-file_draft.ts")
       .filter({ visible: true })
@@ -422,7 +418,8 @@ test.describe("CodeMirror workspace file editing", () => {
       .getByTestId("workspace-tab-context-file_draft.ts-close")
       .filter({ visible: true })
       .click();
-    expect(closePrompt).toContain("Closing it will discard the draft.");
+    const closePrompt = await answerConfirmDialog(page, "cancel");
+    expect(closePrompt.message).toContain("Closing it will discard the draft.");
 
     await expect(page.getByTestId("file-source-editor")).toBeVisible();
     await expect(page.getByTestId("workspace-tab-modified-file_draft.ts")).toBeVisible();

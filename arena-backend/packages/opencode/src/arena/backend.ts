@@ -5,9 +5,10 @@ import { isNetworkUnavailable } from "@agent-duel/arena-service/network"
 import type { ArenaCredentials } from "./credentials"
 
 /**
- * Where the engine sends assignment, contestant and comparison requests. Both modes keep the
- * control plane's paths (`/api/arena/assignments`, `/api/arena/comparison`, `/api/openrouter/...`)
- * and `fetch` adds whatever credential the routes need, so callers never branch on the mode.
+ * Where the engine sends assignment, contestant, comparison and metadata requests. Both modes keep
+ * the control plane's paths (`/api/arena/assignments`, `/api/arena/comparison`,
+ * `/api/arena/metadata`, `/api/openrouter/...`) and `fetch` adds whatever credential the routes
+ * need, so callers never branch on the mode.
  */
 export interface ArenaBackend {
   readonly url: string
@@ -36,6 +37,8 @@ export function createArenaBackend(credentials: ArenaCredentials, db: () => Prom
     pool: defaultPool,
     openRouterApiKey: credentials.openRouterApiKey,
     networkUnavailable: (error) => isNetworkUnavailable(error, "openrouter.ai"),
+    // The per-account limit guards the hosted key; this one is the user's.
+    metadataRateLimit: null,
   })
   return {
     url: inProcessUrl,

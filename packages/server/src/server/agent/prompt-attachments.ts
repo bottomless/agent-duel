@@ -193,27 +193,3 @@ function formatIssueNumber(forge: string, number: number): string {
 function padLineNumber(lineNumber: number | null): string {
   return (lineNumber?.toString() ?? "-").padStart(2);
 }
-
-export function buildAgentBranchNameSeed(
-  firstAgentContext: { prompt?: string; attachments?: readonly AgentAttachment[] } | undefined,
-): string | undefined {
-  if (!firstAgentContext) {
-    return undefined;
-  }
-  const parts: string[] = [];
-  const prompt = firstAgentContext.prompt?.trim();
-  if (prompt) {
-    parts.push(["<user-prompt>", prompt, "</user-prompt>"].join("\n"));
-  }
-  const renderedAttachments: string[] = [];
-  for (const attachment of firstAgentContext.attachments ?? []) {
-    const rendered = renderPromptAttachmentAsText(attachment).trim();
-    if (rendered) {
-      renderedAttachments.push(rendered);
-    }
-  }
-  if (renderedAttachments.length > 0) {
-    parts.push(["<attachments>", renderedAttachments.join("\n\n"), "</attachments>"].join("\n"));
-  }
-  return parts.length > 0 ? parts.join("\n\n") : undefined;
-}

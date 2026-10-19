@@ -3,6 +3,7 @@ import type { ArenaContext, Caller, Fetch } from "./context"
 import { validateOpenRouter, type ModelPool } from "./pool"
 import { handleAssignmentsRequest } from "./assignments"
 import { handleComparisonRequest } from "./comparison"
+import { defaultMetadataRateLimit, handleMetadataRequest, type MetadataRateLimit } from "./metadata"
 import { handleOpenRouterRequest } from "./openrouter"
 import { mediumModel } from "./default-pool"
 
@@ -15,7 +16,7 @@ export type ArenaServiceOptions = {
   readonly resolveCaller: (request: Request) => Promise<Caller | undefined>
   readonly db: () => Promise<ArenaDb>
   readonly pool: ModelPool
-  /** Pays for contestant, comparison and catalog calls. Without it the routes answer 503. */
+  /** Pays for contestant, comparison, metadata and catalog calls. Without it the routes answer 503. */
   readonly openRouterApiKey: string | undefined
   readonly fetch?: Fetch
   readonly random?: () => number
@@ -29,12 +30,18 @@ export type ArenaServiceOptions = {
    * the network. The control plane leaves it unset; its own outbound failures are not the user's.
    */
   readonly networkUnavailable?: (error: unknown) => Promise<boolean>
+  /**
+   * Commit message and pull request requests each account may make per window. Defaults to
+   * `defaultMetadataRateLimit`; null turns the limit off, as a BYOK engine does for its own key.
+   */
+  readonly metadataRateLimit?: MetadataRateLimit | null
 }
 
 export type ArenaService = {
   readonly assignments: (request: Request) => Promise<Response>
   readonly openrouter: (request: Request) => Promise<Response>
   readonly comparison: (request: Request) => Promise<Response>
+  readonly metadata: (request: Request) => Promise<Response>
   /** Answers any of the routes above by path, or undefined when the path is not one of them. */
   readonly route: (request: Request) => Promise<Response | undefined>
 }
@@ -59,18 +66,23 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
           throw error
         }))),
     networkUnavailable: options.networkUnavailable,
+    metadataRateLimit:
+      options.metadataRateLimit === null ? undefined : (options.metadataRateLimit ?? defaultMetadataRateLimit),
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)
   const comparison = (request: Request) => handleComparisonRequest(request, context)
+  const metadata = (request: Request) => handleMetadataRequest(request, context)
   return {
     assignments,
     openrouter,
     comparison,
+    metadata,
     async route(request) {
       const path = new URL(request.url).pathname
       if (path === "/api/arena/assignments") return assignments(request)
       if (path === "/api/arena/comparison") return comparison(request)
+      if (path === "/api/arena/metadata") return metadata(request)
       if (path.startsWith("/api/openrouter/")) return openrouter(request)
       return undefined
     },

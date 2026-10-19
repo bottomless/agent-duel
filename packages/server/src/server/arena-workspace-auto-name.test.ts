@@ -1,12 +1,8 @@
-import pino from "pino";
 import { describe, expect, test, vi } from "vitest";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
-import type { AgentManager } from "./agent/agent-manager.js";
-import type { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
 import { applyArenaChatTitle, applyArenaFirstTurnMetadata } from "./arena-workspace-auto-name.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
-import type { WorkspaceGitService } from "./workspace-git-service.js";
 import {
   createPersistedWorkspaceRecord,
   type PersistedWorkspaceRecord,
@@ -55,19 +51,9 @@ function workspaceNamer(title: string | null) {
     },
   } satisfies Pick<WorkspaceRegistry, "get" | "update">;
   const workspaceAutoName = new WorkspaceAutoName({
-    agentManager: {} as AgentManager,
     workspaceRegistry,
-    workspaceGitService: {} as WorkspaceGitService,
-    providerSnapshotManager: {} as ProviderSnapshotManager,
-    readDaemonConfig: () => ({}),
-    gitMutation: { notifyGitMutation: async () => {} },
-    emitWorkspaceUpdateForCwd: async () => {},
     emitWorkspaceUpdateForWorkspaceId: async (workspaceId) => {
       emitted.push(workspaceId);
-    },
-    logger: pino({ level: "silent" }),
-    generateWorkspaceName: async () => {
-      throw new Error("Arena chats are not named by a generation agent");
     },
   });
   return { workspaceAutoName, writes, emitted, title: () => workspace.title };
