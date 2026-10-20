@@ -58,16 +58,28 @@ export function localizeCanonicalCommand(command: string, input: LocalPaths) {
  * every other string the model will read again, tool output and reasoning included, has its Arena
  * references replaced (`retargetArenaReferences`), so no later turn is handed a path into a worktree
  * that is gone, recycled into another side's, or the other side's own. Text the user typed stays as
- * written.
+ * written. A subagent's user messages are the prompts its parent model wrote with `task`, not text
+ * the user typed, so `subagent` rewrites them like the rest of the transcript.
  */
-export async function canonicalizeTranscriptPaths<T>(value: T, input: ArenaRoots, role?: string): Promise<T> {
+export async function canonicalizeTranscriptPaths<T>(
+  value: T,
+  input: ArenaRoots,
+  role?: string,
+  options?: { readonly subagent?: boolean },
+): Promise<T> {
   const declared = await transcript(
     value,
     (path) => canonicalizeWorktreePaths(path, input),
     (text) => rewritePathReferences(text, input.worktrees, input.canonical),
     role,
   )
-  if (plainObject(declared) && declared.type === "text" && role === "user" && declared.synthetic !== true) {
+  if (
+    !options?.subagent &&
+    plainObject(declared) &&
+    declared.type === "text" &&
+    role === "user" &&
+    declared.synthetic !== true
+  ) {
     return declared
   }
   const references = arenaReferences(input)
