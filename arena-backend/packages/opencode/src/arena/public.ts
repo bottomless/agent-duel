@@ -70,6 +70,7 @@ export type PublicRun = {
   readonly lastEventAt?: Date
   readonly completedAt?: Date
   readonly durationMs: number | null
+  readonly priorDurationMs?: number
   readonly promptMessageID?: string
   readonly diff?: RunDocument["diff"]
   readonly finalCommit?: string
@@ -411,6 +412,7 @@ export function project(snapshot: BattleSnapshot) {
         ...(run.lastEventAt ? { lastEventAt: run.lastEventAt } : {}),
         ...(run.completedAt ? { completedAt: run.completedAt } : {}),
         durationMs: run.durationMs ?? null,
+        ...(run.priorDurationMs ? { priorDurationMs: run.priorDurationMs } : {}),
         ...(run.promptMessageID ? { promptMessageID: run.promptMessageID } : {}),
         ...(run.diff ? { diff: run.diff } : {}),
         ...(run.finalCommit ? { finalCommit: run.finalCommit } : {}),

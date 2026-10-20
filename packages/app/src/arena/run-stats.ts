@@ -7,7 +7,10 @@ const RETRY_MESSAGES = new Set([
   "Continuing after model timeout",
 ]);
 
-type ArenaRunTiming = Pick<ArenaRun, "runState" | "startedAt" | "completedAt" | "durationMs">;
+type ArenaRunTiming = Pick<
+  ArenaRun,
+  "runState" | "startedAt" | "completedAt" | "durationMs" | "priorDurationMs"
+>;
 
 function parseTime(value: string | undefined): number | null {
   if (typeof value !== "string") return null;
@@ -20,15 +23,29 @@ function parseTime(value: string | undefined): number | null {
  *
  * A settled run reports the engine's own duration so the number stops moving
  * the moment the run finalizes; a pending run counts from when it started.
+ * Both include the requests before a follow-up or a retry, as the engine's
+ * duration does.
  */
 export function arenaRunElapsedMs(run: ArenaRunTiming, now: number): number | null {
   if (typeof run.durationMs === "number" && run.durationMs >= 0) return run.durationMs;
-  const startedAt = parseTime(run.startedAt);
+  const startedAt = arenaRunClockStart(run);
   if (startedAt === null) return null;
   const completedAt = parseTime(run.completedAt);
   if (completedAt !== null) return Math.max(0, completedAt - startedAt);
   if (run.runState !== "pending") return null;
   return Math.max(0, now - startedAt);
+}
+
+/**
+ * When the run's clock would have started had it worked without a break: the
+ * current request's start, moved back by the time worked before it.
+ */
+export function arenaRunClockStart(
+  run: Pick<ArenaRun, "startedAt" | "priorDurationMs">,
+): number | null {
+  const startedAt = parseTime(run.startedAt);
+  if (startedAt === null) return null;
+  return startedAt - (run.priorDurationMs ?? 0);
 }
 
 export function arenaRunStatusLabel(run: ArenaRun, now: number): string {

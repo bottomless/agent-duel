@@ -825,12 +825,17 @@ export class Store {
       if (manifest?.artifactIDs.length) await this.artifacts.deleteMany({ _id: { $in: [...manifest.artifactIDs] } })
       await this.sessionArchives.deleteOne({ _id: run.transcriptArchiveID, runID })
     }
+    // The request that ended counts toward the run's time whether it completed or failed. The
+    // new request's `startedAt` replaces its own, so this is the last moment it can be measured.
+    const ended =
+      run.startedAt && run.completedAt ? Math.max(0, run.completedAt.getTime() - run.startedAt.getTime()) : 0
     const updated = await this.runs.findOneAndUpdate(
       { _id: runID },
       {
         $set: {
           runState: "pending",
           durationMs: null,
+          priorDurationMs: (run.priorDurationMs ?? 0) + ended,
           selectable: false,
           startedAt: at,
           updatedAt: at,
