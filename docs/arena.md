@@ -772,10 +772,16 @@ only the path arguments of its file commands (`cd`, `rm`, `cp`, `mv`, `mkdir`, `
 `chown`, `cat`); other programs and redirection reach anything the user can.
 
 Each side has a temp directory, `$TMPDIR/opencode/arena/<session id>`. The shell exports it as
-`TMPDIR` and the shell tool's description names it, and truncated tool output is saved under it, so
+`TMPDIR`, the shell tool's description names it, and truncated tool output is saved under it, so
 the hint to read that file works. It is removed when the run gives up its worktree: released for the
 next pair (`releaseRunSlot`) or removed by archive, eviction or an environment release
 (`removeStoppedRun`).
+
+The system prompt (`ARENA_IDENTITY`) tells contestants to keep temporary files there and never in
+`/tmp`, even when a task names `/tmp`. Both sides run at once and `/tmp` is one shared folder, so a
+side that writes where a task says can overwrite the other side's file. Nothing enforces the rule.
+In an A/B test on the production pool, every model wrote `/tmp/word.txt` when asked without the
+sentence, and none did with it.
 
 A contestant denied `.agent-duel`, or a write into the checkout, gets one sentence that says so, not the generic list of matching
 rules, which holds dozens of home-directory paths that contestants copy into their answers and that
