@@ -4027,7 +4027,7 @@ export const layer: Layer.Layer<
         SessionRetry.retryable(assistant.error, "arena") !== undefined
       const durationMs =
         runState === "complete" && stored?.startedAt
-          ? Math.max(0, completedAt.getTime() - stored.startedAt.getTime())
+          ? (stored.priorDurationMs ?? 0) + Math.max(0, completedAt.getTime() - stored.startedAt.getTime())
           : null
       yield* promise(() =>
         store.updateRun(run.runID, {

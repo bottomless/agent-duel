@@ -8,7 +8,7 @@ import { connectLocalStore } from "@/arena/local-store"
 import { MAX_RUN_ARTIFACT_BYTES } from "@/arena/artifact"
 import { ArenaTranscriptArtifact } from "@/arena/transcript-artifact"
 import type { ArenaRecord } from "@agent-duel/arena-service/collection"
-import type { ChatDocument, ComparisonDocument, GenerationDocument } from "@/arena/records"
+import type { ChatDocument, ComparisonDocument, GenerationDocument, RunDocument } from "@/arena/records"
 
 const now = new Date("2026-01-01T00:00:00.000Z")
 
@@ -218,6 +218,35 @@ describe("local Arena store", () => {
       expect(await store.saveSkippedComparison(record("turn-claimed"))).toBeUndefined()
       expect(await store.comparisons.findOne({ turnID: "turn-claimed" })).toBeNull()
       expect((await store.turn("turn-claimed"))?.comparisonID).toBeUndefined()
+      await store.close()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("keeps the time of each request a reply or retry starts over", async () => {
+    const directory = await temporaryDirectory()
+    try {
+      type TimedRun = Pick<RunDocument, "_id" | "turnID" | "runState" | "durationMs" | "startedAt" | "completedAt">
+      const store = await connectLocalStore({ directory })
+      const runs = store.db.collection<TimedRun>("runs")
+      const at = (ms: number) => new Date(now.getTime() + ms)
+      await runs.insertOne({
+        _id: "run",
+        turnID: "turn",
+        runState: "complete",
+        durationMs: 3_000,
+        startedAt: now,
+        completedAt: at(3_000),
+      })
+      // A follow-up sent a minute after the run finished. The wait is not time worked.
+      const followUp = await store.resetRunForReply("run", at(60_000))
+      expect(followUp.priorDurationMs).toBe(3_000)
+      expect(followUp.completedAt).toBeUndefined()
+      // The follow-up fails after two seconds, and the retry keeps that time too.
+      await runs.updateOne({ _id: "run" }, { $set: { runState: "error", completedAt: at(62_000) } })
+      const retry = await store.resetRunForReply("run", at(70_000))
+      expect(retry.priorDurationMs).toBe(5_000)
       await store.close()
     } finally {
       await rm(directory, { recursive: true, force: true })

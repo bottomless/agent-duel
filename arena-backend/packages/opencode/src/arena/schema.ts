@@ -272,6 +272,7 @@ const PublicRun = Schema.Struct({
   lastEventAt: Schema.optional(Schema.String),
   completedAt: Schema.optional(Schema.String),
   durationMs: Schema.NullOr(Schema.Number),
+  priorDurationMs: Schema.optional(Schema.Number),
   promptMessageID: Schema.optional(Schema.String),
   diff: Schema.optional(DiffSummary),
   finalCommit: Schema.optional(Schema.String),
