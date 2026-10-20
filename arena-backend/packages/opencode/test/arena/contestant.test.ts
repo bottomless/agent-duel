@@ -153,9 +153,7 @@ describe("Arena contestant permissions", () => {
         pattern: path.join(other, "*"),
         write: false,
       }),
-    ).toBe(
-      `Arena contestants cannot access any Arena worktree but their own. ${other} is inside them.`,
-    )
+    ).toBe(`Arena contestants cannot access any Arena worktree but their own. ${other} is inside them.`)
     expect(
       ArenaContestant.denial({
         ruleset,

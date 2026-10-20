@@ -739,7 +739,9 @@ user typed and image bytes keep their bytes. A slot of the checkout's pool, from
 side or a spare, becomes the checkout; its host repository, `<slot>.git`, becomes the checkout's
 `.git`; and a contestant temp directory becomes `$TMPDIR`, since it is deleted with its run. They are
 matched in every spelling a tool prints: after `file://`, under `/private`, behind `../`, and from
-`~` or `$HOME`. Before this, the read tool's `<path>` header and grep, glob and shell output kept
+`~` or `$HOME`. A slot is matched by the names Arena gives slots (`SLOT_PATH_PATTERN` in
+`arena/domain.ts`), not by reading up to the next separator, which swallowed a sentence's closing
+`.` and a JSON string's `\n` with the path. Before this, the read tool's `<path>` header and grep, glob and shell output kept
 the winner's worktree path, so later turns, and the chat's own agent in the checkout, re-read an
 earlier turn's slot; by then that path is gone or belongs to another side. Chats copied before the
 change keep their old paths, so the fork never localizes a checkout path into `.agent-duel`: it

@@ -1,6 +1,7 @@
 import { rewritePathCommand } from "./path-command"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { isolatedRoot, LOCAL_STATE_DIRNAME } from "@/worktree/layout"
+import { SLOT_PATH_PATTERN } from "./domain"
 
 type CanonicalPaths = { readonly worktrees: readonly string[]; readonly canonical: string }
 
@@ -231,8 +232,10 @@ function arenaReferences(input: ArenaRoots): (text: string) => string {
       : []),
     ...(encodeURI(input.canonical) === input.canonical ? [] : [escapeRegExp(encodeURI(input.canonical))]),
   ]
+  // The name ends the match, not the next separator: a sentence's `.` or a JSON string's `\n`
+  // right after a slot stays in the text.
   const slot = new RegExp(
-    `(?:${spellings.join("|")})${escapeRegExp(pool)}/[^/\\s"'\`<>()[\\]{},;:!?#*]+/[^/\\s"'\`<>()[\\]{},;:!?#*]+?(\\.git)?(?=$|[/\\s"'\`<>()[\\]{},;:!?#*])`,
+    `(?:${spellings.join("|")})${escapeRegExp(pool)}/${SLOT_PATH_PATTERN}(\\.git)?(?![\\w-])`,
     "g",
   )
   const temp = new RegExp(`${privateOptional(input.temp)}/ses_[0-9A-Za-z]+(?![0-9A-Za-z])`, "g")
