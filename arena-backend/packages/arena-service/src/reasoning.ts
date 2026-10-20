@@ -29,12 +29,6 @@ function renderedReasoning(value: Record<string, unknown>) {
     .join("")
 }
 
-export class InvalidReasoningContinuation extends Error {
-  constructor() {
-    super("Invalid Arena reasoning continuation")
-  }
-}
-
 /**
  * The engine must echo original reasoning (including late signatures) during tool continuation.
  * Seal it at the cloud boundary instead of disabling thinking or forwarding provider-shaped blocks.
@@ -59,7 +53,10 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     return prefix + Buffer.concat([nonce, cipher.getAuthTag(), encrypted]).toString("base64url")
   }
 
-  function open(token: string): Packet {
+  // An envelope sealed for another scope (an earlier single-agent message), assignment, account, or
+  // server key does not open. Callers drop it: it reveals nothing, and only the current tool loop
+  // needs its reasoning back.
+  function open(token: string): Packet | undefined {
     try {
       const bytes = Buffer.from(token.slice(prefix.length), "base64url")
       const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12))
@@ -72,13 +69,13 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
         !record(decoded) ||
         !record(decoded.value) ||
         typeof decoded.stream !== "boolean" ||
-        typeof decoded.rendered !== "string"
+        typeof decoded.rendered !== "string" ||
+        (decoded.kind !== "chat" && decoded.kind !== "responses")
       )
-        throw new InvalidReasoningContinuation()
-      if (decoded.kind !== "chat" && decoded.kind !== "responses") throw new InvalidReasoningContinuation()
+        return undefined
       return { kind: decoded.kind, value: decoded.value, stream: decoded.stream, rendered: decoded.rendered }
     } catch {
-      throw new InvalidReasoningContinuation()
+      return undefined
     }
   }
 
@@ -227,17 +224,20 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     const details: unknown[] = []
     const restored: Record<string, unknown> = { ...message }
     for (const field of fields) delete restored[field]
-    let sealed = false
+    let redacted = false
     let rendered = ""
     for (const detail of message.reasoning_details) {
-      if (record(detail) && detail.id === markerID) continue
+      if (record(detail) && detail.id === markerID) {
+        redacted = true
+        continue
+      }
       if (!record(detail) || typeof detail.data !== "string" || !detail.data.startsWith(prefix)) {
         details.push(detail)
         continue
       }
+      redacted = true
       const packet = open(detail.data)
-      if (packet.kind !== "chat") throw new InvalidReasoningContinuation()
-      sealed = true
+      if (packet?.kind !== "chat") continue
       rendered += packet.rendered
       for (const field of ["reasoning", "reasoning_content"]) {
         if (typeof packet.value[field] === "string")
@@ -246,7 +246,8 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
       if (Array.isArray(packet.value.reasoning_details))
         mergeDetails(details, packet.value.reasoning_details, packet.stream)
     }
-    if (!sealed) return message
+    // Markers never go upstream, even when no envelope opened.
+    if (!redacted) return message
     if (restored.reasoning === undefined && rendered) restored.reasoning = rendered
     if (details.length > 0) restored.reasoning_details = details
     return restored
@@ -257,17 +258,16 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     if (Array.isArray(input.messages))
       restored.messages = input.messages.map((message) => (record(message) ? restoreMessage(message) : message))
     if (Array.isArray(input.input)) {
-      restored.input = input.input.map((item) => {
+      restored.input = input.input.flatMap((item) => {
         if (
           !record(item) ||
           item.type !== "reasoning" ||
           typeof item.encrypted_content !== "string" ||
           !item.encrypted_content.startsWith(prefix)
         )
-          return item
+          return [item]
         const packet = open(item.encrypted_content)
-        if (packet.kind !== "responses") throw new InvalidReasoningContinuation()
-        return packet.value
+        return packet?.kind === "responses" ? [packet.value] : []
       })
     }
     return restored

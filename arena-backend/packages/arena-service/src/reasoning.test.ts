@@ -212,25 +212,69 @@ test("preserves every streamed packet and late signature for the next tool step"
   })
 })
 
-test("rejects tampered reasoning and replay across users, turns, assignments, or server keys", () => {
+test("drops reasoning sealed for another user, turn, assignment, or server key instead of failing", () => {
   const redactor = createReasoningRedactor("server-key", binding)
   const result = redactor.redact({ choices: [{ message: { role: "assistant", reasoning: "secret" } }] }) as {
     choices: [{ message: Record<string, unknown> }]
   }
-  const input = { messages: [result.choices[0].message] }
+  const input = {
+    messages: [
+      { role: "user", content: "next" },
+      { ...result.choices[0].message, content: "Done" },
+    ],
+  }
+  const dropped = {
+    messages: [
+      { role: "user", content: "next" },
+      { role: "assistant", content: "Done" },
+    ],
+  }
   for (const other of [
     { ...binding, userId: "other" },
     { ...binding, scopeID: "other" },
     { ...binding, assignmentID: "other" },
   ])
-    expect(() => createReasoningRedactor("server-key", other).restore(input)).toThrow(
-      "Invalid Arena reasoning continuation",
-    )
-  expect(() => createReasoningRedactor("another-key", binding).restore(input)).toThrow(
-    "Invalid Arena reasoning continuation",
-  )
+    expect(createReasoningRedactor("server-key", other).restore(input)).toEqual(dropped)
+  expect(createReasoningRedactor("another-key", binding).restore(input)).toEqual(dropped)
   const tampered = JSON.parse(JSON.stringify(input).replace("arena_reasoning_v1.", "arena_reasoning_v1.tampered"))
-  expect(() => redactor.restore(tampered)).toThrow("Invalid Arena reasoning continuation")
+  expect(redactor.restore(tampered)).toEqual(dropped)
+})
+
+test("a single-agent follow-up keeps current reasoning and drops the previous message's", () => {
+  const stream = (redactor: ReturnType<typeof createReasoningRedactor>, text: string) => {
+    const details: Record<string, unknown>[] = []
+    for (const chunk of [
+      { choices: [{ index: 0, delta: { reasoning_details: [{ type: "reasoning.text", text, index: 0 }] } }] },
+      {
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning_details: [{ type: "reasoning.text", text: "", signature: "sig", index: 0 }] },
+          },
+        ],
+      },
+      { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+    ]) {
+      const value = redactor.redact(chunk, true) as {
+        choices: [{ delta: { reasoning_details?: Record<string, unknown>[] } }]
+      }
+      details.push(...(value.choices[0].delta.reasoning_details ?? []))
+    }
+    return { role: "assistant", content: "", reasoning: REDACTED_THINKING, reasoning_details: details }
+  }
+  const first = stream(createReasoningRedactor("server-key", { ...binding, scopeID: "message-1" }), "Old plan")
+  const second = createReasoningRedactor("server-key", { ...binding, scopeID: "message-2" })
+  const current = stream(second, "New plan")
+  const restored = second.restore({ messages: [first, { role: "user", content: "next" }, current] }) as {
+    messages: Record<string, unknown>[]
+  }
+  expect(restored.messages[0]).toEqual({ role: "assistant", content: "" })
+  expect(restored.messages[2]).toMatchObject({
+    reasoning: "New plan",
+    reasoning_details: [{ type: "reasoning.text", text: "New plan", signature: "sig" }],
+  })
+  expect(JSON.stringify(restored)).not.toContain(REDACTED_THINKING)
+  expect(JSON.stringify(restored)).not.toContain("Old plan")
 })
 
 test("redacts Responses items and progress events and restores their original continuation", () => {

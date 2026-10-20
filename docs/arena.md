@@ -810,8 +810,10 @@ field. Each layer has its own file:
   envelopes, so thinking does not trigger the model-idle deadline. The service restores the original
   blocks on the next request; tool continuation must not see the marker in place of its reasoning.
   Envelopes are authenticated against the account, scope, and assignment using a key derived from the
-  service's OpenRouter key. Cloud instances must share that key; rotating it invalidates outstanding
-  envelopes. BYOK sealing provides no secrecy from the user who owns that key.
+  service's OpenRouter key. The service drops an envelope that does not open instead of failing the
+  request: a single-agent chat replays the previous message's envelopes under that message's new
+  scope, and a running turn loses its sealed reasoning when the key rotates. Cloud instances must
+  share that key. BYOK sealing provides no secrecy from the user who owns that key.
   Runtime-only usage can continue through the transport, but the telemetry copy never persists
   generation request bodies because system prompts and tool
   schemas can fingerprint the provider. It drops per-side token counts, native finish reasons,

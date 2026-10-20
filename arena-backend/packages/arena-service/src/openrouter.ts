@@ -3,7 +3,7 @@ import { recordAssignmentGenerationMetrics, reserveRoutingAssignment } from "./a
 import { authorize, type ArenaContext } from "./context"
 import type { GenerationMetrics, UsageTotals } from "./metrics"
 import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
-import { createReasoningRedactor, InvalidReasoningContinuation } from "./reasoning"
+import { createReasoningRedactor } from "./reasoning"
 
 type ReasoningRedactor = ReturnType<typeof createReasoningRedactor>
 
@@ -448,9 +448,6 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       }
     })
   } catch (error) {
-    if (error instanceof InvalidReasoningContinuation) {
-      return Response.json({ error: { message: "Arena reasoning continuation is invalid" } }, { status: 400 })
-    }
     if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")
     return Response.json({ error: { message: "OpenRouter request failed" } }, { status: 502 })
