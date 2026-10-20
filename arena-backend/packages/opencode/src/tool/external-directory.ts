@@ -12,7 +12,7 @@ type Options = {
   kind?: Kind
   /**
    * What the tool does there. Writes are also held to the read-only rules that keep Arena
-   * contestants out of skill directories; the default is the stricter `write`.
+   * contestants from changing the main checkout; the default is the stricter `write`.
    */
   access?: "read" | "write"
 }

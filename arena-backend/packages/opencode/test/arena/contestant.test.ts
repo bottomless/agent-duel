@@ -8,12 +8,14 @@ import { excludedBelow } from "@/tool/external-directory"
 import { Truncate } from "@/tool/truncate"
 
 const checkout = path.join(path.sep, "Users", "dev", "project")
-const pool = path.join(checkout, ".agent-duel", "worktrees", "1e5a93c70dbcca48")
+const state = path.join(checkout, ".agent-duel")
+const pool = path.join(state, "worktrees", "1e5a93c70dbcca48")
 const own = path.join(pool, "generation-11-a")
 const skill = path.join(path.sep, "Users", "dev", ".agents", "skills", "review")
 const sandbox = {
   tmp: ArenaContestant.tmpDirectory("ses_left"),
-  blocked: [checkout],
+  readOnly: [checkout],
+  blocked: [state],
   own: [own, `${own}.git`],
 }
 
@@ -27,9 +29,11 @@ const agentRules = [
 
 const access = (ruleset: Parameters<typeof Permission.evaluate>[2], directory: string) =>
   Permission.evaluate("external_directory", path.join(directory, "*"), ruleset).action
+const write = (ruleset: Parameters<typeof Permission.evaluate>[2], directory: string) =>
+  Permission.evaluate(ArenaContestant.EXTERNAL_WRITE, path.join(directory, "*"), ruleset).action
 
 describe("Arena contestant permissions", () => {
-  test("allows everything outside the main checkout, without asking", () => {
+  test("allows everything outside .agent-duel, the main checkout included, without asking", () => {
     const ruleset = Permission.merge(agentRules, contestantPermissions(undefined, sandbox))
 
     for (const directory of [
@@ -41,18 +45,30 @@ describe("Arena contestant permissions", () => {
       path.join(path.sep, "Users", "dev"),
       path.join(path.sep, "Users", "dev", "code", "other-project"),
       `${checkout}-backup`,
+      checkout,
+      path.join(checkout, "src"),
+      path.join(checkout, ".git"),
     ]) {
       expect(access(ruleset, directory)).toBe("allow")
     }
   })
 
-  test("denies the main checkout, the other side's worktree and every earlier turn's", () => {
+  test("keeps the main checkout read-only and everything else writable", () => {
+    const ruleset = Permission.merge(agentRules, contestantPermissions(undefined, sandbox))
+
+    for (const directory of [checkout, path.join(checkout, "src"), path.join(checkout, ".git")]) {
+      expect(write(ruleset, directory)).toBe("deny")
+    }
+    for (const directory of ["/tmp", sandbox.tmp, path.join(path.sep, "Users", "dev"), `${checkout}-backup`]) {
+      expect(write(ruleset, directory)).not.toBe("deny")
+    }
+  })
+
+  test("denies .agent-duel: the other side's worktree and every earlier turn's", () => {
     const ruleset = Permission.merge(agentRules, contestantPermissions(undefined, sandbox))
 
     for (const directory of [
-      checkout,
-      path.join(checkout, "src"),
-      path.join(checkout, ".git"),
+      state,
       pool,
       path.join(pool, "generation-11-b"),
       path.join(pool, "generation-11-b.git"),
@@ -68,25 +84,31 @@ describe("Arena contestant permissions", () => {
 
     expect(access(ruleset, path.join(own, "src"))).toBe("allow")
     expect(access(ruleset, `${own}.git`)).toBe("allow")
+    expect(write(ruleset, path.join(own, "src"))).toBe("allow")
+    expect(write(ruleset, `${own}.git`)).toBe("allow")
     expect(access(ruleset, `${own}-backup`)).toBe("deny")
   })
 
   test("blocks each spelling it is given, so /private cannot route around /tmp", () => {
     const ruleset = contestantPermissions(undefined, {
       ...sandbox,
-      blocked: ["/tmp/project", "/private/tmp/project"],
+      readOnly: ["/tmp/project", "/private/tmp/project"],
+      blocked: ["/tmp/project/.agent-duel", "/private/tmp/project/.agent-duel"],
       own: [],
     })
 
-    expect(access(ruleset, "/tmp/project/src")).toBe("deny")
-    expect(access(ruleset, "/private/tmp/project/src")).toBe("deny")
+    expect(write(ruleset, "/tmp/project/src")).toBe("deny")
+    expect(write(ruleset, "/private/tmp/project/src")).toBe("deny")
+    expect(access(ruleset, "/tmp/project/.agent-duel/worktrees")).toBe("deny")
+    expect(access(ruleset, "/private/tmp/project/.agent-duel/worktrees")).toBe("deny")
   })
 
   test("preserves unrelated source permissions", () => {
     const permissions = contestantPermissions([{ permission: "edit", pattern: "*", action: "allow" }], sandbox)
 
     expect(Permission.evaluate("edit", "src/index.ts", permissions).action).toBe("allow")
-    expect(access(permissions, checkout)).toBe("deny")
+    expect(access(permissions, checkout)).toBe("allow")
+    expect(access(permissions, pool)).toBe("deny")
   })
 
   test("gives each side its own temp directory", () => {
@@ -108,13 +130,14 @@ describe("Arena contestant permissions", () => {
     expect(access(permission, path.join(pool, "generation-11-b"))).toBe("deny")
     expect(access(permission, path.join(own, "src"))).toBe("allow")
     expect(access(permission, "/tmp")).toBe("allow")
+    expect(write(permission, checkout)).toBe("deny")
   })
 
   test("names the blocked directories for a contestant only", () => {
-    expect(ArenaContestant.blockedDirectories(contestantPermissions(agentRules, sandbox))).toEqual([checkout])
+    expect(ArenaContestant.blockedDirectories(contestantPermissions(agentRules, sandbox))).toEqual([state])
     expect(
       ArenaContestant.blockedDirectories([
-        { permission: "external_directory", pattern: path.join(checkout, "*"), action: "deny" },
+        { permission: "external_directory", pattern: path.join(state, "*"), action: "deny" },
       ]),
     ).toEqual([])
   })
@@ -131,7 +154,17 @@ describe("Arena contestant permissions", () => {
         write: false,
       }),
     ).toBe(
-      `Arena contestants cannot access the main checkout or any Arena worktree but their own. ${other} is inside them.`,
+      `Arena contestants cannot access any Arena worktree but their own. ${other} is inside them.`,
+    )
+    expect(
+      ArenaContestant.denial({
+        ruleset,
+        permission: "external_directory",
+        pattern: path.join(checkout, "src", "*"),
+        write: true,
+      }),
+    ).toBe(
+      `Arena contestants can read the main checkout but change files only in their own worktree. ${path.join(checkout, "src")} is in the main checkout.`,
     )
     // Any other denial, and every denial outside Arena, keeps the generic message.
     expect(
@@ -141,7 +174,7 @@ describe("Arena contestant permissions", () => {
       ArenaContestant.denial({
         ruleset: agentRules,
         permission: "external_directory",
-        pattern: path.join(checkout, "*"),
+        pattern: path.join(pool, "*"),
         write: false,
       }),
     ).toBeUndefined()

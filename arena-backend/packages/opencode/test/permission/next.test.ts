@@ -655,7 +655,8 @@ const contestantWorktree = path.join(
 )
 const contestantRuleset = contestantPermissions([{ permission: "external_directory", pattern: "*", action: "ask" }], {
   tmp: ArenaContestant.tmpDirectory("ses_contestant"),
-  blocked: [contestantCheckout],
+  readOnly: [contestantCheckout],
+  blocked: [path.join(contestantCheckout, ".agent-duel")],
   own: [contestantWorktree, `${contestantWorktree}.git`],
 })
 const externalAsk = (pattern: string, writes: string[], ruleset: PermissionV1.Ruleset) =>
@@ -682,6 +683,23 @@ it.instance(
 )
 
 it.instance(
+  "ask - lets a contestant read the main checkout but write only to its own worktree",
+  () =>
+    Effect.gen(function* () {
+      const src = path.join(contestantCheckout, "src", "*")
+      expect(yield* externalAsk(src, [], contestantRuleset)).toBeUndefined()
+      const err = yield* fail(externalAsk(src, [src], contestantRuleset))
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+      expect((err as Error).message).toBe(
+        `Arena contestants can read the main checkout but change files only in their own worktree. ${path.join(contestantCheckout, "src")} is in the main checkout.`,
+      )
+      const host = path.join(`${contestantWorktree}.git`, "refs", "*")
+      expect(yield* externalAsk(host, [host], contestantRuleset)).toBeUndefined()
+    }),
+  { git: true },
+)
+
+it.instance(
   "ask - explains a contestant denial without listing the rules",
   () =>
     Effect.gen(function* () {
@@ -689,7 +707,7 @@ it.instance(
       const err = yield* fail(externalAsk(path.join(other, "src", "*"), [], contestantRuleset))
       expect(err).toBeInstanceOf(PermissionV1.DeniedError)
       expect((err as Error).message).toBe(
-        `Arena contestants cannot access the main checkout or any Arena worktree but their own. ${path.join(other, "src")} is inside them.`,
+        `Arena contestants cannot access any Arena worktree but their own. ${path.join(other, "src")} is inside them.`,
       )
     }),
   { git: true },
