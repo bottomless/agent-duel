@@ -691,8 +691,8 @@ reply takes the same attachments as a chat message, and both contestants get ide
   `$PASEO_HOME/uploads/<id>/`, for the contestant to open with its own tools. The daemon resolves
   that path from the upload id, never from the client's path. Before each prompt and reply the engine
   adds an `external_directory` allow for each upload's directory to the contestant session
-  (`allowReading`). It comes after the sandbox's checkout deny (see **Setup**), so an upload stays
-  readable even when `$PASEO_HOME` sits inside the checkout. Both sides get the same path.
+  (`allowReading`). It comes after the sandbox's rules (see **Setup**), so an upload stays
+  readable wherever `$PASEO_HOME` sits. Both sides get the same path.
 - Contestants take PDFs. OpenRouter passes one natively to a model that reads PDFs and parses it
   with mistral-ocr for one that does not, so the two sides can read different renderings of the
   same file.
@@ -752,19 +752,25 @@ lose every subagent transcript. Rebuilding the chat's timeline from history drop
 daemon knew of, and OpenCode's history carries none, so loading a winner reloads them from the
 session's children (`reloadProviderSubagents`).
 
-The sandbox (`arena/contestant.ts`) keeps a contestant's own tools out of the main checkout, which
-holds every Arena worktree: the other side's and every earlier turn's. Everything else is open,
-`/tmp`, the home directory and skill directories included. The rules are the inherited permissions,
-then an `external_directory` allow for everything, then a deny for the checkout, then allows for the
-side's own worktree and host repository, which sit inside it. Rules match last first. The allow
-overrides the agent's own `ask`: never let a contestant ask, since a prompt the user answers for one
-side and not the other makes the sides unequal. The checkout and the side's own paths are listed in
-both their spelling and their real path, so `/private/tmp/...` cannot route around `/tmp/...`.
-Subagents inherit the rules.
+The sandbox (`arena/contestant.ts`) lets a contestant's own tools read the main checkout but not
+write to it, and keeps them out of the checkout's `.agent-duel`, which holds every Arena worktree:
+the other side's and every earlier turn's. Everything else is open, `/tmp`, the home directory and
+skill directories included. The rules are the inherited permissions, then an `external_directory`
+allow for everything, then an `external_directory_write` deny for the checkout, then an
+`external_directory` deny for `.agent-duel`, then read and write allows for the side's own worktree
+and host repository, which sit inside it. Rules match last first. The allow overrides the agent's
+own `ask`: never let a contestant ask, since a prompt the user answers for one side and not the
+other makes the sides unequal. Every path is listed in both its spelling and its real path, so
+`/private/tmp/...` cannot route around `/tmp/...`. Subagents inherit the rules.
 
-The check sees only where a tool starts, so glob and grep leave the checkout out of a search that
-starts above it, from `~/code` for example (`excludedBelow`, `tool/external-directory.ts`). Such a
-search skips the side's own worktree too; a search from inside it is unaffected. The shell checks
+The checkout's `.git` is readable too. A side's result is imported into it under `refs/battles/`
+as soon as the side finishes, before the vote. File tools see only ref names and commit ids there,
+since objects are compressed; `git` in the shell is not checked and reads them either way.
+
+The check sees only where a tool starts, so glob and grep leave `.agent-duel` out of a search that
+starts above it, from the checkout or `~/code` for example (`excludedBelow`,
+`tool/external-directory.ts`). Such a search skips the side's own worktree too; a search from inside
+it is unaffected. The shell checks
 only the path arguments of its file commands (`cd`, `rm`, `cp`, `mv`, `mkdir`, `touch`, `chmod`,
 `chown`, `cat`); other programs and redirection reach anything the user can.
 
@@ -774,7 +780,7 @@ the hint to read that file works. It is removed when the run gives up its worktr
 next pair (`releaseRunSlot`) or removed by archive, eviction or an environment release
 (`removeStoppedRun`).
 
-A contestant denied the checkout gets one sentence that says so, not the generic list of matching
+A contestant denied `.agent-duel`, or a write into the checkout, gets one sentence that says so, not the generic list of matching
 rules, which holds dozens of home-directory paths that contestants copy into their answers and that
 reach research uploads.
 

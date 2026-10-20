@@ -1317,9 +1317,10 @@ export const layer: Layer.Layer<
     const withGit = <A, E, R>(effect: Effect.Effect<A, E, R | Git.Service>) =>
       effect.pipe(Effect.provideService(Git.Service, git))
     /**
-     * What a contestant session may not reach outside its worktree: the main checkout, which holds the
-     * other side's worktree and every earlier turn's, reopened for the side's own worktree and host
-     * repository. Each path is blocked under both its spelling and its real path, so a contestant
+     * What a contestant session may not change or reach outside its worktree: it reads the main
+     * checkout but does not write to it, and does not reach the checkout's `.agent-duel`, which holds
+     * the other side's worktree and every earlier turn's, except for its own worktree and host
+     * repository. Each path is listed under both its spelling and its real path, so a contestant
      * cannot reach the checkout through `/private/tmp` when it lives under `/tmp`.
      */
     const contestantSandbox = (repositoryRoot: string, sessionID: string, worktree: string) => {
@@ -1335,7 +1336,8 @@ export const layer: Layer.Layer<
       }
       return {
         tmp: ArenaContestant.tmpDirectory(sessionID),
-        blocked: spellings(repositoryRoot),
+        readOnly: spellings(repositoryRoot),
+        blocked: spellings(localStatePath(repositoryRoot)),
         own: [...spellings(worktree), ...spellings(hostRepoPath(worktree))],
       } satisfies ArenaContestant.Sandbox
     }
