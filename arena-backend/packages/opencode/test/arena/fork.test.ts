@@ -236,6 +236,34 @@ describe("Arena fork", () => {
     }),
   )
 
+  it.live("tells the part callback which source message each part was copied from", () =>
+    Effect.gen(function* () {
+      const { root, worktree } = yield* prepareRepository()
+      const sessions = yield* Session.Service
+      const source = yield* provideInstance(root)(sessions.create({ title: "source" }))
+      yield* seedHistory(source.id, root).pipe(provideInstance(root))
+      const history = yield* sessions.messages({ sessionID: source.id })
+      const seen: { copy: string; source?: string }[] = []
+
+      const forked = yield* forkSessionInto({
+        sessionID: source.id,
+        destination: worktree,
+        pathMode: "transcript",
+        part(part, info, sourceMessageID) {
+          seen.push({ copy: info.id, source: sourceMessageID })
+          return part
+        },
+      })
+
+      const copy = yield* sessions.messages({ sessionID: forked.id })
+      const expected = copy.flatMap((message, index) =>
+        message.parts.map(() => ({ copy: message.info.id, source: history[index]?.info.id })),
+      )
+      expect(seen).toEqual(expected)
+      expect(seen.every((entry) => entry.source && entry.source !== entry.copy)).toBe(true)
+    }),
+  )
+
   it.live("maps a session opened in a subdirectory onto the destination's top level", () =>
     Effect.gen(function* () {
       const { root, worktree } = yield* prepareRepository()
