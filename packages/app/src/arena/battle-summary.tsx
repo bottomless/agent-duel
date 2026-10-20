@@ -1,5 +1,4 @@
 import { arenaSubscription } from "./stream-subscription";
-import { arenaSizeErrorOr } from "./chat-too-large";
 import { ArenaStreamStatus } from "./stream-status";
 import { useArenaStream } from "./use-arena-stream";
 import { useCallback, useMemo, useState } from "react";
@@ -19,6 +18,7 @@ import {
   GitBranch,
   GitCompareArrows,
   Info,
+  PanelRight,
 } from "lucide-react-native";
 import type {
   ArenaComparisonDiff,
@@ -35,7 +35,6 @@ import { useSessionStore } from "@/stores/session-store";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { WorkspaceOpenInEditorButton } from "@/screens/workspace/workspace-open-in-editor-button";
 import { toErrorMessage } from "@/utils/error-messages";
-import { useFetchQuery } from "@/data/query";
 import {
   ARENA_MAX_CONTENT_WIDTH,
   ARENA_PANE_BASIS_WIDTH,
@@ -44,13 +43,10 @@ import {
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { battleWinnerSide, gitApplicationNotice, isStoppedByEarlyPick } from "./battle-result";
 import { ArenaPathList } from "./path-list";
-import { useContainerWidth } from "@/hooks/use-container-width";
-import { useArenaDiffLayout } from "./diff-layout";
-import { DiffLayoutControl } from "./diff-layout-control";
-import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
+import { openBattleChanges } from "./battle-changes-store";
 import { VerdictBody } from "./verdict-body";
-import { ArenaChangesList } from "./changes-list";
-import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
+import { arenaChangesCountLabel } from "./changes-rows";
+import { useBattleDiff } from "./battle-diff-query";
 import { hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
 import { ArenaModelVendorIcon } from "./model-vendor-icon";
@@ -90,58 +86,43 @@ function chosenLabel(item: ArenaHistoryItem): string {
 }
 
 /**
- * The files an archived battle touched, each opening its diff under its row.
+ * The way to an archived battle's files: they are read in the Battle changes panel, the same
+ * place the live battle's are, so the summary names the count and opens the panel on this battle.
  */
 function ArchivedChanges({
   serverId,
+  workspaceId,
   agentId,
   turnId,
   diff,
 }: {
   serverId: string;
+  workspaceId: string;
   agentId: string;
   turnId: string;
   diff: ArenaComparisonDiff;
 }) {
-  const rows = useMemo(() => arenaChangesRows(diff), [diff]);
-  const { onLayout, width } = useContainerWidth();
-  const measured = width > 0 ? width : null;
-  const layout = useArenaDiffLayout(agentId, measured);
-  // Undefined until the reader picks a row; empty once they close every diff.
-  const [chosenFiles, setChosenFiles] = useState<readonly string[] | undefined>(undefined);
-  const openFiles = useMemo(() => openChangesFiles(rows, chosenFiles), [rows, chosenFiles]);
-  const toggleFile = useCallback(
-    (file: string) => setChosenFiles(toggleChangesFile(openFiles, file)),
-    [openFiles],
-  );
-  const renderDiff = useCallback(
-    (file: string) => (
-      <InlineFileDiff
-        serverId={serverId}
-        agentId={agentId}
-        turnId={turnId}
-        file={file}
-        layout={layout}
-        embedded
-      />
-    ),
-    [agentId, layout, serverId, turnId],
+  const count = diff.files.length;
+  const open = useCallback(
+    () => openBattleChanges({ serverId, workspaceId, agentId, turnId }),
+    [agentId, serverId, turnId, workspaceId],
   );
   return (
-    <View style={styles.section} onLayout={onLayout}>
-      <View style={styles.sectionHeader}>
-        <ThemedGitCompareArrows size={16} uniProps={mutedColorMapping} />
-        <Text style={styles.sectionTitle}>Changes from base</Text>
-        <Text style={styles.muted}>{arenaChangesCountLabel(rows.length)}</Text>
-        <View style={styles.sectionSpacer} />
-        <DiffLayoutControl agentId={agentId} width={measured} />
-      </View>
-      <ArenaChangesList
-        rows={rows}
-        openFiles={openFiles}
-        onToggle={toggleFile}
-        renderDiff={renderDiff}
-      />
+    <View style={styles.sectionHeader}>
+      <ThemedGitCompareArrows size={16} uniProps={mutedColorMapping} />
+      <Text style={styles.sectionTitle}>Changes from base</Text>
+      <Text style={styles.muted}>{arenaChangesCountLabel(count)}</Text>
+      <View style={styles.sectionSpacer} />
+      <Button
+        size="xs"
+        variant="ghost"
+        leftIcon={PanelRight}
+        onPress={open}
+        accessibilityLabel="Show this battle's changes in the side panel"
+        testID="arena-archived-open-panel"
+      >
+        Show changes
+      </Button>
     </View>
   );
 }
@@ -397,6 +378,7 @@ function BattleThreads({
 
 function ArchivedBattleComparison({
   serverId,
+  workspaceId,
   agentId,
   turnId,
   selectedEarly,
@@ -409,6 +391,7 @@ function ArchivedBattleComparison({
   diffError,
 }: {
   serverId: string;
+  workspaceId: string;
   agentId: string;
   turnId: string;
   selectedEarly: boolean;
@@ -434,7 +417,13 @@ function ArchivedBattleComparison({
       <View style={styles.section}>
         <IdenticalBattleResult hasChanges={hasBattleDiff(diff)} />
         {hasBattleDiff(diff) ? (
-          <ArchivedChanges serverId={serverId} agentId={agentId} turnId={turnId} diff={diff} />
+          <ArchivedChanges
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={agentId}
+            turnId={turnId}
+            diff={diff}
+          />
         ) : null}
       </View>
     );
@@ -472,7 +461,13 @@ function ArchivedBattleComparison({
         </View>
       ) : null}
       {hasBattleDiff(diff) ? (
-        <ArchivedChanges serverId={serverId} agentId={agentId} turnId={turnId} diff={diff} />
+        <ArchivedChanges
+          serverId={serverId}
+          workspaceId={workspaceId}
+          agentId={agentId}
+          turnId={turnId}
+          diff={diff}
+        />
       ) : null}
       {diffError ? <Text style={styles.warning}>{toErrorMessage(diffError)}</Text> : null}
     </>
@@ -528,21 +523,7 @@ function ExpandedBattleSummary({
   const runA = snapshot?.runs.find((run) => run.side === "a");
   const runB = snapshot?.runs.find((run) => run.side === "b");
   const bothFinal = runsAreFinal(runA, runB);
-  const diffQuery = useFetchQuery({
-    queryKey: ["arena", "diff", serverId, agentId, item.id],
-    dataShape: "value",
-    staleTimeMs: 0,
-    queryFn: async () => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
-      try {
-        return await client.arenaDiff(agentId, item.id);
-      } catch (error) {
-        throw arenaSizeErrorOr(error);
-      }
-    },
-    enabled: Boolean(client) && bothFinal,
-    retry: false,
-  });
+  const diffQuery = useBattleDiff(serverId, agentId, item.id, { enabled: bothFinal, retry: false });
   const retryComparisonRequest = retryComparison.mutateAsync;
   const handleRetry = useCallback(() => {
     void retryComparisonRequest().catch((error) => toast.error(toErrorMessage(error)));
@@ -565,6 +546,7 @@ function ExpandedBattleSummary({
       <BattleThreads runA={runA} runB={runB} item={item} />
       <ArchivedBattleComparison
         serverId={serverId}
+        workspaceId={workspaceId}
         agentId={agentId}
         turnId={item.id}
         selectedEarly={item.selectedEarly === true}

@@ -192,22 +192,31 @@ export function useArenaReviewTelemetry({
 
     // How far down a diff the reader actually got. Reported as new ground only, in
     // 5% steps, so a long read is bounded at twenty events per file rather than one
-    // per frame. Scroll does not bubble, hence the capture listener. Several diffs
-    // can be open at once, so the scroll belongs to the file its viewer names, and
-    // only a diff inside this battle's review counts: an archived battle's diff in
-    // the side panel is the same viewer.
+    // per frame. Scroll does not bubble, hence the capture listener. The diffs are
+    // read in the Battle changes panel, one file after another in one scroll, so a
+    // file's depth is how much of it has passed the panel's bottom edge; a file
+    // that fits on screen reads as read through. Only the panel showing this
+    // battle counts: the same panel shows archived battles too.
     const deepest = new Map<string, number>();
-    const onScroll = (event: Event) => {
-      const el = event.target as HTMLElement | null;
-      if (el?.getAttribute?.("data-testid") !== "arena-inline-diff") return;
-      if (el.closest("[data-review-turn]")?.getAttribute("data-review-turn") !== turnId) return;
-      const file = el.getAttribute("data-diff-file");
-      if (!file) return;
-      const travel = el.scrollHeight - el.clientHeight;
-      const depth = travel <= 0 ? 1 : Math.min(1, Math.max(0, el.scrollTop / travel));
+    const record = (file: string, depth: number) => {
       if (depth <= (deepest.get(file) ?? 0) + 0.05) return;
       deepest.set(file, depth);
       current.push({ type: "diff.scrolled", file, depth });
+    };
+    const onScroll = (event: Event) => {
+      const el = event.target as HTMLElement | null;
+      if (el?.getAttribute?.("data-testid") !== "arena-battle-changes-scroll") return;
+      if (el.closest("[data-review-turn]")?.getAttribute("data-review-turn") !== turnId) return;
+      const view = el.getBoundingClientRect();
+      for (const section of el.querySelectorAll<HTMLElement>("[data-battle-file]")) {
+        const box = section.getBoundingClientRect();
+        if (box.bottom <= view.top || box.top >= view.bottom) continue;
+        const file = section.getAttribute("data-battle-file");
+        if (!file) continue;
+        const depth =
+          box.height <= 0 ? 1 : Math.min(1, Math.max(0, (view.bottom - box.top) / box.height));
+        record(file, depth);
+      }
     };
 
     const onFocus = () => current.push({ type: "window.focus" });

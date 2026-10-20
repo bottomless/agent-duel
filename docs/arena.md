@@ -129,32 +129,44 @@ results side by side, the difference between them legible, and every decision in
 battle card in the transcript is for reading. The contestant responses and their inline review
 share one surface, without another Responses/Review switch. The response panes keep a fixed
 resting height and scroll internally. A small arrow appears when the reader scrolls away from the
-latest output. The battle uses no side panel tab: the card has the chat's width, and a panel beside it would only
-narrow the card to show the same thing.
+latest output.
 
-Review has two tabs: **Difference summary**, the generated comparison, and **Changes**, the file rows with git's
-status for each pair. A row opens its file's diff right under it and closes it again, several can be open
-at once, and the first diverging file opens on arrival. Past eight rows the rest wait behind Show more, so a
-battle that touched hundreds of files does not push the threads off screen; an open row past them still shows.
-The list names every file either side changed, in path order, without contents; each diff reads its own file
-when it opens (`arena.turn.get_file_diff`). Do not cap the list to bound the response: a cap hid every file B
-alone changed whenever A changed 25.
-The chevron at the end of the tab row folds the whole review away, and a tab opens it again. A ready summary opens first. When
-the review opens before the summary is ready, Changes stays open after it arrives. Changes
-retries a failed read twice before showing a small manual retry. The summary generator retries
+The review under the threads is the **Difference summary**, the generated comparison, with
+**Changes (N)** in its heading. The files are read in the **Battle changes** side panel tab
+(`battle-changes-panel.tsx`), beside the chat, so the threads, the vote and the composer stay on
+screen while the reader reads; the card names the count and opens the panel rather than listing the
+files a second time. Diffs used to open under file rows in the card, each capped at a height and
+scrolling inside a page that also scrolled, and testers lost their place in the nested scroll. An
+archived battle's summary has the same way into the panel, which then shows that battle. The
+comparison names every file either side changed, in path order, without contents. Do not cap it to
+bound the response: a cap hid every file B alone changed whenever A changed 25.
+
+The panel shows one battle per chat (`arena_changes`, keyed by the chat's agent). Every file is a
+band with a heading that sticks to the top while the file is read, and the diff under it at full
+height, in one scroll. The heading folds the file. The toolbar's menu, after Claude's diff menu,
+shows a file list to jump from, folds or unfolds every file, and turns word wrap on or off
+(`battle-changes-toolbar.tsx`); wrap is on by default, since a docked panel cut long lines off.
+These hold across chats for the session. Each diff reads its own file
+(`arena.turn.get_file_diff`) when it nears the view, so a battle that touched hundreds of files opens
+as fast as a small one. The panel opens on its own once per battle, when both results are in and the
+vote is waiting, and the chat keeps keyboard focus (`use-battle-changes-lifecycle.ts`). A reader who
+closes it or hides the panel while deciding has put it away, and it stays closed for that chat. It
+closes again once the battle is decided, unless the reader opened it themselves since. On a compact
+window it waits to be asked, since it would replace the chat.
+
+The chevron at the end of the heading folds the summary away. The file list retries a failed read
+twice before showing a small manual retry. The summary generator retries
 transient network and service failures
 up to three attempts, while permanent failures such as payment or credentials remain actionable.
 Identical file results say nothing about whether the contestants' text answers agree. The threads
 are the headline and the review is their complement, so the review must never outweigh the agent
-headings above it: the tabs are text in a strip across the
-card with a 1px baseline (`battle-review.tsx`), the selected one in foreground at medium weight
-with a 2px underline sitting on that baseline, the other muted, so the strip reads as the heading
-of the section under it rather than a control floating in it; the summary renders as compact
+headings above it: its heading is text across the card with a 1px baseline
+(`battle-review.tsx`) and the way to the files is a ghost `xs` button, so the row reads as the
+heading of the section under it rather than a control floating in it; the summary renders as compact
 Markdown with flat headings (`flatHeadings` on `MarkdownRenderer`) so its headings sit one step
 above the body while the prose keeps the regular text colour, since muted prose was hard to read, and with
 its paragraphs capped at the reading measure (`proseMeasure`) while the differences table keeps
-the card's width, since a 1000px line of 14px prose is unreadable; and the diff's layout toggle
-uses the `xs` tier like the A | A+B | B control inside it. The agent names are the largest type
+the card's width, since a 1000px line of 14px prose is unreadable. The agent names are the largest type
 on the card. The judge is asked for a short report (`arena/comparison.ts`,
 `arena-comparison-v12`): what each agent did, including shared violations of the task, then a table of where they differ, and nothing else.
 On the first turn it also ends with a `Title:` line, which the engine takes out of the report. A
@@ -172,21 +184,32 @@ opening with `Show full summary` (`verdict-body.tsx`). Trimming at the prompt wa
 the fold spent latency on prose the voter then had to unfold. The status is `git merge-tree
 --write-tree` of A and B over the frozen base (`arena/git.ts`, `compare`), with
 `merge.conflictStyle=zdiff3`, so `diverging` means a real merge conflict and `compatible` means both
-touched the file in different places; no client heuristic decides it. Review each contestant against the frozen original, with corresponding regions aligned across
-A and B. A change made by either contestant must stay visible in the comparison; fold only
-context that neither changed. Keep shared additions and removals visible even when the entire
-results match, and label them `Both`. The voter still needs to see what will be applied.
+touched the file in different places; no client heuristic decides it. The Battle changes panel
+does not show it. Review each contestant against the frozen original. Keep shared additions and removals visible even when the entire
+results match. The voter still needs to see what will be applied.
 
-The comparison has two layouts, **Side by side** and **One column**, shared by the active card and
-archived battles (`inline-file-diff.tsx`). In one column, show A and then B for each region so an
-extra change stays near the other contestant's corresponding code. Width chooses the layout until
-the reader does; the choice holds for the chat. **Expand** shows one contestant's changes from the
-original at the full width of the card. It is the same icon-only action as the pane header's, so
-the diff and the panes share one affordance; in the one-column layout the two icons carry their
-side's colour, since no heading sits beside them. **Back to comparison**, the matching icon or
-Escape, restores the reading position and keyboard focus. Keep this inspection inside the
-conversation; it is separate from the panes' expand control. [Design](design.md) owns the diff's
-colour and control conventions.
+The panel shows one agent's changes at a time, picked with **Agent A | Agent B** in its toolbar
+(`battle-changes-panel.tsx`); the choice holds for the chat. Each view lists only the files that
+agent changed, each as one plain diff from the original that folds context away from that agent's
+changes. A pane's diff stat opens the panel on that agent once its result is final, and on its live
+worktree's Changes tab before that. A beside B, and A then B region by region, both left the code too little room in a docked
+panel; the rows still come from the aligned three-way comparison (`three-way-diff.ts`). A view
+shows nothing of the other agent: no `Both` label on shared lines, and file headings with only the
+shown agent's counts. The reader compares by switching agents. [Design](design.md) owns the
+diff's colour and control conventions.
+
+An agent that finishes first can be read while the other still works. The engine compares a side
+without a final result as the frozen base (`comparedCommits` in `service.ts`), so every file reads
+as the finished side's alone until the other lands; the panel then reads the list and every file
+again (`useRefetchBattleDiffOnResult`) and shows the still-working side as a note. Gate on the run's
+`finalCommit`, not its `runState`: the state turns final before the result is written. The
+Difference summary still waits for both, and review telemetry starts with the vote, so reading a
+side early records nothing.
+
+Review telemetry's `diff.scrolled` is how far through a file the panel has moved: the share of the
+file's band above the panel's bottom edge, so a file that fits on screen reads as read through
+(`review-telemetry.ts`). The panel records the file at its top as shown when the changes arrive.
+Which agent's view the reader looked at is not recorded, and `layout.changed` no longer fires.
 
 Keep alignment bounded. Try the ordered sparse matcher after the matrix budget, including when
 aligning additions at the same original position. If both budgets are exhausted, show a bounded
@@ -210,9 +233,9 @@ activity groups, behind the `toolCallDetailLevel` setting). The battle is one ca
 reading column, it runs edge to edge, keeping only its top and bottom borders; a 14" MacBook Pro
 never exceeds that. On a wider panel each pane would outrun the reading column, so the battle is
 a bordered, rounded card centered at that width. `ArenaContentColumn` measures the host
-and decides. Everything in the battle shares the card's width — the two threads and the Changes
-review — so the page has two widths: the chat's reading column for the prompt and the
-composer, and the card for the battle. Inside the card, sections separate with
+and decides. Everything in the battle shares the card's width — the two threads and the review —
+so the page has two widths: the chat's reading column for the prompt and the composer, and the
+card for the battle. Inside the card, sections separate with
 one top border each, the way rows in a settings card do, and text starts on one rail. A and B each
 occupy half the card, split by a divider; below 520px of available card width, they stack.
 The panes keep a fixed resting height and their threads scroll internally. Scrolling away pauses

@@ -136,6 +136,9 @@ function getCloseButtonTestId(tab: WorkspaceTabDescriptor): string {
   if (tab.target.kind === "arena_terminal") {
     return `workspace-arena-terminal-close-${tab.target.instanceId}`;
   }
+  if (tab.target.kind === "arena_changes") {
+    return "workspace-arena-changes-close";
+  }
   if (tab.target.kind === "draft") {
     return `workspace-draft-close-${tab.target.draftId}`;
   }

@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { Theme } from "@/styles/theme";
 import { toErrorMessage } from "@/utils/error-messages";
-import type { ArenaChangesRow } from "./changes-rows";
 import type { ArenaDiffLayout } from "./diff-layout";
 import { BaseRelativeFileView } from "./base-relative-view";
 import { useArenaFileDiff } from "./file-diff-query";
@@ -13,39 +12,13 @@ import { useArenaFileDiff } from "./file-diff-query";
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
-/** The row to open first: the first file the two sides disagree on, else the first. */
-export function defaultChangesFile(rows: readonly ArenaChangesRow[]): string | null {
-  return (rows.find((row) => row.status === "diverging") ?? rows[0])?.file ?? null;
-}
-
 /**
- * The files whose diffs are open, in the order the reader opened them. Undefined means the reader
- * has not chosen, so the default opens; empty means they closed every diff and nothing opens until
- * they pick a row. Chosen files the rows no longer hold drop out, and when none are left the
- * default opens again.
- */
-export function openChangesFiles(
-  rows: readonly ArenaChangesRow[],
-  chosen: readonly string[] | undefined,
-): readonly string[] {
-  if (chosen?.length === 0) return chosen;
-  const kept = chosen?.filter((file) => rows.some((row) => row.file === file)) ?? [];
-  if (kept.length > 0) return kept;
-  const fallback = defaultChangesFile(rows);
-  return fallback ? [fallback] : [];
-}
-
-/** Opens a closed file's diff after the others, or closes an open one. */
-export function toggleChangesFile(open: readonly string[], file: string): readonly string[] {
-  return open.includes(file) ? open.filter((other) => other !== file) : [...open, file];
-}
-
-/**
- * One file's diff inside the card, A beside B or as one column. A file both
- * changed the same way reads as the change both made, against the base. A file
- * without retained textual content says why it cannot be compared. Embedded, it
- * sits under its row in the Changes list, which draws the edges around it. The
- * list carries no contents, so the diff reads its file when it opens.
+ * One file's diff, A beside B or as one column. A file both changed the same way
+ * reads as the change both made, against the base. A file without retained
+ * textual content says why it cannot be compared. Embedded, it sits under its
+ * heading in the Battle changes panel, which draws the edges around it. The
+ * battle's file list carries no contents, so the diff reads its file when it
+ * mounts.
  */
 export function InlineFileDiff({
   serverId,
@@ -54,6 +27,9 @@ export function InlineFileDiff({
   file,
   layout,
   embedded = false,
+  flowTop,
+  onlySide,
+  wrap,
 }: {
   serverId: string;
   agentId: string;
@@ -61,6 +37,12 @@ export function InlineFileDiff({
   file: string;
   layout: ArenaDiffLayout;
   embedded?: boolean;
+  /** See `BaseRelativeFileView`: full height in the panel's scroller. */
+  flowTop?: number;
+  /** See `BaseRelativeFileView`: one agent's changes only. */
+  onlySide?: "a" | "b";
+  /** See `BaseRelativeFileView`: long lines wrap. */
+  wrap?: boolean;
 }) {
   const query = useArenaFileDiff({ serverId, agentId, turnId, file });
   const { refetch } = query;
@@ -72,6 +54,9 @@ export function InlineFileDiff({
         file={query.data.file}
         layout={layout}
         embedded={embedded}
+        flowTop={flowTop}
+        onlySide={onlySide}
+        wrap={wrap}
       />
     );
   }

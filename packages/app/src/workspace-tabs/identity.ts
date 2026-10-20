@@ -67,6 +67,10 @@ function normalizeSimpleWorkspaceTabTarget(value: WorkspaceTabTarget): Workspace
       const sha = trimNonEmpty(value.sha);
       return sha ? { kind: "commit_diff", sha } : null;
     }
+    case "arena_changes": {
+      const agentId = trimNonEmpty(value.agentId);
+      return agentId ? { kind: "arena_changes", agentId } : null;
+    }
     case "changes":
       return { kind: "changes" };
     case "files":
@@ -123,6 +127,9 @@ export function workspaceTabTargetsEqual(
   }
   if (left.kind === "arena_terminal" && right.kind === "arena_terminal") {
     return left.instanceId === right.instanceId;
+  }
+  if (left.kind === "arena_changes" && right.kind === "arena_changes") {
+    return left.agentId === right.agentId;
   }
   return secondaryWorkspaceTabTargetsEqual(left, right);
 }
@@ -200,6 +207,9 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
   }
   if (target.kind === "arena_terminal") {
     return `arena_terminal_${target.instanceId}`;
+  }
+  if (target.kind === "arena_changes") {
+    return `arena_changes_${target.agentId}`;
   }
   if (target.kind === "browser") {
     return `browser_${target.browserId}`;

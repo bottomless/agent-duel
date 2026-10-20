@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Text, View, type ViewStyle } from "react-native";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Pressable, Text, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { Maximize2, Minimize2 } from "lucide-react-native";
+import { ChevronDown, ChevronsUpDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react-native";
 import type { HighlightToken } from "@getpaseo/highlight";
 import type { ArenaFileContent, ArenaThreeWayFile } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
@@ -12,21 +20,17 @@ import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { tokenizeToLines } from "@/utils/highlight-cache";
 import { bothChanged, buildBaseRelativeDiff, type BaseRelativeDiff } from "./base-relative-diff";
 import { syntaxExtension, tokensSpelling } from "./combined-tokens";
-import {
-  CARD_DIFF_MAX_HEIGHT,
-  MAX_RENDERED_ROWS,
-  diffRowHeight,
-  diffTextHeight,
-} from "./diff-metrics";
+import { CARD_DIFF_MAX_HEIGHT, MAX_RENDERED_ROWS, diffTextHeight } from "./diff-metrics";
 import type { ArenaDiffLayout } from "./diff-layout";
 import { PaneIconAction } from "./pane-icon-action";
+import { unifiedSideRows } from "./side-rows";
 import {
   buildThreeWayBlocks,
   limitThreeWayBlocks,
+  type ThreeWayGapBlock,
   type ThreeWayRow,
   type ThreeWayWindowedDiff,
 } from "./three-way-diff";
-import { ExpandBand } from "./three-way-file-diff";
 import { TokenText } from "./token-text";
 
 type Side = "a" | "b";
@@ -37,11 +41,38 @@ const labelFor = (side: Side) => (side === "a" ? "Agent A" : "Agent B");
 const STICKY_STYLE = isWeb
   ? ({ position: "sticky", top: 0, zIndex: 1 } as unknown as ViewStyle)
   : null;
+const stickyAt = (top: number) =>
+  isWeb ? ({ position: "sticky", top, zIndex: 1 } as unknown as ViewStyle) : null;
 
 function toneFor(type: string | undefined) {
   if (type === "add") return styles.add;
   if (type === "remove") return styles.remove;
   return null;
+}
+
+/**
+ * The diff's own header rows. In the panel the file's heading above already names what this is,
+ * so the caption row only appears to lead back from one agent's full view, and a single agent's
+ * diff needs no header at all.
+ */
+function headerChrome(
+  flowTop: number | undefined,
+  mode: Side | null,
+  shown: Side | null,
+  layout: ArenaDiffLayout,
+) {
+  return {
+    headerSticky: flowTop === undefined ? STICKY_STYLE : stickyAt(flowTop),
+    showToolbar: flowTop === undefined || mode !== null,
+    showColumns: shown === null && layout === "split",
+  };
+}
+
+// A changed line is marked at its left edge as well as by its tint, so it reads at a glance.
+function edgeFor(type: string | undefined) {
+  if (type === "add") return styles.addEdge;
+  if (type === "remove") return styles.removeEdge;
+  return styles.plainEdge;
 }
 
 function signFor(type: string | undefined) {
@@ -75,6 +106,10 @@ function sideTokens(
 const ThemedMaximize2 = withUnistyles(Maximize2);
 const ThemedMinimize2 = withUnistyles(Minimize2);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
+const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+const ThemedChevronUp = withUnistyles(ChevronUp);
+const ThemedChevronDown = withUnistyles(ChevronDown);
+const ThemedChevronsUpDown = withUnistyles(ChevronsUpDown);
 const sideColorMappings: Record<Side, (theme: Theme) => { color: string }> = {
   a: (theme) => ({ color: theme.colors.statusDotRunning }),
   b: (theme) => ({ color: theme.colors.statusDotWarning }),
@@ -110,6 +145,44 @@ function Action({
   );
 }
 
+/**
+ * Unchanged lines folded away, as one quiet line on the gutter's rail: the count and the way it
+ * opens, up at the top of the file, down at its end, either way between two changes. Pressing it
+ * shows the whole run.
+ */
+function GapRow({
+  gap,
+  total,
+  onReveal,
+}: {
+  gap: ThreeWayGapBlock;
+  total: number;
+  onReveal: (start: number, end: number) => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const handlePointerEnter = useCallback(() => setHovered(true), []);
+  const handlePointerLeave = useCallback(() => setHovered(false), []);
+  const reveal = useCallback(() => onReveal(gap.start, gap.end), [gap.end, gap.start, onReveal]);
+  let Icon = ThemedChevronsUpDown;
+  if (gap.start === 0) Icon = ThemedChevronUp;
+  else if (gap.end >= total) Icon = ThemedChevronDown;
+  const label = `${gap.count} unmodified ${gap.count === 1 ? "line" : "lines"}`;
+  return (
+    <View onPointerEnter={handlePointerEnter} onPointerLeave={handlePointerLeave}>
+      <Pressable
+        onPress={reveal}
+        style={[styles.gap, hovered && styles.gapHovered]}
+        accessibilityRole="button"
+        accessibilityLabel={`Show ${label}`}
+        testID="arena-diff-gap"
+      >
+        <Icon size={ICON_SIZE.sm} uniProps={mutedColorMapping} />
+        <Text style={styles.gapText}>{label}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function Column({
   rows,
   side,
@@ -119,6 +192,8 @@ function Column({
   numberWidth,
   stacked,
   showStatus,
+  unified,
+  wrap,
 }: {
   rows: ThreeWayRow[];
   side: Side;
@@ -128,11 +203,19 @@ function Column({
   numberWidth: number;
   stacked: boolean;
   showStatus: boolean;
+  /** One agent's diff read alone, in unified-diff order rather than lined up with the other's. */
+  unified: boolean;
+  /** Long lines wrap inside the panel instead of scrolling sideways. */
+  wrap: boolean;
 }) {
   const changed = rows.some((row) => row[side] && row[side]?.type !== "context");
+  const sideRows = useMemo(() => {
+    if (unified) return unifiedSideRows(rows, side);
+    return stacked ? rows.filter((row) => row[side] !== null) : rows;
+  }, [rows, side, stacked, unified]);
   const shownRows = useMemo(
     () =>
-      (stacked ? rows.filter((row) => row[side] !== null) : rows).map((row) => {
+      sideRows.map((row) => {
         const cell = row[side];
         const both = bothChanged(row, aligned);
         const sharedLabel =
@@ -141,71 +224,143 @@ function Column({
           row,
           cell,
           both,
-          oldNumber: cell && cell.type !== "add" ? (row.base?.lineNumber ?? "") : "",
+          // One number per row, the way a unified diff reads: the original's for a removed line,
+          // this side's otherwise. A second column of base numbers took a third of a docked panel.
+          number: (cell?.type === "remove" ? row.base?.lineNumber : cell?.lineNumber) ?? "",
           sharedLabel: both ? sharedLabel : undefined,
           dataSet: { rowKey: row.key, change: cell?.type ?? "absent", both: String(both) },
         };
       }),
-    [aligned, rows, side, stacked],
+    [aligned, side, sideRows],
   );
   const columnData = useMemo(() => ({ comparisonSide: side }), [side]);
   const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
+  let body: ReactNode;
+  if (wrap) {
+    // Wrapped, a line can take several rows of text, so its number and its code share one row
+    // and grow together.
+    body = (
+      <View style={styles.wrapBody}>
+        {shownRows.map((shown) => (
+          <View
+            key={shown.row.key}
+            style={[styles.wrapRow, toneFor(shown.cell?.type), edgeFor(shown.cell?.type)]}
+            dataSet={shown.dataSet}
+          >
+            <View style={styles.wrapGutter}>
+              <GutterCells {...shown} hasBoth={hasBoth} numberStyle={numberStyle} />
+            </View>
+            <View style={styles.wrapCode}>
+              <CodeText row={shown.row} cell={shown.cell} side={side} tokens={tokens} wrap />
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  } else {
+    body = (
+      <>
+        <View style={styles.gutter}>
+          {shownRows.map((shown) => (
+            <View
+              key={shown.row.key}
+              style={[styles.gutterRow, toneFor(shown.cell?.type), edgeFor(shown.cell?.type)]}
+            >
+              <GutterCells {...shown} hasBoth={hasBoth} numberStyle={numberStyle} />
+            </View>
+          ))}
+        </View>
+        <View style={styles.codeScroll}>
+          {shownRows.map((shown) => (
+            <View
+              key={shown.row.key}
+              style={[styles.codeRow, toneFor(shown.cell?.type)]}
+              dataSet={shown.dataSet}
+            >
+              <CodeText
+                row={shown.row}
+                cell={shown.cell}
+                side={side}
+                tokens={tokens}
+                wrap={false}
+              />
+            </View>
+          ))}
+        </View>
+      </>
+    );
+  }
   return (
     <View style={styles.column} dataSet={columnData}>
-      {showStatus ? (
+      {/* Side by side, the blank status keeps both columns' rows level. Stacked, it is only a gap. */}
+      {showStatus && (!stacked || !changed) ? (
         <Text numberOfLines={1} style={styles.regionStatus}>
           {changed ? " " : "No changes in this region"}
         </Text>
       ) : null}
-      <View style={styles.columnBody}>
-        <View style={styles.gutter}>
-          {shownRows.map(({ row, cell, both, oldNumber, sharedLabel }) => {
-            const tone = toneFor(cell?.type);
-            return (
-              <View key={row.key} style={[styles.gutterRow, tone]}>
-                <Text style={[styles.number, numberStyle]}>{oldNumber}</Text>
-                <Text style={[styles.number, numberStyle]}>{cell?.lineNumber ?? ""}</Text>
-                <Text
-                  style={[styles.sign, cell?.type === "add" ? styles.addText : styles.removeText]}
-                >
-                  {signFor(cell?.type)}
-                </Text>
-                {hasBoth ? (
-                  <Text style={styles.both} numberOfLines={1} accessibilityLabel={sharedLabel}>
-                    {both ? "Both" : ""}
-                  </Text>
-                ) : null}
-              </View>
-            );
-          })}
-        </View>
-        <View style={styles.codeScroll}>
-          {shownRows.map(({ row, cell, dataSet }) => {
-            const removed = cell?.type === "remove";
-            const source = removed ? tokens.base : tokens[side];
-            const line = removed ? row.base?.lineNumber : cell?.lineNumber;
-            const matched =
-              cell && line != null ? tokensSpelling(source.get(line), cell.content) : undefined;
-            const tone = toneFor(cell?.type);
-            return (
-              <View key={row.key} style={[styles.codeRow, tone]} dataSet={dataSet}>
-                {cell && matched ? (
-                  <TokenText
-                    tokens={matched}
-                    segments={cell.segments}
-                    lineStyle={styles.codeText}
-                    highlightStyle={removed ? styles.removeHighlight : styles.addHighlight}
-                  />
-                ) : (
-                  <Text style={styles.codeText}>{cell?.content || " "}</Text>
-                )}
-              </View>
-            );
-          })}
-        </View>
-      </View>
+      <View style={[styles.columnBody, !stacked && styles.columnDivider]}>{body}</View>
     </View>
   );
+}
+
+function GutterCells({
+  cell,
+  both,
+  number,
+  sharedLabel,
+  hasBoth,
+  numberStyle,
+}: {
+  cell: ThreeWayRow["a"];
+  both: boolean;
+  number: number | string;
+  sharedLabel: string | undefined;
+  hasBoth: boolean;
+  numberStyle: { width: number };
+}) {
+  return (
+    <>
+      <Text style={[styles.number, numberStyle]}>{number}</Text>
+      <Text style={[styles.sign, cell?.type === "add" ? styles.addText : styles.removeText]}>
+        {signFor(cell?.type)}
+      </Text>
+      {hasBoth ? (
+        <Text style={styles.both} numberOfLines={1} accessibilityLabel={sharedLabel}>
+          {both ? "Both" : ""}
+        </Text>
+      ) : null}
+    </>
+  );
+}
+
+function CodeText({
+  row,
+  cell,
+  side,
+  tokens,
+  wrap,
+}: {
+  row: ThreeWayRow;
+  cell: ThreeWayRow["a"];
+  side: Side;
+  tokens: Tokens;
+  wrap: boolean;
+}) {
+  const removed = cell?.type === "remove";
+  const source = removed ? tokens.base : tokens[side];
+  const line = removed ? row.base?.lineNumber : cell?.lineNumber;
+  const matched = cell && line != null ? tokensSpelling(source.get(line), cell.content) : undefined;
+  const lineStyle = wrap ? styles.codeTextWrap : styles.codeText;
+  if (cell && matched)
+    return (
+      <TokenText
+        tokens={matched}
+        segments={cell.segments}
+        lineStyle={lineStyle}
+        highlightStyle={removed ? styles.removeHighlight : styles.addHighlight}
+      />
+    );
+  return <Text style={lineStyle}>{cell?.content || " "}</Text>;
 }
 
 function ReadyDiff({
@@ -214,12 +369,18 @@ function ReadyDiff({
   truncated,
   layout,
   embedded,
+  flowTop,
+  onlySide,
+  wrap,
 }: {
   file: ArenaThreeWayFile;
   diff: ThreeWayWindowedDiff;
   truncated: boolean;
   layout: ArenaDiffLayout;
   embedded: boolean;
+  flowTop: number | undefined;
+  onlySide: Side | null;
+  wrap: boolean;
 }) {
   const viewportRef = useRef<View>(null);
   const [mode, setMode] = useState<Side | null>(null);
@@ -305,9 +466,10 @@ function ReadyDiff({
   );
   const showAll = useCallback(() => setFull(true), []);
   const { blocks, truncated: previewLimited } = useMemo(() => {
-    const all = buildThreeWayBlocks(diff.rows, revealed, "both", 3, diff.breaks);
+    // One side's view folds the context around the other side's changes too.
+    const all = buildThreeWayBlocks(diff.rows, revealed, onlySide ?? "both", 3, diff.breaks);
     return full ? { blocks: all, truncated: false } : limitThreeWayBlocks(all, MAX_RENDERED_ROWS);
-  }, [diff, full, revealed]);
+  }, [diff, full, onlySide, revealed]);
   const tokens = useMemo<Tokens>(
     () => ({
       base: sideTokens(file.base, file.file),
@@ -316,7 +478,12 @@ function ReadyDiff({
     }),
     [file],
   );
-  const hasBoth = useMemo(() => diff.rows.some((row) => bothChanged(row, diff.aligned)), [diff]);
+  // One agent's view leaves out what the other did, the shared changes included: the reader
+  // compares by switching agents, and the label cost the code a column.
+  const hasBoth = useMemo(
+    () => onlySide === null && diff.rows.some((row) => bothChanged(row, diff.aligned)),
+    [diff, onlySide],
+  );
   const numberWidth = useMemo(() => {
     let largest = 1;
     for (const row of diff.rows)
@@ -328,8 +495,9 @@ function ReadyDiff({
       );
     return Math.max(20, String(largest).length * 8);
   }, [diff]);
-  const stacked = layout === "single" || mode !== null;
-  const sides = mode ? [mode] : SIDES;
+  const shown = onlySide ?? mode;
+  const stacked = layout === "single" || shown !== null;
+  const sides = shown ? [shown] : SIDES;
   // Several diffs can be open at once, so each viewer names its file for review telemetry to
   // credit a scroll to the diff that scrolled.
   const viewportData = useMemo(
@@ -337,55 +505,68 @@ function ReadyDiff({
     [file.file, mode],
   );
 
+  const { headerSticky, showToolbar, showColumns } = useMemo(
+    () => headerChrome(flowTop, mode, shown, layout),
+    [flowTop, layout, mode, shown],
+  );
+
   return (
     <View
       ref={viewportRef}
-      style={[styles.viewer, embedded && styles.viewerEmbedded]}
+      style={[
+        styles.viewer,
+        embedded && styles.viewerEmbedded,
+        flowTop !== undefined && styles.viewerFlow,
+      ]}
       testID="arena-inline-diff"
       dataSet={viewportData}
     >
-      <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA}>
-        <View style={styles.toolbar}>
-          <Text style={styles.caption}>
-            {mode ? `${labelFor(mode)} · Changes from original` : "Changes from original"}
-          </Text>
-          {mode ? (
-            <Action label="Back to comparison" onPress={back} back testID="arena-diff-back" />
+      {showToolbar || showColumns ? (
+        <View style={[styles.header, headerSticky]} dataSet={HEADER_DATA}>
+          {showToolbar ? (
+            <View style={styles.toolbar}>
+              <Text style={styles.caption}>
+                {mode ? `${labelFor(mode)} · Changes from original` : "Changes from original"}
+              </Text>
+              {mode ? (
+                <Action label="Back to comparison" onPress={back} back testID="arena-diff-back" />
+              ) : null}
+              {!mode && layout === "single" ? (
+                <View style={styles.actions}>
+                  <Action
+                    label="Expand Agent A"
+                    onPress={expandA}
+                    side="a"
+                    testID="arena-diff-expand-a"
+                  />
+                  <Action
+                    label="Expand Agent B"
+                    onPress={expandB}
+                    side="b"
+                    testID="arena-diff-expand-b"
+                  />
+                </View>
+              ) : null}
+            </View>
           ) : null}
-          {!mode && layout === "single" ? (
-            <View style={styles.actions}>
-              <Action
-                label="Expand Agent A"
-                onPress={expandA}
-                side="a"
-                testID="arena-diff-expand-a"
-              />
-              <Action
-                label="Expand Agent B"
-                onPress={expandB}
-                side="b"
-                testID="arena-diff-expand-b"
-              />
+          {showColumns ? (
+            <View style={styles.pair}>
+              {SIDES.map((side) => (
+                <View key={side} style={styles.columnHeader}>
+                  <Text style={[styles.agentLabel, side === "a" ? styles.agentA : styles.agentB]}>
+                    {labelFor(side)}
+                  </Text>
+                  <Action
+                    label={`Expand ${labelFor(side)}`}
+                    onPress={side === "a" ? expandA : expandB}
+                    testID={`arena-diff-expand-${side}`}
+                  />
+                </View>
+              ))}
             </View>
           ) : null}
         </View>
-        {!mode && layout === "split" ? (
-          <View style={styles.pair}>
-            {SIDES.map((side) => (
-              <View key={side} style={styles.columnHeader}>
-                <Text style={[styles.agentLabel, side === "a" ? styles.agentA : styles.agentB]}>
-                  {labelFor(side)}
-                </Text>
-                <Action
-                  label={`Expand ${labelFor(side)}`}
-                  onPress={side === "a" ? expandA : expandB}
-                  testID={`arena-diff-expand-${side}`}
-                />
-              </View>
-            ))}
-          </View>
-        ) : null}
-      </View>
+      ) : null}
       {!diff.aligned ? (
         <Text style={styles.warning}>
           Some regions were too large to align precisely. They are shown as replacements from the
@@ -399,7 +580,7 @@ function ReadyDiff({
       ) : null}
       {blocks.map((block) => {
         if (block.kind === "gap")
-          return <ExpandBand key={block.key} gap={block} onReveal={reveal} />;
+          return <GapRow key={block.key} gap={block} total={diff.rows.length} onReveal={reveal} />;
         if (block.kind === "omitted")
           return (
             <Text key={block.key} style={styles.notice}>
@@ -418,8 +599,8 @@ function ReadyDiff({
             testID={`arena-diff-region-${block.key}`}
           >
             {sides.map((side) => (
-              <View key={side} style={styles.column}>
-                {stacked && !mode ? (
+              <View key={side} style={stacked ? styles.stackedColumn : styles.column}>
+                {stacked && !shown ? (
                   <Text style={[styles.regionLabel, side === "a" ? styles.agentA : styles.agentB]}>
                     {labelFor(side)}
                   </Text>
@@ -432,7 +613,9 @@ function ReadyDiff({
                   hasBoth={hasBoth}
                   numberWidth={numberWidth}
                   stacked={stacked}
-                  showStatus={showStatus}
+                  showStatus={showStatus && onlySide === null}
+                  unified={onlySide !== null}
+                  wrap={wrap}
                 />
               </View>
             ))}
@@ -457,17 +640,43 @@ export function BaseRelativeFileView({
   file,
   layout,
   embedded = false,
+  flowTop,
+  onlySide,
+  wrap = false,
 }: {
   file: ArenaThreeWayFile;
   layout: ArenaDiffLayout;
   /** Drawn under its row in the Changes list, which supplies the edges around it. */
   embedded?: boolean;
+  /**
+   * Set where the diff flows at its full height in a scroller of its own, the Battle changes
+   * panel: no height cap and no scroll inside it, and its header sticks this far from the
+   * scroller's top, under the file's own heading.
+   */
+  flowTop?: number;
+  /** Show only this agent's changes from the original, as one unified diff. */
+  onlySide?: Side;
+  /** Long lines wrap instead of scrolling sideways. */
+  wrap?: boolean;
 }) {
   const comparison = useMemo<BaseRelativeDiff>(() => buildBaseRelativeDiff(file), [file]);
+  const untouched = useMemo(
+    () =>
+      onlySide !== undefined &&
+      comparison.kind !== "unavailable" &&
+      !comparison.diff.rows.some((row) => row[onlySide] && row[onlySide]?.type !== "context"),
+    [comparison, onlySide],
+  );
   if (comparison.kind === "unavailable")
     return (
       <View style={styles.pad} testID="arena-inline-diff-note">
         <Text style={styles.caption}>{comparison.message}</Text>
+      </View>
+    );
+  if (untouched && onlySide)
+    return (
+      <View style={styles.pad} testID="arena-inline-diff-untouched">
+        <Text style={styles.caption}>{`${labelFor(onlySide)} didn't change this file.`}</Text>
       </View>
     );
   return (
@@ -477,6 +686,9 @@ export function BaseRelativeFileView({
       truncated={comparison.truncated}
       layout={layout}
       embedded={embedded}
+      flowTop={flowTop}
+      onlySide={onlySide ?? null}
+      wrap={wrap}
     />
   );
 }
@@ -498,6 +710,13 @@ const styles = StyleSheet.create((theme) => ({
     borderWidth: 0,
     borderRadius: 0,
   },
+  // Nested scrolling was the complaint: a capped diff scrolling inside a scrolling page. In the
+  // panel the panel scrolls, and the diff is as tall as it is. Both axes go visible: hidden on
+  // one makes the browser scroll the other, and a scroller here would also unstick the header.
+  viewerFlow: {
+    maxHeight: "none" as unknown as number,
+    ...(isWeb ? { overflowY: "visible" as const, overflowX: "visible" as const } : {}),
+  },
   header: {
     backgroundColor: theme.colors.surface1,
     borderBottomWidth: 1,
@@ -516,6 +735,9 @@ const styles = StyleSheet.create((theme) => ({
   caption: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
   pair: { flexDirection: "row", minWidth: 0 },
   column: { flex: 1, minWidth: 0 },
+  // Stacked, each agent's rows take their own height. `flex: 1` here shared the region's height
+  // equally, so the side with more rows lost its last one under the other's label.
+  stackedColumn: { minWidth: 0 },
   columnHeader: {
     flex: 1,
     minWidth: 0,
@@ -531,11 +753,12 @@ const styles = StyleSheet.create((theme) => ({
   agentA: { color: theme.colors.statusDotRunning },
   agentB: { color: theme.colors.statusDotWarning },
   regionLabel: {
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
+    paddingLeft: theme.spacing[3],
+    paddingRight: theme.spacing[2],
+    paddingTop: theme.spacing[2],
+    paddingBottom: theme.spacing[1],
     fontSize: theme.fontSize.xs,
     fontWeight: theme.fontWeight.medium,
-    backgroundColor: theme.colors.surface1,
   },
   regionStatus: {
     minHeight: 24,
@@ -549,16 +772,36 @@ const styles = StyleSheet.create((theme) => ({
   columnBody: {
     flexDirection: "row",
     minWidth: 0,
+  },
+  // Side by side, a hairline parts A from B. Stacked, the change edge is the only rule.
+  columnDivider: {
     borderLeftWidth: 1,
     borderLeftColor: theme.colors.border,
   },
-  gutter: { backgroundColor: theme.colors.surface1 },
+  gutter: {},
+  // Rows are as tall as their text, the way a unified diff reads, so a docked panel shows more
+  // of the file; the text height follows the code font size in Settings.
   gutterRow: {
-    height: diffRowHeight(theme),
+    height: diffTextHeight(theme),
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: theme.spacing[1],
+    paddingLeft: theme.spacing[2],
+    paddingRight: theme.spacing[1],
+    borderLeftWidth: 3,
   },
+  gap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    minHeight: diffTextHeight(theme) + theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1],
+  },
+  gapHovered: { backgroundColor: theme.colors.surface2 },
+  gapText: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
+  plainEdge: { borderLeftColor: "transparent" },
+  addEdge: { borderLeftColor: theme.colors.diffAddition },
+  removeEdge: { borderLeftColor: theme.colors.diffDeletion },
   number: {
     fontFamily: theme.fontFamily.mono,
     fontSize: theme.fontSize.xs,
@@ -584,7 +827,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   codeScroll: { flex: 1, minWidth: 0, ...(isWeb ? { overflowX: "auto" as const } : null) },
   codeRow: {
-    height: diffRowHeight(theme),
+    height: diffTextHeight(theme),
     minWidth: "100%",
     justifyContent: "center",
     paddingHorizontal: theme.spacing[1],
@@ -596,6 +839,26 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     ...(isWeb ? { whiteSpace: "pre" as const, overflowWrap: "normal" as const } : null),
   },
+  codeTextWrap: {
+    fontFamily: theme.fontFamily.mono,
+    fontSize: theme.fontSize.code,
+    lineHeight: diffTextHeight(theme),
+    color: theme.colors.foreground,
+    ...(isWeb ? { whiteSpace: "pre-wrap" as const, overflowWrap: "anywhere" as const } : null),
+  },
+  wrapBody: { flex: 1, minWidth: 0 },
+  wrapRow: {
+    flexDirection: "row",
+    minHeight: diffTextHeight(theme),
+    borderLeftWidth: 3,
+  },
+  wrapGutter: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    paddingLeft: theme.spacing[2],
+    paddingRight: theme.spacing[1],
+  },
+  wrapCode: { flex: 1, minWidth: 0, paddingHorizontal: theme.spacing[1] },
   add: { backgroundColor: tint(theme.colors.diffAddition, 13) },
   remove: { backgroundColor: tint(theme.colors.diffDeletion, 13) },
   addText: { color: theme.colors.diffAddition },

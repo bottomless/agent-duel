@@ -1,8 +1,4 @@
-import type {
-  ArenaDivergenceFile,
-  ArenaDivergenceStatus,
-  ArenaThreeWayFile,
-} from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaDivergenceFile, ArenaThreeWayFile } from "@getpaseo/protocol/arena/rpc-schemas";
 
 /**
  * The merged text the combined view reads: git's merge for files both sides
@@ -33,22 +29,5 @@ export function mergedContent(
       return whole(file.b);
     default:
       return null;
-  }
-}
-
-export function divergenceStatusLabel(status: ArenaDivergenceStatus): string {
-  switch (status) {
-    case "identical":
-      return "same result";
-    case "diverging":
-      return "diverging";
-    case "compatible":
-      return "compatible";
-    case "only_a":
-      return "A only";
-    case "only_b":
-      return "B only";
-    case "binary":
-      return "binary";
   }
 }

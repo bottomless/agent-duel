@@ -1896,12 +1896,12 @@ export const layer: Layer.Layer<
         turn.state === "discarding" ||
         turn.state === "discarded" ||
         turn.resolution?.kind === "stopped"
-      if ((!a?.finalCommit || !b?.finalCommit) && !stopped) {
-        return yield* Effect.fail(new Error("Arena comparison is not finalized"))
+      if (!a?.finalCommit && !b?.finalCommit && !stopped) {
+        return yield* Effect.fail(new Error("Arena comparison has no finished side yet"))
       }
-      // A stopped battle deliberately permits partial and failed contestants. Keep its
-      // diff inspectable by representing a side without a finalized result as the
-      // frozen base revision; the public run still reports that the side has no result.
+      // A side without a finalized result reads as the frozen base revision: a side still
+      // running, so the reader can review the one that finished, and a stopped battle's
+      // partial or failed contestant. The public run still reports that the side has no result.
       return {
         turn,
         a,

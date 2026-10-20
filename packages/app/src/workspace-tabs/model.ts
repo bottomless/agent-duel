@@ -26,6 +26,9 @@ export type WorkspaceTabTarget =
   // because the worktree behind it is replaced every turn and the tab has to outlive that. The
   // shell itself is in the seat-terminal store, keyed by the same instance.
   | { kind: "arena_terminal"; agentId: string; side: ArenaSide; instanceId: string }
+  // A battle chat's changes, one tab per chat. Which turn it shows is panel state
+  // (`arena/battle-changes-store.ts`), so reviewing an older battle reuses the tab.
+  | { kind: "arena_changes"; agentId: string }
   | { kind: "browser"; browserId: string }
   | WorkspaceFileTabTarget
   | WorkspaceWorkingDiffTabTarget

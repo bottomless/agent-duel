@@ -5446,6 +5446,88 @@ describe("Arena service vertical slice", () => {
     }
   }, 30_000)
 
+  test("serves a finished side's diff while the other side is still running", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure one-sided diff fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    // The first contestant to call answers and writes a file; the second waits until released.
+    const releaseSecond = Promise.withResolvers<void>()
+    let first: string | undefined
+    const router = installOpenRouterStub({
+      contestantCommands: { 1: "printf 'finished\\n' > finished.txt" },
+      respond: async ({ model }) => {
+        first ??= model
+        if (model !== first) await releaseSecond.promise
+        return undefined
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "One-sided Arena diff",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Create a result while the other side waits." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted one-sided turn")
+      const deadline = Date.now() + 20_000
+      let finished = (await memory.store.runsForTurn(turnID)).find((run) => run.finalCommit)
+      while (!finished && Date.now() < deadline) {
+        await Bun.sleep(10)
+        finished = (await memory.store.runsForTurn(turnID)).find((run) => run.finalCommit)
+      }
+      if (!finished?.finalCommit) throw new Error("Arena did not finalize the first contestant")
+      const turn = await memory.store.turn(turnID)
+      if (!turn) throw new Error("Arena lost the one-sided turn")
+      expect(turn.state).toBe("running")
+      const other = finished.side === "a" ? "b" : "a"
+
+      type Diff = {
+        baseCommit: string
+        a: { commit: string; ref?: string }
+        b: { commit: string; ref?: string }
+        files: { file: string; status: string }[]
+      }
+      const diff = await json<Diff>(await request(`/arena/turns/${turnID}/diff`, { headers }))
+      // The running side has no result yet, so it reads as the base and the file is the finished side's alone.
+      expect(diff.baseCommit).toBe(turn.frozenBaseSHA)
+      expect(diff[finished.side].commit).toBe(finished.finalCommit)
+      expect(diff[other].commit).toBe(turn.frozenBaseSHA)
+      expect(diff[other].ref).toBeUndefined()
+      expect(diff.files).toEqual([expect.objectContaining({ file: "finished.txt", status: `only_${finished.side}` })])
+      const read = await json<{ divergence: { status: string } }>(
+        await request(`/arena/turns/${turnID}/diff/file?${new URLSearchParams({ path: "finished.txt" })}`, { headers }),
+      )
+      expect(read.divergence.status).toBe(`only_${finished.side}`)
+    } finally {
+      releaseSecond.resolve()
+      router.restore()
+    }
+  }, 30_000)
+
   test("makes a finalized empty contestant result selectable", async () => {
     await using directory = await tmpdir({
       git: true,

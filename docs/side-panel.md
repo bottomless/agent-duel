@@ -137,9 +137,9 @@ review; it is a separate tab on purpose so Changes can stay a file list beside i
 A provider's subagent transcript (`provider_subagent`) and the workspace's Setup tab (`setup`) are
 side panel tabs as well: they are things the chat works beside, not chats of their own.
 
-A battle has no side panel tab. Its diff is read in the battle card and the archived summary,
-which have the chat's width (see [arena.md](arena.md), "What this is for"); a panel beside the
-card would only narrow it to show the same thing.
+A battle's diffs are a side panel tab too, **Battle changes** (`arena_changes`, one per chat). The
+card's **Changes (N)** opens it; it is the one tab the app opens without being asked, at a battle's
+decision. When and why is in [arena.md](arena.md), "What this is for".
 
 ## Shortcuts
 

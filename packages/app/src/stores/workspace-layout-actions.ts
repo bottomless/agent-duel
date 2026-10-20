@@ -194,6 +194,7 @@ const SIDE_PANEL_TAB_KINDS: ReadonlySet<WorkspaceTabTarget["kind"]> = new Set<
   "setup",
   "terminal",
   "arena_terminal",
+  "arena_changes",
   "browser",
   "file",
   "working_diff",

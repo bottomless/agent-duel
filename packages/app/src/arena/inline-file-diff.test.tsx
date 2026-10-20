@@ -23,8 +23,7 @@ vi.mock("./file-diff-query", async () =>
   (await import("./review-fixtures.test-helpers")).fileDiffQueryStandIn(),
 );
 
-import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
-import { arenaChangesRows } from "./changes-rows";
+import { InlineFileDiff } from "./inline-file-diff";
 import type { ArenaComparisonDiff } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ArenaDiffLayout } from "./diff-layout";
 import {
@@ -213,30 +212,5 @@ describe("InlineFileDiff", () => {
     act(() => container.querySelector<HTMLElement>('[aria-label="Expand Agent A"]')!.click());
     act(() => root.render(mainDiff(diff, "single", "next-turn")));
     expect(byTestId("arena-inline-diff")?.getAttribute("data-detail-side")).toBe("both");
-  });
-});
-
-describe("openChangesFiles", () => {
-  const rows = arenaChangesRows(shortConflict());
-
-  it("opens the default file until the reader chooses", () => {
-    expect(openChangesFiles(rows, undefined)).toEqual(["main.py"]);
-  });
-
-  it("keeps every diff closed once the reader closed them", () => {
-    expect(openChangesFiles(rows, [])).toEqual([]);
-  });
-
-  it("drops chosen files that are gone, and falls back to the default when none are left", () => {
-    expect(openChangesFiles(rows, ["deleted.py", "main.py"])).toEqual(["main.py"]);
-    expect(openChangesFiles(rows, ["deleted.py"])).toEqual(["main.py"]);
-  });
-});
-
-describe("toggleChangesFile", () => {
-  it("opens a closed file after the ones already open and closes an open one", () => {
-    expect(toggleChangesFile(["a.py"], "b.py")).toEqual(["a.py", "b.py"]);
-    expect(toggleChangesFile(["a.py", "b.py"], "a.py")).toEqual(["b.py"]);
-    expect(toggleChangesFile(["a.py"], "a.py")).toEqual([]);
   });
 });

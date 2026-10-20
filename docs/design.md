@@ -241,17 +241,19 @@ Identity badges — the project icon and the PR-panel participant avatar — do 
 
 A battle's diff (`base-relative-view.tsx`) uses `diffAddition` green for additions and
 `diffDeletion` red for removals, with visible `+` and `−` signs. Blue and amber identify Agent A
-and Agent B in the diff's column headings and tint that side's vote button
-(`decision-bar.tsx`); they do not colour changed code. An explicit `Both` label marks
-shared edits, using the same addition/removal colours as individual edits. Keep unchanged code
-neutral. Every tint uses `tint(token, percent)` so it follows the theme.
+and Agent B and tint that side's vote button (`decision-bar.tsx`); they do not colour changed
+code. In the three-way views an explicit `Both` label marks shared edits, using the same
+addition/removal colours as individual edits; the panel's one-agent view leaves it out. Keep unchanged code
+neutral. Every tint uses `tint(token, percent)` so it follows the theme. Each row carries one line
+number, the original's for a removed line and the side's otherwise, and a changed row has a 3px
+edge in its sign's colour; the diff is read in a side panel about 370px wide, where a second
+number column took the code's room. Rows are as tall as their text, which follows the code font
+size in Settings, and a run of unchanged lines folds to one muted "N unmodified lines" line on the
+gutter's rail that opens the run.
 
-Keep the **Expand** action visible beside each agent heading, as the pane header's icon action; a
-heading label or a hover-only icon must not be its only affordance. Full-width inspection shows
-old and new lines in one column. **Back to comparison** and Escape while focus is in the diff
-restore the comparison's reading position and return keyboard focus to the initiating action. In
-the narrow comparison, group A and B by changed region, rather than showing one agent's entire
-file before the other.
+The Battle changes panel shows one agent's diff at a time, and **Agent A | Agent B** in its
+toolbar is the diff's only view control. Old and new lines share one column, the way a unified
+diff reads.
 
 The bespoke pills in `packages/app/src/screens/settings/host-page.tsx:97-116` and `packages/app/src/components/sidebar-workspace-list.tsx:2889-2894` are drift to be removed. New code uses `<StatusBadge>`.
 

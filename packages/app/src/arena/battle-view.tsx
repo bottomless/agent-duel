@@ -20,11 +20,8 @@ import { ARENA_MAX_CONTENT_WIDTH, MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { MessageOuterSpacingProvider, UserMessage } from "@/components/message";
-import { useSessionStore } from "@/stores/session-store";
-import { useFetchQuery } from "@/data/query";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { ArenaRunThread } from "./run-thread";
-import { arenaSizeErrorOr, isArenaSizeError } from "./chat-too-large";
 import { ArenaRunTaskFooter } from "./task-progress-card";
 import { openArenaWorktreeChanges } from "./explorer-selection";
 import { ARENA_RUN_META_HEIGHT, ArenaRunMeta } from "./run-meta";
@@ -32,6 +29,9 @@ import type { ArenaTurnAction } from "./use-arena-session";
 import { useArenaBattleActions } from "./use-battle-actions";
 import { arenaChangesRows } from "./changes-rows";
 import { BattleReview } from "./battle-review";
+import { useBattleDiff } from "./battle-diff-query";
+import { openBattleChanges } from "./battle-changes-store";
+import { useBattleChangesLifecycle } from "./use-battle-changes-lifecycle";
 import { useArenaReviewTelemetry } from "./review-telemetry";
 import { isStoppedByEarlyPick } from "./battle-result";
 import { canReviewBattle } from "./comparison-visibility";
@@ -104,22 +104,27 @@ function BattleReadingColumn({ children, testID }: { children: ReactNode; testID
 }
 
 /**
- * A run's diff stats open the Changes tab on that run's worktree. The handler is
- * per side so the memoised status line keeps its identity between ticks.
+ * A run's diff stats open its changes: once its result is final, that side in the Battle
+ * changes panel, even while the other side still works; before that, the Changes tab on its
+ * live worktree. The handler is per side so the memoised status line keeps its identity
+ * between ticks.
  */
 function useOpenRunChanges(input: {
   serverId: string;
   workspaceId: string;
+  agentId: string;
+  turnId: string;
   side: ArenaSide;
   run: ArenaRun | undefined;
 }): (() => void) | undefined {
-  const { serverId, workspaceId, side, run } = input;
+  const { serverId, workspaceId, agentId, turnId, side, run } = input;
+  const final = Boolean(run?.finalCommit && turnId);
   const browsable = Boolean(run?.worktree && run.worktreeActive);
-  const open = useCallback(
-    () => openArenaWorktreeChanges({ serverId, workspaceId, side }),
-    [serverId, side, workspaceId],
-  );
-  return browsable ? open : undefined;
+  const open = useCallback(() => {
+    if (final) openBattleChanges({ serverId, workspaceId, agentId, turnId, side });
+    else openArenaWorktreeChanges({ serverId, workspaceId, side });
+  }, [agentId, final, serverId, side, turnId, workspaceId]);
+  return final || browsable ? open : undefined;
 }
 
 function BattlePane({
@@ -270,7 +275,7 @@ function BattlePane({
       dispatched ? <ArenaRunRetry run={dispatched} serverId={serverId} agentId={agentId} /> : null,
     [dispatched, serverId, agentId],
   );
-  const openChanges = useOpenRunChanges({ serverId, workspaceId, side, run });
+  const openChanges = useOpenRunChanges({ serverId, workspaceId, agentId, turnId, side, run });
   const expanded = paneView === side;
   const handleExpand = useCallback(() => {
     onPaneViewChange(side);
@@ -372,34 +377,13 @@ function BattlePane({
   );
 }
 
-// The same key the side panel and the summary fetch, so no view adds a request.
-function useBattleDiff(serverId: string, agentId: string, turnId: string) {
-  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
-  return useFetchQuery({
-    queryKey: ["arena", "diff", serverId, agentId, turnId],
-    dataShape: "value",
-    staleTimeMs: 0,
-    queryFn: async () => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
-      try {
-        return await client.arenaDiff(agentId, turnId);
-      } catch (error) {
-        throw arenaSizeErrorOr(error);
-      }
-    },
-    enabled: Boolean(client),
-    // A comparison too large to send is refused the same way every time.
-    retry: (failures, error) => failures < 2 && !isArenaSizeError(error),
-    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
-  });
-}
-
 /**
  * The card once both results are in: the review region, fed from the same diff
  * query the summary uses.
  */
 function BattleJudging({
   serverId,
+  workspaceId,
   agentId,
   turnId,
   comparison,
@@ -408,6 +392,7 @@ function BattleJudging({
   onRetry,
 }: {
   serverId: string;
+  workspaceId: string;
   agentId: string;
   turnId: string;
   comparison: ArenaSnapshot["comparison"];
@@ -432,6 +417,7 @@ function BattleJudging({
   return (
     <BattleReview
       serverId={serverId}
+      workspaceId={workspaceId}
       agentId={agentId}
       turnId={turnId}
       summaryAvailable={summaryAvailable}
@@ -665,6 +651,7 @@ export function ArenaBattleView({
     focused: false,
     enabled: reviewAvailable && !turn?.resolution,
   });
+  useBattleChangesLifecycle({ serverId, workspaceId, agentId, turn, reviewAvailable });
   const { pendingAction } = actions;
   const respondingA = respondingIdsForRun(pendingAction, runA);
   const respondingB = respondingIdsForRun(pendingAction, runB);
@@ -754,6 +741,7 @@ export function ArenaBattleView({
             <View style={styles.reviewSection}>
               <BattleJudging
                 serverId={serverId}
+                workspaceId={workspaceId}
                 agentId={agentId}
                 turnId={turn.id}
                 comparison={snapshot.comparison}

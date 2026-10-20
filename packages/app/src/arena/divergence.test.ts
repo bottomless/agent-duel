@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ArenaDivergenceFile, ArenaThreeWayFile } from "@getpaseo/protocol/arena/rpc-schemas";
-import { divergenceStatusLabel, mergedContent } from "./divergence";
+import { mergedContent } from "./divergence";
 
 function content(text: string, extra: Partial<ArenaThreeWayFile["a"]> = {}) {
   return { content: text, truncated: false, missing: false, ...extra };
@@ -55,16 +55,5 @@ describe("mergedContent", () => {
       mergedContent(file({ a: content("", { missing: true }) }), entry({ status: "only_a" })),
     ).toBeNull();
     expect(mergedContent(file(), undefined)).toBeNull();
-  });
-});
-
-describe("divergenceStatusLabel", () => {
-  it("names every status", () => {
-    expect(divergenceStatusLabel("identical")).toBe("same result");
-    expect(divergenceStatusLabel("diverging")).toBe("diverging");
-    expect(divergenceStatusLabel("compatible")).toBe("compatible");
-    expect(divergenceStatusLabel("only_a")).toBe("A only");
-    expect(divergenceStatusLabel("only_b")).toBe("B only");
-    expect(divergenceStatusLabel("binary")).toBe("binary");
   });
 });

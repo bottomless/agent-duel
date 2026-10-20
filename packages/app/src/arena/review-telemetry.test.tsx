@@ -42,16 +42,34 @@ function types() {
   return sent.map((event) => event.type);
 }
 
-/** A diff viewer for `file`, inside the review of `turn`, or outside any review for null. */
-function diffViewer(turn: string | null, file: string) {
+// jsdom lays nothing out, so each element is given the box a browser would have measured.
+function placeAt(element: HTMLElement, top: number, height: number) {
+  element.getBoundingClientRect = () =>
+    ({ top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top }) as DOMRect;
+}
+
+/**
+ * The Battle changes panel's scroller, showing the battle `turn` (none for null), 600px tall,
+ * with one section per file at the given offset from the scroller's top.
+ */
+function changesPanel(
+  turn: string | null,
+  sections: ReadonlyArray<{ file: string; top: number; height: number }>,
+) {
   const review = document.createElement("div");
   if (turn) review.setAttribute("data-review-turn", turn);
-  const viewer = document.createElement("div");
-  viewer.setAttribute("data-testid", "arena-inline-diff");
-  viewer.setAttribute("data-diff-file", file);
-  review.appendChild(viewer);
+  const scroller = document.createElement("div");
+  scroller.setAttribute("data-testid", "arena-battle-changes-scroll");
+  placeAt(scroller, 0, 600);
+  for (const section of sections) {
+    const element = document.createElement("div");
+    element.setAttribute("data-battle-file", section.file);
+    placeAt(element, section.top, section.height);
+    scroller.appendChild(element);
+  }
+  review.appendChild(scroller);
   container.appendChild(review);
-  return viewer;
+  return scroller;
 }
 
 beforeEach(() => {
@@ -100,30 +118,57 @@ describe("useArenaReviewTelemetry", () => {
     expect(files.map((event) => "index" in event && event.index)).toEqual([0, 1]);
   });
 
-  it("credits a scroll to the diff that scrolled, not the file opened last", () => {
-    // Several diffs can be open at once. Reading the first one after opening a
-    // second must not be booked against the second.
+  it("credits each file on screen with how much of it the panel has passed", () => {
+    // The panel reads every file in one scroll, so one scroll can move the reader through
+    // several. A file that has gone past the top reads as read through; one still running past
+    // the bottom is credited with what is above the bottom edge; one below is not credited.
     mount();
+    const panel = changesPanel(TURN, [
+      { file: "src/a.ts", top: -200, height: 400 },
+      { file: "src/b.ts", top: 200, height: 1600 },
+      { file: "src/c.ts", top: 1800, height: 300 },
+    ]);
     act(() => {
-      useArenaReviewStore.getState().setShownFile(TURN, "src/a.ts", 0);
-      useArenaReviewStore.getState().setShownFile(TURN, "src/b.ts", 1);
-    });
-    const viewer = diffViewer(TURN, "src/a.ts");
-    act(() => {
-      viewer.dispatchEvent(new Event("scroll"));
+      panel.dispatchEvent(new Event("scroll"));
     });
     act(() => {
       root.unmount();
     });
-    const scrolled = sent.filter((event) => event.type === "diff.scrolled");
-    expect(scrolled.map((event) => "file" in event && event.file)).toEqual(["src/a.ts"]);
+    const scrolled = sent.flatMap((event) =>
+      event.type === "diff.scrolled" ? [[event.file, event.depth]] : [],
+    );
+    expect(scrolled).toEqual([
+      ["src/a.ts", 1],
+      ["src/b.ts", 0.25],
+    ]);
   });
 
-  it("ignores a scroll in another battle's diff", () => {
-    // An archived battle in the side panel draws its diffs with the same viewer.
+  it("reports only new ground, in steps of more than five percent", () => {
     mount();
-    const other = diffViewer("turn-2", "src/a.ts");
-    const loose = diffViewer(null, "src/b.ts");
+    const panel = changesPanel(TURN, [{ file: "src/b.ts", top: 200, height: 1600 }]);
+    act(() => {
+      panel.dispatchEvent(new Event("scroll"));
+    });
+    placeAt(panel.firstElementChild as HTMLElement, 160, 1600);
+    act(() => {
+      panel.dispatchEvent(new Event("scroll"));
+    });
+    placeAt(panel.firstElementChild as HTMLElement, -200, 1600);
+    act(() => {
+      panel.dispatchEvent(new Event("scroll"));
+    });
+    act(() => {
+      root.unmount();
+    });
+    const depths = sent.flatMap((event) => (event.type === "diff.scrolled" ? [event.depth] : []));
+    expect(depths).toEqual([0.25, 0.5]);
+  });
+
+  it("ignores a scroll in another battle's changes", () => {
+    // The same panel shows archived battles too.
+    mount();
+    const other = changesPanel("turn-2", [{ file: "src/a.ts", top: 0, height: 100 }]);
+    const loose = changesPanel(null, [{ file: "src/b.ts", top: 0, height: 100 }]);
     act(() => {
       other.dispatchEvent(new Event("scroll"));
       loose.dispatchEvent(new Event("scroll"));

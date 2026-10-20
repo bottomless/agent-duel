@@ -1,4 +1,5 @@
 import { agentPanelRegistration } from "@/panels/agent-panel";
+import { arenaChangesPanelRegistration } from "@/panels/arena-changes-panel";
 import { arenaTerminalPanelRegistration } from "@/panels/arena-terminal-panel";
 import { browserPanelRegistration } from "@/desktop/browser/panel";
 import { changesPanelRegistration } from "@/panels/changes-panel";
@@ -24,6 +25,7 @@ export function ensurePanelsRegistered(): void {
   registerPanel(setupPanelRegistration);
   registerPanel(terminalPanelRegistration);
   registerPanel(arenaTerminalPanelRegistration);
+  registerPanel(arenaChangesPanelRegistration);
   registerPanel(browserPanelRegistration);
   registerPanel(filePanelRegistration);
   registerPanel(commitDiffPanelRegistration);

@@ -503,7 +503,7 @@ function getFallbackTabLabel(
   if (tab.target.kind === "working_diff") {
     return labels.diff;
   }
-  if (tab.target.kind === "changes") {
+  if (tab.target.kind === "changes" || tab.target.kind === "arena_changes") {
     return labels.changes;
   }
   if (tab.target.kind === "files") {
