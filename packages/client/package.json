@@ -1,6 +1,6 @@
 {
   "name": "@getpaseo/client",
-  "version": "0.4.0-beta.10",
+  "version": "0.4.0-beta.11",
   "description": "Agent Duel client SDK package",
   "license": "AGPL-3.0-or-later",
   "files": [
@@ -40,8 +40,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@getpaseo/protocol": "0.4.0-beta.10",
-    "@getpaseo/relay": "0.4.0-beta.10",
+    "@getpaseo/protocol": "0.4.0-beta.11",
+    "@getpaseo/relay": "0.4.0-beta.11",
     "zod": "^4.4.3"
   },
   "devDependencies": {
