@@ -195,6 +195,7 @@ import {
   anyListening,
   releaseTakenBank,
   route as previewRoute,
+  sequentialAllocator,
   url as previewUrl,
   type PreviewRoute,
 } from "./preview"
@@ -4713,6 +4714,7 @@ export const layer: Layer.Layer<
                     chatID: chat._id,
                     turnIndex: generation,
                     side: slot.side,
+                    allocator: sequentialAllocator(store.portCursor()),
                     context: {
                       ...(branch ? { branch } : {}),
                       trunkDirectory: chat.repository.root,
@@ -4901,6 +4903,7 @@ export const layer: Layer.Layer<
             chatID: chat._id,
             turnIndex: turn.turnIndex,
             side,
+            allocator: sequentialAllocator(store.portCursor()),
             context: {
               ...(branch ? { branch } : {}),
               trunkDirectory: chat.repository.root,

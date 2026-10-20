@@ -587,6 +587,12 @@ patches use native Git with time and output limits; battle review owns its separ
 Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
 `.localhost` hostnames, and never retarget an old URL to a later process.
 
+Banks come from 20000–29999, below every OS ephemeral range, in order from a cursor the store keeps
+(`portCursors`, `sequentialAllocator` in `arena/preview.ts`). A port an earlier turn used is not
+handed out again until the range wraps, so a port in the history never names a later contestant's
+server. The allocator skips ports in use and well-known defaults; a store without a cursor starts at
+a random point.
+
 The canonical chat keeps the winner's literal ports and preview URLs, so the reader sees the URLs
 that worked. A contestant's copy retargets them to its own bank as it forks
 (`retargetArenaTranscriptPart`, `arena/port-retarget.ts`). Everything may change except a
