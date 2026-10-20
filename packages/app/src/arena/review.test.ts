@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ArenaReviewItem } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   busyCallout,
+  heldResolveStep,
   refDisplayName,
   readySentence,
   resolvePrompt,
@@ -210,5 +211,65 @@ describe("review callout", () => {
 
   it("quotes Arena's reason when an agent applies a stopped winner", () => {
     expect(stoppedPrompt("The winner moved.")).toContain('Arena said: "The winner moved."');
+  });
+});
+
+describe("heldResolveStep", () => {
+  const held = {
+    turnId: "turn-1",
+    claimedAt: "2026-10-20T10:00:00.000Z",
+    prompt: "Combine the files.",
+  };
+  const turn = (input: Partial<Parameters<typeof heldResolveStep>[1] & object> = {}) => ({
+    id: "turn-1",
+    state: "applying" as const,
+    updatedAt: "2026-10-20T10:00:05.000Z",
+    ...input,
+  });
+
+  it("waits while the turn has not loaded or still reads as it did when the apply was claimed", () => {
+    expect(heldResolveStep(held, undefined)).toBe("wait");
+    expect(heldResolveStep(held, turn({ updatedAt: held.claimedAt }))).toBe("wait");
+  });
+
+  it("waits out a snapshot from before the claim, which still shows the review it answered", () => {
+    const earlier = turn({
+      state: "application_failed",
+      updatedAt: "2026-10-20T09:59:00.000Z",
+      gitApplication: { state: "review" },
+    });
+    expect(heldResolveStep(held, earlier)).toBe("wait");
+  });
+
+  it("waits while the apply is still running", () => {
+    for (const state of ["applying", "canonicalizing", "cleanup_pending"] as const) {
+      expect(heldResolveStep(held, turn({ state }))).toBe("wait");
+    }
+  });
+
+  it("sends once the apply has settled with the winner in the checkout", () => {
+    expect(heldResolveStep(held, turn({ state: "complete" }))).toBe("send");
+    expect(
+      heldResolveStep(
+        held,
+        turn({
+          state: "application_failed",
+          gitApplication: { state: "conflicted", conflicts: ["a.txt"] },
+        }),
+      ),
+    ).toBe("send");
+  });
+
+  it("drops the prompt when the apply failed, whose error stays on the callout", () => {
+    for (const state of ["failed", "manual"] as const) {
+      expect(
+        heldResolveStep(held, turn({ state: "application_failed", gitApplication: { state } })),
+      ).toBe("drop");
+    }
+    expect(heldResolveStep(held, turn({ state: "canonicalization_failed" }))).toBe("drop");
+  });
+
+  it("drops the prompt when the chat has moved on to another turn", () => {
+    expect(heldResolveStep(held, turn({ id: "turn-2", state: "complete" }))).toBe("drop");
   });
 });

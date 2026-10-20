@@ -146,16 +146,16 @@ export function useArenaBattleActions(
   }, [mutateTurn, showError, turnId]);
 
   // The review's answers go back through the same retry; the daemon plans again with them.
-  // Resolves true once the daemon applied what it could, so a prompt that depends on it can follow.
+  // Resolves with the turn as the daemon claimed it for the apply, which then runs on its own.
   const answerReview = useCallback(
-    async (answers: readonly ArenaReviewAnswer[]) => {
-      if (!turnId) return false;
+    async (answers: readonly ArenaReviewAnswer[]): Promise<ArenaSnapshot["turn"] | null> => {
+      if (!turnId) return null;
       try {
-        await mutateTurn({ kind: "retry_resolution", turnId, answers });
-        return true;
+        const snapshot = await mutateTurn({ kind: "retry_resolution", turnId, answers });
+        return snapshot.turn;
       } catch (error) {
         showError(error);
-        return false;
+        return null;
       }
     },
     [mutateTurn, showError, turnId],

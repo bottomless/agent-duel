@@ -8989,6 +8989,34 @@ export const layer: Layer.Layer<
       }
     })
 
+    /**
+     * Runs a resolution's apply after the request has been answered. On a large checkout the plan
+     * and the write take minutes, longer than a client waits for an answer, so the caller answers
+     * with the turn already `applying` and the battle card follows the rest. A failure the apply
+     * did not record itself still parks the turn, so it never stays in a working state.
+     */
+    const applyInBackground = (store: Store, turnID: string, application: Effect.Effect<unknown, Error>) =>
+      application.pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            const current = yield* promise(() => store.turn(turnID))
+            if (current?.state === "applying") {
+              yield* promise(() =>
+                store.updateTurn(turnID, {
+                  gitApplication: { state: "failed", reason: Cause.pretty(cause) },
+                }),
+              )
+              yield* promise(() => store.transitionTurn(turnID, "application_failed"))
+            }
+            if (current?.state === "canonicalizing") {
+              yield* promise(() => store.transitionTurn(turnID, "canonicalization_failed"))
+            }
+            yield* Effect.logError("Arena background application failed", { turnID, cause })
+          }),
+        ),
+        Effect.forkIn(scope),
+      )
+
     const promote: (
       store: Store,
       turn: TurnDocument,
@@ -9038,27 +9066,13 @@ export const layer: Layer.Layer<
         )
         if (!recorded.recorded) return yield* respond(store, turn.chatID)
         yield* revealTelemetry(recorded.turn, revealed.metrics)
-        if (resolution.kind === "vote") {
-          const acknowledged = yield* respond(store, turn.chatID)
-          yield* promote(store, recorded.turn, side, resolution, vote, true, rawParticipantID).pipe(
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                const current = yield* promise(() => store.turn(turn._id))
-                if (current?.state === "applying") {
-                  yield* promise(() =>
-                    store.updateTurn(turn._id, {
-                      gitApplication: { state: "failed", reason: Cause.pretty(cause) },
-                    }),
-                  )
-                  yield* promise(() => store.transitionTurn(turn._id, "application_failed"))
-                }
-                yield* Effect.logError("Arena background vote application failed", { turnID: turn._id, cause })
-              }),
-            ),
-            Effect.forkIn(scope),
-          )
-          return acknowledged
-        }
+        const acknowledged = yield* respond(store, turn.chatID)
+        yield* applyInBackground(
+          store,
+          turn._id,
+          promote(store, recorded.turn, side, resolution, vote, true, rawParticipantID),
+        )
+        return acknowledged
       }
       const runs = yield* trackOperation(store, turn._id, "preserving_results", ensureArchives(store, turn))
       // Analytics only. Forked and swallowed so a metrics failure can never
@@ -9670,14 +9684,20 @@ export const layer: Layer.Layer<
       // Persisted so a daemon restart mid-apply resumes with the answers instead of asking again.
       const reviewAnswers = answers?.length ? mergeAnswers(turn.reviewAnswers, answers) : turn.reviewAnswers
       if (answers?.length) yield* promise(() => store.updateTurn(turn._id, { reviewAnswers }))
-      return yield* promote(
+      const acknowledged = yield* respond(store, turn.chatID)
+      yield* applyInBackground(
         store,
-        reviewAnswers ? { ...turn, reviewAnswers } : turn,
-        turn.appliedSide,
-        turn.resolution,
-        turn.vote,
-        true,
+        turn._id,
+        promote(
+          store,
+          reviewAnswers ? { ...turn, reviewAnswers } : turn,
+          turn.appliedSide,
+          turn.resolution,
+          turn.vote,
+          true,
+        ),
       )
+      return acknowledged
     })
 
     const retryComparison = Effect.fn("Arena.retryComparison")(function* (id: string) {

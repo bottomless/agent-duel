@@ -904,7 +904,10 @@ Use one utility request; increase evidence quality before adding model passes.
 
 **Applying** (`arena/service.ts:4039`) records the resolution and enters `applying` in one
 compare-and-set. The response and feed reveal that durable choice before transcript retention,
-application, cancellation, or timeline hydration continue in the background. The battle stays open
+application, cancellation, or timeline hydration continue in the background. A vote, a kept side
+after Stop, and an answer to a review all answer once the apply is claimed (`applyInBackground`):
+on a large checkout the plan and the write take minutes, longer than the client waits for an
+answer, and a timed-out answer read as a failure while the engine went on. A failure lands on the turn as `application_failed`. The battle stays open
 while the selected result is being applied, then collapses; expand it for the difference summary,
 changed files, both threads, and the transition report. Each contestant pane keeps its worktree menu
 in the header and its owned services below
@@ -962,6 +965,8 @@ replaced values go under the turn's `replaced/` refs and replaced file edits sta
 which the card names. **Let an agent resolve** applies the winner with the developer's work kept and
 conflict markers where files can hold them, then sends an agent what is left to combine
 (`resolvePrompt` in `packages/app/src/arena/review.ts`), told to ask before it removes anything.
+The prompt waits until that apply has settled (`heldResolveStep`), so the agent never edits the
+checkout while Arena writes it, and a failed apply sends nothing.
 It is always offered and is the filled button. The Battle switch is hidden while the review stands and comes back
 where it was. Answers carry each item's fingerprint, so an answer given to a situation that has
 since changed is asked again. Answers are stored on the turn and reused by every later plan, so the

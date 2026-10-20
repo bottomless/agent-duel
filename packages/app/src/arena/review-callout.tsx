@@ -95,8 +95,8 @@ export function ArenaReviewCallouts({
   planned: readonly { ref: string }[];
   switchTo?: string | undefined;
   canDiscard: boolean;
-  /** Resolves true once the daemon has the answers and applied what it could. */
-  onAnswer: (answers: ArenaReviewAnswer[]) => Promise<boolean>;
+  /** `followUp` goes to an agent once the apply the answers start has settled. */
+  onAnswer: (answers: ArenaReviewAnswer[], followUp?: string) => Promise<void>;
   onCheckAgain: () => void;
   onDiscard: () => void;
   onAskAgent?: (prompt: string) => void;
@@ -110,11 +110,10 @@ export function ArenaReviewCallouts({
   const answer = useCallback(
     async (mode: ReviewMode) => {
       setPressed(mode);
-      const prompt = mode === "resolve" ? resolvePrompt(items) : undefined;
-      const applied = await onAnswer(reviewAnswers(items, mode));
-      if (applied && prompt) onAskAgent?.(prompt);
+      const followUp = mode === "resolve" ? resolvePrompt(items) : undefined;
+      await onAnswer(reviewAnswers(items, mode), followUp);
     },
-    [items, onAnswer, onAskAgent],
+    [items, onAnswer],
   );
 
   if (busy?.kind === "busy") {

@@ -195,8 +195,8 @@ export function ArenaChatCallouts({
   resolvingConflicts?: boolean;
   /** Answers a promotion parked on a review, or one that stopped before writing. */
   review?: {
-    /** Resolves true once the daemon has the answers and applied what it could. */
-    onApply: (answers: ArenaReviewAnswer[]) => Promise<boolean>;
+    /** `followUp` goes to an agent once the apply the answers start has settled. */
+    onApply: (answers: ArenaReviewAnswer[], followUp?: string) => Promise<void>;
     onRetry: () => void;
     onDiscard: () => void;
     /** Puts back a workspace an apply left half written. */

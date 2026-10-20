@@ -140,6 +140,7 @@ import {
   resolveBattlePause,
 } from "@/arena/conflict-guard";
 import { clearArenaBattleHandoff, useArenaBattleHandoff } from "@/arena/battle-handoff";
+import { useReviewAnswer } from "@/arena/use-review-answer";
 import { retainArenaPromptImages } from "@/arena/prompt-attachments";
 import {
   clearPendingBattlePrompt,
@@ -1774,9 +1775,14 @@ const AgentStreamSection = memo(function AgentStreamSection({
   if (calloutPendingAction?.kind === "retry_resolution") {
     reviewPending = calloutPendingAction.mode === "discard_winner" ? "discard" : "apply";
   }
+  const answerCalloutReview = useReviewAnswer({
+    snapshot: arenaSession.data,
+    answerReview: calloutAnswerReview,
+    askAgent: askCalloutAgent,
+  });
   const calloutReview = useMemo(
     () => ({
-      onApply: calloutAnswerReview,
+      onApply: answerCalloutReview,
       onRetry: calloutRetryResolution,
       onDiscard: () => void calloutDiscardWinner(),
       onRestore: calloutRestoreWorkspace,
@@ -1784,8 +1790,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
       pending: reviewPending,
     }),
     [
+      answerCalloutReview,
       askCalloutAgent,
-      calloutAnswerReview,
       calloutDiscardWinner,
       calloutRestoreWorkspace,
       calloutRetryResolution,
