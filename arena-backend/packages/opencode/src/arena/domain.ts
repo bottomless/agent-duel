@@ -3,6 +3,8 @@
  * Git, and OpenCode. Adapters persist these values and use this module to make
  * their compare-and-set transitions deterministic.
  */
+import { createHash } from "crypto"
+
 export const Side = ["a", "b"] as const
 export type Side = (typeof Side)[number]
 
@@ -155,6 +157,26 @@ export function operationID(input: {
 export function generationName(generation: number, side: Side): string {
   return `generation-${generation + 1}-${side}`
 }
+
+/** The directory every slot of a chat's worktree pool sits in, under `.agent-duel/worktrees`. */
+export function chatSlug(chatID: string): string {
+  return createHash("sha256").update(chatID).digest("hex").slice(0, 16)
+}
+
+/**
+ * The worktree directory of a spare slot, which a later turn renames to a generation's. `suffix` is
+ * 8 random hex characters.
+ */
+export function spareName(suffix: string): string {
+  return `spare-${suffix}`
+}
+
+/**
+ * Every slot path under `.agent-duel/worktrees`, `<chatSlug>/<generationName or spareName>`, as a
+ * regular expression source. The transcript rewrite matches slot names by it, so a slot path ends
+ * where the name does and the `.` or `\n` written right after it survives.
+ */
+export const SLOT_PATH_PATTERN = String.raw`[0-9a-f]{16}/(?:generation-[1-9][0-9]*-[ab]|spare-[0-9a-f]{8})`
 
 function identifier(kind: string, ...parts: ReadonlyArray<string>): string {
   return [kind, ...parts.map((part) => `${part.length}:${part}`)].join("|")

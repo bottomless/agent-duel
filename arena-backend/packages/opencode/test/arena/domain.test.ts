@@ -7,7 +7,9 @@ import {
   canRetryRun,
   canTie,
   canTransition,
+  chatSlug,
   earlyResolution,
+  generationName,
   isFinalState,
   isVoteReady,
   operationID,
@@ -17,6 +19,8 @@ import {
   isParkedPromotion,
   isStopAbort,
   MAX_MANUAL_RUN_RETRIES,
+  SLOT_PATH_PATTERN,
+  spareName,
   voteResolution,
 } from "../../src/arena/domain"
 
@@ -254,5 +258,35 @@ describe("canTie and canDiscardBattle", () => {
     expect(canDiscardBattle(decided, neither)).toBe(false)
     expect(canTie({ state: "running" }, both)).toBe(false)
     expect(canDiscardBattle({ state: "running" }, neither)).toBe(false)
+  })
+})
+
+describe("Arena slot names", () => {
+  const slotPath = new RegExp(`^${SLOT_PATH_PATTERN}$`)
+
+  test("the slot path pattern matches every name a slot is given", () => {
+    const chat = chatSlug("chat_01HZX")
+    for (const name of [
+      generationName(0, "a"),
+      generationName(0, "b"),
+      generationName(41, "a"),
+      spareName("0a1b2c3d"),
+    ]) {
+      expect(`${chat}/${name}`).toMatch(slotPath)
+    }
+  })
+
+  test("the slot path pattern matches nothing else", () => {
+    const chat = chatSlug("chat_01HZX")
+    for (const path of [
+      `${chat}/generation-0-a`,
+      `${chat}/generation-1-c`,
+      `${chat}/generation-1-a.`,
+      `${chat}/spare-0a1b2c3`,
+      `${chat}/my-worktree`,
+      `chat/generation-1-a`,
+    ]) {
+      expect(path).not.toMatch(slotPath)
+    }
   })
 })

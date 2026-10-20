@@ -260,6 +260,23 @@ describe("Arena canonical path", () => {
       }
     })
 
+    test("ends a worktree path where the slot name ends", async () => {
+      const cases = [
+        [`My working directory is ${old}.`, `My working directory is ${CANONICAL}.`],
+        [JSON.stringify({ msg: `${old}\nnext line` }), JSON.stringify({ msg: `${CANONICAL}\nnext line` })],
+        [`${old}.git.`, `${CANONICAL}/.git.`],
+        [`${pool}/generation-5-bx`, `${pool}/generation-5-bx`],
+      ] as const
+      for (const [before, after] of cases) {
+        const part = tool("bash", { input: { command: "x" }, output: before })
+        expect((await canonicalizeTranscriptPaths(part, paths, "assistant")).state.output).toBe(after)
+      }
+      const text = { type: "text", text: `My working directory is ${old}.` }
+      expect((await canonicalizeTranscriptPaths(text, paths, "assistant")).text).toBe(
+        `My working directory is ${CANONICAL}.`,
+      )
+    })
+
     test("turns a contestant temp directory into $TMPDIR, in either spelling", async () => {
       const output = `${TEMP}/ses_ecc459383ffesdiw7QdDMWaRmj/shots/a.png\n/private${TEMP}/ses_ecc1bcedfffeBxHZzZdTIaJjCK/log`
       const part = tool("bash", { input: { command: "ls" }, output })

@@ -68,12 +68,14 @@ import {
   canRetryRun,
   canTie,
   earlyResolution,
+  chatSlug,
   generationName,
   INTERRUPTED_RUN_MESSAGE,
   isFinalState,
   isParkedPromotion,
   isStopAbort,
   operationID,
+  spareName,
   stoppedResolution,
   turnID as makeTurnID,
   voteResolution,
@@ -476,10 +478,6 @@ function refRoot(turn: Pick<TurnDocument, "chatID" | "turnIndex">) {
 
 function singleAgentResultRef(chatID: string, ratingID: string) {
   return `refs/battles/${chatSlug(chatID)}/single-agent/${createHash("sha256").update(ratingID).digest("hex")}`
-}
-
-function chatSlug(id: string) {
-  return createHash("sha256").update(id).digest("hex").slice(0, 16)
 }
 
 function contestantWorktreeName(id: string, generation: number, side: Side) {
@@ -7029,7 +7027,7 @@ export const layer: Layer.Layer<
 
     const forkSpareSlot = Effect.fnUntraced(function* (store: Store, turn: TurnDocument, canonical: string) {
       if (spareCreations.has(turn.chatID)) return
-      const name = `${chatSlug(turn.chatID)}/spare-${randomBytes(4).toString("hex")}`
+      const name = `${chatSlug(turn.chatID)}/${spareName(randomBytes(4).toString("hex"))}`
       const fiber = yield* ensureSpareSlot(store, turn, name).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Arena spare worktree creation failed", { chatID: turn.chatID, cause }),
