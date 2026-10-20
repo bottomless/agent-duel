@@ -734,8 +734,9 @@ runtime state.
 
 When the winner is copied into the chat (`graft`), every string the model reads again also has its
 Arena references replaced (`arenaReferences` in `arena/canonical-path.ts`): tool output of every
-tool, tool inputs and errors, reasoning, and text the engine adds to a user message. Only text the
-user typed and image bytes keep their bytes. A slot of the checkout's pool, from any turn, either
+tool, tool inputs and errors, reasoning, and text the engine adds to a user message. A subagent's
+user messages are rewritten too, since its parent wrote them with `task`. Only text the user typed
+and image bytes keep their bytes. A slot of the checkout's pool, from any turn, either
 side or a spare, becomes the checkout; its host repository, `<slot>.git`, becomes the checkout's
 `.git`; and a contestant temp directory becomes `$TMPDIR`, since it is deleted with its run. They are
 matched in every spelling a tool prints: after `file://`, under `/private`, behind `../`, and from

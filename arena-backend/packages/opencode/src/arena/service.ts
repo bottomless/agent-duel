@@ -8919,8 +8919,8 @@ export const layer: Layer.Layer<
         temp: ArenaContestant.tmpParent(),
         home: homedir(),
       }
-      const canonicalize = <T>(value: T, role?: string) =>
-        promise(() => canonicalizeTranscriptPaths(retargetSessions(value), paths, role))
+      const canonicalize = <T>(value: T, role?: string, options?: { readonly subagent?: boolean }) =>
+        promise(() => canonicalizeTranscriptPaths(retargetSessions(value), paths, role, options))
       const idMap = new Map<string, MessageID>()
       for (const message of source) {
         if (message.info.id < boundary) continue
@@ -8966,6 +8966,7 @@ export const layer: Layer.Layer<
             const next = yield* canonicalize(
               { ...part, id: PartID.ascending(), messageID: cloned.id, sessionID: copy },
               message.info.role,
+              { subagent: true },
             )
             if (next.type === "compaction" && next.tail_start_id) next.tail_start_id = childIds.get(next.tail_start_id)
             yield* sessions.updatePart(next)

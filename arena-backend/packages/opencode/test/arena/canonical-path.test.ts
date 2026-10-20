@@ -298,6 +298,14 @@ describe("Arena canonical path", () => {
       expect(await canonicalizeTranscriptPaths(image, paths, "assistant")).toEqual(image)
     })
 
+    test("retargets a subagent's prompt, which its parent wrote, and only that user text", async () => {
+      const prompt = { type: "text", text: `List the files in ${old} with the read tool.` }
+      expect((await canonicalizeTranscriptPaths(prompt, paths, "user", { subagent: true })).text).toBe(
+        `List the files in ${CANONICAL} with the read tool.`,
+      )
+      expect(await canonicalizeTranscriptPaths(prompt, paths, "user")).toBe(prompt)
+    })
+
     test("never localizes a checkout path into the worktree pool", async () => {
       const surviving = tool("read", { input: { filePath: `${old}/a.ts` } })
       const localized = await localizeTranscriptPaths(surviving, {
