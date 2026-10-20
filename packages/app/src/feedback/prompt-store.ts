@@ -22,13 +22,13 @@ interface FeedbackPromptState {
 const useFeedbackPromptStore = create<FeedbackPromptState>()(
   persist(
     (set) => ({
-      schedule: createFeedbackPromptSchedule(Math.random),
+      schedule: createFeedbackPromptSchedule(),
       hydrated: false,
       recordMessageSent: () =>
         set((state) => ({ schedule: incrementFeedbackMessageCount(state.schedule) })),
       consider: (battleId) =>
         set((state) => {
-          const transition = considerFeedbackPrompt(state.schedule, battleId, Math.random);
+          const transition = considerFeedbackPrompt(state.schedule, battleId);
           if (transition.schedule === state.schedule) return state;
           return { schedule: transition.schedule };
         }),
