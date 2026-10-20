@@ -645,6 +645,18 @@ export const zhCN: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "登录 {{host}}",
+        title: "需要登录",
+        description:
+          "Agent Duel 无法在未登录的情况下从 {{host}} 获取更新。请通过 Git 凭据提示登录。",
+        signIn: "登录",
+        signingIn: "正在登录...",
+        signedIn: "已登录 {{host}}",
+        loginNotKept:
+          "已登录，但 Git 没有保存登录信息，下次获取时还需要登录。要保存它，请设置 Git 凭据助手，或将 origin 改为 SSH。",
+        failed: "登录失败：{{reason}}",
+      },
       actions: {
         moreOptions: "更多选项",
         moreActions: "更多操作",

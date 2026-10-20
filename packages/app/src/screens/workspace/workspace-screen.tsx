@@ -2659,12 +2659,13 @@ function WorkspaceScreenContent({
             hideLabels
           />
         ) : null}
-        {!headerActionsCollapsed && arenaSnapshot && chatAgentId ? (
+        {!headerActionsCollapsed && arenaSnapshot && chatAgentId && workspaceDirectory ? (
           <ArenaEnvironmentButton
             key={chatAgentId}
             serverId={normalizedServerId}
             workspaceId={normalizedWorkspaceId}
             agentId={chatAgentId}
+            cwd={workspaceDirectory}
             snapshot={arenaSnapshot}
             isFocused={isRouteFocused}
             isWorktree={isWorktree}

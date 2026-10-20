@@ -62,6 +62,7 @@ import type {
   CheckoutPullResponse,
   CheckoutPushResponse,
   CheckoutRefreshResponse,
+  CheckoutRemoteSignInResponse,
   CheckoutPrCreateResponse,
   CheckoutPrMergeResponse,
   CheckoutPrMergeMethod,
@@ -433,6 +434,7 @@ type CheckoutMergeFromBasePayload = CheckoutMergeFromBaseResponse["payload"];
 type CheckoutPullPayload = CheckoutPullResponse["payload"];
 type CheckoutPushPayload = CheckoutPushResponse["payload"];
 type CheckoutRefreshPayload = CheckoutRefreshResponse["payload"];
+type CheckoutRemoteSignInPayload = CheckoutRemoteSignInResponse["payload"];
 type CheckoutPrCreatePayload = CheckoutPrCreateResponse["payload"];
 type CheckoutPrMergePayload = CheckoutPrMergeResponse["payload"];
 type CheckoutForgeSetAutoMergePayload = CheckoutForgeSetAutoMergeResponse["payload"];
@@ -4197,6 +4199,21 @@ export class DaemonClient {
         cwd,
       },
       responseType: "checkout.refresh.response",
+    });
+  }
+
+  /** Waits while the user answers their credential prompt, a little past the daemon's own limit. */
+  async checkoutRemoteSignIn(
+    cwd: string,
+    requestId?: string,
+  ): Promise<CheckoutRemoteSignInPayload> {
+    return this.sendNamespacedCorrelatedSessionRequest<"checkout.remote.sign_in.response">({
+      requestId,
+      message: {
+        type: "checkout.remote.sign_in.request",
+        cwd,
+      },
+      timeout: 330_000,
     });
   }
 

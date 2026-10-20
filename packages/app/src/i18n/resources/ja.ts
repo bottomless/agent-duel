@@ -656,6 +656,18 @@ export const ja: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "{{host}} にサインイン",
+        title: "サインインが必要です",
+        description:
+          "Agent Duel はログインなしでは {{host}} から更新を取得できません。Git の認証情報プロンプトでサインインしてください。",
+        signIn: "サインイン",
+        signingIn: "サインイン中...",
+        signedIn: "{{host}} にサインインしました",
+        loginNotKept:
+          "サインインしましたが、Git がログインを保存しなかったため、次回の取得で再度必要になります。保存するには Git の認証情報ヘルパーを設定するか、origin を SSH に切り替えてください。",
+        failed: "サインインに失敗しました: {{reason}}",
+      },
       actions: {
         moreOptions: "その他のオプション",
         moreActions: "その他のアクション",

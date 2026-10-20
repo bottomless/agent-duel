@@ -658,6 +658,18 @@ export const ru: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "Войти в {{host}}",
+        title: "Требуется вход",
+        description:
+          "Agent Duel не может получать обновления с {{host}} без входа. Войдите через запрос учётных данных Git.",
+        signIn: "Войти",
+        signingIn: "Вход...",
+        signedIn: "Выполнен вход в {{host}}",
+        loginNotKept:
+          "Вход выполнен, но Git не сохранил учётные данные, поэтому при следующем получении они понадобятся снова. Чтобы сохранить их, настройте помощник учётных данных Git или переключите origin на SSH.",
+        failed: "Не удалось войти: {{reason}}",
+      },
       actions: {
         moreOptions: "Больше возможностей",
         moreActions: "Дополнительные действия",

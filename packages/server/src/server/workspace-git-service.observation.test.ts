@@ -522,6 +522,7 @@ describe("WorkspaceGitService checkout observation", () => {
         return {
           changes: [{ kind: "moved" as const, ref: "origin/main", beforeOid: "a", afterOid: "b" }],
           error: null,
+          signInRequired: false,
         };
       }),
     });
@@ -585,6 +586,7 @@ describe("WorkspaceGitService checkout observation", () => {
           nonRemoteRefsChanged: false,
           remoteRefs: new Set(["origin/main", "origin/unrelated"]),
           error: null,
+          signInRequired: false,
         };
       }),
     });
@@ -634,6 +636,7 @@ describe("WorkspaceGitService checkout observation", () => {
           nonRemoteRefsChanged: false,
           remoteRefs: new Set(["origin/main"]),
           error: null,
+          signInRequired: false,
         };
       });
       const service = createService(watcher, {
@@ -688,6 +691,7 @@ describe("WorkspaceGitService checkout observation", () => {
           nonRemoteRefsChanged: false,
           remoteRefs: new Set(["origin/main"]),
           error: null,
+          signInRequired: false,
         };
       }),
     });
@@ -741,6 +745,7 @@ describe("WorkspaceGitService checkout observation", () => {
           nonRemoteRefsChanged: false,
           remoteRefs: new Set(["origin/main", "origin/load/00001"]),
           error: null,
+          signInRequired: false,
         };
       }),
     });
@@ -813,6 +818,7 @@ describe("WorkspaceGitService checkout observation", () => {
       runGitFetch: vi.fn(async () => ({
         changes: [{ kind: "moved" as const, ref: "origin/main", beforeOid: "a", afterOid: "b" }],
         error: null,
+        signInRequired: false,
       })),
     });
     const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
@@ -867,7 +873,7 @@ describe("WorkspaceGitService checkout observation", () => {
         observer?.onRefSnapshot("after");
         fetchSnapshotRead.resolve();
         await releaseFetch.promise;
-        return { changes: [], nonRemoteRefsChanged: false, error: null };
+        return { changes: [], nonRemoteRefsChanged: false, error: null, signInRequired: false };
       }),
     });
     const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
@@ -1316,7 +1322,7 @@ describe("WorkspaceGitService checkout observation", () => {
     const fetch = createDeferred<void>();
     const runGitFetch = vi.fn(async () => {
       await fetch.promise;
-      return { changes: [], error: null };
+      return { changes: [], error: null, signInRequired: false };
     });
     const commonGitDir = path.resolve("/tmp/paseo-shared-repository.git");
     const worktrees = Array.from({ length: 10 }, (_, index) =>

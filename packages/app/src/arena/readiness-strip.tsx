@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
-import { AlertTriangle, ChevronDown, GitBranch } from "lucide-react-native";
+import { AlertTriangle, ChevronDown, GitBranch, TriangleAlert } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type {
   ArenaReviewAnswer,
@@ -44,13 +45,16 @@ import {
 import { ServiceStateIcon, StatusDot } from "./service-indicators";
 import { ArenaWorktreeMenuButton } from "./worktree-menu";
 import { WrappedPath } from "./wrapped-path";
+import { RemoteSignInSection, useRemoteSignIn } from "@/git/remote-sign-in";
 
 const ThemedAlertTriangle = withUnistyles(AlertTriangle);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedGitBranch = withUnistyles(GitBranch);
+const ThemedTriangleAlert = withUnistyles(TriangleAlert);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const dangerColorMapping = (theme: Theme) => ({ color: theme.colors.statusDanger });
+const warningColorMapping = (theme: Theme) => ({ color: theme.colors.statusWarning });
 
 function PieceIcon({ tone }: { tone: ReadinessPiece["tone"] }) {
   if (tone === "busy") return <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />;
@@ -407,6 +411,7 @@ export function ArenaEnvironmentButton({
   serverId,
   workspaceId,
   agentId,
+  cwd,
   snapshot,
   isFocused,
   isWorktree,
@@ -414,26 +419,39 @@ export function ArenaEnvironmentButton({
   serverId: string;
   workspaceId: string;
   agentId: string;
+  cwd: string;
   snapshot: ArenaSnapshot;
   isFocused: boolean;
   isWorktree: boolean;
 }) {
+  const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
   const [inspecting, setInspecting] = useState(false);
   const open = inspecting && isFocused;
   const accessibilityState = useMemo(() => ({ expanded: open }), [open]);
   const environmentLabel = arenaEnvironmentLabel(snapshot, isWorktree);
+  // A remote that wants a login is the branch's problem, so the branch control carries it.
+  const remote = useRemoteSignIn({ serverId, cwd });
+  const accessibilityLabel = remote.required
+    ? t("workspace.git.remoteSignIn.trigger", { host: remote.host })
+    : `Inspect environment for ${environmentLabel}`;
   return (
     <DropdownMenu open={open} onOpenChange={setInspecting}>
       <DropdownMenuTrigger
         style={environmentTriggerStyle}
         accessibilityRole="button"
         accessibilityState={accessibilityState}
-        accessibilityLabel={`Inspect environment for ${environmentLabel}`}
+        accessibilityLabel={accessibilityLabel}
         testID="arena-inspect-environment-toggle"
       >
         <View style={styles.triggerLabel}>
-          <ThemedGitBranch size={14} uniProps={mutedColorMapping} />
+          {remote.required ? (
+            <View testID="arena-readiness-sign-in-required">
+              <ThemedTriangleAlert size={14} uniProps={warningColorMapping} />
+            </View>
+          ) : (
+            <ThemedGitBranch size={14} uniProps={mutedColorMapping} />
+          )}
           <Text style={styles.branch} numberOfLines={1} testID="arena-readiness-branch">
             {environmentLabel}
           </Text>
@@ -449,6 +467,7 @@ export function ArenaEnvironmentButton({
         fullWidth={isCompact}
         testID="arena-current-environment"
       >
+        {remote.required ? <RemoteSignInSection remote={remote} /> : null}
         <ArenaEnvironmentDetails
           serverId={serverId}
           workspaceId={workspaceId}

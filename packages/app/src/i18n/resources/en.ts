@@ -648,6 +648,18 @@ export const en = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "Sign in to {{host}}",
+        title: "Sign-in needed",
+        description:
+          "Agent Duel can't fetch updates from {{host}} without a login. Sign in through your Git credential prompt.",
+        signIn: "Sign in",
+        signingIn: "Signing in...",
+        signedIn: "Signed in to {{host}}",
+        loginNotKept:
+          "Signed in, but Git didn't keep the login, so the next fetch needs it again. To keep it, set up a Git credential helper or switch origin to SSH.",
+        failed: "Sign-in failed: {{reason}}",
+      },
       actions: {
         moreOptions: "More options",
         moreActions: "More actions",

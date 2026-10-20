@@ -8,6 +8,7 @@ import type {
   CheckoutCommitsListRequest,
   CheckoutCommitFileDiffRequest,
   CheckoutRefreshRequest,
+  CheckoutRemoteSignInRequest,
   CheckoutRenameBranchRequest,
   CheckoutCreateBranchRequest,
   CheckoutSuggestBranchNameRequest,
@@ -24,6 +25,7 @@ import type {
   CheckoutDiffSubscriptionRequest,
 } from "../../checkout-diff-manager.js";
 import { toCheckoutError } from "../../checkout-git-utils.js";
+import { gitFailureReason } from "../../workspace-git-fetch.js";
 import {
   buildCheckoutPrStatusPayloadFromSnapshot,
   buildCheckoutStatusPayloadFromSnapshot,
@@ -271,6 +273,7 @@ export class CheckoutSession {
           hasRemote: false,
           remoteUrl: null,
           isPaseoOwnedWorktree: false,
+          remoteSignInRequired: false,
           error: toCheckoutError(error),
           requestId,
         },
@@ -490,6 +493,44 @@ export class CheckoutSession {
         payload: {
           cwd,
           success: false,
+          error: toCheckoutError(error),
+          requestId,
+        },
+      });
+    }
+  }
+
+  async handleRemoteSignInRequest(msg: CheckoutRemoteSignInRequest): Promise<void> {
+    const { cwd, requestId } = msg;
+    const resolvedCwd = expandTilde(cwd);
+    try {
+      const result = await this.workspaceGitService.signInToRemote(resolvedCwd);
+      if (!result.ok) {
+        this.host.emit({
+          type: "checkout.remote.sign_in.response",
+          payload: {
+            cwd,
+            success: false,
+            loginKept: false,
+            // Git's last line says why ("Authentication failed for ..."); the rest is the command.
+            error: toCheckoutError(new Error(gitFailureReason(result.error))),
+            requestId,
+          },
+        });
+        return;
+      }
+      this.checkoutDiffManager.scheduleRefreshForCwd(resolvedCwd);
+      this.host.emit({
+        type: "checkout.remote.sign_in.response",
+        payload: { cwd, success: true, loginKept: result.loginKept, error: null, requestId },
+      });
+    } catch (error) {
+      this.host.emit({
+        type: "checkout.remote.sign_in.response",
+        payload: {
+          cwd,
+          success: false,
+          loginKept: false,
           error: toCheckoutError(error),
           requestId,
         },

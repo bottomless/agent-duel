@@ -71,6 +71,8 @@ import { checkoutLiteFromGitSnapshot } from "./workspace-registry-model.js";
 
 const WORKSPACE_GIT_WATCH_DEBOUNCE_MS = 1_000;
 const BACKGROUND_GIT_FETCH_INTERVAL_MS = 180_000;
+// Long enough for the user to read the credential dialog and type a login into it.
+const REMOTE_SIGN_IN_TIMEOUT_MS = 300_000;
 const FETCH_METADATA_ECHO_TTL_MS = 5_000;
 export const WORKSPACE_GIT_SELF_HEAL_INTERVAL_MS = 60_000;
 const FORGE_PR_STATUS_POLL_FAST_INTERVAL_MS = 20_000;
@@ -167,7 +169,14 @@ export interface WorkspaceGitRuntimeSnapshot {
     } | null;
     error: { message: string } | null;
   };
+  remote: {
+    /** The background fetch failed because origin wants a login it may not ask for. */
+    signInRequired: boolean;
+  };
 }
+
+/** A sign-in that worked, and whether Git kept the login for the next background fetch. */
+export type RemoteSignInResult = { ok: true; loginKept: boolean } | { ok: false; error: unknown };
 
 export interface WorkspaceGitService {
   registerWorkspace(
@@ -213,6 +222,8 @@ export interface WorkspaceGitService {
   resolveDefaultBranch(cwdOrRepoRoot: string, options?: WorkspaceGitReadOptions): Promise<string>;
   resolveRepoRemoteUrl(cwd: string, options?: WorkspaceGitReadOptions): Promise<string | null>;
   refresh(cwd: string, options?: { priority?: "normal" | "high" }): Promise<void>;
+  /** Fetches origin once with the user's credential prompt allowed, then checks the login held. */
+  signInToRemote(cwd: string): Promise<RemoteSignInResult>;
   requestWorkingTreeWatch(
     cwd: string,
     onChange: () => void,
@@ -420,12 +431,15 @@ interface RepoGitTarget {
   recovery: WatchRecoveryState;
   intervalId: NodeJS.Timeout | null;
   fetchInFlight: boolean;
+  /** The background fetch running now, for a caller that needs its outcome. */
+  pendingFetch: Promise<void> | null;
   bufferedFetchMetadataEvents: FileChange[];
   recentFetchRemoteRefChanges: Map<
     string,
     { change: WorkspaceGitRemoteRefChange; expiresAtMs: number }
   >;
   knownRemoteRefs: Set<string> | null;
+  signInRequired: boolean;
   closed: boolean;
 }
 
@@ -905,6 +919,30 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       movedRemoteRefs: new Set(),
     });
     this.scheduleWorkspaceObservationSetup(target);
+  }
+
+  async signInToRemote(cwd: string): Promise<RemoteSignInResult> {
+    this.assertNotDisposed();
+    cwd = resolve(cwd);
+    try {
+      // The user asked for this one, so Git may show them its credential prompt.
+      await this.deps.runGitCommand(["fetch", "origin", "--prune"], {
+        cwd,
+        timeout: REMOTE_SIGN_IN_TIMEOUT_MS,
+      });
+    } catch (error) {
+      return { ok: false, error };
+    }
+    const repoGitRoot = this.workspaceTargets.get(cwd)?.repoGitRoot;
+    const repoTarget = repoGitRoot ? this.repoTargets.get(repoGitRoot) : undefined;
+    if (!repoTarget) {
+      return { ok: true, loginKept: true };
+    }
+    // The background fetch has only what Git stored. A fetch already running began before the
+    // login, so the check waits for it and runs its own.
+    await repoTarget.pendingFetch;
+    await this.runRepoFetch(repoTarget);
+    return { ok: true, loginKept: !repoTarget.signInRequired };
   }
 
   async requestWorkingTreeWatch(
@@ -1776,9 +1814,11 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       recovery: { attemptCount: 0, timer: null },
       intervalId: null,
       fetchInFlight: false,
+      pendingFetch: null,
       bufferedFetchMetadataEvents: [],
       recentFetchRemoteRefChanges: new Map(),
       knownRemoteRefs: null,
+      signInRequired: false,
       closed: false,
     };
     this.repoTargets.set(repoGitRoot, repoTarget);
@@ -3005,10 +3045,12 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       return target.latestSnapshot ?? buildNotGitSnapshot(target.cwd);
     }
 
+    const repoTarget = target.repoGitRoot ? this.repoTargets.get(target.repoGitRoot) : undefined;
     return {
       cwd: target.cwd,
       git: target.latestGit,
       forge: target.latestForge ?? buildForgeUnavailableSnapshot(),
+      remote: { signInRequired: repoTarget?.signInRequired ?? false },
     };
   }
 
@@ -3085,7 +3127,18 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     }
   }
 
-  private async runRepoFetch(target: RepoGitTarget): Promise<void> {
+  private runRepoFetch(target: RepoGitTarget): Promise<void> {
+    if (target.pendingFetch) {
+      return target.pendingFetch;
+    }
+    const pending = this.fetchRepo(target).finally(() => {
+      target.pendingFetch = null;
+    });
+    target.pendingFetch = pending;
+    return pending;
+  }
+
+  private async fetchRepo(target: RepoGitTarget): Promise<void> {
     if (target.fetchInFlight) {
       return;
     }
@@ -3116,6 +3169,11 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
       target.fetchInFlight = false;
     }
     this.flushFetchMetadataEvents(target, eventsBeforeFetchSnapshot);
+    // A refused login changes no refs, so nothing below would refresh the workspaces that show it.
+    if (result && result.signInRequired !== target.signInRequired) {
+      target.signInRequired = result.signInRequired;
+      this.scheduleRepoMetadataRefresh(target, "repo-fetch-sign-in", false);
+    }
     if (!result || result.changes === null) {
       target.recentFetchRemoteRefChanges.clear();
       target.knownRemoteRefs = null;
@@ -3447,6 +3505,7 @@ function buildNotGitSnapshot(cwd: string): WorkspaceGitRuntimeSnapshot {
       diffStat: null,
     },
     forge: buildForgeUnavailableSnapshot(),
+    remote: { signInRequired: false },
   };
 }
 

@@ -1960,6 +1960,14 @@ export const CheckoutRefreshRequestSchema = z.object({
   requestId: z.string(),
 });
 
+// Fetches origin once with the user's own credential prompt allowed, after the background fetch
+// reported that the remote wants a login it may not ask for (`remoteSignInRequired`).
+export const CheckoutRemoteSignInRequestSchema = z.object({
+  type: z.literal("checkout.remote.sign_in.request"),
+  cwd: z.string(),
+  requestId: z.string(),
+});
+
 export const CheckoutDiscardChangesRequestSchema = z.object({
   type: z.literal("checkout.discard_changes.request"),
   cwd: z.string(),
@@ -2907,6 +2915,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   CheckoutPullRequestSchema,
   CheckoutPushRequestSchema,
   CheckoutRefreshRequestSchema,
+  CheckoutRemoteSignInRequestSchema,
   CheckoutDiscardChangesRequestSchema,
   CheckoutPrCreateRequestSchema,
   CheckoutPrMergeRequestSchema,
@@ -4442,6 +4451,9 @@ const CheckoutStatusCommonSchema = z.object({
   // upstream branch name is not necessarily currentBranch, so composing one is wrong.
   // aheadOfOrigin/behindOfOrigin are measured against exactly this ref.
   upstreamRef: z.string().nullable().optional(),
+  // The background fetch failed because origin wants a login it may not ask for. The app offers
+  // a sign-in that allows the user's credential prompt (`checkout.remote.sign_in.request`).
+  remoteSignInRequired: z.boolean(),
 });
 
 const CheckoutStatusNotGitSchema = CheckoutStatusCommonSchema.extend({
@@ -4707,6 +4719,19 @@ export const CheckoutRefreshResponseSchema = z.object({
   payload: z.object({
     cwd: z.string(),
     success: z.boolean(),
+    error: CheckoutErrorSchema.nullable(),
+    requestId: z.string(),
+  }),
+});
+
+export const CheckoutRemoteSignInResponseSchema = z.object({
+  type: z.literal("checkout.remote.sign_in.response"),
+  payload: z.object({
+    cwd: z.string(),
+    success: z.boolean(),
+    // False when the fetch signed in but Git did not keep the login, so the next background
+    // fetch needs it again: there is no credential helper to store it.
+    loginKept: z.boolean(),
     error: CheckoutErrorSchema.nullable(),
     requestId: z.string(),
   }),
@@ -5827,6 +5852,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   CheckoutPullResponseSchema,
   CheckoutPushResponseSchema,
   CheckoutRefreshResponseSchema,
+  CheckoutRemoteSignInResponseSchema,
   CheckoutDiscardChangesResponseSchema,
   CheckoutPrCreateResponseSchema,
   CheckoutPrMergeResponseSchema,
@@ -6162,6 +6188,8 @@ export type CheckoutPushRequest = z.infer<typeof CheckoutPushRequestSchema>;
 export type CheckoutPushResponse = z.infer<typeof CheckoutPushResponseSchema>;
 export type CheckoutRefreshRequest = z.infer<typeof CheckoutRefreshRequestSchema>;
 export type CheckoutRefreshResponse = z.infer<typeof CheckoutRefreshResponseSchema>;
+export type CheckoutRemoteSignInRequest = z.infer<typeof CheckoutRemoteSignInRequestSchema>;
+export type CheckoutRemoteSignInResponse = z.infer<typeof CheckoutRemoteSignInResponseSchema>;
 export type CheckoutDiscardChangesRequest = z.infer<typeof CheckoutDiscardChangesRequestSchema>;
 export type CheckoutDiscardChangesResponse = z.infer<typeof CheckoutDiscardChangesResponseSchema>;
 export type CheckoutCommitFile = z.infer<typeof CheckoutCommitFileSchema>;

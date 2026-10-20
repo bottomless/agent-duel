@@ -217,6 +217,7 @@ function createFallbackWorkspaceGitSnapshot(cwd: string): WorkspaceGitRuntimeSna
       pullRequest: null,
       error: null,
     },
+    remote: { signInRequired: false },
   };
 }
 
@@ -254,6 +255,7 @@ function createFallbackWorkspaceGitService(): WorkspaceGitService {
     resolveDefaultBranch: async () => "main",
     resolveRepoRemoteUrl: async () => null,
     refresh: async () => {},
+    signInToRemote: async () => ({ ok: false, error: new Error("Git is unavailable") }),
     requestWorkingTreeWatch: async () => ({
       repoRoot: null,
       unsubscribe: () => {},

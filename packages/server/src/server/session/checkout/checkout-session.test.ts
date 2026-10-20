@@ -208,10 +208,82 @@ function createGitSnapshot(
       diffStat: null,
     },
     forge: { featuresEnabled: false, pullRequest: null, error: null },
+    remote: { signInRequired: false },
   };
 }
 
 describe("CheckoutSession", () => {
+  describe("remote sign-in", () => {
+    const request = {
+      type: "checkout.remote.sign_in.request" as const,
+      cwd: "/repo",
+      requestId: "r1",
+    };
+
+    it("reports a sign-in Git kept for the next background fetch", async () => {
+      const { checkout, emitted } = makeCheckoutSession({
+        git: { signInToRemote: async () => ({ ok: true, loginKept: true }) },
+      });
+
+      await checkout.handleRemoteSignInRequest(request);
+
+      expect(emitted).toEqual([
+        {
+          type: "checkout.remote.sign_in.response",
+          payload: { cwd: "/repo", success: true, loginKept: true, error: null, requestId: "r1" },
+        },
+      ]);
+    });
+
+    it("reports a sign-in Git did not keep", async () => {
+      const { checkout, emitted } = makeCheckoutSession({
+        git: { signInToRemote: async () => ({ ok: true, loginKept: false }) },
+      });
+
+      await checkout.handleRemoteSignInRequest(request);
+
+      expect(emitted).toEqual([
+        {
+          type: "checkout.remote.sign_in.response",
+          payload: { cwd: "/repo", success: true, loginKept: false, error: null, requestId: "r1" },
+        },
+      ]);
+    });
+
+    it("reports Git's reason when the sign-in is refused", async () => {
+      const { checkout, emitted } = makeCheckoutSession({
+        git: {
+          signInToRemote: async () => ({
+            ok: false,
+            error: new Error(
+              "Git command failed: git fetch origin --prune (exit code: 128, signal: none)\n" +
+                "remote: Invalid username or password.\n" +
+                "fatal: Authentication failed for 'https://example.com/private.git/'",
+            ),
+          }),
+        },
+      });
+
+      await checkout.handleRemoteSignInRequest(request);
+
+      expect(emitted).toEqual([
+        {
+          type: "checkout.remote.sign_in.response",
+          payload: {
+            cwd: "/repo",
+            success: false,
+            loginKept: false,
+            error: {
+              code: "UNKNOWN",
+              message: "Authentication failed for 'https://example.com/private.git/'",
+            },
+            requestId: "r1",
+          },
+        },
+      ]);
+    });
+  });
+
   describe("status", () => {
     it("emits a checkout status response built from the git snapshot", async () => {
       const { checkout, emitted } = makeCheckoutSession({

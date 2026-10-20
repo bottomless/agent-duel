@@ -39,6 +39,7 @@ export function buildCheckoutStatusPayloadFromSnapshot({
       hasRemote: false,
       remoteUrl: null,
       isPaseoOwnedWorktree: false,
+      remoteSignInRequired: false,
       error: null,
       requestId,
     };
@@ -68,6 +69,7 @@ export function buildCheckoutStatusPayloadFromSnapshot({
       hasRemote: snapshot.git.hasRemote,
       remoteUrl: snapshot.git.remoteUrl,
       isPaseoOwnedWorktree: true,
+      remoteSignInRequired: snapshot.remote.signInRequired,
       error: null,
       requestId,
     };
@@ -88,6 +90,7 @@ export function buildCheckoutStatusPayloadFromSnapshot({
     hasRemote: snapshot.git.hasRemote,
     remoteUrl: snapshot.git.remoteUrl,
     isPaseoOwnedWorktree: false,
+    remoteSignInRequired: snapshot.remote.signInRequired,
     error: null,
     requestId,
   };

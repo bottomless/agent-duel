@@ -2313,6 +2313,8 @@ export class Session {
         return this.checkoutSession.handleCheckoutPushRequest(msg);
       case "checkout.refresh.request":
         return this.checkoutSession.handleRefreshRequest(msg);
+      case "checkout.remote.sign_in.request":
+        return this.checkoutSession.handleRemoteSignInRequest(msg);
       case "checkout.discard_changes.request":
         return this.checkoutSession.handleCheckoutDiscardChangesRequest(msg);
       case "checkout_pr_create_request":
