@@ -283,6 +283,14 @@ describe("ArenaMetrics blinding leak", () => {
     expect(mentionedAlias("I'm Claude, and I added the endpoint.", "x-ai/grok-4.6")).toBeUndefined()
   })
 
+  test.each(["MiMo-V2.6 Flash", "xiaomi/mimo-v2.6-flash"])("recognizes MiMo and Xiaomi for %s", (model) => {
+    expect(mentionedAlias("I'm MiMo, and I added the endpoint.", model)).toBe("MiMo")
+    expect(mentionedAlias("Developed by XIAOMI.", model)).toBe("Xiaomi")
+    expect(mentionedAlias("Updated the mimosa fixture.", model)).toBeUndefined()
+    expect(mentionedAlias("Added the endpoint.", model)).toBeUndefined()
+    expect(mentionedAlias("I'm MiMo, developed by Xiaomi.", "deepseek/deepseek-v4.1-flash-1017")).toBeUndefined()
+  })
+
   test("does not match a vendor buried inside another word", () => {
     // "encrypt" contains gpt, "grokking" contains grok, "metagame" contains meta.
     expect(mentionedAlias("The encryption helper was updated.", "openai/gpt-5")).toBeUndefined()
@@ -416,6 +424,35 @@ function battleFor(vote: "a" | "b" | "tie") {
 }
 
 describe("ArenaMetrics outcome", () => {
+  test("flags MiMo identity mentions in resolved battle metrics", () => {
+    const turn = turnFor("a")
+    turn.placement.a = { ...assignment, model: "MiMo-V2.6 Flash" }
+    turn.placement.b = { ...assignment, model: "DeepSeek V4.1 Flash 1017" }
+    const transcript = [
+      {
+        messages: [
+          {
+            info: { id: "reply", role: "assistant" },
+            parts: [{ type: "text", text: "I'm MiMo, developed by Xiaomi." }],
+          },
+        ],
+      },
+    ]
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn,
+      runs: [runFor("a"), runFor("b")],
+      generations: [],
+      reviewEvents: [],
+      transcripts: { a: transcript, b: transcript },
+      computedAt: new Date(0),
+    })
+    expect(battle.sides.a?.mentionsOwnName).toBe(true)
+    expect(battle.sides.a?.matchedAlias).toBe("MiMo")
+    expect(battle.sides.b?.mentionsOwnName).toBe(false)
+    expect(battle.sides.b).not.toHaveProperty("matchedAlias")
+  })
+
   test("nobody wins a tie, even though A is what gets applied", () => {
     const battle = battleFor("tie")
     expect(battle.sides.a?.won).toBe(false)

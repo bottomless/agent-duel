@@ -44,6 +44,7 @@ const vendors: readonly VendorAliases[] = [
   { slug: /meta|llama/i, aliases: ["Llama", "Meta"] },
   { slug: /mistral/i, aliases: ["Mistral"] },
   { slug: /deepseek/i, aliases: ["DeepSeek"] },
+  { slug: /xiaomi|mi[\s-]?mo/i, aliases: ["MiMo", "Xiaomi"] },
   { slug: /moonshot|kimi/i, aliases: ["Kimi", "Moonshot"] },
   { slug: /minimax/i, aliases: ["MiniMax"] },
 ]
