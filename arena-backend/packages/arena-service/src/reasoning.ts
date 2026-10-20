@@ -4,6 +4,9 @@ export const REDACTED_THINKING = "[Thinking redacted]"
 const prefix = "arena_reasoning_v1."
 const markerID = "arena_redacted_thinking"
 const fields = new Set(["reasoning", "reasoning_content", "reasoning_details"])
+// Count incoming serialized bytes, including metadata, rather than retaining an entire step.
+// A single upstream chunk can exceed this limit; it is sealed immediately.
+const batchBytes = 64 * 1024
 
 type Binding = { readonly userId: string; readonly scopeID: string; readonly assignmentID: string }
 type Packet = { kind: "chat" | "responses"; value: Record<string, unknown>; stream: boolean; rendered: string }
@@ -42,6 +45,7 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
   const aad = Buffer.from(JSON.stringify([binding.userId, binding.scopeID, binding.assignmentID]))
   const marked = new Set<number>()
   const textStarted = new Set<number>()
+  const buffered = new Map<number, { value: Record<string, unknown>; rendered: string; bytes: number }>()
 
   function id(value: string) {
     return "rs_arena_" + createHmac("sha256", key).update(aad).update(value).digest("hex").slice(0, 32)
@@ -78,27 +82,76 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     }
   }
 
-  function redactMessage(message: Record<string, unknown>, stream: boolean, choice: number) {
+  function redactMessage(message: Record<string, unknown>, stream: boolean, choice: number, finished = false) {
     const afterText = stream && textStarted.has(choice)
     if (stream && typeof message.content === "string" && message.content.length > 0) textStarted.add(choice)
     const reasoning = Object.fromEntries(
       [...fields].filter((field) => message[field] !== undefined).map((field) => [field, message[field]]),
     )
-    if (Object.keys(reasoning).length === 0) return message
     const safe = Object.fromEntries(Object.entries(message).filter(([field]) => !fields.has(field)))
     const hasReasoning = Object.values(reasoning).some((value) =>
       Array.isArray(value) ? value.length > 0 : typeof value === "string" && value.length > 0,
     )
-    if (!hasReasoning) return safe
     const rendered = afterText ? "" : renderedReasoning(reasoning)
-    const token = seal({ kind: "chat", value: reasoning, stream, rendered })
+    let packet: Packet | undefined
+    if (stream) {
+      if (hasReasoning) {
+        const pending = buffered.get(choice) ?? { value: {}, rendered: "", bytes: 0 }
+        for (const field of ["reasoning", "reasoning_content"]) {
+          if (typeof reasoning[field] === "string")
+            pending.value[field] = String(pending.value[field] ?? "") + reasoning[field]
+        }
+        if (Array.isArray(reasoning.reasoning_details)) {
+          const details = Array.isArray(pending.value.reasoning_details) ? pending.value.reasoning_details : []
+          mergeDetails(details, reasoning.reasoning_details, true)
+          pending.value.reasoning_details = details
+        }
+        pending.rendered += rendered
+        pending.bytes += Buffer.byteLength(JSON.stringify(reasoning))
+        buffered.set(choice, pending)
+      }
+      const pending = buffered.get(choice)
+      if (
+        pending &&
+        (finished ||
+          pending.bytes >= batchBytes ||
+          (typeof message.content === "string" && message.content.length > 0) ||
+          (Array.isArray(message.tool_calls) && message.tool_calls.length > 0))
+      ) {
+        packet = { kind: "chat", value: pending.value, rendered: pending.rendered, stream: true }
+        buffered.delete(choice)
+      }
+    } else if (hasReasoning) packet = { kind: "chat", value: reasoning, stream: false, rendered }
+    if (!hasReasoning && !packet) return safe
     const details: Record<string, unknown>[] = []
-    if (!stream || !marked.has(choice)) {
-      details.push({ type: "reasoning.text", text: REDACTED_THINKING, format: "unknown", id: markerID })
+    // Empty markers keep reasoning progress flowing without repeating visible text or
+    // making one encrypted continuation envelope for every provider token.
+    if (hasReasoning) {
+      details.push({
+        type: "reasoning.text",
+        text: !stream || !marked.has(choice) ? REDACTED_THINKING : "",
+        format: "unknown",
+        id: markerID,
+      })
       marked.add(choice)
     }
-    details.push({ type: "reasoning.encrypted", data: token, format: "unknown" })
+    if (packet) details.push({ type: "reasoning.encrypted", data: seal(packet), format: "unknown" })
     return { ...safe, reasoning: REDACTED_THINKING, reasoning_details: details }
+  }
+
+  function flush() {
+    const choices = [...buffered.keys()].map((index) => ({
+      index,
+      delta: redactMessage({}, true, index, true),
+      finish_reason: null,
+    }))
+    return choices.length ? { choices } : undefined
+  }
+
+  function clear() {
+    buffered.clear()
+    marked.clear()
+    textStarted.clear()
   }
 
   function redactItem(item: Record<string, unknown>, stream: boolean) {
@@ -130,7 +183,16 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
         const index = typeof choice.index === "number" ? choice.index : 0
         return {
           ...choice,
-          ...(record(choice.delta) ? { delta: redactMessage(choice.delta, stream, index) } : {}),
+          ...(record(choice.delta) || (stream && choice.finish_reason != null)
+            ? {
+                delta: redactMessage(
+                  record(choice.delta) ? choice.delta : {},
+                  stream,
+                  index,
+                  choice.finish_reason != null,
+                ),
+              }
+            : {}),
           ...(record(choice.message) ? { message: redactMessage(choice.message, false, index) } : {}),
         }
       })
@@ -211,5 +273,5 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     return restored
   }
 
-  return { redact, restore }
+  return { redact, restore, flush, clear }
 }

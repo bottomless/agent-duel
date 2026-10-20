@@ -127,12 +127,18 @@ function sanitizeLine(
 ) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
-  if (!raw || raw === "[DONE]") return line
+  if (!raw) return line
   try {
+    if (raw === "[DONE]") {
+      const tail = reasoning.flush()
+      reasoning.clear()
+      return tail ? `data: ${JSON.stringify({ id: generationID, ...tail })}\n\n${line}` : line
+    }
     const value = JSON.parse(raw) as unknown
     observe?.(value)
     return `data: ${JSON.stringify(reasoning.redact(sanitizePayload(value, generationID, true), true))}`
   } catch {
+    reasoning.clear()
     return `data: ${JSON.stringify({
       error: { message: "Arena contestant stream failed", type: "arena_stream_error" },
     })}`
@@ -163,6 +169,10 @@ function sanitizeStream(
             pending += decoder.decode()
             if (pending)
               controller.enqueue(encoder.encode(sanitizeLine(pending, generationID, reasoning, metrics.observe)))
+            const tail = reasoning.flush()
+            if (tail)
+              controller.enqueue(encoder.encode(`\n\ndata: ${JSON.stringify({ id: generationID, ...tail })}\n\n`))
+            reasoning.clear()
             await complete(metrics.value())
             controller.close()
             return
@@ -176,6 +186,7 @@ function sanitizeStream(
           return
         }
       } catch {
+        reasoning.clear()
         if (cancelled) return
         controller.enqueue(
           encoder.encode(
@@ -189,6 +200,7 @@ function sanitizeStream(
     },
     cancel(reason) {
       cancelled = true
+      reasoning.clear()
       return reader.cancel(reason)
     },
   })

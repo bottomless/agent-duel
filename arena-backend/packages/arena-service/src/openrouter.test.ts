@@ -87,6 +87,60 @@ function fakeDb(input: {
 }
 
 describe("OpenRouter proxy", () => {
+  test.each(["done", "eof", "unterminated-eof"])(
+    "flushes buffered reasoning at %s without a finish event",
+    async (ending) => {
+      const db = fakeDb({
+        assignmentSets: () => [
+          { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+        ],
+      })
+      const delta = {
+        reasoning_details: [{ type: "reasoning.text", text: "Private thought", signature: "signature", index: 0 }],
+      }
+      const chunk = `data: ${JSON.stringify({ choices: [{ index: 0, delta }] })}`
+      let body: Record<string, unknown> | undefined
+      const proxy = openrouter({
+        db: async () => db,
+        fetch: async (_input, init) => {
+          body = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+          return new Response(chunk + (ending === "done" ? "\n\ndata: [DONE]" : ending === "eof" ? "\n\n" : ""), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        },
+      })
+      const invoke = (messages: unknown[]) =>
+        proxy(
+          new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Arena-Assignment-ID": "opaque-id",
+              "X-Arena-Scope-ID": "turn-1",
+            },
+            body: JSON.stringify({ model: "contestant", messages, stream: true }),
+          }),
+        )
+      const text = await (await invoke([])).text()
+      expect(text).not.toContain("Private thought")
+      expect(text).not.toContain("signature")
+      const events = text
+        .split("\n\n")
+        .map((event) => event.trim())
+        .filter(Boolean)
+      const details = events
+        .filter((event) => event !== "data: [DONE]")
+        .flatMap((event) => {
+          const value = JSON.parse(event.slice(6)) as { choices: { delta: { reasoning_details: unknown[] } }[] }
+          return value.choices.flatMap((choice) => choice.delta.reasoning_details)
+        })
+      expect(details.filter((detail) => (detail as { type: string }).type === "reasoning.encrypted")).toHaveLength(1)
+      if (ending === "done") expect(events.at(-1)).toBe("data: [DONE]")
+      await (await invoke([{ role: "assistant", reasoning_details: details }])).text()
+      expect(body?.messages).toEqual([{ role: "assistant", reasoning: "Private thought", ...delta }])
+    },
+  )
+
   test.each([false, true])(
     "redacts nested Responses reasoning and restores it for continuation (stream=%s)",
     async (stream) => {

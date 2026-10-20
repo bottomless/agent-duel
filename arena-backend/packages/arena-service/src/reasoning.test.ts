@@ -3,6 +3,65 @@ import { createReasoningRedactor, REDACTED_THINKING } from "./reasoning"
 
 const binding = { userId: "user", scopeID: "turn", assignmentID: "assignment" }
 
+test("batches tiny reasoning fragments into a compact, lossless continuation", () => {
+  const redactor = createReasoningRedactor("server-key", binding)
+  const details: unknown[] = []
+  for (let index = 0; index < 16_384; index++) {
+    const result = redactor.redact(
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "reasoning.text", text: "abcd", format: "anthropic-claude-v1", index: 0 }],
+            },
+          },
+        ],
+      },
+      true,
+    ) as { choices: [{ delta: { reasoning_details: unknown[] } }] }
+    details.push(...result.choices[0].delta.reasoning_details)
+  }
+  const end = redactor.redact(
+    {
+      choices: [
+        {
+          index: 0,
+          delta: {
+            reasoning_details: [{ type: "reasoning.text", text: "", signature: "late-signature", index: 0 }],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    },
+    true,
+  ) as { choices: [{ delta: { reasoning_details: unknown[] } }] }
+  details.push(...end.choices[0].delta.reasoning_details)
+  // The SDK coalesces adjacent neutral text markers; measure only continuation envelopes here.
+  const encrypted = details.filter((detail) => (detail as { type: string }).type === "reasoning.encrypted")
+  expect(encrypted.length).toBeGreaterThan(1)
+  const input = { messages: [{ role: "assistant", content: "", reasoning_details: encrypted }] }
+  expect(Buffer.byteLength(JSON.stringify(input))).toBeLessThan(256 * 1024)
+  expect(createReasoningRedactor("server-key", binding).restore(input)).toEqual({
+    messages: [
+      {
+        role: "assistant",
+        content: "",
+        reasoning: "abcd".repeat(16_384),
+        reasoning_details: [
+          {
+            type: "reasoning.text",
+            text: "abcd".repeat(16_384),
+            format: "anthropic-claude-v1",
+            index: 0,
+            signature: "late-signature",
+          },
+        ],
+      },
+    ],
+  })
+})
+
 test("leaves ordinary content and empty reasoning chunks alone", () => {
   const redactor = createReasoningRedactor("server-key", binding)
   const input = {
@@ -10,6 +69,74 @@ test("leaves ordinary content and empty reasoning chunks alone", () => {
   }
   expect(redactor.redact(input, true)).toEqual({ choices: [{ index: 0, delta: { content: "Visible answer" } }] })
   expect(input.choices[0]?.delta.reasoning).toBeNull()
+})
+
+test("keeps interleaved choices separate, flushes at content, and preserves late signatures", () => {
+  const redactor = createReasoningRedactor("server-key", binding)
+  const collected = new Map<number, unknown[]>()
+  const collect = (value: unknown) => {
+    const result = value as { choices: { index: number; delta: { reasoning_details?: unknown[] } }[] }
+    for (const choice of result.choices) {
+      const details = collected.get(choice.index) ?? []
+      details.push(...(choice.delta.reasoning_details ?? []))
+      collected.set(choice.index, details)
+    }
+  }
+  collect(
+    redactor.redact(
+      {
+        choices: [0, 1].map((index) => ({
+          index,
+          delta: {
+            reasoning_details: [{ type: "reasoning.text", text: `private-${index}`, index: 0 }],
+          },
+        })),
+      },
+      true,
+    ),
+  )
+  collect(redactor.redact({ choices: [{ index: 0, delta: { content: "Visible answer" } }] }, true))
+  collect(
+    redactor.redact(
+      {
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning_details: [{ type: "reasoning.text", text: "", signature: "late-signature", index: 0 }] },
+            finish_reason: "stop",
+          },
+        ],
+      },
+      true,
+    ),
+  )
+  collect(redactor.flush())
+  expect(redactor.flush()).toBeUndefined()
+  for (const index of [0, 1]) {
+    expect(redactor.restore({ messages: [{ role: "assistant", reasoning_details: collected.get(index) }] })).toEqual({
+      messages: [
+        {
+          role: "assistant",
+          reasoning: `private-${index}`,
+          reasoning_details: [
+            {
+              type: "reasoning.text",
+              text: `private-${index}`,
+              index: 0,
+              ...(index === 0 ? { signature: "late-signature" } : {}),
+            },
+          ],
+        },
+      ],
+    })
+  }
+})
+
+test("discards buffered reasoning when a stream is cancelled", () => {
+  const redactor = createReasoningRedactor("server-key", binding)
+  redactor.redact({ choices: [{ delta: { reasoning: "private" } }] }, true)
+  redactor.clear()
+  expect(redactor.flush()).toBeUndefined()
 })
 
 test("redacts JSON reasoning and restores the exact continuation without changing tools or text", () => {
@@ -51,8 +178,11 @@ test("preserves every streamed packet and late signature for the next tool step"
     { reasoning_details: [{ type: "reasoning.text", text: "second", signature: "signed", index: 0 }] },
     { reasoning_details: [{ type: "reasoning.encrypted", data: "secret", format: "openai-responses-v1", index: 1 }] },
   ] as const
-  const details = original.flatMap((delta) => {
-    const result = redactor.redact({ choices: [{ delta }] }, true) as {
+  const details = [...original, {}].flatMap((delta, index) => {
+    const result = redactor.redact(
+      { choices: [{ delta, finish_reason: index === original.length ? "tool_calls" : null }] },
+      true,
+    ) as {
       choices: [{ delta: { reasoning_details: unknown[] } }]
     }
     expect(JSON.stringify(result)).not.toContain("First")

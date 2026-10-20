@@ -31,7 +31,7 @@ function bodyValue(body: RequestInit["body"]) {
   return JSON.parse(text) as Record<string, unknown>
 }
 
-function sse(chunks: readonly unknown[]) {
+function sse(chunks: readonly unknown[], fragmentBytes = 2) {
   const bytes = new TextEncoder().encode(
     `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`,
   )
@@ -43,7 +43,7 @@ function sse(chunks: readonly unknown[]) {
           controller.close()
           return
         }
-        const end = Math.min(offset + 2, bytes.length)
+        const end = Math.min(offset + fragmentBytes, bytes.length)
         controller.enqueue(bytes.slice(offset, end))
         offset = end
       },
@@ -173,21 +173,42 @@ const followUpChunks = [
   },
 ] as const
 
-function syntheticUpstream(bodies: Record<string, unknown>[]) {
+function syntheticUpstream(
+  bodies: Record<string, unknown>[],
+  chunks: readonly unknown[] = firstResponseChunks,
+  fragmentBytes = 2,
+) {
   let calls = 0
   const fetch: Fetch = async (_input, init) => {
     bodies.push(bodyValue(init?.body))
     calls++
-    return sse(calls === 1 ? firstResponseChunks : followUpChunks)
+    return sse(calls === 1 ? chunks : followUpChunks, fragmentBytes)
   }
   return fetch
 }
 
 describe("Arena reasoning redaction through the real SDK", () => {
-  test("keeps streamed reasoning opaque and restores it for a tool continuation", async () => {
+  test.each([1, 16_384])("restores %s fragments in a compact SDK continuation", async (count) => {
+    const text = count === 1 ? "Private first " : "abcd"
+    const chunks = [
+      ...Array.from({ length: count }, () => ({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "reasoning.text", text, format: "anthropic-claude-v1", index: 0 }],
+            },
+            finish_reason: null,
+          },
+        ],
+      })),
+      ...firstResponseChunks.slice(1),
+    ]
+    const fragmentBytes = count === 1 ? 2 : 2048
     const upstreamBodies: Record<string, unknown>[] = []
+    const requestBytes: number[] = []
     const proxyStreams: Promise<string>[] = []
-    const upstream = syntheticUpstream(upstreamBodies)
+    const upstream = syntheticUpstream(upstreamBodies, chunks, fragmentBytes)
 
     const db = {
       collection: () => ({
@@ -207,6 +228,7 @@ describe("Arena reasoning redaction through the real SDK", () => {
       apiKey: "client-key",
       baseURL: "https://arena.local/api/openrouter/api/v1",
       fetch: async (input, init) => {
+        requestBytes.push(Buffer.byteLength(JSON.stringify(bodyValue(init?.body))))
         const headers = new Headers(init?.headers)
         headers.set("X-Arena-Assignment-ID", assignmentID)
         headers.set("X-Arena-Scope-ID", scopeID)
@@ -262,9 +284,10 @@ describe("Arena reasoning redaction through the real SDK", () => {
     }
 
     const baselineBodies: Record<string, unknown>[] = []
-    const baselineModel = createOpenRouter({ apiKey: "client-key", fetch: syntheticUpstream(baselineBodies) }).chat(
-      "contestant",
-    )
+    const baselineModel = createOpenRouter({
+      apiKey: "client-key",
+      fetch: syntheticUpstream(baselineBodies, chunks, fragmentBytes),
+    }).chat("contestant")
     const baselineFirst = streamText({
       model: baselineModel,
       prompt: "What is the weather in Paris?",
@@ -301,6 +324,8 @@ describe("Arena reasoning redaction through the real SDK", () => {
     }
 
     expect(upstreamBodies).toHaveLength(2)
+    expect(requestBytes).toHaveLength(2)
+    expect(requestBytes[1]).toBeLessThan(256 * 1024)
     expect(baselineBodies).toHaveLength(2)
     expect(upstreamBodies[0]).toMatchObject({ model: model.slug })
     expect(upstreamBodies[1]).toMatchObject({ model: model.slug })
@@ -315,7 +340,7 @@ describe("Arena reasoning redaction through the real SDK", () => {
       {
         role: "assistant",
         content: "",
-        reasoning: "Private first private second",
+        reasoning: text.repeat(count) + "private second",
         tool_calls: [
           {
             id: "call-weather",
@@ -326,7 +351,7 @@ describe("Arena reasoning redaction through the real SDK", () => {
         reasoning_details: [
           {
             type: "reasoning.text",
-            text: "Private first private second",
+            text: text.repeat(count) + "private second",
             signature: "provider-signature-secret",
             format: "anthropic-claude-v1",
             index: 0,
