@@ -53,7 +53,13 @@ import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { generate as generateComparison } from "./comparison"
-import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
+import { canonicalizeTranscriptPaths } from "./canonical-path"
+import {
+  createRetiredPortForwarder,
+  writeOpenShim,
+  type Contestant as RetiredPortContestant,
+  type RetiredPort,
+} from "./retired-ports"
 import { comparisonTimeline } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
 import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
@@ -180,7 +186,11 @@ import {
   type ArenaOperationProgress,
 } from "./operation-tracker"
 import {
+  activeRoute as activePreviewRoute,
   allocatePreview,
+  configureOpenShim,
+  configurePortCursor,
+  configureReservedPorts,
   endOwnership,
   environment as previewEnvironment,
   hostnameForAlias as previewHostnameForAlias,
@@ -189,7 +199,9 @@ import {
   anyListening,
   releaseTakenBank,
   route as previewRoute,
+  setRetiredPortMap,
   url as previewUrl,
+  type PortAlias,
   type PreviewRoute,
 } from "./preview"
 import {
@@ -217,7 +229,7 @@ import type { Store } from "./mongo"
 
 const encoder = new TextEncoder()
 const contestantWorktreeInstruction =
-  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Literal ports, preview URLs, log paths, and process IDs in earlier messages or tool output are historical; do not reuse them, connect to them, or stop anything using them. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
+  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Log paths and process IDs in earlier messages or tool output are historical; do not reuse them or stop anything using them. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
 const canonicalUnavailableReason = "The trunk worktree is unavailable. Restore it at its recorded location, then retry."
 
 // The refusal reaches the user as a toast, so a merge that conflicted in hundreds of files must
@@ -270,15 +282,112 @@ function sameConflicts(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((path, index) => path === right[index])
 }
 
+/** A winner of an earlier turn whose transcript is in the chat's history, with the ports it shows. */
+export type PortHistoryEntry = {
+  readonly turnIndex: number
+  readonly runID: string
+  readonly portAliases: Readonly<Record<PortAlias, number>>
+  readonly previewUrls: Readonly<Partial<Record<PortAlias, string>>>
+  /** Released: nothing of the winner runs any more, and the engine forwards its ports. */
+  readonly retired: boolean
+}
+
+/** Every applied winner's port bank, oldest turn first. Derived from the store, so it survives a restart. */
+export function portHistory(turns: readonly TurnDocument[], runs: readonly RunDocument[]): PortHistoryEntry[] {
+  const byID = new Map(runs.map((run) => [run._id, run]))
+  return turns
+    .toSorted((left, right) => left.turnIndex - right.turnIndex)
+    .flatMap((turn) => {
+      const run = turn.appliedSide ? byID.get(turn.runIDs[turn.appliedSide]) : undefined
+      const aliases = run?.portAliases
+      if (!run || !aliases?.PASEO_PORT || !aliases.PASEO_PORT2 || !aliases.PASEO_PORT3) return []
+      const previewUrls = Object.fromEntries(
+        (run.services ?? []).flatMap((service) =>
+          service.proxyRoutes.flatMap((route) => (route.alias && route.url ? [[route.alias, route.url]] : [])),
+        ),
+      )
+      return [
+        {
+          turnIndex: turn.turnIndex,
+          runID: run._id,
+          portAliases: {
+            PASEO_PORT: aliases.PASEO_PORT,
+            PASEO_PORT2: aliases.PASEO_PORT2,
+            PASEO_PORT3: aliases.PASEO_PORT3,
+          },
+          previewUrls,
+          retired: !!run.worktreeRemovedAt,
+        },
+      ]
+    })
+}
+
+/** The ports the engine listens on for a chat: released winners' banks. */
+export function retiredPorts(history: readonly PortHistoryEntry[]): RetiredPort[] {
+  return history
+    .filter((entry) => entry.retired)
+    .flatMap((entry) =>
+      PORT_ALIASES.map((alias) => ({ port: entry.portAliases[alias], alias, turnIndex: entry.turnIndex })),
+    )
+}
+
+/** Earlier turns' ports and preview hostnames, each mapped to the current bank's with the same alias. */
+export function retiredPortMap(
+  history: readonly PortHistoryEntry[],
+  current: PreviewRoute["portAliases"],
+  hostname: string,
+) {
+  const ports: Record<number, number> = {}
+  const hosts: Record<string, string> = {}
+  for (const entry of history) {
+    if (entry.portAliases.PASEO_PORT === current.PASEO_PORT) continue
+    for (const alias of PORT_ALIASES) {
+      ports[entry.portAliases[alias]] = current[alias]
+      const url = entry.previewUrls[alias]
+      const old = url ? urlHostname(url) : undefined
+      if (old) hosts[old] = previewHostnameForAlias(hostname, alias)
+    }
+  }
+  return { ports, hosts }
+}
+
+function urlHostname(url: string) {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return undefined
+  }
+}
+
+function historicalPorts(history: readonly PortHistoryEntry[], env: Readonly<Record<string, string>>) {
+  const earlier = history.filter((entry) => String(entry.portAliases.PASEO_PORT) !== env["PASEO_PORT"])
+  if (earlier.length === 0) return ""
+  const lines = earlier.map((entry) => {
+    const ports = PORT_ALIASES.map((alias) => {
+      const current = env[alias] ? ` -> your ${alias} ${env[alias]}` : ""
+      return `${alias} ${entry.portAliases[alias]}${current}`
+    })
+    const preview = entry.previewUrls.PASEO_PORT ? ` (preview ${entry.previewUrls.PASEO_PORT})` : ""
+    return `Turn ${entry.turnIndex + 1}: ${ports.join("; ")}${preview}`
+  })
+  return [
+    "Ports from earlier turns. Earlier messages and tool output come from the winners of earlier turns and show their ports and preview URLs. Those servers have stopped. A connection from your own commands, scripts, servers, or browser to an earlier-turn port reaches your own current port with the same alias, so commands copied from earlier messages still work:",
+    ...lines,
+    'Earlier preview URLs do not reach anything; use your own ARENA_PREVIEW_URL values. Bind new servers only to $PASEO_PORT, $PASEO_PORT2, or $PASEO_PORT3, never to an earlier-turn port: Agent Duel holds the earlier-turn ports, so a bind to one fails with "address already in use". To start a server again the way an earlier message did, put your own port in place of the earlier one. When you report a port or URL, report your current one.',
+  ].join("\n")
+}
+
 /**
  * The previous winner's transition is recorded for the report in the UI and never reaches a
  * contestant: nothing about the environment is part of a prompt, and keeping it out is what lets
- * the send prompt without waiting for the release.
+ * the send prompt without waiting for the release. The earlier turns' port numbers are listed,
+ * since the history shows them.
  */
 export function contestantSystemInstruction(
   worktree?: string,
   environmentPending = false,
   processEnv: Record<string, string | undefined> = process.env,
+  history: readonly PortHistoryEntry[] = [],
 ) {
   const env = worktree ? previewEnvironment(worktree, processEnv) : {}
   const previewUrls = PORT_ALIASES.flatMap((alias) => {
@@ -295,7 +404,13 @@ export function contestantSystemInstruction(
     environmentPending && worktree
       ? `The initial model call is running while the environment is still being prepared at ${worktree}. This is your worktree path. You may reason immediately. Tools that do not need the filesystem can run before the base checkout is ready. Once it is ready, safe reads can run while ignored content finishes copying. A tool that could observe or change incomplete state will wait until its required setup phase completes.`
       : ""
-  return [contestantWorktreeInstruction, ArenaResponseRecovery.INSTRUCTION, pendingEnvironment, currentPreview]
+  return [
+    contestantWorktreeInstruction,
+    ArenaResponseRecovery.INSTRUCTION,
+    pendingEnvironment,
+    currentPreview,
+    historicalPorts(history, env),
+  ]
     .filter(Boolean)
     .join("\n\n")
 }
@@ -1273,6 +1388,17 @@ export const layer: Layer.Layer<
     let idleUnloadStarted = false
     const reconciledComparisonStores = new WeakSet<Store>()
     let recoverInterrupted: (store: Store) => Effect.Effect<void, Error> = () => Effect.void
+    // Released winners' ports, which the engine holds for the chat's current contestants
+    // (`retired-ports.ts`). Listeners exist only while the chat holds environments.
+    // The layer's context carries the engine's file logger; a bare runFork would log to stdout.
+    const logContext = yield* Effect.context()
+    const retiredPortForwarder = createRetiredPortForwarder({
+      log: (message, data) => void Effect.runForkWith(logContext)(Effect.logInfo(message, data)),
+    })
+    configureReservedPorts(retiredPortForwarder.holds)
+    configureOpenShim(
+      yield* Effect.promise(() => writeOpenShim(join(Global.Path.data, "arena", "bin")).catch(() => undefined)),
+    )
 
     const getStore = promise(() => runtimeStore()).pipe(
       Effect.tap((store) =>
@@ -1283,6 +1409,7 @@ export const layer: Layer.Layer<
           telemetry = createTelemetry(store)
           setTelemetry(telemetry)
           recorder = new Recorder(store)
+          configurePortCursor({ read: () => store.portCursor(), write: (next) => store.setPortCursor(next) })
         }),
       ),
     )
@@ -1292,8 +1419,46 @@ export const layer: Layer.Layer<
         recorder?.close()
         telemetry = undefined
         setTelemetry(undefined)
-      }),
+      }).pipe(Effect.andThen(Effect.promise(() => retiredPortForwarder.close()))),
     )
+
+    /** The chat's contestants that own a live environment, which a forwarded caller can reach. */
+    const liveContestants = async (store: Store, chatID: string): Promise<RetiredPortContestant[]> =>
+      (await store.runsForChat(chatID)).flatMap((run) => {
+        const route = run.worktreeRemovedAt ? undefined : activePreviewRoute(run.worktree)
+        return route ? [{ directory: run.worktree, hostname: route.hostname, portAliases: route.portAliases }] : []
+      })
+
+    /**
+     * Listen on the chat's released winners' ports and give each live contestant the map from
+     * earlier ports to its own. The table is derived from the store, so it comes back after a
+     * restart. Returns the history the contestant prompt lists; a failure costs only forwarding.
+     */
+    const syncRetiredPorts = (store: Store, chatID: string) =>
+      Effect.gen(function* () {
+        const [turns, runs] = yield* promise(() => Promise.all([store.turnsForChat(chatID), store.runsForChat(chatID)]))
+        const history = portHistory(turns, runs)
+        for (const run of runs) {
+          const route = run.worktreeRemovedAt ? undefined : activePreviewRoute(run.worktree)
+          if (route) setRetiredPortMap(run.worktree, retiredPortMap(history, route.portAliases, route.hostname))
+        }
+        let cached: { readonly at: number; readonly value: Promise<RetiredPortContestant[]> } | undefined
+        const contestants = () => {
+          if (!cached || Date.now() - cached.at > 1_000)
+            cached = { at: Date.now(), value: liveContestants(store, chatID) }
+          return cached.value
+        }
+        yield* promise(() => retiredPortForwarder.sync(chatID, { ports: retiredPorts(history), contestants }))
+        return history
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not set up retired-port forwarding", { chatID, cause }).pipe(
+            Effect.as([] as PortHistoryEntry[]),
+          ),
+        ),
+      )
+
+    const stopRetiredPorts = (chatID: string) => Effect.promise(() => retiredPortForwarder.stop(chatID))
 
     const available = Effect.fn("Arena.available")(function* () {
       if (!enabled()) return yield* Effect.fail(new Error("Arena mode is disabled"))
@@ -2741,6 +2906,9 @@ export const layer: Layer.Layer<
      * watches stop with it.
      */
     const vacateSlotPool = Effect.fnUntraced(function* (chat: ChatDocument) {
+      // Archive, eviction and environment release all come through here. The chat has no
+      // contestant left to forward to; its next send listens again (`syncRetiredPorts`).
+      yield* stopRetiredPorts(chat._id)
       const pool = slotPool(chat)
       const entries = yield* Effect.promise(() => readdir(pool).catch(() => [] as string[]))
       const directories = new Set(
@@ -4174,6 +4342,8 @@ export const layer: Layer.Layer<
       const beforeDispatch = yield* promise(() => store.turn(run.turnID))
       if (beforeDispatch?.state === "stopping" || beforeDispatch?.state === "early_selected") return Exit.void
       if (prompt) yield* allowReading(run.worktree.directory, run.sessionID, prompt.readable)
+      // Before the first tool runs: the shell reads the side's retired-port map from its route.
+      const history = beforeDispatch ? yield* syncRetiredPorts(store, beforeDispatch.chatID) : []
       if (hostDirectory !== run.worktree.directory) promptHosts.set(run.sessionID, hostDirectory)
       let result = yield* Effect.exit(
         inDirectory(
@@ -4188,7 +4358,12 @@ export const layer: Layer.Layer<
                 },
                 agent,
                 variant: "high",
-                system: contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID)),
+                system: contestantSystemInstruction(
+                  run.worktree.directory,
+                  isToolExecutionGated(run.sessionID),
+                  process.env,
+                  history,
+                ),
                 parts: prompt.parts,
               })
             : // A retry adds no message: the loop answers the last user message again, from the
@@ -4227,12 +4402,6 @@ export const layer: Layer.Layer<
             ),
           ),
         )
-      }
-      if (Exit.isSuccess(result) && result.value?.info.role === "assistant") {
-        const env = previewEnvironment(run.worktree.directory)
-        yield* Effect.forEach(result.value.parts, (part) => sessions.updatePart(localizeArenaEnvironment(part, env)), {
-          discard: true,
-        })
       }
       yield* promise(() => store.updateRun(run.runID, { completedAt: new Date() }))
       ArenaPrivacy.clearDiscardedMessages(run.sessionID)
@@ -4603,21 +4772,6 @@ export const layer: Layer.Layer<
       )
     })
 
-    /** Every past run's port bank and preview URLs, so a copied transcript can be retargeted. */
-    const historicalEnvironmentsForChat = Effect.fn("Arena.historicalEnvironmentsForChat")(function* (
-      store: Store,
-      chatID: string,
-    ) {
-      return (yield* promise(() => store.runsForChat(chatID))).map((run) => ({
-        portAliases: run.portAliases,
-        previewUrls: Object.fromEntries(
-          (run.services ?? []).flatMap((service) =>
-            service.proxyRoutes.flatMap((route) => (route.alias && route.url ? [[route.alias, route.url]] : [])),
-          ),
-        ),
-      }))
-    })
-
     /** Sessions forked at warm-up that no turn will ever use. */
     const disposeWarmSessions = (ids: readonly (string | undefined)[]) =>
       Effect.forEach(
@@ -4649,8 +4803,8 @@ export const layer: Layer.Layer<
 
     /**
      * Whether the session forked at warm-up is the one this send can prompt. Everything the fork
-     * copied has to be unchanged: the canonical session and its transcript, and the port bank its
-     * paths were localized against, which is process-local and so also requires a trusted pair.
+     * copied has to be unchanged: the canonical session and its transcript, in a pair trusted in
+     * this process. The fork holds no port, so a fresh port bank at send keeps it.
      */
     const usableWarmFork = (
       trusted: boolean,
@@ -4658,22 +4812,20 @@ export const layer: Layer.Layer<
       warm: WarmWorktreeRecord,
       directory: string,
       sourceID: string,
-      portAliases: PreviewRoute["portAliases"],
     ) => {
-      if (!warm.forkedSessionID || !warm.forkMessageMap || !warm.portAliases) return undefined
+      if (!warm.forkedSessionID || !warm.forkMessageMap) return undefined
       if (!trusted) return undefined
       if (warm.directory !== directory) return undefined
       if (warm.forkSourceSessionID !== sourceID || warm.forkTranscriptHash !== turn.canonicalTranscriptHash) {
         return undefined
       }
-      if (PORT_ALIASES.some((alias) => warm.portAliases?.[alias] !== portAliases[alias])) return undefined
       return { forkedSessionID: warm.forkedSessionID, forkMessageMap: warm.forkMessageMap }
     }
 
     /**
-     * Fork the canonical session into each warm worktree now rather than at send. The port bank
-     * is allocated here too, because the copied transcript is retargeted to it. A fork that fails
-     * leaves its slot as it was: the send forks then, as it always could.
+     * Fork the canonical session into each warm worktree now rather than at send, and allocate
+     * the side's port bank. A fork that fails leaves its slot as it was: the send forks then, as
+     * it always could.
      */
     const prepareWarmSessions = Effect.fn("Arena.prepareWarmSessions")(function* (
       store: Store,
@@ -4691,7 +4843,6 @@ export const layer: Layer.Layer<
       const transcriptHash = digest(transcript.value)
       const agent = source.value.agent ?? "build"
       const branch = current.canonicalCheckout?.branch ?? current.arenaBranch
-      const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
       // Both forks at once: each writes its own session into its own directory.
       return yield* Effect.forEach(
         slots,
@@ -4712,7 +4863,6 @@ export const layer: Layer.Layer<
                     },
                   }),
                 )
-                const env = previewEnvironment(slot.directory)
                 const messageMapping = new Map<string, string>()
                 const session = yield* forkInto({
                   sessionID: sourceID,
@@ -4721,14 +4871,6 @@ export const layer: Layer.Layer<
                   pathMode: "transcript",
                   onMessageMapping(mapping) {
                     mapping.forEach((target, from) => messageMapping.set(from, target))
-                  },
-                  part(part, message) {
-                    if (message.role === "user") return part
-                    const canonicalEnvironment = historicalEnvironments.reduce(
-                      (value, historical) => canonicalizeArenaEnvironment(value, historical),
-                      part,
-                    )
-                    return localizeArenaEnvironment(canonicalEnvironment, env)
                   },
                 }).pipe(Effect.mapError(error))
                 forked(session.id)
@@ -4883,8 +5025,8 @@ export const layer: Layer.Layer<
           }
         }
 
-        // A warm bank was reserved at warm-up. If a port has been taken since, the fresh bank no
-        // longer matches the warm fork's, so the fork below is made now instead.
+        // A warm bank was reserved at warm-up, only in this process. If a port has been taken
+        // since, the side gets a fresh bank; the warm fork holds no port and stays usable.
         if (warm) yield* promise(() => releaseTakenBank(info.directory))
         const preview = yield* promise(() =>
           allocatePreview({
@@ -4900,11 +5042,8 @@ export const layer: Layer.Layer<
           }),
         )
         previewWorktrees.add(info.directory)
-        const env = previewEnvironment(info.directory)
         const forkStartedAt = Date.now()
-        const warmFork = warm
-          ? usableWarmFork(warmForksTrusted, turn, warm, info.directory, sourceID, preview.portAliases)
-          : undefined
+        const warmFork = warm ? usableWarmFork(warmForksTrusted, turn, warm, info.directory, sourceID) : undefined
         if (warm?.forkedSessionID && !warmFork) {
           // Forked from an older transcript or in another process; nothing else refers to it.
           yield* disposeWarmSessions([warm.forkedSessionID])
@@ -4915,9 +5054,8 @@ export const layer: Layer.Layer<
           forkedID = SessionID.make(warmFork.forkedSessionID)
           forkedAtWarmup = true
         } else {
-          // Keep concrete URLs in the canonical chat for the reader. Contestant copies normalize
-          // every historical run here, then retarget those references to this side's environment.
-          const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
+          // The transcript is copied as it is: literal ports from earlier turns reach this side's own
+          // through the retired-port forwarder, and the prompt lists them (`syncRetiredPorts`).
           const forked = yield* forkInto({
             sessionID: sourceID,
             destination: info.directory,
@@ -4925,14 +5063,6 @@ export const layer: Layer.Layer<
             pathMode: "transcript",
             onMessageMapping(mapping) {
               mapping.forEach((target, source) => messageMapping.set(source, target))
-            },
-            part(part, message) {
-              if (message.role === "user") return part
-              const canonicalEnvironment = historicalEnvironments.reduce(
-                (current, historical) => canonicalizeArenaEnvironment(current, historical),
-                part,
-              )
-              return localizeArenaEnvironment(canonicalEnvironment, env)
             },
           }).pipe(Effect.mapError(error))
           yield* sessions.setAgentModel({
@@ -6129,7 +6259,8 @@ export const layer: Layer.Layer<
         (run) => {
           // A working contestant whose request started early is still run by its host's runner.
           return allowReading(run.worktree, SessionID.make(run.rootSessionID), prompt.readable).pipe(
-            Effect.andThen(
+            Effect.andThen(syncRetiredPorts(store, turn.chatID)),
+            Effect.flatMap((history) =>
               inDirectory(
                 promptHosts.get(SessionID.make(run.rootSessionID)) ?? run.worktree,
                 prompts.prompt({
@@ -6140,7 +6271,7 @@ export const layer: Layer.Layer<
                   },
                   agent,
                   variant: "high",
-                  system: contestantSystemInstruction(run.worktree),
+                  system: contestantSystemInstruction(run.worktree, false, process.env, history),
                   parts: prompt.parts,
                 }),
               ),
@@ -7066,6 +7197,8 @@ export const layer: Layer.Layer<
           { $unset: { retainedWinner: "" }, $set: { updatedAt: new Date() } },
         ),
       )
+      // Its services are stopped, so its ports are free for the forwarder to hold.
+      yield* syncRetiredPorts(store, chat._id)
     })
 
     const retryFailedRunCleanups = Effect.fn("Arena.retryFailedRunCleanups")(function* (
@@ -8583,6 +8716,12 @@ export const layer: Layer.Layer<
           ),
         { concurrency: 1, discard: true },
       )
+      // A chat that still holds environments listens on its retired ports again: a contestant's
+      // server or a reply to the retained winner can use the old numbers its history shows.
+      const holding = (yield* promise(() => store.chats.find({}).toArray())).filter(
+        (chat) => chat.status !== "archived" && !chat.checkoutEvicted && (chat.retainedWinner || chat.activeTurnID),
+      )
+      yield* Effect.forEach(holding, (chat) => syncRetiredPorts(store, chat._id), { discard: true })
       // In the background: recovery gates every call, and a failure only leaves the send to refresh.
       yield* rewarmLatestPair(store).pipe(
         Effect.catchCause((cause) =>

@@ -28,6 +28,8 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
 import { Cause, Effect, Exit, Layer, Context, Schema, Stream } from "effect"
 import { EffectBridge } from "@/effect/bridge"
+import { forgetCallerRoot, recordCallerRoot } from "@/arena/caller-roots"
+import { serviceOwnerID } from "@/arena/services"
 import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -358,10 +360,11 @@ const layer = Layer.effect(
 
       const connectTimeout = mcp.timeout ?? DEFAULT_TIMEOUT
       return yield* connectTransport(transport, connectTimeout).pipe(
-        Effect.map((client): { client: MCPClient | undefined; status: Status } => ({
-          client,
-          status: { status: "connected" },
-        })),
+        Effect.map((client): { client: MCPClient | undefined; status: Status } => {
+          // A browser MCP server run for an Arena contestant connects for it; see `caller-roots.ts`.
+          recordCallerRoot(transport.pid ?? undefined, serviceOwnerID(baseDir))
+          return { client, status: { status: "connected" } }
+        }),
         Effect.catch((error): Effect.Effect<{ client: MCPClient | undefined; status: Status }> => {
           const msg = error instanceof Error ? error.message : String(error)
           return Effect.succeed({ client: undefined, status: { status: "failed", error: msg } })
@@ -540,6 +543,7 @@ const layer = Layer.effect(
                 Effect.gen(function* () {
                   const pid = client.transport instanceof StdioClientTransport ? client.transport.pid : null
                   if (typeof pid === "number") {
+                    forgetCallerRoot(pid)
                     const pids = yield* descendants(pid)
                     for (const dpid of pids) {
                       try {

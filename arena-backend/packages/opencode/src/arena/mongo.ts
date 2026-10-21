@@ -184,6 +184,8 @@ export class Store {
   readonly reviewEvents: ArenaCollection<ReviewEventDocument>
   readonly battleMetrics: ArenaCollection<BattleMetricsDocument>
   readonly singleAgentRatings: ArenaCollection<SingleAgentRatingDocument>
+  /** Engine-wide counters, one document each. */
+  readonly state: ArenaCollection<{ readonly _id: string; readonly next: number }>
   readonly artifactQueues = new Map<string, Promise<void>>()
 
   constructor(client: ArenaClient, db: ArenaDb | Db) {
@@ -202,6 +204,16 @@ export class Store {
     this.reviewEvents = this.db.collection<ReviewEventDocument>("reviewEvents")
     this.battleMetrics = this.db.collection<BattleMetricsDocument>("battleMetrics")
     this.singleAgentRatings = this.db.collection<SingleAgentRatingDocument>("singleAgentRatings")
+    this.state = this.db.collection<{ readonly _id: string; readonly next: number }>("arenaState")
+  }
+
+  /** The next port Arena hands out (`PORT_RANGE` in `preview.ts`), so no number goes out twice. */
+  async portCursor() {
+    return (await this.state.findOne({ _id: "portCursor" }))?.next
+  }
+
+  async setPortCursor(next: number) {
+    await this.state.replaceOne({ _id: "portCursor" }, { _id: "portCursor", next }, { upsert: true })
   }
 
   async initialize() {

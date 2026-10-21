@@ -1,18 +1,25 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createServer } from "net"
 import {
+  activeRoute,
   allocatePortBank,
   allocatePreview,
   clearForTest,
+  configureOpenShim,
+  configurePortCursor,
+  configureReservedPorts,
   deactivate,
+  endOwnership,
   environment,
   hostname,
   observe,
+  PORT_RANGE,
   register,
   release,
   releaseTakenBank,
   route,
   routesFor,
+  setRetiredPortMap,
 } from "@/arena/preview"
 import { serviceOwnerID } from "@/arena/services"
 
@@ -75,9 +82,11 @@ describe("ArenaPreview", () => {
       allocator: async () => [43124, 43125, 43126],
     })
     const base = { PASEO_LISTEN: "127.0.0.1:6771" }
-    const urls = [environment("/worktrees/turn-0-a", base), environment("/worktrees/turn-0-b", base)].flatMap(
-      (env) => [env.ARENA_PREVIEW_URL, env.ARENA_PREVIEW_URL2, env.ARENA_PREVIEW_URL3],
-    )
+    const urls = [environment("/worktrees/turn-0-a", base), environment("/worktrees/turn-0-b", base)].flatMap((env) => [
+      env.ARENA_PREVIEW_URL,
+      env.ARENA_PREVIEW_URL2,
+      env.ARENA_PREVIEW_URL3,
+    ])
     expect(urls.every(Boolean)).toBe(true)
     expect(new Set(urls).size).toBe(6)
   })
@@ -147,9 +156,11 @@ describe("ArenaPreview", () => {
     expect(route("/worktrees/owned")?.state).toBe("inactive")
     expect(route("/worktrees/owned")?.ownership).toBe("ended")
     expect(routesFor("/worktrees/owned")).toHaveLength(1)
-    expect(
-      await allocatePortBank({ allocator: async () => [43141, 43142, 43143] }),
-    ).toEqual({ PASEO_PORT: 43141, PASEO_PORT2: 43142, PASEO_PORT3: 43143 })
+    expect(await allocatePortBank({ allocator: async () => [43141, 43142, 43143] })).toEqual({
+      PASEO_PORT: 43141,
+      PASEO_PORT2: 43142,
+      PASEO_PORT3: 43143,
+    })
   })
 
   test("records aliases for known listeners and preserves literal ports", () => {
@@ -172,9 +183,81 @@ describe("ArenaPreview", () => {
     await expect(allocatePortBank({ allocator: async () => [43161, 43161, 43162] })).rejects.toThrow(
       "three distinct unreserved ports",
     )
-    expect(
-      await allocatePortBank({ allocator: async () => [43161, 43162, 43163] }),
-    ).toEqual({ PASEO_PORT: 43161, PASEO_PORT2: 43162, PASEO_PORT3: 43163 })
+    expect(await allocatePortBank({ allocator: async () => [43161, 43162, 43163] })).toEqual({
+      PASEO_PORT: 43161,
+      PASEO_PORT2: 43162,
+      PASEO_PORT3: 43163,
+    })
+  })
+
+  test("hands out ports in sequence from the Arena range and persists where it stopped", async () => {
+    let stored: number | undefined = 29_900
+    const writes: number[] = []
+    configurePortCursor({
+      read: async () => stored,
+      write: async (next) => {
+        stored = next
+        writes.push(next)
+      },
+    })
+    // Taken by another program: the scan skips it.
+    const squatter = createServer()
+    await new Promise<void>((resolve) => squatter.listen(29_901, "127.0.0.1", resolve))
+    try {
+      const first = await allocatePortBank()
+      expect(first).toEqual({ PASEO_PORT: 29_900, PASEO_PORT2: 29_902, PASEO_PORT3: 29_903 })
+      expect(stored).toBe(29_904)
+      // A restarted engine reads the cursor back, so the first bank is not handed out again.
+      configurePortCursor(undefined)
+      configurePortCursor({ read: async () => stored, write: async (next) => void (stored = next) })
+      const second = await allocatePortBank()
+      expect(second).toEqual({ PASEO_PORT: 29_904, PASEO_PORT2: 29_905, PASEO_PORT3: 29_906 })
+      expect(writes).toEqual([29_904])
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve))
+    }
+  })
+
+  test("wraps to the start of the range only past its end, skipping ports held in this process", async () => {
+    let stored: number | undefined = PORT_RANGE.last - 1
+    configurePortCursor({ read: async () => stored, write: async (next) => void (stored = next) })
+    configureReservedPorts((port) => port === PORT_RANGE.first)
+
+    const bank = await allocatePortBank()
+    expect([bank.PASEO_PORT, bank.PASEO_PORT2]).toEqual([PORT_RANGE.last - 1, PORT_RANGE.last])
+    // Other Arena engines on this machine may hold the ports right after the start.
+    expect(bank.PASEO_PORT3).toBeGreaterThan(PORT_RANGE.first)
+    expect(bank.PASEO_PORT3).toBeLessThan(PORT_RANGE.first + 1_000)
+    expect(stored).toBe(bank.PASEO_PORT3 + 1)
+  })
+
+  test("gives a contestant with earlier-turn ports the map and the open shim on its PATH", async () => {
+    configureOpenShim("/engine/arena/bin")
+    register("/worktrees/turn-2-a", {
+      hostname: hostname("chat-a", 2, "a"),
+      port: 20_110,
+      portAliases: { PASEO_PORT: 20_110, PASEO_PORT2: 20_111, PASEO_PORT3: 20_112 },
+    })
+    expect(environment("/worktrees/turn-2-a", { PATH: "/usr/bin" }).ARENA_RETIRED_PORTS).toBeUndefined()
+
+    setRetiredPortMap("/worktrees/turn-2-a", {
+      ports: { 20_001: 20_110, 20_002: 20_111 },
+      hosts: { "turn1-a--6b6e7f77.localhost": "turn3-a--6b6e7f77.localhost" },
+    })
+    const env = environment("/worktrees/turn-2-a", { PATH: "/usr/bin" })
+    expect(env.ARENA_RETIRED_PORTS).toBe("20001=20110 20002=20111")
+    expect(env.ARENA_RETIRED_HOSTS).toBe("turn1-a--6b6e7f77.localhost=turn3-a--6b6e7f77.localhost")
+    expect(env.PATH).toBe("/engine/arena/bin:/usr/bin")
+    expect(activeRoute("/worktrees/turn-2-a")?.portAliases.PASEO_PORT).toBe(20_110)
+
+    await endOwnership("/worktrees/turn-2-a")
+    expect(activeRoute("/worktrees/turn-2-a")).toBeUndefined()
+    register("/worktrees/turn-2-a", {
+      hostname: hostname("chat-a", 3, "a"),
+      port: 20_120,
+      portAliases: { PASEO_PORT: 20_120, PASEO_PORT2: 20_121, PASEO_PORT3: 20_122 },
+    })
+    expect(environment("/worktrees/turn-2-a").ARENA_RETIRED_PORTS).toBeUndefined()
   })
 
   test("serializes concurrent banks that request the same deterministic ports", async () => {
