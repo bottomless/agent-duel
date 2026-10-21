@@ -363,6 +363,7 @@ export function project(snapshot: BattleSnapshot) {
       ...(item.selectedEarly === undefined ? {} : { selectedEarly: item.selectedEarly }),
       ...(item.appliedSide ? { appliedSide: item.appliedSide } : {}),
       ...(item.canonicalUserMessageID ? { canonicalUserMessageID: item.canonicalUserMessageID } : {}),
+      ...(item.canonicalLastMessageID ? { canonicalLastMessageID: item.canonicalLastMessageID } : {}),
       ...(item.gitApplication ? { gitApplication: item.gitApplication } : {}),
       ...(item.transitionEvent ? { transition: transition(item.transitionEvent) } : {}),
       endedAt: item.transitionTimestamps.complete ?? item.transitionTimestamps.discarded,

@@ -73,6 +73,7 @@ function snapshot(revealed: boolean): BattleSnapshot {
             },
             selectedEarly: false,
             canonicalUserMessageID: "message-a",
+            canonicalLastMessageID: "message-z",
           }
         : {}),
       createdAt: now,
@@ -551,6 +552,7 @@ describe("ArenaPublic", () => {
     expect(value.turn?.canonicalUserMessageID).toBe("message-a")
     expect(value.turn?.selectedEarly).toBe(false)
     expect(value.history[0]?.canonicalUserMessageID).toBe("message-a")
+    expect(value.history[0]?.canonicalLastMessageID).toBe("message-z")
     expect(value.history[0]?.selectedEarly).toBe(false)
     expect(json).not.toContain("anthropic/")
     expect(json).not.toContain("private-assignment")

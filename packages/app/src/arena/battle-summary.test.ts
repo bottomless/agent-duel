@@ -177,6 +177,93 @@ describe("arenaTurnFollowedUp", () => {
   });
 });
 
+describe("a battle with replies sent inside it", () => {
+  // Canonical message IDs ascend; the graft records the last one it copied.
+  const battle = {
+    ...historyItem,
+    canonicalUserMessageID: "msg_0100",
+    canonicalLastMessageID: "msg_0199",
+  } as ArenaHistoryItem;
+  const shellCall = (id: string) =>
+    ({
+      id,
+      kind: "tool_call",
+      timestamp: new Date(historyItem.createdAt),
+      payload: {
+        source: "agent",
+        data: {
+          provider: "opencode",
+          callId: id,
+          name: "shell",
+          status: "completed",
+          error: null,
+          detail: { type: "shell", command: "ls" },
+        },
+      },
+    }) as StreamItem;
+  const battleRows = [
+    { id: "msg_0100", kind: "user_message", messageId: "msg_0100" },
+    { id: "answer-1", kind: "assistant_message" },
+    { id: "msg_0120", kind: "user_message", messageId: "msg_0120" },
+    { id: "answer-2", kind: "assistant_message" },
+    shellCall("tool-2"),
+    { id: "msg_0150", kind: "user_message", messageId: "msg_0150" },
+    { id: "answer-3", kind: "assistant_message" },
+  ] as StreamItem[];
+  const later = [
+    { id: "msg_0300", kind: "user_message", messageId: "msg_0300" },
+    { id: "answer-later", kind: "assistant_message" },
+  ] as StreamItem[];
+
+  it("anchors after the battle's last answer, not its first", () => {
+    expect(arenaSummaryAnchor(battle, battleRows)).toBe("answer-3");
+    expect(arenaTurnFollowedUp(battle, { tail: battleRows, head: [] })).toBe(false);
+  });
+
+  it("stays under the battle once a single-agent reply follows it", () => {
+    const stream = { tail: [...battleRows, ...later], head: [] };
+    expect(arenaSummaryAnchors([battle], stream)).toEqual(["answer-3"]);
+    expect(arenaTurnFollowedUp(battle, stream)).toBe(true);
+    const sending = createUserMessage({
+      clientMessageId: "reply",
+      text: "Battle-off follow-up",
+      timestamp: new Date("2026-08-12T00:05:00Z"),
+    });
+    expect(arenaSummaryAnchor(battle, [...battleRows, sending])).toBe("answer-3");
+    expect(arenaTurnFollowedUp(battle, { tail: battleRows, head: [sending] })).toBe(true);
+  });
+
+  it("finds the battle's end when the loaded page starts after its prompt", () => {
+    const page = [...battleRows.slice(2), ...later];
+    expect(arenaSummaryAnchor(battle, page)).toBe("answer-3");
+    expect(arenaTurnFollowedUp(battle, { tail: page, head: [] })).toBe(true);
+  });
+
+  it("waits for older history when the page holds none of the battle's prompts", () => {
+    const page = [...battleRows.slice(6), ...later];
+    expect(arenaSummaryAnchor(battle, page)).toBeNull();
+    // A canonical prompt past the graft still means the chat moved on.
+    expect(arenaTurnFollowedUp(battle, { tail: page, head: [] })).toBe(true);
+    expect(arenaTurnFollowedUp(battle, { tail: battleRows.slice(6), head: [] })).toBe(false);
+  });
+
+  it("follows the work the last reply's answer moved above, in chat order", () => {
+    const work = shellCall("call-3");
+    const lastReply = [
+      { id: "msg_0150", kind: "user_message", messageId: "msg_0150" },
+      work,
+      { id: "answer-3", kind: "assistant_message", text: "Done" },
+    ] as StreamItem[];
+    const stream = { tail: [...battleRows.slice(0, 5), ...lastReply, ...later], head: [] };
+    expect(arenaSummaryAnchors([battle], stream)).toEqual(["call-3"]);
+  });
+
+  it("falls back to the battle's own prompt for a turn grafted without the bound", () => {
+    const { canonicalLastMessageID: _omitted, ...older } = battle;
+    expect(arenaSummaryAnchor(older, battleRows)).toBe("answer-1");
+  });
+});
+
 describe("partitionArenaSummaries", () => {
   const older = {
     ...historyItem,

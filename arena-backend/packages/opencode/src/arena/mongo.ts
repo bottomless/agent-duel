@@ -77,6 +77,7 @@ const historyProjection = {
   selectedEarly: 1,
   appliedSide: 1,
   canonicalUserMessageID: 1,
+  canonicalLastMessageID: 1,
   gitApplication: 1,
   transitionEvent: 1,
   transitionTimestamps: 1,

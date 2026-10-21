@@ -399,6 +399,12 @@ export type TurnDocument = {
    * their messages are copied so a retried graft can remove a partial copy.
    */
   canonicalSubagentSessionIDs?: string[]
+  /**
+   * The last message the graft copied into the canonical session. With `canonicalUserMessageID` it
+   * bounds the battle's rows in the chat: replies sent inside the battle are user messages too, so
+   * the next user message is not where the battle ends.
+   */
+  canonicalLastMessageID?: string
   gitApplication?: {
     readonly state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
     readonly reason?: string
@@ -907,6 +913,7 @@ export type BattleHistoryTurn = Pick<
   | "selectedEarly"
   | "appliedSide"
   | "canonicalUserMessageID"
+  | "canonicalLastMessageID"
   | "gitApplication"
   | "transitionEvent"
   | "transitionTimestamps"

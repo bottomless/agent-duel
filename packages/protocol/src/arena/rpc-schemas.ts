@@ -320,6 +320,7 @@ export const ArenaHistoryItemSchema = z
     selectedEarly: z.boolean().optional(),
     appliedSide: ArenaSideSchema.optional(),
     canonicalUserMessageID: z.string().optional(),
+    canonicalLastMessageID: z.string().optional(),
     endedAt: z.string().optional(),
     identities: ArenaIdentitiesSchema.optional(),
     gitApplication: ArenaGitApplicationSchema.optional(),

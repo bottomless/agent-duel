@@ -9018,10 +9018,12 @@ export const layer: Layer.Layer<
       const canonicalize = <T>(value: T, role?: string, options?: { readonly subagent?: boolean }) =>
         promise(() => canonicalizeTranscriptPaths(retargetSessions(value), paths, role, options))
       const idMap = new Map<string, MessageID>()
+      let last: MessageID | undefined
       for (const message of source) {
         if (message.info.id < boundary) continue
         const id = MessageID.ascending()
         idMap.set(message.info.id, id)
+        last = id
         const parentID =
           message.info.role === "assistant" && message.info.parentID ? idMap.get(message.info.parentID) : undefined
         const cloned = yield* sessions.updateMessage(
@@ -9069,7 +9071,12 @@ export const layer: Layer.Layer<
           }
         }
       }
-      yield* promise(() => store.updateTurn(turn._id, { canonicalGraftedAt: new Date() }))
+      yield* promise(() =>
+        store.updateTurn(turn._id, {
+          canonicalGraftedAt: new Date(),
+          ...(last ? { canonicalLastMessageID: last } : {}),
+        }),
+      )
     })
 
     const transcriptFor = Effect.fn("Arena.transcriptFor")(function* (store: Store, run: RunDocument) {

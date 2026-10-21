@@ -5949,6 +5949,11 @@ describe("Arena service vertical slice", () => {
       // messages are grafted onto it instead, so it outlives every contestant worktree.
       expect(voted.chat.canonicalSessionID).toBe(source.id)
       expect((await store.turn(firstTurnID))?.canonicalUserMessageID).toBeTruthy()
+      // The battle's rows end at the last message the graft copied, not at the next user message.
+      const grafted = await json<Array<{ readonly info: { readonly id: string } }>>(
+        await request(`/session/${source.id}/message`, { headers }),
+      )
+      expect((await store.turn(firstTurnID))?.canonicalLastMessageID).toBe(grafted.at(-1)?.info.id)
       // The winner stays live through the next-send boundary. The loser lets go of its worktree at
       // once, and the next pair's warm-up adopts it: it leaves its generation's path for the next.
       await waitForRemoved(firstRuns.find((run) => run.side !== "a")!.worktree)
