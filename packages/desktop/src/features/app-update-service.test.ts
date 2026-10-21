@@ -320,6 +320,32 @@ describe("app update service", () => {
     expect(runtime.installModes).toEqual([{ isSilent: true, isForceRunAfter: false }]);
   });
 
+  it("runs the before-quit step ahead of the installer when quitting with a download", async () => {
+    const { runtime, service } = createService({ bucket: async () => 0 });
+    runtime.nextCheck({ isUpdateAvailable: true, updateInfo: rolledOutUpdate });
+    await service.checkForAppUpdate({
+      currentVersion: "1.2.3",
+      releaseChannel: "stable",
+      intent: "automatic",
+    });
+    runtime.finishUpdateDownload(rolledOutUpdate);
+    runtime.nextCheck({ isUpdateAvailable: true, updateInfo: rolledOutUpdate });
+
+    let installsWhenStopped = -1;
+    const installed = await service.installUpdateOnQuit({
+      currentVersion: "1.2.3",
+      releaseChannel: "stable",
+      signal: new AbortController().signal,
+      onBeforeQuit: async () => {
+        installsWhenStopped = runtime.installModes.length;
+      },
+    });
+
+    expect(installed).toBe(true);
+    expect(installsWhenStopped).toBe(0);
+    expect(runtime.installModes).toEqual([{ isSilent: true, isForceRunAfter: false }]);
+  });
+
   it("does not install an older download while its replacement is still rolling out", async () => {
     const now = Date.parse("2026-04-28T12:00:00.000Z");
     const { runtime, service } = createService({ now: () => now, bucket: async () => 0.4 });
