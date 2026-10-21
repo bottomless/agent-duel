@@ -155,40 +155,112 @@ async function transcript<T>(
 const ARENA_PORT_ALIASES = ["PASEO_PORT", "PASEO_PORT2", "PASEO_PORT3"] as const
 type ArenaPortAlias = (typeof ARENA_PORT_ALIASES)[number]
 
-export function canonicalizeArenaEnvironment<T>(
-  value: T,
-  input: {
-    readonly portAliases?: Partial<Record<ArenaPortAlias, number>>
-    readonly previewUrls?: Partial<Record<ArenaPortAlias, string>>
-  },
-): T {
-  const replacements = ARENA_PORT_ALIASES.flatMap((alias) => {
-    const suffix = alias === "PASEO_PORT" ? "" : alias.slice("PASEO_PORT".length)
-    const url = input.previewUrls?.[alias]
-    const port = input.portAliases?.[alias]
-    return [
-      ...(url ? [{ literal: url, variable: `$ARENA_PREVIEW_URL${suffix}`, numeric: false }] : []),
-      ...(port ? [{ literal: String(port), variable: `$${alias}`, numeric: true }] : []),
-    ]
-  }).toSorted((left, right) => right.literal.length - left.literal.length)
-  if (replacements.length === 0) return value
-  return rewriteEnvironment(value, replacements) as T
+/** The port bank and preview URLs one contestant ran with. */
+export type ArenaEnvironment = {
+  readonly portAliases?: Partial<Record<ArenaPortAlias, number>>
+  readonly previewUrls?: Partial<Record<ArenaPortAlias, string>>
 }
 
-export function localizeArenaEnvironment<T>(value: T, env: Readonly<Record<string, string>>): T {
-  const replacements = [
-    ...ARENA_PORT_ALIASES.map((alias) => ({ variable: `$${alias}`, literal: env[alias] })),
-    ...ARENA_PORT_ALIASES.map((alias) => {
-      const suffix = alias === "PASEO_PORT" ? "" : alias.slice("PASEO_PORT".length)
-      const name = `ARENA_PREVIEW_URL${suffix}`
-      return { variable: `$${name}`, literal: env[name] }
+/**
+ * Where a canonical text part keeps the text the winner wrote, before its ports became variables.
+ * The daemon shows this to the reader; the model reads only `text`. Assistant text metadata goes
+ * to the provider as provider metadata on the next call, which must map names to objects, so the
+ * text is nested one level down.
+ */
+export const DISPLAY_METADATA_KEY = "arenaDisplay"
+
+// The loopback hosts a contestant names its own listener by. A port number anywhere else (a PID, a
+// hash, a line number, a remote host) is left alone.
+const LOOPBACK_PORT = /(?<![\w.-])(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d+)(?!\w)/g
+
+/**
+ * Replace the winner's own ports and preview URLs with the variables that name them, so a later
+ * contestant reads its own values there. Only the host:port and full preview URL forms change.
+ * Idempotent: no variable matches again.
+ */
+export function canonicalizeEnvironmentText(text: string, environment: ArenaEnvironment): string {
+  const result = ARENA_PORT_ALIASES.reduce((current, alias) => {
+    const url = environment.previewUrls?.[alias]
+    if (!url) return current
+    const variable = `$ARENA_PREVIEW_URL${alias.slice("PASEO_PORT".length)}`
+    // Not when the host or port carries on: `:67689` or `.localhost.example` is another origin.
+    const pattern = new RegExp(`${escapeRegExp(url)}(?![\\w-]|[.:]\\w)`, "g")
+    return current.replace(pattern, () => variable)
+  }, text)
+  const variables = new Map(
+    ARENA_PORT_ALIASES.flatMap((alias) => {
+      const port = environment.portAliases?.[alias]
+      return port ? [[String(port), `$${alias}`] as const] : []
     }),
-  ]
-    .filter((replacement): replacement is { variable: string; literal: string } => !!replacement.literal)
-    // `$PASEO_PORT` is a prefix of `$PASEO_PORT2`; replace the longest names first.
-    .toSorted((left, right) => right.variable.length - left.variable.length)
-  if (replacements.length === 0) return value
-  return rewriteVariables(value, replacements) as T
+  )
+  if (variables.size === 0) return result
+  return result.replace(LOOPBACK_PORT, (match, host: string, port: string) => {
+    const variable = variables.get(port)
+    return variable ? `${host}:${variable}` : match
+  })
+}
+
+/**
+ * The winner's prose as the canonical session keeps it. Only assistant text parts change: reasoning
+ * carries signatures, tool inputs must keep matching what ran and what is on disk, and tool output
+ * records what happened. The text the winner wrote stays under DISPLAY_METADATA_KEY.
+ */
+export function canonicalizeEnvironmentProse<T>(part: T, role: string | undefined, environment: ArenaEnvironment): T {
+  if (role !== "assistant" || !plainObject(part) || part.type !== "text" || typeof part.text !== "string") return part
+  const text = canonicalizeEnvironmentText(part.text, environment)
+  if (text === part.text) return part
+  const metadata = plainObject(part.metadata) ? part.metadata : {}
+  // A display text the run already set (`displayEnvironmentProse`) is what the reader saw.
+  const display = displayText(part) ?? part.text
+  return { ...part, text, metadata: { ...metadata, [DISPLAY_METADATA_KEY]: { text: display } } } as T
+}
+
+// `$NAME` or `${NAME}`, not when the name carries on (`$PASEO_PORTS`, `$ARENA_PREVIEW_URL_OLD`).
+const VARIABLE = /\$(?:\{(PASEO_PORT[23]?|ARENA_PREVIEW_URL[23]?)\}|(PASEO_PORT[23]?|ARENA_PREVIEW_URL[23]?)(?!\w))/g
+
+// Markdown code: a fenced block, or an inline span.
+const CODE = /(```[\s\S]*?(?:```|$)|`[^`\n]*`)/
+
+/**
+ * This run's values for the port and preview variables in `text`, for the reader. Code stays as
+ * written: there a variable is a name the contestant talks about or a command the shell expands.
+ */
+export function expandEnvironmentText(text: string, environment: ArenaEnvironment): string {
+  return text
+    .split(CODE)
+    .map((segment, index) => (index % 2 === 1 ? segment : expandProse(segment, environment)))
+    .join("")
+}
+
+function expandProse(text: string, environment: ArenaEnvironment): string {
+  return text.replace(VARIABLE, (match, braced: string | undefined, bare: string | undefined) => {
+    const name = braced ?? bare ?? ""
+    if (name.startsWith("PASEO_PORT")) {
+      const port = environment.portAliases?.[name as ArenaPortAlias]
+      return port ? String(port) : match
+    }
+    const alias = `PASEO_PORT${name.slice("ARENA_PREVIEW_URL".length)}` as ArenaPortAlias
+    return environment.previewUrls?.[alias] ?? match
+  })
+}
+
+/**
+ * A contestant reads `$ARENA_PREVIEW_URL` and `$PASEO_PORT` in the history and can write them in its
+ * own prose, where the reader needs a link. When a run ends, its assistant text parts that name one
+ * keep `text` as written, which is what later contestants read, and get this run's values under
+ * DISPLAY_METADATA_KEY for the panes and the chat.
+ */
+export function displayEnvironmentProse<T>(part: T, role: string | undefined, environment: ArenaEnvironment): T {
+  if (role !== "assistant" || !plainObject(part) || part.type !== "text" || typeof part.text !== "string") return part
+  const display = expandEnvironmentText(part.text, environment)
+  if (display === part.text) return part
+  const metadata = plainObject(part.metadata) ? part.metadata : {}
+  return { ...part, metadata: { ...metadata, [DISPLAY_METADATA_KEY]: { text: display } } } as T
+}
+
+function displayText(part: Record<string, unknown>) {
+  const display = plainObject(part.metadata) ? part.metadata[DISPLAY_METADATA_KEY] : undefined
+  return plainObject(display) && typeof display.text === "string" ? display.text : undefined
 }
 
 function pathRoots(worktrees: readonly string[]) {
@@ -254,50 +326,6 @@ function rewrite(value: unknown, roots: readonly string[], canonical: string): u
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-// A data URL carries encoded bytes, a screenshot a contestant read for one. Its base64 text can hold a
-// port's digits between two letters, and rewriting them corrupted the image, so every later battle
-// of the chat sent an image no provider would decode.
-function encodedBytes(value: string) {
-  return value.startsWith("data:")
-}
-
-function rewriteEnvironment(
-  value: unknown,
-  replacements: readonly { readonly literal: string; readonly variable: string; readonly numeric: boolean }[],
-): unknown {
-  if (typeof value === "string") {
-    if (encodedBytes(value)) return value
-    return replacements.reduce((current, replacement) => {
-      if (!replacement.numeric) return current.split(replacement.literal).join(replacement.variable)
-      const pattern = new RegExp(`(?<!\\d)${escapeRegExp(replacement.literal)}(?!\\d)`, "g")
-      return current.replace(pattern, () => replacement.variable)
-    }, value)
-  }
-  if (Array.isArray(value)) return value.map((entry) => rewriteEnvironment(entry, replacements))
-  if (!plainObject(value)) return value
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, rewriteEnvironment(entry, replacements)]),
-  )
-}
-
-function rewriteVariables(
-  value: unknown,
-  replacements: readonly { readonly variable: string; readonly literal: string }[],
-): unknown {
-  if (typeof value === "string") {
-    if (encodedBytes(value)) return value
-    return replacements.reduce(
-      (current, replacement) => current.split(replacement.variable).join(replacement.literal),
-      value,
-    )
-  }
-  if (Array.isArray(value)) return value.map((entry) => rewriteVariables(entry, replacements))
-  if (!plainObject(value)) return value
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, rewriteVariables(entry, replacements)]),
-  )
 }
 
 // Anything with a non-trivial prototype (Date, Uint8Array, BSON values) is passed through untouched

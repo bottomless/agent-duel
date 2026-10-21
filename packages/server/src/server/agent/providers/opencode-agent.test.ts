@@ -3607,6 +3607,47 @@ describe("OpenCodeAgentClient env", () => {
 });
 
 describe("OpenCode persisted sessions", () => {
+  test("replay shows the text a battle winner wrote, not the canonical copy the next contestant reads", () => {
+    const timeline = __openCodeInternals.buildOpenCodeSessionTimeline([
+      {
+        info: {
+          id: "msg_winner",
+          sessionID: "ses_1",
+          role: "assistant",
+          time: { created: 1001, completed: 1002 },
+          providerID: "arena",
+          modelID: "contestant",
+        },
+        parts: [
+          {
+            id: "prt_prose",
+            sessionID: "ses_1",
+            messageID: "msg_winner",
+            type: "text",
+            text: "Running at http://localhost:$PASEO_PORT",
+            metadata: { arenaDisplay: { text: "Running at http://localhost:21400" } },
+          },
+          {
+            id: "prt_plain",
+            sessionID: "ses_1",
+            messageID: "msg_winner",
+            type: "text",
+            text: "Done.",
+          },
+        ],
+      },
+    ]);
+
+    expect(timeline).toEqual([
+      {
+        type: "assistant_message",
+        text: "Running at http://localhost:21400",
+        messageId: "msg_winner",
+      },
+      { type: "assistant_message", text: "Done.", messageId: "msg_winner" },
+    ]);
+  });
+
   test("replay hides summaries produced by manual compact", () => {
     const timeline = __openCodeInternals.buildOpenCodeSessionTimeline([
       {

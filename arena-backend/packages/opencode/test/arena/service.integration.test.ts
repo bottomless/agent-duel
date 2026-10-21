@@ -29,6 +29,7 @@ import type {
   TurnDocument,
 } from "@/arena/records"
 import { registry, setStoreForTest } from "@/arena/runtime"
+import { runEnvironment } from "@/arena/service"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
 import { MessageID } from "@/session/schema"
 import { Server } from "@/server/server"
@@ -49,7 +50,7 @@ type Mutable = Record<string, unknown>
 type Update = Record<string, Record<string, unknown>>
 const TOOL_OUTPUT_DISPLAY_CAP = 128
 const CONTESTANT_WORKTREE_INSTRUCTION =
-  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Literal ports, preview URLs, log paths, and process IDs in earlier messages or tool output are historical; do not reuse them, connect to them, or stop anything using them. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
+  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Where earlier messages say $PASEO_PORT, $PASEO_PORT2, $PASEO_PORT3, $ARENA_PREVIEW_URL, $ARENA_PREVIEW_URL2, or $ARENA_PREVIEW_URL3, they mean this environment's current values. Literal ports, preview URLs, log paths, and process IDs in earlier commands or tool output belong to earlier environments that are now closed; do not reuse them, connect to them, or stop anything using them. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
 
 function record(value: unknown): value is Mutable {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -2013,6 +2014,130 @@ describe("Arena service vertical slice", () => {
     }
   }, 90_000)
 
+  test("names the winner's own ports by variable in the canonical prose, and nowhere else", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure port prose fixture"`.cwd(directory.path).quiet()
+    await using arenaDirectory = await tmpdir()
+    const store = await connectLocalStore({ directory: arenaDirectory.path })
+    const previousBase = process.env.PASEO_ARENA_PREVIEW_BASE_URL
+    process.env.PASEO_ARENA_PREVIEW_BASE_URL = "http://localhost:6768"
+    const report = `printf 'port=%s url=%s\\n' "$PASEO_PORT" "$ARENA_PREVIEW_URL"`
+    let generation = 0
+    const router = installOpenRouterStub({
+      contestantCommands: { 1: report, 2: report },
+      // Answer with the port and preview URL the contestant's own command printed.
+      respond: ({ model, messages }) => {
+        const history = JSON.stringify(messages)
+        const reported = [...history.matchAll(/port=(\d+) url=(http:\/\/[\w.-]+:\d+)/g)].at(-1)
+        if (!reported) return undefined
+        // On the second turn the contestant names its preview by the variable it read.
+        const content = history.includes("Check the preview again")
+          ? "Still up. URL: $ARENA_PREVIEW_URL"
+          : `Server running at http://localhost:${reported[1]}/ and ${reported[2]}. Port ${reported[1]} stays.`
+        const base = { id: `chatcmpl-prose-${++generation}`, object: "chat.completion.chunk", model }
+        return chunks([
+          { ...base, choices: [{ index: 0, delta: { role: "assistant" } }] },
+          { ...base, choices: [{ index: 0, delta: { content } }] },
+          {
+            ...base,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
+          },
+          "[DONE]",
+        ])
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+    const headers = {
+      "content-type": "application/json",
+      "x-opencode-directory": directory.path,
+    }
+    type Message = {
+      readonly info: { readonly role: string }
+      readonly parts: ReadonlyArray<{
+        readonly type: string
+        readonly text?: string
+        readonly metadata?: Record<string, unknown>
+        readonly state?: { readonly input?: { readonly command?: string }; readonly output?: string }
+      }>
+    }
+    const messages = async (sessionID: string) =>
+      json<Message[]>(await request(`/session/${sessionID}/message`, { headers }))
+    const battle = async (chatID: string, prompt: string) => {
+      const started = await json<PublicSnapshot>(
+        await request(`/arena/chats/${chatID}/turns`, { method: "POST", headers, body: JSON.stringify({ prompt }) }),
+      )
+      const turnID = started.turn?.id
+      if (!turnID) throw new Error(`Arena did not start: ${prompt}`)
+      await waitForTurn(store, turnID, "awaiting_vote")
+      return turnID
+    }
+
+    try {
+      const source = await json<{ id: string }>(
+        await request("/session", { method: "POST", headers, body: JSON.stringify({ title: "Port prose" }) }),
+      )
+      const chatID = (await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))).chat.id
+      const turnID = await battle(chatID, "Start the preview.")
+      const winner = (await store.runsForTurn(turnID)).find((run) => run.side === "a")
+      const port = winner?.portAliases?.PASEO_PORT
+      if (!winner || !port) throw new Error("Arena gave the winner no port bank")
+      expect(port).toBeGreaterThanOrEqual(20_000)
+      expect(port).toBeLessThanOrEqual(29_999)
+      await request(`/arena/turns/${turnID}/vote`, { method: "POST", headers, body: JSON.stringify({ vote: "a" }) })
+      await waitForTurn(store, turnID, "complete")
+
+      const written = `Server running at http://localhost:${port}/ and `
+      const ownProse = (await messages(winner.rootSessionID))
+        .flatMap((message) => message.parts)
+        .find((part) => part.type === "text" && part.text?.startsWith(written))
+      if (!ownProse) throw new Error("The winner did not report its preview")
+      expect(ownProse.metadata?.arenaDisplay).toBeUndefined()
+
+      const canonical = (await messages(source.id)).filter((message) => message.info.role === "assistant")
+      const prose = canonical
+        .flatMap((message) => message.parts)
+        .find((part) => part.text?.startsWith("Server running"))
+      expect(prose?.text).toBe(
+        `Server running at http://localhost:$PASEO_PORT/ and $ARENA_PREVIEW_URL. Port ${port} stays.`,
+      )
+      expect(prose?.metadata?.arenaDisplay).toEqual({ text: ownProse.text })
+      const tool = canonical.flatMap((message) => message.parts).find((part) => part.type === "tool")
+      expect(tool?.state?.input?.command).toBe(report)
+      expect(tool?.state?.output).toContain(`port=${port} url=http://`)
+
+      // The next contestants read the variables; the text the reader sees never reaches them.
+      const boundary = router.contestantRequests.length
+      const nextTurnID = await battle(chatID, "Check the preview again.")
+      const next = router.contestantRequests.slice(boundary).map((body) => JSON.stringify(body))
+      expect(next.length).toBeGreaterThanOrEqual(2)
+      expect(next.every((body) => body.includes("http://localhost:$PASEO_PORT/"))).toBe(true)
+      expect(next.some((body) => body.includes(`localhost:${port}`))).toBe(false)
+      expect(next.some((body) => body.includes("arenaDisplay"))).toBe(false)
+
+      // A contestant that writes the variable keeps it in its text and shows its own link.
+      for (const run of await store.runsForTurn(nextTurnID)) {
+        const own = (await messages(run.rootSessionID))
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "text" && part.text === "Still up. URL: $ARENA_PREVIEW_URL")
+        const url = runEnvironment(run).previewUrls?.PASEO_PORT
+        if (!own || !url) throw new Error(`Side ${run.side} did not name its preview`)
+        expect(url).toContain(`turn2-${run.side}--`)
+        expect(own.metadata?.arenaDisplay).toEqual({ text: `Still up. URL: ${url}` })
+      }
+    } finally {
+      router.restore()
+      if (previousBase === undefined) delete process.env.PASEO_ARENA_PREVIEW_BASE_URL
+      else process.env.PASEO_ARENA_PREVIEW_BASE_URL = previousBase
+      await store.close()
+    }
+  }, 90_000)
+
   test.each(["manifest", "ready"] as const)(
     "reuses a warm pair when submission overlaps %s publication",
     async (gate) => {
@@ -3211,9 +3336,7 @@ describe("Arena service vertical slice", () => {
       await waitForTurn(memory.store, turnID, "awaiting_stop_resolution")
       const runs = await memory.store.runsForTurn(turnID)
       expect(runs.map((run) => [run.side, run.runState, run.selectable])).toEqual(
-        runs.map((run) =>
-          run.side === failed.side ? [run.side, "error", false] : [run.side, "complete", true],
-        ),
+        runs.map((run) => (run.side === failed.side ? [run.side, "error", false] : [run.side, "complete", true])),
       )
       const keep = failed.side === "a" ? "apply_b" : "apply_a"
       await json<PublicSnapshot>(

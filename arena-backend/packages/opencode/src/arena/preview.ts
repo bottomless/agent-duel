@@ -1,4 +1,4 @@
-import { createHash } from "crypto"
+import { createHash, randomInt } from "crypto"
 import { connect, createServer } from "net"
 import path from "path"
 import type { Side } from "./domain"
@@ -69,36 +69,62 @@ export function hostnameForAlias(hostname: string, alias: PortAlias) {
 }
 
 /**
- * Pick one free loopback port and retain its reservation until releasePort is called.
- * Closing the probe socket is intentional: the contestant process must be able to bind it.
+ * Contestant ports come from this range, below the ephemeral ranges of macOS (49152-65535) and
+ * Linux (32768-60999), so the OS never hands one out for an outgoing connection or a `listen(0)`.
+ * The winner's prose names its ports by variable from then on (`canonicalizeEnvironmentProse`),
+ * which is only exact while a port number belongs to one environment: handed out in sequence, a
+ * port comes back only after the whole range has gone round.
  */
-export function availablePort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const probe = createServer()
-    const fail = (error: Error) => {
-      probe.close(() => reject(error))
+export const PREVIEW_PORT_RANGE = { first: 20_000, last: 29_999 } as const
+
+/** Where the next allocation starts. The engine keeps it in the Arena store across restarts. */
+export type PortCursor = {
+  readonly read: () => Promise<number | undefined>
+  readonly write: (next: number) => Promise<void>
+}
+
+let memoryCursorValue: number | undefined
+const memoryCursor: PortCursor = {
+  read: async () => memoryCursorValue,
+  write: async (next) => {
+    memoryCursorValue = next
+  },
+}
+
+function inRange(port: number | undefined): port is number {
+  return (
+    port !== undefined && Number.isInteger(port) && port >= PREVIEW_PORT_RANGE.first && port <= PREVIEW_PORT_RANGE.last
+  )
+}
+
+/**
+ * Hand out ports in sequence from PREVIEW_PORT_RANGE, skipping any this process has reserved or
+ * another program holds. With no stored cursor the sequence starts at a random place, so two
+ * engines with separate stores rarely walk the same ports. Runs inside allocatePortBank's queue.
+ */
+export function sequentialPorts(
+  cursor: PortCursor = memoryCursor,
+  isFree: (port: number) => Promise<boolean> = portFree,
+) {
+  return async (count: number): Promise<readonly number[]> => {
+    const size = PREVIEW_PORT_RANGE.last - PREVIEW_PORT_RANGE.first + 1
+    const stored = await cursor.read()
+    let next = inRange(stored) ? stored : PREVIEW_PORT_RANGE.first + randomInt(size)
+    const ports: number[] = []
+    for (let tried = 0; ports.length < count; tried++) {
+      if (tried >= size) throw new Error("Arena found no free port for a contestant in its port range")
+      const port = next
+      next = port === PREVIEW_PORT_RANGE.last ? PREVIEW_PORT_RANGE.first : port + 1
+      if (allocatedPorts.has(port)) continue
+      if (await isFree(port)) ports.push(port)
     }
-    probe.once("error", fail)
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address()
-      if (!address || typeof address === "string") {
-        fail(new Error("Arena preview could not allocate a port"))
-        return
-      }
-      probe.close((error) => {
-        if (error) {
-          reject(error)
-          return
-        }
-        if (allocatedPorts.has(address.port)) {
-          void availablePort().then(resolve, reject)
-          return
-        }
-        allocatedPorts.add(address.port)
-        resolve(address.port)
-      })
-    })
-  })
+    await cursor.write(next)
+    return ports
+  }
+}
+
+async function portFree(port: number) {
+  return !(await portTaken(port))
 }
 
 export function releasePort(port: number) {
@@ -106,21 +132,7 @@ export function releasePort(port: number) {
 }
 
 function allocatorFunction(input: AllocatePortBankOptions["allocator"]): PortAllocator {
-  if (!input) {
-    return {
-      allocate: async (count) => {
-        const ports: number[] = []
-        try {
-          for (let index = 0; index < count; index++) ports.push(await availablePort())
-          return ports
-        } catch (error) {
-          ports.forEach(releasePort)
-          throw error
-        }
-      },
-      release: (ports) => ports.forEach(releasePort),
-    }
-  }
+  if (!input) return { allocate: sequentialPorts() }
   return typeof input === "function" ? { allocate: input } : input
 }
 
@@ -431,9 +443,8 @@ export function environment(
   const previewUrl2 = url({ ...preview, hostname: hostnameForAlias(preview.hostname, "PASEO_PORT2") }, env)
   const previewUrl3 = url({ ...preview, hostname: hostnameForAlias(preview.hostname, "PASEO_PORT3") }, env)
   const relative = path.relative(path.resolve(directory), path.resolve(cwd))
-  const ownerRelativeCwd = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
-    ? relative || "."
-    : "."
+  const ownerRelativeCwd =
+    relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)) ? relative || "." : "."
   return {
     HOST: "127.0.0.1",
     PORT: String(preview.port),
@@ -463,6 +474,7 @@ export function clearForTest() {
   pendingAllocations.clear()
   allocatedPorts.clear()
   releaseCallbacks.clear()
+  memoryCursorValue = undefined
 }
 
 export * as ArenaPreview from "./preview"

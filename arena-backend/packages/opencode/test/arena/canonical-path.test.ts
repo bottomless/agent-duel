@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
-  canonicalizeArenaEnvironment,
+  canonicalizeEnvironmentProse,
+  canonicalizeEnvironmentText,
   canonicalizeTranscriptPaths,
+  DISPLAY_METADATA_KEY,
+  displayEnvironmentProse,
+  expandEnvironmentText,
   localizeTranscriptPaths,
   canonicalizeWorktreePaths,
-  localizeArenaEnvironment,
   localizeCanonicalPaths,
 } from "@/arena/canonical-path"
 
@@ -14,85 +17,168 @@ const WORKTREE_B = "/Users/dev/.local/share/opencode/worktree/5f90df7c/turn-1-b-
 const BOTH = { worktrees: [WORKTREE_A, WORKTREE_B], canonical: CANONICAL }
 
 describe("Arena canonical path", () => {
-  test("rewrites historical preview URLs and ports to current environment variables", () => {
-    const result = canonicalizeArenaEnvironment(
-      {
-        text: "Server at http://turn1-a--abc.localhost:6768/ on port 51101",
-        tool: {
-          input: { command: "vite --port 51102" },
-          output: "PORT=51101 PASEO_PORT2=51102; unrelated=1511010",
-        },
-      },
-      {
-        portAliases: { PASEO_PORT: 51101, PASEO_PORT2: 51102, PASEO_PORT3: 51103 },
-        previewUrls: {
-          PASEO_PORT: "http://turn1-a--abc.localhost:6768",
-          PASEO_PORT2: "http://port2--turn1-a--abc.localhost:6768",
-        },
-      },
-    )
+  const WINNER = {
+    portAliases: { PASEO_PORT: 21400, PASEO_PORT2: 21401, PASEO_PORT3: 21402 },
+    previewUrls: {
+      PASEO_PORT: "http://turn1-a--abc.localhost:6768",
+      PASEO_PORT2: "http://port2--turn1-a--abc.localhost:6768",
+      PASEO_PORT3: "http://port3--turn1-a--abc.localhost:6768",
+    },
+  }
 
-    expect(result).toEqual({
-      text: "Server at $ARENA_PREVIEW_URL/ on port $PASEO_PORT",
-      tool: {
-        input: { command: "vite --port $PASEO_PORT2" },
-        output: "PORT=$PASEO_PORT PASEO_PORT2=$PASEO_PORT2; unrelated=1511010",
-      },
-    })
+  test.each([
+    ["http://localhost:21400/", "http://localhost:$PASEO_PORT/"],
+    ["https://127.0.0.1:21401/api?q=1", "https://127.0.0.1:$PASEO_PORT2/api?q=1"],
+    ["bound to 0.0.0.0:21402.", "bound to 0.0.0.0:$PASEO_PORT3."],
+    ["curl [::1]:21400", "curl [::1]:$PASEO_PORT"],
+    ["listen on [::]:21401", "listen on [::]:$PASEO_PORT2"],
+    ["(localhost:21400)", "(localhost:$PASEO_PORT)"],
+    ["Open http://turn1-a--abc.localhost:6768", "Open $ARENA_PREVIEW_URL"],
+    ["Open http://turn1-a--abc.localhost:6768/admin.", "Open $ARENA_PREVIEW_URL/admin."],
+    ["[API](http://port2--turn1-a--abc.localhost:6768/v1)", "[API]($ARENA_PREVIEW_URL2/v1)"],
+    ["ws at http://port3--turn1-a--abc.localhost:6768", "ws at $ARENA_PREVIEW_URL3"],
+  ])("replaces the winner's own port or preview URL in %s", (text, expected) => {
+    expect(canonicalizeEnvironmentText(text, WINNER)).toBe(expected)
   })
 
-  test("localizes canonical environment variables for a contestant", () => {
-    const result = localizeArenaEnvironment(
-      {
-        text: "Server: $ARENA_PREVIEW_URL ($PASEO_PORT)",
-        tool: { command: "vite --port $PASEO_PORT2; echo $ARENA_PREVIEW_URL2" },
-      },
-      {
-        PASEO_PORT: "53728",
-        PASEO_PORT2: "53729",
-        ARENA_PREVIEW_URL: "http://turn2-a.localhost:6768",
-        ARENA_PREVIEW_URL2: "http://port2--turn2-a.localhost:6768",
-      },
-    )
-
-    expect(result).toEqual({
-      text: "Server: http://turn2-a.localhost:6768 (53728)",
-      tool: { command: "vite --port 53729; echo http://port2--turn2-a.localhost:6768" },
-    })
+  test.each([
+    "port 21400",
+    "PID 21400 exited",
+    "localhost:214001",
+    "localhost:21400abc",
+    "mylocalhost:21400",
+    "10.0.0.1:21400",
+    "https://example.com:21400/",
+    "localhost:21403",
+    "sha 9f21400a",
+    "line 21400:",
+    "http://turn1-a--abc.localhost:67689",
+    "http://turn1-a--abc.localhost:6768.evil.test",
+    "http://turn1-a--abcd.localhost:6768",
+    "iVBORw0KGgoqzp8localhost:21400",
+  ])("leaves %s unchanged", (text) => {
+    expect(canonicalizeEnvironmentText(text, WINNER)).toBe(text)
   })
 
-  test("retargets ports in a screenshot's tool output but never inside its image bytes", () => {
-    // A screenshot whose base64 text holds the old port's digits between two letters, as the one
-    // that left every later battle of a chat failing with "Invalid PNG image".
-    const image = "data:image/png;base64,iVBORw0KGgoqzp8CLI6cButwH+oUre55556u33/ld5uALUtI8+eD8mN"
+  test("is idempotent", () => {
+    const once = canonicalizeEnvironmentText(
+      "Started at http://localhost:21400 and http://turn1-a--abc.localhost:6768",
+      WINNER,
+    )
+    expect(once).toBe("Started at http://localhost:$PASEO_PORT and $ARENA_PREVIEW_URL")
+    expect(canonicalizeEnvironmentText(once, WINNER)).toBe(once)
+  })
+
+  test("changes an assistant text part and keeps its original text for display", () => {
     const part = {
-      type: "tool",
-      tool: "read",
-      state: {
-        output: "Screenshot of http://localhost:55556",
-        attachments: [{ type: "file", mime: "image/png", url: image }],
+      type: "text",
+      text: "Running at http://localhost:21400",
+      metadata: { openai: { itemId: "msg_1" } },
+    }
+    const result = canonicalizeEnvironmentProse(part, "assistant", WINNER)
+    expect(result).toEqual({
+      type: "text",
+      text: "Running at http://localhost:$PASEO_PORT",
+      metadata: {
+        openai: { itemId: "msg_1" },
+        [DISPLAY_METADATA_KEY]: { text: "Running at http://localhost:21400" },
+      },
+    })
+    expect(part.text).toBe("Running at http://localhost:21400")
+    expect(canonicalizeEnvironmentProse(result, "assistant", WINNER)).toEqual(result)
+  })
+
+  test("returns a text part without a match unchanged", () => {
+    const part = { type: "text", text: "No server this time" }
+    expect(canonicalizeEnvironmentProse(part, "assistant", WINNER)).toBe(part)
+  })
+
+  test("keeps the display text a contestant's own run already set", () => {
+    const part = {
+      type: "text",
+      text: "Old http://localhost:21400, now URL: $ARENA_PREVIEW_URL",
+      metadata: {
+        [DISPLAY_METADATA_KEY]: { text: "Old http://localhost:21400, now URL: http://turn1-a--abc.localhost:6768" },
       },
     }
-
-    const canonical = canonicalizeArenaEnvironment(part, { portAliases: { PASEO_PORT: 55556 } })
-    const localized = localizeArenaEnvironment(canonical, { PASEO_PORT: "54507" })
-
-    expect(localized.state.output).toBe("Screenshot of http://localhost:54507")
-    expect(localized.state.attachments[0]?.url).toBe(image)
+    expect(canonicalizeEnvironmentProse(part, "assistant", WINNER)).toEqual({
+      type: "text",
+      text: "Old http://localhost:$PASEO_PORT, now URL: $ARENA_PREVIEW_URL",
+      metadata: {
+        [DISPLAY_METADATA_KEY]: { text: "Old http://localhost:21400, now URL: http://turn1-a--abc.localhost:6768" },
+      },
+    })
   })
 
-  test("retargets a concrete historical URL without changing the displayed canonical value", () => {
-    const displayed = "Server: http://turn1-b.localhost:6768"
-    const canonical = canonicalizeArenaEnvironment(displayed, {
-      portAliases: { PASEO_PORT: 51112 },
-      previewUrls: { PASEO_PORT: "http://turn1-b.localhost:6768" },
-    })
+  test.each([
+    ["URL: $ARENA_PREVIEW_URL", "URL: http://turn1-a--abc.localhost:6768"],
+    ["URL: ${ARENA_PREVIEW_URL}/admin", "URL: http://turn1-a--abc.localhost:6768/admin"],
+    ["api at $ARENA_PREVIEW_URL2.", "api at http://port2--turn1-a--abc.localhost:6768."],
+    ["http://localhost:$PASEO_PORT/ and 127.0.0.1:$PASEO_PORT3", "http://localhost:21400/ and 127.0.0.1:21402"],
+    ["the server is on port $PASEO_PORT2", "the server is on port 21401"],
+    ["Use `npm start`, then open $ARENA_PREVIEW_URL", "Use `npm start`, then open http://turn1-a--abc.localhost:6768"],
+  ])("expands this run's variables for display in %s", (text, expected) => {
+    expect(expandEnvironmentText(text, WINNER)).toBe(expected)
+  })
 
-    expect(displayed).toBe("Server: http://turn1-b.localhost:6768")
-    expect(localizeArenaEnvironment(canonical, {
-      PASEO_PORT: "53731",
-      ARENA_PREVIEW_URL: "http://turn2-b.localhost:6768",
-    })).toBe("Server: http://turn2-b.localhost:6768")
+  test.each([
+    "$PASEO_PORTS",
+    "$ARENA_PREVIEW_URL_OLD",
+    "$HOME",
+    "no variables",
+    // In code the contestant names the variable or writes a command the shell expands.
+    "I wrote the variable names `$PASEO_PORT` and `$ARENA_PREVIEW_URL` instead of values.",
+    "Run:\n```bash\ncurl -s http://127.0.0.1:$PASEO_PORT/whoami\n```",
+  ])("leaves %s as written", (text) => {
+    expect(expandEnvironmentText(text, WINNER)).toBe(text)
+  })
+
+  test("sets display text on an assistant text part that names a variable, and changes nothing else", () => {
+    const part = { type: "text", text: "Done.\nURL: $ARENA_PREVIEW_URL", metadata: { openai: { itemId: "msg_1" } } }
+    expect(displayEnvironmentProse(part, "assistant", WINNER)).toEqual({
+      type: "text",
+      text: "Done.\nURL: $ARENA_PREVIEW_URL",
+      metadata: {
+        openai: { itemId: "msg_1" },
+        [DISPLAY_METADATA_KEY]: { text: "Done.\nURL: http://turn1-a--abc.localhost:6768" },
+      },
+    })
+    const plain = { type: "text", text: "URL: http://turn1-a--abc.localhost:6768" }
+    expect(displayEnvironmentProse(plain, "assistant", WINNER)).toBe(plain)
+    const user = { type: "text", text: "use $PASEO_PORT" }
+    expect(displayEnvironmentProse(user, "user", WINNER)).toBe(user)
+    const tool = { type: "tool", tool: "bash", state: { input: { command: "curl localhost:$PASEO_PORT" } } }
+    expect(displayEnvironmentProse(tool, "assistant", WINNER)).toBe(tool)
+  })
+
+  test("never changes user prompts, reasoning, tools, files, or other parts", () => {
+    const literal = "http://localhost:21400"
+    const parts = [
+      { role: "user", part: { type: "text", text: literal } },
+      {
+        role: "assistant",
+        part: { type: "reasoning", text: literal, metadata: { anthropic: { signature: "21400" } } },
+      },
+      {
+        role: "assistant",
+        part: {
+          type: "tool",
+          tool: "bash",
+          state: { status: "completed", input: { command: `curl ${literal}` }, output: `ok ${literal}` },
+        },
+      },
+      {
+        role: "assistant",
+        part: {
+          type: "tool",
+          tool: "edit",
+          state: { status: "completed", input: { oldString: literal, newString: "http://localhost:3000" } },
+        },
+      },
+      { role: "assistant", part: { type: "file", mime: "image/png", url: "data:image/png;base64,localhost:21400" } },
+      { role: "assistant", part: { type: "patch", hash: "21400", files: [] } },
+    ]
+    for (const { role, part } of parts) expect(canonicalizeEnvironmentProse(part, role, WINNER)).toBe(part)
   })
 
   test("rewrites declared path values through objects and arrays, never keys", () => {
@@ -165,9 +251,7 @@ describe("Arena canonical path", () => {
       `Edited ${CANONICAL}/src/data/tiers.ts.\n${CANONICAL}/src/data/tiers.ts\ncd ${CANONICAL} && pwd`,
     )
     const continued = await localizeTranscriptPaths(canonical, { canonical: CANONICAL, worktree: second }, "assistant")
-    expect(continued.text).toBe(
-      `Edited ${second}/src/data/tiers.ts.\n${second}/src/data/tiers.ts\ncd ${second} && pwd`,
-    )
+    expect(continued.text).toBe(`Edited ${second}/src/data/tiers.ts.\n${second}/src/data/tiers.ts\ncd ${second} && pwd`)
     expect(await canonicalizeTranscriptPaths(part, { worktrees: [first], canonical: CANONICAL }, "user")).toBe(part)
   })
 

@@ -5,6 +5,7 @@ import {
   contestantSystemInstruction,
   isGitLockContention,
   normalTurnReservations,
+  runEnvironment,
   trunkConflictList,
   trunkConflictPaths,
   trunkConflictReason,
@@ -31,9 +32,7 @@ test("caps the conflict list in the refusal without hiding how many there are", 
 
   const many = Array.from({ length: 300 }, (_, index) => `src/file-${index}.ts`)
   const listed = trunkConflictList(many)
-  expect(listed).toBe(
-    "src/file-0.ts, src/file-1.ts, src/file-2.ts, src/file-3.ts, src/file-4.ts, and 295 more",
-  )
+  expect(listed).toBe("src/file-0.ts, src/file-1.ts, src/file-2.ts, src/file-3.ts, src/file-4.ts, and 295 more")
   expect(trunkConflictReason(many)).toBe(
     `Unresolved merge conflicts: ${listed}. Resolve them, or turn Battle off and ask one agent to resolve them.`,
   )
@@ -83,6 +82,51 @@ describe("unappliedWinnerNote", () => {
   })
 })
 
+describe("runEnvironment", () => {
+  test("reads the winner's port bank and each alias's preview URL from its record", () => {
+    const at = new Date()
+    const route = (alias: "PASEO_PORT" | "PASEO_PORT2" | "PASEO_PORT3", port: number, url?: string) => ({
+      hostname: "h.localhost",
+      port,
+      alias,
+      active: true,
+      ...(url ? { url } : {}),
+    })
+    expect(
+      runEnvironment({
+        portAliases: { PASEO_PORT: 21400, PASEO_PORT2: 21401, PASEO_PORT3: 21402 },
+        services: [
+          {
+            kind: "environment",
+            command: "Arena preview environment",
+            args: [],
+            env: {},
+            relativeCwd: ".",
+            listeners: [],
+            proxyRoutes: [
+              route("PASEO_PORT", 21400, "http://turn1-a--abc.localhost:6768"),
+              route("PASEO_PORT2", 21401, "http://port2--turn1-a--abc.localhost:6768"),
+              route("PASEO_PORT3", 21402),
+            ],
+            capturedAt: at,
+            verifiedAt: at,
+          },
+        ],
+      }),
+    ).toEqual({
+      portAliases: { PASEO_PORT: 21400, PASEO_PORT2: 21401, PASEO_PORT3: 21402 },
+      previewUrls: {
+        PASEO_PORT: "http://turn1-a--abc.localhost:6768",
+        PASEO_PORT2: "http://port2--turn1-a--abc.localhost:6768",
+      },
+    })
+  })
+
+  test("has nothing to replace for a run without a bank", () => {
+    expect(runEnvironment({})).toEqual({ previewUrls: {} })
+  })
+})
+
 describe("contestantSystemInstruction", () => {
   afterEach(clearForTest)
 
@@ -102,6 +146,17 @@ describe("contestantSystemInstruction", () => {
     )
     expect(instruction).toContain("Otherwise do not write about preview URLs at all, not even to say there is none.")
     expect(instruction).not.toContain("In your final response, report the expanded")
+  })
+
+  test("says what the port variables in earlier messages mean and that literal ports are closed", () => {
+    const instruction = contestantSystemInstruction()
+
+    expect(instruction).toContain(
+      "Where earlier messages say $PASEO_PORT, $PASEO_PORT2, $PASEO_PORT3, $ARENA_PREVIEW_URL, $ARENA_PREVIEW_URL2, or $ARENA_PREVIEW_URL3, they mean this environment's current values.",
+    )
+    expect(instruction).toContain(
+      "Literal ports, preview URLs, log paths, and process IDs in earlier commands or tool output belong to earlier environments that are now closed",
+    )
   })
 
   test("lists no preview URLs for a worktree without a live route", () => {

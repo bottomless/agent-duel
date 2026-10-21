@@ -116,15 +116,13 @@ export type WarmWorktreeRecord = {
   readonly refsMirrored?: boolean
   /**
    * The canonical session forked into this worktree at warm-up, with the transcript hash and
-   * source it was copied from and the port bank its paths were localized against. A send uses
-   * it only when all three still match and the pair is trusted in this process; otherwise it
-   * forks again and disposes of this one.
+   * source it was copied from. A send uses it only when both still match and the pair is
+   * trusted in this process; otherwise it forks again and disposes of this one.
    */
   readonly forkedSessionID?: string
   readonly forkSourceSessionID?: string
   readonly forkTranscriptHash?: string
   readonly forkMessageMap?: Readonly<Record<string, string>>
-  readonly portAliases?: Readonly<Record<ArenaPortAlias, number>>
   /** How this worktree was last brought to its base, and where that time went. */
   readonly sync?: SlotSyncTimings
 }
@@ -271,6 +269,12 @@ export type CheckoutEvictionDocument = {
   readonly root: string
   readonly createdAt: Date
   updatedAt: Date
+}
+
+/** A position the engine keeps across restarts, such as the next contestant port to hand out. */
+export type CursorDocument = {
+  readonly _id: string
+  readonly value: number
 }
 
 export type HiddenAssignment = {

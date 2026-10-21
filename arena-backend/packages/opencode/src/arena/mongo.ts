@@ -28,6 +28,7 @@ import type {
   ChatDocument,
   CheckoutEvictionDocument,
   ComparisonDocument,
+  CursorDocument,
   GenerationDocument,
   GenerationRetry,
   RawEventDocument,
@@ -184,7 +185,16 @@ export class Store {
   readonly reviewEvents: ArenaCollection<ReviewEventDocument>
   readonly battleMetrics: ArenaCollection<BattleMetricsDocument>
   readonly singleAgentRatings: ArenaCollection<SingleAgentRatingDocument>
+  readonly cursors: ArenaCollection<CursorDocument>
   readonly artifactQueues = new Map<string, Promise<void>>()
+
+  /** Where the next contestant port bank starts (`sequentialPorts` in `arena/preview.ts`). */
+  readonly previewPortCursor = {
+    read: async () => (await this.cursors.findOne({ _id: "previewPort" }))?.value,
+    write: async (value: number) => {
+      await this.cursors.replaceOne({ _id: "previewPort" }, { _id: "previewPort", value }, { upsert: true })
+    },
+  }
 
   constructor(client: ArenaClient, db: ArenaDb | Db) {
     this.client = client
@@ -202,6 +212,7 @@ export class Store {
     this.reviewEvents = this.db.collection<ReviewEventDocument>("reviewEvents")
     this.battleMetrics = this.db.collection<BattleMetricsDocument>("battleMetrics")
     this.singleAgentRatings = this.db.collection<SingleAgentRatingDocument>("singleAgentRatings")
+    this.cursors = this.db.collection<CursorDocument>("cursors")
   }
 
   async initialize() {

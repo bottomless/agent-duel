@@ -38,6 +38,47 @@ function createState(sessionId = "session-1"): OpenCodeEventTranslationState {
 }
 
 describe("translateOpenCodeEvent", () => {
+  it("shows the text a battle winner wrote, not the canonical copy the next contestant reads", () => {
+    const state = createState();
+    translateOpenCodeEvent(
+      {
+        type: "message.updated",
+        properties: { info: { id: "message-1", sessionID: "session-1", role: "assistant" } },
+      },
+      state,
+    );
+
+    const events = translateOpenCodeEvent(
+      {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-1",
+            sessionID: "session-1",
+            messageID: "message-1",
+            type: "text",
+            text: "Open $ARENA_PREVIEW_URL",
+            metadata: { arenaDisplay: { text: "Open http://turn1-a--abc.localhost:6768" } },
+            time: { start: 1, end: 2 },
+          },
+        },
+      },
+      state,
+    );
+
+    expect(events).toEqual([
+      {
+        type: "timeline",
+        provider: "opencode",
+        item: {
+          type: "assistant_message",
+          text: "Open http://turn1-a--abc.localhost:6768",
+          messageId: "message-1",
+        },
+      },
+    ]);
+  });
+
   it("resolves context window max tokens from assistant message.updated model metadata", () => {
     const resolvedContextWindowMaxTokens: number[] = [];
     const state = createState();

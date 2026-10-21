@@ -93,6 +93,22 @@ describe("local Arena store", () => {
     }
   })
 
+  test("keeps the contestant port cursor across reopen", async () => {
+    const directory = await temporaryDirectory()
+    try {
+      const first = await connectLocalStore({ directory })
+      expect(await first.previewPortCursor.read()).toBeUndefined()
+      await first.previewPortCursor.write(21_003)
+      await first.previewPortCursor.write(21_006)
+      await first.close()
+      const reopened = await connectLocalStore({ directory })
+      expect(await reopened.previewPortCursor.read()).toBe(21_006)
+      await reopened.close()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("keeps source identity and mutation revisions across handles and reopen", async () => {
     const directory = await temporaryDirectory()
     const revisions: number[] = []
@@ -270,9 +286,7 @@ describe("local Arena store", () => {
       await store.close()
 
       const database = new Database(path.join(directory, "arena.sqlite"))
-      database
-        .query("DELETE FROM arena_metadata WHERE key = 'privacy.blinded-generation-telemetry'")
-        .run()
+      database.query("DELETE FROM arena_metadata WHERE key = 'privacy.blinded-generation-telemetry'").run()
       database.close()
 
       store = await connectLocalStore({ directory })
