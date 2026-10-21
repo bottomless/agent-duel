@@ -235,11 +235,19 @@ export const TaskTool = Tool.define(
         text: string,
       ) {
         const currentParent = yield* sessions.get(ctx.sessionID)
+        // A request takes its system text from the last user message, which this result becomes.
+        // Without the parent's, the contestant loses its Arena instructions for the rest of the turn
+        // and the provider re-reads the whole conversation uncached.
+        const system = arenaParent
+          ? (yield* sessions.messages({ sessionID: ctx.sessionID }))
+              .flatMap((message) => (message.info.role === "user" && message.info.system ? [message.info.system] : []))
+              .at(-1)
+          : undefined
         const delivery = ops.prompt({
           sessionID: ctx.sessionID,
           agent: currentParent.agent ?? ctx.agent,
           variant,
-          ...(arenaParent ? { model, noReply: true } : {}),
+          ...(arenaParent ? { model, noReply: true, ...(system ? { system } : {}) } : {}),
           parts: [
             {
               type: "text",

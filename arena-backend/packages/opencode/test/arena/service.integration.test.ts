@@ -3913,6 +3913,14 @@ describe("Arena service vertical slice", () => {
               body.model === model && JSON.stringify(body.messages).includes("Both sides: keep the change minimal."),
           ),
         ).toBe(true)
+        // A reply sends the system text the run started with: a changed system makes the provider
+        // re-read the whole conversation uncached.
+        const systems = new Set(
+          router.contestantRequests
+            .filter((body) => body.model === model)
+            .map((body) => JSON.stringify(body.messages?.[0])),
+        )
+        expect(systems.size).toBe(1)
       }
     } finally {
       router.restore()

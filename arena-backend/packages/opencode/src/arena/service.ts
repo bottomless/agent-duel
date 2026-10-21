@@ -4129,6 +4129,27 @@ export const layer: Layer.Layer<
       )
     })
 
+    // The system text the run's first prompt carried. A reply sends it again rather than building a
+    // new one: the first may hold the staging note a later build leaves out, and a system that
+    // changes mid-session makes the provider re-read the whole conversation uncached.
+    const startedSystem = Effect.fnUntraced(function* (
+      worktree: string,
+      sessionID: SessionID,
+      promptMessageID: string | undefined,
+    ) {
+      if (!promptMessageID) return undefined
+      const messages = yield* inDirectory(worktree, sessions.messages({ sessionID })).pipe(
+        Effect.catchCause(() => Effect.succeed([])),
+      )
+      return messages
+        .flatMap((message) =>
+          message.info.role === "user" && message.info.id >= promptMessageID && message.info.system
+            ? [message.info.system]
+            : [],
+        )
+        .at(0)
+    })
+
     // The proxy routes a contestant's requests, and the recorder keeps its events, only for a run
     // bound in this process. A battle binds each run as it starts it. After an engine restart a
     // settled run is bound to nothing, so resuming it for a reply or a retry binds it again.
@@ -4179,6 +4200,10 @@ export const layer: Layer.Layer<
       const beforeDispatch = yield* promise(() => store.turn(run.turnID))
       if (beforeDispatch?.state === "stopping" || beforeDispatch?.state === "early_selected") return Exit.void
       if (prompt) yield* allowReading(run.worktree.directory, run.sessionID, prompt.readable)
+      // Read before the boundary moves: a reply resumes the run its first prompt started.
+      const system =
+        (yield* startedSystem(run.worktree.directory, run.sessionID, storedRun?.promptMessageID)) ??
+        contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID))
       if (hostDirectory !== run.worktree.directory) promptHosts.set(run.sessionID, hostDirectory)
       let result = yield* Effect.exit(
         inDirectory(
@@ -4193,7 +4218,7 @@ export const layer: Layer.Layer<
                 },
                 agent,
                 variant: "high",
-                system: contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID)),
+                system,
                 parts: prompt.parts,
               })
             : // A retry adds no message: the loop answers the last user message again, from the
@@ -6141,7 +6166,8 @@ export const layer: Layer.Layer<
         (run) => {
           // A working contestant whose request started early is still run by its host's runner.
           return allowReading(run.worktree, SessionID.make(run.rootSessionID), prompt.readable).pipe(
-            Effect.andThen(
+            Effect.andThen(startedSystem(run.worktree, SessionID.make(run.rootSessionID), run.promptMessageID)),
+            Effect.flatMap((system) =>
               inDirectory(
                 promptHosts.get(SessionID.make(run.rootSessionID)) ?? run.worktree,
                 prompts.prompt({
@@ -6152,7 +6178,7 @@ export const layer: Layer.Layer<
                   },
                   agent,
                   variant: "high",
-                  system: contestantSystemInstruction(run.worktree),
+                  system: system ?? contestantSystemInstruction(run.worktree),
                   parts: prompt.parts,
                 }),
               ),

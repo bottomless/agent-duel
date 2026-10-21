@@ -815,6 +815,13 @@ results before marking their jobs complete; detached notifications can otherwise
 Arena has captured the final Git state. This behavior does not depend on the experimental
 background-subagent flag used by ordinary OpenCode sessions.
 
+The contestant instruction (`contestantSystemInstruction`) rides on the user message as `system`,
+and each request builds its system prompt from the latest user message. So every user message a
+run adds carries the same text: a child result copies its parent's (`tool/task.ts`), and a reply
+reuses the one the run's first prompt carried, staging note included (`startedSystem`). The system
+text heads the cached prefix: when it changes mid-turn the provider re-reads the whole conversation
+uncached, and a result without it leaves the contestant without its instructions.
+
 The local OpenCode HTTP server is not an Arena client API. In Arena mode the daemon authenticates
 all session and orchestration calls with its private control token, while the OpenCode process keeps
 only a one-way verifier. The renderer and browser QA harness continue through the daemon protocol,
