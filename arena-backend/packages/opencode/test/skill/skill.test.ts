@@ -582,4 +582,55 @@ description: A skill in the .opencode/skills directory.
       { git: true },
     ),
   )
+
+  // The `skills` installer keeps skills in ~/.agents/skills and links them into ~/.claude/skills.
+  // Every directory instance scans again, and the system prompt lists the location it picks, so a
+  // different pick between instances changes the prompt and loses the provider's prompt cache.
+  it.live("picks the same location for a duplicate skill name in every directory instance", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true })),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const skillFile = (name: string, body: string) => `---
+name: ${name}
+description: A duplicated skill.
+---
+
+${body}
+`
+      const linked = path.join(tmp.path, ".agents", "skills", "linked-skill")
+      const copiedClaude = path.join(tmp.path, ".claude", "skills", "copied-skill")
+      const copiedAgents = path.join(tmp.path, ".agents", "skills", "copied-skill")
+      yield* Effect.promise(async () => {
+        await Promise.all([linked, copiedClaude, copiedAgents].map((dir) => fs.mkdir(dir, { recursive: true })))
+        await Bun.write(path.join(linked, "SKILL.md"), skillFile("linked-skill", "# Linked"))
+        await fs.symlink(linked, path.join(tmp.path, ".claude", "skills", "linked-skill"), "dir")
+        // The copy scanned first takes longer to parse, so finishing order alone would pick it.
+        await Bun.write(path.join(copiedClaude, "SKILL.md"), skillFile("copied-skill", "line\n".repeat(200_000)))
+        await Bun.write(path.join(copiedAgents, "SKILL.md"), skillFile("copied-skill", "# Copied"))
+      })
+
+      const locations = yield* withHome(
+        tmp.path,
+        Effect.forEach(
+          Array.from({ length: 6 }, (_, index) => path.join(tmp.path, `project-${index}`)),
+          (directory) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
+              const skill = yield* Skill.Service
+              const list = yield* skill.all()
+              return [
+                list.find((s) => s.name === "linked-skill")?.location,
+                list.find((s) => s.name === "copied-skill")?.location,
+              ]
+            }).pipe(provideInstance(directory)),
+        ),
+      )
+
+      for (const location of locations) {
+        expect(location).toEqual([path.join(linked, "SKILL.md"), path.join(copiedAgents, "SKILL.md")])
+      }
+    }),
+  )
 })
