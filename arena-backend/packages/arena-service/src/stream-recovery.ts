@@ -16,6 +16,7 @@ export const REPLAY_UNAVAILABLE_LINE = ": arena-replay-unavailable"
 /** Below `/api/openrouter`, beside the two model routes. */
 export const REPLAY_PATH = "/api/v1/arena/replay"
 
+// A TTL index on `expiresAt` deletes expired records; the control plane creates it by migration.
 const REPLAY_TTL_MS = 15 * 60_000
 // A record is one MongoDB document. Sealed reasoning makes a response larger than its text.
 const REPLAY_MAX_CHARS = 8 * 1024 * 1024
@@ -77,14 +78,6 @@ export function replayRecorder(db: ArenaDb, key: ReplayKey, now: () => Date) {
       )
     return writes
   }
-  const sweep = () =>
-    Promise.resolve()
-      .then(() => replays(db).deleteMany({ userId: key.userId, expiresAt: { $lt: now() } }))
-      .then(
-        () => undefined,
-        () => undefined,
-      )
-  void sweep()
   void save({ state: "streaming" })
   return {
     record(text: string) {

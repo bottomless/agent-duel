@@ -51,7 +51,6 @@ function memoryDb() {
         table(name).set(filter._id, document)
         return { acknowledged: true, matchedCount: 1, modifiedCount: 1 }
       },
-      deleteMany: async () => ({ acknowledged: true, matchedCount: 0, modifiedCount: 0, deletedCount: 0 }),
     }),
   } as unknown as ArenaDb
   return { db, replays: () => [...table("arenaGenerationReplays").values()] }
