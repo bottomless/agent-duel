@@ -1,4 +1,6 @@
+import { uploadPresigned } from "@vercel/blob/client";
 import {
+  feedbackContextCompletionSchema,
   feedbackContextFailureSchema,
   feedbackContextMaximumAttempts,
   feedbackContextSchema,
@@ -9,7 +11,7 @@ import {
   type FeedbackSubmissionResponse,
 } from "@getpaseo/protocol/feedback/schemas";
 import type { Logger } from "pino";
-import { feedbackContextReadableStream, prepareFeedbackContextStream } from "./stream.js";
+import { prepareFeedbackContextStream } from "./stream.js";
 
 export class FeedbackBackendError extends Error {
   constructor(
@@ -33,15 +35,26 @@ export interface FeedbackRemote {
   ): Promise<void>;
 }
 
-interface StreamingRequestInit extends RequestInit {
-  readonly duplex: "half";
-}
+export type FeedbackContextBlobUpload = (
+  pathname: string,
+  body: Blob,
+  options: {
+    readonly access: "private";
+    readonly contentType: string;
+    readonly handleUploadUrl: string;
+    readonly clientPayload: string;
+    readonly headers: Record<string, string>;
+  },
+) => Promise<{ readonly pathname: string }>;
 
 export interface FeedbackBackendDependencies {
   readonly logger: Logger;
   readonly request?: (request: Request) => Promise<Response>;
+  readonly uploadBlob?: FeedbackContextBlobUpload;
   readonly wait?: (milliseconds: number) => Promise<void>;
 }
+
+const contextContentType = "application/x-ndjson";
 
 const retryDelays = [250, 1_000, 2_000] as const;
 
@@ -69,12 +82,14 @@ export class FeedbackBackend implements FeedbackRemote {
   private readonly baseUrl: string;
   private readonly logger: Logger;
   private readonly request: (request: Request) => Promise<Response>;
+  private readonly uploadBlob: FeedbackContextBlobUpload;
   private readonly wait: (milliseconds: number) => Promise<void>;
 
   constructor(baseUrl: string, dependencies: FeedbackBackendDependencies) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.logger = dependencies.logger;
     this.request = dependencies.request ?? ((request) => fetch(request));
+    this.uploadBlob = dependencies.uploadBlob ?? uploadPresigned;
     this.wait = dependencies.wait ?? wait;
   }
 
@@ -113,19 +128,36 @@ export class FeedbackBackend implements FeedbackRemote {
     for (let attempt = 1; attempt <= feedbackContextMaximumAttempts; attempt += 1) {
       if (attempt > 1) await this.wait(retryDelays[attempt - 2]);
       try {
+        // Vercel rejects a function request body over 4.5 MB, so the context goes straight to the
+        // control plane's Blob store through a presigned URL, then the control plane checks it.
         const prepared = prepareFeedbackContextStream({ feedbackId, attempt, context: captured });
-        const init: StreamingRequestInit = {
-          method: "PUT",
-          headers: {
-            Accept: "application/json",
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/x-ndjson",
+        const uploaded = await this.uploadBlob(
+          `feedback/${feedbackId}/context-${attempt}.jsonl`,
+          new Blob([...prepared.chunks], { type: contextContentType }),
+          {
+            access: "private",
+            contentType: contextContentType,
+            handleUploadUrl: `${this.baseUrl}/api/feedback/context/upload`,
+            clientPayload: JSON.stringify({ feedbackId, attempt }),
+            headers: { Authorization: `Bearer ${token}` },
           },
-          body: feedbackContextReadableStream(prepared.chunks),
-          duplex: "half",
-        };
+        );
+        const completion = feedbackContextCompletionSchema.parse({
+          feedbackId,
+          attempt,
+          pathname: uploaded.pathname,
+          transfer: prepared.transfer,
+        });
         const response = await this.request(
-          new Request(`${this.baseUrl}/api/feedback/context`, init),
+          new Request(`${this.baseUrl}/api/feedback/context/complete`, {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(completion),
+          }),
         );
         if (!response.ok) throw await responseError(response);
         return;
