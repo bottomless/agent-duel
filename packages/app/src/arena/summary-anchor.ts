@@ -3,6 +3,7 @@ import type { AgentTimelinePromptIndexPayload } from "@getpaseo/client/internal/
 import type { AgentTimelineCursorState } from "@/stores/session-store";
 import { createUserMessage, type StreamItem } from "@/types/stream";
 import { isResolvingBattleState } from "./battle-result";
+import { orderArenaChat } from "./chat-order";
 
 export function isArenaBattleUnresolved(snapshot: ArenaSnapshot | undefined): boolean {
   return snapshot?.chat.status === "battle_active" && snapshot.turn?.resolution === undefined;
@@ -135,13 +136,14 @@ export function arenaSummaryAnchor(
 /**
  * Each summary's anchor, searched over tail and head. A grafted winner sends no turn completion,
  * so its turn can stay in the head until the next canonical event; in a chat whose history has
- * not loaded yet, the whole turn is there.
+ * not loaded yet, the whole turn is there. The search runs in the order the chat shows
+ * (`orderArenaChat`), so a summary follows the work its turn's answer moved above.
  */
 export function arenaSummaryAnchors(
   history: readonly ArenaHistoryItem[],
   stream: ArenaPresentedStream,
 ): (string | null)[] {
-  const items = [...stream.tail, ...stream.head];
+  const items = orderArenaChat([...stream.tail, ...stream.head]);
   return history.map((item) => arenaSummaryAnchor(item, items));
 }
 

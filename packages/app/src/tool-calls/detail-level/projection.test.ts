@@ -157,6 +157,32 @@ describe("tool call detail-level projection", () => {
     expect(result.groupsByHostId.get(next.id)?.run.items).toEqual([between, next]);
   });
 
+  it("folds thinking into the run it leads into while the run is still live", () => {
+    // A winner's answer copied in at the vote stays live, so its work reaches the chat in the head.
+    const opening = thought("t1");
+    const call = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
+    const next = toolCall("2", { type: "shell", command: "ls" });
+    const closing = thought("t3");
+    const head = [assistant("a1"), opening, call, next, assistant("a2"), closing];
+
+    const live = projectToolCallDetailLevel({
+      level: "overview",
+      tail: [],
+      head,
+      preparedHistory: prepareToolCallHistory("overview", [], { arena: true }),
+      isTurnActive: false,
+      arena: true,
+    });
+    const committed = project({
+      level: "overview",
+      tail: head,
+      preparedHistory: prepareToolCallHistory("overview", head, { arena: true }),
+    });
+
+    expect(live.head.map((item) => item.id)).toEqual(committed.tail.map((item) => item.id));
+    expect(live.groupsByHostId.get(call.id)?.run.items).toEqual([opening, call, next]);
+  });
+
   it("lets a subagent stand alone in a battle chat instead of joining a run", () => {
     const before = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
     const subagent = toolCall("2", {

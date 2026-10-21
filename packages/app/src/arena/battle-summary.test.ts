@@ -109,6 +109,44 @@ describe("arenaSummaryAnchors", () => {
   });
 });
 
+describe("arenaSummaryAnchors in chat order", () => {
+  it("follows the work the turn's answer moved above, not the answer", () => {
+    // The chat shows the answer first and the work that led to it beneath (`orderArenaChat`);
+    // anchoring to the answer put the summary between them once a later prompt followed.
+    const prompt = createUserMessage({
+      messageId: "user-1",
+      text: "Battle prompt",
+      timestamp: new Date(historyItem.createdAt),
+    });
+    const work = {
+      id: "call-1",
+      kind: "tool_call",
+      timestamp: new Date(historyItem.createdAt),
+      payload: {
+        source: "agent",
+        data: {
+          provider: "opencode",
+          callId: "call-1",
+          name: "shell",
+          status: "completed",
+          error: null,
+          detail: { type: "shell", command: "ls" },
+        },
+      },
+    } as StreamItem;
+    const answer = { id: "answer-1", kind: "assistant_message", text: "Done" } as StreamItem;
+    const reply = createUserMessage({
+      clientMessageId: "reply",
+      text: "Battle-off follow-up",
+      timestamp: new Date("2026-08-12T00:05:00Z"),
+    });
+
+    expect(
+      arenaSummaryAnchors([historyItem], { tail: [prompt, work, answer, reply], head: [] }),
+    ).toEqual(["call-1"]);
+  });
+});
+
 describe("arenaTurnFollowedUp", () => {
   const prompt = createUserMessage({
     messageId: "user-1",

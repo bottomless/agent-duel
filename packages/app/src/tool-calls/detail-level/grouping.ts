@@ -229,6 +229,8 @@ export function groupLiveToolCalls<TGroup>(
   let pendingItems: ToolCallRunItem[] = [...input.history.pendingItems];
   let hostPlacement: "history" | "head" | null = pending.length > 0 ? "history" : null;
   let pendingIncludesHead = false;
+  // Reasoning held for the run the next call opens, as `prepareGroupedHistory` holds it.
+  let leadingReasoning: ToolCallRunItem[] = [];
 
   const flush = (isSealed: boolean) => {
     if (pending.length === 0) {
@@ -251,6 +253,8 @@ export function groupLiveToolCalls<TGroup>(
     if (groupable(item, input)) {
       if (pending.length === 0) {
         hostPlacement = "head";
+        pendingItems.push(...leadingReasoning);
+        leadingReasoning = [];
       }
       pending.push(item);
       pendingItems.push(item);
@@ -264,8 +268,13 @@ export function groupLiveToolCalls<TGroup>(
       pendingIncludesHead = true;
       continue;
     }
+    if (isGroupableReasoning(item) && input.arena) {
+      leadingReasoning.push(item);
+      continue;
+    }
     flush(true);
-    head.push(item);
+    head.push(...leadingReasoning, item);
+    leadingReasoning = [];
   }
   // Tool calls live in retained tail rather than the streaming head. The agent
   // lifecycle snapshot can still be idle while a newly received tool call is
@@ -274,6 +283,7 @@ export function groupLiveToolCalls<TGroup>(
   // sequential tool updates.
   const trailingRunIsActive = input.isTurnActive || pending.some(isRunning);
   flush(!trailingRunIsActive);
+  head.push(...leadingReasoning);
 
   if (liveGroups.size === 0) {
     return {

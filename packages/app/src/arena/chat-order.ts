@@ -61,3 +61,34 @@ export function orderArenaChat(items: StreamItem[]): StreamItem[] {
   output.push(...leading);
   return moved ? output : items;
 }
+
+/**
+ * Where the work a later text could still pull beneath it starts in an ordered tail: the work at its
+ * end, when the current turn has written no text and shown no subagent or question yet.
+ * `tail.length` when there is none.
+ */
+export function arenaChatPendingWorkStart(tail: StreamItem[]): number {
+  let start = tail.length;
+  while (start > 0 && isWork(tail[start - 1]!)) start -= 1;
+  if (start === tail.length) return start;
+  for (let index = start - 1; index >= 0; index -= 1) {
+    const item = tail[index]!;
+    if (item.kind === "user_message") break;
+    if (item.kind === "assistant_message" || standsAlone(item)) return tail.length;
+  }
+  return start;
+}
+
+/**
+ * The live head, ordered with the tail's pending work (`arenaChatPendingWorkStart`) as
+ * `orderArenaChat` orders a whole turn, or null when the head's text pulls nothing beneath it. The
+ * text that ends a turn's leading work can still be in the head: an answer while it streams, or a
+ * winner's answer copied in at the vote, which no turn completion commits. The caller then renders
+ * the tail without that work, and this head after it.
+ */
+export function orderArenaChatHead(pending: StreamItem[], head: StreamItem[]): StreamItem[] | null {
+  if (pending.length === 0 || head.length === 0) return null;
+  const joined = [...pending, ...head];
+  const ordered = orderArenaChat(joined);
+  return ordered === joined ? null : ordered;
+}

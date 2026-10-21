@@ -110,7 +110,7 @@ import { ICON_SIZE, SPACING, type Theme } from "@/styles/theme";
 import { recordRenderProfileReasons } from "@/utils/render-profiler";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
-import { orderArenaChat } from "@/arena/chat-order";
+import { arenaChatPendingWorkStart, orderArenaChat, orderArenaChatHead } from "@/arena/chat-order";
 import {
   ArenaChatSubagent,
   ArenaChatTaskPrompt,
@@ -313,6 +313,66 @@ const AGENT_CAPABILITY_FLAG_KEYS: (keyof AgentCapabilityFlags)[] = [
 ];
 
 const EMPTY_STREAM_HEAD: StreamItem[] = [];
+
+/**
+ * `afterItems` keyed by the row that draws each anchor: an item folded into a work row is drawn by
+ * that row's host, so what follows the item follows the row.
+ */
+function afterItemsByRow(
+  afterItems: ReadonlyMap<string, ReactNode> | undefined,
+  lanes: readonly (readonly StreamItem[])[],
+  groupsByHostId: ToolCallGroupLookup<OverviewToolCallGroup>,
+): ReadonlyMap<string, ReactNode> | undefined {
+  if (!afterItems?.size || groupsByHostId.size === 0) return afterItems;
+  let byRow: Map<string, ReactNode> | null = null;
+  for (const row of lanes.flat()) {
+    const hostId = row.id;
+    const group = groupsByHostId.get(hostId);
+    if (!group) continue;
+    for (const item of group.run.items) {
+      const after = item.id === hostId ? undefined : afterItems.get(item.id);
+      if (after === undefined) continue;
+      byRow ??= new Map(afterItems);
+      byRow.delete(item.id);
+      const existing = byRow.get(hostId);
+      byRow.set(
+        hostId,
+        existing === undefined ? (
+          after
+        ) : (
+          <>
+            {existing}
+            {after}
+          </>
+        ),
+      );
+    }
+  }
+  return byRow ?? afterItems;
+}
+
+/**
+ * An Agent Duel chat's tail and head in the order its battle panes show them (`orderArenaChat`).
+ * The turn's leading work can sit in the tail while the text it belongs beneath is still in the
+ * head; splitting once per tail keeps the history's memoized work off the live-head flush path.
+ */
+function useArenaChatOrder(
+  arenaChat: boolean,
+  tail: StreamItem[],
+  head: StreamItem[] | undefined,
+): { tail: StreamItem[]; head: StreamItem[] | undefined } {
+  const ordered = useMemo(() => (arenaChat ? orderArenaChat(tail) : tail), [arenaChat, tail]);
+  const pendingWorkStart = useMemo(
+    () => (arenaChat ? arenaChatPendingWorkStart(ordered) : ordered.length),
+    [arenaChat, ordered],
+  );
+  const settled = useMemo(() => ordered.slice(0, pendingWorkStart), [ordered, pendingWorkStart]);
+  const orderedHead = useMemo(
+    () => orderArenaChatHead(ordered.slice(pendingWorkStart), head ?? EMPTY_STREAM_HEAD),
+    [head, ordered, pendingWorkStart],
+  );
+  return orderedHead ? { tail: settled, head: orderedHead } : { tail: ordered, head };
+}
 
 function useRetainedValue<T>(value: T, active: boolean): T {
   const retainedRef = useRef(value);
@@ -519,11 +579,12 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     // the component reads the current (fresh) streamItems/streamHead from props.
     const isActive = useRetainedPanelActive();
     const retainedStreamItems = useRetainedValue(streamItems, isActive);
-    const effectiveStreamItems = useMemo(
-      () => (arenaChat ? orderArenaChat(retainedStreamItems) : retainedStreamItems),
-      [arenaChat, retainedStreamItems],
+    const retainedStreamHead = useRetainedValue(streamHead, isActive);
+    const { tail: effectiveStreamItems, head: effectiveStreamHead } = useArenaChatOrder(
+      arenaChat === true,
+      retainedStreamItems,
+      retainedStreamHead,
     );
-    const effectiveStreamHead = useRetainedValue(streamHead, isActive);
     const effectiveTurnPresentation = useRetainedValue(turnPresentation, isActive);
     const isTurnActive = effectiveTurnPresentation.isActive;
     // Keep retained history outside the 48ms live-head flush path.
@@ -972,6 +1033,22 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const bottomTurnFooterHost = streamLayout.auxiliaryTurnFooter;
 
+    // A summary anchored to an item that a work row holds draws after that row.
+    const rowAfterItems = useMemo(
+      () =>
+        afterItemsByRow(
+          afterItems,
+          [projectedToolCalls.tail, projectedToolCalls.head],
+          projectedToolCalls.groupsByHostId,
+        ),
+      [
+        afterItems,
+        projectedToolCalls.groupsByHostId,
+        projectedToolCalls.head,
+        projectedToolCalls.tail,
+      ],
+    );
+
     const renderStreamItem = useCallback(
       (layoutItem: StreamLayoutItem) => {
         const content = renderStreamItemContent(layoutItem);
@@ -982,7 +1059,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
         });
-        const after = afterItems?.get(layoutItem.item.id);
+        const after = rowAfterItems?.get(layoutItem.item.id);
         const showForkBoundary = forkBoundaryAfterItemId === layoutItem.item.id;
         if (!after && !showForkBoundary) return streamItem;
         return (
@@ -1006,7 +1083,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         );
       },
       [
-        afterItems,
+        rowAfterItems,
         forkBoundaryAfterItemId,
         handleForkAssistantTurn,
         readOnly,
@@ -1160,8 +1237,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     // `renderLiveHeadRow` is stable, so head rows redraw only on this revision. Arena summaries
     // attach after a head item without changing it; without them here the summary never drew.
     const liveHeadRowRevision = useMemo(
-      () => ({ expandedToolCallGroupIds, afterItems }),
-      [afterItems, expandedToolCallGroupIds],
+      () => ({ expandedToolCallGroupIds, afterItems: rowAfterItems }),
+      [rowAfterItems, expandedToolCallGroupIds],
     );
 
     return (
