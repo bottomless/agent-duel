@@ -1125,6 +1125,26 @@ not be mistaken for a silent model stream. When the runtime abandons a request, 
 proxy aborts its control-plane request too; otherwise the hosted function keeps streaming, and
 billing, until its own time limit.
 
+A compaction summary that ends idle, at its output cap, or empty must never become the history. A
+finished summary hides everything before it, so the contestant continues with no memory of its task
+and asks what it was working on. `session/compaction.ts` removes the unusable summary and asks again,
+three more times, then fails the step with a retryable error and the history intact; Retry
+compacts again.
+
+A connection can also die without closing. On some mobile networks the hosted function finishes the
+response while the desktop never receives another byte or a close, and only the 150-second deadline
+ends the wait. The control plane writes a heartbeat comment into any contestant stream that is quiet
+for 10 seconds and says so with `x-arena-heartbeat-ms`; the engine's proxy treats three missed
+heartbeats as a dead connection (`arena/proxy.ts`). It ends that request and fetches the same
+generation from `/api/openrouter/api/v1/arena/replay`. The control plane records the bytes of every
+stream it sends, without heartbeats, for 15 minutes, and a replay of one still streaming waits up to
+two minutes for it (`arena-service/src/stream-recovery.ts`). The engine skips the data lines the
+model call already received, so the model call sees one uninterrupted response and nothing is paid
+twice. With nothing recorded, the stream fails as a retryable break. A response without the header
+gets no deadline, and the BYOK service turns recovery off: nothing sits between it and the engine.
+The control plane deploys the replay route as its own function, and the daemon's runtime router
+allows it by path.
+
 The contestant sees only a neutral error, so diagnose a deadline from the engine log,
 `~/.local/share/opencode/log/opencode.log` for the packaged app too. Each timeout writes
 `arena model response idle` with the last part types the model produced and the proxy's record of

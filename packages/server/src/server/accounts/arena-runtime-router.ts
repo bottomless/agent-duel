@@ -11,6 +11,9 @@ const allowedRoutes = new Set([
   "/api/research",
   "/api/openrouter/api/v1/chat/completions",
   "/api/openrouter/api/v1/responses",
+  // A contestant stream whose connection died fetches its recorded response here
+  // (arena-service `stream-recovery.ts`).
+  "/api/openrouter/api/v1/arena/replay",
 ]);
 
 type Fetch = typeof fetch;
@@ -76,7 +79,14 @@ export function createArenaRuntimeRouter(options: {
         body: Uint8Array.from(req.body).buffer,
       });
       res.status(upstream.status);
-      for (const name of ["content-type", "cache-control", "x-request-id", "retry-after"]) {
+      // x-arena-heartbeat-ms tells the engine the stream carries heartbeats it can time out on.
+      for (const name of [
+        "content-type",
+        "cache-control",
+        "x-request-id",
+        "retry-after",
+        "x-arena-heartbeat-ms",
+      ]) {
         const value = upstream.headers.get(name);
         if (value) res.setHeader(name, value);
       }

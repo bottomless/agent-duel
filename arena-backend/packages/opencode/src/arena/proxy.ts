@@ -8,6 +8,7 @@ import {
   readPaymentError,
   retryableStreamError,
 } from "@agent-duel/arena-service/request-error"
+import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 
 export type Assignment = {
   readonly runID: string
@@ -67,7 +68,26 @@ type StreamProgress = {
   closedAt?: number
   cancelledAt?: number
   failedAt?: number
-  failure?: "read" | "read-aborted" | "save" | "forward" | "cut-off"
+  stalledAt?: number
+  replayedAt?: number
+  failure?: "read" | "read-aborted" | "save" | "forward" | "cut-off" | "stalled" | "replay-unavailable"
+}
+
+// Missed heartbeats before a stream counts as dead. The control plane sends one at least every
+// `HEARTBEAT_MS` while a stream is quiet, so silence this long is the connection, not the model.
+const STALL_HEARTBEATS = 3
+
+function stallDeadline(headers: Headers) {
+  const heartbeatMs = Number(headers.get(HEARTBEAT_HEADER))
+  return Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs * STALL_HEARTBEATS : undefined
+}
+
+/** How a stream whose connection dies gets its response back (`stream-recovery.ts`). */
+type StreamRecovery = {
+  readonly stallMs: number
+  /** Ends the dead request, so the control plane stops streaming into it. */
+  readonly abandon: () => void
+  readonly replay: () => Promise<Response>
 }
 
 // Each session's latest contestant stream, sizes and times only. When the idle deadline fires, it
@@ -101,6 +121,8 @@ export function streamProgress(sessionID: string, now = Date.now()) {
       closedMsAgo: ago(record.closedAt),
       cancelledMsAgo: ago(record.cancelledAt),
       failedMsAgo: ago(record.failedAt),
+      stalledMsAgo: ago(record.stalledAt),
+      replayedMsAgo: ago(record.replayedAt),
       failure: record.failure,
     }).filter(([, value]) => value !== undefined),
   )
@@ -352,6 +374,25 @@ function endsResponse(line: string) {
   }
 }
 
+function isDataLine(line: string) {
+  return line.startsWith("data:")
+}
+
+async function readWithin(reader: ReadableStreamDefaultReader<Uint8Array>, ms: number | undefined) {
+  if (ms === undefined) return reader.read()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<"stalled">((resolve) => {
+        timer = setTimeout(() => resolve("stalled"), ms)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 function sanitizeStream(
   stream: ReadableStream<Uint8Array>,
   generationID: string,
@@ -359,15 +400,65 @@ function sanitizeStream(
   maxTokens: unknown,
   telemetry?: Telemetry,
   signal?: AbortSignal,
+  recovery?: StreamRecovery,
 ) {
   const normalize = normalizeToolCutoff(maxTokens)
-  const reader = stream.getReader()
-  const decoder = new TextDecoder()
+  let reader = stream.getReader()
+  let decoder = new TextDecoder()
   const encoder = new TextEncoder()
   const tracked = trackProgress(metadata.sessionID, generationID)
   let pending = ""
   let settled = false
   let finished = false
+  // Data lines the model call has received. A replay resends the whole response, so it skips them.
+  let delivered = 0
+  let skip = 0
+  let replayed = false
+  let stallMs = recovery?.stallMs
+  const failRetryable = async (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    failure: NonNullable<StreamProgress["failure"]>,
+    message: string,
+  ) => {
+    settled = true
+    tracked.failedAt = Date.now()
+    tracked.failure = failure
+    try {
+      await telemetry?.error?.(metadata, new Error(message), new Date())
+    } catch {
+      controller.error(new Error("Arena telemetry persistence failed"))
+      return
+    }
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(retryableStreamPayload())}\n\n`))
+    controller.close()
+  }
+  // The connection died without a close. Fetch the recorded response once, from a new connection.
+  const replay = async () => {
+    if (!recovery || replayed) return false
+    replayed = true
+    recovery.abandon()
+    void reader.cancel().catch(() => undefined)
+    const response = await recovery.replay().catch(() => undefined)
+    const type = response?.headers.get("content-type") ?? ""
+    if (!response?.ok || !response.body || !type.includes("text/event-stream")) {
+      await response?.body?.cancel().catch(() => undefined)
+      console.warn("[arena-proxy] Contestant stream went quiet and could not be replayed", {
+        generationID,
+        status: response?.status,
+        delivered,
+      })
+      return false
+    }
+    console.warn("[arena-proxy] Contestant stream went quiet; replaying its response", { generationID, delivered })
+    tracked.replayedAt = Date.now()
+    // The replay keeps its own heartbeats while it waits for the original response to finish.
+    stallMs = stallDeadline(response.headers)
+    reader = response.body.getReader()
+    decoder = new TextDecoder()
+    pending = ""
+    skip = delivered
+    return true
+  }
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       let reading = false
@@ -375,14 +466,21 @@ function sanitizeStream(
         // A pull that emits nothing may never be called again. Keep reading a fragmented SSE line.
         while (true) {
           reading = true
-          const next = await reader.read()
+          const next = await readWithin(reader, stallMs)
           reading = false
           if (settled) return
+          if (next === "stalled") {
+            tracked.stalledAt = Date.now()
+            if (await replay()) continue
+            if (settled) return
+            await failRetryable(controller, "stalled", "Arena contestant stream stalled")
+            return
+          }
           if (next.done) {
             tracked.endedAt = Date.now()
             const tail = decoder.decode()
             pending += tail
-            if (pending) {
+            if (pending && skip === 0) {
               finished ||= endsResponse(pending)
               const line = sanitizeLine(pending, generationID, normalize)
               telemetry?.rawChunk?.(metadata, line)
@@ -391,17 +489,7 @@ function sanitizeStream(
             if (!finished) {
               // A hosting time limit or dropped connection ends the body cleanly. Without a finish or
               // [DONE] the response was cut off, and accepting it would end the run as complete.
-              settled = true
-              tracked.failedAt = Date.now()
-              tracked.failure = "cut-off"
-              try {
-                await telemetry?.error?.(metadata, new Error("Arena contestant stream was cut off"), new Date())
-              } catch {
-                controller.error(new Error("Arena telemetry persistence failed"))
-                return
-              }
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(retryableStreamPayload())}\n\n`))
-              controller.close()
+              await failRetryable(controller, "cut-off", "Arena contestant stream was cut off")
               return
             }
             tracked.savingAt = Date.now()
@@ -421,13 +509,24 @@ function sanitizeStream(
           const lines = pending.split("\n")
           pending = lines.pop() ?? ""
           if (!lines.length) continue
+          let forwarded = false
           for (const line of lines) {
+            if (replayed && line.trim() === REPLAY_UNAVAILABLE_LINE) {
+              await failRetryable(controller, "replay-unavailable", "Arena contestant response could not be replayed")
+              return
+            }
+            if (skip > 0) {
+              if (isDataLine(line)) skip--
+              continue
+            }
             finished ||= endsResponse(line)
+            if (isDataLine(line)) delivered++
             const sanitized = `${sanitizeLine(line, generationID, normalize)}\n`
             telemetry?.rawChunk?.(metadata, sanitized)
             controller.enqueue(encoder.encode(sanitized))
+            forwarded = true
           }
-          return
+          if (forwarded) return
         }
       } catch {
         if (settled) return
@@ -501,18 +600,25 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
 
     const upstream = options.upstream.replace(/\/$/, "")
     const execute = options.fetch ?? fetch
+    const routing = {
+      "X-Arena-Assignment-ID": assignment.assignmentID,
+      "X-Arena-Scope-ID": assignment.scopeID,
+      "X-Arena-Generation-ID": metadata.generationID,
+      "Content-Type": "application/json",
+    }
+    // Its own signal, so a stream whose connection died can be ended without ending the request.
+    const dispatch = new AbortController()
+    if (request.signal.aborted) dispatch.abort(request.signal.reason)
+    else request.signal.addEventListener("abort", () => dispatch.abort(request.signal.reason), { once: true })
     const responsePromise = execute(`${upstream}${upstreamPath(request)}`, {
       method: "POST",
       headers: {
-        "X-Arena-Assignment-ID": assignment.assignmentID,
-        "X-Arena-Scope-ID": assignment.scopeID,
-        "X-Arena-Generation-ID": metadata.generationID,
-        "Content-Type": "application/json",
+        ...routing,
         Accept: request.headers.get("accept") || "text/event-stream, application/json",
         "X-OpenRouter-Metadata": "enabled",
       },
       body: JSON.stringify(rewritten),
-      signal: request.signal,
+      signal: dispatch.signal,
     })
     if (
       request.headers.get("x-arena-generation-classification") === "generation" &&
@@ -554,6 +660,22 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     }
 
     if (type.includes("text/event-stream") && response.body) {
+      // Only a control plane that sends heartbeats can be told apart from a model that thinks.
+      const stallMs = stallDeadline(response.headers)
+      const recovery: StreamRecovery | undefined =
+        stallMs !== undefined
+          ? {
+              stallMs,
+              abandon: () => dispatch.abort(new Error("Arena contestant stream stalled")),
+              replay: () =>
+                execute(`${upstream}${REPLAY_PATH}`, {
+                  method: "POST",
+                  headers: { ...routing, Accept: "text/event-stream" },
+                  body: "{}",
+                  signal: request.signal,
+                }),
+            }
+          : undefined
       const body = sanitizeStream(
         response.body,
         generationID,
@@ -561,6 +683,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         rewritten.max_tokens,
         telemetry,
         request.signal,
+        recovery,
       )
       return new Response(body, { status: response.status, headers })
     }

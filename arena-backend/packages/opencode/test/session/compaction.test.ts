@@ -34,6 +34,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ArenaRuntime } from "@/arena/runtime"
+import { ModelIdleError } from "@/arena/model-idle"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -1126,6 +1127,138 @@ describe("session.compaction.process", () => {
         ])
         expect(ArenaRuntime.registry.assignments.get(child.id)).toBe(assignment)
       }).pipe(withCompaction({ llm: stub.llmLayer, provider: routing.provider, config: routing.config }))
+    },
+    { git: true },
+  )
+
+  const emptySummary = () =>
+    Stream.make(
+      LLMEvent.stepFinish({ index: 0, reason: "stop", usage: basicUsage() }),
+      LLMEvent.finish({ reason: "stop", usage: basicUsage() }),
+    )
+
+  const arenaCompaction = Effect.gen(function* () {
+    const ssn = yield* SessionNs.Service
+    const session = yield* ssn.create({})
+    ArenaRuntime.registry.assign(session.id, {
+      runID: "run-a",
+      rootSessionID: session.id,
+      scopeID: "turn-a",
+      assignmentID: "assignment-a",
+      telemetry: true,
+    })
+    const msg = yield* ssn.updateMessage({
+      id: MessageID.ascending(),
+      role: "user",
+      sessionID: session.id,
+      agent: "build",
+      model: { providerID: ProviderV2.ID.make(ArenaRuntime.providerID), modelID: ModelV2.ID.make("contestant") },
+      time: { created: Date.now() },
+    })
+    yield* ssn.updatePart({
+      id: PartID.ascending(),
+      messageID: msg.id,
+      sessionID: session.id,
+      type: "text",
+      text: "build the encoder",
+    })
+    const result = yield* SessionCompaction.use.process({
+      parentID: msg.id,
+      messages: yield* ssn.messages({ sessionID: session.id }),
+      sessionID: session.id,
+      auto: true,
+    })
+    return { result, messages: yield* ssn.messages({ sessionID: session.id }) }
+  })
+
+  const summaries = (messages: SessionV1.WithParts[]) =>
+    messages.filter((message) => message.info.role === "assistant" && message.info.summary)
+
+  const continues = (messages: SessionV1.WithParts[]) =>
+    messages.filter((message) =>
+      message.parts.some((part) => part.type === "text" && part.metadata?.compaction_continue === true),
+    )
+
+  itCompaction.instance(
+    "retries an Arena summary that timed out or came back empty, and keeps only the one that worked",
+    () => {
+      const routing = compactionRouting()
+      const stub = llm()
+      stub.push(Stream.fail(new ModelIdleError(150_000)))
+      stub.push(emptySummary())
+      stub.push(reply("Encoder done; tests pass."))
+      return Effect.gen(function* () {
+        const { result, messages } = yield* arenaCompaction
+        expect(result).toBe("continue")
+        const kept = summaries(messages)
+        expect(kept).toHaveLength(1)
+        expect(kept[0]!.info.role === "assistant" && kept[0]!.info.error).toBeFalsy()
+        expect(kept[0]!.parts.some((part) => part.type === "text" && part.text === "Encoder done; tests pass.")).toBe(
+          true,
+        )
+        expect(continues(messages)).toHaveLength(1)
+      }).pipe(
+        withCompaction({
+          llm: stub.llmLayer,
+          provider: ProviderTest.fake({ model: routing.contestant }),
+          config: routing.config,
+        }),
+      )
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "keeps the history when an Arena summary keeps failing",
+    () => {
+      const routing = compactionRouting()
+      const stub = llm()
+      for (let i = 0; i < 4; i++) stub.push(Stream.fail(new ModelIdleError(150_000)))
+      return Effect.gen(function* () {
+        const { result, messages } = yield* arenaCompaction
+        expect(result).toBe("stop")
+        const failed = summaries(messages)
+        expect(failed).toHaveLength(1)
+        const info = failed[0]!.info
+        expect(info.role === "assistant" && info.finish).toBe("arena-idle")
+        expect(info.role === "assistant" && info.error).toMatchObject({
+          name: "APIError",
+          data: { isRetryable: true },
+        })
+        expect(continues(messages)).toHaveLength(0)
+        // An unusable summary must not hide the history it failed to summarize.
+        expect(MessageV2.filterCompacted(messages.toReversed()).map((message) => message.info.id)).toEqual(
+          messages.map((message) => message.info.id),
+        )
+      }).pipe(
+        withCompaction({
+          llm: stub.llmLayer,
+          provider: ProviderTest.fake({ model: routing.contestant }),
+          config: routing.config,
+        }),
+      )
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "accepts an empty summary outside Arena, as upstream does",
+    () => {
+      const stub = llm()
+      stub.push(emptySummary())
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const msg = yield* createUserMessage(session.id, "hello")
+        const result = yield* SessionCompaction.use.process({
+          parentID: msg.id,
+          messages: yield* ssn.messages({ sessionID: session.id }),
+          sessionID: session.id,
+          auto: false,
+        })
+        expect(result).toBe("continue")
+        expect(summaries(yield* ssn.messages({ sessionID: session.id }))).toHaveLength(1)
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
     },
     { git: true },
   )

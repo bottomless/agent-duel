@@ -39,6 +39,7 @@ export function createArenaBackend(credentials: ArenaCredentials, db: () => Prom
     networkUnavailable: (error) => isNetworkUnavailable(error, "openrouter.ai"),
     // The per-account limit guards the hosted key; this one is the user's.
     metadataRateLimit: null,
+    streamRecovery: false,
   })
   return {
     url: inProcessUrl,

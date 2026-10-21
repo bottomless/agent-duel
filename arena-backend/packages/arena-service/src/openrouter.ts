@@ -4,6 +4,15 @@ import { authorize, type ArenaContext } from "./context"
 import type { GenerationMetrics, UsageTotals } from "./metrics"
 import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
 import { createReasoningRedactor } from "./reasoning"
+import {
+  HEARTBEAT_HEADER,
+  HEARTBEAT_LINE,
+  HEARTBEAT_MS,
+  REPLAY_PATH,
+  replayRecorder,
+  replayResponse,
+  type ReplayRecorder,
+} from "./stream-recovery"
 
 type ReasoningRedactor = ReturnType<typeof createReasoningRedactor>
 
@@ -151,14 +160,39 @@ function sanitizeStream(
   reasoning: ReasoningRedactor,
   startedAt: number,
   complete: (metrics: GenerationMetrics | undefined) => Promise<void>,
+  recovery?: ReplayRecorder,
 ) {
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
   let pending = ""
   let cancelled = false
+  let heartbeat: ReturnType<typeof setInterval> | undefined
+  let lastWrite = Date.now()
   const metrics = metricsCollector(generationID, startedAt)
+  const stopHeartbeat = () => {
+    if (heartbeat) clearInterval(heartbeat)
+    heartbeat = undefined
+  }
+  const write = (controller: ReadableStreamDefaultController<Uint8Array>, text: string) => {
+    controller.enqueue(encoder.encode(text))
+    recovery?.record(text)
+    lastWrite = Date.now()
+  }
   return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (!recovery) return
+      // A model that thinks without output still sends comments, so a quiet connection is a dead one.
+      heartbeat = setInterval(() => {
+        if (Date.now() - lastWrite < HEARTBEAT_MS) return
+        try {
+          controller.enqueue(encoder.encode(`${HEARTBEAT_LINE}\n`))
+          lastWrite = Date.now()
+        } catch {
+          stopHeartbeat()
+        }
+      }, HEARTBEAT_MS / 4)
+    },
     async pull(controller) {
       try {
         // A pull that emits nothing may never be called again. Keep reading a fragmented SSE line.
@@ -167,13 +201,13 @@ function sanitizeStream(
           if (cancelled) return
           if (next.done) {
             pending += decoder.decode()
-            if (pending)
-              controller.enqueue(encoder.encode(sanitizeLine(pending, generationID, reasoning, metrics.observe)))
+            if (pending) write(controller, sanitizeLine(pending, generationID, reasoning, metrics.observe))
             const tail = reasoning.flush()
-            if (tail)
-              controller.enqueue(encoder.encode(`\n\ndata: ${JSON.stringify({ id: generationID, ...tail })}\n\n`))
+            if (tail) write(controller, `\n\ndata: ${JSON.stringify({ id: generationID, ...tail })}\n\n`)
             reasoning.clear()
-            await complete(metrics.value())
+            stopHeartbeat()
+            // Recorded before the close: a hosted function may stop once its response ends.
+            await Promise.all([complete(metrics.value()), recovery?.complete()])
             controller.close()
             return
           }
@@ -182,12 +216,14 @@ function sanitizeStream(
           pending = lines.pop() ?? ""
           if (!lines.length) continue
           for (const line of lines)
-            controller.enqueue(encoder.encode(`${sanitizeLine(line, generationID, reasoning, metrics.observe)}\n`))
+            write(controller, `${sanitizeLine(line, generationID, reasoning, metrics.observe)}\n`)
           return
         }
       } catch {
         reasoning.clear()
+        stopHeartbeat()
         if (cancelled) return
+        await recovery?.fail()
         controller.enqueue(
           encoder.encode(
             `data: ${JSON.stringify({
@@ -200,7 +236,9 @@ function sanitizeStream(
     },
     cancel(reason) {
       cancelled = true
+      stopHeartbeat()
       reasoning.clear()
+      void recovery?.fail()
       return reader.cancel(reason)
     },
   })
@@ -303,6 +341,7 @@ async function sanitizeAssignedResponse(
   reasoning: ReasoningRedactor,
   startedAt: number,
   complete: (metrics: GenerationMetrics | undefined) => Promise<void>,
+  recovery?: () => ReplayRecorder | undefined,
 ) {
   const { generationID } = refusal
   const headers = assignedHeaders(response.headers)
@@ -324,7 +363,9 @@ async function sanitizeAssignedResponse(
     )
   }
   if ((response.headers.get("content-type") ?? "").includes("text/event-stream") && response.body) {
-    return new Response(sanitizeStream(response.body, generationID, reasoning, startedAt, complete), {
+    const recorder = recovery?.()
+    if (recorder) headers.set(HEARTBEAT_HEADER, String(HEARTBEAT_MS))
+    return new Response(sanitizeStream(response.body, generationID, reasoning, startedAt, complete, recorder), {
       status: response.status,
       headers,
     })
@@ -369,6 +410,24 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         { status: 400 },
       )
     }
+    const requestedGenerationID = request.headers.get("x-arena-generation-id")?.trim()
+    if (requestedGenerationID && !/^gen_[0-9a-f]{32}$/i.test(requestedGenerationID)) {
+      return Response.json({ error: { message: "Arena generation ID is invalid" } }, { status: 400 })
+    }
+    if (context.streamRecovery && request.method === "POST" && suffix === REPLAY_PATH) {
+      if (!requestedGenerationID) {
+        return Response.json({ error: { message: "Arena generation ID is required" } }, { status: 400 })
+      }
+      const db = await context.db()
+      const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
+      if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
+      return await replayResponse(
+        db,
+        { userId: caller.id, ...assignment, generationID: requestedGenerationID },
+        context.now,
+        request.signal,
+      )
+    }
     if (request.method !== "POST" || !["/api/v1/chat/completions", "/api/v1/responses"].includes(suffix)) {
       return Response.json({ error: { message: "Arena assignment cannot access this route" } }, { status: 400 })
     }
@@ -402,10 +461,6 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       assignmentID: assignment.assignmentID,
     })
     const restored = reasoning.restore(input)
-    const requestedGenerationID = request.headers.get("x-arena-generation-id")?.trim()
-    if (requestedGenerationID && !/^gen_[0-9a-f]{32}$/i.test(requestedGenerationID)) {
-      return Response.json({ error: { message: "Arena generation ID is invalid" } }, { status: 400 })
-    }
     const generationID = requestedGenerationID || `gen_${randomUUID().replaceAll("-", "")}`
     const startedAt = Date.now()
     body = new TextEncoder().encode(
@@ -439,7 +494,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       generationID,
       model: routeAssignment.model.slug,
     }
-    return await sanitizeAssignedResponse(response, refusal, reasoning, startedAt, async (metrics) => {
+    const recordMetrics = async (metrics: GenerationMetrics | undefined) => {
       if (!metrics || !requestedGenerationID) return
       try {
         await recordAssignmentGenerationMetrics(db, {
@@ -451,7 +506,12 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       } catch {
         console.error("[arena-service] Arena generation metrics could not be recorded")
       }
-    })
+    }
+    const recovery = () =>
+      context.streamRecovery && requestedGenerationID
+        ? replayRecorder(db, { userId: caller.id, ...assignment, generationID: requestedGenerationID }, context.now)
+        : undefined
+    return await sanitizeAssignedResponse(response, refusal, reasoning, startedAt, recordMetrics, recovery)
   } catch (error) {
     if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")

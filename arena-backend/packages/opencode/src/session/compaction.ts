@@ -12,7 +12,7 @@ import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Option } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { isOverflow as overflow, usable } from "./overflow"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
@@ -25,6 +25,7 @@ import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-e
 import { ArenaRuntime } from "@/arena/runtime"
 import { contestant as arenaContestant, medium as arenaMedium } from "@/arena/model-profile"
 import type { Assignment } from "@/arena/proxy"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import type { ModelMessage } from "ai"
 
 export const Event = SessionCompactionEvent
@@ -39,6 +40,8 @@ const MAX_PRESERVE_RECENT_TOKENS = 8_000
 // Arena cannot use a provider tokenizer without exposing the contestant model. Reserve a bounded
 // allowance for each media item and omit its encoded bytes from the text estimate instead.
 const ARENA_MEDIA_TOKEN_ALLOWANCE = 4_000
+const COMPACTION_EXHAUSTED =
+  "The conversation could not be summarized after three recovery attempts. Completed work has been preserved. Retry to continue."
 type Turn = {
   start: number
   end: number
@@ -434,53 +437,97 @@ const layer = Layer.effect(
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
       })
       const ctx = yield* InstanceState.context
-      const msg: SessionV1.Assistant = {
-        id: MessageID.ascending(),
-        role: "assistant",
-        parentID: input.parentID,
-        sessionID: input.sessionID,
-        mode: "compaction",
-        agent: "compaction",
-        variant: compactionUser.model.variant,
-        summary: true,
-        path: {
-          cwd: ctx.directory,
-          root: ctx.worktree,
-        },
-        cost: 0,
-        tokens: {
-          output: 0,
-          input: 0,
-          reasoning: 0,
-          cache: { read: 0, write: 0 },
-        },
-        modelID: model.id,
-        providerID: model.providerID,
-        time: {
-          created: Date.now(),
-        },
-      }
-      yield* session.updateMessage(msg)
-      const processor = yield* processors.create({
-        assistantMessage: msg,
-        sessionID: input.sessionID,
-        model,
-      })
-      const result = yield* processor.process({
-        user: compactionUser,
-        agent,
-        sessionID: input.sessionID,
-        tools: {},
-        system: [],
-        messages: [
-          ...modelMessages,
-          {
-            role: "user",
-            content: [{ type: "text", text: nextPrompt }],
+      const summarize = Effect.fnUntraced(function* (responseRecovery?: {
+        attempt: number
+        reason: ArenaResponseRecovery.Reason
+      }) {
+        const msg: SessionV1.Assistant = {
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: input.parentID,
+          sessionID: input.sessionID,
+          mode: "compaction",
+          agent: "compaction",
+          variant: compactionUser.model.variant,
+          summary: true,
+          path: {
+            cwd: ctx.directory,
+            root: ctx.worktree,
           },
-        ],
-        model,
+          cost: 0,
+          tokens: {
+            output: 0,
+            input: 0,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+          },
+          modelID: model.id,
+          providerID: model.providerID,
+          time: {
+            created: Date.now(),
+          },
+        }
+        yield* session.updateMessage(msg)
+        const processor = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: input.sessionID,
+          model,
+          ...(responseRecovery ? { responseRecovery } : {}),
+        })
+        const result = yield* processor.process({
+          user: compactionUser,
+          agent,
+          sessionID: input.sessionID,
+          tools: {},
+          system: [],
+          messages: [
+            ...modelMessages,
+            {
+              role: "user",
+              content: [{ type: "text", text: nextPrompt }],
+            },
+          ],
+          model,
+        })
+        return { processor, result }
       })
+      // A finished summary replaces the history before it, so one that timed out, hit its output cap
+      // or came back empty would leave the contestant with no memory of its task. Retry an Arena
+      // summary within the recovery budget, then fail it visibly with the history intact.
+      const unusable = Effect.fnUntraced(function* (message: SessionV1.Assistant) {
+        const reason = ArenaResponseRecovery.reason(message.finish)
+        if (reason) return reason
+        const stored = yield* session
+          .findMessage(input.sessionID, (item) => item.info.id === message.id)
+          .pipe(Effect.orElseSucceed(() => Option.none<SessionV1.WithParts>()))
+        return Option.isSome(stored) && summaryText(stored.value) ? undefined : ("empty" as const)
+      })
+      let { processor, result } = yield* summarize()
+      for (
+        let attempt = 1;
+        model.providerID === ArenaRuntime.providerID && result === "continue" && !processor.message.error;
+        attempt++
+      ) {
+        const failure = yield* unusable(processor.message)
+        if (!failure) break
+        yield* Effect.logWarning("arena compaction summary unusable", {
+          "session.id": input.sessionID,
+          messageID: processor.message.id,
+          failure,
+          attempt,
+        })
+        if (attempt > ArenaResponseRecovery.MAX_RECOVERIES) {
+          processor.message.error = new SessionV1.APIError({
+            message: COMPACTION_EXHAUSTED,
+            isRetryable: true,
+          }).toObject()
+          yield* session.updateMessage(processor.message)
+          yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: processor.message.error })
+          return "stop"
+        }
+        yield* session.removeMessage({ sessionID: input.sessionID, messageID: processor.message.id })
+        ;({ processor, result } = yield* summarize(failure === "empty" ? undefined : { attempt, reason: failure }))
+      }
 
       if (result === "compact") {
         processor.message.error = new SessionV1.ContextOverflowError({
