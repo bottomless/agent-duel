@@ -99,7 +99,8 @@ win:
     - target: zip
       arch:
         - x64
+# One-click, per-user install in %LOCALAPPDATA%\Programs: no pages and no UAC, so an in-app update
+# installs silently. An assisted installer would ask "Anyone / Only for me" again on every update.
 nsis:
-  oneClick: false
+  oneClick: true
   perMachine: false
-  allowToChangeInstallationDirectory: true
