@@ -39,7 +39,12 @@ import type {
   SingleAgentVote,
   TurnDocument,
   ApplyBaseChoice,
+  PortCursorDocument,
+  SessionForkDocument,
 } from "./records"
+import type { PortCursor } from "./preview"
+
+const PORT_CURSOR_ID = "contestant-ports"
 
 export type ArtifactInput = Omit<
   ArtifactDocument,
@@ -184,6 +189,8 @@ export class Store {
   readonly reviewEvents: ArenaCollection<ReviewEventDocument>
   readonly battleMetrics: ArenaCollection<BattleMetricsDocument>
   readonly singleAgentRatings: ArenaCollection<SingleAgentRatingDocument>
+  readonly portCursors: ArenaCollection<PortCursorDocument>
+  readonly sessionForks: ArenaCollection<SessionForkDocument>
   readonly artifactQueues = new Map<string, Promise<void>>()
 
   constructor(client: ArenaClient, db: ArenaDb | Db) {
@@ -202,6 +209,8 @@ export class Store {
     this.reviewEvents = this.db.collection<ReviewEventDocument>("reviewEvents")
     this.battleMetrics = this.db.collection<BattleMetricsDocument>("battleMetrics")
     this.singleAgentRatings = this.db.collection<SingleAgentRatingDocument>("singleAgentRatings")
+    this.portCursors = this.db.collection<PortCursorDocument>("portCursors")
+    this.sessionForks = this.db.collection<SessionForkDocument>("sessionForks")
   }
 
   async initialize() {
@@ -320,6 +329,20 @@ export class Store {
 
   async checkoutEviction(root: string) {
     return this.checkoutEvictions.findOne({ root })
+  }
+
+  /** The cursor `sequentialAllocator` (`preview.ts`) reads, kept across engine restarts. */
+  portCursor(): PortCursor {
+    return {
+      read: async () => (await this.portCursors.findOne({ _id: PORT_CURSOR_ID }))?.next,
+      write: async (next) => {
+        await this.portCursors.replaceOne(
+          { _id: PORT_CURSOR_ID },
+          { _id: PORT_CURSOR_ID, next, updatedAt: new Date() },
+          { upsert: true },
+        )
+      },
+    }
   }
 
   async releaseCheckoutEviction(root: string) {

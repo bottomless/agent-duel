@@ -53,7 +53,7 @@ import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { generate as generateComparison } from "./comparison"
-import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
+import { canonicalizeTranscriptPaths } from "./canonical-path"
 import { comparisonTimeline } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
 import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
@@ -189,6 +189,7 @@ import {
   anyListening,
   releaseTakenBank,
   route as previewRoute,
+  sequentialAllocator,
   url as previewUrl,
   type PreviewRoute,
 } from "./preview"
@@ -217,7 +218,7 @@ import type { Store } from "./mongo"
 
 const encoder = new TextEncoder()
 const contestantWorktreeInstruction =
-  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Literal ports, preview URLs, log paths, and process IDs in earlier messages or tool output are historical; do not reuse them, connect to them, or stop anything using them. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
+  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Literal ports, preview URLs, log paths, and process IDs in earlier messages or tool output belong to earlier turns' environments, which are closed; do not reuse them, connect to them, or stop anything using them. Before you use a port or URL from earlier messages, call `ports`. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
 const canonicalUnavailableReason = "The trunk worktree is unavailable. Restore it at its recorded location, then retry."
 
 // The refusal reaches the user as a toast, so a merge that conflicted in hundreds of files must
@@ -4228,12 +4229,6 @@ export const layer: Layer.Layer<
           ),
         )
       }
-      if (Exit.isSuccess(result) && result.value?.info.role === "assistant") {
-        const env = previewEnvironment(run.worktree.directory)
-        yield* Effect.forEach(result.value.parts, (part) => sessions.updatePart(localizeArenaEnvironment(part, env)), {
-          discard: true,
-        })
-      }
       yield* promise(() => store.updateRun(run.runID, { completedAt: new Date() }))
       ArenaPrivacy.clearDiscardedMessages(run.sessionID)
       return result
@@ -4603,21 +4598,6 @@ export const layer: Layer.Layer<
       )
     })
 
-    /** Every past run's port bank and preview URLs, so a copied transcript can be retargeted. */
-    const historicalEnvironmentsForChat = Effect.fn("Arena.historicalEnvironmentsForChat")(function* (
-      store: Store,
-      chatID: string,
-    ) {
-      return (yield* promise(() => store.runsForChat(chatID))).map((run) => ({
-        portAliases: run.portAliases,
-        previewUrls: Object.fromEntries(
-          (run.services ?? []).flatMap((service) =>
-            service.proxyRoutes.flatMap((route) => (route.alias && route.url ? [[route.alias, route.url]] : [])),
-          ),
-        ),
-      }))
-    })
-
     /** Sessions forked at warm-up that no turn will ever use. */
     const disposeWarmSessions = (ids: readonly (string | undefined)[]) =>
       Effect.forEach(
@@ -4649,8 +4629,8 @@ export const layer: Layer.Layer<
 
     /**
      * Whether the session forked at warm-up is the one this send can prompt. Everything the fork
-     * copied has to be unchanged: the canonical session and its transcript, and the port bank its
-     * paths were localized against, which is process-local and so also requires a trusted pair.
+     * copied has to be unchanged: the canonical session and its transcript, in a pair this process
+     * trusts.
      */
     const usableWarmFork = (
       trusted: boolean,
@@ -4658,22 +4638,20 @@ export const layer: Layer.Layer<
       warm: WarmWorktreeRecord,
       directory: string,
       sourceID: string,
-      portAliases: PreviewRoute["portAliases"],
     ) => {
-      if (!warm.forkedSessionID || !warm.forkMessageMap || !warm.portAliases) return undefined
+      if (!warm.forkedSessionID || !warm.forkMessageMap) return undefined
       if (!trusted) return undefined
       if (warm.directory !== directory) return undefined
       if (warm.forkSourceSessionID !== sourceID || warm.forkTranscriptHash !== turn.canonicalTranscriptHash) {
         return undefined
       }
-      if (PORT_ALIASES.some((alias) => warm.portAliases?.[alias] !== portAliases[alias])) return undefined
       return { forkedSessionID: warm.forkedSessionID, forkMessageMap: warm.forkMessageMap }
     }
 
     /**
-     * Fork the canonical session into each warm worktree now rather than at send. The port bank
-     * is allocated here too, because the copied transcript is retargeted to it. A fork that fails
-     * leaves its slot as it was: the send forks then, as it always could.
+     * Fork the canonical session into each warm worktree now rather than at send, and reserve the
+     * worktree's port bank. A fork that fails leaves its slot as it was: the send forks then, as it
+     * always could.
      */
     const prepareWarmSessions = Effect.fn("Arena.prepareWarmSessions")(function* (
       store: Store,
@@ -4691,7 +4669,6 @@ export const layer: Layer.Layer<
       const transcriptHash = digest(transcript.value)
       const agent = source.value.agent ?? "build"
       const branch = current.canonicalCheckout?.branch ?? current.arenaBranch
-      const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
       // Both forks at once: each writes its own session into its own directory.
       return yield* Effect.forEach(
         slots,
@@ -4699,12 +4676,13 @@ export const layer: Layer.Layer<
           Effect.gen(function* () {
             const outcome = yield* Effect.exit(
               Effect.gen(function* () {
-                const preview = yield* promise(() =>
+                yield* promise(() =>
                   allocatePreview({
                     directory: slot.directory,
                     chatID: chat._id,
                     turnIndex: generation,
                     side: slot.side,
+                    allocator: sequentialAllocator(store.portCursor()),
                     context: {
                       ...(branch ? { branch } : {}),
                       trunkDirectory: chat.repository.root,
@@ -4712,7 +4690,6 @@ export const layer: Layer.Layer<
                     },
                   }),
                 )
-                const env = previewEnvironment(slot.directory)
                 const messageMapping = new Map<string, string>()
                 const session = yield* forkInto({
                   sessionID: sourceID,
@@ -4721,14 +4698,6 @@ export const layer: Layer.Layer<
                   pathMode: "transcript",
                   onMessageMapping(mapping) {
                     mapping.forEach((target, from) => messageMapping.set(from, target))
-                  },
-                  part(part, message) {
-                    if (message.role === "user") return part
-                    const canonicalEnvironment = historicalEnvironments.reduce(
-                      (value, historical) => canonicalizeArenaEnvironment(value, historical),
-                      part,
-                    )
-                    return localizeArenaEnvironment(canonicalEnvironment, env)
                   },
                 }).pipe(Effect.mapError(error))
                 forked(session.id)
@@ -4755,7 +4724,6 @@ export const layer: Layer.Layer<
                   forkSourceSessionID: sourceID,
                   forkTranscriptHash: transcriptHash,
                   forkMessageMap: Object.fromEntries(messageMapping),
-                  portAliases: preview.portAliases,
                 } satisfies WarmWorktreeRecord
               }),
             )
@@ -4883,8 +4851,8 @@ export const layer: Layer.Layer<
           }
         }
 
-        // A warm bank was reserved at warm-up. If a port has been taken since, the fresh bank no
-        // longer matches the warm fork's, so the fork below is made now instead.
+        // A warm bank was reserved at warm-up, and only this process knows it. If another program
+        // has taken one of its ports since, the side gets a fresh bank.
         if (warm) yield* promise(() => releaseTakenBank(info.directory))
         const preview = yield* promise(() =>
           allocatePreview({
@@ -4892,6 +4860,7 @@ export const layer: Layer.Layer<
             chatID: chat._id,
             turnIndex: turn.turnIndex,
             side,
+            allocator: sequentialAllocator(store.portCursor()),
             context: {
               ...(branch ? { branch } : {}),
               trunkDirectory: chat.repository.root,
@@ -4900,11 +4869,8 @@ export const layer: Layer.Layer<
           }),
         )
         previewWorktrees.add(info.directory)
-        const env = previewEnvironment(info.directory)
         const forkStartedAt = Date.now()
-        const warmFork = warm
-          ? usableWarmFork(warmForksTrusted, turn, warm, info.directory, sourceID, preview.portAliases)
-          : undefined
+        const warmFork = warm ? usableWarmFork(warmForksTrusted, turn, warm, info.directory, sourceID) : undefined
         if (warm?.forkedSessionID && !warmFork) {
           // Forked from an older transcript or in another process; nothing else refers to it.
           yield* disposeWarmSessions([warm.forkedSessionID])
@@ -4915,9 +4881,6 @@ export const layer: Layer.Layer<
           forkedID = SessionID.make(warmFork.forkedSessionID)
           forkedAtWarmup = true
         } else {
-          // Keep concrete URLs in the canonical chat for the reader. Contestant copies normalize
-          // every historical run here, then retarget those references to this side's environment.
-          const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
           const forked = yield* forkInto({
             sessionID: sourceID,
             destination: info.directory,
@@ -4925,14 +4888,6 @@ export const layer: Layer.Layer<
             pathMode: "transcript",
             onMessageMapping(mapping) {
               mapping.forEach((target, source) => messageMapping.set(source, target))
-            },
-            part(part, message) {
-              if (message.role === "user") return part
-              const canonicalEnvironment = historicalEnvironments.reduce(
-                (current, historical) => canonicalizeArenaEnvironment(current, historical),
-                part,
-              )
-              return localizeArenaEnvironment(canonicalEnvironment, env)
             },
           }).pipe(Effect.mapError(error))
           yield* sessions.setAgentModel({

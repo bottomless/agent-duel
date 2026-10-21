@@ -10,6 +10,8 @@ import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { ArenaContestant } from "@/arena/contestant"
+import { ArenaRuntime } from "@/arena/runtime"
+import { retiredPortNote } from "@/tool/ports"
 
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
@@ -76,6 +78,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
   const ruleset = Permission.merge(input.agent.permission, input.session.permission ?? [])
   const tmpDirectory = ArenaContestant.sandboxTmp(ruleset)
+  const arenaContestant = !!tmpDirectory && input.model.providerID === ArenaRuntime.providerID
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
     abort: options.abortSignal!,
@@ -132,8 +135,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             )
             const execution = item.execute(args, ctx)
             const result = yield* provide ? provide(execution) : execution
+            const portNote = arenaContestant ? yield* retiredPortNote(ctx.sessionID, item.id, args) : undefined
             const output = {
               ...result,
+              ...(portNote ? { output: `${result.output}\n\n${portNote}` } : {}),
               attachments: result.attachments?.map((attachment) => ({
                 ...attachment,
                 id: PartID.ascending(),

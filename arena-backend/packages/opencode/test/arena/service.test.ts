@@ -104,6 +104,13 @@ describe("contestantSystemInstruction", () => {
     expect(instruction).not.toContain("In your final response, report the expanded")
   })
 
+  test("sends a contestant to the ports tool before it reuses a port from earlier messages", () => {
+    const instruction = contestantSystemInstruction("/worktrees/turn-0-a")
+
+    expect(instruction).toContain("Before you use a port or URL from earlier messages, call `ports`.")
+    expect(instruction).not.toContain("are historical")
+  })
+
   test("lists no preview URLs for a worktree without a live route", () => {
     const instruction = contestantSystemInstruction("/worktrees/turn-0-b", false, {
       PASEO_LISTEN: "127.0.0.1:6771",

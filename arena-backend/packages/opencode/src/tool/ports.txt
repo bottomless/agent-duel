@@ -1,0 +1,8 @@
+Show the ports and preview URLs of your environment, and translate a port or URL from earlier messages.
+
+Earlier turns of this chat ran in other environments with their own ports (PASEO_PORT, PASEO_PORT2, PASEO_PORT3) and preview URLs (ARENA_PREVIEW_URL, ARENA_PREVIEW_URL2, ARENA_PREVIEW_URL3). Those environments are closed, so a literal port or URL in earlier messages no longer reaches anything of yours.
+
+- With no input: lists your current ports and preview URLs, whether each port is listening now, and each earlier turn's values with the current value that replaces them.
+- With `port` or `url`: says what that value was and which current value to use instead.
+
+Call this tool before you use a port or URL from earlier messages.

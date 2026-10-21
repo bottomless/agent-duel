@@ -6,6 +6,8 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { seedWorktreeIgnoredContent } from "@/arena/copy-snapshot"
 import { forkSessionInto } from "@/arena/fork"
 import { generate as generateMetadata } from "@/arena/metadata"
+import { ArenaPorts } from "@/arena/ports"
+import { ArenaRuntime } from "@/arena/runtime"
 import { ArenaService } from "@/arena/service"
 import { MessageID, SessionID } from "@/session/schema"
 import { InstanceHttpApi } from "../api"
@@ -37,6 +39,20 @@ const forkSession = Effect.fn("ArenaHttpApi.forkSession")(function* (ctx: {
     destination: ctx.payload.destination,
     ...(ctx.payload.messageID ? { messageID: MessageID.make(ctx.payload.messageID) } : {}),
   }).pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))))
+  // The copy holds the source chat's ports; the `ports` tool of a battle in it reads them through this.
+  if (ArenaRuntime.enabled()) {
+    yield* Effect.tryPromise(async () =>
+      ArenaPorts.recordFork(await ArenaRuntime.store(), {
+        sessionID: forked.id,
+        sourceSessionID: sessionID,
+        ...(ctx.payload.messageID ? { beforeMessageID: ctx.payload.messageID } : {}),
+      }),
+    ).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Arena could not record a session fork; its ports history stops at the fork", { cause }),
+      ),
+    )
+  }
   return { sessionID: forked.id }
 })
 
