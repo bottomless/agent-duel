@@ -6,7 +6,6 @@ import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { EXPANDABLE_BADGE_DETAIL_INSET, ExpandableBadge } from "@/components/message";
 import { useSessionStore } from "@/stores/session-store";
 import { providerSubagentKey, useProviderSubagentStore } from "@/subagents/provider-store";
-import { TIMELINE_FETCH_PAGE_SIZE } from "@/timeline/timeline-fetch-policy";
 import type { StreamItem } from "@/types/stream";
 
 export interface ArenaChatSubagentTimeline {
@@ -104,13 +103,12 @@ export const ArenaChatSubagent = memo(function ArenaChatSubagent({
       state.timelines.get(providerSubagentKey(serverId, parentAgentId, subagentId)) ?? null,
   );
 
+  // The whole transcript, as the battle pane shows it: a page would hide everything before it, and
+  // the chat has no control to load older rows. The daemon holds the timeline in memory.
   useEffect(() => {
     if (!expanded || !client) return;
     void client
-      .fetchProviderSubagentTimeline(parentAgentId, subagentId, {
-        direction: "tail",
-        limit: TIMELINE_FETCH_PAGE_SIZE,
-      })
+      .fetchProviderSubagentTimeline(parentAgentId, subagentId, { direction: "tail", limit: 0 })
       .then((payload) => {
         useProviderSubagentStore.getState().replaceTimeline(serverId, payload);
         return undefined;
