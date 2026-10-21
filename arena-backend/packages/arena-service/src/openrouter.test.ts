@@ -253,7 +253,7 @@ describe("OpenRouter proxy", () => {
 
       const body = await response.text()
       expect(body).toContain(JSON.stringify(payload.choices))
-      expect(body).toEndWith("data: [DONE]")
+      expect(body).toEndWith("data: [DONE]\n\n")
       expect(body).not.toContain("private-")
       expect(body).not.toContain("cost")
       expect(metrics).toHaveLength(1)
@@ -751,8 +751,12 @@ describe("OpenRouter proxy", () => {
     { name: "xhigh effort", reasoningEffort: "xhigh", expected: { effort: "xhigh" } },
   ])("uses the assigned profile's reasoning setting ($name)", async ({ reasoningEffort, expected }) => {
     let upstreamBody: Record<string, unknown> | undefined
-    const messages = [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/ui.png" } }] }]
-    const tools = [{ type: "function", function: { name: "inspect_ui", parameters: { type: "object", properties: {} } } }]
+    const messages = [
+      { role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/ui.png" } }] },
+    ]
+    const tools = [
+      { type: "function", function: { name: "inspect_ui", parameters: { type: "object", properties: {} } } },
+    ]
     const proxy = openrouter({
       db: async () =>
         fakeDb({
@@ -1050,6 +1054,76 @@ describe("OpenRouter proxy", () => {
     expect(body).toContain('"content":"partial"')
     expect(body).toContain('"type":"arena_retryable_stream_error"')
     expect(body).not.toContain("private")
+  })
+
+  test("ends every stream that stops early on an event boundary, so the client can read its error", async () => {
+    const assignmentSet = {
+      userId: "user-1",
+      scopeID: "turn-1",
+      assignments: [
+        {
+          assignmentID: "opaque-id",
+          model: { displayName: "Hidden Model", slug: "provider/hidden-model", canonicalSlug: "x", routing: {} },
+        },
+      ],
+    }
+    const partial = 'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+    // A slow connection stops wherever the bytes ran out, not on an event boundary.
+    for (const [sent, end] of [
+      [`${partial}data: {"choi`, "close"],
+      [partial.slice(0, -1), "close"],
+      [`${partial}data: {"choi`, "error"],
+      [partial.slice(0, -1), "error"],
+    ] as const) {
+      let first = true
+      const response = await openrouter({
+        db: async () => fakeDb({ assignmentSets: () => [assignmentSet] }),
+        fetch: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (first) {
+                  first = false
+                  controller.enqueue(new TextEncoder().encode(sent))
+                  return
+                }
+                if (end === "close") controller.close()
+                else controller.error(new Error("private transport failure"))
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+
+      const body = await response.text()
+      // An SSE client joins the data lines of one event; each event must still be one JSON value.
+      const events = body
+        .split("\n\n")
+        .map((event) =>
+          event
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice("data:".length).trim())
+            .join("\n"),
+        )
+        .filter(Boolean)
+        .map((data) => JSON.parse(data) as Record<string, unknown>)
+      expect({ sent, end, endsEvent: body.endsWith("\n\n") }).toEqual({ sent, end, endsEvent: true })
+      expect(events[0]).toMatchObject({ choices: [{ delta: { content: "partial" } }] })
+      // A clean close after a whole line is not an error here: the engine finds no finish and retries.
+      if (end === "error" || sent.endsWith('{"choi')) expect(events.at(-1)).toHaveProperty("error")
+      else expect(events).toHaveLength(1)
+    }
   })
 
   test("answers an unreadable upstream body with a 502", async () => {

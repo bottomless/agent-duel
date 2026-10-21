@@ -174,10 +174,20 @@ function sanitizeStream(
     if (heartbeat) clearInterval(heartbeat)
     heartbeat = undefined
   }
+  // Whether the client has data lines of an event whose closing blank line it has not received. An
+  // error written into that event becomes one more data line, the client cannot parse the joined
+  // data, and a retryable failure turns into a final one.
+  let open = false
   const write = (controller: ReadableStreamDefaultController<Uint8Array>, text: string) => {
     controller.enqueue(encoder.encode(text))
     recovery?.record(text)
     lastWrite = Date.now()
+  }
+  const writeLine = (controller: ReadableStreamDefaultController<Uint8Array>, line: string) => {
+    if (open && line.startsWith('data: {"error":')) write(controller, "\n")
+    write(controller, `${line}\n`)
+    if (line.startsWith("data:")) open = true
+    else if (line === "") open = false
   }
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -201,7 +211,8 @@ function sanitizeStream(
           if (cancelled) return
           if (next.done) {
             pending += decoder.decode()
-            if (pending) write(controller, sanitizeLine(pending, generationID, reasoning, metrics.observe))
+            if (pending) writeLine(controller, sanitizeLine(pending, generationID, reasoning, metrics.observe))
+            if (open) writeLine(controller, "")
             const tail = reasoning.flush()
             if (tail) write(controller, `\n\ndata: ${JSON.stringify({ id: generationID, ...tail })}\n\n`)
             reasoning.clear()
@@ -215,8 +226,7 @@ function sanitizeStream(
           const lines = pending.split("\n")
           pending = lines.pop() ?? ""
           if (!lines.length) continue
-          for (const line of lines)
-            write(controller, `${sanitizeLine(line, generationID, reasoning, metrics.observe)}\n`)
+          for (const line of lines) writeLine(controller, sanitizeLine(line, generationID, reasoning, metrics.observe))
           return
         }
       } catch {
@@ -226,7 +236,7 @@ function sanitizeStream(
         await recovery?.fail()
         controller.enqueue(
           encoder.encode(
-            `data: ${JSON.stringify({
+            `${open ? "\n" : ""}data: ${JSON.stringify({
               error: { message: "Arena contestant request failed", type: "arena_retryable_stream_error" },
             })}\n\n`,
           ),

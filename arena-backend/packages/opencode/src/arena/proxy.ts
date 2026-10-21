@@ -415,6 +415,18 @@ function sanitizeStream(
   let skip = 0
   let replayed = false
   let stallMs = recovery?.stallMs
+  // Whether the model call has data lines of an event whose closing blank line it has not received.
+  // An error written into that event joins its data, the SDK cannot parse it, and a retryable
+  // failure ends the run instead. Every error here closes the open event first.
+  let open = false
+  const emit = (controller: ReadableStreamDefaultController<Uint8Array>, line: string) => {
+    if (open && line.startsWith('data: {"error":')) controller.enqueue(encoder.encode("\n"))
+    const text = `${line}\n`
+    telemetry?.rawChunk?.(metadata, text)
+    controller.enqueue(encoder.encode(text))
+    open = line !== ""
+  }
+  const errorEvent = () => `${open ? "\n" : ""}data: ${JSON.stringify(retryableStreamPayload())}\n\n`
   const failRetryable = async (
     controller: ReadableStreamDefaultController<Uint8Array>,
     failure: NonNullable<StreamProgress["failure"]>,
@@ -429,7 +441,7 @@ function sanitizeStream(
       controller.error(new Error("Arena telemetry persistence failed"))
       return
     }
-    controller.enqueue(encoder.encode(`data: ${JSON.stringify(retryableStreamPayload())}\n\n`))
+    controller.enqueue(encoder.encode(errorEvent()))
     controller.close()
   }
   // The connection died without a close. Fetch the recorded response once, from a new connection.
@@ -480,12 +492,13 @@ function sanitizeStream(
             tracked.endedAt = Date.now()
             const tail = decoder.decode()
             pending += tail
-            if (pending && skip === 0) {
-              finished ||= endsResponse(pending)
-              const line = sanitizeLine(pending, generationID, normalize)
-              telemetry?.rawChunk?.(metadata, line)
-              controller.enqueue(encoder.encode(line))
+            // A last line without its newline is a whole line only if it ends the response; anything
+            // else is where the bytes ran out, and the model call gets the cut-off error instead.
+            if (pending && skip === 0 && (finished || endsResponse(pending))) {
+              finished = true
+              emit(controller, sanitizeLine(pending, generationID, normalize))
             }
+            if (finished && open) emit(controller, "")
             if (!finished) {
               // A hosting time limit or dropped connection ends the body cleanly. Without a finish or
               // [DONE] the response was cut off, and accepting it would end the run as complete.
@@ -521,9 +534,7 @@ function sanitizeStream(
             }
             finished ||= endsResponse(line)
             if (isDataLine(line)) delivered++
-            const sanitized = `${sanitizeLine(line, generationID, normalize)}\n`
-            telemetry?.rawChunk?.(metadata, sanitized)
-            controller.enqueue(encoder.encode(sanitized))
+            emit(controller, sanitizeLine(line, generationID, normalize))
             forwarded = true
           }
           if (forwarded) return
@@ -546,7 +557,7 @@ function sanitizeStream(
           return
         }
         if (reading && !signal?.aborted) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(retryableStreamPayload())}\n\n`))
+          controller.enqueue(encoder.encode(errorEvent()))
           controller.close()
           return
         }
