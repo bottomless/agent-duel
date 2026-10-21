@@ -134,6 +134,12 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
   model: Provider.Model,
   options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
 ) {
+  if (model.providerID === "arena") {
+    input = yield* Effect.promise(async () => {
+      const { projectEnvironment } = await import("@/arena/runtime")
+      return projectEnvironment(input)
+    })
+  }
   const result: UIMessage[] = []
   const toolNames = new Set<string>()
   // Track media from tool results that need to be injected as user messages

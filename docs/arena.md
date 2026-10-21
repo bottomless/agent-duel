@@ -593,6 +593,15 @@ patches use native Git with time and output limits; battle review owns its separ
 Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
 `.localhost` hostnames, and never retarget an old URL to a later process.
 
+Keep saved history intact when ports change. Retarget service references in the model's request
+copy, including compaction, and check supported tool endpoint arguments again before execution.
+The execution check is needed because preserved tool output or project files can still show an
+old port, and a model can reuse it despite corrected command examples. Recognize owned endpoints
+and supported shell port arguments, not bare numbers: a screenshot's base64, a checksum, or a
+source file can contain the same digits. Preserve attachments, all command output, opaque tool data, reasoning
+signatures, and user messages. Ambiguous reused ports stay unchanged; an exact historical preview
+origin can still identify its service alias. Already-current endpoints take precedence at execution.
+
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
 
