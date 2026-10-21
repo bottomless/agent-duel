@@ -99,7 +99,6 @@ describe("session.system", () => {
       } as Provider.Model))[0]
 
       expect(output.startsWith(SystemPrompt.ARENA_IDENTITY + "\n")).toBe(true)
-      expect(output).toContain("Keep temporary files in $TMPDIR")
       expect(output).not.toContain("You are powered by")
     }),
   )

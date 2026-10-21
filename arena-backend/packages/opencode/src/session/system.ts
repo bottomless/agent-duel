@@ -45,15 +45,10 @@ export function provider(model: Provider.Model) {
 // Arena sessions run behind the neutral `contestant` model, so the model line would name nothing and
 // the base prompt's "You are opencode" invites the model to guess. The text is static: both sides of
 // a battle must receive identical bytes, and any per-run data here would fingerprint the side.
-// The temp rule names `$TMPDIR` rather than its path for the same reason. Both sides run at once
-// and the shared /tmp is one folder: without the rule, a side writes where a task says and can
-// overwrite the other side's file.
 export const ARENA_IDENTITY = [
   "Your model name and provider are hidden from the user until the vote or a reveal.",
   "If the user asks which model you are or who made you, say that your identity is hidden until then.",
   "Do not guess, name, or hint at a model, version, or company, and do not try to find out from configuration files or the environment.",
-  "Keep temporary files in $TMPDIR, a directory reserved for this session that the shell already sets (TEMP on Windows).",
-  "Do not create or change files directly in /tmp, /var/tmp or the system temp directory, even when a task names one of them: use the same name under $TMPDIR instead, and say which path you used.",
 ].join(" ")
 
 export interface Interface {

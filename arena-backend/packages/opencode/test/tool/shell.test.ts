@@ -1281,6 +1281,52 @@ describe("tool.shell Arena contestant sandbox", () => {
     }),
   )
 
+  it.live("marks a contestant's redirections and tee targets as writes", () =>
+    Effect.gen(function* () {
+      const outside = yield* tmpdirScoped()
+      yield* runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const err = new Error("stop after permission")
+          const requests: Array<Parameters<Tool.Context["ask"]>[0]> = []
+          const stop = (tmpDirectory?: string): Tool.Context => ({
+            ...ctx,
+            ...(tmpDirectory ? { tmpDirectory } : {}),
+            ask: (req) =>
+              Effect.sync(() => {
+                requests.push(req)
+                throw err
+              }),
+          })
+          const writes = () => requests.find((r) => r.permission === "external_directory")!.writes
+          const contestant = stop(path.join(outside, "contestant"))
+
+          for (const command of [
+            `echo hi > ${outside}/word.txt`,
+            `echo hi >> "${outside}/word.txt" 2>&1`,
+            `cat <<EOF > ${outside}/word.txt\nhi\nEOF`,
+            `echo hi | tee ${outside}/word.txt`,
+          ]) {
+            requests.length = 0
+            yield* fail({ command }, contestant)
+            expect(writes()).toEqual([path.join(outside, "*")])
+          }
+
+          // Descriptor redirections name no file, and other sessions keep upstream's checks. Each
+          // stops at the shell's own permission instead.
+          for (const [command, context] of [
+            ["echo hi >&2", contestant],
+            [`echo hi > ${outside}/word.txt`, stop()],
+          ] as const) {
+            requests.length = 0
+            yield* fail({ command }, context)
+            expect(requests.map((r) => r.permission)).toEqual(["bash"])
+          }
+        }),
+      )
+    }),
+  )
+
   it.live("gives the shell the contestant's temp directory and saves truncated output there", () =>
     Effect.gen(function* () {
       const tmpDirectory = path.join(yield* tmpdirScoped(), "contestant")

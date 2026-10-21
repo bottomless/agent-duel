@@ -1322,16 +1322,7 @@ export const layer: Layer.Layer<
      * cannot reach the checkout through `/private/tmp` when it lives under `/tmp`.
      */
     const contestantSandbox = (repositoryRoot: string, sessionID: string, worktree: string) => {
-      const spellings = (directory: string) => {
-        const real = (() => {
-          try {
-            return realpathSync(directory)
-          } catch {
-            return directory
-          }
-        })()
-        return real === directory ? [directory] : [directory, real]
-      }
+      const spellings = ArenaContestant.spellings
       return {
         tmp: ArenaContestant.tmpDirectory(sessionID),
         readOnly: spellings(repositoryRoot),

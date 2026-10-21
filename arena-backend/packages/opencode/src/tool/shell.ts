@@ -68,6 +68,8 @@ const CMD_FILES = new Set([
 const READS = new Set([...CWD, "cat", "get-content", "dir", "type"])
 const COPIES = new Set(["cp", "copy-item", "copy"])
 const FLAGS = new Set(["-destination", "-literalpath", "-path"])
+// Bash redirections that write to their destination; `>&` and `<&` name descriptors, not files.
+const WRITE_REDIRECTS = new Set([">", ">>", ">|", "&>", "&>>"])
 const SWITCHES = new Set(["-confirm", "-debug", "-force", "-nonewline", "-recurse", "-verbose", "-whatif"])
 
 type Part = {
@@ -390,6 +392,11 @@ export const ShellTool = Tool.define(
       ps: boolean,
       shell: string,
       instance: InstanceContext,
+      /**
+       * Also check the files an Arena contestant's command writes outside its file commands:
+       * redirections and `tee`, so a write into a shared temp directory is denied.
+       */
+      contestant = false,
     ) {
       const scan: Scan = {
         dirs: new Set<string>(),
@@ -398,6 +405,21 @@ export const ShellTool = Tool.define(
         always: new Set<string>(),
       }
       const shellKind = ShellID.toKind(Shell.name(shell))
+      const written = Effect.fnUntraced(function* (arg: string) {
+        const resolved = yield* argPath(arg, cwd, ps, shell)
+        if (!resolved || containsPath(resolved, instance)) return
+        const dir = (yield* fs.isDir(resolved)) ? resolved : path.dirname(resolved)
+        scan.dirs.add(dir)
+        scan.writes.add(dir)
+      })
+
+      if (contestant && !ps && shellKind !== "cmd") {
+        for (const node of root.descendantsOfType("file_redirect")) {
+          if (!node?.children.some((child) => child && WRITE_REDIRECTS.has(child.type))) continue
+          const destination = node.childForFieldName("destination")
+          if (destination && destination.type !== "number") yield* written(destination.text)
+        }
+      }
 
       for (const node of commands(root)) {
         const command = parts(node)
@@ -415,6 +437,10 @@ export const ShellTool = Tool.define(
             if (READS.has(cmd) || (COPIES.has(cmd) && index < args.length - 1)) continue
             scan.writes.add(dir)
           }
+        }
+
+        if (contestant && cmd === "tee" && !ps) {
+          for (const arg of pathArgs(command, ps)) yield* written(arg)
         }
 
         if (tokens.length && (!cmd || !CWD.has(cmd))) {
@@ -646,7 +672,7 @@ export const ShellTool = Tool.define(
                   const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
                     Effect.sync(() => tree.delete()),
                   )
-                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
+                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx, Boolean(ctx.tmpDirectory))
                   if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
                   yield* ask(ctx, scan, params)
                 }),

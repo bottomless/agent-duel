@@ -757,11 +757,14 @@ session's children (`reloadProviderSubagents`).
 
 The sandbox (`arena/contestant.ts`) lets a contestant's own tools read the main checkout but not
 write to it, and keeps them out of the checkout's `.agent-duel`, which holds every Arena worktree:
-the other side's and every earlier turn's. Everything else is open, `/tmp`, the home directory and
-skill directories included. The rules are the inherited permissions, then an `external_directory`
-allow for everything, then an `external_directory_write` deny for the checkout, then an
-`external_directory` deny for `.agent-duel`, then read and write allows for the side's own worktree
-and host repository, which sit inside it. Rules match last first. The allow overrides the agent's
+the other side's and every earlier turn's. The shared temp directories (`/tmp`, `/var/tmp` and the
+system temp directory) are readable but not writable, and every side's temp directory but its own is
+denied. Everything else is open, the home directory and skill directories included. The rules are
+the inherited permissions, then an `external_directory` allow for everything, then an
+`external_directory_write` deny for the shared temp directories, an `external_directory` deny for
+the parent of every side's temp directory, the same two for the checkout and `.agent-duel`, then
+read and write allows for the side's own worktree, host repository and temp directory. Rules match
+last first. The allow overrides the agent's
 own `ask`: never let a contestant ask, since a prompt the user answers for one side and not the
 other makes the sides unequal. Every path is listed in both its spelling and its real path, so
 `/private/tmp/...` cannot route around `/tmp/...`. Subagents inherit the rules.
@@ -775,7 +778,8 @@ starts above it, from the checkout or `~/code` for example (`excludedBelow`,
 `tool/external-directory.ts`). Such a search skips the side's own worktree too; a search from inside
 it is unaffected. The shell checks
 only the path arguments of its file commands (`cd`, `rm`, `cp`, `mv`, `mkdir`, `touch`, `chmod`,
-`chown`, `cat`); other programs and redirection reach anything the user can.
+`chown`, `cat`) and, for a contestant, the files it redirects output into and `tee`'s arguments;
+other programs reach anything the user can.
 
 Each side has a temp directory, `$TMPDIR/opencode/arena/<session id>`. The shell exports it as
 `TMPDIR`, the shell tool's description names it, and truncated tool output is saved under it, so
@@ -783,13 +787,13 @@ the hint to read that file works. It is removed when the run gives up its worktr
 next pair (`releaseRunSlot`) or removed by archive, eviction or an environment release
 (`removeStoppedRun`).
 
-The system prompt (`ARENA_IDENTITY`) tells contestants to keep temporary files there and never in
-`/tmp`, even when a task names `/tmp`. Both sides run at once and `/tmp` is one shared folder, so a
-side that writes where a task says can overwrite the other side's file. Nothing enforces the rule.
-In an A/B test on the production pool, every model wrote `/tmp/word.txt` when asked without the
-sentence, and none did with it.
+Both sides run at once and `/tmp` is one shared folder, so a side that writes where a task says can
+overwrite or read the other side's file. Every model in the production pool writes `/tmp/word.txt`
+when a task names it. Keep the rule out of the system prompt: a contestant learns it from the
+denial, which names the side's own directory to use instead.
 
-A contestant denied `.agent-duel`, or a write into the checkout, gets one sentence that says so, not the generic list of matching
+A contestant denied `.agent-duel`, another side's temp directory, or a write into the checkout or a
+shared temp directory, gets one sentence that says so, not the generic list of matching
 rules, which holds dozens of home-directory paths that contestants copy into their answers and that
 reach research uploads.
 

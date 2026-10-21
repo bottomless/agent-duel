@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import os from "os"
 import path from "path"
 import { Global } from "@opencode-ai/core/global"
 import { ArenaContestant, contestantPermissions } from "@/arena/contestant"
@@ -33,7 +34,7 @@ const write = (ruleset: Parameters<typeof Permission.evaluate>[2], directory: st
   Permission.evaluate(ArenaContestant.EXTERNAL_WRITE, path.join(directory, "*"), ruleset).action
 
 describe("Arena contestant permissions", () => {
-  test("allows everything outside .agent-duel, the main checkout included, without asking", () => {
+  test("allows reading everything outside .agent-duel and other sides' temp directories, without asking", () => {
     const ruleset = Permission.merge(agentRules, contestantPermissions(undefined, sandbox))
 
     for (const directory of [
@@ -41,7 +42,6 @@ describe("Arena contestant permissions", () => {
       Global.Path.tmp,
       Truncate.DIR,
       path.join(skill, "references"),
-      ArenaContestant.tmpDirectory("ses_right"),
       path.join(path.sep, "Users", "dev"),
       path.join(path.sep, "Users", "dev", "code", "other-project"),
       `${checkout}-backup`,
@@ -53,14 +53,47 @@ describe("Arena contestant permissions", () => {
     }
   })
 
-  test("keeps the main checkout read-only and everything else writable", () => {
+  test("keeps the main checkout and the shared temp directories read-only and everything else writable", () => {
     const ruleset = Permission.merge(agentRules, contestantPermissions(undefined, sandbox))
 
-    for (const directory of [checkout, path.join(checkout, "src"), path.join(checkout, ".git")]) {
+    for (const directory of [
+      checkout,
+      path.join(checkout, "src"),
+      path.join(checkout, ".git"),
+      "/tmp",
+      "/var/tmp",
+      os.tmpdir(),
+      path.join(os.tmpdir(), "build"),
+      Global.Path.tmp,
+    ]) {
       expect(write(ruleset, directory)).toBe("deny")
     }
-    for (const directory of ["/tmp", sandbox.tmp, path.join(path.sep, "Users", "dev"), `${checkout}-backup`]) {
+    for (const directory of [sandbox.tmp, path.join(path.sep, "Users", "dev"), `${checkout}-backup`]) {
       expect(write(ruleset, directory)).not.toBe("deny")
+    }
+  })
+
+  test("blocks the shared temp directories under their real paths too", () => {
+    const ruleset = contestantPermissions(undefined, sandbox)
+
+    for (const directory of ["/tmp", "/var/tmp", os.tmpdir()].flatMap(ArenaContestant.spellings)) {
+      expect(access(ruleset, directory)).toBe("allow")
+      expect(write(ruleset, directory)).toBe("deny")
+    }
+  })
+
+  test("denies every other side's temp directory and reopens the side's own", () => {
+    const ruleset = Permission.merge(agentRules, contestantPermissions(undefined, sandbox))
+    const other = ArenaContestant.tmpDirectory("ses_right")
+
+    for (const directory of ArenaContestant.spellings(other)) {
+      expect(access(ruleset, directory)).toBe("deny")
+      expect(access(ruleset, path.join(directory, "shots"))).toBe("deny")
+    }
+    expect(access(ruleset, ArenaContestant.tmpParent())).toBe("deny")
+    for (const directory of ArenaContestant.spellings(sandbox.tmp)) {
+      expect(access(ruleset, path.join(directory, "shots"))).toBe("allow")
+      expect(write(ruleset, path.join(directory, "shots"))).toBe("allow")
     }
   })
 
@@ -134,7 +167,10 @@ describe("Arena contestant permissions", () => {
   })
 
   test("names the blocked directories for a contestant only", () => {
-    expect(ArenaContestant.blockedDirectories(contestantPermissions(agentRules, sandbox))).toEqual([state])
+    expect(ArenaContestant.blockedDirectories(contestantPermissions(agentRules, sandbox))).toEqual([
+      ...ArenaContestant.spellings(ArenaContestant.tmpParent()),
+      state,
+    ])
     expect(
       ArenaContestant.blockedDirectories([
         { permission: "external_directory", pattern: path.join(state, "*"), action: "deny" },
@@ -164,6 +200,30 @@ describe("Arena contestant permissions", () => {
     ).toBe(
       `Arena contestants can read the main checkout but change files only in their own worktree. ${path.join(checkout, "src")} is in the main checkout.`,
     )
+    expect(
+      ArenaContestant.denial({ ruleset, permission: "external_directory", pattern: "/tmp/*", write: true }),
+    ).toBe(
+      `Arena contestants cannot change files in /tmp, which both sides use while they run. Use the same name under $TMPDIR (${sandbox.tmp}) instead.`,
+    )
+    expect(
+      ArenaContestant.denial({
+        ruleset,
+        permission: "external_directory",
+        pattern: path.join(os.tmpdir(), "build", "*"),
+        write: true,
+      }),
+    ).toBe(
+      `Arena contestants cannot change files in ${os.tmpdir()}, which both sides use while they run. Use the same name under $TMPDIR (${sandbox.tmp}) instead.`,
+    )
+    const otherTmp = ArenaContestant.tmpDirectory("ses_right")
+    expect(
+      ArenaContestant.denial({
+        ruleset,
+        permission: "external_directory",
+        pattern: path.join(otherTmp, "*"),
+        write: false,
+      }),
+    ).toBe(`Arena contestants can use only their own temp directory, $TMPDIR (${sandbox.tmp}), not ${otherTmp}.`)
     // Any other denial, and every denial outside Arena, keeps the generic message.
     expect(
       ArenaContestant.denial({ ruleset, permission: "external_directory", pattern: "/etc/*", write: false }),

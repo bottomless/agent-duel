@@ -674,10 +674,34 @@ it.instance(
   "ask - lets a contestant read and write outside the main checkout without asking",
   () =>
     Effect.gen(function* () {
-      for (const directory of ["/tmp", path.join(contestantSkill, "references"), "/outside"]) {
+      for (const directory of [path.join(contestantSkill, "references"), "/outside"]) {
         const pattern = path.join(directory, "*")
         expect(yield* externalAsk(pattern, [pattern], contestantRuleset)).toBeUndefined()
       }
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - lets a contestant read the shared temp directories but write only to its own",
+  () =>
+    Effect.gen(function* () {
+      const own = ArenaContestant.tmpDirectory("ses_contestant")
+      const shared = path.join("/tmp", "*")
+      expect(yield* externalAsk(shared, [], contestantRuleset)).toBeUndefined()
+      const err = yield* fail(externalAsk(shared, [shared], contestantRuleset))
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+      expect((err as Error).message).toBe(
+        `Arena contestants cannot change files in /tmp, which both sides use while they run. Use the same name under $TMPDIR (${own}) instead.`,
+      )
+      const mine = path.join(own, "*")
+      expect(yield* externalAsk(mine, [mine], contestantRuleset)).toBeUndefined()
+
+      const other = ArenaContestant.tmpDirectory("ses_other")
+      const denied = yield* fail(externalAsk(path.join(other, "*"), [], contestantRuleset))
+      expect((denied as Error).message).toBe(
+        `Arena contestants can use only their own temp directory, $TMPDIR (${own}), not ${other}.`,
+      )
     }),
   { git: true },
 )
