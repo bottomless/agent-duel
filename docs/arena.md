@@ -671,6 +671,17 @@ nonignored-untracked state in `refs/battles/<chat>/turn-<n>/base`, then draws a 
 work from that frozen state, so later canonical movement cannot shift the ground under a running
 battle.
 
+An untracked embedded repository, a directory with its own `.git` the checkout does not track, is
+frozen as its files: what that repository tracks or leaves unignored, filtered through the
+checkout's ignore rules, and never its `.git` (`stageEmbeddedRepositories` in `arena/git.ts`). The
+filter is there because a contestant has no `.git` in that directory and reads the files through the
+checkout's rules. `git add -A` cannot be used for them: it records the directory as a gitlink to a
+commit only the embedded repository holds, and fails outright on one with no commit. The vote writes
+the winner's edits back into the embedded repository as uncommitted changes. A winner that replaces
+its directory with a file is refused, since the write would delete the `.git`. A contestant that
+commits those files makes the checkout track them once it wins. A gitlink the checkout tracks,
+submodule or not, still reaches a contestant as an empty directory.
+
 **The draw** (`arena-service/src/pool.ts`). The service draws two distinct profiles uniformly from
 its pool; which one lands on side A is part of the draw. It stores the private mapping permanently
 in `arenaAssignmentSets` and returns one opaque assignment id per side. The set is account- and
