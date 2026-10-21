@@ -10,6 +10,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  readlink,
   realpath,
   rename,
   rm,
@@ -2460,13 +2461,9 @@ export const verifyContestantState = Effect.fn("ArenaGit.verifyContestantState")
   }
   const actualIndexTree = yield* indexTree
   const working = yield* workingTree
-  const mismatch = snapshotTreesMismatch(
-    { indexTree: probe.indexTree, workingTree: probe.workingTree },
-    { indexTree: actualIndexTree, workingTree: working.tree },
-  )
-  if (mismatch) return yield* Effect.fail(mismatch)
-  // The working-tree snapshot leaves untracked nested repositories out, so the tree check above
-  // passes over one; `clean -ff` removes them in sync.
+  // A contestant worktree never holds one: an embedded repository reaches it as plain files. The
+  // snapshot reads a nested repository's files too, so this goes before the tree check, which
+  // would report the same leftover less precisely. `clean -ff` removes them in sync.
   if (working.nestedRepositories.length > 0) {
     return yield* Effect.fail(
       new OperationError(
@@ -2476,6 +2473,11 @@ export const verifyContestantState = Effect.fn("ArenaGit.verifyContestantState")
       ),
     )
   }
+  const mismatch = snapshotTreesMismatch(
+    { indexTree: probe.indexTree, workingTree: probe.workingTree },
+    { indexTree: actualIndexTree, workingTree: working.tree },
+  )
+  if (mismatch) return yield* Effect.fail(mismatch)
 
   const layout = snapshotLayout(yield* succeeded(snapshot, "read_snapshot_working_tree"))
   const findings = yield* reconcileLayout(root, layout, false)
@@ -2716,8 +2718,151 @@ const stageNewlyIgnoredFiles = Effect.fnUntraced(function* (
 })
 
 /**
- * The working tree as a tree object, and the untracked nested repositories it leaves out: `add -A`
- * stages one as a gitlink, which a snapshot must not carry.
+ * The untracked nested repositories in the working tree, which `ls-files` lists as their directory
+ * with a trailing slash instead of walking into them. Found before `add -A`, which records one as a
+ * gitlink to a commit only that repository holds, and fails outright on one without a commit.
+ */
+const untrackedRepositories = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  env: Record<string, string>,
+) {
+  const listed = yield* run(
+    git,
+    root,
+    "list_embedded_repositories",
+    ["ls-files", "-z", "--others", "--exclude-standard"],
+    { env },
+  )
+  return listed
+    .text()
+    .split("\0")
+    .flatMap((entry) => (entry.endsWith("/") ? [entry.slice(0, -1)] : []))
+})
+
+/**
+ * The files of an embedded repository as the repository itself lists them, tracked and untracked
+ * but not ignored, with the repositories nested in it walked the same way. A gitlink it records is
+ * a directory, and like any gitlink it is left empty.
+ */
+const embeddedRepositoryFiles = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  repository: string,
+): Effect.fn.Return<string[], OperationError> {
+  const listed = yield* run(git, join(root, repository), "list_embedded_repository_files", [
+    "ls-files",
+    "-z",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+  ])
+  const files: string[] = []
+  for (const entry of new Set(listed.text().split("\0"))) {
+    if (!entry) continue
+    const path = `${repository}/${entry}`
+    if (entry.endsWith("/")) files.push(...(yield* embeddedRepositoryFiles(git, root, path.slice(0, -1))))
+    else if (!entry.split("/").includes(".git")) files.push(path)
+  }
+  return files
+})
+
+/**
+ * Stage the files of the untracked embedded repositories as plain files, so a contestant gets them
+ * the way it gets any other untracked file. In a contestant worktree they have no `.git`, so its own
+ * snapshot reads them through this repository's ignore rules: they apply here too, or the two
+ * snapshots of the same files would differ. `add` will not stage a path inside another repository,
+ * so the blobs go into the index directly. A linked worktree of this repository is skipped: it is a
+ * second checkout of the same project.
+ */
+const stageEmbeddedRepositories = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  repositories: readonly string[],
+  env: Record<string, string>,
+) {
+  const commonGitDir = yield* read(git, root, "read_common_git_dir", [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ])
+  const listed: string[] = []
+  for (const repository of repositories) {
+    const common = yield* git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: join(root, repository),
+    })
+    if (common.exitCode === 0 && output(common) === commonGitDir) continue
+    listed.push(...(yield* embeddedRepositoryFiles(git, root, repository)))
+  }
+  if (listed.length === 0) return
+  const checkable = listed.filter((path) => !path.startsWith(":"))
+  const ignored = new Set<string>()
+  if (checkable.length > 0) {
+    const checked = yield* git.run(["check-ignore", "--no-index", "--stdin", "-z"], {
+      cwd: root,
+      stdin: Stream.make(new TextEncoder().encode(`${checkable.join("\0")}\0`)),
+    })
+    if (checked.exitCode !== 0 && checked.exitCode !== 1) {
+      return yield* Effect.fail(
+        new OperationError("check_embedded_ignored_files", checked.stderr.toString("utf8").trim()),
+      )
+    }
+    for (const path of checked.text().split("\0")) if (path) ignored.add(path)
+  }
+  const fileMode = yield* git.run(["config", "--type=bool", "core.fileMode"], { cwd: root })
+  const trustExecutableBit = fileMode.exitCode !== 0 || output(fileMode) !== "false"
+  const kinds = yield* Effect.promise(() =>
+    Promise.all(
+      listed.map((path) =>
+        ignored.has(path)
+          ? undefined
+          : lstat(join(root, path)).then(
+              (entry) => ({ path, entry }),
+              () => undefined,
+            ),
+      ),
+    ),
+  )
+  const files: { path: string; mode: string }[] = []
+  const links: string[] = []
+  for (const kind of kinds) {
+    if (!kind) continue
+    if (kind.entry.isSymbolicLink()) links.push(kind.path)
+    else if (kind.entry.isFile()) {
+      files.push({ path: kind.path, mode: trustExecutableBit && kind.entry.mode & 0o100 ? "100755" : "100644" })
+    }
+  }
+  const entries: string[] = []
+  // `--stdin-paths` reads one path per line, so a name with a newline is hashed on its own.
+  const batched = files.filter((file) => !file.path.includes("\n"))
+  if (batched.length > 0) {
+    const hashed = (yield* read(git, root, "hash_embedded_files", ["hash-object", "-w", "--stdin-paths"], {
+      stdin: Stream.make(new TextEncoder().encode(`${batched.map((file) => file.path).join("\n")}\n`)),
+    })).split("\n")
+    batched.forEach((file, index) => entries.push(`${file.mode} ${hashed[index]}\t${file.path}`))
+  }
+  for (const file of files.filter((file) => file.path.includes("\n"))) {
+    const oid = yield* read(git, root, "hash_embedded_file", ["hash-object", "-w", "--", file.path])
+    entries.push(`${file.mode} ${oid}\t${file.path}`)
+  }
+  for (const path of links) {
+    const target = yield* Effect.promise(() => readlink(join(root, path)))
+    const oid = yield* read(git, root, "hash_embedded_link", ["hash-object", "-w", "--stdin"], {
+      stdin: Stream.make(new TextEncoder().encode(target)),
+    })
+    entries.push(`120000 ${oid}\t${path}`)
+  }
+  if (entries.length === 0) return
+  yield* run(git, root, "stage_embedded_files", ["update-index", "-z", "--add", "--index-info"], {
+    env,
+    stdin: Stream.make(new TextEncoder().encode(`${entries.join("\0")}\0`)),
+  })
+})
+
+/**
+ * The working tree as a tree object, and the untracked nested repositories in it. An embedded
+ * repository's files are snapshotted as plain files; its `.git` never is. Whatever `add -A` still
+ * stages as a gitlink is left out, which a snapshot must not carry.
  */
 const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function* (
   git: Git.Interface,
@@ -2728,12 +2873,21 @@ const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function
   return yield* Effect.gen(function* () {
     const env = { GIT_INDEX_FILE: index }
     const seeded = yield* seedSnapshotIndex({ git, root, index, ...options })
-    yield* run(git, root, "stage_snapshot", ["add", "-A", "--", "."], { env })
+    const embedded = yield* untrackedRepositories(git, root, env)
+    yield* run(
+      git,
+      root,
+      "stage_snapshot",
+      ["add", "-A", "--", ".", ...embedded.map((repository) => `:(exclude,literal)${repository}`)],
+      { env },
+    )
+    yield* stageEmbeddedRepositories(git, root, embedded, env)
     if (options?.keepFilesOf) yield* stageNewlyIgnoredFiles(git, root, options.keepFilesOf, env)
     const snapshot = indexListing(
       (yield* run(git, root, "read_snapshot_gitlinks", ["ls-files", "--stage", "-z"], { env })).text(),
     )
-    const nestedRepositories = Array.from(snapshot.gitlinks).filter((path) => !seeded.gitlinks.has(path))
+    const gitlinks = Array.from(snapshot.gitlinks).filter((path) => !seeded.gitlinks.has(path))
+    const nestedRepositories = [...embedded, ...gitlinks]
     yield* excludeSyncConflictCopies(
       git,
       root,
@@ -2741,7 +2895,7 @@ const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function
       env,
     )
     yield* Effect.forEach(
-      nestedRepositories,
+      gitlinks,
       (path) =>
         run(git, root, "exclude_untracked_gitlink", ["rm", "--cached", "--force", "--ignore-unmatch", "--", path], {
           env,
@@ -4363,6 +4517,17 @@ const replaceTreeEntry = Effect.fn("ArenaGit.replaceTreeEntry")(function* (
  * Untracked files in the snapshots are ordinary entries; ignored files are in neither and are
  * never touched.
  */
+/** Whether `path` is a directory with a `.git` entry somewhere inside it. */
+async function holdsRepository(path: string): Promise<boolean> {
+  const entries = await readdir(path, { withFileTypes: true }).catch(() => undefined)
+  if (!entries) return false
+  if (entries.some((entry) => entry.name === ".git")) return true
+  for (const entry of entries) {
+    if (entry.isDirectory() && (await holdsRepository(join(path, entry.name)))) return true
+  }
+  return false
+}
+
 const writeTreeToWorktree = Effect.fn("ArenaGit.writeTreeToWorktree")(function* (
   git: Git.Interface,
   root: string,
@@ -4380,6 +4545,27 @@ const writeTreeToWorktree = Effect.fn("ArenaGit.writeTreeToWorktree")(function* 
     const [, dstMode, , dstOid, status] = meta.slice(1).split(" ")
     if (status === "D" || !dstMode || !dstOid) changes.push({ path })
     else if (dstMode !== "160000") changes.push({ path, mode: dstMode, oid: dstOid })
+  }
+  // A file written where a directory stands replaces the whole directory. An embedded repository's
+  // files are plain files in a snapshot, but its `.git` is not, so nothing would bring it back.
+  const repositories = yield* Effect.promise(() =>
+    Promise.all(
+      changes.map((change) =>
+        change.oid
+          ? holdsRepository(join(root, change.path)).then((held) => (held ? change.path : undefined))
+          : undefined,
+      ),
+    ),
+  )
+  const overwritten = repositories.filter((path): path is string => path !== undefined)
+  if (overwritten.length > 0) {
+    return yield* Effect.fail(
+      new OperationError(
+        "write_over_embedded_repository",
+        `A file would replace a directory holding a Git repository: ${overwritten.join(", ")}`,
+        overwritten,
+      ),
+    )
   }
   const sizes = yield* readBlobSizes(
     git,
