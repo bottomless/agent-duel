@@ -994,7 +994,7 @@ describe("workspace-layout-store actions", () => {
     expect(layout.focusedPaneId).toBe(sidePaneId);
   });
 
-  it("closeTab keeps an emptied side pane so the panel stays open on its launcher", () => {
+  it("closeTab hides the panel when it closes the side pane's last tab", () => {
     useWorkspaceLayoutIds("cccccccc-cccc-cccc-cccc-cccccccccccc");
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
@@ -1004,32 +1004,54 @@ describe("workspace-layout-store actions", () => {
       kind: "file",
       path: "/repo/worktree/b.ts",
     });
-    const sidePaneId = "pane_cccccccc-cccc-cccc-cccc-cccccccccccc";
 
     store.closeTab(workspaceKey, fileTabId!);
-    const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    const state = workspaceLayoutStore.getState();
+    const layout = state.layoutByWorkspace[workspaceKey];
 
-    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual(["main", sidePaneId]);
-    expect(layout.focusedPaneId).toBe(sidePaneId);
+    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual(["main"]);
+    expect(layout.focusedPaneId).toBe("main");
+    expect(state.sidePanelOpenByWorkspace[workspaceKey]).toBe(false);
   });
 
-  it("hiding the panel is what drops a side pane emptied by closeTab", () => {
+  it("closeTab keeps a side panel open while other side tabs remain", () => {
     useWorkspaceLayoutIds("cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd");
     const workspaceKey = createWorkspaceKey();
     const store = workspaceLayoutStore.getState();
 
     store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    store.openTabFocused(workspaceKey, { kind: "file", path: "/repo/worktree/a.ts" });
     const fileTabId = store.openTabFocused(workspaceKey, {
       kind: "file",
       path: "/repo/worktree/b.ts",
     });
 
     store.closeTab(workspaceKey, fileTabId!);
-    store.setSidePanelOpen(workspaceKey, false);
-    const layout = workspaceLayoutStore.getState().layoutByWorkspace[workspaceKey];
+    const state = workspaceLayoutStore.getState();
+    const layout = state.layoutByWorkspace[workspaceKey];
 
-    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual(["main"]);
-    expect(layout.focusedPaneId).toBe("main");
+    expect(getWorkspaceSidePane(layout.root)?.tabIds).toEqual(["file_/repo/worktree/a.ts"]);
+    expect(state.sidePanelOpenByWorkspace[workspaceKey]).toBeUndefined();
+  });
+
+  it("closeTab in the main pane leaves an empty launcher the reader opened", () => {
+    useWorkspaceLayoutIds("cececece-cece-cece-cece-cececececece");
+    const workspaceKey = createWorkspaceKey();
+    const store = workspaceLayoutStore.getState();
+
+    store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-1" });
+    const draftTabId = store.openTabFocused(workspaceKey, { kind: "draft", draftId: "draft-2" });
+    store.setSidePanelOpen(workspaceKey, true);
+
+    store.closeTab(workspaceKey, draftTabId!);
+    const state = workspaceLayoutStore.getState();
+    const layout = state.layoutByWorkspace[workspaceKey];
+
+    expect(collectAllPanes(layout.root).map((pane) => pane.id)).toEqual([
+      "main",
+      "pane_cececece-cece-cece-cece-cececececece",
+    ]);
+    expect(state.sidePanelOpenByWorkspace[workspaceKey]).toBeUndefined();
   });
 
   it("keeps a single side pane however many side-panel tabs open", () => {

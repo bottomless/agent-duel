@@ -79,12 +79,13 @@ primary action. Keep Files, pull request, new terminal, and new browser in the s
 than duplicating its launchers in this menu. Import, copy path/branch, and setup keep their existing
 menu access.
 
-No pane collapses when a tab is closed: `closeTabInLayout` preserves whichever pane held the tab.
-For the main pane that stops the side pane being promoted into the main slot when the last chat
-closes. For the side pane it keeps the panel open on its launcher, rather than taking the panel out
-from under the click that emptied it — hiding the panel is what drops an empty side pane
-(`removeEmptySidePaneInLayout`, called only from `setSidePanelOpen`). `moveTabToPaneInLayout` is
-the exception and still collapses a side pane whose last tab is dragged to the main pane.
+Closing the main pane's last tab keeps the pane: `closeTabInLayout` preserves whichever pane held
+the tab, which stops the side pane being promoted into the main slot. Closing the side pane's last
+tab hides the panel, the way the header toggle does (`closeTab` in the layout store). It used to
+stay open on its launcher, and an empty panel left behind read as a close that had not finished.
+A launcher the reader opened with the toggle stays until they hide it, since none of its tabs was
+closed. Hiding is what drops an empty side pane (`removeEmptySidePaneInLayout`).
+`moveTabToPaneInLayout` also collapses a side pane whose last tab is dragged to the main pane.
 
 ## Open state
 

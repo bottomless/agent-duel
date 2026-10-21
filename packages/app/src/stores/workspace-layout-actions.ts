@@ -1265,10 +1265,9 @@ export function closeTabInLayout(input: CloseTabInLayoutInput): WorkspaceLayout 
   });
   const fallbackPaneId = findNearestSiblingPaneId(internalLayout.root, pane.id);
   // Closing a tab never collapses the pane it was in. The main pane survives so
-  // the side pane is never promoted into its place, and an emptied side pane
-  // stays on its launcher rather than taking the panel out from under the click
-  // that emptied it. Hiding the panel is what drops an empty side pane
-  // (`removeEmptySidePaneInLayout`).
+  // the side pane is never promoted into its place. An emptied side pane is
+  // dropped by hiding the panel (`removeEmptySidePaneInLayout`), which the
+  // store's `closeTab` does when it closes the side pane's last tab.
   const nextRoot = detachTabFromTree(internalLayout.root, {
     tabId: input.tabId,
     preserveEmptyPaneId: pane.id,

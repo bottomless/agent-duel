@@ -374,12 +374,34 @@ export function createWorkspaceLayoutStore(
           }
 
           set((state) => {
-            const nextLayout = closeTabInLayout({
-              layout: getWorkspaceLayout(state.layoutByWorkspace, normalizedWorkspaceKey),
-              tabId: normalizedTabId,
-            });
+            const layout = getWorkspaceLayout(state.layoutByWorkspace, normalizedWorkspaceKey);
+            const nextLayout = closeTabInLayout({ layout, tabId: normalizedTabId });
             if (!nextLayout) {
               return state;
+            }
+
+            // Closing the side panel's last tab puts the panel away, the way the header toggle
+            // does: an empty panel left open read as a close that did not finish. A launcher the
+            // reader opened on purpose stays, since no tab of its was closed.
+            const emptiedSidePane =
+              removeEmptySidePaneInLayout(layout) === null
+                ? removeEmptySidePaneInLayout(nextLayout)
+                : null;
+            if (emptiedSidePane) {
+              const mainPaneId = getWorkspaceMainPane(emptiedSidePane.root).id;
+              return {
+                ...withoutFocusRestoration(state, normalizedWorkspaceKey),
+                sidePanelOpenByWorkspace: {
+                  ...state.sidePanelOpenByWorkspace,
+                  [normalizedWorkspaceKey]: false,
+                },
+                layoutByWorkspace: {
+                  ...state.layoutByWorkspace,
+                  [normalizedWorkspaceKey]:
+                    focusPaneInLayout({ layout: emptiedSidePane, paneId: mainPaneId }) ??
+                    emptiedSidePane,
+                },
+              };
             }
 
             return {

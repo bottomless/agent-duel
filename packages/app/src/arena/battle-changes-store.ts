@@ -147,8 +147,4 @@ export function closeBattleChanges(input: {
   const sidePane = layout ? getWorkspaceSidePane(layout.root) : null;
   if (!sidePane?.tabIds.includes(tabId)) return;
   layoutStore.closeTab(key, tabId);
-  // The panel was opened for this; with nothing else in it, closing the tab puts it away too.
-  const after = useWorkspaceLayoutStore.getState().layoutByWorkspace[key];
-  const remaining = after ? getWorkspaceSidePane(after.root) : null;
-  if (remaining && remaining.tabIds.length === 0) layoutStore.setSidePanelOpen(key, false);
 }
