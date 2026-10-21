@@ -1,7 +1,10 @@
 import pino from "pino";
 import { describe, expect, it } from "vitest";
-import type { FeedbackContext } from "@getpaseo/protocol/feedback/schemas";
-import { FeedbackBackend } from "./backend.js";
+import {
+  feedbackContextMaximumBytes,
+  type FeedbackContext,
+} from "@getpaseo/protocol/feedback/schemas";
+import { FeedbackBackend, type FeedbackContextBlobUpload } from "./backend.js";
 
 const feedbackId = "9d5b3081-70b8-4d51-82d4-5d76035ea62f";
 const context: FeedbackContext = {
@@ -18,8 +21,8 @@ const context: FeedbackContext = {
   git: { kind: "not_git" },
 };
 
-function uploadAttempt(body: string) {
-  const value: unknown = JSON.parse(body.split("\n")[0] ?? "null");
+async function uploadAttempt(body: Blob) {
+  const value: unknown = JSON.parse((await body.text()).split("\n")[0] ?? "null");
   if (!value || typeof value !== "object" || !("attempt" in value)) {
     throw new Error("Missing upload attempt");
   }
@@ -27,16 +30,75 @@ function uploadAttempt(body: string) {
 }
 
 describe("feedback backend", () => {
-  it("retries a streamed context three times and records the final failure", async () => {
-    const requests: Array<{ method: string; body: string }> = [];
+  it("uploads the context to Blob and confirms the uploaded pathname", async () => {
+    const uploads: Array<{
+      pathname: string;
+      body: Blob;
+      options: Parameters<FeedbackContextBlobUpload>[2];
+    }> = [];
+    const requests: Array<{ url: string; authorization: string | null; body: unknown }> = [];
+    const backend = new FeedbackBackend("https://control-plane.test", {
+      logger: pino({ level: "silent" }),
+      uploadBlob: async (pathname, body, options) => {
+        uploads.push({ pathname, body, options });
+        return { pathname: `feedback/${feedbackId}/context-1-Rand0m.jsonl` };
+      },
+      request: async (request) => {
+        requests.push({
+          url: request.url,
+          authorization: request.headers.get("authorization"),
+          body: await request.json(),
+        });
+        return Response.json({ id: feedbackId, contextStatus: "complete" });
+      },
+    });
+
+    await backend.uploadContext("session-token", feedbackId, context);
+
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toMatchObject({
+      pathname: `feedback/${feedbackId}/context-1.jsonl`,
+      options: {
+        access: "private",
+        contentType: "application/x-ndjson",
+        handleUploadUrl: "https://control-plane.test/api/feedback/context/upload",
+        clientPayload: JSON.stringify({ feedbackId, attempt: 1 }),
+        headers: { Authorization: "Bearer session-token" },
+      },
+    });
+    const uploadedBytes = uploads[0]?.body.size ?? 0;
+    expect(requests).toEqual([
+      {
+        url: "https://control-plane.test/api/feedback/context/complete",
+        authorization: "Bearer session-token",
+        body: {
+          feedbackId,
+          attempt: 1,
+          pathname: `feedback/${feedbackId}/context-1-Rand0m.jsonl`,
+          transfer: {
+            maxBytes: feedbackContextMaximumBytes,
+            encodedBytes: uploadedBytes,
+            originalTimelineItems: 1,
+            includedTimelineItems: 1,
+            truncated: false,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("retries a failed upload three times and records the final failure", async () => {
+    const uploads: Blob[] = [];
+    const requests: Array<{ url: string; body: unknown }> = [];
     const waits: number[] = [];
     const backend = new FeedbackBackend("https://control-plane.test", {
       logger: pino({ level: "silent" }),
+      uploadBlob: async (_pathname, body) => {
+        uploads.push(body);
+        throw new Error("Upload unavailable");
+      },
       request: async (request) => {
-        requests.push({ method: request.method, body: await request.text() });
-        if (request.method === "PUT") {
-          return Response.json({ error: "Upload unavailable" }, { status: 503 });
-        }
+        requests.push({ url: request.url, body: await request.json() });
         return Response.json({ id: feedbackId, contextStatus: "failed" });
       },
       wait: async (milliseconds) => {
@@ -46,15 +108,13 @@ describe("feedback backend", () => {
 
     await backend.uploadContext("session-token", feedbackId, context);
 
-    const uploads = requests.filter((request) => request.method === "PUT");
-    expect(uploads).toHaveLength(4);
-    expect(uploads.map((request) => uploadAttempt(request.body))).toEqual([1, 2, 3, 4]);
+    expect(await Promise.all(uploads.map(uploadAttempt))).toEqual([1, 2, 3, 4]);
     expect(waits).toEqual([250, 1_000, 2_000]);
-    const failure: unknown = JSON.parse(requests[4]?.body ?? "null");
-    expect(failure).toEqual({
-      feedbackId,
-      attempts: 4,
-      error: "Upload unavailable",
-    });
+    expect(requests).toEqual([
+      {
+        url: "https://control-plane.test/api/feedback/context",
+        body: { feedbackId, attempts: 4, error: "Upload unavailable" },
+      },
+    ]);
   });
 });

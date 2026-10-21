@@ -7,7 +7,7 @@ import {
 } from "@getpaseo/protocol/feedback/schemas";
 
 export interface PreparedFeedbackContextStream {
-  readonly chunks: readonly Uint8Array[];
+  readonly chunks: readonly Uint8Array<ArrayBuffer>[];
   readonly transfer: FeedbackContextTransfer;
 }
 
@@ -66,7 +66,7 @@ export function prepareFeedbackContextStream(input: {
     throw new Error("Feedback context metadata exceeds the upload limit");
   }
 
-  const timelineChunks: Uint8Array[] = [];
+  const timelineChunks: Uint8Array<ArrayBuffer>[] = [];
   let timelineBytes = 0;
   const timelineBudget = feedbackContextMaximumBytes - maximumHeader.byteLength;
   for (let index = input.context.timeline.length - 1; index >= 0; index -= 1) {
@@ -95,19 +95,4 @@ export function prepareFeedbackContextStream(input: {
   }
 
   return { chunks: [header, ...timelineChunks], transfer };
-}
-
-export function feedbackContextReadableStream(chunks: readonly Uint8Array[]) {
-  let index = 0;
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      const chunk = chunks[index];
-      if (!chunk) {
-        controller.close();
-        return;
-      }
-      index += 1;
-      controller.enqueue(chunk);
-    },
-  });
 }
