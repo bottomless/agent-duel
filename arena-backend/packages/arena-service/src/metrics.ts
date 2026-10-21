@@ -16,4 +16,6 @@ export type GenerationMetrics = {
   readonly generationID: string
   readonly usage?: UsageTotals
   readonly finishReason?: string
+  /** The OpenRouter provider that served the call. Stays with the stored metrics: a reveal returns usage and finish reason only. */
+  readonly provider?: string
 }

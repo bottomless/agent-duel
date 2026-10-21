@@ -451,6 +451,8 @@ describe("OpenRouter proxy", () => {
       max_tokens: 999_999,
       reasoning: { effort: "high" },
       provider: { sort: "throughput", max_price: { prompt: 2, completion: 6 } },
+      session_id: "opaque-id",
+      prompt_cache_key: "opaque-id",
       stream_options: { include_usage: true },
     })
     expect(response.headers.get("x-openrouter-provider")).toBeNull()
@@ -689,6 +691,56 @@ describe("OpenRouter proxy", () => {
       await invoke("chat/completions", fields)
       expect(upstreamBodies.at(-1)).not.toHaveProperty("cache_control")
     }
+  })
+
+  test("keeps each side of a turn on one provider and its cache, and records that provider privately", async () => {
+    const upstreamBodies: Record<string, unknown>[] = []
+    const recorded: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => recorded.push(document),
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async (_input, init) => {
+        upstreamBodies.push(JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>)
+        return new Response(
+          `data: ${JSON.stringify({
+            id: "private-id",
+            provider: "Private Provider",
+            choices: [{ delta: { content: "done" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+          })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+          "X-Arena-Generation-ID": "gen_00000000000000000000000000000001",
+        },
+        // A client's own keys would let it steer the routing of a hidden model.
+        body: JSON.stringify({
+          model: "contestant",
+          messages: [],
+          stream: true,
+          session_id: "client",
+          prompt_cache_key: "client",
+        }),
+      }),
+    )
+
+    expect(await response.text()).not.toContain("Private Provider")
+    expect(upstreamBodies[0]).toMatchObject({ session_id: "opaque-id", prompt_cache_key: "opaque-id" })
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]).toMatchObject({ provider: "Private Provider", finishReason: "stop" })
   })
 
   test("leaves sampling to each provider, because the engine cannot choose it for a hidden model", async () => {

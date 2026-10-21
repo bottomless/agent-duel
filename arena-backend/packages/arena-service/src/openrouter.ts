@@ -79,12 +79,14 @@ function finishReason(value: unknown) {
 function metricsCollector(generationID: string, startedAt: number) {
   let usagePayload: unknown
   let finished: string | undefined
+  let provider: string | undefined
   return {
     observe(value: unknown) {
       if (record(value) && (value.usage !== undefined || (record(value.data) && value.data.usage !== undefined))) {
         usagePayload = value
       }
       finished = finishReason(value) ?? finished
+      if (record(value) && typeof value.provider === "string" && value.provider) provider = value.provider
     },
     value(): GenerationMetrics | undefined {
       const measured = usage(usagePayload, Math.max(0, Date.now() - startedAt))
@@ -93,6 +95,7 @@ function metricsCollector(generationID: string, startedAt: number) {
         generationID,
         ...(measured ? { usage: measured } : {}),
         ...(finished ? { finishReason: finished } : {}),
+        ...(provider ? { provider } : {}),
       }
     },
   }
@@ -485,6 +488,11 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
               },
         provider: routeAssignment.model.routing,
         ...promptCache(routeAssignment.model.slug, input),
+        // Without these OpenRouter's throughput sort can move a conversation to another provider
+        // mid-turn, whose cache is empty, and some providers (Meta) miss their own cache without a
+        // key. One assignment is one side of one turn; its subagents share it.
+        session_id: assignment.assignmentID,
+        prompt_cache_key: assignment.assignmentID,
         stream_options: record(input.stream_options)
           ? { ...input.stream_options, include_usage: true }
           : { include_usage: true },

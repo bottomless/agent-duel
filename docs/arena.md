@@ -859,7 +859,11 @@ field. Each layer has its own file:
   titles), whose prefix nothing reads back, and bodies that mark their own cache breakpoints. It
   drops `temperature`, `top_p`, and `top_k` from every request: the engine sets them without knowing
   the model, Claude and OpenAI's reasoning models accept none of them, and under the pool's
-  `require_parameters` OpenRouter would refuse only those draws, which also reveals them.
+  `require_parameters` OpenRouter would refuse only those draws, which also reveals them. It sets
+  `session_id` and `prompt_cache_key` to the assignment id, replacing any the engine sent: without
+  them the throughput sort moves a turn to providers whose cache is empty, and Muse Wonder misses its
+  own cache on about one call in five. Every production model accepts both
+  under `require_parameters`.
   Resolution disables further routing without deleting the assignment.
 - **Response** (`arena-service/src/openrouter.ts`) — before bytes return to the desktop, the control
   plane strips model, provider, fingerprint, OpenRouter metadata, and cost, replaces the generation
@@ -880,7 +884,7 @@ field. Each layer has its own file:
   provider-specific reasoning metadata, identity fields, and raw upstream errors from stored
   responses, and rewrites provider-shaped tool-call ids before saving response artifacts. The
   control plane holds generation usage, cost, and finish reason and returns them only with the
-  committed resolution. Usage keeps OpenRouter's account charge in `cost` and, when supplied, the
+  committed resolution. It also keeps the provider that served each call, which no response returns. Usage keeps OpenRouter's account charge in `cost` and, when supplied, the
   provider's `cost_details.upstream_inference_cost` as `upstreamInferenceCost`; the desktop then
   records both in the research metrics. Local-store startup
   removes those fields and request/response artifacts from legacy unresolved battles; resolved

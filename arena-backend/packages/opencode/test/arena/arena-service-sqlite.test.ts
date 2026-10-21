@@ -168,10 +168,17 @@ describe("Arena service on the desktop SQLite local store", () => {
         stream: false,
         reasoning: { effort: "high" },
         provider: glm.routing,
+        session_id: "assignment-a",
+        prompt_cache_key: "assignment-a",
         stream_options: { include_usage: true },
       },
     })
-    expect(arena.upstream[1]?.body).toMatchObject({ model: grok.slug, provider: grok.routing })
+    expect(arena.upstream[1]?.body).toMatchObject({
+      model: grok.slug,
+      provider: grok.routing,
+      session_id: "assignment-b",
+      prompt_cache_key: "assignment-b",
+    })
 
     const unknown = await arena.contestant("turn-1", "assignment-unknown")
     expect(unknown.status).toBe(403)
