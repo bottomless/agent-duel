@@ -88,6 +88,7 @@ function buildHelper() {
     "/EHsc",
     helperSource,
     `/Fe:${helper}`,
+    `/Fo${path.join(fixtureDir, "vote-input-windows-helper.obj")}`,
     "/link",
     "/SUBSYSTEM:CONSOLE",
     "user32.lib",
@@ -100,6 +101,7 @@ function buildHelper() {
     ].join(" && ");
     execFileSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", command], {
       stdio: "inherit",
+      windowsVerbatimArguments: true,
     });
     return;
   }

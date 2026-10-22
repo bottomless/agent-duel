@@ -116,6 +116,7 @@ function runMsvc(clArgs, linkArgs, targetArch) {
     ].join(" && ");
     execFileSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", command], {
       stdio: "inherit",
+      windowsVerbatimArguments: true,
     });
     return;
   }
