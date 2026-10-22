@@ -21,7 +21,12 @@ import {
   RESOLVING_BATTLE_STATES,
   settledHistoryRun,
 } from "./battle-result";
-import { canRequestBattleDiff, canReviewBattle, hasBattleDiff } from "./comparison-visibility";
+import {
+  battleSummaryStatus,
+  canRequestBattleDiff,
+  canReviewBattle,
+  hasBattleDiff,
+} from "./comparison-visibility";
 import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
 import {
   arenaSummaryAnchor,
@@ -509,6 +514,60 @@ describe("canReviewBattle", () => {
     expect(
       canReviewBattle(turn({ canVote: false, canDiscardBattle: true, canResumeBattle: true })),
     ).toBe(false);
+  });
+});
+
+describe("battleSummaryStatus", () => {
+  const record = (state: "running" | "complete" | "failed", output?: string) => ({
+    state,
+    ...(output ? { output } : {}),
+    truncated: false,
+    omittedArtifacts: [],
+  });
+
+  it("counts a summary as coming before the engine writes its record", () => {
+    expect(battleSummaryStatus(undefined, "pending")).toEqual({
+      available: true,
+      pending: true,
+      failed: false,
+    });
+    expect(battleSummaryStatus(undefined, "running")).toEqual({
+      available: true,
+      pending: true,
+      failed: false,
+    });
+  });
+
+  it("offers a retry for a summary that failed before its record was written", () => {
+    expect(battleSummaryStatus(undefined, "failed")).toEqual({
+      available: true,
+      pending: false,
+      failed: true,
+    });
+  });
+
+  it("follows the record once it exists", () => {
+    expect(battleSummaryStatus(record("running"), "running")).toEqual({
+      available: true,
+      pending: true,
+      failed: false,
+    });
+    expect(battleSummaryStatus(record("complete", "report"), "complete")).toEqual({
+      available: true,
+      pending: false,
+      failed: false,
+    });
+    expect(battleSummaryStatus(record("failed"), "failed")).toEqual({
+      available: true,
+      pending: false,
+      failed: true,
+    });
+  });
+
+  it("has nothing to show for identical results or a stopped battle", () => {
+    expect(battleSummaryStatus(record("complete"), "complete").available).toBe(false);
+    expect(battleSummaryStatus(undefined, "skipped").available).toBe(false);
+    expect(battleSummaryStatus(record("running"), "skipped").available).toBe(false);
   });
 });
 

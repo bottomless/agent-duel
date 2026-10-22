@@ -139,8 +139,12 @@ battle that touched hundreds of files does not push the threads off screen; an o
 The list names every file either side changed, in path order, without contents; each diff reads its own file
 when it opens (`arena.turn.get_file_diff`). Do not cap the list to bound the response: a cap hid every file B
 alone changed whenever A changed 25.
-The chevron at the end of the tab row folds the whole review away, and a tab opens it again. A ready summary opens first. When
-the review opens before the summary is ready, Changes stays open after it arrives. Changes
+The chevron at the end of the tab row folds the whole review away, and a tab opens it again. The review opens on the
+Difference summary, showing its progress while it generates; Changes opens first only when no summary
+is coming, as for a stopped battle or one where a side failed. The review mounts before the engine writes the comparison
+record, so read the turn's `comparisonState` until the record exists (`battleSummaryStatus` in
+`comparison-visibility.ts`); the review keeps the tab it opened on, and reading only the record
+opened every battle on Changes. Changes
 retries a failed read twice before showing a small manual retry. The summary generator retries
 transient network and service failures
 up to three attempts, while permanent failures such as payment or credentials remain actionable.
