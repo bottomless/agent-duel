@@ -7,6 +7,7 @@ import { Git } from "@/git"
 import { InstanceStore } from "@/project/instance-store"
 import type { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
+import { notedUpload } from "./attachments"
 import { localizeEmbeddedPaths, localizeTranscriptPaths } from "./canonical-path"
 
 export interface Roots {
@@ -80,7 +81,9 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
     moveChanges: false,
   })
   const transcript = yield* sessions.messages({ sessionID: forked.id })
-  const prunedAt = Date.now()
+  const prune = pruneBefore
+    ? { before: pruneBefore, at: Date.now(), worktree: roots.worktree, uploads: uploadDirectories(transcript) }
+    : undefined
   for (const message of transcript) {
     yield* sessions.updateMessage(
       input.pathMode === "transcript"
@@ -100,9 +103,7 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
           : localizeEmbeddedPaths(part, roots)
       const copied = input.part ? input.part(localized, message.info) : localized
       // Copies keep their source's order, so an older copied message has a smaller id.
-      yield* sessions.updatePart(
-        pruneBefore && message.info.id < pruneBefore ? pruneToolOutput(copied, prunedAt, roots.worktree) : copied,
-      )
+      yield* sessions.updatePart(prune && message.info.id < prune.before ? pruneToolOutput(copied, prune) : copied)
     }
   }
   return forked
@@ -113,11 +114,11 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
  * a placeholder instead (`MessageV2.toModelMessages`), and the input stays so it still sees what
  * was done. An interrupted call has no compacted mark, so its partial output becomes the placeholder.
  */
-function pruneToolOutput(part: SessionV1.Part, at: number, worktree: string): SessionV1.Part {
-  if (part.type !== "tool" || !recoverable(part, worktree)) return part
+function pruneToolOutput(part: SessionV1.Part, prune: Prune): SessionV1.Part {
+  if (part.type !== "tool" || !recoverable(part, prune)) return part
   if (part.state.status === "completed") {
     if (part.state.time.compacted) return part
-    return { ...part, state: { ...part.state, time: { ...part.state.time, compacted: at } } }
+    return { ...part, state: { ...part.state, time: { ...part.state.time, compacted: prune.at } } }
   }
   if (part.state.status === "error" && typeof part.state.metadata?.output === "string") {
     return { ...part, state: { ...part.state, metadata: { ...part.state.metadata, output: CLEARED } } }
@@ -147,17 +148,45 @@ const RECOVERABLE_TOOLS = new Set([
   "websearch",
 ])
 
+type Prune = {
+  readonly before: MessageID
+  readonly at: number
+  readonly worktree: string
+  readonly uploads: readonly string[]
+}
+
 /**
- * A read is recoverable only inside the worktree. A contestant may not read outside it, and what an
- * earlier turn read there is gone or closed to it: another turn's uploads, its temp directory.
+ * Whether repeating the call gives the copy its output again. A contestant may not reach outside
+ * its worktree, and what an earlier turn reached there is gone or closed to it: that turn's
+ * uploads, its temp directory. So a call that names an upload, or a path outside the worktree,
+ * keeps its output.
  */
-function recoverable(part: SessionV1.ToolPart, worktree: string) {
+function recoverable(part: SessionV1.ToolPart, prune: Prune) {
   if (!RECOVERABLE_TOOLS.has(part.tool)) return false
-  if (part.tool !== "read") return true
-  const filePath = part.state.input.filePath
-  if (typeof filePath !== "string" || !path.isAbsolute(filePath)) return true
-  const relative = path.relative(worktree, filePath)
+  const input = part.state.input
+  const strings = Object.values(input).filter((value) => typeof value === "string")
+  if (strings.some((value) => prune.uploads.some((upload) => value.includes(upload)))) return false
+  return [input.filePath, input.path].every(
+    (target) => typeof target !== "string" || !path.isAbsolute(target) || inside(prune.worktree, target),
+  )
+}
+
+function inside(root: string, target: string) {
+  const relative = path.relative(root, target)
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+}
+
+/** The directories of the uploads the transcript's prompts name; each upload has its own. */
+function uploadDirectories(transcript: readonly SessionV1.WithParts[]) {
+  const uploads = transcript.flatMap((message) =>
+    message.info.role === "user"
+      ? message.parts.flatMap((part) => {
+          const upload = part.type === "text" ? notedUpload(part.text) : undefined
+          return upload ? [path.dirname(upload)] : []
+        })
+      : [],
+  )
+  return [...new Set(uploads)]
 }
 
 // `--show-cdup`, not `--show-toplevel`: the transcript names the directory in the form the session

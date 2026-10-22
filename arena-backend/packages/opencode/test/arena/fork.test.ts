@@ -242,11 +242,18 @@ describe("Arena fork", () => {
       const sessions = yield* Session.Service
       const source = yield* provideInstance(root)(sessions.create({ title: "source" }))
       yield* seedHistory(source.id, root).pipe(provideInstance(root))
-      const assistant = (yield* sessions.messages({ sessionID: source.id })).find(
-        (message) => message.info.role === "assistant",
-      )
-      if (!assistant) return yield* Effect.fail(new Error("Seeded assistant message missing"))
+      const seeded = yield* sessions.messages({ sessionID: source.id })
+      const user = seeded.find((message) => message.info.role === "user")
+      const assistant = seeded.find((message) => message.info.role === "assistant")
+      if (!user || !assistant) return yield* Effect.fail(new Error("Seeded messages missing"))
       const upload = path.join(path.dirname(root), "uploads", "upload-1", "server.log")
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: user.info.id,
+        sessionID: source.id,
+        type: "text",
+        text: ["Uploaded file: server.log", `Path: ${upload}`, "MIME: text/plain", "Size: 12 bytes"].join("\n"),
+      })
       const calls: ReadonlyArray<
         readonly [
           callID: string,
@@ -260,6 +267,8 @@ describe("Arena fork", () => {
         ["call-task", "task", { description: "survey", prompt: "survey the API" }, "completed"],
         ["call-mcp", "github_get_issue", { number: 7 }, "completed"],
         ["call-upload", "read", { filePath: upload }, "completed"],
+        ["call-upload-shell", "bash", { command: `tail -n 50 ${upload}` }, "completed"],
+        ["call-outside", "grep", { pattern: "TODO", path: path.dirname(root) }, "completed"],
         ["call-read", "read", { filePath: path.join(root, "src", "index.ts") }, "completed"],
         ["call-bash", "bash", { command: "bun test" }, "completed"],
         ["call-failed", "bash", { command: "false" }, "error"],
@@ -323,6 +332,8 @@ describe("Arena fork", () => {
         ["call-task", "call-task output"],
         ["call-mcp", "call-mcp output"],
         ["call-upload", "call-upload output"],
+        ["call-upload-shell", "call-upload-shell output"],
+        ["call-outside", "call-outside output"],
         ["call-read", "cleared"],
         ["call-bash", "cleared"],
         ["call-failed", "Tool execution aborted"],
