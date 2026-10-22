@@ -1,4 +1,9 @@
-import type { ArenaComparisonDiff, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import type {
+  ArenaComparisonDiff,
+  ArenaRun,
+  ArenaSide,
+  ArenaSnapshot,
+} from "@getpaseo/protocol/arena/rpc-schemas";
 
 const diffReadyStates = new Set([
   "awaiting_vote",
@@ -37,4 +42,44 @@ export function battleSummaryStatus(
   const pending = state === "pending" || state === "running";
   const failed = state === "failed";
   return { available: pending || failed || Boolean(comparison?.output), pending, failed };
+}
+
+export type BattleReviewPhase =
+  | { kind: "none" }
+  /** One side has a result and the other is still working: its changes alone, no summary yet. */
+  | { kind: "partial"; finished: ArenaSide; waitingFor: ArenaSide }
+  | { kind: "full" };
+
+function settled(run: ArenaRun | undefined): boolean {
+  return run !== undefined && run.runState !== "pending";
+}
+
+// A side working again after a reply keeps its last result's commit on the run, so the state
+// decides, not the commit alone.
+function hasResult(run: ArenaRun | undefined): boolean {
+  return settled(run) && Boolean(run?.finalCommit);
+}
+
+/**
+ * What the card can review: both results once both sides settle, or the first result alone
+ * while the other side still works, so the voter can read it before deciding early.
+ */
+export function battleReviewPhase(
+  turn: ArenaSnapshot["turn"],
+  runA: ArenaRun | undefined,
+  runB: ArenaRun | undefined,
+): BattleReviewPhase {
+  if (!turn) return { kind: "none" };
+  const working = turn.state === "running" || turn.state === "finalizing";
+  if (settled(runA) && settled(runB)) {
+    // Both results are in before the turn moves on to the vote; the review stays up through
+    // that rather than vanishing for a moment and coming back.
+    const ready =
+      canRequestBattleDiff(turn.state) || (working && hasResult(runA) && hasResult(runB));
+    return ready ? { kind: "full" } : { kind: "none" };
+  }
+  if (!working) return { kind: "none" };
+  if (hasResult(runA) && !settled(runB)) return { kind: "partial", finished: "a", waitingFor: "b" };
+  if (hasResult(runB) && !settled(runA)) return { kind: "partial", finished: "b", waitingFor: "a" };
+  return { kind: "none" };
 }

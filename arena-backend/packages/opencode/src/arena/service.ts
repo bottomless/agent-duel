@@ -1888,14 +1888,20 @@ export const layer: Layer.Layer<
         turn.state === "discarding" ||
         turn.state === "discarded" ||
         turn.resolution?.kind === "stopped"
-      if ((!a?.finalCommit || !b?.finalCommit) && !stopped) {
+      // A side working again after a reply keeps its last result's commit until it finishes, so
+      // only a settled side's result counts while the battle runs.
+      const result = (run: RunDocument | undefined) =>
+        run?.finalCommit && run.runState !== "pending" ? run.finalCommit : undefined
+      const partial = turn.state === "running" && Boolean(result(a) || result(b))
+      if (!(result(a) && result(b)) && !stopped && !partial) {
         return yield* Effect.fail(new Error("Arena comparison is not finalized"))
       }
-      // A stopped battle deliberately permits partial and failed contestants. Keep its
-      // diff inspectable by representing a side without a finalized result as the
-      // frozen base revision; the public run still reports that the side has no result.
-      const aCommit = a?.finalCommit ?? turn.frozenBaseSHA
-      const bCommit = b?.finalCommit ?? turn.frozenBaseSHA
+      // A stopped battle deliberately permits partial and failed contestants, and a running one
+      // has a result to review as soon as one side finishes. Keep the diff inspectable by
+      // representing a side without a result as the frozen base revision; the public run still
+      // reports that the side has no result.
+      const aCommit = (stopped ? a?.finalCommit : result(a)) ?? turn.frozenBaseSHA
+      const bCommit = (stopped ? b?.finalCommit : result(b)) ?? turn.frozenBaseSHA
       const evidence = yield* withGit(
         compare({
           canonical: chat.repository.root,
@@ -1911,12 +1917,12 @@ export const layer: Layer.Layer<
         a: {
           commit: aCommit,
           tree: evidence.aTree,
-          ...(a?.finalCommit && a.permanentRef ? { ref: a.permanentRef } : {}),
+          ...(aCommit === a?.finalCommit && a.permanentRef ? { ref: a.permanentRef } : {}),
         },
         b: {
           commit: bCommit,
           tree: evidence.bTree,
-          ...(b?.finalCommit && b.permanentRef ? { ref: b.permanentRef } : {}),
+          ...(bCommit === b?.finalCommit && b.permanentRef ? { ref: b.permanentRef } : {}),
         },
         treesEqual: evidence.aTree === evidence.bTree,
         files: evidence.files,

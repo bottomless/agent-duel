@@ -34,7 +34,11 @@ import { arenaChangesRows } from "./changes-rows";
 import { BattleReview } from "./battle-review";
 import { useArenaReviewTelemetry } from "./review-telemetry";
 import { isStoppedByEarlyPick } from "./battle-result";
-import { battleSummaryStatus, canRequestBattleDiff } from "./comparison-visibility";
+import {
+  battleReviewPhase,
+  battleSummaryStatus,
+  type BattleReviewPhase,
+} from "./comparison-visibility";
 import type { ArenaPendingQuestion } from "./question";
 import type { ArenaPendingPermission, ArenaPermissionReply } from "./permission";
 import { Button } from "@/components/ui/button";
@@ -372,11 +376,24 @@ function BattlePane({
   );
 }
 
-// The same key the side panel and the summary fetch, so no view adds a request.
-function useBattleDiff(serverId: string, agentId: string, turnId: string) {
+// The same key the side panel and the summary fetch, so no view adds a request. The first
+// result alone is keyed apart, so the comparison is fetched again once the other side lands.
+function useBattleDiff(
+  serverId: string,
+  agentId: string,
+  turnId: string,
+  phase: BattleReviewPhase,
+) {
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   return useFetchQuery({
-    queryKey: ["arena", "diff", serverId, agentId, turnId],
+    queryKey: [
+      "arena",
+      "diff",
+      serverId,
+      agentId,
+      turnId,
+      ...(phase.kind === "partial" ? [`partial:${phase.finished}`] : []),
+    ],
     dataShape: "value",
     staleTimeMs: 0,
     queryFn: async () => {
@@ -404,6 +421,7 @@ function BattleJudging({
   turnId,
   comparison,
   comparisonState,
+  phase,
   retrying,
   onRetry,
 }: {
@@ -412,11 +430,17 @@ function BattleJudging({
   turnId: string;
   comparison: ArenaSnapshot["comparison"];
   comparisonState: NonNullable<ArenaSnapshot["turn"]>["comparisonState"];
+  phase: Exclude<BattleReviewPhase, { kind: "none" }>;
   retrying: boolean;
   onRetry: () => void;
 }) {
-  const summary = battleSummaryStatus(comparison, comparisonState);
-  const diffQuery = useBattleDiff(serverId, agentId, turnId);
+  // A turn's comparison is pending from its creation, which while one side still works would
+  // read as a summary on its way; nothing starts until both sides finish.
+  const summary =
+    phase.kind === "partial"
+      ? { available: false, pending: false, failed: false }
+      : battleSummaryStatus(comparison, comparisonState);
+  const diffQuery = useBattleDiff(serverId, agentId, turnId, phase);
   const refetchDiff = diffQuery.refetch;
   const retryDiff = useCallback(() => {
     void refetchDiff();
@@ -430,6 +454,7 @@ function BattleJudging({
       summaryAvailable={summary.available}
       summaryPending={summary.pending}
       summaryFailed={summary.failed}
+      waitingFor={phase.kind === "partial" ? phase.waitingFor : null}
       comparison={comparison}
       retrying={retrying}
       onRetry={onRetry}
@@ -440,10 +465,6 @@ function BattleJudging({
       retryingDiff={diffQuery.isFetching}
     />
   );
-}
-
-function runsAreFinal(runA: ArenaRun | undefined, runB: ArenaRun | undefined): boolean {
-  return Boolean(runA && runB && runA.runState !== "pending" && runB.runState !== "pending");
 }
 
 interface RespondingIds {
@@ -646,8 +667,8 @@ export function ArenaBattleView({
       ),
     [promptAttachments, promptImages.length],
   );
-  const bothFinal = runsAreFinal(runA, runB);
-  const reviewAvailable = bothFinal && Boolean(turn && canRequestBattleDiff(turn.state));
+  const reviewPhase = battleReviewPhase(turn, runA, runB);
+  const reviewAvailable = reviewPhase.kind !== "none";
   const [paneView, setPaneView] = useArenaPaneView(turn?.index);
   // Observes the review stores and the window; emits nothing into React state,
   // so the card renders exactly as it did without it.
@@ -743,7 +764,7 @@ export function ArenaBattleView({
               <ArenaTransitionRow transition={turn.transition} />
             </View>
           ) : null}
-          {reviewAvailable ? (
+          {reviewPhase.kind !== "none" ? (
             <View style={styles.reviewSection}>
               <BattleJudging
                 serverId={serverId}
@@ -751,6 +772,7 @@ export function ArenaBattleView({
                 turnId={turn.id}
                 comparison={snapshot.comparison}
                 comparisonState={turn.comparisonState}
+                phase={reviewPhase}
                 retrying={pendingAction?.kind === "retry_comparison"}
                 onRetry={actions.retryComparison}
               />

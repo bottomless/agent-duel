@@ -133,7 +133,17 @@ latest output. The battle uses no side panel tab: the card has the chat's width,
 narrow the card to show the same thing.
 
 Review has two tabs: **Difference summary**, the generated comparison, and **Changes**, the file rows with git's
-status for each pair. A row opens its file's diff right under it and closes it again, several can be open
+status for each pair. The review appears as soon as one side has a result (`battleReviewPhase` in
+`comparison-visibility.ts`), so the voter can read it before picking early. It opens on the
+summary tab, which says the other side is still working. Changes holds the finished side's files:
+its counts beside `working` for the other side, no verdict on a pair that is not in yet, and in
+each diff the working side's column is a hatched placeholder the size of the finished side's diff
+(one line per region in the one-column layout), so nothing moves when its result lands. Only the
+finished side expands. The engine's diff stands the
+unfinished side in as the frozen base, the shape a stopped battle already uses; a side working
+again after a reply keeps its last result's commit, so its run state decides, not the commit.
+The first result is fetched under its own query key, so the comparison is fetched again when the
+other side lands, and the review stays up from then on rather than dropping out until the vote opens. A row opens its file's diff right under it and closes it again, several can be open
 at once, and the first diverging file opens on arrival. Past eight rows the rest wait behind Show more, so a
 battle that touched hundreds of files does not push the threads off screen; an open row past them still shows.
 The chevron at the end of the tab row folds the whole review away, and a tab opens it again. The review opens on the

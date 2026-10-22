@@ -162,6 +162,35 @@ describe("InlineFileDiff", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Expand Agent B");
   });
 
+  it("keeps the working side's column as a placeholder beside the finished side", () => {
+    act(() => {
+      root.render(
+        <InlineFileDiff diff={shortConflict()} file="main.py" layout="split" waitingFor="a" />,
+      );
+    });
+    expect(byTestId("arena-diff-pending-a")?.textContent).toContain("Agent A is still working");
+    expect(container.textContent).toContain("y = 200");
+    expect(container.textContent).not.toContain("y = 20\n");
+    expect(byTestId("arena-diff-back")).toBeNull();
+    expect(container.querySelector('[aria-label="Expand Agent A"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Expand Agent B"]')).not.toBeNull();
+  });
+
+  it("stacks the working side as one line per region in one column", () => {
+    act(() => {
+      root.render(
+        <InlineFileDiff diff={shortConflict()} file="main.py" layout="single" waitingFor="b" />,
+      );
+    });
+    const pending = byTestId("arena-diff-pending-b");
+    expect(pending?.textContent).toBe(
+      "Agent Bis still working · its version of this region appears here",
+    );
+    expect(container.textContent).toContain("y = 20");
+    expect(container.textContent).not.toContain("y = 200");
+    expect(container.querySelector('[aria-label="Expand Agent B"]')).toBeNull();
+  });
+
   it("names its file on the viewer, so a scroll is credited to the right diff", () => {
     act(() => root.render(<InlineFileDiff diff={shortConflict()} file="main.py" layout="split" />));
     expect(byTestId("arena-inline-diff")?.getAttribute("data-diff-file")).toBe("main.py");

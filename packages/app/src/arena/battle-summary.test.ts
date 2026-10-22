@@ -18,7 +18,12 @@ import {
   resolutionRetryDetail,
   RESOLVING_BATTLE_STATES,
 } from "./battle-result";
-import { battleSummaryStatus, canRequestBattleDiff, hasBattleDiff } from "./comparison-visibility";
+import {
+  battleReviewPhase,
+  battleSummaryStatus,
+  canRequestBattleDiff,
+  hasBattleDiff,
+} from "./comparison-visibility";
 import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
 import {
   arenaSummaryAnchor,
@@ -292,6 +297,56 @@ describe("canRequestBattleDiff", () => {
     expect(canRequestBattleDiff("applying")).toBe(true);
     expect(canRequestBattleDiff("complete")).toBe(true);
     expect(canRequestBattleDiff("discarded")).toBe(true);
+  });
+});
+
+describe("battleReviewPhase", () => {
+  type Run = Parameters<typeof battleReviewPhase>[1];
+  type Turn = NonNullable<Parameters<typeof battleReviewPhase>[0]>;
+  const turn = (state: Turn["state"]) => ({ state }) as Turn;
+  const run = (runState: NonNullable<Run>["runState"], finalCommit?: string) =>
+    ({ runState, ...(finalCommit ? { finalCommit } : {}) }) as Run;
+
+  it("reviews the first result alone while the other side still works", () => {
+    expect(battleReviewPhase(turn("running"), run("complete", "a1"), run("pending"))).toEqual({
+      kind: "partial",
+      finished: "a",
+      waitingFor: "b",
+    });
+    expect(battleReviewPhase(turn("running"), run("pending"), run("complete", "b1"))).toEqual({
+      kind: "partial",
+      finished: "b",
+      waitingFor: "a",
+    });
+  });
+
+  it("has nothing to review while both work, or when the finished side has no result", () => {
+    expect(battleReviewPhase(turn("running"), run("pending"), run("pending")).kind).toBe("none");
+    expect(battleReviewPhase(turn("running"), run("error"), run("pending")).kind).toBe("none");
+    expect(battleReviewPhase(undefined, run("complete", "a1"), run("pending")).kind).toBe("none");
+  });
+
+  it("drops a side's last result while it works again after a reply", () => {
+    expect(battleReviewPhase(turn("running"), run("pending", "a1"), run("complete", "b1"))).toEqual(
+      {
+        kind: "partial",
+        finished: "b",
+        waitingFor: "a",
+      },
+    );
+  });
+
+  it("reviews both results as soon as both are in, and otherwise once the turn can be diffed", () => {
+    expect(battleReviewPhase(turn("awaiting_vote"), run("complete", "a1"), run("error")).kind).toBe(
+      "full",
+    );
+    expect(
+      battleReviewPhase(turn("running"), run("complete", "a1"), run("complete", "b1")).kind,
+    ).toBe("full");
+    expect(battleReviewPhase(turn("running"), run("complete", "a1"), run("error")).kind).toBe(
+      "none",
+    );
+    expect(battleReviewPhase(turn("stopping"), run("stopped"), run("stopped")).kind).toBe("none");
   });
 });
 

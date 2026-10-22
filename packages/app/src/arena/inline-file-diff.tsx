@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { ArenaComparisonDiff } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaComparisonDiff, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ArenaChangesRow } from "./changes-rows";
 import type { ArenaDiffLayout } from "./diff-layout";
 import { BaseRelativeFileView } from "./base-relative-view";
@@ -41,11 +41,14 @@ export function InlineFileDiff({
   diff,
   file,
   layout,
+  waitingFor,
   embedded = false,
 }: {
   diff: ArenaComparisonDiff;
   file: string;
   layout: ArenaDiffLayout;
+  /** The side still working: its column is a placeholder until its result lands. */
+  waitingFor?: ArenaSide;
   embedded?: boolean;
 }) {
   const threeWay = useMemo(
@@ -58,6 +61,7 @@ export function InlineFileDiff({
       key={`${diff.turnID}:${file}`}
       file={threeWay}
       layout={layout}
+      waitingFor={waitingFor}
       embedded={embedded}
     />
   );
