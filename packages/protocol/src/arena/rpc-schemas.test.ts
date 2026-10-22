@@ -3,6 +3,8 @@ import {
   ArenaRunQuestionRejectRequestSchema,
   ArenaRunQuestionReplyRequestSchema,
   ArenaSingleAgentVoteRequestSchema,
+  ArenaVoteInputSchema,
+  ArenaVoteSourceSchema,
   ArenaSnapshotSchema,
   ArenaTurnReplyRequestSchema,
   ArenaTurnRetryResolutionRequestSchema,
@@ -30,6 +32,7 @@ function snapshot() {
       state: "running",
       comparisonState: "pending",
       canVote: false,
+      canResumeBattle: false,
       canTie: false,
       canDiscardBattle: false,
       canRetryResolution: false,
@@ -210,6 +213,83 @@ describe("Arena RPC schemas", () => {
     expect("participantID" in start).toBe(false);
     expect("participantID" in vote).toBe(false);
     expect("participantID" in singleAgentVote).toBe(false);
+  });
+
+  it("defaults vote source to the API for direct requests", () => {
+    const vote = ArenaTurnVoteRequestSchema.parse({
+      type: "arena.turn.vote.request",
+      requestId: "request-1",
+      agentId: "agent-1",
+      turnId: "turn-1",
+      vote: "a",
+    });
+    const singleAgentVote = ArenaSingleAgentVoteRequestSchema.parse({
+      type: "arena.single_agent.vote.request",
+      requestId: "request-2",
+      agentId: "agent-1",
+      ratingId: "rating-1",
+      vote: "up",
+    });
+
+    expect(vote.voteSource).toBe("api");
+    expect(singleAgentVote.voteSource).toBe("api");
+  });
+
+  it("accepts native, injected, and unverified vote sources", () => {
+    const sources = ["native", "injected", "unverified"] as const;
+    for (const voteSource of sources) {
+      expect(ArenaVoteSourceSchema.parse(voteSource)).toBe(voteSource);
+      expect(
+        ArenaTurnVoteRequestSchema.parse({
+          type: "arena.turn.vote.request",
+          requestId: `request-${voteSource}`,
+          agentId: "agent-1",
+          turnId: "turn-1",
+          vote: "a",
+          voteSource,
+        }).voteSource,
+      ).toBe(voteSource);
+    }
+  });
+
+  it("accepts canonical pointer and keyboard vote inputs", () => {
+    expect(ArenaVoteInputSchema.parse({ kind: "pointer", screenX: 12.5, screenY: 48 })).toEqual({
+      kind: "pointer",
+      screenX: 12.5,
+      screenY: 48,
+    });
+    expect(ArenaVoteInputSchema.parse({ kind: "keyboard", key: "Enter" })).toEqual({
+      kind: "keyboard",
+      key: "Enter",
+    });
+    expect(
+      ArenaVoteInputSchema.safeParse({ kind: "pointer", screenX: Number.NaN, screenY: 48 }).success,
+    ).toBe(false);
+    expect(ArenaVoteInputSchema.safeParse({ kind: "keyboard", key: "Tab" }).success).toBe(false);
+  });
+
+  it("rejects vote sources outside the transport enum", () => {
+    expect(ArenaVoteSourceSchema.safeParse("operator").success).toBe(false);
+    expect(() =>
+      ArenaTurnVoteRequestSchema.parse({
+        type: "arena.turn.vote.request",
+        requestId: "request-1",
+        agentId: "agent-1",
+        turnId: "turn-1",
+        vote: "a",
+        voteSource: "operator",
+      }),
+    ).toThrow();
+    expect(() =>
+      ArenaSingleAgentVoteRequestSchema.parse({
+        type: "arena.single_agent.vote.request",
+        requestId: "request-2",
+        agentId: "agent-1",
+        ratingId: "rating-1",
+        vote: "up",
+        voteSource: "operator",
+      }),
+    ).toThrow();
   });
 
   it("keeps the single-agent identity hidden until a thumbs vote is present", () => {

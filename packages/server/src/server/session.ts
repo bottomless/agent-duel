@@ -4201,7 +4201,7 @@ export class Session {
           return;
         }
         case "arena.turn.vote.request": {
-          const result = await arena.vote(msg.turnId, msg.vote, this.clientId);
+          const result = await arena.vote(msg.turnId, msg.vote, this.clientId, msg.voteSource);
           this.syncArenaPreviewRoutes(result);
           this.emit({
             type: "arena.turn.vote.response",
@@ -4357,7 +4357,12 @@ export class Session {
     if (!msg.ratingId) {
       throw new Error("Update Agent Duel before revealing a single-agent pass");
     }
-    const result = await arena.singleAgentVote(msg.ratingId, msg.vote, this.clientId);
+    const result = await arena.singleAgentVote(
+      msg.ratingId,
+      msg.vote,
+      this.clientId,
+      msg.voteSource,
+    );
     this.emit({
       type: "arena.single_agent.vote.response",
       payload: { requestId: msg.requestId, snapshot: result },

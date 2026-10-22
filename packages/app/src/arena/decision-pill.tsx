@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from "react";
-import { Text, View, type LayoutChangeEvent } from "react-native";
+import { Text, View, type LayoutChangeEvent, type GestureResponderEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
@@ -17,6 +17,7 @@ import {
 } from "./decision-state";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
+import { voteClickSource } from "./vote-source";
 
 function BattlePaneDecision({
   side,
@@ -28,12 +29,20 @@ function BattlePaneDecision({
   actions: ArenaBattleActions;
 }) {
   const { pending, pendingAction } = actions;
-  const handleChoose = useCallback(() => {
-    void actions.choose(side);
-  }, [actions, side]);
-  const handlePickEarly = useCallback(() => {
-    void actions.pickEarly(side);
-  }, [actions, side]);
+  const handleChoose = useCallback(
+    async (event: GestureResponderEvent) => {
+      const source = await voteClickSource(event);
+      void actions.choose(side, source);
+    },
+    [actions, side],
+  );
+  const handlePickEarly = useCallback(
+    async (event: GestureResponderEvent) => {
+      const source = await voteClickSource(event);
+      void actions.pickEarly(side, source);
+    },
+    [actions, side],
+  );
   const pendingVote = pendingAction?.kind === "vote" && pendingAction.vote === side;
 
   if (phase.kind === "running") {

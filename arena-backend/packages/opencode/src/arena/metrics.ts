@@ -395,6 +395,7 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
     ...(ipAddress ? { ipAddress } : {}),
     modelPair,
     ...(turn.vote ? { vote: turn.vote } : {}),
+    ...(turn.voteSource ? { voteSource: turn.voteSource } : {}),
     ...(turn.resolution?.kind ? { resolutionKind: turn.resolution.kind } : {}),
     selectedEarly: turn.selectedEarly === true,
     steerCount: turn.steerCount ?? 0,

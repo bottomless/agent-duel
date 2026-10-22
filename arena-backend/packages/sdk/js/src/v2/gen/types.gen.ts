@@ -8011,6 +8011,7 @@ export type ArenaSingleAgentVoteData = {
     ratingID: string
     vote: "up" | "down"
     participantID?: string
+    voteSource?: "synthetic" | "unknown" | "api" | "native" | "injected" | "unverified"
   }
   path: {
     sessionID: string
@@ -11831,6 +11832,7 @@ export type ArenaTurnVoteData = {
   body?: {
     vote: "a" | "b" | "tie"
     participantID?: string
+    voteSource?: "synthetic" | "unknown" | "api" | "native" | "injected" | "unverified"
   }
   path: {
     turnID: string

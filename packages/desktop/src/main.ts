@@ -99,6 +99,7 @@ import {
 import { AgentNavigationInbox, parseAgentDeepLinkFromArgv } from "./agent-navigation.js";
 import { createAccountsReturnServer } from "./features/accounts-return.js";
 import { registerEncryptedStorageHandlers } from "./features/encrypted-storage.js";
+import { registerVoteInputHandlers } from "./features/vote-input.js";
 
 const DEV_SERVER_URL = process.env.EXPO_DEV_URL ?? "http://localhost:8081";
 const APP_SCHEME = "paseo";
@@ -896,6 +897,7 @@ async function bootstrap(): Promise<void> {
   registerEditorTargetHandlers();
   registerBrowserAutomationIpc();
   registerEncryptedStorageHandlers();
+  registerVoteInputHandlers();
 
   // In-app "Open in new window": opens a window that lands on the given project
   // via the same open-project flow as a CLI launch (no move, no ownership).

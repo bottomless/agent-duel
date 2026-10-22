@@ -75,6 +75,7 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
             ctx.payload.ratingID,
             ctx.payload.vote,
             ctx.payload.participantID,
+            ctx.payload.voteSource,
           ),
         ),
       )
@@ -126,7 +127,9 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
       .handle("reply", (ctx) =>
         map(arena.reply(ctx.params.turnID, ctx.payload.prompt, ctx.payload.target, ctx.payload.attachments)),
       )
-      .handle("vote", (ctx) => map(arena.vote(ctx.params.turnID, ctx.payload.vote, ctx.payload.participantID)))
+      .handle("vote", (ctx) =>
+        map(arena.vote(ctx.params.turnID, ctx.payload.vote, ctx.payload.participantID, ctx.payload.voteSource)),
+      )
       .handle("recordReview", (ctx) =>
         map(
           arena.recordReview(ctx.params.turnID, ctx.payload.events, ctx.payload.participantID, ctx.payload.ipAddress),

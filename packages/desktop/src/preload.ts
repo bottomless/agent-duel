@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BrowserKeyboardPolicy } from "./features/browser-keyboard/index.js";
+import type { ArenaVoteInput, ArenaVoteSource } from "@getpaseo/protocol/arena/rpc-schemas";
 
 // This preload runs in Electron's sandbox and is tsc-compiled (not bundled), so it MUST
 // NOT emit any runtime module load other than "electron" — a require() of a local or
@@ -44,6 +45,10 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
       save: (value: string) => ipcRenderer.invoke("paseo:byok:key:save", value),
       clear: () => ipcRenderer.invoke("paseo:byok:key:clear"),
     },
+  },
+  voteInput: {
+    source: (input: ArenaVoteInput) =>
+      ipcRenderer.invoke("paseo:vote-input:source", input) as Promise<ArenaVoteSource>,
   },
   events: {
     on: (event: string, handler: EventHandler): Promise<() => void> => {

@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode } from "react";
-import { Text, View } from "react-native";
+import { Text, View, type GestureResponderEvent } from "react-native";
 import { ThumbsDown, ThumbsUp } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { useSessionStore } from "@/stores/session-store";
 import { settingsStyles } from "@/styles/settings";
 import { useArenaTurnMutation } from "./use-arena-session";
+import { voteClickSource } from "./vote-source";
 
 interface SingleAgentRatingDialogProps {
   serverId: string;
@@ -30,13 +31,31 @@ export function SingleAgentRatingDialog({
     rating.variables?.kind === "single_agent_vote" ? rating.variables.vote : undefined;
 
   const { mutate } = rating;
-  const voteUp = useCallback(() => {
-    mutate({ kind: "single_agent_vote", ratingId, vote: "up" });
-  }, [mutate, ratingId]);
+  const voteUp = useCallback(
+    async (event: GestureResponderEvent) => {
+      const voteSource = await voteClickSource(event);
+      mutate({
+        kind: "single_agent_vote",
+        ratingId,
+        vote: "up",
+        voteSource,
+      });
+    },
+    [mutate, ratingId],
+  );
 
-  const voteDown = useCallback(() => {
-    mutate({ kind: "single_agent_vote", ratingId, vote: "down" });
-  }, [mutate, ratingId]);
+  const voteDown = useCallback(
+    async (event: GestureResponderEvent) => {
+      const voteSource = await voteClickSource(event);
+      mutate({
+        kind: "single_agent_vote",
+        ratingId,
+        vote: "down",
+        voteSource,
+      });
+    },
+    [mutate, ratingId],
+  );
 
   return (
     <View style={styles.column}>

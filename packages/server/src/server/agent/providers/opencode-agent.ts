@@ -3927,12 +3927,12 @@ class OpenCodeAgentSession implements AgentSession {
             userId ? `?userID=${encodeURIComponent(userId)}` : ""
           }`,
         ),
-      singleAgentVote: (ratingId, vote, participantId) =>
+      singleAgentVote: (ratingId, vote, participantId, voteSource) =>
         this.arenaRequest(
           `/arena/sessions/${encodeURIComponent(this.sessionId)}/single-agent-vote`,
           {
             method: "POST",
-            body: { ratingID: ratingId, vote, participantID: participantId },
+            body: { ratingID: ratingId, vote, participantID: participantId, voteSource },
           },
         ),
       archive: () =>
@@ -3972,10 +3972,10 @@ class OpenCodeAgentSession implements AgentSession {
             method: "POST",
           },
         ),
-      vote: (turnId, vote, participantId) =>
+      vote: (turnId, vote, participantId, voteSource) =>
         this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/vote`, {
           method: "POST",
-          body: { vote, participantID: participantId },
+          body: { vote, participantID: participantId, voteSource },
         }),
       recordReview: (turnId, events, participantId, ipAddress) =>
         this.arenaFetch(

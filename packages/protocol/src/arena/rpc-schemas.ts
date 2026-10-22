@@ -3,6 +3,22 @@ import { z } from "zod";
 export const ArenaSideSchema = z.enum(["a", "b"]);
 export const ArenaReplyTargetSchema = z.enum(["a", "b", "both"]);
 export const ArenaVoteSchema = z.enum(["a", "b", "tie"]);
+export const ArenaVoteSourceSchema = z.enum([
+  "synthetic",
+  "unknown",
+  "api",
+  "native",
+  "injected",
+  "unverified",
+]);
+export const ArenaVoteInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("pointer"),
+    screenX: z.number().finite(),
+    screenY: z.number().finite(),
+  }),
+  z.object({ kind: z.literal("keyboard"), key: z.enum(["Enter", " ", "Spacebar"]) }),
+]);
 export const ArenaBattleStateSchema = z.enum([
   "creating",
   "worktrees_ready",
@@ -617,6 +633,7 @@ export const ArenaSingleAgentVoteRequestSchema = z.object({
   ...ArenaAgentRequestFields,
   ratingId: z.string().optional(),
   vote: z.enum(["up", "down"]),
+  voteSource: ArenaVoteSourceSchema.default("api"),
 });
 export const ArenaSingleAgentVoteResponseSchema = z.object({
   type: z.literal("arena.single_agent.vote.response"),
@@ -819,6 +836,7 @@ export const ArenaTurnVoteRequestSchema = z.object({
   ...ArenaAgentRequestFields,
   turnId: z.string(),
   vote: ArenaVoteSchema,
+  voteSource: ArenaVoteSourceSchema.default("api"),
 });
 export const ArenaTurnVoteResponseSchema = z.object({
   type: z.literal("arena.turn.vote.response"),
@@ -999,5 +1017,7 @@ export type ArenaFileContent = z.infer<typeof ArenaFileContentSchema>;
 export type ArenaSide = z.infer<typeof ArenaSideSchema>;
 export type ArenaReplyTarget = z.infer<typeof ArenaReplyTargetSchema>;
 export type ArenaVote = z.infer<typeof ArenaVoteSchema>;
+export type ArenaVoteSource = z.infer<typeof ArenaVoteSourceSchema>;
+export type ArenaVoteInput = z.infer<typeof ArenaVoteInputSchema>;
 export type ArenaSingleAgentVote = "up" | "down";
 export type ArenaPermissionReply = z.infer<typeof ArenaPermissionReplySchema>;
