@@ -236,7 +236,7 @@ describe("Arena fork", () => {
     }),
   )
 
-  it.live("hides tool output older than the boundary from the model, keeping it stored and in the source", () =>
+  it.live("hides older tool output the copy can produce again, keeping it stored and in the source", () =>
     Effect.gen(function* () {
       const { root, worktree } = yield* prepareRepository()
       const sessions = yield* Session.Service
@@ -246,10 +246,28 @@ describe("Arena fork", () => {
         (message) => message.info.role === "assistant",
       )
       if (!assistant) return yield* Effect.fail(new Error("Seeded assistant message missing"))
-      for (const [callID, tool, status] of [
-        ["call-skill", "skill", "completed"],
-        ["call-failed", "bash", "error"],
-      ] as const) {
+      const upload = path.join(path.dirname(root), "uploads", "upload-1", "server.log")
+      const calls: ReadonlyArray<
+        readonly [
+          callID: string,
+          tool: string,
+          input: Record<string, unknown>,
+          state: "completed" | "error" | "interrupted",
+        ]
+      > = [
+        ["call-skill", "skill", { name: "review" }, "completed"],
+        ["call-question", "question", { questions: [{ question: "Postgres or SQLite?" }] }, "completed"],
+        ["call-task", "task", { description: "survey", prompt: "survey the API" }, "completed"],
+        ["call-mcp", "github_get_issue", { number: 7 }, "completed"],
+        ["call-upload", "read", { filePath: upload }, "completed"],
+        ["call-read", "read", { filePath: path.join(root, "src", "index.ts") }, "completed"],
+        ["call-bash", "bash", { command: "bun test" }, "completed"],
+        ["call-failed", "bash", { command: "false" }, "error"],
+        ["call-interrupted", "bash", { command: "bun run dev" }, "interrupted"],
+        ["call-interrupted-question", "question", { questions: [] }, "interrupted"],
+      ]
+      for (const [callID, tool, input, state] of calls) {
+        const time = { start: Date.now(), end: Date.now() }
         yield* sessions.updatePart({
           id: PartID.ascending(),
           messageID: assistant.info.id,
@@ -258,16 +276,17 @@ describe("Arena fork", () => {
           callID,
           tool,
           state:
-            status === "completed"
-              ? {
-                  status,
-                  input: { name: "review" },
-                  output: "skill body",
-                  title: "review",
-                  metadata: {},
-                  time: { start: Date.now(), end: Date.now() },
-                }
-              : { status, input: { command: "false" }, error: "exit 1", time: { start: Date.now(), end: Date.now() } },
+            state === "completed"
+              ? { status: state, input, output: `${callID} output`, title: tool, metadata: {}, time }
+              : {
+                  status: "error",
+                  input,
+                  error: "Tool execution aborted",
+                  ...(state === "interrupted"
+                    ? { metadata: { interrupted: true, output: `${callID} partial output` } }
+                    : {}),
+                  time,
+                },
         })
       }
       // The second turn, whose output stays.
@@ -288,18 +307,33 @@ describe("Arena fork", () => {
       expect(
         tools.map((part) => [
           part.callID,
-          part.state.status === "completed" ? part.state.time.compacted !== undefined : "not completed",
+          part.state.status === "completed"
+            ? part.state.time.compacted === undefined
+              ? part.state.output
+              : "cleared"
+            : part.state.status === "error"
+              ? (part.state.metadata?.output ?? part.state.error)
+              : part.state.status,
         ]),
       ).toEqual([
-        ["call-write", true],
-        ["call-skill", false],
-        ["call-failed", "not completed"],
-        ["call-write", false],
+        ["call-write", "cleared"],
+        // Only these hold what the copy cannot get again.
+        ["call-skill", "call-skill output"],
+        ["call-question", "call-question output"],
+        ["call-task", "call-task output"],
+        ["call-mcp", "call-mcp output"],
+        ["call-upload", "call-upload output"],
+        ["call-read", "cleared"],
+        ["call-bash", "cleared"],
+        ["call-failed", "Tool execution aborted"],
+        ["call-interrupted", "[Old tool result content cleared]"],
+        ["call-interrupted-question", "call-interrupted-question partial output"],
+        ["call-write", `Wrote ${path.join(root, "src", "index.ts")}`],
       ])
-      expect(tools.map((part) => part.state.status === "completed" && part.state.output)).toEqual([
+      // A cleared output stays stored.
+      expect(tools.flatMap((part) => (part.state.status === "completed" ? [part.state.output] : []))).toEqual([
         `Wrote ${path.join(root, "src", "index.ts")}`,
-        "skill body",
-        false,
+        ...calls.flatMap(([callID, , , state]) => (state === "completed" ? [`${callID} output`] : [])),
         `Wrote ${path.join(root, "src", "index.ts")}`,
       ])
       expect(yield* sessions.messages({ sessionID: source.id })).toEqual(before)

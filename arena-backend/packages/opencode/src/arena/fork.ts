@@ -5,7 +5,6 @@ import { Effect } from "effect"
 import path from "path"
 import { Git } from "@/git"
 import { InstanceStore } from "@/project/instance-store"
-import { SessionCompaction } from "@/session/compaction"
 import type { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { localizeEmbeddedPaths, localizeTranscriptPaths } from "./canonical-path"
@@ -38,10 +37,11 @@ export interface Input {
    */
   readonly part?: (part: SessionV1.Part, info: SessionV1.Info) => SessionV1.Part
   /**
-   * Hide the output of tool calls copied from source messages older than this one. Contestant
-   * copies set it to the start of the chat's last finished turn: a new turn starts with an empty
-   * cache (a new model, a new worktree path), so clearing older output here costs no cache while
-   * every request of the turn sends less. The output stays stored, and the source keeps it visible.
+   * Hide the output of tool calls copied from source messages older than this one, when the copy
+   * can produce that output again (`recoverable`). Contestant copies set it to the start of the
+   * chat's last finished turn: a new turn starts with an empty cache (a new model, a new worktree
+   * path), so clearing older output here costs no cache while every request of the turn sends less.
+   * The source keeps the output visible.
    */
   readonly pruneToolOutputBefore?: MessageID
 }
@@ -101,7 +101,7 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
       const copied = input.part ? input.part(localized, message.info) : localized
       // Copies keep their source's order, so an older copied message has a smaller id.
       yield* sessions.updatePart(
-        pruneBefore && message.info.id < pruneBefore ? pruneToolOutput(copied, prunedAt) : copied,
+        pruneBefore && message.info.id < pruneBefore ? pruneToolOutput(copied, prunedAt, roots.worktree) : copied,
       )
     }
   }
@@ -111,12 +111,53 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
 /**
  * Marks a finished tool call's output compacted, the way OpenCode's own prune does: the model gets
  * a placeholder instead (`MessageV2.toModelMessages`), and the input stays so it still sees what
- * was done. Protected tools (skills) keep their output.
+ * was done. An interrupted call has no compacted mark, so its partial output becomes the placeholder.
  */
-function pruneToolOutput(part: SessionV1.Part, at: number): SessionV1.Part {
-  if (part.type !== "tool" || part.state.status !== "completed") return part
-  if (part.state.time.compacted || SessionCompaction.PRUNE_PROTECTED_TOOLS.includes(part.tool)) return part
-  return { ...part, state: { ...part.state, time: { ...part.state.time, compacted: at } } }
+function pruneToolOutput(part: SessionV1.Part, at: number, worktree: string): SessionV1.Part {
+  if (part.type !== "tool" || !recoverable(part, worktree)) return part
+  if (part.state.status === "completed") {
+    if (part.state.time.compacted) return part
+    return { ...part, state: { ...part.state, time: { ...part.state.time, compacted: at } } }
+  }
+  if (part.state.status === "error" && typeof part.state.metadata?.output === "string") {
+    return { ...part, state: { ...part.state, metadata: { ...part.state.metadata, output: CLEARED } } }
+  }
+  return part
+}
+
+// What `MessageV2.toModelMessages` sends for compacted output.
+const CLEARED = "[Old tool result content cleared]"
+
+/**
+ * Tools whose output the copy can produce again by repeating the call in its own worktree or on the
+ * network. Every other output is kept: a question's output is the only record of the user's answers,
+ * a subagent's report cannot be reproduced, a skill is instructions the model was told to follow,
+ * and an MCP tool's output is unknown.
+ */
+const RECOVERABLE_TOOLS = new Set([
+  "bash",
+  "read",
+  "glob",
+  "grep",
+  "lsp",
+  "edit",
+  "write",
+  "apply_patch",
+  "webfetch",
+  "websearch",
+])
+
+/**
+ * A read is recoverable only inside the worktree. A contestant may not read outside it, and what an
+ * earlier turn read there is gone or closed to it: another turn's uploads, its temp directory.
+ */
+function recoverable(part: SessionV1.ToolPart, worktree: string) {
+  if (!RECOVERABLE_TOOLS.has(part.tool)) return false
+  if (part.tool !== "read") return true
+  const filePath = part.state.input.filePath
+  if (typeof filePath !== "string" || !path.isAbsolute(filePath)) return true
+  const relative = path.relative(worktree, filePath)
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
 }
 
 // `--show-cdup`, not `--show-toplevel`: the transcript names the directory in the form the session
