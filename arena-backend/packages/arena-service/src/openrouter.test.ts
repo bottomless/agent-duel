@@ -467,6 +467,7 @@ describe("OpenRouter proxy", () => {
       assignmentID: "opaque-id",
       generationID: "gen_00000000000000000000000000000001",
       usage: { promptTokens: 10, completionTokens: 5, cost: 0, upstreamInferenceCost: 0.456 },
+      provider: "hidden-provider",
     })
     for (const [source, code] of [
       ["openrouter_in_flight_budget", "arena_temporary_budget"],

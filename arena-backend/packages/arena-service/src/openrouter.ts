@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment } from "./assignments"
 import { authorize, type ArenaContext } from "./context"
-import type { GenerationMetrics, UsageTotals } from "./metrics"
+import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
 import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
 import { createReasoningRedactor } from "./reasoning"
 import {
@@ -88,7 +88,7 @@ function metricsCollector(generationID: string, startedAt: number) {
       finished = finishReason(value) ?? finished
       if (record(value) && typeof value.provider === "string" && value.provider) provider = value.provider
     },
-    value(): GenerationMetrics | undefined {
+    value(): StoredGenerationMetrics | undefined {
       const measured = usage(usagePayload, Math.max(0, Date.now() - startedAt))
       if (!measured && !finished) return undefined
       return {
@@ -162,7 +162,7 @@ function sanitizeStream(
   generationID: string,
   reasoning: ReasoningRedactor,
   startedAt: number,
-  complete: (metrics: GenerationMetrics | undefined) => Promise<void>,
+  complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
   recovery?: ReplayRecorder,
 ) {
   const reader = stream.getReader()
@@ -353,7 +353,7 @@ async function sanitizeAssignedResponse(
   refusal: RefusalContext,
   reasoning: ReasoningRedactor,
   startedAt: number,
-  complete: (metrics: GenerationMetrics | undefined) => Promise<void>,
+  complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
   recovery?: () => ReplayRecorder | undefined,
 ) {
   const { generationID } = refusal
@@ -512,7 +512,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       generationID,
       model: routeAssignment.model.slug,
     }
-    const recordMetrics = async (metrics: GenerationMetrics | undefined) => {
+    const recordMetrics = async (metrics: StoredGenerationMetrics | undefined) => {
       if (!metrics || !requestedGenerationID) return
       try {
         await recordAssignmentGenerationMetrics(db, {

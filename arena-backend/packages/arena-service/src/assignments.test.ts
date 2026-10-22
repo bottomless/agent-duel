@@ -170,6 +170,7 @@ describe("Arena assignment control plane", () => {
           latencyMs: 250,
         },
         finishReason: "tool_calls",
+        provider: "hidden-provider",
       },
     })
 
@@ -179,7 +180,9 @@ describe("Arena assignment control plane", () => {
     const resolved = await service().assignments(
       request({ action: "resolve", kind: "battle", scopeID: "turn-metrics", decision: "select:a" }),
     )
-    expect(await resolved.json()).toMatchObject({
+    const revealed = await resolved.json()
+    expect(JSON.stringify(revealed)).not.toContain("hidden-provider")
+    expect(revealed).toMatchObject({
       decision: "select:a",
       assignments: [
         {

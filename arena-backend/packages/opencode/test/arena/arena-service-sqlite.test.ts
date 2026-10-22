@@ -93,6 +93,7 @@ async function localService(input: { readonly ids: string[]; readonly random: nu
     return response
   }
   return {
+    db: store.db,
     upstream,
     validatedKeys,
     assignments: (body: unknown) =>
@@ -196,7 +197,12 @@ describe("Arena service on the desktop SQLite local store", () => {
       decision: "select:b",
     })
     expect(resolved.status).toBe(200)
-    expect(await resolved.json()).toMatchObject({
+    // The control plane keeps the provider that served each call; the reveal returns usage only.
+    const stored = await arena.db.collection("arenaAssignmentGenerationMetrics").find({ scopeID: "turn-1" }).toArray()
+    expect(stored.map((item) => item.provider)).toEqual(["hidden-provider", "hidden-provider"])
+    const revealed = await resolved.json()
+    expect(JSON.stringify(revealed)).not.toContain("hidden-provider")
+    expect(revealed).toMatchObject({
       decision: "select:b",
       assignments: [
         {
