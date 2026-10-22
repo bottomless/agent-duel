@@ -42,7 +42,14 @@ const MAX_PRESERVE_RECENT_TOKENS = 8_000
 const ARENA_MEDIA_TOKEN_ALLOWANCE = 4_000
 // Keep the same early-compaction policy for every blinded Arena model, including medium
 // sessions. This is an estimate of history, not a provider-specific billed-token limit.
-const ARENA_COMPACTION_TOKEN_LIMIT = 200_000
+const ARENA_COMPACTION_TOKEN_LIMIT = 272_000
+// Compaction is an internal checkpoint, not a new user task or permission to stop after one step.
+const ARENA_COMPACTION_CONTINUE =
+  "Resume the original user task from the summary and retained context. " +
+  "Carry out the remaining steps, including verification, until the task is complete. " +
+  'Do not end with a plan or "next step" while actionable work remains. ' +
+  "Ask the user only when a concrete blocker requires information or authorization you do not have. " +
+  "If the task is already complete, report the result."
 const COMPACTION_EXHAUSTED =
   "The conversation could not be summarized after three recovery attempts. Completed work has been preserved. Retry to continue."
 type Turn = {
@@ -588,7 +595,7 @@ const layer = Layer.effect(
               type: "text",
               synthetic: true,
               metadata: { arena_compaction_replay: true },
-              text: "Continue the request above after compaction.",
+              text: ARENA_COMPACTION_CONTINUE,
             })
           }
         }
@@ -623,11 +630,13 @@ const layer = Layer.effect(
               agent: userMessage.agent,
               model: userMessage.model,
             })
+            const continuation = assignment
+              ? ARENA_COMPACTION_CONTINUE
+              : "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
             const text =
               (input.overflow
                 ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
-                : "") +
-              "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
+                : "") + continuation
             yield* session.updatePart({
               id: PartID.ascending(),
               messageID: continueMsg.id,
