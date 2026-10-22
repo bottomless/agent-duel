@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { defaultPool } from "@agent-duel/arena-service/default-pool"
-import { comparisonModel } from "@agent-duel/arena-service/utility-model"
+import { utilityModels } from "@agent-duel/arena-service/utility-model"
 import { createBattleAssignments, resolveAssignments } from "@/arena/assignment-client"
 import { createArenaBackend } from "@/arena/backend"
 import { hashArenaControlToken, setArenaCredentials } from "@/arena/credentials"
@@ -143,7 +143,7 @@ describe("Arena backend", () => {
     ])
     expect(network.every((request) => request.authorization === "Bearer sk-or-v1-user-key")).toBe(true)
     expect(slugs).toContain(String(network[1]?.body?.model))
-    expect(network[2]?.body).toMatchObject({ model: comparisonModel.id })
+    expect(network[2]?.body).toMatchObject({ model: utilityModels[0].id })
 
     // A hosted build would have buffered this for upload and warned about it when the store closed.
     await local.saveEvent({
