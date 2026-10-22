@@ -867,9 +867,12 @@ vote.
 
 The comparison uses base-to-agent changes, direct A/B differences, and visible timelines. It uses the dedicated
 `POST /api/arena/comparison` route, which accepts only the expected single-message payload for an
-unresolved battle scope and always selects `minimax/minimax-m2.7` via groq in the service
-(`arena/comparison.ts`). There is no generic or unassigned comparison path through the OpenRouter
-proxy.
+unresolved battle scope and picks the model in the service (`arena-service/src/utility-model.ts`):
+Qwen 3.8 27B on Cerebras with low reasoning, and on any failure status or network error, DeepSeek
+V4.1 Flash on Baseten with reasoning off. Baseten ignores `effort: low` and reasons for thousands of
+tokens, so DeepSeek runs without it. The comparison record keeps the first choice in `model` and the
+model that answered in `resolvedModel`. There is no generic or unassigned comparison path through
+the OpenRouter proxy.
 
 The Commit and Create PR buttons get their text from the same model through
 `POST /api/arena/metadata` (`arena-service/src/metadata.ts`), never from an agent, and so do the

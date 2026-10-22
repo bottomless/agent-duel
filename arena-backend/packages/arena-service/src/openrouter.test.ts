@@ -326,7 +326,7 @@ describe("OpenRouter proxy", () => {
       )
 
     expect((await invoke({ model: "provider/other", messages: [] })).status).toBe(400)
-    expect((await invoke({ model: "minimax/minimax-m2.7", messages: [] })).status).toBe(400)
+    expect((await invoke({ model: "qwen/qwen3.8-27b", messages: [] })).status).toBe(400)
     expect(contacted).toBe(false)
   })
 
@@ -344,7 +344,7 @@ describe("OpenRouter proxy", () => {
           "Content-Type": "application/json",
           "X-Arena-Assignment-ID": "",
         },
-        body: JSON.stringify({ model: "minimax/minimax-m2.7", messages: [] }),
+        body: JSON.stringify({ model: "qwen/qwen3.8-27b", messages: [] }),
       }),
     )
 

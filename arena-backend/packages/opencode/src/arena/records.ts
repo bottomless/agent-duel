@@ -675,8 +675,9 @@ export type ComparisonDocument = {
   readonly truncated: boolean
   readonly omittedArtifacts: ReadonlyArray<string>
   readonly promptVersion: string
-  readonly model: "minimax/minimax-m2.7"
-  readonly provider: "groq"
+  readonly model: string
+  readonly provider: string
+  resolvedModel?: string
   resolvedProvider?: string
   requestArtifactID?: Identifier
   responseArtifactID?: Identifier

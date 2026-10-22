@@ -503,10 +503,10 @@ function installOpenRouterStub(options?: {
         readonly content?: string | Array<{ readonly text?: string }>
       }>
     }
-    if (body.model === "minimax/minimax-m2.7") {
+    if (body.model === "qwen/qwen3.8-27b") {
       utilityCalls++
       return Response.json({
-        provider: "groq",
+        provider: "Cerebras",
         choices: [{ message: { content: "The two retained Git results and transcripts were compared." } }],
         usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
       })

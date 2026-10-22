@@ -1,11 +1,13 @@
 import type { Store } from "./mongo"
 import type { ComparisonDocument, UsageTotals } from "./records"
 import { backend } from "./runtime"
-import { comparisonModel } from "@agent-duel/arena-service/utility-model"
+import { utilityModels } from "@agent-duel/arena-service/utility-model"
 import { prepareEvidence, type ComparisonFileFact } from "./comparison-evidence"
 
-export const model = comparisonModel.id
-export const provider = comparisonModel.provider
+// The service falls back to the next utility model when the first fails, so the record names the
+// first choice here and the model that answered in `resolvedModel`.
+export const model = utilityModels[0].id
+export const provider = utilityModels[0].provider
 export const promptVersion = "arena-comparison-v12"
 
 // Timelines carry only visible text and tool calls, so a real one runs a few thousand characters.
@@ -154,10 +156,10 @@ async function nameChat(input: Input) {
   }
 }
 
-function resolvedProvider(value: unknown) {
+function responseField(value: unknown, key: "model" | "provider") {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
-  const provider = (value as Record<string, unknown>).provider
-  return typeof provider === "string" && provider.trim() ? provider : undefined
+  const field = (value as Record<string, unknown>)[key]
+  return typeof field === "string" && field.trim() ? field : undefined
 }
 
 export async function generate(input: Input) {
@@ -354,7 +356,8 @@ export async function generate(input: Input) {
     return await input.store.updateComparison(comparisonID, {
       state: "complete",
       ...report,
-      resolvedProvider: resolvedProvider(parsed) ?? provider,
+      resolvedModel: responseField(parsed, "model") ?? model,
+      resolvedProvider: responseField(parsed, "provider") ?? provider,
       responseArtifactID,
       artifactIDs,
       usage: (() => {

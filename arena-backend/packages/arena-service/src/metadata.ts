@@ -1,10 +1,10 @@
 import { createHash } from "crypto"
 import type { ArenaCollection, ArenaDb } from "./collection"
 import { authorize, type ArenaContext } from "./context"
-import { comparisonModel } from "./utility-model"
+import { requestUtilityModel } from "./utility-model"
 
 // Commit messages, pull request text, branch name suggestions and the names of chats started with
-// Battle off, written by the comparison's cheap model. The caller sends only what to write and its
+// Battle off, written by the comparison's utility models. The caller sends only what to write and its
 // source (the changes, or the chat's first prompt); the prompt is built here, so the route cannot be
 // used as a general model endpoint, and both the input and the reply are capped.
 
@@ -247,21 +247,17 @@ export async function handleMetadataRequest(request: Request, context: ArenaCont
 
   let reply: string | undefined
   try {
-    const response = await context.fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
+    const response = await requestUtilityModel(context, {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: comparisonModel.id,
+      body: {
         messages: [{ role: "user", content: prompt(input) }],
         temperature: 0,
         max_tokens: specs[input.kind].maxTokens,
-        reasoning: comparisonModel.reasoning,
-        provider: comparisonModel.routing,
-      }),
+      },
       signal: request.signal,
     })
     if (!response.ok) {

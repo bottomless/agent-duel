@@ -1,6 +1,6 @@
 import { hasActiveComparisonScope } from "./assignments"
 import { authorize, type ArenaContext } from "./context"
-import { comparisonModel } from "./utility-model"
+import { requestUtilityModel } from "./utility-model"
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -52,21 +52,14 @@ export async function handleComparisonRequest(request: Request, context: ArenaCo
   }
 
   try {
-    const response = await context.fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
+    const response = await requestUtilityModel(context, {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         Accept: request.headers.get("accept") || "application/json",
         "Content-Type": "application/json",
         "X-OpenRouter-Metadata": "enabled",
       },
-      body: JSON.stringify({
-        model: comparisonModel.id,
-        messages: [input.message],
-        temperature: 0,
-        reasoning: comparisonModel.reasoning,
-        provider: comparisonModel.routing,
-      }),
+      body: { messages: [input.message], temperature: 0 },
       signal: request.signal,
     })
     return new Response(response.body, { status: response.status, headers: responseHeaders(response.headers) })
