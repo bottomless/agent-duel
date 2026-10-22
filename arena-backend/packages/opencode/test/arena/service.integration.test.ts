@@ -432,6 +432,7 @@ function installOpenRouterStub(options?: {
     }
   }> = []
   let utilityCalls = 0
+  const utilityPrompts: string[] = []
   type TestAssignment = {
     readonly scopeID: string
     readonly assignmentID: string
@@ -493,6 +494,16 @@ function installOpenRouterStub(options?: {
       return Response.json({
         decision: body.decision,
         assignments: set.assignments.map(({ assignmentID, model }) => ({ assignmentID, model: model.displayName })),
+      })
+    }
+    if (url.pathname === "/api/arena/comparison") {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }
+      utilityCalls++
+      utilityPrompts.push(body.messages[0]?.content ?? "")
+      return Response.json({
+        provider: "groq",
+        choices: [{ message: { content: "The two retained Git results and transcripts were compared." } }],
+        usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
       })
     }
     if (url.pathname !== "/api/openrouter/api/v1/chat/completions")
@@ -575,6 +586,9 @@ function installOpenRouterStub(options?: {
     /** The decision the control plane holds for a battle, if one was resolved. */
     battleDecision: (scopeID: string) => assignmentSets.get(`battle:${scopeID}`)?.decision,
     utilityCalls: () => utilityCalls,
+    /** Utility requests that asked for a comparison report rather than only the chat's name. */
+    reportCalls: () =>
+      utilityPrompts.filter((prompt) => prompt.includes("neutral coding-run comparison utility")).length,
     restore: () => {
       setArenaCredentials(undefined)
       globalThis.fetch = original
@@ -3083,6 +3097,8 @@ describe("Arena service vertical slice", () => {
         : null
       expect(resumedArchive?.contentHash).not.toBe(firstArchive?.contentHash)
       expect(router.utilityCalls()).toBe(1)
+      expect(router.reportCalls()).toBe(1)
+      expect((await memory.store.turn(turnID))?.comparisonState).toBe("complete")
     } finally {
       router.restore()
     }
@@ -3409,6 +3425,11 @@ describe("Arena service vertical slice", () => {
       ])
       expect(failed.turn?.canTie).toBe(false)
       expect(failed.turn?.canDiscardBattle).toBe(true)
+      // Two failures leave nothing to compare: no report is paid for, and the first turn is only named.
+      expect((await waitForComparison(memory.store, turnID)).output).toBeUndefined()
+      expect((await memory.store.turn(turnID))?.comparisonState).toBe("skipped")
+      expect(router.reportCalls()).toBe(0)
+      expect(router.utilityCalls()).toBe(1)
 
       // A tie applies A whatever A is, so it would have recorded a vote between two failures.
       const tie = await request(`/arena/turns/${turnID}/vote`, {
@@ -3489,6 +3510,11 @@ describe("Arena service vertical slice", () => {
       expect(settled.runs.filter((run) => run.runState === "error")).toHaveLength(1)
       expect(settled.turn?.canTie).toBe(false)
       expect(settled.turn?.canDiscardBattle).toBe(false)
+      // The finished side has nothing to be compared against, so no report is paid for.
+      expect((await waitForComparison(memory.store, turnID)).output).toBeUndefined()
+      expect((await memory.store.turn(turnID))?.comparisonState).toBe("skipped")
+      expect(router.reportCalls()).toBe(0)
+      expect(router.utilityCalls()).toBe(1)
 
       const tie = await request(`/arena/turns/${turnID}/vote`, {
         method: "POST",

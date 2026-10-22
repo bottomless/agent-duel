@@ -162,11 +162,13 @@ new battle chat's workspace shows the prompt's first line from the send and that
 comparison arrives; a workspace with any other name keeps it
 (`arena-workspace-auto-name.ts`). When both sides leave identical trees there is no report to write,
 so the first turn sends the comparison route a request for the title alone; if it fails, the chat
-keeps its prompt's first line. A chat started with Battle off also shows its prompt's first line
-from the send, and the same model renames it from that prompt through the metadata route below; if
-that fails it keeps the line. Nothing else names a chat: Paseo named workspaces with an agent, which
-here meant the user's installed Claude Code or a paid contestant with the full agent setup (up to
-$0.25 per new chat).
+keeps its prompt's first line. A turn where either side failed gets no report either, since there
+is nothing to weigh the other side against: its comparison is `skipped`, the card shows only
+Changes, and the first turn still asks for the title alone. A chat started with Battle off also
+shows its prompt's first line from the send, and the same model renames it from that prompt
+through the metadata route below; if that fails it keeps the line. Nothing else names a chat:
+Paseo named workspaces with an agent, which here meant the user's installed Claude Code or a paid
+contestant with the full agent setup (up to $0.25 per new chat).
 The card shows it whole; only a report that measures longer than a screen of the card folds to its
 opening with `Show full summary` (`verdict-body.tsx`). Trimming at the prompt was Michael's call:
 the fold spent latency on prose the voter then had to unfold. The status is `git merge-tree
@@ -872,7 +874,7 @@ checkout does not ignore. The contestant is checked against the base, and in a c
 `node_modules` the exclude would drop a new package's files while its edits to tracked ones still
 apply. When both are in, the
 turn becomes `awaiting_vote` and the comparison starts in the background
-(`arena/service.ts:1968`). A failed comparison never blocks a vote.
+(`startUtility` in `arena/service.ts`), unless a side failed. A failed comparison never blocks a vote.
 
 ## Blinding
 

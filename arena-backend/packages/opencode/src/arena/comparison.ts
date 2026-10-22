@@ -19,6 +19,8 @@ type Input = {
   readonly turnID: string
   /** The first turn's judge also names the chat. */
   readonly turnIndex: number
+  /** False when a side failed: there is nothing to weigh against it, so no report is paid for. */
+  readonly report?: boolean
   readonly userPrompt: string
   /** What the prompt carried besides text, as `ArenaAttachments.describeForJudge` renders it. */
   readonly userAttachments?: string
@@ -109,8 +111,8 @@ function splitTitle(content: string) {
 }
 
 /**
- * Identical trees leave no report to write, so the first turn asks the same model for the title
- * alone. Best effort: without one the chat keeps its prompt's first line.
+ * Identical trees or a failed side leave no report to write, so the first turn asks the same model
+ * for the title alone. Best effort: without one the chat keeps its prompt's first line.
  */
 async function nameChat(input: Input) {
   const target = backend()
@@ -261,7 +263,7 @@ export async function generate(input: Input) {
   }
   await input.store.saveComparison(document)
 
-  if (input.aTree === input.bTree) {
+  if (input.report === false || input.aTree === input.bTree) {
     return input.store.updateComparison(comparisonID, {
       state: "complete",
       latencyMs: 0,
