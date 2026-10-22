@@ -9,6 +9,7 @@ import { rename, rm, stat, writeFile } from "fs/promises"
 import fs from "fs/promises"
 import * as CopySnapshot from "@/arena/copy-snapshot"
 import * as ArenaGit from "@/arena/git"
+import * as GitState from "@/worktree/git-state"
 import { Store } from "@/arena/mongo"
 import { connectLocalStore } from "@/arena/local-store"
 import type { Frame } from "@/arena/stream"
@@ -1004,6 +1005,86 @@ describe("Arena service vertical slice", () => {
       expect(testProfiles.map((profile) => profile.displayName)).toContain(publicAfterVote.turn?.identities?.a.name)
       expect(testProfiles.map((profile) => profile.displayName)).toContain(publicAfterVote.turn?.identities?.b.name)
     } finally {
+      router.restore()
+    }
+  }, 30_000)
+
+  test("ends a battle that fails while it is being created without naming either side", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure failed creation fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    // What a tester's Windows laptop answered when a scanner held the fresh host copy.
+    const held = spyOn(GitState, "copyGitState").mockRejectedValue(
+      Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" }),
+    )
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "Failed creation" }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "This battle cannot prepare its worktrees." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not admit the failing battle")
+
+      const deadline = Date.now() + 20_000
+      let failed = await memory.store.turn(turnID)
+      while (failed?.state !== "discarded" && Date.now() < deadline) {
+        await Bun.sleep(10)
+        failed = await memory.store.turn(turnID)
+      }
+      if (failed?.state !== "discarded") throw new Error(`Arena failed battle stayed ${failed?.state}`)
+      expect(held).toHaveBeenCalled()
+      expect(failed.transitionTimestamps.creation_failed).toBeDefined()
+      expect(failed.resolution).toEqual({
+        kind: "aborted",
+        reason: "Arena battle failed before resolution",
+        revealed: false,
+      })
+      expect(failed.placement.a.model).toBeUndefined()
+      expect(failed.placement.b.model).toBeUndefined()
+      expect(failed.revealAt).toBeUndefined()
+
+      const runs = await memory.store.runsForTurn(turnID)
+      expect(runs).toHaveLength(2)
+      for (const run of runs) {
+        expect(run.runState).toBe("error")
+        expect(run.completedAt).toBeDefined()
+      }
+      const stored = JSON.stringify({ turn: failed, runs })
+      for (const profile of testProfiles) {
+        expect(stored).not.toContain(profile.slug)
+        expect(stored).not.toContain(profile.displayName)
+      }
+
+      const shown = await json<PublicSnapshot & { history: ReadonlyArray<{ id: string; identities?: unknown }> }>(
+        await request(`/arena/turns/${turnID}`, { headers }),
+      )
+      expect(shown.chat.status).toBe("ready")
+      expect(shown.turn?.revealed).toBe(false)
+      expect(shown.turn?.identities).toBeUndefined()
+      expect(shown.runs.every((run) => run.identity === undefined)).toBe(true)
+      expect(shown.history.find((item) => item.id === turnID)?.identities).toBeUndefined()
+    } finally {
+      held.mockRestore()
       router.restore()
     }
   }, 30_000)

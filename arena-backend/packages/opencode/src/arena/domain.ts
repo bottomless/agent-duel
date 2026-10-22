@@ -58,6 +58,8 @@ export type EarlyResolution = {
 export type AbortedResolution = {
   readonly kind: "aborted"
   readonly reason: string
+  /** False when the battle ended before either side could show anything; see `identitiesRevealed`. */
+  readonly revealed?: false
 }
 
 export type Resolution = VoteResolution | StoppedResolution | EarlyResolution | AbortedResolution
@@ -116,8 +118,19 @@ export function earlyResolution(side: Side): EarlyResolution {
   return { kind: "early", vote: side, appliedSide: side }
 }
 
-export function abortedResolution(reason: string): AbortedResolution {
-  return { kind: "aborted", reason }
+export function abortedResolution(reason: string, options?: { readonly revealed: false }): AbortedResolution {
+  return { kind: "aborted", reason, ...(options ? { revealed: false as const } : {}) }
+}
+
+/**
+ * Whether a resolved turn shows who the contestants were.
+ *
+ * Every decision reveals, including an abort after the sides ran: the voter has seen their work. A
+ * battle that failed while it was being created has shown nothing, so it ends as blind as it began.
+ */
+export function identitiesRevealed(resolution: Resolution | undefined): boolean {
+  if (resolution === undefined) return false
+  return !(resolution.kind === "aborted" && resolution.revealed === false)
 }
 
 export function isVoteReady(state: BattleState): boolean {

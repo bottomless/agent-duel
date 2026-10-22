@@ -11,6 +11,7 @@ import type {
   ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
+  battleFailedToStart,
   battleWinnerSide,
   divergenceFilesLabel,
   gitApplicationNotice,
@@ -227,6 +228,40 @@ describe("partitionArenaSummaries", () => {
       });
     },
   );
+
+  it("shows a battle that failed to start, though it names nobody", () => {
+    const unstarted = {
+      ...historyItem,
+      id: "turn-unstarted",
+      index: 2,
+      state: "discarded",
+      canonicalUserMessageID: undefined,
+      resolution: { kind: "aborted", reason: "Arena battle failed before resolution" },
+    } as ArenaHistoryItem;
+    expect(partitionArenaSummaries([older, unstarted], false)).toEqual({
+      inline: [older],
+      live: unstarted,
+    });
+  });
+});
+
+describe("battleFailedToStart", () => {
+  it("is an abort that names neither side", () => {
+    const aborted = { resolution: { kind: "aborted", reason: "failed" } } as ArenaHistoryItem;
+    expect(battleFailedToStart(aborted)).toBe(true);
+    expect(
+      battleFailedToStart({
+        ...aborted,
+        identities: { a: { name: "Model A" }, b: { name: "Model B" } },
+      }),
+    ).toBe(false);
+    expect(
+      battleFailedToStart({
+        resolution: { kind: "stopped", resolution: "discard" },
+      } as ArenaHistoryItem),
+    ).toBe(false);
+    expect(battleFailedToStart({} as ArenaHistoryItem)).toBe(false);
+  });
 });
 
 describe("isArenaBattleUnresolved", () => {

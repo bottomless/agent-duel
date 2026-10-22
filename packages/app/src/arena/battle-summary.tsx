@@ -42,7 +42,12 @@ import {
   MAX_CONTENT_WIDTH,
 } from "@/constants/layout";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
-import { battleWinnerSide, gitApplicationNotice, isStoppedByEarlyPick } from "./battle-result";
+import {
+  battleFailedToStart,
+  battleWinnerSide,
+  gitApplicationNotice,
+  isStoppedByEarlyPick,
+} from "./battle-result";
 import { ArenaPathList } from "./path-list";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { useArenaDiffLayout } from "./diff-layout";
@@ -57,7 +62,7 @@ import { ArenaModelVendorIcon } from "./model-vendor-icon";
 import { describeSummaryOmissions } from "./summary-omissions";
 import { ArenaRunMeta } from "./run-meta";
 import { ArenaRunThread } from "./run-thread";
-import { arenaSessionQueryKey } from "./use-arena-session";
+import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
 import { ArenaTransitionRow } from "./transition-row";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
@@ -580,7 +585,96 @@ function ExpandedBattleSummary({
   );
 }
 
+/**
+ * A battle that failed while it was being created. Neither side ran, so there is nothing to expand
+ * and nobody to name. Try again sends the same prompt as a new battle, which draws a new pair.
+ */
+function FailedBattleStart({
+  serverId,
+  agentId,
+  item,
+  canStartAgain,
+}: {
+  serverId: string;
+  agentId: string;
+  item: ArenaHistoryItem;
+  canStartAgain: boolean;
+}) {
+  const toast = useToast();
+  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
+  const arenaStart = useArenaStartMutation(serverId, agentId);
+  const startArena = arenaStart.mutateAsync;
+  const handleStartAgain = useCallback(() => {
+    const run = async () => {
+      if (!client) throw new Error("Arena daemon connection is unavailable");
+      const turn = (await client.arenaTurn(agentId, item.id)).turn;
+      if (!turn?.prompt) throw new Error("This battle's prompt is no longer available.");
+      // The turn keeps attachment labels, not their bytes, so only the composer can send them again.
+      if (turn.attachments?.length) {
+        throw new Error("This prompt had attachments. Send it again from the composer with them.");
+      }
+      await startArena({ prompt: turn.prompt });
+    };
+    void run().catch((error) => toast.error(toErrorMessage(error)));
+  }, [agentId, client, item.id, startArena, toast]);
+  return (
+    <View style={[styles.card, styles.failedStart]} testID={`arena-summary-${item.id}`}>
+      <View style={styles.headerText}>
+        <Text style={styles.gitNoticeTitle}>{"Battle couldn't start"}</Text>
+        <Text style={styles.gitNoticeDetail}>
+          Neither agent ran, so both stay hidden. Your project is unchanged.
+        </Text>
+      </View>
+      {canStartAgain ? (
+        <Button
+          size="xs"
+          variant="outline"
+          loading={arenaStart.isPending}
+          onPress={handleStartAgain}
+          testID="arena-failed-start-retry"
+        >
+          Try again
+        </Button>
+      ) : null}
+    </View>
+  );
+}
+
 export function ArenaBattleSummary({
+  serverId,
+  workspaceId,
+  agentId,
+  item,
+  canStartAgain = false,
+}: {
+  serverId: string;
+  workspaceId: string;
+  agentId: string;
+  item: ArenaHistoryItem;
+  /** Whether a battle that failed to start can be sent again now: nothing else is running. */
+  canStartAgain?: boolean;
+}) {
+  if (battleFailedToStart(item)) {
+    return (
+      <FailedBattleStart
+        serverId={serverId}
+        agentId={agentId}
+        item={item}
+        canStartAgain={canStartAgain}
+      />
+    );
+  }
+  return (
+    <DecidedBattleSummary
+      serverId={serverId}
+      workspaceId={workspaceId}
+      agentId={agentId}
+      item={item}
+    />
+  );
+}
+
+function DecidedBattleSummary({
   serverId,
   workspaceId,
   agentId,
@@ -633,6 +727,13 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.lg,
     backgroundColor: theme.colors.surface1,
     overflow: "hidden",
+  },
+  failedStart: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[3],
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[3],
   },
   cardHeader: {
     minHeight: 58,

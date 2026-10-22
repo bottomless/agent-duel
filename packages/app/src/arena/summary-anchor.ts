@@ -2,11 +2,19 @@ import type { ArenaHistoryItem, ArenaSnapshot } from "@getpaseo/protocol/arena/r
 import type { AgentTimelinePromptIndexPayload } from "@getpaseo/client/internal/daemon-client";
 import type { AgentTimelineCursorState } from "@/stores/session-store";
 import { createUserMessage, type StreamItem } from "@/types/stream";
-import { isResolvingBattleState } from "./battle-result";
+import { battleFailedToStart, isResolvingBattleState } from "./battle-result";
 import { orderArenaChat } from "./chat-order";
 
 export function isArenaBattleUnresolved(snapshot: ArenaSnapshot | undefined): boolean {
   return snapshot?.chat.status === "battle_active" && snapshot.turn?.resolution === undefined;
+}
+
+/** Whether the chat can take a new battle now: none is on screen and the chat is ready. */
+export function arenaChatCanStartBattle(
+  snapshot: ArenaSnapshot | undefined,
+  battleOnScreen: boolean,
+): boolean {
+  return !battleOnScreen && snapshot?.chat.status === "ready";
 }
 
 /**
@@ -169,8 +177,12 @@ export function partitionArenaSummaries(
 } {
   // Recording the vote reveals identities before application and transcript grafting finish.
   // That turn still belongs to the live battle, even if its history anchor already exists.
+  // A battle that failed to start is decided without them.
   const resolved = history.filter(
-    (item) => item.resolution && item.identities && !isResolvingBattleState(item.state),
+    (item) =>
+      item.resolution &&
+      (item.identities || battleFailedToStart(item)) &&
+      !isResolvingBattleState(item.state),
   );
   if (battleIsActive || resolved.length === 0) {
     return { inline: resolved, live: null };

@@ -156,6 +156,27 @@ describe("ArenaPublic", () => {
     expect(project({ ...input, history: [input.turn!] }).history[0]?.activeOperations).toBeUndefined()
   })
 
+  test("names nobody for a battle that failed while it was being created", () => {
+    const input = snapshot(false)
+    const turn = input.turn!
+    turn.state = "discarded"
+    turn.resolution = { kind: "aborted", reason: "Arena battle failed before resolution", revealed: false }
+    // The placement still holds no names; projecting identities would throw.
+    turn.placement = {
+      a: { ...turn.placement.a, model: undefined },
+      b: { ...turn.placement.b, model: undefined },
+    }
+    input.runs[0]!.runState = "error"
+    input.runs[0]!.error = "Arena battle could not start"
+    const projected = project({ ...input, history: [turn] })
+    expect(projected.turn?.revealed).toBe(false)
+    expect(projected.turn?.identities).toBeUndefined()
+    expect(projected.runs[0]?.identity).toBeUndefined()
+    expect(projected.runs[0]?.error).toBe("Contestant run failed")
+    expect(projected.history[0]?.identities).toBeUndefined()
+    expect(projected.history[0]?.resolution).toMatchObject({ kind: "aborted" })
+  })
+
   test("drops transition operations this build does not know", () => {
     const input = snapshot(true)
     input.turn!.state = "applying"

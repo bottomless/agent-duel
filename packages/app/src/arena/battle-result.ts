@@ -4,6 +4,16 @@ export function battleWinnerSide(item: ArenaHistoryItem): ArenaSide | undefined 
   return item.vote === "a" || item.vote === "b" ? item.vote : undefined;
 }
 
+/**
+ * Whether the battle failed while it was being created. Neither side ran, so the engine ends it
+ * without naming them: an abort with no identities.
+ */
+export function battleFailedToStart(
+  item: Pick<ArenaHistoryItem, "resolution" | "identities">,
+): boolean {
+  return item.resolution?.kind === "aborted" && item.identities === undefined;
+}
+
 /** What a stopped contestant pane says in place of the provider's abort. */
 export const STOPPED_BY_EARLY_PICK_NOTE = "Stopped when you picked the other agent's result.";
 

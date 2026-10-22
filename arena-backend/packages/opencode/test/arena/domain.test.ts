@@ -10,6 +10,7 @@ import {
   chatSlug,
   earlyResolution,
   generationName,
+  identitiesRevealed,
   isFinalState,
   isVoteReady,
   operationID,
@@ -69,6 +70,16 @@ describe("Arena domain", () => {
       kind: "aborted",
       reason: "failed before resolution",
     })
+  })
+
+  test("reveals every decision except a battle that never started", () => {
+    expect(identitiesRevealed(undefined)).toBe(false)
+    expect(identitiesRevealed(voteResolution("a"))).toBe(true)
+    expect(identitiesRevealed(stoppedResolution("discard"))).toBe(true)
+    expect(identitiesRevealed(abortedResolution("failed after running"))).toBe(true)
+    const unstarted = abortedResolution("failed while creating", { revealed: false })
+    expect(unstarted).toEqual({ kind: "aborted", reason: "failed while creating", revealed: false })
+    expect(identitiesRevealed(unstarted)).toBe(false)
   })
 
   test("keeps ties as completed votes while deterministically applying A", () => {

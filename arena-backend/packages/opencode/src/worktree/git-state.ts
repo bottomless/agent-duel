@@ -1,6 +1,7 @@
-import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises"
+import { chmod, cp, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "fs/promises"
 import path from "path"
 import { cloneTree } from "../util/copy-tree"
+import { renameRetrying } from "../util/rename-retry"
 
 export type CopyGitStateInput = {
   /** Canonical common git directory, absolute. */
@@ -85,7 +86,7 @@ export async function copyGitState(input: CopyGitStateInput) {
   }
   await gitConfig(partial, ["--unset", "core.worktree"], [0, 5])
   if (input.excludeRefPrefixes?.length) await dropRefs(partial, input.excludeRefPrefixes)
-  await rename(partial, input.target)
+  await renameRetrying(partial, input.target)
 }
 
 /**

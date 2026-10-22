@@ -1262,19 +1262,24 @@ export class Store {
     readonly turnID: string
     readonly expectedState: "creation_failed" | "finalization_failed" | "interrupted_recovery"
     readonly reason: string
-    readonly models: Readonly<Record<Side, string>>
+    /** Left out for a battle that never started, which ends without naming either side. */
+    readonly models?: Readonly<Record<Side, string>>
     readonly at: Date
   }) {
-    const resolution = abortedResolution(input.reason)
+    const resolution = abortedResolution(input.reason, input.models ? undefined : { revealed: false })
     const updated = await this.turns.findOneAndUpdate(
       { _id: input.turnID, state: input.expectedState, resolution: { $exists: false } },
       {
         $set: {
           resolution,
-          "placement.a.model": input.models.a,
-          "placement.b.model": input.models.b,
+          ...(input.models
+            ? {
+                "placement.a.model": input.models.a,
+                "placement.b.model": input.models.b,
+                revealAt: input.at,
+              }
+            : {}),
           comparisonState: "skipped",
-          revealAt: input.at,
           updatedAt: input.at,
         },
       },

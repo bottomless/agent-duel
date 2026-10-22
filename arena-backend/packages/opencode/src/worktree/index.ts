@@ -11,6 +11,7 @@ import { Slug } from "@opencode-ai/core/util/slug";
 import { errorMessage } from "../util/error";
 import { copyTree } from "../util/copy-tree";
 import { copyGitState } from "./git-state";
+import { renameRetrying } from "../util/rename-retry";
 import {
   discardTree,
   sweepTrash as sweepTrashDir,
@@ -1672,7 +1673,8 @@ const layer: Layer.Layer<
           }
           if (moving) {
             yield* attempt(fs.makeDirectory(pathSvc.dirname(to), { recursive: true }));
-            yield* attempt(fs.rename(from, to));
+            // Windows will not move a tree while a scanner still holds one of its files.
+            yield* attempt(Effect.tryPromise({ try: () => renameRetrying(from, to), catch: (error) => error }));
           }
           return { commit, hostCopyMs };
         }).pipe(

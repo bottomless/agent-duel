@@ -169,6 +169,7 @@ import {
 } from "@/arena/reply-state";
 import { useArenaReplyComposerControls } from "@/arena/reply-target-control";
 import {
+  arenaChatCanStartBattle,
   arenaSummaryAnchors,
   arenaTurnFollowedUp,
   isArenaBattleOnScreen,
@@ -1692,6 +1693,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
     );
   }, [agent.id, arenaBattleOnScreen, arenaSession.data, serverId, startingBattle, workspaceId]);
 
+  const canStartAgain = arenaChatCanStartBattle(arenaSession.data, arenaBattleOnScreen);
   const latestBattleSummary = useMemo(
     () =>
       summaryPlacement.live ? (
@@ -1700,9 +1702,10 @@ const AgentStreamSection = memo(function AgentStreamSection({
           workspaceId={workspaceId}
           agentId={agent.id}
           item={summaryPlacement.live}
+          canStartAgain={canStartAgain}
         />
       ) : null,
-    [agent.id, serverId, summaryPlacement.live, workspaceId],
+    [agent.id, canStartAgain, serverId, summaryPlacement.live, workspaceId],
   );
 
   /**

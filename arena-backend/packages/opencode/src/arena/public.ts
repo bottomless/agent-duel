@@ -5,6 +5,7 @@ import {
   canResumeBattle,
   canRetryRun,
   canTie,
+  identitiesRevealed,
   INTERRUPTED_RUN_MESSAGE,
   type Resolution,
   type Side,
@@ -237,7 +238,7 @@ const ACTIVE_TURN_STATES = new Set([
 
 export function project(snapshot: BattleSnapshot) {
   const turn = snapshot.turn
-  const revealed = turn?.resolution !== undefined
+  const revealed = identitiesRevealed(turn?.resolution)
   // Progress is stored on the turn, so it can hold a step name from an older or newer build. The
   // snapshot schema accepts only this build's names, and one unknown name would fail the snapshot.
   const operationProgress = turn?.operationProgress?.filter(
@@ -366,7 +367,9 @@ export function project(snapshot: BattleSnapshot) {
       ...(item.gitApplication ? { gitApplication: item.gitApplication } : {}),
       ...(item.transitionEvent ? { transition: transition(item.transitionEvent) } : {}),
       endedAt: item.transitionTimestamps.complete ?? item.transitionTimestamps.discarded,
-      ...(item.resolution ? { identities: { a: identity(item.placement.a), b: identity(item.placement.b) } } : {}),
+      ...(identitiesRevealed(item.resolution)
+        ? { identities: { a: identity(item.placement.a), b: identity(item.placement.b) } }
+        : {}),
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
     })),

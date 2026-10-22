@@ -1061,10 +1061,13 @@ failed single-agent send stays in the queue for editing and retry.
 ## The reveal
 
 ```
-const revealed = turn.resolution !== undefined   // arena/public.ts:198
+const revealed = identitiesRevealed(turn.resolution)   // arena/domain.ts
 ```
 
-That one line governs the public projection. Before committing a vote, the service resolves the
+That one rule governs the public projection. Every resolution reveals except the abort of a battle
+that failed while it was being created: neither side ran, so the service still resolves the
+assignments, which stops their routing, but stores no names. The chat shows **Battle couldn't
+start**, and **Try again** sends the same prompt as a new battle with a new pair. Before committing a vote, the service resolves the
 assignment on the control plane. Resolution accepts only the final decisions defined for that kind
 of assignment. The first decision is immutable; a retry returns that committed decision and the
 desktop honours it instead of applying a later choice. Only then does the control plane return
@@ -1108,10 +1111,12 @@ frontier assignment, because released desktop builds send none and route as `con
 `arena/domain.ts:63` holds the legal-transition table: 19 states, an explicit map, and
 `requireTransition` for the compare-and-set call sites. Read it before adding a state.
 
-Failure has first-class states rather than an abort — `creation_failed`, `finalization_failed`,
-`application_failed`, `canonicalization_failed` — each transitioning back into the step it failed,
-so a resolution can be retried instead of losing the battle. `interrupted_recovery` is where a turn
-lands when the daemon dies mid-battle.
+Failure has first-class states — `creation_failed`, `finalization_failed`, `application_failed`,
+`canonicalization_failed`. The last two come after the decision and transition back into the step
+they failed, so a resolution can be retried instead of losing the battle. A battle that fails
+before anyone decides it is aborted at once (`abortUnresolved` in `arena/service.ts`): its pending
+sides are cancelled and settled, so no pane keeps reading as working, its worktrees go, and the chat
+is ready again. `interrupted_recovery` is where a turn lands when the daemon dies mid-battle.
 
 A battle the restart cut off goes back to the vote (`reopenInterruptedTurn`), because quitting the
 app is not a decision about the battle. A side that had finished keeps its result. A side that was

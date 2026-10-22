@@ -632,6 +632,29 @@ describe("ArenaMongo claims", () => {
     expect(updates.every((fields) => fields.comparisonState === "skipped")).toBe(true)
   })
 
+  test("records an abort without names for a battle that never started", async () => {
+    const aborted = turn("creation_failed")
+    const updates: Record<string, unknown>[] = []
+    const arena = store({
+      turns: {
+        findOneAndUpdate: async (_filter: unknown, update: { $set: Record<string, unknown> }) => {
+          updates.push(update.$set)
+          return { ...aborted, resolution: update.$set.resolution }
+        },
+      },
+      changed: () => undefined,
+    })
+
+    await arena.recordAbort({ turnID: aborted._id, expectedState: "creation_failed", reason: "failed", at: now })
+
+    expect(updates).toHaveLength(1)
+    expect(updates[0]?.resolution).toEqual({ kind: "aborted", reason: "failed", revealed: false })
+    expect(updates[0]).not.toHaveProperty("placement.a.model")
+    expect(updates[0]).not.toHaveProperty("placement.b.model")
+    expect(updates[0]).not.toHaveProperty("revealAt")
+    expect(updates[0]?.comparisonState).toBe("skipped")
+  })
+
   test("claims an early selection only while the other side is still unfinalized", async () => {
     let current: TurnDocument = {
       ...turn("running"),
