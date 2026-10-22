@@ -607,7 +607,8 @@ ${body}
         await Bun.write(path.join(linked, "SKILL.md"), skillFile("linked-skill", "# Linked"))
         await fs.symlink(linked, path.join(tmp.path, ".claude", "skills", "linked-skill"), "dir")
         // The copy scanned first takes longer to parse, so finishing order alone would pick it.
-        await Bun.write(path.join(copiedClaude, "SKILL.md"), skillFile("copied-skill", "line\n".repeat(200_000)))
+        // About 100 KB is enough to make main fail every time.
+        await Bun.write(path.join(copiedClaude, "SKILL.md"), skillFile("copied-skill", "line\n".repeat(20_000)))
         await Bun.write(path.join(copiedAgents, "SKILL.md"), skillFile("copied-skill", "# Copied"))
       })
 

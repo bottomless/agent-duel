@@ -127,9 +127,9 @@ const parse = Effect.fnUntraced(function* (match: string, events: EventV2Bridge.
     ),
   )
 
-  if (!md) return
+  if (!md) return undefined
 
-  if (!isSkillFrontmatter(md.data)) return
+  if (!isSkillFrontmatter(md.data)) return undefined
 
   const real = yield* Effect.promise(() => realpath(match).catch(() => match))
   return {
@@ -144,7 +144,7 @@ const parse = Effect.fnUntraced(function* (match: string, events: EventV2Bridge.
 const add = Effect.fnUntraced(function* (state: State, real: Map<string, string>, skill: Parsed) {
   const existing = state.skills[skill.name]
   // A skill linked into a second root (the `skills` installer links ~/.agents/skills into
-  // ~/.claude/skills) is one skill, not a duplicate.
+  // ~/.claude/skills) is one skill, so skip the warning. The later path still wins either way.
   if (existing && real.get(skill.name) !== skill.real) {
     yield* Effect.logWarning("duplicate skill name", {
       name: skill.name,
