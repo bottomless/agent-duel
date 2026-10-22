@@ -52,6 +52,8 @@ import { READ_ONLY_GIT_ENV } from "./checkout-git-utils.js";
 import { classifyGitMetadataPath, getPrunedGitMetadataPaths } from "./git-metadata-event-rules.js";
 import {
   fetchWorkspaceGitRemote,
+  fetchWorkspaceGitRemoteWithLogin,
+  type RemoteLogin,
   type WorkspaceGitFetchResult,
   type WorkspaceGitFetchObserver,
   type WorkspaceGitRemoteRefChange,
@@ -71,8 +73,6 @@ import { checkoutLiteFromGitSnapshot } from "./workspace-registry-model.js";
 
 const WORKSPACE_GIT_WATCH_DEBOUNCE_MS = 1_000;
 const BACKGROUND_GIT_FETCH_INTERVAL_MS = 180_000;
-// Long enough for the user to read the credential dialog and type a login into it.
-const REMOTE_SIGN_IN_TIMEOUT_MS = 300_000;
 const FETCH_METADATA_ECHO_TTL_MS = 5_000;
 export const WORKSPACE_GIT_SELF_HEAL_INTERVAL_MS = 60_000;
 const FORGE_PR_STATUS_POLL_FAST_INTERVAL_MS = 20_000;
@@ -222,8 +222,8 @@ export interface WorkspaceGitService {
   resolveDefaultBranch(cwdOrRepoRoot: string, options?: WorkspaceGitReadOptions): Promise<string>;
   resolveRepoRemoteUrl(cwd: string, options?: WorkspaceGitReadOptions): Promise<string | null>;
   refresh(cwd: string, options?: { priority?: "normal" | "high" }): Promise<void>;
-  /** Fetches origin once with the user's credential prompt allowed, then checks the login held. */
-  signInToRemote(cwd: string): Promise<RemoteSignInResult>;
+  /** Fetches origin once with the login the user typed, then checks Git kept it. */
+  signInToRemote(cwd: string, login: RemoteLogin): Promise<RemoteSignInResult>;
   requestWorkingTreeWatch(
     cwd: string,
     onChange: () => void,
@@ -921,15 +921,11 @@ export class WorkspaceGitServiceImpl implements WorkspaceGitService {
     this.scheduleWorkspaceObservationSetup(target);
   }
 
-  async signInToRemote(cwd: string): Promise<RemoteSignInResult> {
+  async signInToRemote(cwd: string, login: RemoteLogin): Promise<RemoteSignInResult> {
     this.assertNotDisposed();
     cwd = resolve(cwd);
     try {
-      // The user asked for this one, so Git may show them its credential prompt.
-      await this.deps.runGitCommand(["fetch", "origin", "--prune"], {
-        cwd,
-        timeout: REMOTE_SIGN_IN_TIMEOUT_MS,
-      });
+      await fetchWorkspaceGitRemoteWithLogin(cwd, login, this.deps.runGitCommand);
     } catch (error) {
       return { ok: false, error };
     }

@@ -659,8 +659,11 @@ export const ja: TranslationResources = {
       remoteSignIn: {
         trigger: "{{host}} にサインイン",
         title: "サインインが必要です",
-        description:
-          "Agent Duel はログインなしでは {{host}} から更新を取得できません。Git の認証情報プロンプトでサインインしてください。",
+        description: "Agent Duel はログインなしでは {{host}} から更新を取得できません。",
+        sshDescription:
+          "{{host}} が SSH キーを受け付けなかったため、Agent Duel は更新を取得できません。ssh-add でキーを読み込むか、{{host}} のアカウントにキーを追加してください。",
+        username: "ユーザー名",
+        password: "パスワードまたはトークン",
         signIn: "サインイン",
         signingIn: "サインイン中...",
         signedIn: "{{host}} にサインインしました",

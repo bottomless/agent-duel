@@ -661,8 +661,11 @@ export const ru: TranslationResources = {
       remoteSignIn: {
         trigger: "Войти в {{host}}",
         title: "Требуется вход",
-        description:
-          "Agent Duel не может получать обновления с {{host}} без входа. Войдите через запрос учётных данных Git.",
+        description: "Agent Duel не может получать обновления с {{host}} без входа.",
+        sshDescription:
+          "{{host}} не принял ваш SSH-ключ, поэтому Agent Duel не может получать обновления. Загрузите ключ через ssh-add или добавьте его в свой аккаунт на {{host}}.",
+        username: "Имя пользователя",
+        password: "Пароль или токен",
         signIn: "Войти",
         signingIn: "Вход...",
         signedIn: "Выполнен вход в {{host}}",

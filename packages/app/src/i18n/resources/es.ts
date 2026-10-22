@@ -663,8 +663,11 @@ export const es: TranslationResources = {
       remoteSignIn: {
         trigger: "Iniciar sesión en {{host}}",
         title: "Inicio de sesión necesario",
-        description:
-          "Agent Duel no puede obtener cambios de {{host}} sin iniciar sesión. Inicia sesión con el aviso de credenciales de Git.",
+        description: "Agent Duel no puede obtener cambios de {{host}} sin iniciar sesión.",
+        sshDescription:
+          "{{host}} no aceptó tu clave SSH, así que Agent Duel no puede obtener cambios. Carga la clave con ssh-add o añádela a tu cuenta en {{host}}.",
+        username: "Usuario",
+        password: "Contraseña o token",
         signIn: "Iniciar sesión",
         signingIn: "Iniciando sesión...",
         signedIn: "Sesión iniciada en {{host}}",

@@ -654,8 +654,11 @@ export const ar: TranslationResources = {
       remoteSignIn: {
         trigger: "تسجيل الدخول إلى {{host}}",
         title: "يلزم تسجيل الدخول",
-        description:
-          "لا يستطيع Agent Duel جلب التحديثات من {{host}} دون تسجيل الدخول. سجّل الدخول عبر نافذة بيانات اعتماد Git.",
+        description: "لا يستطيع Agent Duel جلب التحديثات من {{host}} دون تسجيل الدخول.",
+        sshDescription:
+          "لم يقبل {{host}} مفتاح SSH الخاص بك، لذا لا يستطيع Agent Duel جلب التحديثات. حمّل المفتاح باستخدام ssh-add، أو أضفه إلى حسابك على {{host}}.",
+        username: "اسم المستخدم",
+        password: "كلمة المرور أو الرمز المميز",
         signIn: "تسجيل الدخول",
         signingIn: "جارٍ تسجيل الدخول...",
         signedIn: "تم تسجيل الدخول إلى {{host}}",

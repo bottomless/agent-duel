@@ -23,7 +23,7 @@ export type WorkspaceGitRemoteRefChange =
  * a credential dialog it opened came back every cycle. A credential helper that already holds a
  * login still answers, since that needs no prompt.
  */
-const NON_INTERACTIVE_GIT_ENV = {
+export const NON_INTERACTIVE_GIT_ENV = {
   GIT_TERMINAL_PROMPT: "0",
   // Set but empty, Git runs no askpass at all instead of falling back to `core.askPass` or the
   // desktop session's `SSH_ASKPASS`.
@@ -31,6 +31,65 @@ const NON_INTERACTIVE_GIT_ENV = {
   GCM_INTERACTIVE: "never",
   SSH_ASKPASS_REQUIRE: "never",
 } as const;
+
+/** A username and its password or token, as the user typed them into the sign-in. */
+export interface RemoteLogin {
+  username: string;
+  password: string;
+}
+
+/**
+ * Answers Git's login question from the environment. The daemon has no terminal, and most machines
+ * have no credential dialog either (macOS's osxkeychain only stores logins), so the sign-in hands
+ * Git the login itself. It drains Git's request and answers only `get`.
+ */
+const LOGIN_HELPER =
+  '!f() { cat >/dev/null; [ "$1" = get ] || return 0; ' +
+  'printf "username=%s\\npassword=%s\\n" "$AGENT_DUEL_GIT_USERNAME" "$AGENT_DUEL_GIT_PASSWORD"; }; f';
+
+/**
+ * Fetches origin once with the login the user typed, then hands it to the user's own credential
+ * helpers (the Keychain on macOS) so the background fetch gets in by itself.
+ */
+export async function fetchWorkspaceGitRemoteWithLogin(
+  cwd: string,
+  login: RemoteLogin,
+  run: typeof runGitCommand = runGitCommand,
+): Promise<void> {
+  // Git's credential protocol is one value per line.
+  const values = login.username + login.password;
+  if (/[\r\n]/.test(values) || values.includes("\0")) {
+    throw new Error("The username and password can't contain line breaks");
+  }
+  // The empty helper drops the user's own first, so a stale stored login can't answer instead.
+  await run(
+    [
+      "-c",
+      "credential.helper=",
+      "-c",
+      `credential.helper=${LOGIN_HELPER}`,
+      "fetch",
+      "origin",
+      "--prune",
+    ],
+    {
+      cwd,
+      envOverlay: {
+        ...NON_INTERACTIVE_GIT_ENV,
+        AGENT_DUEL_GIT_USERNAME: login.username,
+        AGENT_DUEL_GIT_PASSWORD: login.password,
+      },
+      timeout: 120_000,
+    },
+  );
+  const { stdout } = await run(["remote", "get-url", "origin"], { cwd });
+  // With no helper to store it, this keeps nothing; the caller's next background fetch says so.
+  await run(["credential", "approve"], {
+    cwd,
+    envOverlay: NON_INTERACTIVE_GIT_ENV,
+    stdin: `url=${stdout.trim()}\nusername=${login.username}\npassword=${login.password}\n\n`,
+  });
+}
 
 /**
  * Git's own words for a refused login: HTTPS with no stored credentials or wrong ones, an SSH key

@@ -664,7 +664,11 @@ export const fr: TranslationResources = {
         trigger: "Se connecter à {{host}}",
         title: "Connexion requise",
         description:
-          "Agent Duel ne peut pas récupérer les mises à jour de {{host}} sans identifiants. Connectez-vous via l'invite d'identifiants de Git.",
+          "Agent Duel ne peut pas récupérer les mises à jour de {{host}} sans identifiants.",
+        sshDescription:
+          "{{host}} n'a pas accepté votre clé SSH : Agent Duel ne peut pas récupérer les mises à jour. Chargez la clé avec ssh-add ou ajoutez-la à votre compte sur {{host}}.",
+        username: "Nom d'utilisateur",
+        password: "Mot de passe ou jeton",
         signIn: "Se connecter",
         signingIn: "Connexion...",
         signedIn: "Connecté à {{host}}",

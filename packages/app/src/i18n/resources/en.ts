@@ -651,8 +651,11 @@ export const en = {
       remoteSignIn: {
         trigger: "Sign in to {{host}}",
         title: "Sign-in needed",
-        description:
-          "Agent Duel can't fetch updates from {{host}} without a login. Sign in through your Git credential prompt.",
+        description: "Agent Duel can't fetch updates from {{host}} without a login.",
+        sshDescription:
+          "{{host}} didn't accept your SSH key, so Agent Duel can't fetch updates. Load the key with ssh-add, or add it to your account on {{host}}.",
+        username: "Username",
+        password: "Password or token",
         signIn: "Sign in",
         signingIn: "Signing in...",
         signedIn: "Signed in to {{host}}",

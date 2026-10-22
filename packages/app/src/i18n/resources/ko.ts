@@ -656,8 +656,11 @@ export const ko: TranslationResources = {
       remoteSignIn: {
         trigger: "{{host}}에 로그인",
         title: "로그인 필요",
-        description:
-          "Agent Duel은 로그인 없이 {{host}}에서 업데이트를 가져올 수 없습니다. Git 자격 증명 프롬프트로 로그인하세요.",
+        description: "Agent Duel은 로그인 없이 {{host}}에서 업데이트를 가져올 수 없습니다.",
+        sshDescription:
+          "{{host}}이(가) SSH 키를 받아들이지 않아 Agent Duel이 업데이트를 가져올 수 없습니다. ssh-add로 키를 불러오거나 {{host}} 계정에 키를 추가하세요.",
+        username: "사용자 이름",
+        password: "비밀번호 또는 토큰",
         signIn: "로그인",
         signingIn: "로그인 중...",
         signedIn: "{{host}}에 로그인했습니다",

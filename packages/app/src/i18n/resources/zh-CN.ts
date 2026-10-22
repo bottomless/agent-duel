@@ -648,8 +648,11 @@ export const zhCN: TranslationResources = {
       remoteSignIn: {
         trigger: "登录 {{host}}",
         title: "需要登录",
-        description:
-          "Agent Duel 无法在未登录的情况下从 {{host}} 获取更新。请通过 Git 凭据提示登录。",
+        description: "Agent Duel 无法在未登录的情况下从 {{host}} 获取更新。",
+        sshDescription:
+          "{{host}} 没有接受你的 SSH 密钥，因此 Agent Duel 无法获取更新。请用 ssh-add 加载密钥，或将其添加到你在 {{host}} 的账户。",
+        username: "用户名",
+        password: "密码或令牌",
         signIn: "登录",
         signingIn: "正在登录...",
         signedIn: "已登录 {{host}}",

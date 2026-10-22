@@ -1480,6 +1480,7 @@ describe("WorkspaceGitServiceImpl remote sign-in", () => {
     signInRequired: true,
   };
   const fetched = { changes: [], error: null, signInRequired: false };
+  const login = { username: "qa", password: "token" };
 
   function createRepoService(options: CreateServiceTestOptions) {
     return createService({
@@ -1517,7 +1518,7 @@ describe("WorkspaceGitServiceImpl remote sign-in", () => {
     service.dispose();
   });
 
-  test("signs in with the user's prompt and reports whether Git kept the login", async () => {
+  test("signs in with the typed login and reports whether Git kept it", async () => {
     const runGitFetch = vi.fn().mockResolvedValue(refused);
     const runGitCommand = vi.fn(async () => ({
       stdout: `${REPO_CWD}\n`,
@@ -1534,15 +1535,28 @@ describe("WorkspaceGitServiceImpl remote sign-in", () => {
     });
 
     // No credential helper: the login worked once, and the background fetch is refused again.
-    await expect(service.signInToRemote(REPO_CWD)).resolves.toEqual({ ok: true, loginKept: false });
-    expect(runGitCommand).toHaveBeenCalledWith(["fetch", "origin", "--prune"], {
-      cwd: REPO_CWD,
-      timeout: 300_000,
+    await expect(service.signInToRemote(REPO_CWD, login)).resolves.toEqual({
+      ok: true,
+      loginKept: false,
     });
+    expect(runGitCommand).toHaveBeenCalledWith(
+      expect.arrayContaining(["fetch", "origin", "--prune"]),
+      expect.objectContaining({
+        cwd: REPO_CWD,
+        envOverlay: expect.objectContaining({
+          GIT_TERMINAL_PROMPT: "0",
+          AGENT_DUEL_GIT_USERNAME: "qa",
+          AGENT_DUEL_GIT_PASSWORD: "token",
+        }),
+      }),
+    );
 
     // A credential helper stored it: the background fetch gets in on its own.
     runGitFetch.mockResolvedValue(fetched);
-    await expect(service.signInToRemote(REPO_CWD)).resolves.toEqual({ ok: true, loginKept: true });
+    await expect(service.signInToRemote(REPO_CWD, login)).resolves.toEqual({
+      ok: true,
+      loginKept: true,
+    });
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => {
       expect(service.peekSnapshot(REPO_CWD)?.remote).toEqual({ signInRequired: false });
@@ -1557,7 +1571,7 @@ describe("WorkspaceGitServiceImpl remote sign-in", () => {
       "fatal: Authentication failed for 'https://example.com/private.git/'",
     );
     const runGitCommand = vi.fn(async (args: string[]) => {
-      if (args[0] === "fetch") throw failure;
+      if (args.includes("fetch")) throw failure;
       return { stdout: `${REPO_CWD}\n`, stderr: "", truncated: false, exitCode: 0, signal: null };
     });
     const service = createRepoService({
@@ -1565,7 +1579,10 @@ describe("WorkspaceGitServiceImpl remote sign-in", () => {
       runGitCommand,
     });
 
-    await expect(service.signInToRemote(REPO_CWD)).resolves.toEqual({ ok: false, error: failure });
+    await expect(service.signInToRemote(REPO_CWD, login)).resolves.toEqual({
+      ok: false,
+      error: failure,
+    });
 
     service.dispose();
   });

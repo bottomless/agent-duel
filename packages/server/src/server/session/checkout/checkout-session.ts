@@ -501,10 +501,13 @@ export class CheckoutSession {
   }
 
   async handleRemoteSignInRequest(msg: CheckoutRemoteSignInRequest): Promise<void> {
-    const { cwd, requestId } = msg;
+    const { cwd, requestId, username, password } = msg;
     const resolvedCwd = expandTilde(cwd);
     try {
-      const result = await this.workspaceGitService.signInToRemote(resolvedCwd);
+      const result = await this.workspaceGitService.signInToRemote(resolvedCwd, {
+        username,
+        password,
+      });
       if (!result.ok) {
         this.host.emit({
           type: "checkout.remote.sign_in.response",

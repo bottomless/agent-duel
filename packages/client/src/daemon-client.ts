@@ -4202,9 +4202,10 @@ export class DaemonClient {
     });
   }
 
-  /** Waits while the user answers their credential prompt, a little past the daemon's own limit. */
+  /** A sign-in runs up to three fetches of up to two minutes each, so it outlasts the default. */
   async checkoutRemoteSignIn(
     cwd: string,
+    login: { username: string; password: string },
     requestId?: string,
   ): Promise<CheckoutRemoteSignInPayload> {
     return this.sendNamespacedCorrelatedSessionRequest<"checkout.remote.sign_in.response">({
@@ -4212,8 +4213,10 @@ export class DaemonClient {
       message: {
         type: "checkout.remote.sign_in.request",
         cwd,
+        username: login.username,
+        password: login.password,
       },
-      timeout: 330_000,
+      timeout: 380_000,
     });
   }
 

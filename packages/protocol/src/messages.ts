@@ -1960,11 +1960,15 @@ export const CheckoutRefreshRequestSchema = z.object({
   requestId: z.string(),
 });
 
-// Fetches origin once with the user's own credential prompt allowed, after the background fetch
-// reported that the remote wants a login it may not ask for (`remoteSignInRequired`).
+// Fetches origin once with the login the user typed, after the background fetch reported that the
+// remote wants a login it may not ask for (`remoteSignInRequired`). The daemon hands the login to
+// Git and to the user's credential helper, and never logs it.
 export const CheckoutRemoteSignInRequestSchema = z.object({
   type: z.literal("checkout.remote.sign_in.request"),
   cwd: z.string(),
+  username: z.string().min(1),
+  // A password, or the access token a forge takes in its place.
+  password: z.string().min(1),
   requestId: z.string(),
 });
 

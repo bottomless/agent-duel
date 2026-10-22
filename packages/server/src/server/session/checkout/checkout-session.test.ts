@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import {
   type CheckoutDiffSubscriber,
@@ -217,15 +217,20 @@ describe("CheckoutSession", () => {
     const request = {
       type: "checkout.remote.sign_in.request" as const,
       cwd: "/repo",
+      username: "qa",
+      password: "token",
       requestId: "r1",
     };
 
+    const keptSignIn = vi.fn(async () => ({ ok: true as const, loginKept: true }));
+
     it("reports a sign-in Git kept for the next background fetch", async () => {
-      const { checkout, emitted } = makeCheckoutSession({
-        git: { signInToRemote: async () => ({ ok: true, loginKept: true }) },
-      });
+      const signInToRemote = keptSignIn;
+      const { checkout, emitted } = makeCheckoutSession({ git: { signInToRemote } });
 
       await checkout.handleRemoteSignInRequest(request);
+
+      expect(signInToRemote).toHaveBeenCalledWith("/repo", { username: "qa", password: "token" });
 
       expect(emitted).toEqual([
         {
