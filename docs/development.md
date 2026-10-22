@@ -365,15 +365,12 @@ checks the registered path, branch, Git tree, and post-setup fingerprint of
 copied manifest content. A mismatch removes both warm paths and falls back to
 cold preparation.
 
-Contestant shells receive the current context dynamically:
+Contestant shells receive the environment's ports and preview URLs:
 
-| Variable                                                        | Value                                                    |
-| --------------------------------------------------------------- | -------------------------------------------------------- |
-| `PASEO_CURRENT_BRANCH`                                          | Persistent branch attached to this contestant.           |
-| `PASEO_TRUNK_DIR`                                               | Canonical checkout path. Contestants must not modify it. |
-| `PASEO_TRUNK_BRANCH`                                            | Canonical branch, or an empty string at detached `HEAD`. |
-| `PASEO_PORT`, `PASEO_PORT2`, `PASEO_PORT3`                      | Three aliases reserved for this contestant environment.  |
-| `ARENA_PREVIEW_URL`, `ARENA_PREVIEW_URL2`, `ARENA_PREVIEW_URL3` | Public URL matching each port alias.                     |
+| Variable                                                        | Value                                                   |
+| --------------------------------------------------------------- | ------------------------------------------------------- |
+| `PASEO_PORT`, `PASEO_PORT2`, `PASEO_PORT3`                      | Three aliases reserved for this contestant environment. |
+| `ARENA_PREVIEW_URL`, `ARENA_PREVIEW_URL2`, `ARENA_PREVIEW_URL3` | Public URL matching each port alias.                    |
 
 Use `$(pwd)` and these variables in prompts, setup, and diagnostics. Port
 numbers and aliases expire with the environment. Arena records commands from a
