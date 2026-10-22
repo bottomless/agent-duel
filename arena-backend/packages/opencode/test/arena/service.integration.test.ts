@@ -638,13 +638,14 @@ async function waitForTurn(
 /**
  * The warm pair is prepared after the turn completes, so that the chat reaches `ready` — and
  * the user's next prompt can start a turn — without waiting on the project's setup command.
- * `complete` therefore no longer implies a prepared pair; this is what does.
+ * `complete` therefore no longer implies a prepared pair; this is what does. Until that warm-up
+ * starts, the turn still holds the pair its own send used, so only the next generation counts.
  */
 async function waitForWarmPair(store: Store, turnID: string) {
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
     const turn = await store.turn(turnID)
-    const warm = turn?.warmPreparation
+    const warm = turn && turn.warmPreparation?.generation === turn.turnIndex + 1 ? turn.warmPreparation : undefined
     if (warm?.state === "ready") return turn
     if (warm?.state === "failed") throw new Error(`Arena warm preparation failed: ${warm.error ?? "no error recorded"}`)
     await Bun.sleep(10)
@@ -2038,19 +2039,19 @@ describe("Arena service vertical slice", () => {
       expect(sentToolResults(normalRequests[0]!)).not.toContain(cleared)
       expect(["T1-42", "T2-42"].every((output) => sentToolResults(normalRequests[0]!).includes(output))).toBe(true)
 
-      // The single-agent turn is now the last finished one.
+      // The single-agent turn is now the last finished one. It changed the transcript the warm pair
+      // was forked from, so this send forks both sides itself.
       const third = await battle("T3")
+      expect(third.forkedAtWarmup).toEqual([false, false])
       expect(inherited(third.requests)).toEqual([
         { cleared: true, kept: ["S1"] },
         { cleared: true, kept: ["S1"] },
       ])
 
       // A battle after it starts at its grafted prompt, though the single-agent prompt came later.
-      // A restart leaves the warm forks untrusted, so this send forks both sides itself.
-      setStoreForTest(memory.store)
-      await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      // Warm-up forked after the vote, and the send reads the same boundary, so it reuses both forks.
       const fourth = await battle("T4")
-      expect(fourth.forkedAtWarmup).toEqual([false, false])
+      expect(fourth.forkedAtWarmup).toEqual([true, true])
       expect(inherited(fourth.requests)).toEqual([
         { cleared: true, kept: ["T3"] },
         { cleared: true, kept: ["T3"] },
@@ -2070,7 +2071,7 @@ describe("Arena service vertical slice", () => {
     } finally {
       router.restore()
     }
-  }, 90_000)
+  }, 180_000)
 
   test("waits for the retained winner only while it still serves a port", async () => {
     await using directory = await tmpdir({
