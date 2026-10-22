@@ -4131,7 +4131,9 @@ export const layer: Layer.Layer<
 
     // The system text the run's first prompt carried. A reply sends it again rather than building a
     // new one: the first may hold the staging note a later build leaves out, and a system that
-    // changes mid-session makes the provider re-read the whole conversation uncached.
+    // changes mid-session makes the provider re-read the whole conversation uncached. It is reused
+    // only while a build now gives the same text, with or without that note: preview routes live in
+    // this process, so after a restart its URLs can be dead, and one uncached request costs less.
     const startedSystem = Effect.fnUntraced(function* (
       worktree: string,
       sessionID: SessionID,
@@ -4141,13 +4143,15 @@ export const layer: Layer.Layer<
       const messages = yield* inDirectory(worktree, sessions.messages({ sessionID })).pipe(
         Effect.catchCause(() => Effect.succeed([])),
       )
-      return messages
+      const started = messages
         .flatMap((message) =>
           message.info.role === "user" && message.info.id >= promptMessageID && message.info.system
             ? [message.info.system]
             : [],
         )
         .at(0)
+      const current = [contestantSystemInstruction(worktree, true), contestantSystemInstruction(worktree)]
+      return started !== undefined && current.includes(started) ? started : undefined
     })
 
     // The proxy routes a contestant's requests, and the recorder keeps its events, only for a run

@@ -4040,6 +4040,69 @@ describe("Arena service vertical slice", () => {
     }
   }, 90_000)
 
+  test("a reply builds the system text again once the preview URLs it named have changed", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure stale system fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    const previousBase = process.env.PASEO_ARENA_PREVIEW_BASE_URL
+    process.env.PASEO_ARENA_PREVIEW_BASE_URL = "http://localhost:7101"
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "Stale preview URLs" }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Start the preview." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not admit the stale system turn")
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const models = (await memory.store.runsForTurn(turnID)).map((run) =>
+        router.modelForAssignment(run.assignment.assignmentID),
+      )
+      if (models.some((model) => !model)) throw new Error("A run did not retain an opaque assignment")
+
+      // Preview routes live in the engine process, so after a restart the same run can have new URLs.
+      process.env.PASEO_ARENA_PREVIEW_BASE_URL = "http://localhost:7102"
+      await request(`/arena/turns/${turnID}/reply`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "Check the preview again.", target: "both" }),
+      })
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+
+      for (const model of models) {
+        const systems = router.contestantRequests
+          .filter((body) => body.model === model)
+          .map((body) => JSON.stringify(body.messages?.[0]))
+        expect(systems[0]).toContain("localhost:7101")
+        expect(systems.at(-1)).toContain("localhost:7102")
+        expect(systems.at(-1)).not.toContain("localhost:7101")
+      }
+    } finally {
+      router.restore()
+      if (previousBase === undefined) delete process.env.PASEO_ARENA_PREVIEW_BASE_URL
+      else process.env.PASEO_ARENA_PREVIEW_BASE_URL = previousBase
+    }
+  }, 90_000)
+
   test("a reply to both sent before the finished contestant's result is committed waits and reaches both", async () => {
     await using directory = await tmpdir({
       git: true,
