@@ -1,5 +1,9 @@
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0602
 #endif
@@ -29,6 +33,8 @@ using Clock = std::chrono::steady_clock;
 constexpr size_t kMaxEvents = 32;
 constexpr auto kEventLifetime = std::chrono::seconds(2);
 constexpr double kPointerTolerance = 2.0;
+// SDKs can omit IMDT_TOUCHPAD although Windows returns its documented device value.
+constexpr unsigned int kTouchpadDevice = 0x10;
 
 enum class EventKind { Pointer, Keyboard };
 
@@ -236,7 +242,7 @@ bool getProperty(napi_env env, napi_value object, const char* name, napi_value& 
 const char* sourceResult(const NativeEvent& event) {
   if (!event.sourceKnown) return "unknown";
 
-  const bool pointerDevice = event.deviceType == IMDT_MOUSE || event.deviceType == IMDT_TOUCHPAD ||
+  const bool pointerDevice = event.deviceType == IMDT_MOUSE || static_cast<unsigned int>(event.deviceType) == kTouchpadDevice ||
                              event.deviceType == IMDT_TOUCH || event.deviceType == IMDT_PEN;
   const bool expectedDevice = (event.kind == EventKind::Pointer && pointerDevice) ||
                               (event.kind == EventKind::Keyboard && event.deviceType == IMDT_KEYBOARD);
@@ -394,6 +400,6 @@ static FARPROC WINAPI loadExeHook(unsigned notification, PDelayLoadInfo delayLoa
   return nullptr;
 }
 
-extern "C" PfnDliHook __pfnDliNotifyHook2 = loadExeHook;
+extern "C" decltype(__pfnDliNotifyHook2) __pfnDliNotifyHook2 = loadExeHook;
 
 NAPI_MODULE(vote_input, init)
