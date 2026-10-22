@@ -674,4 +674,34 @@ description: A skill in every root.
       expect(location).toBe(path.join(pkg, ".agents", "skills", "nested-skill", "SKILL.md"))
     }),
   )
+
+  it.live("lets a skills.paths entry for an earlier root win over a later root", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all(
+              [".claude", ".agents"].map((root) =>
+                Bun.write(
+                  path.join(dir, root, "skills", "pinned-skill", "SKILL.md"),
+                  `---
+name: pinned-skill
+description: A skill in both project roots.
+---
+
+# Pinned Skill
+`,
+                ),
+              ),
+            ),
+          )
+
+          // `.agents` is scanned after `.claude`, so it wins until `skills.paths` names `.claude`.
+          const skill = yield* Skill.Service
+          const location = (yield* skill.get("pinned-skill"))?.location
+          expect(location).toBe(path.join(dir, ".claude", "skills", "pinned-skill", "SKILL.md"))
+        }),
+      { git: true, config: { skills: { paths: [".claude/skills"] } } },
+    ),
+  )
 })

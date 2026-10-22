@@ -190,6 +190,9 @@ const scan = Effect.fnUntraced(function* (
 
   // Glob returns matches in walk order, which varies between scans.
   for (const match of matches.toSorted()) {
+    // A Set keeps a value at its first position, so drop it first: a path that a later root
+    // matches again (an explicit `skills.paths` entry for a global dir) takes the later position.
+    state.matches.delete(match)
     state.matches.add(match)
     state.dirs.add(path.dirname(match))
   }
