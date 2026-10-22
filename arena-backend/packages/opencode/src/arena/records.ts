@@ -273,6 +273,13 @@ export type CheckoutEvictionDocument = {
   updatedAt: Date
 }
 
+/** Where the next search for contestant ports starts; one document per store. */
+export type PortCursorDocument = {
+  readonly _id: string
+  next: number
+  updatedAt: Date
+}
+
 export type HiddenAssignment = {
   readonly assignmentID: string
   model?: string
@@ -393,6 +400,12 @@ export type TurnDocument = {
    * anchor. This marker is how a retry knows the copy already happened and must not drop anything.
    */
   canonicalGraftedAt?: Date
+  /**
+   * The last canonical message the graft copied. With `canonicalUserMessageID` it bounds the
+   * messages this turn's winner wrote, so a later contestant's copy retargets only that run's
+   * ports. Absent on turns grafted before it was recorded; those run until the next battle.
+   */
+  canonicalGraftedThroughMessageID?: string
   gitApplication?: {
     readonly state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
     readonly reason?: string

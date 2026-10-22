@@ -593,6 +593,56 @@ patches use native Git with time and output limits; battle review owns its separ
 Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
 `.localhost` hostnames, and never retarget an old URL to a later process.
 
+Banks come from 20000–29999, below every OS ephemeral range, in order from a cursor the store keeps
+(`portCursors`, `sequentialAllocator` in `arena/preview.ts`). A port an earlier turn used is not
+handed out again until the range wraps, so a port in the history never names a later contestant's
+server. The allocator skips ports in use and well-known defaults; a store without a cursor starts at
+a random point.
+
+The canonical chat keeps the winner's literal ports and preview URLs, so the reader sees the URLs
+that worked. A contestant's copy retargets them to its own bank as it forks
+(`retargetArenaTranscriptPart`, `arena/port-retarget.ts`). Everything may change except a
+blacklist, and text and tool calls match differently:
+
+- **Text** (answers, reasoning, a subagent's answer in `task` output): every number equal to one of
+  the producing run's ports, unless it is part of a name: glued to a letter or `_`, a dashed name
+  (`req-N-ab12`, `web-N.txt`), a version (`1.N.0`), or a path segment.
+- **Tool calls** (inputs, outputs and errors): port contexts only. `:N` after a loopback host, `*`
+  or a `*.localhost` name; `--port N`, `-p N` (the host side of `N:M`), `NAME_PORT=N`, `port N`,
+  `lsof -i :N`, `nc host N`, `http.server N`, `N/tcp`, `listening on N`, and `:N` after a space.
+- **Both:** whole preview URLs and preview hosts.
+
+Never changed: user messages; files, attachments, tool metadata, titles and IDs; `data:` URIs,
+base64 runs, hex runs of 12 or more, UUIDs; JSON (a string or any `{"…` span that parses); binary
+output; `websearch` output; reasoning that carries metadata. Agent Duel saves reasoning without
+its metadata (`arena/privacy.ts`), so a forked copy never carries a signature to break. File
+content changes only in logs (`.log`, `.out`, `.err`, `nohup.out`, or under a `log/` or `logs/`
+directory, never a JSON file): `read` output, `write`/`edit`/`apply_patch` input, `grep` matches
+per file, the output of a shell command that prints a file (`cat`, `head`, `tail`, `less`, `grep`,
+`sed`, `git diff` …), and file content a shell command writes (`cat > f <<EOF`, `echo … > f`,
+`tee f`, `sed -i`). A later `edit` must still match the file on disk, and a config's ports are the
+project's own.
+
+Three rules keep the mapping exact:
+
+- **The run that wrote the message.** Banks are reused across turns, so matching every run's ports
+  maps a reused port to the wrong alias. The graft records the canonical messages a winner wrote
+  (`canonicalUserMessageID` through `canonicalGraftedThroughMessageID`), and the fork hands each
+  part its source message id. A turn grafted before the end marker existed counts until the next
+  battle; messages outside every range (Battle-off turns, conflict resolution) stay unchanged.
+- **One pass.** Matches are found on the original text and then replaced, so a new port that
+  equals an old port of the same bank is not rewritten again. `$PASEO_PORT` that the agent wrote
+  stays a variable; it already names whichever environment runs it.
+- **The prompt says what changed.** The contestant prompt lists what was updated and what keeps
+  the original ports, and tells the contestant to connect only to its own ports.
+
+The costs: a command and its JSON or file output can name different ports; a bare number in prose
+that equals a port (a PID, a size) changes with it; and ports a user typed, or a Battle-off turn
+ran, stay literal, so they can name a port the other side now owns.
+
+After a run, `$ARENA_PREVIEW_URL…` in its answer text is expanded so the reader sees the URL. Port
+variables stay as written.
+
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
 
