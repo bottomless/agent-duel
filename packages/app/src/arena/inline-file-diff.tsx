@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import type { ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { Theme } from "@/styles/theme";
@@ -53,6 +54,7 @@ export function InlineFileDiff({
   turnId,
   file,
   layout,
+  waitingFor,
   embedded = false,
 }: {
   serverId: string;
@@ -60,9 +62,11 @@ export function InlineFileDiff({
   turnId: string;
   file: string;
   layout: ArenaDiffLayout;
+  /** The side still working: its column is a placeholder until its result lands. */
+  waitingFor?: ArenaSide;
   embedded?: boolean;
 }) {
-  const query = useArenaFileDiff({ serverId, agentId, turnId, file });
+  const query = useArenaFileDiff({ serverId, agentId, turnId, file, waitingFor });
   const { refetch } = query;
   const retry = useCallback(() => void refetch(), [refetch]);
   if (query.data) {
@@ -71,6 +75,7 @@ export function InlineFileDiff({
         key={`${turnId}:${file}`}
         file={query.data.file}
         layout={layout}
+        waitingFor={waitingFor}
         embedded={embedded}
       />
     );

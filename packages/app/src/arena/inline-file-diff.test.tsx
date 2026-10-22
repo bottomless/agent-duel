@@ -25,7 +25,7 @@ vi.mock("./file-diff-query", async () =>
 
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { arenaChangesRows } from "./changes-rows";
-import type { ArenaComparisonDiff } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaComparisonDiff, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ArenaDiffLayout } from "./diff-layout";
 import {
   rewrite,
@@ -54,7 +54,12 @@ function byTestId(testId: string): HTMLElement | null {
 }
 
 /** `main.py`'s diff as `fixture` served it; building a fixture is what serves its files. */
-function mainDiff(_fixture: ArenaComparisonDiff, layout: ArenaDiffLayout, turnId = "turn-1") {
+function mainDiff(
+  _fixture: ArenaComparisonDiff,
+  layout: ArenaDiffLayout,
+  turnId = "turn-1",
+  waitingFor?: ArenaSide,
+) {
   return (
     <InlineFileDiff
       serverId="server-1"
@@ -62,6 +67,7 @@ function mainDiff(_fixture: ArenaComparisonDiff, layout: ArenaDiffLayout, turnId
       turnId={turnId}
       file="main.py"
       layout={layout}
+      waitingFor={waitingFor}
     />
   );
 }
@@ -197,6 +203,31 @@ describe("InlineFileDiff", () => {
     );
     expect(byTestId("arena-inline-diff")).toBeNull();
     expect(byTestId("arena-inline-diff-loading")?.textContent).toContain("Loading diff");
+  });
+
+  it("keeps the working side's column as a placeholder beside the finished side", () => {
+    act(() => {
+      root.render(mainDiff(shortConflict(), "split", "turn-1", "a"));
+    });
+    expect(byTestId("arena-diff-pending-a")?.textContent).toContain("Agent A is still working");
+    expect(container.textContent).toContain("y = 200");
+    expect(container.textContent).not.toContain("y = 20\n");
+    expect(byTestId("arena-diff-back")).toBeNull();
+    expect(container.querySelector('[aria-label="Expand Agent A"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Expand Agent B"]')).not.toBeNull();
+  });
+
+  it("stacks the working side as one line per region in one column", () => {
+    act(() => {
+      root.render(mainDiff(shortConflict(), "single", "turn-1", "b"));
+    });
+    const pending = byTestId("arena-diff-pending-b");
+    expect(pending?.textContent).toBe(
+      "Agent Bis still working · its version of this region appears here",
+    );
+    expect(container.textContent).toContain("y = 20");
+    expect(container.textContent).not.toContain("y = 200");
+    expect(container.querySelector('[aria-label="Expand Agent B"]')).toBeNull();
   });
 
   it("names its file on the viewer, so a scroll is credited to the right diff", () => {

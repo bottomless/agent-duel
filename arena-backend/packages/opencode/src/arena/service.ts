@@ -1958,12 +1958,18 @@ export const layer: Layer.Layer<
         turn.state === "discarding" ||
         turn.state === "discarded" ||
         turn.resolution?.kind === "stopped"
-      if ((!a?.finalCommit || !b?.finalCommit) && !stopped) {
+      // A side working again after a reply keeps its last result's commit until it finishes, so
+      // only a settled side's result counts while the battle runs.
+      const result = (run: RunDocument | undefined) =>
+        run?.finalCommit && run.runState !== "pending" ? run.finalCommit : undefined
+      const partial = turn.state === "running" && Boolean(result(a) || result(b))
+      if (!(result(a) && result(b)) && !stopped && !partial) {
         return yield* Effect.fail(new Error("Arena comparison is not finalized"))
       }
-      // A stopped battle deliberately permits partial and failed contestants. Keep its
-      // diff inspectable by representing a side without a finalized result as the
-      // frozen base revision; the public run still reports that the side has no result.
+      // A stopped battle deliberately permits partial and failed contestants, and a running one
+      // has a result to review as soon as one side finishes. Keep the diff inspectable by
+      // representing a side without a result as the frozen base revision; the public run still
+      // reports that the side has no result.
       return {
         turn,
         a,
@@ -1971,8 +1977,8 @@ export const layer: Layer.Layer<
         input: {
           canonical: chat.repository.root,
           baseCommit: turn.frozenBaseSHA,
-          aCommit: a?.finalCommit ?? turn.frozenBaseSHA,
-          bCommit: b?.finalCommit ?? turn.frozenBaseSHA,
+          aCommit: (stopped ? a?.finalCommit : result(a)) ?? turn.frozenBaseSHA,
+          bCommit: (stopped ? b?.finalCommit : result(b)) ?? turn.frozenBaseSHA,
         },
       }
     })
@@ -1986,12 +1992,12 @@ export const layer: Layer.Layer<
         a: {
           commit: input.aCommit,
           tree: listed.aTree,
-          ...(a?.finalCommit && a.permanentRef ? { ref: a.permanentRef } : {}),
+          ...(input.aCommit === a?.finalCommit && a.permanentRef ? { ref: a.permanentRef } : {}),
         },
         b: {
           commit: input.bCommit,
           tree: listed.bTree,
-          ...(b?.finalCommit && b.permanentRef ? { ref: b.permanentRef } : {}),
+          ...(input.bCommit === b?.finalCommit && b.permanentRef ? { ref: b.permanentRef } : {}),
         },
         treesEqual: listed.aTree === listed.bTree,
         files: listed.files,

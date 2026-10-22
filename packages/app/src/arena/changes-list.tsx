@@ -4,6 +4,7 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react-native";
 import { DiffStat } from "@/components/diff-stat";
 import { Button } from "@/components/ui/button";
+import type { ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import type { ArenaChangesRow } from "./changes-rows";
 import { divergenceStatusLabel } from "./divergence";
@@ -35,12 +36,15 @@ const VISIBLE_ROWS = 8;
 export const ArenaChangesList = memo(function ArenaChangesList({
   rows,
   openFiles,
+  waitingFor,
   onToggle,
   renderDiff,
 }: {
   rows: readonly ArenaChangesRow[];
   /** The rows whose diffs are open. */
   openFiles: readonly string[];
+  /** The side still working: its counts say so, and no verdict on a pair that is not in yet. */
+  waitingFor?: ArenaSide;
   /** Opens a closed row's diff or closes an open one. */
   onToggle: (file: string) => void;
   /** The diff that opens under a row. */
@@ -70,7 +74,7 @@ export const ArenaChangesList = memo(function ArenaChangesList({
         const lastItem = index === visible.length - 1 && !footer;
         return (
           <Fragment key={row.file}>
-            <ChangesRow row={row} onToggle={onToggle} open={open} />
+            <ChangesRow row={row} waitingFor={waitingFor} onToggle={onToggle} open={open} />
             {open ? (
               <View
                 style={[styles.diffBand, lastItem && styles.diffBandLast]}
@@ -108,10 +112,12 @@ function statusStyle(status: ArenaChangesRow["status"]) {
 
 function ChangesRow({
   row,
+  waitingFor,
   onToggle,
   open,
 }: {
   row: ArenaChangesRow;
+  waitingFor: ArenaSide | undefined;
   onToggle: (file: string) => void;
   open: boolean;
 }) {
@@ -142,24 +148,37 @@ function ChangesRow({
         <Text style={styles.file} numberOfLines={1}>
           {row.file}
         </Text>
-        <Text style={[styles.status, statusStyle(row.status)]}>
-          {divergenceStatusLabel(row.status)}
-        </Text>
+        {waitingFor ? null : (
+          <Text style={[styles.status, statusStyle(row.status)]}>
+            {divergenceStatusLabel(row.status)}
+          </Text>
+        )}
         <View style={styles.stats}>
-          <SideStat side="a" row={row} />
-          <SideStat side="b" row={row} />
+          <SideStat side="a" row={row} waiting={waitingFor === "a"} />
+          <SideStat side="b" row={row} waiting={waitingFor === "b"} />
         </View>
       </Pressable>
     </View>
   );
 }
 
-function SideStat({ side, row }: { side: "a" | "b"; row: ArenaChangesRow }) {
+function SideStat({
+  side,
+  row,
+  waiting,
+}: {
+  side: "a" | "b";
+  row: ArenaChangesRow;
+  /** The side is still working, so it has no counts yet. */
+  waiting: boolean;
+}) {
   const changed = row.changedBy === "both" || row.changedBy === side;
   const additions = side === "a" ? row.additionsA : row.additionsB;
   const deletions = side === "a" ? row.deletionsA : row.deletionsB;
   let stat: ReactNode;
-  if (!changed) {
+  if (waiting) {
+    stat = <Text style={styles.waiting}>working</Text>;
+  } else if (!changed) {
     stat = <Text style={styles.untouched}>unchanged</Text>;
   } else if (row.binary) {
     stat = <Text style={styles.untouched}>binary</Text>;
@@ -258,6 +277,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   untouched: {
     color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
+  },
+  waiting: {
+    color: theme.colors.foregroundExtraMuted,
     fontSize: theme.fontSize.xs,
   },
 }));
