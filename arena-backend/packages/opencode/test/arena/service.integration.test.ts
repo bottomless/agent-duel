@@ -3690,6 +3690,119 @@ describe("Arena service vertical slice", () => {
     }
   }, 90_000)
 
+  test("a background subagent result keeps the contestant's system text", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure subagent system fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const turnPrompt = "Delegate the child work, then end your response."
+    const childPrompt = "child-only work"
+    const text = (content: unknown) => (typeof content === "string" ? content : JSON.stringify(content ?? ""))
+    const isChild = (messages: ReadonlyArray<{ readonly role?: string; readonly content?: unknown }>) =>
+      messages.some((message) => message.role === "user" && text(message.content).includes(childPrompt))
+    // Each child answers once its parent has ended its response, so the result lands in a loop that
+    // waits only for it.
+    const parentEnded = new Map<string, PromiseWithResolvers<void>>()
+    const ended = (model: string) => {
+      const existing = parentEnded.get(model)
+      if (existing) return existing
+      const created = Promise.withResolvers<void>()
+      parentEnded.set(model, created)
+      return created
+    }
+    let generation = 0
+    const router = installOpenRouterStub({
+      respond: ({ model, messages }) => {
+        const key = `${model}-${++generation}`
+        const last = messages.at(-1)
+        if (isChild(messages)) {
+          return ended(model).promise.then(() => contestantResponse(model, 1, undefined, false, undefined, key))
+        }
+        if (last?.role === "user" && text(last.content).includes(turnPrompt)) {
+          const base = { id: `chatcmpl-${key}`, object: "chat.completion.chunk", model }
+          const call = { description: "Child work", prompt: childPrompt, subagent_type: "general" }
+          return chunks([
+            { ...base, choices: [{ index: 0, delta: { role: "assistant" } }] },
+            {
+              ...base,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: `call-${key}`,
+                        type: "function",
+                        function: { name: "task", arguments: JSON.stringify(call) },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+            {
+              ...base,
+              choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 },
+            },
+            "[DONE]",
+          ])
+        }
+        if (last?.role === "tool") ended(model).resolve()
+        return contestantResponse(model, 2, undefined, false, undefined, key)
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Subagent result system text",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: turnPrompt }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted subagent turn")
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote", 60_000)
+      const runs = await memory.store.runsForTurn(turnID)
+      for (const run of runs) {
+        const model = router.modelForAssignment(run.assignment.assignmentID)
+        const parent = router.contestantRequests.filter((body) => body.model === model && !isChild(body.messages ?? []))
+        // The parent answered its child's result.
+        expect(parent.some((body) => JSON.stringify(body.messages?.at(-1)).includes("Background task completed"))).toBe(
+          true,
+        )
+        // The system text heads the cached prefix: a result without it makes the provider re-read
+        // the whole conversation uncached.
+        expect(new Set(parent.map((body) => JSON.stringify(body.messages?.[0]))).size).toBe(1)
+      }
+    } finally {
+      router.restore()
+    }
+  }, 90_000)
+
   test("discards multiple queued steers without interrupting active work", async () => {
     await using directory = await tmpdir({
       git: true,
