@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { generate } from "@/arena/comparison"
+import { generate, skip } from "@/arena/comparison"
 import { setArenaCredentials } from "@/arena/credentials"
 import { Store } from "@/arena/mongo"
 import type { ComparisonDocument } from "@/arena/records"
@@ -147,30 +147,24 @@ describe("ArenaComparison", () => {
     expect(unnamed.title).toBeUndefined()
   })
 
-  test("writes no report when a side failed, and only names a first-turn chat", async () => {
+  test("records a failed side's turn without a report, and only names a first-turn chat", async () => {
     setArenaCredentials({
       mode: "hosted",
       token: "test-key",
       controlPlaneUrl: "https://control.test",
       controlTokenHash: "0".repeat(64),
     })
-    let comparison: ComparisonDocument | undefined
+    const saved: ComparisonDocument[] = []
     const arena = store({
       saveComparison: async (input: ComparisonDocument) => {
-        comparison = input
+        saved.push(input)
         return input
       },
-      updateComparison: async (_id: string, patch: Partial<ComparisonDocument>) => {
-        comparison = { ...comparison!, ...patch }
-        return comparison
-      },
-      storeArtifact: async (input: { _id: string }) => input,
     })
     const prompts: string[] = []
     const input = {
       store: arena,
       turnID: "failed-side",
-      report: false,
       userPrompt: "Fix the login form",
       baseCommit: "base",
       aCommit: "a",
@@ -178,31 +172,27 @@ describe("ArenaComparison", () => {
       baseTree: "base-tree",
       aTree: "a-tree",
       bTree: "b-tree",
-      aToB: gitPatch("a"),
-      aToBTruncated: false,
-      baseToA: gitPatch("a"),
-      baseToATruncated: false,
-      baseToB: gitPatch("b"),
-      baseToBTruncated: false,
-      transcriptA: "A edited the form",
-      transcriptB: "B failed",
-      files: [],
-      artifactIDs: [],
+      artifactIDs: ["transcript-a", "transcript-b"],
       execute: async (_url: string | URL | Request, init?: RequestInit) => {
         prompts.push(JSON.parse(String(init?.body)).messages[0].content)
         return Response.json({ choices: [{ message: { content: "Login form fix" } }] })
       },
     }
 
-    const first = await generate({ ...input, turnIndex: 0 })
+    const first = await skip({ ...input, turnIndex: 0 })
     expect(prompts).toHaveLength(1)
     expect(prompts[0]).toContain("Name the task in the user prompt")
-    expect(prompts[0]).not.toContain("A edited the form")
-    expect(first).toMatchObject({ state: "complete", title: "Login form fix" })
+    // Written once, already complete: a restart during the title request leaves nothing running.
+    expect(saved).toHaveLength(1)
+    expect(first).toMatchObject({
+      state: "complete",
+      title: "Login form fix",
+      artifactIDs: ["transcript-a", "transcript-b"],
+    })
     expect(first.output).toBeUndefined()
     expect(first.requestArtifactID).toBeUndefined()
 
-    const later = await generate({ ...input, turnIndex: 1 })
+    const later = await skip({ ...input, turnID: "failed-side-later", turnIndex: 1 })
     expect(prompts).toHaveLength(1)
     expect(later).toMatchObject({ state: "complete", latencyMs: 0 })
     expect(later.output).toBeUndefined()

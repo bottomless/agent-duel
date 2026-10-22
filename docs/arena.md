@@ -874,7 +874,9 @@ checkout does not ignore. The contestant is checked against the base, and in a c
 `node_modules` the exclude would drop a new package's files while its edits to tracked ones still
 apply. When both are in, the
 turn becomes `awaiting_vote` and the comparison starts in the background
-(`startUtility` in `arena/service.ts`), unless a side failed. A failed comparison never blocks a vote.
+(`startUtility` in `arena/service.ts`). When a side failed it writes no report and skips the Git
+evidence: the comparison is `skipped` and only the first turn's title is requested. A failed
+comparison never blocks a vote.
 
 ## Blinding
 

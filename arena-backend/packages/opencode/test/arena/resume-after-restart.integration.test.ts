@@ -17,8 +17,8 @@ afterEach(async () => {
   await resetDatabase()
 })
 
-// The shared stub does not answer the comparison route, so the comparison fails; a failed one never
-// blocks a reply or a vote. Wait for it to settle so it cannot finish under the restart.
+// A comparison never blocks a reply or a vote. Wait for it to settle so it cannot finish under the
+// restart.
 async function waitForSettledComparison(store: Store, turnID: string) {
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
@@ -267,6 +267,10 @@ describe("Arena after an engine restart", () => {
       )
       expect(toolStates.filter((status) => status === "pending" || status === "running")).toEqual([])
       expect(reopened.turn?.canDiscardBattle).toBe(true)
+      // Interrupted sides have nothing to compare yet, so no report is paid for.
+      await waitForSettledComparison(store, turnID)
+      expect((await store.turn(turnID))?.comparisonState).toBe("skipped")
+      expect(router.reportCalls()).toBe(0)
       // The battle is resumed or discarded, never voted on as it stands.
       const voted = await arenaRequest(`/arena/turns/${encodeURIComponent(turnID)}/vote`, {
         method: "POST",
@@ -295,6 +299,10 @@ describe("Arena after an engine restart", () => {
       ])
       // Each side continued its session on its own assignment.
       expect(models.map((model) => router.calls.get(model!))).toEqual([2, 2])
+      // Both sides finished after the resume, so the turn is compared again; their trees are
+      // identical, so that needs no report.
+      await waitForSettledComparison(store, turnID)
+      expect((await store.turn(turnID))?.comparisonState).toBe("complete")
     } finally {
       router.restore()
       await store.close()
@@ -319,8 +327,11 @@ describe("Arena after an engine restart", () => {
       const failedModel = router.modelForAssignment(failed.assignment.assignmentID)
       if (!failedModel) throw new Error("Failed run did not retain an opaque assignment")
       expect(router.calls.get(failedModel)).toBe(1)
-      const settledTurn = await store.turn(turnID)
-      if (settledTurn?.state === "awaiting_vote") await waitForSettledComparison(store, turnID)
+      await waitForTurn(store, turnID, "awaiting_vote")
+      await waitForSettledComparison(store, turnID)
+      // The finished side has nothing to be compared against yet, so no report is paid for.
+      expect((await store.turn(turnID))?.comparisonState).toBe("skipped")
+      expect(router.reportCalls()).toBe(0)
       const before = await recorded(store, [failed])
 
       store = await restartEngine(store, arenaDirectory.path)
@@ -337,6 +348,10 @@ describe("Arena after an engine restart", () => {
         ["b", "complete", true, undefined],
       ])
       expect(router.calls.get(failedModel)).toBe(2)
+      // Both sides finished after the retry, so the turn now gets its report.
+      await waitForSettledComparison(store, turnID)
+      expect((await store.turn(turnID))?.comparisonState).toBe("complete")
+      expect(router.reportCalls()).toBe(1)
       const previous = before.get(failed._id)!
       expect(previous.callIndexes.length).toBeGreaterThan(0)
       expect(await callIndexes(store, failed._id)).toEqual([...previous.callIndexes, previous.callIndexes.length])

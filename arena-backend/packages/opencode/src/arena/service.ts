@@ -53,7 +53,7 @@ import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { isRecord } from "@/util/record"
-import { generate as generateComparison } from "./comparison"
+import { generate as generateComparison, skip as skipComparison } from "./comparison"
 import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
 import { comparisonTimeline } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
@@ -4579,13 +4579,32 @@ export const layer: Layer.Layer<
       b: { result: Pick<FinalizedResult, "finalCommit">; transcript: string; artifactID: string },
       canonical: string,
     ) {
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      const [runA, runB] = (["a", "b"] as const).map((side) => runs.find((run) => run._id === turn.runIDs[side]))
       // A failed side leaves nothing to weigh the other side against, so only a battle both sides
       // finished pays for a report. The first turn still asks for the chat's name.
-      const runs = yield* promise(() => store.runsForTurn(turn._id))
-      const report = (["a", "b"] as const).every(
-        (side) => runs.find((run) => run._id === turn.runIDs[side])?.runState === "complete",
-      )
-      yield* promise(() => store.updateTurn(turn._id, { comparisonState: report ? "running" : "skipped" }))
+      if (runA?.runState !== "complete" || runB?.runState !== "complete") {
+        yield* promise(() => store.updateTurn(turn._id, { comparisonState: "skipped" }))
+        const skipped = yield* promise(() =>
+          skipComparison({
+            store,
+            turnID: turn._id,
+            turnIndex: turn.turnIndex,
+            userPrompt: turn.userPrompt,
+            userAttachments: ArenaAttachments.describeForJudge(turn.userAttachments),
+            baseCommit: turn.frozenBaseSHA,
+            aCommit: a.result.finalCommit,
+            bCommit: b.result.finalCommit,
+            baseTree: turn.baseSnapshot?.tree ?? turn.frozenBaseSHA,
+            aTree: runA?.finalTree ?? a.result.finalCommit,
+            bTree: runB?.finalTree ?? b.result.finalCommit,
+            artifactIDs: [a.artifactID, b.artifactID],
+          }),
+        )
+        yield* promise(() => store.updateTurn(turn._id, { comparisonState: "skipped", comparisonID: skipped._id }))
+        return
+      }
+      yield* promise(() => store.updateTurn(turn._id, { comparisonState: "running" }))
       const evidence = yield* withGit(
         compare({
           canonical,
@@ -4621,7 +4640,6 @@ export const layer: Layer.Layer<
           store,
           turnID: turn._id,
           turnIndex: turn.turnIndex,
-          report,
           userPrompt: turn.userPrompt,
           userAttachments: ArenaAttachments.describeForJudge(turn.userAttachments),
           baseCommit: turn.frozenBaseSHA,
@@ -4644,7 +4662,7 @@ export const layer: Layer.Layer<
       )
       yield* promise(() =>
         store.updateTurn(turn._id, {
-          comparisonState: !report ? "skipped" : comparison.state === "complete" ? "complete" : "failed",
+          comparisonState: comparison.state === "complete" ? "complete" : "failed",
           comparisonID: comparison._id,
         }),
       )

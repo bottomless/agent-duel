@@ -515,14 +515,6 @@ function installOpenRouterStub(options?: {
         readonly content?: string | Array<{ readonly text?: string }>
       }>
     }
-    if (body.model === "minimax/minimax-m2.7") {
-      utilityCalls++
-      return Response.json({
-        provider: "groq",
-        choices: [{ message: { content: "The two retained Git results and transcripts were compared." } }],
-        usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
-      })
-    }
     const headers = new Headers(init?.headers)
     if (headers.has("x-arena-assignment")) throw new Error("Contestant request carried a legacy routing token")
     const assignmentID = headers.get("x-arena-assignment-id")
