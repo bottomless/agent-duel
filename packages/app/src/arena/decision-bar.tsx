@@ -2,7 +2,11 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { Text, View, type LayoutChangeEvent, type GestureResponderEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet } from "react-native-unistyles";
-import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import type {
+  ArenaSide,
+  ArenaSnapshot,
+  ArenaVoteTarget,
+} from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { ArenaTransitionStatus } from "./transition-status";
 import { arenaSetupStatus } from "./transition-progress";
@@ -132,18 +136,20 @@ export function ArenaRunningPillButton({
 
 export function VoteDecision({
   actions,
+  target,
   disabled,
 }: {
   actions: ArenaBattleActions;
+  target: ArenaVoteTarget;
   disabled?: boolean;
 }) {
   const { pending, pendingAction } = actions;
   const tie = useCallback(
     async (event: GestureResponderEvent) => {
-      const source = await voteClickSource(event);
-      void actions.tie(source);
+      const evidence = await voteClickSource(event, target);
+      void actions.tie(evidence);
     },
-    [actions],
+    [actions, target],
   );
   return (
     <Button

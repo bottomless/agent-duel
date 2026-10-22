@@ -15,9 +15,12 @@ const preload = path.join(desktopDir, "dist/preload.js");
 const html = `<button id="vote">Vote</button><div role="button" tabindex="0" id="keyboard">Keyboard vote</div>
 <script>
 window.results = [];
+const target = { kind: 'battle', agentId: 'test-agent', targetId: 'test-turn', vote: 'a' };
 async function record(event, input) {
-  const source = await window.paseoDesktop.voteInput.source(input);
-  const replay = await window.paseoDesktop.voteInput.source(input);
+  const evidence = await window.paseoDesktop.voteInput.source({ target, input });
+  const source = evidence.source;
+  const replayEvidence = await window.paseoDesktop.voteInput.source({ target, input });
+  const replay = replayEvidence.source;
   window.results.push({ source, replay, trusted: event.isTrusted });
 }
 document.getElementById('vote').onclick = event => record(event, { kind: 'pointer', screenX: event.screenX, screenY: event.screenY });
@@ -41,7 +44,8 @@ let electron;
 try {
   electron = await _electron.launch({ executablePath: require("electron"), args: [fixture] });
   const page = await electron.firstWindow();
-  const expected = process.platform === "darwin" ? "unverified" : "unknown";
+  const expected =
+    process.platform === "darwin" || process.platform === "win32" ? "unverified" : "unknown";
   await page.getByRole("button", { name: "Vote", exact: true }).click();
   await page.waitForFunction(() => window.results.length === 1);
   assert.deepEqual(await page.evaluate(() => window.results[0]), {
@@ -58,16 +62,17 @@ try {
   });
   const spoofed = await page.evaluate(() =>
     window.paseoDesktop.voteInput.source({
-      kind: "pointer",
-      screenX: 0,
-      screenY: 0,
-      source: "native",
+      target: { kind: "battle", agentId: "test-agent", targetId: "test-turn", vote: "a" },
+      input: { kind: "pointer", screenX: 0, screenY: 0, source: "native" },
     }),
   );
-  assert.equal(spoofed, expected);
+  assert.equal(spoofed.source, expected);
   const invalidRejected = await page.evaluate(async () => {
     try {
-      await window.paseoDesktop.voteInput.source({ kind: "keyboard", key: "a" });
+      await window.paseoDesktop.voteInput.source({
+        target: { kind: "battle", agentId: "test-agent", targetId: "test-turn", vote: "a" },
+        input: { kind: "keyboard", key: "a" },
+      });
       return false;
     } catch {
       return true;

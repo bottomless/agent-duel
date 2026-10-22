@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Text, View, type LayoutChangeEvent, type GestureResponderEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
@@ -31,15 +31,27 @@ function BattlePaneDecision({
   const { pending, pendingAction } = actions;
   const handleChoose = useCallback(
     async (event: GestureResponderEvent) => {
-      const source = await voteClickSource(event);
-      void actions.choose(side, source);
+      if (!actions.turnId) return;
+      const evidence = await voteClickSource(event, {
+        kind: "battle",
+        agentId: actions.agentId,
+        targetId: actions.turnId,
+        vote: side,
+      });
+      void actions.choose(side, evidence);
     },
     [actions, side],
   );
   const handlePickEarly = useCallback(
     async (event: GestureResponderEvent) => {
-      const source = await voteClickSource(event);
-      void actions.pickEarly(side, source);
+      if (!actions.turnId) return;
+      const evidence = await voteClickSource(event, {
+        kind: "battle",
+        agentId: actions.agentId,
+        targetId: actions.turnId,
+        vote: side,
+      });
+      void actions.pickEarly(side, evidence);
     },
     [actions, side],
   );
@@ -157,6 +169,15 @@ export function ArenaDecisionPill({
   const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
   const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
   const hint = decisionHint(phase);
+  const tieTarget = useMemo(
+    () => ({
+      kind: "battle" as const,
+      agentId,
+      targetId: snapshot.turn?.id ?? "",
+      vote: "tie" as const,
+    }),
+    [agentId, snapshot.turn?.id],
+  );
   const visible = isArenaBattleOnScreen(snapshot) && showChoices;
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
@@ -196,7 +217,7 @@ export function ArenaDecisionPill({
           <>
             <BattlePaneDecision side="a" phase={phase} actions={actions} />
             {phase.kind === "awaiting_vote" && !phase.canDiscard ? (
-              <VoteDecision actions={actions} disabled={!phase.canTie} />
+              <VoteDecision actions={actions} target={tieTarget} disabled={!phase.canTie} />
             ) : null}
             {stopped || bothFailed ? <DiscardDecision actions={actions} /> : null}
             <BattlePaneDecision side="b" phase={phase} actions={actions} />

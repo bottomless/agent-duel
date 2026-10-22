@@ -16,6 +16,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 constexpr size_t kMaxEvents = 32;
+constexpr size_t kMaxEventIdentities = 64;
 constexpr auto kEventLifetime = std::chrono::seconds(2);
 constexpr double kPointerTolerance = 2.0;
 
@@ -33,13 +34,23 @@ struct NativeEvent {
   Clock::time_point receivedAt;
 };
 
+struct NativeEventIdentity {
+  const void* cgEvent = nullptr;
+  NSTimeInterval timestamp = 0;
+  Clock::time_point receivedAt;
+};
+
 std::mutex eventMutex;
 std::deque<NativeEvent> events;
+std::deque<NativeEventIdentity> recentIdentities;
 id localMonitor = nil;
 
 void pruneExpired(Clock::time_point now) {
   while (!events.empty() && now - events.front().receivedAt > kEventLifetime) {
     events.pop_front();
+  }
+  while (!recentIdentities.empty() && now - recentIdentities.front().receivedAt > kEventLifetime) {
+    recentIdentities.pop_front();
   }
 }
 
@@ -64,6 +75,18 @@ void recordEvent(NSEvent* event) {
   }
   std::lock_guard<std::mutex> lock(eventMutex);
   pruneExpired(record.receivedAt);
+
+  // AppKit can deliver the same OS activation to a local monitor twice. Keep
+  // its identity separately from the consumable queue so consuming the first
+  // delivery cannot make the duplicate look like a second activation.
+  if (cgEvent) {
+    const void* identity = reinterpret_cast<const void*>(cgEvent);
+    for (const NativeEventIdentity& recent : recentIdentities) {
+      if (recent.cgEvent == identity && recent.timestamp == event.timestamp) return;
+    }
+    if (recentIdentities.size() == kMaxEventIdentities) recentIdentities.pop_front();
+    recentIdentities.push_back({identity, event.timestamp, record.receivedAt});
+  }
   if (events.size() == kMaxEvents) events.pop_front();
   events.push_back(record);
 }
@@ -75,6 +98,7 @@ void cleanup(void*) {
     monitor = localMonitor;
     localMonitor = nil;
     events.clear();
+    recentIdentities.clear();
   }
   if (monitor) [NSEvent removeMonitor:monitor];
 }

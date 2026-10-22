@@ -13,6 +13,7 @@ import type {
   ArenaReplyTarget,
   ArenaSnapshot,
   ArenaVote,
+  ArenaVoteReceipt,
   ArenaVoteSource,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import { useArenaStream } from "./use-arena-stream";
@@ -201,6 +202,7 @@ export type ArenaTurnAction =
       ratingId: string;
       vote: "up" | "down";
       voteSource: ArenaVoteSource;
+      voteReceipt?: ArenaVoteReceipt;
     }
   | {
       kind: "reply";
@@ -213,7 +215,13 @@ export type ArenaTurnAction =
   | { kind: "discard_steer"; runId: string; messageIds: string[] }
   | { kind: "retry_run"; runId: string }
   | { kind: "resume_battle"; turnId: string }
-  | { kind: "vote"; turnId: string; vote: ArenaVote; voteSource: ArenaVoteSource }
+  | {
+      kind: "vote";
+      turnId: string;
+      vote: ArenaVote;
+      voteSource: ArenaVoteSource;
+      voteReceipt?: ArenaVoteReceipt;
+    }
   | { kind: "stop"; turnId: string }
   | {
       kind: "resolve_stop";
@@ -287,7 +295,13 @@ export function useArenaTurnMutation(serverId: string, agentId: string) {
 async function runArenaTurnAction(client: DaemonClient, agentId: string, action: ArenaTurnAction) {
   switch (action.kind) {
     case "single_agent_vote":
-      return client.arenaSingleAgentVote(agentId, action.ratingId, action.vote, action.voteSource);
+      return client.arenaSingleAgentVote(
+        agentId,
+        action.ratingId,
+        action.vote,
+        action.voteSource,
+        action.voteReceipt,
+      );
     case "reply":
       return client.arenaReply(
         agentId,
@@ -305,7 +319,13 @@ async function runArenaTurnAction(client: DaemonClient, agentId: string, action:
     case "resume_battle":
       return client.arenaResumeBattle(agentId, action.turnId);
     case "vote":
-      return client.arenaVote(agentId, action.turnId, action.vote, action.voteSource);
+      return client.arenaVote(
+        agentId,
+        action.turnId,
+        action.vote,
+        action.voteSource,
+        action.voteReceipt,
+      );
     case "stop":
       return client.arenaStop(agentId, action.turnId);
     case "resolve_stop":

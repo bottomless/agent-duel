@@ -252,6 +252,37 @@ describe("Arena RPC schemas", () => {
     }
   });
 
+  it("retains bounded vote receipts on both vote endpoints", () => {
+    const voteReceipt = { payload: "signed-vote", signature: "signature" };
+    const battle = {
+      type: "arena.turn.vote.request",
+      requestId: "battle-proof",
+      agentId: "agent-1",
+      turnId: "turn-1",
+      vote: "a",
+      voteSource: "native",
+      voteReceipt,
+    };
+    expect(ArenaTurnVoteRequestSchema.parse(battle).voteReceipt).toEqual(voteReceipt);
+    expect(
+      ArenaSingleAgentVoteRequestSchema.parse({
+        type: "arena.single_agent.vote.request",
+        requestId: "rating-proof",
+        agentId: "agent-1",
+        ratingId: "rating-1",
+        vote: "up",
+        voteSource: "injected",
+        voteReceipt,
+      }).voteReceipt,
+    ).toEqual(voteReceipt);
+    expect(
+      ArenaTurnVoteRequestSchema.safeParse({
+        ...battle,
+        voteReceipt: { ...voteReceipt, payload: "x".repeat(8193) },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts canonical pointer and keyboard vote inputs", () => {
     expect(ArenaVoteInputSchema.parse({ kind: "pointer", screenX: 12.5, screenY: 48 })).toEqual({
       kind: "pointer",

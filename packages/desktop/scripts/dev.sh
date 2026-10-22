@@ -121,25 +121,10 @@ else
   control_plane_label="$PASEO_CONTROL_PLANE_URL"
 fi
 
-daemon_endpoint="$(resolve_dev_daemon_endpoint)"
-if [ "$reuse_daemon" != "1" ]; then
-  PASEO_DESKTOP_MANAGED=1 \
-    node "$ROOT_DIR/packages/cli/dist/index.js" daemon start \
-      --listen "$PASEO_LISTEN" \
-      --home "$PASEO_HOME" \
-      --no-relay \
-      --no-web-ui
-  export PASEO_DEV_OWNS_DAEMON=1
-fi
-
-daemon_deadline=$((SECONDS + 60))
-until node "$SCRIPT_DIR/dev-daemon-state.mjs" verify "$PASEO_LISTEN" "$expected_server_id"; do
-  if [ "$SECONDS" -ge "$daemon_deadline" ]; then
-    echo "Desktop dev daemon ${expected_server_id} did not become ready at ${daemon_endpoint}" >&2
-    exit 1
-  fi
-  sleep 0.25
-done
+# The runner creates an in-memory vote issuer before starting the daemon, then
+# hands the private half only to Electron over an inherited pipe.
+export PASEO_DEV_START_DAEMON="$((1 - reuse_daemon))"
+export PASEO_DEV_EXPECTED_SERVER_ID="$expected_server_id"
 
 if [ -z "${EXPO_PORT:-}" ]; then
   EXPO_PORT=$(NO_COLOR=1 FORCE_COLOR=0 "$ROOT_DIR/node_modules/.bin/get-port" 8082 8083 8084 8085 8086 8087 8088 8089)

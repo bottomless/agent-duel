@@ -33,28 +33,40 @@ export function SingleAgentRatingDialog({
   const { mutate } = rating;
   const voteUp = useCallback(
     async (event: GestureResponderEvent) => {
-      const voteSource = await voteClickSource(event);
+      const evidence = await voteClickSource(event, {
+        kind: "single_agent",
+        agentId,
+        targetId: ratingId,
+        vote: "up",
+      });
       mutate({
         kind: "single_agent_vote",
         ratingId,
         vote: "up",
-        voteSource,
+        voteSource: evidence.source,
+        voteReceipt: evidence.receipt,
       });
     },
-    [mutate, ratingId],
+    [agentId, mutate, ratingId],
   );
 
   const voteDown = useCallback(
     async (event: GestureResponderEvent) => {
-      const voteSource = await voteClickSource(event);
+      const evidence = await voteClickSource(event, {
+        kind: "single_agent",
+        agentId,
+        targetId: ratingId,
+        vote: "down",
+      });
       mutate({
         kind: "single_agent_vote",
         ratingId,
         vote: "down",
-        voteSource,
+        voteSource: evidence.source,
+        voteReceipt: evidence.receipt,
       });
     },
-    [mutate, ratingId],
+    [agentId, mutate, ratingId],
   );
 
   return (

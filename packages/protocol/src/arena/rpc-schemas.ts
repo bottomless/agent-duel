@@ -19,6 +19,36 @@ export const ArenaVoteInputSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ kind: z.literal("keyboard"), key: z.enum(["Enter", " ", "Spacebar"]) }),
 ]);
+export const ArenaVoteTargetSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("battle"),
+    agentId: z.string().min(1),
+    targetId: z.string().min(1),
+    vote: ArenaVoteSchema,
+  }),
+  z.object({
+    kind: z.literal("single_agent"),
+    agentId: z.string().min(1),
+    targetId: z.string().min(1),
+    vote: z.enum(["up", "down"]),
+  }),
+]);
+export const ArenaVoteReceiptSchema = z.object({
+  payload: z.string().min(1).max(8192),
+  signature: z.string().min(1).max(128),
+});
+export const ArenaVoteEvidenceSchema = z.object({
+  source: ArenaVoteSourceSchema,
+  receipt: ArenaVoteReceiptSchema.optional(),
+});
+export const ArenaVoteInputRequestSchema = z.object({
+  target: ArenaVoteTargetSchema,
+  input: ArenaVoteInputSchema,
+});
+export type ArenaVoteTarget = z.infer<typeof ArenaVoteTargetSchema>;
+export type ArenaVoteReceipt = z.infer<typeof ArenaVoteReceiptSchema>;
+export type ArenaVoteEvidence = z.infer<typeof ArenaVoteEvidenceSchema>;
+export type ArenaVoteInputRequest = z.infer<typeof ArenaVoteInputRequestSchema>;
 export const ArenaBattleStateSchema = z.enum([
   "creating",
   "worktrees_ready",
@@ -634,6 +664,7 @@ export const ArenaSingleAgentVoteRequestSchema = z.object({
   ratingId: z.string().optional(),
   vote: z.enum(["up", "down"]),
   voteSource: ArenaVoteSourceSchema.default("api"),
+  voteReceipt: ArenaVoteReceiptSchema.optional(),
 });
 export const ArenaSingleAgentVoteResponseSchema = z.object({
   type: z.literal("arena.single_agent.vote.response"),
@@ -837,6 +868,7 @@ export const ArenaTurnVoteRequestSchema = z.object({
   turnId: z.string(),
   vote: ArenaVoteSchema,
   voteSource: ArenaVoteSourceSchema.default("api"),
+  voteReceipt: ArenaVoteReceiptSchema.optional(),
 });
 export const ArenaTurnVoteResponseSchema = z.object({
   type: z.literal("arena.turn.vote.response"),

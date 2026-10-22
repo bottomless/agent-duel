@@ -205,6 +205,7 @@ import { SESSION_HEADER } from "@getpaseo/protocol/accounts/schemas";
 import { createWebUiMiddleware } from "./web-ui.js";
 import { resolveArenaAccessConfig } from "./accounts/config.js";
 import { createArenaByokService } from "./accounts/byok.js";
+import { createVoteEvidenceVerifier } from "./arena/vote-evidence.js";
 import { createAccountsService, type AccountsService } from "./accounts/service.js";
 import { createAccountsRouter } from "./accounts/routes.js";
 import { createRequireSessionMiddleware } from "./accounts/middleware.js";
@@ -730,6 +731,9 @@ export async function createPaseoDaemon(
   // a signed-out client can reach sign-in and nothing else. The browser-facing
   // sign-in callbacks bypass the daemon password (see BEARER_AUTH_BYPASS_PATHS)
   // because a redirect cannot carry an Authorization header.
+  const arenaVoteEvidence = createVoteEvidenceVerifier({
+    publicKey: process.env.PASEO_VOTE_PUBLIC_KEY,
+  });
   const arenaAccess = resolveArenaAccessConfig(process.env);
   const accountsConfig = arenaAccess.kind === "accounts" ? arenaAccess.accounts : null;
   const arenaByok =
@@ -1440,6 +1444,7 @@ export async function createPaseoDaemon(
                 relayConfig: dependencies.serverFeatureOverrides?.relayConfig,
                 accounts,
                 arenaByok,
+                arenaVoteEvidence,
               },
               workspaceAutoName,
               config.auth,

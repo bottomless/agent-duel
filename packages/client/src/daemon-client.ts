@@ -17,6 +17,7 @@ import type {
   ArenaReplyTarget,
   ArenaSingleAgentVote,
   ArenaVoteSource,
+  ArenaVoteReceipt,
   ArenaReviewEvent,
   ArenaReviewIngestResult,
   ArenaSnapshot,
@@ -2089,10 +2090,18 @@ export class DaemonClient {
     ratingId: string,
     vote: ArenaSingleAgentVote,
     voteSource: ArenaVoteSource = "api",
+    voteReceipt?: ArenaVoteReceipt,
   ): Promise<ArenaSnapshot> {
     const payload =
       await this.sendNamespacedCorrelatedSessionRequest<"arena.single_agent.vote.response">({
-        message: { type: "arena.single_agent.vote.request", agentId, ratingId, vote, voteSource },
+        message: {
+          type: "arena.single_agent.vote.request",
+          agentId,
+          ratingId,
+          vote,
+          voteSource,
+          ...(voteReceipt ? { voteReceipt } : {}),
+        },
       });
     return payload.snapshot;
   }
@@ -2203,9 +2212,17 @@ export class DaemonClient {
     turnId: string,
     vote: ArenaVote,
     voteSource: ArenaVoteSource = "api",
+    voteReceipt?: ArenaVoteReceipt,
   ): Promise<ArenaSnapshot> {
     const payload = await this.sendNamespacedCorrelatedSessionRequest<"arena.turn.vote.response">({
-      message: { type: "arena.turn.vote.request", agentId, turnId, vote, voteSource },
+      message: {
+        type: "arena.turn.vote.request",
+        agentId,
+        turnId,
+        vote,
+        voteSource,
+        ...(voteReceipt ? { voteReceipt } : {}),
+      },
       timeout: 120_000,
     });
     return payload.snapshot;

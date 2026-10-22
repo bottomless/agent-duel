@@ -3,16 +3,22 @@ import { page, userEvent } from "vitest/browser";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Pressable, Text, type GestureResponderEvent } from "react-native";
-import type { ArenaVoteSource } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaVoteEvidence, ArenaVoteTarget } from "@getpaseo/protocol/arena/rpc-schemas";
 import { voteClickSource } from "./vote-source";
 
 let root: Root | undefined;
 let host: HTMLDivElement | undefined;
-const sources: ArenaVoteSource[] = [];
+const sources: ArenaVoteEvidence[] = [];
+const target: ArenaVoteTarget = {
+  kind: "battle",
+  agentId: "agent-1",
+  targetId: "turn-1",
+  vote: "a",
+};
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 async function recordSource(event: GestureResponderEvent) {
-  sources.push(await voteClickSource(event));
+  sources.push(await voteClickSource(event, target));
 }
 
 afterEach(async () => {
@@ -33,14 +39,25 @@ it("keeps browser automation unverified and identifies scripted votes", async ()
   });
   const vote = page.getByRole("button", { name: "Vote" });
   await vote.click();
-  expect(sources).toEqual(["unverified"]);
+  expect(sources).toEqual([{ source: "unverified" }]);
 
   await userEvent.keyboard("{Enter}");
-  expect(sources).toEqual(["unverified", "unverified"]);
+  expect(sources).toEqual([{ source: "unverified" }, { source: "unverified" }]);
 
   await userEvent.keyboard(" ");
-  expect(sources).toEqual(["unverified", "unverified", "unverified"]);
+  expect(sources).toEqual([
+    { source: "unverified" },
+    { source: "unverified" },
+    { source: "unverified" },
+  ]);
 
   vote.element().dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  await expect.poll(() => sources).toEqual(["unverified", "unverified", "unverified", "synthetic"]);
+  await expect
+    .poll(() => sources)
+    .toEqual([
+      { source: "unverified" },
+      { source: "unverified" },
+      { source: "unverified" },
+      { source: "synthetic" },
+    ]);
 });
