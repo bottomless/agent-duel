@@ -350,6 +350,8 @@ export const ArenaRunSchema = z
     lastEventAt: z.string().optional(),
     completedAt: z.string().optional(),
     durationMs: z.number().nullable(),
+    // Time worked before the current request; see the engine's `RunDocument`.
+    priorDurationMs: z.number().optional(),
     promptMessageID: z.string().optional(),
     diff: z
       .object({

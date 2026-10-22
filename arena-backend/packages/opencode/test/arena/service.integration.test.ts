@@ -503,10 +503,10 @@ function installOpenRouterStub(options?: {
         readonly content?: string | Array<{ readonly text?: string }>
       }>
     }
-    if (body.model === "minimax/minimax-m2.7") {
+    if (body.model === "qwen/qwen3.8-27b") {
       utilityCalls++
       return Response.json({
-        provider: "groq",
+        provider: "Cerebras",
         choices: [{ message: { content: "The two retained Git results and transcripts were compared." } }],
         usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
       })
@@ -5438,6 +5438,81 @@ describe("Arena service vertical slice", () => {
       expect(discarded.turn?.state).toBe("discarded")
       expect(discarded.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
       expect(discarded.turn?.comparisonState).toBe("skipped")
+    } finally {
+      router.restore()
+    }
+  }, 30_000)
+
+  test("diffs the finished side against the base while the other side is still working", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure partial diff fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Partial Arena diff",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Create results to review one at a time." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted partial diff turn")
+      const finished = await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const runs = memory.runs.values.filter((item) => item.turnID === turnID)
+      const a = runs.find((run) => run.side === "a")
+      const b = runs.find((run) => run.side === "b")
+      if (!a?.finalCommit || !a.permanentRef || !b?.finalCommit) {
+        throw new Error("Arena did not finalize both results before the diff fixture mutation")
+      }
+      // Wind the turn back to one finished side: B is working again after a reply, which keeps
+      // its last result's commit on the run.
+      const turn = memory.turns.values.find((item) => item._id === turnID) as Mutable
+      turn.state = "running"
+      ;(b as Mutable).runState = "pending"
+
+      type Diff = {
+        baseCommit: string
+        a: { commit: string; ref?: string }
+        b: { commit: string; ref?: string }
+        divergence?: { conflicted: boolean; files: { file: string; status: string }[] }
+      }
+      const partial = await json<Diff>(await request(`/arena/turns/${turnID}/diff`, { headers }))
+      expect(partial).toMatchObject({
+        baseCommit: finished.frozenBaseSHA,
+        a: { commit: a.finalCommit, ref: a.permanentRef },
+        b: { commit: finished.frozenBaseSHA },
+      })
+      expect(partial.b.ref).toBeUndefined()
+      expect(partial.divergence?.conflicted).toBe(false)
+      expect(partial.divergence?.files.length).toBeGreaterThan(0)
+      expect(partial.divergence?.files.every((file) => file.status === "only_a")).toBe(true)
+
+      ;(a as Mutable).runState = "pending"
+      const neither = await request(`/arena/turns/${turnID}/diff`, { headers })
+      expect(neither.ok).toBe(false)
     } finally {
       router.restore()
     }

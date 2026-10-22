@@ -47,6 +47,23 @@ async function rawEventCount(store: Store, runID: string) {
   return (await store.rawEvents.find({ runID }).toArray()).length
 }
 
+// The time one request of the run took, from the start and end the run record holds for it.
+function requestMs(run: RunDocument) {
+  if (!run.startedAt || !run.completedAt) throw new Error(`Arena run ${run._id} has no settled request`)
+  return run.completedAt.getTime() - run.startedAt.getTime()
+}
+
+// The metrics row is written in the background after the vote.
+async function waitForBattleMetrics(store: Store, turnID: string) {
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline) {
+    const row = await store.battleMetrics.findOne({ _id: turnID })
+    if (row) return row
+    await Bun.sleep(10)
+  }
+  throw new Error("Arena battle metrics were not recorded")
+}
+
 async function recorded(store: Store, runs: readonly RunDocument[]) {
   return new Map(
     await Promise.all(
@@ -119,7 +136,8 @@ describe("Arena after an engine restart", () => {
       const turnID = await startBattle(headers, "Restarted Arena reply", "Create two results, then wait for feedback.")
       await waitForTurn(store, turnID, "awaiting_vote")
       await waitForSettledComparison(store, turnID)
-      const before = await recorded(store, await store.runsForTurn(turnID))
+      const firstRuns = await store.runsForTurn(turnID)
+      const before = await recorded(store, firstRuns)
       const requestBoundary = router.contestantRequests.length
 
       store = await restartEngine(store, arenaDirectory.path)
@@ -147,6 +165,10 @@ describe("Arena after an engine restart", () => {
         expect(await callIndexes(store, run._id)).toEqual([...previous.callIndexes, previous.callIndexes.length])
         // The recorder took the resumed session's events.
         expect(await rawEventCount(store, run._id)).toBeGreaterThan(previous.rawEvents)
+        // The run's time is both requests, not only the follow-up's.
+        const first = firstRuns.find((candidate) => candidate._id === run._id)!
+        expect(run.priorDurationMs).toBe(requestMs(first))
+        expect(run.durationMs).toBe(requestMs(first) + requestMs(run))
       }
 
       await waitForSettledComparison(store, turnID)
@@ -158,6 +180,8 @@ describe("Arena after an engine restart", () => {
         }),
       )
       await waitForTurn(store, turnID, "complete")
+      const metrics = await waitForBattleMetrics(store, turnID)
+      for (const run of continued) expect(metrics.sides[run.side]?.durationMs).toBe(run.durationMs!)
     } finally {
       router.restore()
       await store.close()
@@ -261,6 +285,10 @@ describe("Arena after an engine restart", () => {
       expect(previous.callIndexes.length).toBeGreaterThan(0)
       expect(await callIndexes(store, failed._id)).toEqual([...previous.callIndexes, previous.callIndexes.length])
       expect(await rawEventCount(store, failed._id)).toBeGreaterThan(previous.rawEvents)
+      // The failed attempt counts toward the run's time, as the retry that follows it does.
+      const recovered = continued.find((run) => run._id === failed._id)!
+      expect(recovered.priorDurationMs).toBe(requestMs(failed))
+      expect(recovered.durationMs).toBe(requestMs(failed) + requestMs(recovered))
     } finally {
       router.restore()
       await store.close()

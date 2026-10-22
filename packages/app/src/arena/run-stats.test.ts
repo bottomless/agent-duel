@@ -51,6 +51,23 @@ describe("arenaRunElapsedMs", () => {
     expect(arenaRunElapsedMs(run({ startedAt: STARTED_AT }), NOW)).toBe(300_000);
   });
 
+  it("adds the time worked before a follow-up or a retry", () => {
+    expect(arenaRunElapsedMs(run({ startedAt: STARTED_AT, priorDurationMs: 60_000 }), NOW)).toBe(
+      360_000,
+    );
+    expect(
+      arenaRunElapsedMs(
+        run({
+          runState: "error",
+          startedAt: STARTED_AT,
+          completedAt: "2026-09-03T10:02:30.000Z",
+          priorDurationMs: 60_000,
+        }),
+        NOW,
+      ),
+    ).toBe(210_000);
+  });
+
   it("reports nothing before a run starts or for a settled run with no timing", () => {
     expect(arenaRunElapsedMs(run(), NOW)).toBeNull();
     expect(arenaRunElapsedMs(run({ runState: "error", startedAt: STARTED_AT }), NOW)).toBeNull();

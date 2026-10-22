@@ -107,6 +107,41 @@ const newlyIgnoredBattle = Effect.gen(function* () {
   return { canonical, candidate, base }
 })
 
+/** A repository with one commit of `files`, created inside `parent` at `name` and not added to it. */
+const embeddedRepository = (parent: string, name: string, files: Record<string, string>) =>
+  Effect.promise(async () => {
+    const directory = `${parent}/${name}`
+    await fs.mkdir(directory)
+    await $`git init -q`.cwd(directory).quiet()
+    for (const [file, content] of Object.entries(files)) await fs.writeFile(`${directory}/${file}`, content, "utf8")
+    await $`git add -A && git commit -q -m ${name}`.cwd(directory).quiet()
+    return directory
+  })
+
+/** A battle whose checkout holds the untracked embedded repository `nested`, set up in a contestant. */
+const embeddedRepositoryBattle = Effect.gen(function* () {
+  const canonical = yield* scopedTmpdir({ git: true })
+  const candidate = yield* scopedTmpdir()
+  const nested = yield* embeddedRepository(canonical.path, "nested", { "nested.txt": "nested\n" })
+  const base = yield* snapshotBase({ canonical: canonical.path })
+  expect(base.clean).toBe(false)
+  yield* Effect.promise(() =>
+    $`git worktree add --detach ${candidate.path} ${base.frozenHead}`.cwd(canonical.path).quiet(),
+  )
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(() => $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow()).pipe(
+      Effect.ignore,
+    ),
+  )
+  yield* prepareContestantState({
+    worktree: candidate.path,
+    frozenHead: base.frozenHead,
+    indexTree: base.indexTree,
+    workingTree: base.baseTree,
+  })
+  return { canonical, candidate, base, nested }
+})
+
 const expectNewlyIgnoredFilesKept = (root: string) =>
   Effect.promise(async () => {
     expect(await fs.readFile(`${root}/.DS_Store`)).toEqual(finderMetadata)
@@ -1857,30 +1892,124 @@ describe("ArenaGit", () => {
     }),
   )
 
-  it.live("excludes untracked embedded repositories from dirty snapshots", () =>
+  it.live("snapshots an untracked embedded repository's files as plain files, without its .git", () =>
     Effect.gen(function* () {
       const canonical = yield* scopedTmpdir({ git: true })
-      const nested = `${canonical.path}/nested`
-      yield* Effect.promise(() => fs.mkdir(nested))
-      yield* Effect.promise(() => $`git init`.cwd(nested).quiet())
-      yield* Effect.promise(() => fs.writeFile(`${nested}/nested.txt`, "nested\n", "utf8"))
-      yield* Effect.promise(() => $`git add nested.txt`.cwd(nested).quiet())
-      yield* Effect.promise(() => $`git commit -m nested`.cwd(nested).quiet())
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/.gitignore`, "*.tmp\n", "utf8"))
+      yield* Effect.promise(() => $`git add .gitignore && git commit -m ignore`.cwd(canonical.path).quiet())
+      const nested = yield* embeddedRepository(canonical.path, "nested", { "nested.txt": "nested\n" })
+      yield* Effect.promise(async () => {
+        await fs.writeFile(`${nested}/.gitignore`, "build/\n", "utf8")
+        await fs.writeFile(`${nested}/untracked.txt`, "untracked\n", "utf8")
+        await fs.mkdir(`${nested}/build`)
+        await fs.writeFile(`${nested}/build/out.js`, "built\n", "utf8")
+        await fs.writeFile(`${nested}/scratch.tmp`, "scratch\n", "utf8")
+        await fs.symlink("nested.txt", `${nested}/link.txt`)
+      })
+      yield* embeddedRepository(nested, "inner", { "inner.txt": "inner\n" })
+      // `git add -A` refuses a repository without a commit, which used to fail the whole snapshot.
+      yield* Effect.promise(async () => {
+        await fs.mkdir(`${canonical.path}/fresh`)
+        await $`git init -q`.cwd(`${canonical.path}/fresh`).quiet()
+        await fs.writeFile(`${canonical.path}/fresh/main.rs`, "fn main() {}\n", "utf8")
+      })
       yield* Effect.promise(() => fs.writeFile(`${canonical.path}/normal.txt`, "normal\n", "utf8"))
 
       const base = yield* snapshotBase({
         canonical: canonical.path,
         permanentRef: "refs/battles/turn-6/base",
       })
-      const nestedEntry = yield* Effect.promise(() =>
-        $`git cat-file -e ${base.baseCommit}:nested`.cwd(canonical.path).quiet().nothrow(),
+      const listed = yield* Effect.promise(() =>
+        $`git ls-tree -r --full-tree ${base.baseCommit}`.cwd(canonical.path).quiet().text(),
       )
-      const normalEntry = yield* Effect.promise(() =>
-        $`git cat-file -e ${base.baseCommit}:normal.txt`.cwd(canonical.path).quiet().nothrow(),
+      const entries = Object.fromEntries(
+        listed
+          .trim()
+          .split("\n")
+          .map((line) => [line.slice(line.indexOf("\t") + 1), line.split(" ")[0]]),
       )
-      expect(nestedEntry.exitCode).not.toBe(0)
-      expect(normalEntry.exitCode).toBe(0)
+      expect(entries).toEqual({
+        ".gitignore": "100644",
+        "fresh/main.rs": "100644",
+        "nested/.gitignore": "100644",
+        "nested/inner/inner.txt": "100644",
+        "nested/link.txt": "120000",
+        "nested/nested.txt": "100644",
+        "nested/untracked.txt": "100644",
+        "normal.txt": "100644",
+      })
       expect(yield* Effect.promise(() => fs.readFile(`${nested}/nested.txt`, "utf8"))).toBe("nested\n")
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        "?? fresh/\n?? nested/\n?? normal.txt",
+      )
+    }),
+  )
+
+  it.live("hands a contestant an embedded repository's files and votes its edits back into that repository", () =>
+    Effect.gen(function* () {
+      const { canonical, candidate, base, nested } = yield* embeddedRepositoryBattle
+      yield* Effect.promise(async () => {
+        expect(await fs.readFile(`${candidate.path}/nested/nested.txt`, "utf8")).toBe("nested\n")
+        expect(await fs.lstat(`${candidate.path}/nested/.git`).catch(() => undefined)).toBeUndefined()
+        await fs.writeFile(`${candidate.path}/nested/nested.txt`, "winner\n", "utf8")
+        await fs.writeFile(`${candidate.path}/nested/added.txt`, "added\n", "utf8")
+      })
+      const result = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: base.baseCommit,
+        frozenHead: base.frozenHead,
+        permanentRef: "refs/battles/embedded/a",
+      })
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead: base.frozenHead,
+        baseWorkingTree: base.baseTree,
+        baseIndexTree: base.indexTree,
+        resultCommit: result.finalCommit,
+        finalIndexTree: result.finalIndexTree,
+        safetyRef: "refs/battles/embedded/a-safety",
+      })
+      expect(promoted.conflicts).toEqual([])
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        "?? nested/",
+      )
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(nested).quiet().text())).trim()).toBe(
+        "M nested.txt\n?? added.txt",
+      )
+    }),
+  )
+
+  it.live("refuses a winner that replaces an embedded repository's directory with a file", () =>
+    Effect.gen(function* () {
+      const { canonical, candidate, base, nested } = yield* embeddedRepositoryBattle
+      yield* Effect.promise(async () => {
+        await fs.rm(`${candidate.path}/nested`, { recursive: true })
+        await fs.writeFile(`${candidate.path}/nested`, "a file now\n", "utf8")
+      })
+      const result = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: base.baseCommit,
+        frozenHead: base.frozenHead,
+        permanentRef: "refs/battles/embedded/b",
+      })
+      const refused = yield* Effect.exit(
+        promoteWinnerState({
+          canonical: canonical.path,
+          frozenHead: base.frozenHead,
+          baseWorkingTree: base.baseTree,
+          baseIndexTree: base.indexTree,
+          resultCommit: result.finalCommit,
+          finalIndexTree: result.finalIndexTree,
+          safetyRef: "refs/battles/embedded/b-safety",
+        }),
+      )
+      expect(Exit.isFailure(refused)).toBe(true)
+      if (Exit.isFailure(refused)) {
+        const error = Cause.squash(refused.cause)
+        expect(error).toBeInstanceOf(OperationError)
+        expect((error as OperationError).operation).toBe("write_over_embedded_repository")
+      }
+      expect((yield* Effect.promise(() => $`git log --format=%s`.cwd(nested).quiet().text())).trim()).toBe("nested")
     }),
   )
 
@@ -4414,6 +4543,11 @@ describe("ArenaGit contestant worktree sync", () => {
     readonly developer?: (canonical: string) => Effect.Effect<void>
     /** Where the worktree and its host go; a fresh temporary directory by default. */
     readonly parent?: (canonical: string) => Effect.Effect<string>
+    /**
+     * Whether the worktree's `git status` reads as the canonical checkout's. It does not when the
+     * checkout holds an embedded repository: the contestant has its files and no `.git`.
+     */
+    readonly sameStatus?: boolean
   }
   type Fixture = {
     readonly canonical: string
@@ -4507,7 +4641,7 @@ describe("ArenaGit contestant worktree sync", () => {
       yield* syncContestantState(state)
       yield* verifyContestantState(state)
       const expected = yield* status(canonical)
-      expect(yield* status(slot)).toBe(expected)
+      if (options.sameStatus !== false) expect(yield* status(slot)).toBe(expected)
       return { canonical, host, slot, ...(branch ? { branch } : {}), state, expected } satisfies Fixture
     })
 
@@ -4810,6 +4944,31 @@ describe("ArenaGit contestant worktree sync", () => {
         }),
     },
   ]
+
+  it.live("syncs an embedded repository's files into a worktree as plain files and verifies them", () =>
+    Effect.gen(function* () {
+      const fixture = yield* arrange({
+        sameStatus: false,
+        developer: (canonical) =>
+          Effect.gen(function* () {
+            yield* write(`${canonical}/vendor/lib/lib.txt`, "library\n")
+            yield* git(`${canonical}/vendor/lib`, "init", "-q")
+            yield* git(`${canonical}/vendor/lib`, "add", "-A")
+            yield* git(`${canonical}/vendor/lib`, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "lib")
+          }),
+      })
+      expect(yield* read(`${fixture.slot}/vendor/lib/lib.txt`)).toBe("library\n")
+      expect(yield* exists(`${fixture.slot}/vendor/lib/.git`)).toBe(false)
+      expect(yield* status(fixture.slot)).toBe("?? vendor/lib/lib.txt")
+
+      // A kept worktree whose contestant edited the files is brought back to the frozen base.
+      yield* write(`${fixture.slot}/vendor/lib/lib.txt`, "edited\n")
+      expect(yield* failure(verifyContestantState(fixture.state))).toBe("verify_contestant_worktree")
+      yield* syncContestantState(fixture.state)
+      yield* verifyContestantState(fixture.state)
+      expect(yield* read(`${fixture.slot}/vendor/lib/lib.txt`)).toBe("library\n")
+    }),
+  )
 
   for (const scenario of scenarios) {
     it.live(`syncs a kept worktree after ${scenario.name}`, () =>

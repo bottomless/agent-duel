@@ -5,7 +5,12 @@ import type { ArenaRun, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import { DiffStat } from "@/components/diff-stat";
 import { LiveElapsed } from "@/components/message";
 import { formatDuration } from "@/utils/time";
-import { arenaRunElapsedMs, arenaRunFilesLabel, arenaRunStatusLabel } from "./run-stats";
+import {
+  arenaRunClockStart,
+  arenaRunElapsedMs,
+  arenaRunFilesLabel,
+  arenaRunStatusLabel,
+} from "./run-stats";
 
 // Stall detection only has to notice a run going quiet, not count seconds.
 const STALL_CHECK_INTERVAL_MS = 10_000;
@@ -46,10 +51,13 @@ export const ArenaRunMeta = memo(function ArenaRunMeta({
     return () => clearInterval(interval);
   }, [active, isPending]);
   const liveStartedAt = useMemo(() => {
-    if (!isPending || typeof run.startedAt !== "string") return null;
-    const parsed = Date.parse(run.startedAt);
-    return Number.isFinite(parsed) ? new Date(parsed) : null;
-  }, [isPending, run.startedAt]);
+    if (!isPending) return null;
+    const clockStart = arenaRunClockStart({
+      startedAt: run.startedAt,
+      priorDurationMs: run.priorDurationMs,
+    });
+    return clockStart === null ? null : new Date(clockStart);
+  }, [isPending, run.startedAt, run.priorDurationMs]);
   const settledElapsedMs = liveStartedAt ? null : arenaRunElapsedMs(run, now);
   const filesLabel = arenaRunFilesLabel(run.diff);
   return (

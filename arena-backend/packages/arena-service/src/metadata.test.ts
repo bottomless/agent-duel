@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { ArenaDb } from "./collection"
 import { MAX_METADATA_CHANGES_CHARS, parseMetadataReply } from "./metadata"
 import { createArenaService, type ArenaServiceOptions } from "./service"
-import { comparisonModel } from "./utility-model"
+import { utilityModels } from "./utility-model"
 
 function request(body: unknown) {
   return new Request("https://control.test/api/arena/metadata", {
@@ -66,8 +66,9 @@ describe("Arena metadata route", () => {
 
     expect(response?.status).toBe(200)
     expect(await response?.json()).toEqual({ message: "Fix the login redirect" })
-    expect(upstreamBody?.model).toBe(comparisonModel.id)
-    expect(upstreamBody?.provider).toEqual(comparisonModel.routing)
+    expect(upstreamBody?.model).toBe(utilityModels[0].id)
+    expect(upstreamBody?.provider).toEqual(utilityModels[0].routing)
+    expect(upstreamBody?.reasoning).toEqual(utilityModels[0].reasoning)
     expect(upstreamBody?.max_tokens).toBe(1_024)
     const messages = upstreamBody?.messages as { role: string; content: string }[]
     expect(messages).toHaveLength(1)
@@ -75,6 +76,24 @@ describe("Arena metadata route", () => {
     expect(content).toStartWith("Write a git commit message for the changes below.")
     expect(content).toContain("Use Conventional Commits")
     expect(content).toEndWith("## Changes\nM\tsrc/login.ts\t(+2 -1)")
+  })
+
+  test("falls back to the second utility model when the first fails", async () => {
+    const upstream: Record<string, unknown>[] = []
+    const response = await service({
+      fetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        upstream.push(body)
+        if (body.model === utilityModels[0].id) return Response.json({ error: "unavailable" }, { status: 502 })
+        return reply("Fix the login redirect")
+      },
+    }).metadata(request({ kind: "commit_message", changes: "diff" }))
+
+    expect(await response.json()).toEqual({ message: "Fix the login redirect" })
+    expect(upstream.map((body) => body.model)).toEqual(utilityModels.map((model) => model.id))
+    expect(upstream[1]?.reasoning).toEqual(utilityModels[1].reasoning)
+    expect(upstream[1]?.provider).toEqual(utilityModels[1].routing)
+    expect(upstream[1]?.max_tokens).toBe(1_024)
   })
 
   test("answers a pull request as a title and a body", async () => {
