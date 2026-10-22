@@ -34,7 +34,7 @@ import { arenaChangesRows } from "./changes-rows";
 import { BattleReview } from "./battle-review";
 import { useArenaReviewTelemetry } from "./review-telemetry";
 import { isStoppedByEarlyPick } from "./battle-result";
-import { canRequestBattleDiff } from "./comparison-visibility";
+import { battleSummaryStatus, canRequestBattleDiff } from "./comparison-visibility";
 import type { ArenaPendingQuestion } from "./question";
 import type { ArenaPendingPermission, ArenaPermissionReply } from "./permission";
 import { Button } from "@/components/ui/button";
@@ -415,13 +415,7 @@ function BattleJudging({
   retrying: boolean;
   onRetry: () => void;
 }) {
-  // A stopped battle never gets a judge's verdict; the changes stand alone.
-  // Likewise a turn whose comparison never started has nothing to say yet.
-  const summaryPending = comparison?.state === "pending" || comparison?.state === "running";
-  const summaryFailed = comparison?.state === "failed";
-  const summaryAvailable =
-    comparisonState !== "skipped" &&
-    (summaryPending || summaryFailed || Boolean(comparison?.output));
+  const summary = battleSummaryStatus(comparison, comparisonState);
   const diffQuery = useBattleDiff(serverId, agentId, turnId);
   const refetchDiff = diffQuery.refetch;
   const retryDiff = useCallback(() => {
@@ -433,9 +427,9 @@ function BattleJudging({
     <BattleReview
       agentId={agentId}
       turnId={turnId}
-      summaryAvailable={summaryAvailable}
-      summaryPending={summaryPending}
-      summaryFailed={summaryFailed}
+      summaryAvailable={summary.available}
+      summaryPending={summary.pending}
+      summaryFailed={summary.failed}
       comparison={comparison}
       retrying={retrying}
       onRetry={onRetry}

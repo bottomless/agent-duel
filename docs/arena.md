@@ -136,8 +136,12 @@ Review has two tabs: **Difference summary**, the generated comparison, and **Cha
 status for each pair. A row opens its file's diff right under it and closes it again, several can be open
 at once, and the first diverging file opens on arrival. Past eight rows the rest wait behind Show more, so a
 battle that touched hundreds of files does not push the threads off screen; an open row past them still shows.
-The chevron at the end of the tab row folds the whole review away, and a tab opens it again. A ready summary opens first. When
-the review opens before the summary is ready, Changes stays open after it arrives. Changes
+The chevron at the end of the tab row folds the whole review away, and a tab opens it again. The review opens on the
+Difference summary, showing its progress while it generates; Changes opens first only when no summary
+is coming, as for a stopped battle. The review mounts before the engine writes the comparison
+record, so read the turn's `comparisonState` until the record exists (`battleSummaryStatus` in
+`comparison-visibility.ts`); the review keeps the tab it opened on, and reading only the record
+opened every battle on Changes. Changes
 retries a failed read twice before showing a small manual retry. The summary generator retries
 transient network and service failures
 up to three attempts, while permanent failures such as payment or credentials remain actionable.
