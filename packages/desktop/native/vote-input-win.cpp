@@ -5,6 +5,7 @@
 #endif
 
 #include <windows.h>
+#include <commctrl.h>
 
 #include <delayimp.h>
 
@@ -17,7 +18,9 @@
 #include <deque>
 #include <iterator>
 #include <mutex>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -30,11 +33,12 @@ constexpr double kPointerTolerance = 2.0;
 enum class EventKind { Pointer, Keyboard };
 
 struct MessageIdentity {
-  HWND window = nullptr;
-  UINT message = 0;
-  WPARAM wParam = 0;
-  LPARAM lParam = 0;
+  HWND rootWindow = nullptr;
+  EventKind kind = EventKind::Pointer;
+  UINT virtualKey = 0;
   LONG messageTime = 0;
+  LONG screenX = 0;
+  LONG screenY = 0;
   Clock::time_point receivedAt;
 };
 
@@ -53,12 +57,14 @@ struct NativeEvent {
 std::mutex eventMutex;
 std::deque<NativeEvent> events;
 std::deque<MessageIdentity> seenMessages;
+std::set<HWND> subclassedWindows;
 HHOOK messageHook = nullptr;
+constexpr UINT_PTR kSubclassId = 0x4144564c;
 
 bool sameIdentity(const MessageIdentity& left, const MessageIdentity& right) {
-  return left.window == right.window && left.message == right.message &&
-         left.wParam == right.wParam && left.lParam == right.lParam &&
-         left.messageTime == right.messageTime;
+  return left.rootWindow == right.rootWindow && left.kind == right.kind &&
+         left.virtualKey == right.virtualKey && left.messageTime == right.messageTime &&
+         left.screenX == right.screenX && left.screenY == right.screenY;
 }
 
 void pruneExpired(Clock::time_point now) {
@@ -70,15 +76,15 @@ void pruneExpired(Clock::time_point now) {
   }
 }
 
-bool isSupportedMessage(const CWPSTRUCT& message, EventKind& kind, UINT& virtualKey) {
-  if (message.message == WM_LBUTTONUP) {
+bool isSupportedMessage(UINT message, WPARAM wParam, EventKind& kind, UINT& virtualKey) {
+  if (message == WM_LBUTTONUP) {
     kind = EventKind::Pointer;
     virtualKey = 0;
     return true;
   }
-  if (message.message != WM_KEYUP && message.message != WM_SYSKEYUP) return false;
+  if (message != WM_KEYUP && message != WM_SYSKEYUP) return false;
 
-  const UINT key = static_cast<UINT>(message.wParam);
+  const UINT key = static_cast<UINT>(wParam);
   if (key != VK_RETURN && key != VK_SPACE) return false;
   kind = EventKind::Keyboard;
   virtualKey = key;
@@ -91,26 +97,18 @@ HWND rootWindowFor(HWND window) {
   return root ? root : window;
 }
 
-void recordMessage(const CWPSTRUCT& message) {
+void recordMessage(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
   EventKind kind;
   UINT virtualKey;
-  if (!message.hwnd || !isSupportedMessage(message, kind, virtualKey)) return;
+  if (!window || !isSupportedMessage(message, wParam, kind, virtualKey)) return;
 
   const Clock::time_point now = Clock::now();
-  MessageIdentity identity;
-  identity.window = message.hwnd;
-  identity.message = message.message;
-  identity.wParam = message.wParam;
-  identity.lParam = message.lParam;
-  identity.messageTime = GetMessageTime();
-  identity.receivedAt = now;
-
   INPUT_MESSAGE_SOURCE source{};
   const bool sourceKnown = GetCurrentInputMessageSource(&source) != FALSE;
 
   NativeEvent record;
   record.kind = kind;
-  record.rootWindow = rootWindowFor(message.hwnd);
+  record.rootWindow = rootWindowFor(window);
   record.virtualKey = virtualKey;
   record.sourceKnown = sourceKnown;
   if (sourceKnown) {
@@ -121,13 +119,22 @@ void recordMessage(const CWPSTRUCT& message) {
 
   if (kind == EventKind::Pointer) {
     POINT screenPoint = {
-        static_cast<LONG>(static_cast<SHORT>(LOWORD(message.lParam))),
-        static_cast<LONG>(static_cast<SHORT>(HIWORD(message.lParam))),
+        static_cast<LONG>(static_cast<SHORT>(LOWORD(lParam))),
+        static_cast<LONG>(static_cast<SHORT>(HIWORD(lParam))),
     };
-    if (!ClientToScreen(message.hwnd, &screenPoint)) return;
+    if (!ClientToScreen(window, &screenPoint)) return;
     record.screenX = static_cast<double>(screenPoint.x);
     record.screenY = static_cast<double>(screenPoint.y);
   }
+
+  MessageIdentity identity;
+  identity.rootWindow = record.rootWindow;
+  identity.kind = kind;
+  identity.virtualKey = virtualKey;
+  identity.messageTime = GetMessageTime();
+  identity.screenX = static_cast<LONG>(std::lround(record.screenX));
+  identity.screenY = static_cast<LONG>(std::lround(record.screenY));
+  identity.receivedAt = now;
 
   std::lock_guard<std::mutex> lock(eventMutex);
   pruneExpired(now);
@@ -140,23 +147,71 @@ void recordMessage(const CWPSTRUCT& message) {
   events.push_back(record);
 }
 
+LRESULT CALLBACK windowSubclassProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
+                                    UINT_PTR subclassId, DWORD_PTR refData);
+
+void registerWindow(HWND window) {
+  if (!window || GetWindowThreadProcessId(window, nullptr) != GetCurrentThreadId()) return;
+
+  std::lock_guard<std::mutex> lock(eventMutex);
+  if (subclassedWindows.find(window) != subclassedWindows.end()) return;
+  if (SetWindowSubclass(window, windowSubclassProc, kSubclassId, 0)) {
+    subclassedWindows.insert(window);
+  }
+}
+
+BOOL CALLBACK enumChildWindows(HWND window, LPARAM) {
+  registerWindow(window);
+  return TRUE;
+}
+
+void registerWindowTree(HWND rootWindow) {
+  registerWindow(rootWindow);
+  EnumChildWindows(rootWindow, enumChildWindows, 0);
+}
+
+BOOL CALLBACK enumThreadWindows(HWND window, LPARAM) {
+  registerWindowTree(window);
+  return TRUE;
+}
+
 LRESULT CALLBACK callWindowProc(int code, WPARAM wParam, LPARAM lParam) {
   if (code >= 0 && lParam != 0) {
-    recordMessage(*reinterpret_cast<const CWPSTRUCT*>(lParam));
+    const CWPSTRUCT& message = *reinterpret_cast<const CWPSTRUCT*>(lParam);
+    if (message.message == WM_CREATE) registerWindowTree(message.hwnd);
   }
   return CallNextHookEx(nullptr, code, wParam, lParam);
 }
 
+LRESULT CALLBACK windowSubclassProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
+                                    UINT_PTR subclassId, DWORD_PTR) {
+  if (subclassId == kSubclassId) {
+    if (message == WM_LBUTTONUP || message == WM_KEYUP || message == WM_SYSKEYUP) {
+      recordMessage(window, message, wParam, lParam);
+    }
+    if (message == WM_NCDESTROY) {
+      RemoveWindowSubclass(window, windowSubclassProc, kSubclassId);
+      std::lock_guard<std::mutex> lock(eventMutex);
+      subclassedWindows.erase(window);
+    }
+  }
+  return DefSubclassProc(window, message, wParam, lParam);
+}
+
 void cleanup(void*) {
   HHOOK hook;
+  std::vector<HWND> windows;
   {
     std::lock_guard<std::mutex> lock(eventMutex);
     hook = messageHook;
     messageHook = nullptr;
+    windows.assign(subclassedWindows.begin(), subclassedWindows.end());
+    subclassedWindows.clear();
     events.clear();
     seenMessages.clear();
   }
   if (hook) UnhookWindowsHookEx(hook);
+  for (HWND window : windows) RemoveWindowSubclass(window, windowSubclassProc, kSubclassId);
 }
 
 bool readString(napi_env env, napi_value value, std::string& result) {
@@ -207,14 +262,17 @@ napi_value start(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  std::lock_guard<std::mutex> lock(eventMutex);
-  if (!messageHook) {
-    messageHook = SetWindowsHookExW(WH_CALLWNDPROC, callWindowProc, nullptr, GetCurrentThreadId());
+  {
+    std::lock_guard<std::mutex> lock(eventMutex);
     if (!messageHook) {
-      napi_throw_error(env, nullptr, "unable to observe the Electron UI thread");
-      return nullptr;
+      messageHook = SetWindowsHookExW(WH_CALLWNDPROC, callWindowProc, nullptr, GetCurrentThreadId());
+      if (!messageHook) {
+        napi_throw_error(env, nullptr, "unable to observe the Electron UI thread");
+        return nullptr;
+      }
     }
   }
+  EnumThreadWindows(GetCurrentThreadId(), enumThreadWindows, 0);
   napi_value result;
   napi_get_undefined(env, &result);
   return result;

@@ -201,6 +201,7 @@ async function buildWindows() {
     `/OUT:${output}`,
     object,
     nodeLib,
+    "comctl32.lib",
     "user32.lib",
     "delayimp.lib",
     "/DELAYLOAD:node.exe",

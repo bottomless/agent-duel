@@ -190,10 +190,12 @@ app.on('window-all-closed', () => app.quit());`,
     runHelper(handle, "send-enter");
     const injectedEnter = await consumeEnter();
     sourceIsSafe(injectedEnter);
+    assert.equal(await consumeEnter(), "unverified");
 
     runHelper(handle, "send-enter");
     const secondEnter = await consumeEnter();
     sourceIsSafe(secondEnter);
+    assert.equal(await consumeEnter(), "unverified");
 
     const postedPointer = runHelper(handle, "post-pointer");
     assert(postedPointer);

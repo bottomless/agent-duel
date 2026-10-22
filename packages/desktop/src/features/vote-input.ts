@@ -1,5 +1,6 @@
 import path from "node:path";
 import { BrowserWindow, ipcMain, screen } from "electron";
+import log from "electron-log/main";
 import {
   ArenaVoteInputRequestSchema,
   ArenaVoteSourceSchema,
@@ -15,9 +16,14 @@ interface NativeVoteInput {
 export function registerVoteInputHandlers(): void {
   let native: NativeVoteInput | null = null;
   if (process.platform === "darwin" || process.platform === "win32") {
-    const loaded: NativeVoteInput = require(path.join(__dirname, "../native/vote-input.node"));
-    loaded.start();
-    native = loaded;
+    try {
+      const loaded: NativeVoteInput = require(path.join(__dirname, "../native/vote-input.node"));
+      loaded.start();
+      native = loaded;
+    } catch (error) {
+      // An unavailable OS monitor lowers provenance confidence and must leave voting usable.
+      log.warn("Vote input monitor unavailable", error);
+    }
   }
 
   ipcMain.handle("paseo:vote-input:source", (event, payload: unknown) => {
