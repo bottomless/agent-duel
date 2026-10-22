@@ -1014,6 +1014,46 @@ type EnvironmentRelease =
   | { readonly kind: "absent" }
   | { readonly kind: "kept"; readonly reason: string }
 
+/**
+ * Where the chat's last finished turn starts in its canonical transcript. Contestant forks keep
+ * that turn's tool output (its test runs, the files it just read) and clear the output before it.
+ * A battle turn starts at its grafted prompt and holds its replies and subagent results too; a
+ * prompt written after that graft starts a single-agent turn of its own, and a steer sent while
+ * that agent worked belongs to the turn it steered.
+ */
+export function lastTurnStart(
+  turns: readonly Pick<TurnDocument, "canonicalGraftedAt" | "canonicalUserMessageID">[],
+  transcript: readonly SessionV1.WithParts[],
+) {
+  const battle = turns.findLast((turn) => turn.canonicalGraftedAt && turn.canonicalUserMessageID)
+  const graftedAt = battle?.canonicalGraftedAt ? new Date(battle.canonicalGraftedAt).getTime() : -Infinity
+  const isPrompt = (message: SessionV1.WithParts) =>
+    message.info.role === "user" &&
+    message.info.time.created > graftedAt &&
+    message.parts.some((part) => part.type === "text" && !part.synthetic)
+  let index = transcript.findLastIndex(isPrompt)
+  while (index >= 0 && steered(transcript, index)) {
+    const steer = index
+    index = transcript.findLastIndex((message, at) => at < steer && isPrompt(message))
+  }
+  return transcript[index]?.info.id ?? battle?.canonicalUserMessageID
+}
+
+/**
+ * Whether the user message at `index` reached the agent before its turn ended, the way the prompt
+ * loop decides: the reply before it was still being written, or stopped only to call tools or to
+ * recover from a cut-off response. A reply that failed or was aborted ended its turn.
+ */
+function steered(transcript: readonly SessionV1.WithParts[], index: number) {
+  const reply = transcript.slice(0, index).findLast((message) => message.info.role === "assistant")?.info
+  if (reply?.role !== "assistant" || reply.error) return false
+  const sent = transcript[index].info.time.created
+  if (reply.time.completed === undefined || reply.time.completed > sent) return true
+  return (
+    !reply.finish || ["tool-calls", "unknown"].includes(reply.finish) || !!ArenaResponseRecovery.reason(reply.finish)
+  )
+}
+
 /** Turn activity used by checkout eviction; environment/setup timestamps are intentionally absent. */
 export function latestArenaChatActivity(turns: readonly TurnDocument[], runs: readonly RunDocument[]) {
   const dates = turns.flatMap((turn) => [
@@ -1337,27 +1377,14 @@ export const layer: Layer.Layer<
         Effect.provideService(InstanceStore.Service, instances),
         Effect.provideService(Git.Service, git),
       )
-    /**
-     * Where the chat's last finished turn starts in its canonical transcript. Contestant forks keep
-     * that turn's tool output (its test runs, the files it just read) and clear the output before
-     * it. A battle turn starts at its grafted prompt and holds its replies and subagent results too;
-     * a prompt written after that graft starts a single-agent turn of its own.
-     */
-    const lastTurnStart = Effect.fn("Arena.lastTurnStart")(function* (
+    /** `lastTurnStart` for a chat. A failed read only leaves the history whole. */
+    const contestantPruneBoundary = Effect.fn("Arena.contestantPruneBoundary")(function* (
       store: Store,
       chatID: string,
       transcript: readonly SessionV1.WithParts[],
     ) {
-      const turns = yield* promise(() => store.turnsForChat(chatID))
-      const battle = turns.findLast((turn) => turn.canonicalGraftedAt && turn.canonicalUserMessageID)
-      const graftedAt = battle?.canonicalGraftedAt ? new Date(battle.canonicalGraftedAt).getTime() : -Infinity
-      const prompt = transcript.findLast(
-        (message) =>
-          message.info.role === "user" &&
-          message.info.time.created > graftedAt &&
-          message.parts.some((part) => part.type === "text" && !part.synthetic),
-      )
-      const start = prompt?.info.id ?? battle?.canonicalUserMessageID
+      const turns = yield* promise(() => store.turnsForChat(chatID)).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      const start = turns ? lastTurnStart(turns, transcript) : undefined
       return start ? MessageID.make(start) : undefined
     })
     const repositoryMutationLock = (commonGitDir: string) => {
@@ -4682,8 +4709,9 @@ export const layer: Layer.Layer<
 
     /**
      * Whether the session forked at warm-up is the one this send can prompt. Everything the fork
-     * copied has to be unchanged: the canonical session and its transcript, and the port bank its
-     * paths were localized against, which is process-local and so also requires a trusted pair.
+     * copied has to be unchanged: the canonical session and its transcript, the output it cleared,
+     * which the other side may fork again now, and the port bank its paths were localized against,
+     * which is process-local and so also requires a trusted pair.
      */
     const usableWarmFork = (
       trusted: boolean,
@@ -4691,6 +4719,7 @@ export const layer: Layer.Layer<
       warm: WarmWorktreeRecord,
       directory: string,
       sourceID: string,
+      pruneToolOutputBefore: MessageID | undefined,
       portAliases: PreviewRoute["portAliases"],
     ) => {
       if (!warm.forkedSessionID || !warm.forkMessageMap || !warm.portAliases) return undefined
@@ -4699,6 +4728,7 @@ export const layer: Layer.Layer<
       if (warm.forkSourceSessionID !== sourceID || warm.forkTranscriptHash !== turn.canonicalTranscriptHash) {
         return undefined
       }
+      if (warm.forkPruneToolOutputBefore !== pruneToolOutputBefore) return undefined
       if (PORT_ALIASES.some((alias) => warm.portAliases?.[alias] !== portAliases[alias])) return undefined
       return { forkedSessionID: warm.forkedSessionID, forkMessageMap: warm.forkMessageMap }
     }
@@ -4722,10 +4752,7 @@ export const layer: Layer.Layer<
       const transcript = yield* Effect.exit(sessions.messages({ sessionID: sourceID }))
       if (Exit.isFailure(source) || Exit.isFailure(transcript)) return slots
       const transcriptHash = digest(transcript.value)
-      // A failed read only leaves the history whole.
-      const pruneToolOutputBefore = yield* lastTurnStart(store, chat._id, transcript.value).pipe(
-        Effect.catch(() => Effect.succeed(undefined)),
-      )
+      const pruneToolOutputBefore = yield* contestantPruneBoundary(store, chat._id, transcript.value)
       const agent = source.value.agent ?? "build"
       const branch = current.canonicalCheckout?.branch ?? current.arenaBranch
       const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
@@ -4792,6 +4819,7 @@ export const layer: Layer.Layer<
                   forkedSessionID: session.id,
                   forkSourceSessionID: sourceID,
                   forkTranscriptHash: transcriptHash,
+                  ...(pruneToolOutputBefore ? { forkPruneToolOutputBefore: pruneToolOutputBefore } : {}),
                   forkMessageMap: Object.fromEntries(messageMapping),
                   portAliases: preview.portAliases,
                 } satisfies WarmWorktreeRecord
@@ -4816,6 +4844,8 @@ export const layer: Layer.Layer<
       prompt: ArenaAttachments.ContestantPrompt,
       warmForksTrusted: boolean,
       autoAccept: boolean,
+      /** Read with the transcript the turn froze, so both sides clear the same output. */
+      pruneToolOutputBefore: MessageID | undefined,
     ) {
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
@@ -4886,13 +4916,6 @@ export const layer: Layer.Layer<
       )
       const refreshing = turn.warmPreparation?.state === "pending"
       const sideTimings = new Map<Side, NonNullable<TurnSetupTimings["sides"]>[Side] & SlotSyncTimings>()
-      // Read once for both sides, so a side forked at send clears what the other does.
-      const coldPruneBoundary = yield* Effect.cached(
-        sessions.messages({ sessionID: sourceID }).pipe(
-          Effect.mapError(error),
-          Effect.flatMap((transcript) => lastTurnStart(store, chat._id, transcript)),
-        ),
-      )
       const makeSide = Effect.fnUntraced(function* (side: Side) {
         const sideStartedAt = Date.now()
         let prepareMs = 0
@@ -4948,7 +4971,15 @@ export const layer: Layer.Layer<
         const env = previewEnvironment(info.directory)
         const forkStartedAt = Date.now()
         const warmFork = warm
-          ? usableWarmFork(warmForksTrusted, turn, warm, info.directory, sourceID, preview.portAliases)
+          ? usableWarmFork(
+              warmForksTrusted,
+              turn,
+              warm,
+              info.directory,
+              sourceID,
+              pruneToolOutputBefore,
+              preview.portAliases,
+            )
           : undefined
         if (warm?.forkedSessionID && !warmFork) {
           // Forked from an older transcript or in another process; nothing else refers to it.
@@ -4963,13 +4994,12 @@ export const layer: Layer.Layer<
           // Keep concrete URLs in the canonical chat for the reader. Contestant copies normalize
           // every historical run here, then retarget those references to this side's environment.
           const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
-          const pruneBefore = yield* coldPruneBoundary
           const forked = yield* forkInto({
             sessionID: sourceID,
             destination: info.directory,
             roots: { canonical: chat.repository.root, worktree: info.directory },
             pathMode: "transcript",
-            ...(pruneBefore ? { pruneToolOutputBefore: pruneBefore } : {}),
+            ...(pruneToolOutputBefore ? { pruneToolOutputBefore } : {}),
             onMessageMapping(mapping) {
               mapping.forEach((target, source) => messageMapping.set(source, target))
             },
@@ -5703,6 +5733,7 @@ export const layer: Layer.Layer<
           new Error("Arena canonical Git state and transcript changed without a reconciled single-agent turn"),
         )
       }
+      const pruneToolOutputBefore = yield* contestantPruneBoundary(store, chat._id, transcript)
       const copyConfiguration = yield* promise(() => arenaCopyConfiguration(base.root)).pipe(
         Effect.onError(() => discardBaseRef),
       )
@@ -5862,7 +5893,14 @@ export const layer: Layer.Layer<
         return yield* respond(store, chat._id)
       }
       const activeTurn = activation.turn
-      yield* executeBattle(store, activeTurn, contestantPrompt.prompt, warmForksTrusted, autoAccept).pipe(
+      yield* executeBattle(
+        store,
+        activeTurn,
+        contestantPrompt.prompt,
+        warmForksTrusted,
+        autoAccept,
+        pruneToolOutputBefore,
+      ).pipe(
         Effect.scoped,
         Effect.catchCause((cause) =>
           Effect.gen(function* () {

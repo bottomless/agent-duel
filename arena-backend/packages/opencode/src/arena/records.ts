@@ -116,13 +116,14 @@ export type WarmWorktreeRecord = {
   readonly refsMirrored?: boolean
   /**
    * The canonical session forked into this worktree at warm-up, with the transcript hash and
-   * source it was copied from and the port bank its paths were localized against. A send uses
-   * it only when all three still match and the pair is trusted in this process; otherwise it
-   * forks again and disposes of this one.
+   * source it was copied from, the message before which it cleared tool output, and the port bank
+   * its paths were localized against. A send uses it only when all four still match and the pair
+   * is trusted in this process; otherwise it forks again and disposes of this one.
    */
   readonly forkedSessionID?: string
   readonly forkSourceSessionID?: string
   readonly forkTranscriptHash?: string
+  readonly forkPruneToolOutputBefore?: string
   readonly forkMessageMap?: Readonly<Record<string, string>>
   readonly portAliases?: Readonly<Record<ArenaPortAlias, number>>
   /** How this worktree was last brought to its base, and where that time went. */
