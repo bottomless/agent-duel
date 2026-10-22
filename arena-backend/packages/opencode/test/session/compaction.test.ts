@@ -35,6 +35,7 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ArenaRuntime } from "@/arena/runtime"
 import { ModelIdleError } from "@/arena/model-idle"
+import { contestant, medium } from "@/arena/model-profile"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -496,6 +497,63 @@ function autocontinue(enabled: boolean) {
 }
 
 describe("session.compaction.isOverflow", () => {
+  for (const profile of [contestant, medium]) {
+    for (const auto of [true, false]) {
+      it.live(
+        `caps Arena ${profile.id} history at 200k estimated tokens with auto=${auto}`,
+        provideTmpdirInstance(
+          () =>
+            Effect.gen(function* () {
+              const compact = yield* SessionCompaction.Service
+              const model = createModel({ context: profile.contextWindow, output: profile.outputLimit })
+              const blinded = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+              const sessionID = SessionID.descending()
+              const messageID = MessageID.ascending()
+              const part: SessionV1.TextPart = {
+                id: PartID.ascending(),
+                sessionID,
+                messageID,
+                type: "text",
+                text: "",
+              }
+              const messages: SessionV1.WithParts[] = [
+                {
+                  info: { id: messageID, sessionID, role: "user", agent: "build", model: ref, time: { created: 1 } },
+                  parts: [part],
+                },
+              ]
+              part.text = "x"
+              const serialized = JSON.stringify(yield* MessageV2.toModelMessagesEffect(messages, model))
+              const overhead = serialized.length - 1
+              const previous = process.env.OPENCODE_ARENA
+              const results = yield* Effect.gen(function* () {
+                delete process.env.OPENCODE_ARENA
+                part.text = "x".repeat(200_000 * 4 - overhead)
+                expect(Token.estimate(JSON.stringify(yield* MessageV2.toModelMessagesEffect(messages, model)))).toBe(
+                  200_000,
+                )
+                const outsideArena = yield* compact.isOverflow({ tokens: blinded, model, messages })
+                process.env.OPENCODE_ARENA = "1"
+                const atLimit = yield* compact.isOverflow({ tokens: blinded, model, messages })
+                part.text = part.text.slice(4)
+                const belowLimit = yield* compact.isOverflow({ tokens: blinded, model, messages })
+                return [outsideArena, belowLimit, atLimit]
+              }).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    if (previous === undefined) delete process.env.OPENCODE_ARENA
+                    else process.env.OPENCODE_ARENA = previous
+                  }),
+                ),
+              )
+              expect(results).toEqual([false, false, auto])
+            }),
+          { config: { compaction: { auto } } },
+        ),
+      )
+    }
+  }
+
   it.live(
     "returns true when token count exceeds usable context",
     provideTmpdirInstance(() =>

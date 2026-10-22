@@ -40,6 +40,9 @@ const MAX_PRESERVE_RECENT_TOKENS = 8_000
 // Arena cannot use a provider tokenizer without exposing the contestant model. Reserve a bounded
 // allowance for each media item and omit its encoded bytes from the text estimate instead.
 const ARENA_MEDIA_TOKEN_ALLOWANCE = 4_000
+// Keep the same early-compaction policy for every blinded Arena model, including medium
+// sessions. This is an estimate of history, not a provider-specific billed-token limit.
+const ARENA_COMPACTION_TOKEN_LIMIT = 200_000
 const COMPACTION_EXHAUSTED =
   "The conversation could not be summarized after three recovery attempts. Completed work has been preserved. Retry to continue."
 type Turn = {
@@ -236,8 +239,11 @@ const layer = Layer.effect(
         ArenaRuntime.enabled() && input.messages
           ? yield* estimate({ messages: input.messages, model: input.model })
           : undefined
+      const cfg = yield* config.get()
+      const arenaLimitReached = estimated !== undefined && estimated >= ARENA_COMPACTION_TOKEN_LIMIT
+      if (cfg.compaction?.auto !== false && arenaLimitReached) return true
       return overflow({
-        cfg: yield* config.get(),
+        cfg,
         tokens:
           estimated === undefined
             ? input.tokens
