@@ -1,5 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import type { ArenaDb } from "./collection"
+import { defaultPool, mediumModel } from "./default-pool"
+import { probeRouting } from "./openrouter"
 import type { ModelPool } from "./pool"
 import { createArenaService, type ArenaServiceOptions } from "./service"
 
@@ -848,6 +850,41 @@ describe("OpenRouter proxy", () => {
       provider: "Private Provider",
     })
   })
+
+  test("probes every pool profile with the routing fields the proxy adds", async () => {
+    const bodies: string[] = []
+    const execute = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? init.body : ""
+      bodies.push(body)
+      return body.includes(pool[1]!.slug)
+        ? Response.json(
+            { error: { message: "No endpoints found that can handle the requested parameters." } },
+            { status: 404 },
+          )
+        : Response.json({ choices: [] })
+    }
+
+    const failure = await probeRouting(pool, "key", execute).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(failure instanceof Error && failure.message).toMatch(/Qwen 3\.8 Max \(404\) .*No endpoints found/)
+    expect(bodies).toHaveLength(2)
+    const first = JSON.parse(bodies[0]!)
+    expect(first).toMatchObject({ model: pool[0]!.slug, provider: pool[0]!.routing, reasoning: { effort: "high" } })
+    expect(first.session_id).toEqual(expect.any(String))
+    expect(first.prompt_cache_key).toBe(first.session_id)
+  })
+
+  // Spends one OpenRouter call per profile, so it runs only when asked:
+  // ARENA_PROBE_OPENROUTER_KEY=... bun test src/openrouter.test.ts -t "accepts the routing fields"
+  test.skipIf(!process.env.ARENA_PROBE_OPENROUTER_KEY)(
+    "the default pool and Medium accept the routing fields on OpenRouter",
+    async () => {
+      await probeRouting([...defaultPool, mediumModel], process.env.ARENA_PROBE_OPENROUTER_KEY!)
+    },
+    120_000,
+  )
 
   test("leaves sampling to each provider, because the engine cannot choose it for a hidden model", async () => {
     let upstreamBody: Record<string, unknown> | undefined

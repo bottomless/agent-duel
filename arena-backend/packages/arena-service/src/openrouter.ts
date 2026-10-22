@@ -1,9 +1,9 @@
 import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
-import { authorize, type ArenaContext } from "./context"
+import { authorize, type ArenaContext, type Fetch } from "./context"
 import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
 import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
-import type { ModelProfile } from "./pool"
+import type { ModelPool, ModelProfile } from "./pool"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -571,5 +571,32 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")
     return Response.json({ error: { message: "OpenRouter request failed" } }, { status: 502 })
+  }
+}
+
+/**
+ * Sends one small tool-carrying request per profile with the fields `assignedRouting` adds. Under
+ * `require_parameters` OpenRouter refuses a field a model's providers lack for that model's draws
+ * only, and the refusal tells the voter which model it is. The catalog check cannot show that, so
+ * run this before a pool change ships. It pays for one call per profile.
+ */
+export async function probeRouting(pool: ModelPool, apiKey: string, execute: Fetch = fetch) {
+  for (const profile of pool) {
+    const response = await execute("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...assignedRouting(profile, undefined, randomUUID()),
+        messages: [{ role: "user", content: "Reply with OK." }],
+        tools: [{ type: "function", function: { name: "noop", parameters: { type: "object", properties: {} } } }],
+        stream: false,
+      }),
+    })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "")
+      throw new Error(
+        `Arena contestant refused the proxy's routing fields: ${profile.displayName} (${response.status}) ${detail.slice(0, MAX_LOGGED_REFUSAL)}`,
+      )
+    }
   }
 }
