@@ -748,6 +748,20 @@ earlier turn's slot; by then that path is gone or belongs to another side. Chats
 change keep their old paths, so the fork never localizes a checkout path into `.agent-duel`: it
 would name a directory inside the contestant's own worktree that does not exist.
 
+The fork also clears, for the model, the output of tool calls from before the chat's last finished
+turn, except skills (`pruneToolOutputBefore` in `arena/fork.ts`, the boundary from `lastTurnStart`
+in `arena/service.ts`). The last turn keeps its output, since its test runs and reads are the
+freshest context. The call and its input stay, and the model sees OpenCode's
+"[Old tool result content cleared]" placeholder instead of the output. A battle turn starts at its
+grafted prompt and includes its replies; a prompt written after the graft is a single-agent turn.
+Clearing at the fork costs no cache: a turn draws new models and a new worktree path, so its first
+request never reads the previous turn's cache. Never prune mid-turn, which would rewrite the warm
+prefix. The canonical session keeps every output, so the chat's history, its transcript hash, and
+single-agent turns, which continue one model whose cache does survive, are unchanged. Warm
+preparation forks right after the vote, so the pruning usually happens there, off the send. In a
+five-turn run, this rule cleared 1–29% of what turns 3–5 inherited, and clearing every earlier turn
+would have cleared 35–43%. The gap is one turn's output, so it shrinks as a chat grows.
+
 The winner's subagent sessions are copied too, under the chat's session, and its `task` calls point
 at the copies (`canonicalSubagentSessionIDs` records them so a retried graft can remove a partial
 copy). The run's own sessions are deleted with its worktree, so without the copies the chat would

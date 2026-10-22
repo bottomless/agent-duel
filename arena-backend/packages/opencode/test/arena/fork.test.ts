@@ -236,6 +236,76 @@ describe("Arena fork", () => {
     }),
   )
 
+  it.live("hides tool output older than the boundary from the model, keeping it stored and in the source", () =>
+    Effect.gen(function* () {
+      const { root, worktree } = yield* prepareRepository()
+      const sessions = yield* Session.Service
+      const source = yield* provideInstance(root)(sessions.create({ title: "source" }))
+      yield* seedHistory(source.id, root).pipe(provideInstance(root))
+      const assistant = (yield* sessions.messages({ sessionID: source.id })).find(
+        (message) => message.info.role === "assistant",
+      )
+      if (!assistant) return yield* Effect.fail(new Error("Seeded assistant message missing"))
+      for (const [callID, tool, status] of [
+        ["call-skill", "skill", "completed"],
+        ["call-failed", "bash", "error"],
+      ] as const) {
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.info.id,
+          sessionID: source.id,
+          type: "tool",
+          callID,
+          tool,
+          state:
+            status === "completed"
+              ? {
+                  status,
+                  input: { name: "review" },
+                  output: "skill body",
+                  title: "review",
+                  metadata: {},
+                  time: { start: Date.now(), end: Date.now() },
+                }
+              : { status, input: { command: "false" }, error: "exit 1", time: { start: Date.now(), end: Date.now() } },
+        })
+      }
+      // The second turn, whose output stays.
+      yield* seedHistory(source.id, root).pipe(provideInstance(root))
+      const before = yield* sessions.messages({ sessionID: source.id })
+      const boundary = before.findLast((message) => message.info.role === "user")!.info.id
+
+      const forked = yield* forkSessionInto({
+        sessionID: source.id,
+        destination: worktree,
+        pathMode: "transcript",
+        pruneToolOutputBefore: MessageID.make(boundary),
+      })
+
+      const tools = (yield* sessions.messages({ sessionID: forked.id })).flatMap((message) =>
+        message.parts.flatMap((part) => (part.type === "tool" ? [part] : [])),
+      )
+      expect(
+        tools.map((part) => [
+          part.callID,
+          part.state.status === "completed" ? part.state.time.compacted !== undefined : "not completed",
+        ]),
+      ).toEqual([
+        ["call-write", true],
+        ["call-skill", false],
+        ["call-failed", "not completed"],
+        ["call-write", false],
+      ])
+      expect(tools.map((part) => part.state.status === "completed" && part.state.output)).toEqual([
+        `Wrote ${path.join(root, "src", "index.ts")}`,
+        "skill body",
+        false,
+        `Wrote ${path.join(root, "src", "index.ts")}`,
+      ])
+      expect(yield* sessions.messages({ sessionID: source.id })).toEqual(before)
+    }),
+  )
+
   it.live("maps a session opened in a subdirectory onto the destination's top level", () =>
     Effect.gen(function* () {
       const { root, worktree } = yield* prepareRepository()

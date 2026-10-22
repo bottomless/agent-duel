@@ -5,6 +5,7 @@ import { createHash, randomBytes } from "crypto"
 import { imageArtifactID } from "@agent-duel/arena-service/research-protocol"
 import { createServer } from "net"
 import { Global } from "@opencode-ai/core/global"
+import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import { rename, rm, stat, writeFile } from "fs/promises"
 import fs from "fs/promises"
 import * as CopySnapshot from "@/arena/copy-snapshot"
@@ -1937,6 +1938,139 @@ describe("Arena service vertical slice", () => {
       router.restore()
     }
   }, 45_000)
+
+  test("keeps the last finished turn's tool output and clears older output for the next contestants only", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure pruning fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const cleared = "[Old tool result content cleared]"
+    // Every turn's prompt names a marker. A fresh prompt runs `echo <marker>-$((40+2))`, whose output
+    // differs from the command, so a request carries `<marker>-42` only as a tool result.
+    let generation = 0
+    const router = installOpenRouterStub({
+      respond({ messages }) {
+        generation++
+        if (messages.at(-1)?.role === "tool")
+          return contestantResponse("contestant", 0, undefined, false, undefined, `p${generation}`)
+        const marker = JSON.stringify(messages.at(-1)?.content).match(/\b([TS]\d)\b/)?.[1]
+        if (!marker) return undefined
+        return contestantResponse("contestant", 0, "bash", false, `echo ${marker}-$((40+2))`, `p${generation}`)
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    const sentToolResults = (request: (typeof router.contestantRequests)[number]) =>
+      JSON.stringify((request.messages as Array<{ role?: string }> | undefined)?.filter((m) => m.role === "tool"))
+    const firstPerModel = (requests: typeof router.contestantRequests) => [
+      ...new Map(requests.toReversed().map((request) => [request.model, request])).values(),
+    ]
+    /** What each side's first request of a turn carries from the history it inherited. */
+    const inherited = (requests: typeof router.contestantRequests) =>
+      firstPerModel(requests).map((request) => {
+        const sent = sentToolResults(request)
+        return {
+          cleared: sent.includes(cleared),
+          kept: ["T1", "T2", "S1", "T3"].filter((marker) => sent.includes(`${marker}-42`)),
+        }
+      })
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await request("/session", { method: "POST", headers, body: JSON.stringify({ title: "Pruning" }) }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const battle = async (marker: string) => {
+        const boundary = router.contestantRequests.length
+        const admitted = await json<PublicSnapshot>(
+          await request(`/arena/chats/${attached.chat.id}/turns`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ prompt: `Run turn ${marker}.` }),
+          }),
+        )
+        const turnID = admitted.turn?.id
+        if (!turnID) throw new Error(`Arena did not admit turn ${marker}`)
+        await waitForTurn(memory.store, turnID, "awaiting_vote")
+        const requests = router.contestantRequests.slice(boundary)
+        await request(`/arena/turns/${turnID}/vote`, { method: "POST", headers, body: JSON.stringify({ vote: "a" }) })
+        await waitForTurn(memory.store, turnID, "complete")
+        await waitForWarmPair(memory.store, turnID)
+        const sides = (await memory.store.turn(turnID))?.setupTimings?.sides
+        return { requests, forkedAtWarmup: [sides?.a?.forkedAtWarmup, sides?.b?.forkedAtWarmup] }
+      }
+
+      // Mid-turn: a side's later requests carry its own tool output.
+      const first = await battle("T1")
+      expect(first.requests.some((request) => sentToolResults(request).includes("T1-42"))).toBe(true)
+      expect(first.requests.every((request) => !sentToolResults(request).includes(cleared))).toBe(true)
+
+      // Forked at warm-up, right after the vote. The last finished turn keeps its output.
+      const second = await battle("T2")
+      expect(second.forkedAtWarmup).toEqual([true, true])
+      expect(inherited(second.requests)).toEqual([
+        { cleared: false, kept: ["T1"] },
+        { cleared: false, kept: ["T1"] },
+      ])
+
+      // A single-agent turn continues the canonical session, which keeps every output.
+      const beforeNormal = (await memory.store.chat(attached.chat.id))?.canonicalTranscriptHash
+      if (!beforeNormal) throw new Error("Arena did not record the canonical transcript")
+      const normalBoundary = router.contestantRequests.length
+      const normal = await request(`/session/${source.id}/message`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          agent: "build",
+          messageID: MessageID.ascending(),
+          model: { providerID: "openrouter", modelID: "deepseek/deepseek-v4-flash" },
+          parts: [{ type: "text", text: "Run single-agent turn S1 without changing files." }],
+        }),
+      })
+      expect(normal.status).toBe(200)
+      await waitForCanonicalTranscriptChange(memory.store, attached.chat.id, beforeNormal)
+      const normalRequests = router.contestantRequests.slice(normalBoundary)
+      expect(normalRequests.length).toBeGreaterThan(0)
+      expect(sentToolResults(normalRequests[0]!)).not.toContain(cleared)
+      expect(["T1-42", "T2-42"].every((output) => sentToolResults(normalRequests[0]!).includes(output))).toBe(true)
+
+      // The single-agent turn is now the last finished one.
+      const third = await battle("T3")
+      expect(inherited(third.requests)).toEqual([
+        { cleared: true, kept: ["S1"] },
+        { cleared: true, kept: ["S1"] },
+      ])
+
+      // A battle after it starts at its grafted prompt, though the single-agent prompt came later.
+      // A restart leaves the warm forks untrusted, so this send forks both sides itself.
+      setStoreForTest(memory.store)
+      await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const fourth = await battle("T4")
+      expect(fourth.forkedAtWarmup).toEqual([false, false])
+      expect(inherited(fourth.requests)).toEqual([
+        { cleared: true, kept: ["T3"] },
+        { cleared: true, kept: ["T3"] },
+      ])
+
+      // What the chat's history shows comes from the canonical session, still whole.
+      const canonical = await json<SessionV1.WithParts[]>(await request(`/session/${source.id}/message`, { headers }))
+      const outputs = canonical.flatMap((message) =>
+        message.parts.flatMap((part) =>
+          part.type === "tool" && part.state.status === "completed" ? [part.state] : [],
+        ),
+      )
+      for (const marker of ["T1", "T2", "S1", "T3", "T4"]) {
+        expect(outputs.some((state) => state.output.includes(`${marker}-42`))).toBe(true)
+      }
+      expect(outputs.every((state) => !state.time.compacted)).toBe(true)
+    } finally {
+      router.restore()
+    }
+  }, 90_000)
 
   test("waits for the retained winner only while it still serves a port", async () => {
     await using directory = await tmpdir({

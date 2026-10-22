@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import path from "path"
 import { Git } from "@/git"
 import { InstanceStore } from "@/project/instance-store"
+import { SessionCompaction } from "@/session/compaction"
 import type { MessageID, SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { localizeEmbeddedPaths, localizeTranscriptPaths } from "./canonical-path"
@@ -36,6 +37,13 @@ export interface Input {
    * copies retarget ports and preview URLs here so each part is written once.
    */
   readonly part?: (part: SessionV1.Part, info: SessionV1.Info) => SessionV1.Part
+  /**
+   * Hide the output of tool calls copied from source messages older than this one. Contestant
+   * copies set it to the start of the chat's last finished turn: a new turn starts with an empty
+   * cache (a new model, a new worktree path), so clearing older output here costs no cache while
+   * every request of the turn sends less. The output stays stored, and the source keeps it visible.
+   */
+  readonly pruneToolOutputBefore?: MessageID
 }
 
 /**
@@ -49,25 +57,30 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
   const mover = yield* MoveSession.Service
   const instances = yield* InstanceStore.Service
   const source = yield* sessions.get(input.sessionID)
+  let pruneBefore: MessageID | undefined
   const forked = yield* instances.provide(
     { directory: source.directory },
     sessions.fork({
       sessionID: input.sessionID,
       ...(input.messageID ? { messageID: input.messageID } : {}),
-      ...(input.onMessageMapping ? { onMessageMapping: input.onMessageMapping } : {}),
+      onMessageMapping(mapping) {
+        if (input.pruneToolOutputBefore) pruneBefore = mapping.get(input.pruneToolOutputBefore)
+        input.onMessageMapping?.(mapping)
+      },
     }),
   )
   const roots = input.roots ?? {
     canonical: yield* topLevel(source.directory),
     worktree: yield* topLevel(input.destination),
   }
-  if (roots.canonical === roots.worktree && !input.part) return forked
+  if (roots.canonical === roots.worktree && !input.part && !pruneBefore) return forked
   yield* mover.moveSession({
     sessionID: forked.id,
     destination: { directory: AbsolutePath.make(input.destination) },
     moveChanges: false,
   })
   const transcript = yield* sessions.messages({ sessionID: forked.id })
+  const prunedAt = Date.now()
   for (const message of transcript) {
     yield* sessions.updateMessage(
       input.pathMode === "transcript"
@@ -85,11 +98,26 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
               catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
             })
           : localizeEmbeddedPaths(part, roots)
-      yield* sessions.updatePart(input.part ? input.part(localized, message.info) : localized)
+      const copied = input.part ? input.part(localized, message.info) : localized
+      // Copies keep their source's order, so an older copied message has a smaller id.
+      yield* sessions.updatePart(
+        pruneBefore && message.info.id < pruneBefore ? pruneToolOutput(copied, prunedAt) : copied,
+      )
     }
   }
   return forked
 })
+
+/**
+ * Marks a finished tool call's output compacted, the way OpenCode's own prune does: the model gets
+ * a placeholder instead (`MessageV2.toModelMessages`), and the input stays so it still sees what
+ * was done. Protected tools (skills) keep their output.
+ */
+function pruneToolOutput(part: SessionV1.Part, at: number): SessionV1.Part {
+  if (part.type !== "tool" || part.state.status !== "completed") return part
+  if (part.state.time.compacted || SessionCompaction.PRUNE_PROTECTED_TOOLS.includes(part.tool)) return part
+  return { ...part, state: { ...part.state, time: { ...part.state.time, compacted: at } } }
+}
 
 // `--show-cdup`, not `--show-toplevel`: the transcript names the directory in the form the session
 // was opened with, and `--show-toplevel` resolves symlinks (`/tmp` on macOS), so the rewrite would

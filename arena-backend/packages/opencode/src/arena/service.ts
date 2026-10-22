@@ -1337,6 +1337,29 @@ export const layer: Layer.Layer<
         Effect.provideService(InstanceStore.Service, instances),
         Effect.provideService(Git.Service, git),
       )
+    /**
+     * Where the chat's last finished turn starts in its canonical transcript. Contestant forks keep
+     * that turn's tool output (its test runs, the files it just read) and clear the output before
+     * it. A battle turn starts at its grafted prompt and holds its replies and subagent results too;
+     * a prompt written after that graft starts a single-agent turn of its own.
+     */
+    const lastTurnStart = Effect.fn("Arena.lastTurnStart")(function* (
+      store: Store,
+      chatID: string,
+      transcript: readonly SessionV1.WithParts[],
+    ) {
+      const turns = yield* promise(() => store.turnsForChat(chatID))
+      const battle = turns.findLast((turn) => turn.canonicalGraftedAt && turn.canonicalUserMessageID)
+      const graftedAt = battle?.canonicalGraftedAt ? new Date(battle.canonicalGraftedAt).getTime() : -Infinity
+      const prompt = transcript.findLast(
+        (message) =>
+          message.info.role === "user" &&
+          message.info.time.created > graftedAt &&
+          message.parts.some((part) => part.type === "text" && !part.synthetic),
+      )
+      const start = prompt?.info.id ?? battle?.canonicalUserMessageID
+      return start ? MessageID.make(start) : undefined
+    })
     const repositoryMutationLock = (commonGitDir: string) => {
       const existing = repositoryMutationLocks.get(commonGitDir)
       if (existing) return existing
@@ -4699,6 +4722,10 @@ export const layer: Layer.Layer<
       const transcript = yield* Effect.exit(sessions.messages({ sessionID: sourceID }))
       if (Exit.isFailure(source) || Exit.isFailure(transcript)) return slots
       const transcriptHash = digest(transcript.value)
+      // A failed read only leaves the history whole.
+      const pruneToolOutputBefore = yield* lastTurnStart(store, chat._id, transcript.value).pipe(
+        Effect.catch(() => Effect.succeed(undefined)),
+      )
       const agent = source.value.agent ?? "build"
       const branch = current.canonicalCheckout?.branch ?? current.arenaBranch
       const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
@@ -4729,6 +4756,7 @@ export const layer: Layer.Layer<
                   destination: slot.directory,
                   roots: { canonical: chat.repository.root, worktree: slot.directory },
                   pathMode: "transcript",
+                  ...(pruneToolOutputBefore ? { pruneToolOutputBefore } : {}),
                   onMessageMapping(mapping) {
                     mapping.forEach((target, from) => messageMapping.set(from, target))
                   },
@@ -4858,6 +4886,13 @@ export const layer: Layer.Layer<
       )
       const refreshing = turn.warmPreparation?.state === "pending"
       const sideTimings = new Map<Side, NonNullable<TurnSetupTimings["sides"]>[Side] & SlotSyncTimings>()
+      // Read once for both sides, so a side forked at send clears what the other does.
+      const coldPruneBoundary = yield* Effect.cached(
+        sessions.messages({ sessionID: sourceID }).pipe(
+          Effect.mapError(error),
+          Effect.flatMap((transcript) => lastTurnStart(store, chat._id, transcript)),
+        ),
+      )
       const makeSide = Effect.fnUntraced(function* (side: Side) {
         const sideStartedAt = Date.now()
         let prepareMs = 0
@@ -4928,11 +4963,13 @@ export const layer: Layer.Layer<
           // Keep concrete URLs in the canonical chat for the reader. Contestant copies normalize
           // every historical run here, then retarget those references to this side's environment.
           const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
+          const pruneBefore = yield* coldPruneBoundary
           const forked = yield* forkInto({
             sessionID: sourceID,
             destination: info.directory,
             roots: { canonical: chat.repository.root, worktree: info.directory },
             pathMode: "transcript",
+            ...(pruneBefore ? { pruneToolOutputBefore: pruneBefore } : {}),
             onMessageMapping(mapping) {
               mapping.forEach((target, source) => messageMapping.set(source, target))
             },
