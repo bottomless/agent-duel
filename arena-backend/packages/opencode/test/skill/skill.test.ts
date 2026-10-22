@@ -633,4 +633,45 @@ ${body}
       }
     }),
   )
+
+  it.live("prefers the nearest project skill over an ancestor's in a monorepo", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true })),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const pkg = path.join(tmp.path, "packages", "app")
+      const copies = [
+        path.join(tmp.path, ".claude"),
+        path.join(tmp.path, ".agents"),
+        path.join(pkg, ".claude"),
+        path.join(pkg, ".agents"),
+      ]
+      yield* Effect.promise(() =>
+        Promise.all(
+          copies.map((root) =>
+            Bun.write(
+              path.join(root, "skills", "nested-skill", "SKILL.md"),
+              `---
+name: nested-skill
+description: A skill in every root.
+---
+
+# Nested Skill
+`,
+            ),
+          ),
+        ),
+      )
+
+      const location = yield* Effect.gen(function* () {
+        const skill = yield* Skill.Service
+        return (yield* skill.get("nested-skill"))?.location
+      }).pipe(provideInstance(pkg))
+
+      // The package's own root wins over the repository root, and `.agents` still wins over
+      // `.claude` within one directory, as it does for the global roots.
+      expect(location).toBe(path.join(pkg, ".agents", "skills", "nested-skill", "SKILL.md"))
+    }),
+  )
 })

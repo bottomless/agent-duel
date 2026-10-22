@@ -222,7 +222,10 @@ const discoverSkills = Effect.fnUntraced(function* (
       .up({ targets: externalDirs, start: directory, stop: worktree })
       .pipe(Effect.catch(() => Effect.succeed([] as string[])))
 
-    for (const root of upDirs) {
+    // `up` lists the nearest directory first. Scan the outermost first, so a nearer (more specific)
+    // root wins in a monorepo. The sort is stable, so `.agents` still beats `.claude` at one level.
+    const nearestLast = upDirs.toSorted((a, b) => path.dirname(a).length - path.dirname(b).length)
+    for (const root of nearestLast) {
       yield* scan(state, root, EXTERNAL_SKILL_PATTERN, { dot: true, scope: "project" })
     }
   }
