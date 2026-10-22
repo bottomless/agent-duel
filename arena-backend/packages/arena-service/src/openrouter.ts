@@ -76,12 +76,18 @@ function finishReason(value: unknown) {
   return undefined
 }
 
+// A `/responses` stream nests the response, with its usage, status and provider, in each event.
+function generation(value: unknown) {
+  return record(value) && record(value.response) ? value.response : value
+}
+
 function metricsCollector(generationID: string, startedAt: number) {
   let usagePayload: unknown
   let finished: string | undefined
   let provider: string | undefined
   return {
-    observe(value: unknown) {
+    observe(event: unknown) {
+      const value = generation(event)
       if (record(value) && (value.usage !== undefined || (record(value.data) && value.data.usage !== undefined))) {
         usagePayload = value
       }

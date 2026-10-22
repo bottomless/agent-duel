@@ -744,6 +744,52 @@ describe("OpenRouter proxy", () => {
     expect(recorded[0]).toMatchObject({ provider: "Private Provider", finishReason: "stop" })
   })
 
+  test("records the metrics a responses stream nests in its event", async () => {
+    let recordedMetrics: Record<string, unknown> | undefined
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => {
+        recordedMetrics = document
+      },
+    })
+    const response = await openrouter({
+      db: async () => db,
+      fetch: async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            type: "response.completed",
+            response: {
+              id: "private-id",
+              provider: "Private Provider",
+              status: "completed",
+              usage: { input_tokens: 10, output_tokens: 5 },
+            },
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    })(
+      new Request("https://control.test/api/openrouter/api/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+          "X-Arena-Generation-ID": "gen_00000000000000000000000000000003",
+        },
+        body: JSON.stringify({ model: "contestant", input: [], stream: true }),
+      }),
+    )
+
+    expect(await response.text()).not.toContain("Private Provider")
+    expect(recordedMetrics).toMatchObject({
+      usage: { promptTokens: 10, completionTokens: 5 },
+      finishReason: "completed",
+      provider: "Private Provider",
+    })
+  })
+
   test("leaves sampling to each provider, because the engine cannot choose it for a hidden model", async () => {
     let upstreamBody: Record<string, unknown> | undefined
     const db = fakeDb({
