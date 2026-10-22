@@ -13,13 +13,6 @@ export type Preview = {
   /** The first alias, retained for callers of the PR34 API. */
   readonly port: number
   readonly portAliases?: PortAliases
-  readonly context?: ContestantContext
-}
-
-export type ContestantContext = {
-  readonly branch?: string
-  readonly trunkDirectory: string
-  readonly trunkBranch?: string
 }
 
 export type Listener = {
@@ -33,7 +26,6 @@ export type PreviewRoute = {
   readonly directory: string
   readonly hostname: string
   readonly portAliases: PortAliases
-  readonly context?: ContestantContext
   readonly listeners: readonly Listener[]
   readonly state: "active" | "inactive"
   readonly ownership: "owned" | "ended"
@@ -206,7 +198,6 @@ function snapshot(route: PreviewRoute): PreviewRoute {
   return {
     ...route,
     portAliases: { ...route.portAliases },
-    ...(route.context ? { context: { ...route.context } } : {}),
     listeners: route.listeners.map((listener) => ({ ...listener })),
   }
 }
@@ -229,7 +220,6 @@ export function register(directory: string, preview: Preview, at = new Date()): 
     directory,
     hostname: normalized.hostname,
     portAliases: { ...normalized.portAliases },
-    ...(normalized.context ? { context: { ...normalized.context } } : {}),
     listeners: [],
     state: "active",
     ownership: "owned",
@@ -254,7 +244,6 @@ export async function allocatePreview(input: {
   readonly turnIndex: number
   readonly side: Side
   readonly allocator?: PortAllocator | ((count: number) => Promise<readonly number[]>)
-  readonly context?: ContestantContext
   readonly at?: Date
 }): Promise<PreviewRoute> {
   const current = routes.get(input.directory)
@@ -270,7 +259,6 @@ export async function allocatePreview(input: {
           hostname: hostname(input.chatID, input.turnIndex, input.side),
           port: portAliases.PASEO_PORT,
           portAliases,
-          ...(input.context ? { context: input.context } : {}),
         },
         input.at,
       )
@@ -461,13 +449,6 @@ export function environment(
     PASEO_PORT3: String(preview.portAliases.PASEO_PORT3),
     [SERVICE_OWNER_ENV]: serviceOwnerID(directory),
     [SERVICE_RELATIVE_CWD_ENV]: encodeURIComponent(ownerRelativeCwd),
-    ...(current.context
-      ? {
-          PASEO_CURRENT_BRANCH: current.context.branch ?? "",
-          PASEO_TRUNK_DIR: current.context.trunkDirectory,
-          PASEO_TRUNK_BRANCH: current.context.trunkBranch ?? "",
-        }
-      : {}),
     ARENA_PREVIEW_HOSTNAME: preview.hostname,
     ...(previewUrl ? { ARENA_PREVIEW_URL: previewUrl } : {}),
     ...(previewUrl2 ? { ARENA_PREVIEW_URL2: previewUrl2 } : {}),

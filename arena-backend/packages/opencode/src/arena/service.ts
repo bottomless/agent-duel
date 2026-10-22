@@ -234,7 +234,7 @@ import type { Store } from "./mongo"
 
 const encoder = new TextEncoder()
 const contestantWorktreeInstruction =
-  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Earlier turns ran in environments that are now closed. Their ports and preview URLs were updated to this environment's values in earlier answers, reasoning, tool calls, and tool output. Earlier file reads, edits, writes, and grep matches, files on disk, long JSON documents, and user messages keep the original ports. Read a file again before you edit it. Any other port or preview URL may belong to another process: connect only to your own ports and preview URLs, and stop only processes you started in this environment. Do not reuse a log path or process ID from an earlier message. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
+  "Git is prepared at the frozen base in an isolated worktree. Work in $(pwd). Branch changes in this worktree are part of your result. Port aliases belong only to this contestant environment. Earlier turns ran in environments that are now closed. Their ports and preview URLs were updated to this environment's values in earlier answers, reasoning, tool calls, and tool output. Earlier file reads, edits, writes, and grep matches, files on disk, long JSON documents, and user messages keep the original ports. Read a file again before you edit it. Any other port or preview URL may belong to another process: connect only to your own ports and preview URLs, and stop only processes you started in this environment. Do not reuse a log path or process ID from an earlier message. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
 const canonicalUnavailableReason = "The trunk worktree is unavailable. Restore it at its recorded location, then retry."
 
 // The refusal reaches the user as a toast, so a merge that conflicted in hundreds of files must
@@ -4850,7 +4850,6 @@ export const layer: Layer.Layer<
       const transcriptHash = digest(transcript.value)
       const pruneToolOutputBefore = yield* contestantPruneBoundary(store, chat._id, transcript.value)
       const agent = source.value.agent ?? "build"
-      const branch = current.canonicalCheckout?.branch ?? current.arenaBranch
       const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
       // Both forks at once: each writes its own session into its own directory.
       return yield* Effect.forEach(
@@ -4866,11 +4865,6 @@ export const layer: Layer.Layer<
                     turnIndex: generation,
                     side: slot.side,
                     allocator: sequentialAllocator(store.portCursor()),
-                    context: {
-                      ...(branch ? { branch } : {}),
-                      trunkDirectory: chat.repository.root,
-                      trunkBranch: current.canonicalCheckout?.branch ?? current.arenaBranch,
-                    },
                   }),
                 )
                 const env = previewEnvironment(slot.directory)
@@ -5059,11 +5053,6 @@ export const layer: Layer.Layer<
             turnIndex: turn.turnIndex,
             side,
             allocator: sequentialAllocator(store.portCursor()),
-            context: {
-              ...(branch ? { branch } : {}),
-              trunkDirectory: chat.repository.root,
-              trunkBranch: chat.canonicalCheckout?.branch ?? chat.arenaBranch,
-            },
           }),
         )
         previewWorktrees.add(info.directory)
