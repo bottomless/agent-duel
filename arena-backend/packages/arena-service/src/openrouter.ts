@@ -1,8 +1,9 @@
-import { randomUUID } from "crypto"
-import { recordAssignmentGenerationMetrics, reserveRoutingAssignment } from "./assignments"
+import { createHash, createHmac, randomUUID } from "crypto"
+import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
 import { authorize, type ArenaContext } from "./context"
 import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
 import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
+import type { ModelProfile } from "./pool"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -323,6 +324,44 @@ function invalidRequestBody(input: unknown) {
   return undefined
 }
 
+// A battle side lives for one turn, so its assignment id keys its cache and its provider. A
+// single-agent chat draws a new assignment for every message over one growing conversation, and a
+// key per message would send each message's first call away from the cache the last one wrote. The
+// engine names that scope after the session and the message (`ensureSingleAgentRating` in
+// `opencode/src/arena/service.ts`), so the key is a keyed hash of the account and the session: the
+// same for the whole chat, whatever model each message draws, and naming neither.
+const singleAgentScope = /^single-agent\|(\d+):/
+
+function cacheKey(
+  apiKey: string,
+  userId: string,
+  scopeID: string,
+  assignment: { readonly assignmentID: string; readonly modelSize?: SingleAgentModelSize },
+) {
+  const match = assignment.modelSize === undefined ? null : singleAgentScope.exec(scopeID)
+  if (!match) return assignment.assignmentID
+  const sessionID = scopeID.slice(match[0].length, match[0].length + Number(match[1]))
+  if (!sessionID || sessionID.length !== Number(match[1])) return assignment.assignmentID
+  const key = createHash("sha256").update("arena-cache-key-v1\0").update(apiKey).digest()
+  return createHmac("sha256", key).update(`${userId.length}:${userId}|${sessionID}`).digest("hex").slice(0, 32)
+}
+
+/** The fields the proxy decides for every contestant call, replacing any the engine sent. */
+function assignedRouting(model: ModelProfile, modelSize: SingleAgentModelSize | undefined, key: string) {
+  return {
+    model: model.slug,
+    reasoning:
+      model.reasoningEffort === null
+        ? { enabled: true }
+        : { effort: model.reasoningEffort ?? (modelSize === "medium" ? "xhigh" : "high") },
+    provider: model.routing,
+    // Without these OpenRouter's throughput sort can move a conversation to another provider whose
+    // cache is empty, and some providers miss their own cache without a key.
+    session_id: key,
+    prompt_cache_key: key,
+  }
+}
+
 function assignmentHeaders(request: Request) {
   const assignmentHeader = request.headers.get("x-arena-assignment-id")
   const scopeHeader = request.headers.get("x-arena-scope-id")
@@ -485,20 +524,12 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     body = new TextEncoder().encode(
       JSON.stringify({
         ...withoutSampling(restored),
-        model: routeAssignment.model.slug,
-        reasoning:
-          routeAssignment.model.reasoningEffort === null
-            ? { enabled: true }
-            : {
-                effort: routeAssignment.model.reasoningEffort ?? (routeAssignment.modelSize === "medium" ? "xhigh" : "high"),
-              },
-        provider: routeAssignment.model.routing,
+        ...assignedRouting(
+          routeAssignment.model,
+          routeAssignment.modelSize,
+          cacheKey(apiKey, caller.id, assignment.scopeID, routeAssignment),
+        ),
         ...promptCache(routeAssignment.model.slug, input),
-        // Without these OpenRouter's throughput sort can move a conversation to another provider
-        // mid-turn, whose cache is empty, and some providers (Meta) miss their own cache without a
-        // key. One assignment is one side of one turn; its subagents share it.
-        session_id: assignment.assignmentID,
-        prompt_cache_key: assignment.assignmentID,
         stream_options: record(input.stream_options)
           ? { ...input.stream_options, include_usage: true }
           : { include_usage: true },

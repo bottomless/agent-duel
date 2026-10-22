@@ -744,6 +744,65 @@ describe("OpenRouter proxy", () => {
     expect(recorded[0]).toMatchObject({ provider: "Private Provider", finishReason: "stop" })
   })
 
+  test("keeps a single-agent chat on one opaque key across its messages", async () => {
+    const sessionID = "ses_private-session"
+    const scope = (session: string, message: string) =>
+      `single-agent|${session.length}:${session}|${message.length}:${message}`
+    const sets = [
+      { userId: "user-1", scopeID: scope(sessionID, "msg_1"), assignmentID: "first-id", modelSize: "medium" },
+      { userId: "user-1", scopeID: scope(sessionID, "msg_2"), assignmentID: "second-id", modelSize: "frontier" },
+      { userId: "user-1", scopeID: scope("ses_other", "msg_1"), assignmentID: "other-chat-id", modelSize: "medium" },
+      { userId: "user-2", scopeID: scope(sessionID, "msg_3"), assignmentID: "other-user-id", modelSize: "medium" },
+      // A battle scope that copies the single-agent shape still keys on its assignment.
+      { userId: "user-1", scopeID: scope(sessionID, "msg_4"), assignmentID: "battle-id" },
+    ]
+    const db = fakeDb({
+      assignmentSets: (filter) =>
+        sets
+          .filter((set) => set.userId === filter.userId && set.scopeID === filter.scopeID)
+          .map(({ userId, scopeID, assignmentID, modelSize }) => ({
+            userId,
+            scopeID,
+            assignments: [{ assignmentID, ...(modelSize ? { modelSize } : {}), model: pool[1] }],
+          })),
+    })
+    const upstreamBodies: { session_id?: unknown; prompt_cache_key?: unknown }[] = []
+    const keyFor = async ({ userId, scopeID, assignmentID, modelSize }: (typeof sets)[number]) => {
+      const response = await openrouter({
+        resolveCaller: async () => ({ id: userId }),
+        db: async () => db,
+        fetch: async (_input, init) => {
+          upstreamBodies.push(await new Response(init?.body).json())
+          return Response.json({ choices: [] })
+        },
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": assignmentID,
+            "X-Arena-Scope-ID": scopeID,
+          },
+          body: JSON.stringify({ model: modelSize === "medium" ? "medium" : "contestant", messages: [] }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      const body = upstreamBodies.at(-1)
+      expect(body?.session_id).toBe(body?.prompt_cache_key)
+      return body?.prompt_cache_key
+    }
+    const keys: unknown[] = []
+    for (const set of sets) keys.push(await keyFor(set))
+    const [first, second, otherChat, otherUser, battle] = keys
+
+    expect(first).toBe(second)
+    expect(first).toMatch(/^[0-9a-f]{32}$/)
+    expect(String(first)).not.toContain("private-session")
+    expect(otherChat).not.toBe(first)
+    expect(otherUser).not.toBe(first)
+    expect(battle).toBe("battle-id")
+  })
+
   test("records the metrics a responses stream nests in its event", async () => {
     let recordedMetrics: Record<string, unknown> | undefined
     const db = fakeDb({
