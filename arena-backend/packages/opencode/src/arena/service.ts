@@ -312,7 +312,7 @@ export function contestantSystemInstruction(
     environmentPending && worktree
       ? `The initial model call is running while the environment is still being prepared at ${worktree}. This is your worktree path. You may reason immediately. Tools that do not need the filesystem can run before the base checkout is ready. Once it is ready, safe reads can run while ignored content finishes copying. A tool that could observe or change incomplete state will wait until its required setup phase completes.`
       : ""
-  return [contestantWorktreeInstruction, ArenaResponseRecovery.INSTRUCTION, pendingEnvironment, currentPreview]
+  return [contestantWorktreeInstruction, pendingEnvironment, currentPreview]
     .filter(Boolean)
     .join("\n\n")
 }
