@@ -671,8 +671,10 @@ nonignored-untracked state in `refs/battles/<chat>/turn-<n>/base`, then draws a 
 work from that frozen state, so later canonical movement cannot shift the ground under a running
 battle.
 
-**The draw** (`arena-service/src/pool.ts`). The service draws two distinct profiles uniformly from
-its pool; which one lands on side A is part of the draw. It stores the private mapping permanently
+**The draw** (`arena-service/src/pool.ts`). The service draws two distinct profiles without replacement,
+using each profile's relative `selectionWeight` (default 1), then randomizes their sides so weight
+does not bias placement on A or B. Weights must be finite and positive; leave a profile out of the
+active pool to disable it. It stores the private mapping permanently
 in `arenaAssignmentSets` and returns one opaque assignment id per side. The set is account- and
 turn-scoped and idempotent for retries. The local turn and run records contain those opaque ids, not
 model names or slugs, until resolution. Changing a pool does not change assignments already stored.

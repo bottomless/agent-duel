@@ -166,4 +166,52 @@ describe("Arena model pool", () => {
     expect(sampleOne([pool[2]], () => 0.999).displayName).toBe("Grok 4.6")
     expect(() => samplePair(pool, () => 1)).toThrow("Arena assignment randomness must return a finite value in [0, 1)")
   })
+
+  test("uses relative selection weights for each draw without repeating a contestant", () => {
+    const weighted = [
+      { ...pool[0], selectionWeight: 0.25 },
+      pool[1],
+      { ...pool[2], selectionWeight: 2 },
+    ] as const satisfies ModelPool
+
+    expect(sampleOne(weighted, () => 0.08)).toEqual(pool[1])
+    expect(sampleOne(weighted, () => 0.4)).toEqual(weighted[2])
+    expect(samplePair(weighted, sequence(0.4, 0.21, 0))).toEqual([weighted[2], pool[1]])
+    expect(samplePair(weighted, sequence(0.4, 0.21, 0.75))).toEqual([pool[1], weighted[2]])
+  })
+
+  test("preserves uniform draws when every weight is equal", () => {
+    const explicit = pool.map((profile) => ({ ...profile, selectionWeight: 0.25 }))
+    for (const random of [0, 1 / 3, 2 / 3, 0.9999999999999999]) {
+      expect(sampleOne(explicit, () => random).slug).toBe(sampleOne(pool, () => random).slug)
+    }
+    expect(samplePair(explicit.slice(0, 2), sequence(0, 0.999, 0.999)).map((profile) => profile.slug)).toEqual([
+      pool[1].slug,
+      pool[0].slug,
+    ])
+  })
+
+  test.each([0, -1, NaN, Infinity, -Infinity])("rejects invalid selection weight %p", (selectionWeight) => {
+    const invalid = [{ ...pool[0], selectionWeight }, pool[1]]
+    expect(() => sampleOne(invalid)).toThrow("Arena contestant selection weight must be finite and positive")
+    expect(() => samplePair(invalid)).toThrow("Arena contestant selection weight must be finite and positive")
+  })
+
+  test.each([-1, 1, NaN, Infinity])("rejects invalid randomness %p in every stage of a pair draw", (value) => {
+    const message = "Arena assignment randomness must return a finite value in [0, 1)"
+    expect(() => sampleOne(pool, () => value)).toThrow(message)
+    expect(() => samplePair(pool, sequence(0, value))).toThrow(message)
+    expect(() => samplePair(pool, sequence(0, 0, value))).toThrow(message)
+  })
+
+  test("rejects empty or undersized pools and overflowing total weights", () => {
+    expect(() => sampleOne([])).toThrow("Arena model pool has an invalid total selection weight")
+    expect(() => samplePair([])).toThrow("Arena model pool could not produce a pair")
+    expect(() => samplePair([pool[0]])).toThrow("Arena model pool could not produce a pair")
+    const overflowing = [
+      { ...pool[0], selectionWeight: Number.MAX_VALUE },
+      { ...pool[1], selectionWeight: Number.MAX_VALUE },
+    ]
+    expect(() => sampleOne(overflowing)).toThrow("Arena model pool has an invalid total selection weight")
+  })
 })

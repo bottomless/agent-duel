@@ -3,6 +3,8 @@ export type ModelProfile = {
   readonly slug: string
   readonly canonicalSlug: string
   readonly contextWindow: number
+  /** Relative draw weight, default 1. Must be finite and positive; omit a profile to disable it. */
+  readonly selectionWeight?: number
   /** Sent to OpenRouter as `provider`. */
   readonly routing: Readonly<Record<string, unknown>>
   /** Null enables reasoning without an effort level for models that do not expose one. */
@@ -78,25 +80,42 @@ export async function validateOpenRouter(
   validateCatalog(pool, await response.json())
 }
 
-function index(random: () => number, length: number) {
+function randomValue(random: () => number) {
   const value = random()
   if (!Number.isFinite(value) || value < 0 || value >= 1) {
     throw new Error("Arena assignment randomness must return a finite value in [0, 1)")
   }
-  return Math.floor(value * length)
+  return value
 }
 
 export function samplePair(pool: ModelPool, random: () => number = Math.random): readonly [ModelProfile, ModelProfile] {
-  const first = index(random, pool.length)
-  const second = index(random, pool.length - 1)
-  const a = pool[first]
-  const b = pool[second >= first ? second + 1 : second]
-  if (!a || !b) throw new Error("Arena model pool could not produce a pair")
-  return [a, b]
+  if (pool.length < 2) throw new Error("Arena model pool could not produce a pair")
+  const a = sampleOne(pool, random)
+  const remaining = pool.filter((profile) => profile !== a)
+  const b = sampleOne(remaining, random)
+  // Weighted first and second draws have different distributions. Randomize sides so weight
+  // changes exposure without favoring a contestant's placement on A or B.
+  return randomValue(random) < 0.5 ? [a, b] : [b, a]
 }
 
 export function sampleOne(pool: ModelPool, random: () => number = Math.random) {
-  const selected = pool[index(random, pool.length)]
-  if (!selected) throw new Error("Arena model pool could not produce a contestant")
-  return selected
+  const weighted = pool.map((profile) => {
+    const weight = profile.selectionWeight ?? 1
+    if (!Number.isFinite(weight) || weight <= 0) {
+      throw new Error(`Arena contestant selection weight must be finite and positive: ${profile.displayName}`)
+    }
+    return { profile, weight }
+  })
+  const total = weighted.reduce((sum, { weight }) => sum + weight, 0)
+  if (!Number.isFinite(total) || total <= 0) throw new Error("Arena model pool has an invalid total selection weight")
+  const target = randomValue(random) * total
+  let cumulative = 0
+  for (const { profile, weight } of weighted) {
+    cumulative += weight
+    if (target < cumulative) return profile
+  }
+  // Multiplication can round a value just below 1 up to the total.
+  const last = pool.at(-1)
+  if (!last) throw new Error("Arena model pool could not produce a contestant")
+  return last
 }
