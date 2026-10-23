@@ -248,22 +248,24 @@ describe("Arena port retargeting: tool calls", () => {
     expect(bash(heredoc).input.command).toBe(heredoc.replaceAll("51101", "53728"))
   })
 
-  test("rewrites file tool content, patches and grep matches", () => {
-    const write = tool("write", { filePath: "/repo/config.json", content: '{"port": 51101}' }, "Wrote file")
-    expect(retarget(write).state.input.content).toBe('{"port": 53728}')
-    const edit = tool("edit", { filePath: "/repo/vite.config.ts", oldString: "port: 51101", newString: "port: 5173" })
-    expect(retarget(edit).state.input).toMatchObject({ oldString: "port: 53728", newString: "port: 5173" })
-    const multiedit = tool("multiedit", { filePath: "/repo/a.ts", edits: [{ oldString: "--port 51101", newString: "" }] })
-    expect(retarget(multiedit).state.input.edits).toEqual([{ oldString: "--port 53728", newString: "" }])
-    const read = tool("read", { filePath: "/repo/server.py" }, "<content>\n1: PORT = 51101  # port 51101\n</content>")
-    expect(retarget(read).state.output).toBe("<content>\n1: PORT = 53728  # port 53728\n</content>")
-    const patchText = "*** Begin Patch\n*** Update File: vite.config.ts\n-  server: { port: 51101 }\n*** End Patch"
-    expect(retarget(tool("apply_patch", { patchText })).state.input.patchText).toBe(patchText.replace("51101", "53728"))
-    const grep = tool("grep", { pattern: "51101" }, "/repo/server.py:\n  Line 3: PORT = 51101")
-    expect(retarget(grep).state).toMatchObject({
-      input: { pattern: "53728" },
-      output: "/repo/server.py:\n  Line 3: PORT = 53728",
+  test("keeps the file content file tools read or wrote, and rewrites the rest of the call", () => {
+    const write = tool("write", { filePath: "/repo/config.json", content: '{"port": 51101}' }, "Wrote :51101")
+    expect(retarget(write).state).toMatchObject({ input: write.state.input, output: "Wrote :53728" })
+    const edit = tool("edit", {
+      filePath: "/repo/logs/51101/vite.config.ts",
+      oldString: "port: 51101",
+      newString: "port: 5173",
     })
+    expect(retarget(edit).state.input).toEqual(edit.state.input)
+    const multiedit = tool("multiedit", { filePath: "/repo/a.ts", edits: [{ oldString: "--port 51101", newString: "" }] })
+    expect(retarget(multiedit)).toBe(multiedit)
+    const read = tool("read", { filePath: "/repo/server.py" }, "<content>\n1: PORT = 51101  # port 51101\n</content>")
+    expect(retarget(read)).toBe(read)
+    const patchText = "*** Begin Patch\n*** Update File: vite.config.ts\n-  server: { port: 51101 }\n*** End Patch"
+    const patch = tool("apply_patch", { patchText })
+    expect(retarget(patch)).toBe(patch)
+    const grep = tool("grep", { pattern: "51101" }, "/repo/server.py:\n  Line 3: PORT = 51101")
+    expect(retarget(grep).state).toMatchObject({ input: { pattern: "53728" }, output: grep.state.output })
   })
 
   test("rewrites a fetched page and a search result", () => {

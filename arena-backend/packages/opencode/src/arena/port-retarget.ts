@@ -4,9 +4,9 @@
  * input, output and error follow one rule: every standalone number equal to one of the producing
  * run's ports changes, and so do whole preview URLs and preview hosts.
  *
- * Never changed: user messages, files and attachments, tool metadata, titles and IDs, `data:` URIs,
- * base64 and long hex runs, UUIDs, JSON documents longer than `MAX_REWRITTEN_JSON`, and binary
- * output.
+ * Never changed: user messages, files and attachments, tool metadata, titles and IDs, file content
+ * the file tools read or wrote (`FILE_CONTENT`), `data:` URIs, base64 and long hex runs, UUIDs, JSON
+ * documents longer than `MAX_REWRITTEN_JSON`, and binary output.
  */
 
 const PORT_ALIASES = ["PASEO_PORT", "PASEO_PORT2", "PASEO_PORT3"] as const
@@ -128,13 +128,32 @@ function withField(part: Record<string, unknown>, key: string, rewrite: Rewrite)
   return next === value ? part : { ...part, [key]: next }
 }
 
+/**
+ * The file content each file tool read or wrote. It matches the file on disk, which keeps its ports,
+ * so a later edit copied from it still applies.
+ */
+const FILE_CONTENT: Readonly<Record<string, { readonly input?: readonly string[]; readonly output?: true }>> = {
+  read: { output: true },
+  grep: { output: true },
+  write: { input: ["content"] },
+  edit: { input: ["oldString", "newString"] },
+  multiedit: { input: ["edits"] },
+  apply_patch: { input: ["patchText"] },
+}
+
 function retargetTool(part: Record<string, unknown>, rewrite: Rewrite) {
   const state = part.state
   if (!plainObject(state)) return part
+  const content = typeof part.tool === "string" ? FILE_CONTENT[part.tool] : undefined
   const next: Record<string, unknown> = {}
   for (const key of ["input", "output", "error"]) {
-    const rewritten = mapValue(state[key], rewrite)
-    if (rewritten !== state[key]) next[key] = rewritten
+    if (key === "output" && content?.output) continue
+    const value = state[key]
+    const rewritten =
+      key === "input" && content?.input && plainObject(value)
+        ? mapEntries(value, rewrite, content.input)
+        : mapValue(value, rewrite)
+    if (rewritten !== value) next[key] = rewritten
   }
   if (Object.keys(next).length === 0) return part
   return { ...part, state: { ...state, ...next } }
@@ -147,11 +166,16 @@ function mapValue(value: unknown, rewrite: Rewrite): unknown {
     const next = value.map((entry) => mapValue(entry, rewrite))
     return next.some((entry, index) => entry !== value[index]) ? next : value
   }
-  if (plainObject(value)) {
-    const entries = Object.entries(value).map(([key, entry]) => [key, mapValue(entry, rewrite)] as const)
-    return entries.some(([key, entry]) => entry !== value[key]) ? Object.fromEntries(entries) : value
-  }
+  if (plainObject(value)) return mapEntries(value, rewrite, [])
   return value
+}
+
+/** Rewrites every string under `value` except the top-level keys in `keep`. */
+function mapEntries(value: Record<string, unknown>, rewrite: Rewrite, keep: readonly string[]) {
+  const entries = Object.entries(value).map(
+    ([key, entry]) => [key, keep.includes(key) ? entry : mapValue(entry, rewrite)] as const,
+  )
+  return entries.some(([key, entry]) => entry !== value[key]) ? Object.fromEntries(entries) : value
 }
 
 function rewriter(bank: ArenaEnvironmentBank, env: Env): Rewrite | undefined {

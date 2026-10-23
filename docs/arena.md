@@ -599,19 +599,22 @@ that worked. A contestant's copy retargets them to its own bank as it forks
 input, output and error follow one rule: every number equal to one of the producing run's ports
 changes, unless it is part of a name (glued to a letter or `_`, a dashed name like `req-N-ab12` or
 `web-N.txt`, a version like `1.N.0`, or a path segment). Whole preview URLs and preview hosts change
-too. Tool calls get no rule of their own. On production transcripts, a list of port shapes
+too. Tool calls use the same number rule. On production transcripts, a list of port shapes
 (`localhost:N`, `--port N`, ...) missed shapes nobody listed (`lsof -iTCP:"N"`, `printenv
-PASEO_PORT`, a socket tuple, a LAN URL), and a blacklist of file reads and writes kept real ports
-whenever a compound command also read a file.
+PASEO_PORT`, a socket tuple, a LAN URL), and skipping the output of any shell command that read a
+file kept real ports whenever a compound command also ran `git diff` or `cat`.
 
-Never changed: user messages; files, attachments, tool metadata, titles and IDs; `data:` URIs,
+Never changed: user messages; files, attachments, tool metadata, titles and IDs; the file content
+the file tools read or wrote (`read` and `grep` output, `write`, `edit`, `multiedit` and
+`apply_patch` content), so an edit copied from history still matches the file on disk; `data:` URIs,
 base64 runs, hex runs of 12 or more, UUIDs; JSON longer than 2,500 characters (a string or any
 `{"…` span that parses), which is data a program wrote rather than a command's own result; binary
 output; reasoning that carries metadata. Agent Duel saves reasoning without its metadata
 (`arena/privacy.ts`), so a forked copy never carries a signature to break.
 
-Earlier file reads, edits and writes change too, while the files on disk keep their ports. The
-contestant prompt says so and tells the contestant to read a file again before it edits it.
+File content a shell command prints or writes (`cat f`, `cat > f <<EOF`) changes like any other
+output, while the file on disk keeps its ports. The contestant prompt tells the contestant to read a
+file again before it edits it.
 
 Three rules keep the mapping exact:
 
@@ -626,10 +629,11 @@ Three rules keep the mapping exact:
 - **The prompt says what changed.** The contestant prompt lists what was updated and what keeps
   the original ports, and tells the contestant to connect only to its own ports.
 
-The costs: a command and a long JSON it printed can name different ports; earlier file reads and
-edits show ports the file on disk does not have; a number that equals a port but is not one (a PID,
-a size, a line number) changes with it; and ports a user typed, or a Battle-off turn ran, stay
-literal, so they can name a port the other side now owns.
+The costs: a command and a long JSON it printed, or a file tool call and the content it read, can
+name different ports; shell reads and writes of a file show ports the file on disk does not have; a
+number that equals a port but is not one (a PID, a size, a line number) changes with it; and ports
+a user typed, or a Battle-off turn ran, stay literal, so they can name a port the other side now
+owns.
 
 After a run, `$ARENA_PREVIEW_URL…` in its answer text is expanded so the reader sees the URL. Port
 variables stay as written.
