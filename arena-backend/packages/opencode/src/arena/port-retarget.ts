@@ -1,13 +1,12 @@
 /**
  * A contestant's copy of the chat's history is retargeted from the port bank of the run that wrote
- * each message to the contestant's own bank. Everything may change except a blacklist: in answers,
- * reasoning without a signature, and tool inputs, outputs and errors, every standalone number equal
- * to one of the producing run's ports, and whole preview URLs and preview hosts.
+ * each message to the contestant's own bank. Answers, reasoning without a signature, and every tool's
+ * input, output and error follow one rule: every standalone number equal to one of the producing
+ * run's ports changes, and so do whole preview URLs and preview hosts.
  *
- * Never changed: user messages, files and attachments, tool metadata and IDs, `data:` URIs, base64
- * and long hex runs, UUIDs, JSON documents longer than `MAX_REWRITTEN_JSON`, binary output, the
- * content of files that are not logs (`read` output, `write`/`edit`/`apply_patch` input, `grep`
- * matches, shell reads and writes of a file), and `websearch` output.
+ * Never changed: user messages, files and attachments, tool metadata, titles and IDs, `data:` URIs,
+ * base64 and long hex runs, UUIDs, JSON documents longer than `MAX_REWRITTEN_JSON`, and binary
+ * output.
  */
 
 const PORT_ALIASES = ["PASEO_PORT", "PASEO_PORT2", "PASEO_PORT3"] as const
@@ -83,7 +82,7 @@ export function producingArenaEnvironment(messageID: string, turns: readonly Are
 
 type Env = Readonly<Record<string, string | undefined>>
 type Range = readonly [start: number, end: number]
-type Rewrite = (value: string, keep?: readonly Range[]) => string
+type Rewrite = (value: string) => string
 
 /**
  * Retargets one copied part for a contestant: the producing run's literal ports and preview URLs
@@ -129,127 +128,30 @@ function withField(part: Record<string, unknown>, key: string, rewrite: Rewrite)
   return next === value ? part : { ...part, [key]: next }
 }
 
-// Tools whose output is a page from elsewhere: it names ports of machines that are not this one.
-const EXTERNAL_OUTPUT = new Set(["websearch", "codesearch"])
-
 function retargetTool(part: Record<string, unknown>, rewrite: Rewrite) {
   const state = part.state
   if (!plainObject(state)) return part
-  const tool = typeof part.tool === "string" ? part.tool : ""
-  const input = plainObject(state.input) ? state.input : undefined
   const next: Record<string, unknown> = {}
-  if (input) {
-    const rewritten = retargetInput(tool, input, rewrite)
-    if (rewritten !== input) next.input = rewritten
-  }
-  if (typeof state.output === "string") {
-    const rewritten = retargetOutput(tool, input ?? {}, state.output, rewrite)
-    if (rewritten !== state.output) next.output = rewritten
-  }
-  if (typeof state.error === "string") {
-    const rewritten = rewrite(state.error)
-    if (rewritten !== state.error) next.error = rewritten
+  for (const key of ["input", "output", "error"]) {
+    const rewritten = mapValue(state[key], rewrite)
+    if (rewritten !== state[key]) next[key] = rewritten
   }
   if (Object.keys(next).length === 0) return part
   return { ...part, state: { ...state, ...next } }
 }
 
-function retargetInput(tool: string, input: Record<string, unknown>, rewrite: Rewrite) {
-  const file = filePath(input)
-  const log = file !== undefined && logFile(file)
-  if (tool === "write") return mapLeaves(input, rewrite, log ? [] : ["content"])
-  if (tool === "edit") return mapLeaves(input, rewrite, log ? [] : ["oldString", "newString"])
-  if (tool === "multiedit") return mapLeaves(input, rewrite, log ? [] : ["edits"])
-  if (tool === "apply_patch" && typeof input.patchText === "string") {
-    const patchText = retargetPatch(input.patchText, rewrite)
-    return mapLeaves(patchText === input.patchText ? input : { ...input, patchText }, rewrite, ["patchText"])
-  }
-  if (tool === "bash" && typeof input.command === "string") {
-    const command = rewrite(input.command, fileWrites(input.command))
-    return mapLeaves(command === input.command ? input : { ...input, command }, rewrite, ["command"])
-  }
-  return mapLeaves(input, rewrite, [])
-}
-
-function retargetOutput(tool: string, input: Record<string, unknown>, output: string, rewrite: Rewrite) {
-  if (EXTERNAL_OUTPUT.has(tool)) return output
-  if (tool === "read") {
-    const file = filePath(input)
-    return file !== undefined && logFile(file) ? rewrite(output) : output
-  }
-  if (tool === "grep") return retargetGrep(output, rewrite)
-  if (tool === "bash" && typeof input.command === "string" && readsFiles(input.command)) return output
-  return rewrite(output)
-}
-
-function filePath(input: Record<string, unknown>) {
-  const value = input.filePath ?? input.file_path ?? input.path
-  return typeof value === "string" ? value : undefined
-}
-
-/** Rewrites every string under `value` except the top-level keys in `keep`. */
-function mapLeaves(value: Record<string, unknown>, rewrite: Rewrite, keep: readonly string[]) {
-  let changed = false
-  const entries = Object.entries(value).map(([key, entry]) => {
-    if (keep.includes(key)) return [key, entry] as const
-    const next = mapValue(entry, rewrite)
-    if (next !== entry) changed = true
-    return [key, next] as const
-  })
-  return changed ? Object.fromEntries(entries) : value
-}
-
+/** Rewrites every string under `value`. */
 function mapValue(value: unknown, rewrite: Rewrite): unknown {
   if (typeof value === "string") return rewrite(value)
   if (Array.isArray(value)) {
     const next = value.map((entry) => mapValue(entry, rewrite))
     return next.some((entry, index) => entry !== value[index]) ? next : value
   }
-  if (plainObject(value)) return mapLeaves(value, rewrite, [])
+  if (plainObject(value)) {
+    const entries = Object.entries(value).map(([key, entry]) => [key, mapValue(entry, rewrite)] as const)
+    return entries.some(([key, entry]) => entry !== value[key]) ? Object.fromEntries(entries) : value
+  }
   return value
-}
-
-const JSON_FILE = /\.(?:json|jsonc|json5|jsonl|ndjson|geojson|har)$/i
-
-/**
- * A log is what a program printed while it ran, so its ports are as stale as a command's output.
- * Every other file is content the agent or the project wrote, and a later edit must still match it.
- */
-export function logFile(file: string) {
-  if (JSON_FILE.test(file)) return false
-  const segments = file.split(/[\\/]/)
-  const name = segments.at(-1) ?? ""
-  if (/\.(?:log|out|err)$/i.test(name) || name === "nohup.out") return true
-  return segments.slice(0, -1).some((segment) => segment === "log" || segment === "logs")
-}
-
-// `*** Update File: path` sections; only a log's section is rewritten.
-function retargetPatch(patch: string, rewrite: Rewrite) {
-  const header = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm
-  const keep: Range[] = []
-  const sections = [...patch.matchAll(header)]
-  sections.forEach((match, index) => {
-    const start = match.index
-    const end = sections[index + 1]?.index ?? patch.length
-    if (!logFile(match[1]!.trim())) keep.push([start, end])
-  })
-  if (sections.length === 0) return patch
-  return rewrite(patch, keep)
-}
-
-// The grep tool prints `path:` and then `  Line N: text` for each match in that file.
-function retargetGrep(output: string, rewrite: Rewrite) {
-  let file: string | undefined
-  const lines = output.split("\n")
-  const next = lines.map((line) => {
-    if (line.length > 1 && !/^\s/.test(line) && line.endsWith(":")) {
-      file = line.slice(0, -1)
-      return line
-    }
-    if (/^\s+Line \d+:/.test(line) && file !== undefined && logFile(file)) return rewrite(line)
-    return line
-  })
-  return next.some((line, index) => line !== lines[index]) ? next.join("\n") : output
 }
 
 function rewriter(bank: ArenaEnvironmentBank, env: Env): Rewrite | undefined {
@@ -272,7 +174,7 @@ function rewriter(bank: ArenaEnvironmentBank, env: Env): Rewrite | undefined {
       "gi",
     ),
   }))
-  return (value, keep = []) => {
+  return (value) => {
     if (opaque(value)) return value
     const found: Match[] = []
     for (const preview of patterns) {
@@ -289,7 +191,7 @@ function rewriter(bank: ArenaEnvironmentBank, env: Env): Rewrite | undefined {
     }
     found.push(...standalonePorts(value, ports))
     if (found.length === 0) return value
-    return apply(value, found, [...keep, ...protectedRanges(value)])
+    return apply(value, found, protectedRanges(value))
   }
 }
 
@@ -430,248 +332,6 @@ function closing(value: string, start: number, budget: number) {
     }
   }
   return undefined
-}
-
-type Word = { readonly text: string; readonly start: number; readonly end: number }
-type Command = { readonly words: Word[]; readonly heredocs: Range[] }
-type Pipeline = { readonly commands: Command[]; readonly start: number; readonly end: number }
-
-/**
- * A small POSIX shell reader: pipelines, their commands, unquoted words and here-document bodies.
- * It only has to find which files a command reads or writes, so it does not expand anything.
- */
-function parseShell(source: string): Pipeline[] {
-  const pipelines: Pipeline[] = []
-  let commands: Command[] = []
-  let words: Word[] = []
-  let heredocs: Range[] = []
-  let word: { text: string; start: number } | undefined
-  let pipelineStart = 0
-  const pending: { delimiter: string; strip: boolean; into: Range[] }[] = []
-  const append = (text: string, at: number) => {
-    if (word) word.text += text
-    else word = { text, start: at }
-  }
-  const endWord = (at: number) => {
-    if (word) words.push({ ...word, end: at })
-    word = undefined
-  }
-  const endCommand = (at: number) => {
-    endWord(at)
-    if (words.length > 0) commands.push({ words, heredocs })
-    words = []
-    heredocs = []
-  }
-  const endPipeline = (at: number) => {
-    endCommand(at)
-    if (commands.length > 0) pipelines.push({ commands, start: pipelineStart, end: at })
-    commands = []
-    pipelineStart = at + 1
-  }
-  const readHeredocs = (from: number) => {
-    let cursor = from
-    for (const heredoc of pending.splice(0)) {
-      const bodyStart = cursor
-      let bodyEnd = source.length
-      while (cursor < source.length) {
-        const newline = source.indexOf("\n", cursor)
-        const lineEnd = newline === -1 ? source.length : newline
-        const line = source.slice(cursor, lineEnd)
-        if ((heredoc.strip ? line.replace(/^\t+/, "") : line) === heredoc.delimiter) {
-          bodyEnd = cursor
-          cursor = lineEnd + 1
-          break
-        }
-        cursor = lineEnd + 1
-      }
-      heredoc.into.push([bodyStart, Math.min(bodyEnd, source.length)])
-    }
-    return cursor
-  }
-  for (let index = 0; index < source.length; index++) {
-    const character = source[index]!
-    if (character === "\\") {
-      if (source[index + 1] !== "\n") append(source[index + 1] ?? "", index)
-      index++
-      continue
-    }
-    if (character === "'") {
-      const close = source.indexOf("'", index + 1)
-      const end = close === -1 ? source.length : close
-      append(source.slice(index + 1, end), index)
-      index = end
-      continue
-    }
-    if (character === '"') {
-      let text = ""
-      let cursor = index + 1
-      while (cursor < source.length && source[cursor] !== '"') {
-        if (source[cursor] === "\\" && cursor + 1 < source.length) cursor++
-        text += source[cursor]
-        cursor++
-      }
-      append(text, index)
-      index = cursor
-      continue
-    }
-    if (character === "#" && !word) {
-      const newline = source.indexOf("\n", index)
-      index = (newline === -1 ? source.length : newline) - 1
-      continue
-    }
-    if (character === " " || character === "\t") {
-      endWord(index)
-      continue
-    }
-    if (character === "\n") {
-      endPipeline(index)
-      if (pending.length > 0) {
-        index = readHeredocs(index + 1) - 1
-        pipelineStart = index + 1
-      }
-      continue
-    }
-    if (character === "&" && (word?.text.endsWith(">") || source[index + 1] === ">")) {
-      append(character, index)
-      continue
-    }
-    if (character === ";" || character === "&" || character === "(" || character === ")" || character === "`") {
-      if (source[index + 1] === character && character !== "(" && character !== ")") index++
-      endPipeline(index)
-      continue
-    }
-    if (character === "|") {
-      if (source[index + 1] === "|") {
-        index++
-        endPipeline(index)
-      } else endCommand(index)
-      continue
-    }
-    if (character === "<" && source[index + 1] === "<" && source[index + 2] !== "<") {
-      const heredoc = /^<<(-?)[ \t]*(?:'([^']*)'|"([^"]*)"|\\?([\w.-]+))/.exec(source.slice(index))
-      if (heredoc) {
-        endWord(index)
-        pending.push({
-          delimiter: heredoc[2] ?? heredoc[3] ?? heredoc[4] ?? "",
-          strip: heredoc[1] === "-",
-          into: heredocs,
-        })
-        words.push({ text: "<<", start: index, end: index + heredoc[0].length })
-        index += heredoc[0].length - 1
-        continue
-      }
-    }
-    append(character, index)
-  }
-  endPipeline(source.length)
-  return pipelines
-}
-
-const COMMAND_PREFIXES = new Set(["sudo", "nohup", "time", "env", "exec", "command", "builtin", "nice", "stdbuf"])
-
-function commandWords(command: Command) {
-  // Redirections and their targets are not arguments: `cat > config.json` reads nothing.
-  const words = command.words.filter(
-    (word, index) => !redirect(word.text) && !/^(?:\d*|&)(?:>>?|<|>\|)$/.test(command.words[index - 1]?.text ?? ""),
-  )
-  let index = 0
-  while (
-    index < words.length &&
-    (COMMAND_PREFIXES.has(words[index]!.text) || /^[A-Za-z_]\w*=/.test(words[index]!.text))
-  ) {
-    index++
-  }
-  const name = words[index]?.text.split("/").at(-1) ?? ""
-  return { name, args: words.slice(index + 1).map((word) => word.text) }
-}
-
-// `>`, `>>`, `2>&1`, `>file`, `&>file`, `<file`, `<<`
-function redirect(text: string) {
-  return /^(?:\d*|&)(?:>>?|<<?|>\|)/.test(text)
-}
-
-// Where the command sends its standard output, from `> file`, `>> file`, `&> file`, `1> file`.
-function stdoutTargets(command: Command) {
-  return command.words.flatMap((word, index) => {
-    const match = /^(?:1|&)?>>?\|?(.*)$/.exec(word.text)
-    if (!match) return []
-    const target = match[1] || command.words[index + 1]?.text
-    if (!target || target.startsWith("&")) return []
-    return [target]
-  })
-}
-
-function projectFile(file: string) {
-  return !file.startsWith("/dev/") && !logFile(file)
-}
-
-const CONTENT_WRITERS = new Set(["echo", "printf", "cat"])
-
-/**
- * Pipelines that write file content: `cat > file <<EOF`, `echo … > file`, `… | tee file`,
- * `sed -i …`. Their text is the file's content, kept as written like a `write` call's.
- */
-function fileWrites(command: string): Range[] {
-  return parseShell(command).flatMap((pipeline) => {
-    const writes = pipeline.commands.some((item) => {
-      const { name, args } = commandWords(item)
-      const operands = args.filter((arg) => !arg.startsWith("-"))
-      if (name === "tee") return operands.some(projectFile)
-      if ((name === "sed" || name === "perl") && args.some((arg) => /^-\w*i/.test(arg) || arg === "--in-place")) {
-        return operands.slice(1).some(projectFile) || operands.length <= 1
-      }
-      const targets = stdoutTargets(item).filter(projectFile)
-      if (targets.length === 0) return false
-      return CONTENT_WRITERS.has(name) || item.heredocs.length > 0
-    })
-    if (!writes) return []
-    return [[pipeline.start, pipeline.end] as Range, ...pipeline.commands.flatMap((item) => item.heredocs)]
-  })
-}
-
-const FILE_READERS = new Set(["cat", "head", "tail", "less", "more", "bat", "nl", "tac", "diff"])
-const PATTERN_READERS = new Set(["grep", "egrep", "fgrep", "rg", "ag", "sed", "awk"])
-// Options of the readers above that take the next word as their value.
-const SEARCH_OPTIONS = ["-e", "-f", "-m", "-A", "-B", "-C", "-g", "-t", "--max-count", "--glob", "--type"]
-const VALUE_OPTIONS: Readonly<Record<string, readonly string[]>> = {
-  head: ["-n", "-c", "--lines", "--bytes"],
-  tail: ["-n", "-c", "--lines", "--bytes"],
-  grep: SEARCH_OPTIONS,
-  egrep: SEARCH_OPTIONS,
-  fgrep: SEARCH_OPTIONS,
-  rg: SEARCH_OPTIONS,
-  ag: SEARCH_OPTIONS,
-  sed: ["-e", "-f"],
-  awk: ["-f", "-v", "-F"],
-}
-
-/** Whether a shell command prints a file that is not a log: `cat config.json`, `grep x src/a.ts`. */
-function readsFiles(command: string) {
-  return parseShell(command).some((pipeline) =>
-    pipeline.commands.some((item, position) => {
-      const { name, args } = commandWords(item)
-      if (name === "git") return args[0] === "diff" || args[0] === "show"
-      if (!FILE_READERS.has(name) && !PATTERN_READERS.has(name)) return false
-      const operands: string[] = []
-      let pattern = PATTERN_READERS.has(name) && !args.some((arg) => arg === "-e" || arg === "-f")
-      for (let index = 0; index < args.length; index++) {
-        const arg = args[index]!
-        if (VALUE_OPTIONS[name]?.includes(arg)) {
-          index++
-          continue
-        }
-        if (arg.startsWith("-") || /^\d+$/.test(arg)) continue
-        if (pattern) {
-          pattern = false
-          continue
-        }
-        operands.push(arg)
-      }
-      if (operands.length > 0) return operands.some(projectFile)
-      // `rg x` and `grep -r x` search the working directory; anything else reads its input.
-      return position === 0 && (name === "rg" || name === "ag" || args.some((arg) => /^-\w*[rR]/.test(arg)))
-    }),
-  )
 }
 
 function origin(url: string | undefined) {

@@ -595,26 +595,23 @@ a random point.
 
 The canonical chat keeps the winner's literal ports and preview URLs, so the reader sees the URLs
 that worked. A contestant's copy retargets them to its own bank as it forks
-(`retargetArenaTranscriptPart`, `arena/port-retarget.ts`). Everything may change except a
-blacklist. In answers, reasoning, and tool inputs, outputs and errors, every number equal to one of
-the producing run's ports changes, unless it is part of a name: glued to a letter or `_`, a dashed
-name (`req-N-ab12`, `web-N.txt`), a version (`1.N.0`), or a path segment. Whole preview URLs and
-preview hosts change too. Tool calls get no narrower rule: on production transcripts a list of
-port shapes (`localhost:N`, `--port N`, ...) missed shapes nobody listed (`lsof -iTCP:"N"`,
-`printenv PASEO_PORT`, a socket tuple, a LAN URL), and plain matching almost never changed a number
-that was not a port.
+(`retargetArenaTranscriptPart`, `arena/port-retarget.ts`). Answers, reasoning, and every tool's
+input, output and error follow one rule: every number equal to one of the producing run's ports
+changes, unless it is part of a name (glued to a letter or `_`, a dashed name like `req-N-ab12` or
+`web-N.txt`, a version like `1.N.0`, or a path segment). Whole preview URLs and preview hosts change
+too. Tool calls get no rule of their own. On production transcripts, a list of port shapes
+(`localhost:N`, `--port N`, ...) missed shapes nobody listed (`lsof -iTCP:"N"`, `printenv
+PASEO_PORT`, a socket tuple, a LAN URL), and a blacklist of file reads and writes kept real ports
+whenever a compound command also read a file.
 
 Never changed: user messages; files, attachments, tool metadata, titles and IDs; `data:` URIs,
 base64 runs, hex runs of 12 or more, UUIDs; JSON longer than 2,500 characters (a string or any
 `{"…` span that parses), which is data a program wrote rather than a command's own result; binary
-output; `websearch` output; reasoning that carries metadata. Agent Duel saves reasoning without
-its metadata (`arena/privacy.ts`), so a forked copy never carries a signature to break. File
-content changes only in logs (`.log`, `.out`, `.err`, `nohup.out`, or under a `log/` or `logs/`
-directory, never a JSON file): `read` output, `write`/`edit`/`apply_patch` input, `grep` matches
-per file, the output of a shell command that prints a file (`cat`, `head`, `tail`, `less`, `grep`,
-`sed`, `git diff` …), and file content a shell command writes (`cat > f <<EOF`, `echo … > f`,
-`tee f`, `sed -i`). A later `edit` must still match the file on disk, and a config's ports are the
-project's own.
+output; reasoning that carries metadata. Agent Duel saves reasoning without its metadata
+(`arena/privacy.ts`), so a forked copy never carries a signature to break.
+
+Earlier file reads, edits and writes change too, while the files on disk keep their ports. The
+contestant prompt says so and tells the contestant to read a file again before it edits it.
 
 Three rules keep the mapping exact:
 
@@ -629,9 +626,10 @@ Three rules keep the mapping exact:
 - **The prompt says what changed.** The contestant prompt lists what was updated and what keeps
   the original ports, and tells the contestant to connect only to its own ports.
 
-The costs: a command and its JSON or file output can name different ports; a bare number in prose
-that equals a port (a PID, a size) changes with it; and ports a user typed, or a Battle-off turn
-ran, stay literal, so they can name a port the other side now owns.
+The costs: a command and a long JSON it printed can name different ports; earlier file reads and
+edits show ports the file on disk does not have; a number that equals a port but is not one (a PID,
+a size, a line number) changes with it; and ports a user typed, or a Battle-off turn ran, stay
+literal, so they can name a port the other side now owns.
 
 After a run, `$ARENA_PREVIEW_URL…` in its answer text is expanded so the reader sees the URL. Port
 variables stay as written.

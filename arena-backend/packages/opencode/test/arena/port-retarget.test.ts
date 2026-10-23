@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import {
   arenaTurnEnvironments,
   localizeArenaPreviewUrls,
-  logFile,
   producingArenaEnvironment,
   retargetArenaTranscriptPart,
 } from "@/arena/port-retarget"
@@ -235,117 +234,39 @@ describe("Arena port retargeting: tool calls", () => {
     expect(bash("scripts/dump.sh", `serving on :51101\n${long}`).output).toBe(`serving on :53728\n${long}`)
   })
 
-  test("keeps the output of a shell read of a file that is not a log", () => {
+  test("rewrites shell reads and writes of any file", () => {
     const output = "PORT=51101\nurl=http://localhost:51101"
-    for (const command of [
-      "cat .env",
-      "head -n 20 config.yaml",
-      "tail -5 scripts/smoke.sh",
-      "less server.py",
-      "cat out/canary.json; grep BUFFER_SIZE constants.py; ls logs",
-      "grep -n port vite.config.ts",
-      "rg localhost",
-      "sed -n 1,20p server.py",
-      "git diff config.yaml",
-    ]) {
-      expect(bash(command, output).output).toBe(output)
+    for (const command of ["cat .env", "git diff config.yaml", "tail -20 web.server.log", "rg localhost"]) {
+      expect(bash(command, output).output).toBe("PORT=53728\nurl=http://localhost:53728")
     }
-  })
-
-  test("rewrites the output of a shell read of a log or a filter", () => {
-    const output = "listening on http://127.0.0.1:51101"
-    const expected = "listening on http://127.0.0.1:53728"
-    for (const command of [
-      "tail -20 web.server.log",
-      "cat logs/web-51101.txt",
-      "cat nohup.out",
-      "python3 tools/canary.py | head -4",
-      "tools/shot.sh --dom http://127.0.0.1:51101/ | grep -E 'id=\"who\"'",
-      "nohup python3 server.py --port 51101 > logs/web-51101.txt 2>&1 & sleep 1; cat logs/web-51101.txt",
-    ]) {
-      expect(bash(command, output).output).toBe(expected)
-    }
-  })
-
-  test("keeps the content a shell command writes to a file that is not a log", () => {
     const heredoc = [
       "cat > config.json <<'EOF'",
-      '{"web_url": "http://127.0.0.1:51101", "api_url": "http://127.0.0.1:51102"}',
+      '{"web_url": "http://127.0.0.1:51101"}',
       "EOF",
-      "cat > scripts/smoke.sh <<EOF",
-      "curl -s http://127.0.0.1:51101/whoami",
-      "EOF",
-      "chmod +x scripts/smoke.sh && curl -s localhost:51101",
+      "echo 'PORT=51101' > .env && curl -s localhost:51101",
     ].join("\n")
-    expect(bash(heredoc).input.command).toBe(heredoc.replace("curl -s localhost:51101", "curl -s localhost:53728"))
-    for (const command of [
-      "echo 'PORT=51101' > .env",
-      'printf "url=http://localhost:51101\\n" >> config.ini',
-      "echo localhost:51101 | tee scripts/url.txt",
-      "sed -i '' 's/localhost:51101/localhost:51102/' config.yaml",
-    ]) {
-      expect(bash(command).input.command).toBe(command)
-    }
-    expect(bash("echo 'PORT=51101' >> logs/app.log").input.command).toBe("echo 'PORT=53728' >> logs/app.log")
-    expect(bash("python3 - <<EOF\nconnect(('127.0.0.1', 51101)); port=51101\nEOF").input.command).toBe(
-      "python3 - <<EOF\nconnect(('127.0.0.1', 53728)); port=53728\nEOF",
-    )
+    expect(bash(heredoc).input.command).toBe(heredoc.replaceAll("51101", "53728"))
   })
 
-  test("keeps file tool content unless the file is a log", () => {
+  test("rewrites file tool content, patches and grep matches", () => {
     const write = tool("write", { filePath: "/repo/config.json", content: '{"port": 51101}' }, "Wrote file")
-    expect(retarget(write)).toBe(write)
+    expect(retarget(write).state.input.content).toBe('{"port": 53728}')
     const edit = tool("edit", { filePath: "/repo/vite.config.ts", oldString: "port: 51101", newString: "port: 5173" })
-    expect(retarget(edit)).toBe(edit)
-    const multiedit = tool("multiedit", {
-      filePath: "/repo/a.ts",
-      edits: [{ oldString: "--port 51101", newString: "" }],
-    })
-    expect(retarget(multiedit)).toBe(multiedit)
+    expect(retarget(edit).state.input).toMatchObject({ oldString: "port: 53728", newString: "port: 5173" })
+    const multiedit = tool("multiedit", { filePath: "/repo/a.ts", edits: [{ oldString: "--port 51101", newString: "" }] })
+    expect(retarget(multiedit).state.input.edits).toEqual([{ oldString: "--port 53728", newString: "" }])
     const read = tool("read", { filePath: "/repo/server.py" }, "<content>\n1: PORT = 51101  # port 51101\n</content>")
-    expect(retarget(read)).toBe(read)
-    const log = tool("read", { filePath: "/repo/web.server.log" }, "1: listening on port 51101")
-    expect(retarget(log).state.output).toBe("1: listening on port 53728")
-    const jsonLog = tool("read", { filePath: "/repo/logs/access.jsonl" }, "1: listening on port 51101")
-    expect(retarget(jsonLog)).toBe(jsonLog)
-    const logEdit = tool("edit", {
-      filePath: "/repo/logs/notes.txt",
-      oldString: "port 51101",
-      newString: "port 51101!",
+    expect(retarget(read).state.output).toBe("<content>\n1: PORT = 53728  # port 53728\n</content>")
+    const patchText = "*** Begin Patch\n*** Update File: vite.config.ts\n-  server: { port: 51101 }\n*** End Patch"
+    expect(retarget(tool("apply_patch", { patchText })).state.input.patchText).toBe(patchText.replace("51101", "53728"))
+    const grep = tool("grep", { pattern: "51101" }, "/repo/server.py:\n  Line 3: PORT = 51101")
+    expect(retarget(grep).state).toMatchObject({
+      input: { pattern: "53728" },
+      output: "/repo/server.py:\n  Line 3: PORT = 53728",
     })
-    expect(retarget(logEdit).state.input).toMatchObject({ oldString: "port 53728", newString: "port 53728!" })
   })
 
-  test("rewrites only the log sections of a patch", () => {
-    const patchText = [
-      "*** Begin Patch",
-      "*** Update File: vite.config.ts",
-      "-  server: { port: 51101 }",
-      "+  server: { port: 5173 }",
-      "*** Add File: logs/run.txt",
-      "+listening on port 51101",
-      "*** End Patch",
-    ].join("\n")
-    expect(retarget(tool("apply_patch", { patchText })).state.input.patchText).toBe(
-      patchText.replace("+listening on port 51101", "+listening on port 53728"),
-    )
-  })
-
-  test("rewrites grep matches in log files only", () => {
-    const output = [
-      "Found 2 matches",
-      "/repo/server.py:",
-      "  Line 3: PORT = 51101  # port 51101",
-      "",
-      "/repo/logs/web.txt:",
-      "  Line 1: listening on port 51101",
-    ].join("\n")
-    expect(retarget(tool("grep", { pattern: "51101" }, output)).state.output).toBe(
-      output.replace("Line 1: listening on port 51101", "Line 1: listening on port 53728"),
-    )
-  })
-
-  test("rewrites a fetched page but never a search result", () => {
+  test("rewrites a fetched page and a search result", () => {
     const fetch = tool("webfetch", { url: "http://localhost:51101/", format: "text" }, "API at localhost:51102")
     expect(retarget(fetch).state).toMatchObject({
       input: { url: "http://localhost:53728/" },
@@ -354,7 +275,7 @@ describe("Arena port retargeting: tool calls", () => {
     const search = tool("websearch", { query: "vite port 51101" }, "Run on localhost:51101 by default")
     expect(retarget(search).state).toMatchObject({
       input: { query: "vite port 53728" },
-      output: "Run on localhost:51101 by default",
+      output: "Run on localhost:53728 by default",
     })
   })
 
@@ -456,21 +377,6 @@ describe("Arena port retargeting: scope", () => {
     )
     const command = { type: "tool", tool: "bash", state: { input: { command: "curl $ARENA_PREVIEW_URL" } } }
     expect(localizeArenaPreviewUrls(command, CURRENT)).toBe(command)
-  })
-
-  test.each([
-    ["web.server.log", true],
-    ["/repo/nohup.out", true],
-    ["build.err", true],
-    ["logs/web-51101.txt", true],
-    ["/repo/log/app.txt", true],
-    ["logs/access.jsonl", false],
-    ["server.log.json", false],
-    ["config.json", false],
-    ["blog/post.md", false],
-    ["catalog.txt", false],
-  ])("treats %s as a log: %p", (file, expected) => {
-    expect(logFile(file)).toBe(expected)
   })
 })
 
