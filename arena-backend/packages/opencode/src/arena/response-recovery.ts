@@ -21,8 +21,6 @@ export const TOOL_INTERRUPTED =
   "Your tool arguments exceeded the response limit. This call was not executed. Split the operation into smaller writes or patches. Do not repeat tools that already completed."
 export const CONTINUE =
   "The previous response reached its output limit. Continue from the partial response without repeating it. Any unfinished tool call was not executed: replace it with smaller, complete writes or patches. Preserve completed work and do not repeat successful tool calls. Keep reasoning concise and make progress in smaller steps."
-export const INSTRUCTION =
-  "Each response has a limited output budget, which may also include reasoning. Create large files incrementally with smaller writes or patches, and use targeted edits. Finish each tool call within one response."
 
 // Read durable history so restarts cannot grant more attempts. A successful response ends
 // the recovery sequence; compaction summaries and failed tools do not prove recovery.

@@ -225,7 +225,7 @@ import type { Store } from "./mongo"
 
 const encoder = new TextEncoder()
 const contestantWorktreeInstruction =
-  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Literal ports, preview URLs, log paths, and process IDs in earlier messages or tool output are historical; do not reuse them, connect to them, or stop anything using them. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
+  "Git is prepared at the frozen base in an isolated worktree. Work in $(pwd). Branch changes in this worktree are part of your result. Port aliases belong only to this contestant environment. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
 const canonicalUnavailableReason = "The trunk worktree is unavailable. Restore it at its recorded location, then retry."
 
 // The refusal reaches the user as a toast, so a merge that conflicted in hundreds of files must
@@ -303,7 +303,7 @@ export function contestantSystemInstruction(
     environmentPending && worktree
       ? `The initial model call is running while the environment is still being prepared at ${worktree}. This is your worktree path. You may reason immediately. Tools that do not need the filesystem can run before the base checkout is ready. Once it is ready, safe reads can run while ignored content finishes copying. A tool that could observe or change incomplete state will wait until its required setup phase completes.`
       : ""
-  return [contestantWorktreeInstruction, ArenaResponseRecovery.INSTRUCTION, pendingEnvironment, currentPreview]
+  return [contestantWorktreeInstruction, pendingEnvironment, currentPreview]
     .filter(Boolean)
     .join("\n\n")
 }
@@ -4783,7 +4783,6 @@ export const layer: Layer.Layer<
       const transcriptHash = digest(transcript.value)
       const pruneToolOutputBefore = yield* contestantPruneBoundary(store, chat._id, transcript.value)
       const agent = source.value.agent ?? "build"
-      const branch = current.canonicalCheckout?.branch ?? current.arenaBranch
       const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
       // Both forks at once: each writes its own session into its own directory.
       return yield* Effect.forEach(
@@ -4798,11 +4797,6 @@ export const layer: Layer.Layer<
                     chatID: chat._id,
                     turnIndex: generation,
                     side: slot.side,
-                    context: {
-                      ...(branch ? { branch } : {}),
-                      trunkDirectory: chat.repository.root,
-                      trunkBranch: current.canonicalCheckout?.branch ?? current.arenaBranch,
-                    },
                   }),
                 )
                 const env = previewEnvironment(slot.directory)
@@ -4989,11 +4983,6 @@ export const layer: Layer.Layer<
             chatID: chat._id,
             turnIndex: turn.turnIndex,
             side,
-            context: {
-              ...(branch ? { branch } : {}),
-              trunkDirectory: chat.repository.root,
-              trunkBranch: chat.canonicalCheckout?.branch ?? chat.arenaBranch,
-            },
           }),
         )
         previewWorktrees.add(info.directory)
