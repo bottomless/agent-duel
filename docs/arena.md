@@ -886,7 +886,8 @@ field. Each layer has its own file:
 - **Assignment** (`arena-service/src/assignments.ts`) — in hosted mode the model pool and
   assignment mapping exist only on the server. The desktop cannot derive the private profile from
   an assignment id, and assignment creation accepts no client-directed model exclusion because
-  repeated exclusion draws form an identity oracle.
+  repeated exclusion draws form an identity oracle. Context and output limits stay with the private
+  profile too: their numeric combination can identify a contestant without its name.
 - **Request** (`arena-service/src/openrouter.ts`) — the desktop can request only the neutral
   `contestant` model. It sends the assignment id and owning scope id through the daemon's
   capability-gated Arena proxy; the Arena process never receives the account session. The control
@@ -1263,6 +1264,15 @@ billing, until its own time limit.
 A request above the estimated savings threshold triggers compaction. Keep a new user message and
 its attachments intact while summarizing the earlier history. The summary request must be allowed
 to exceed the savings threshold; the provider's context window still applies.
+
+The control plane also checks the complete request against the assigned endpoint's private budget
+before sending it upstream. It answers with a neutral compaction signal, never a model limit or
+provider error. The runtime owns the history change and resumes on the same assignment. If a summary
+is too large, it reduces batches in response to that same signal and carries a rolling summary
+forward. Only the completed final summary can replace history. A request that still cannot fit
+after compaction stops instead of repeating summaries; disabling automatic compaction keeps that
+rejection terminal. Ship the shared service and runtime together before adding a smaller endpoint.
+Different compaction timing remains observable even though the numeric limits stay private.
 
 A compaction summary that ends idle, at its output cap, or empty must never become the history. A
 finished summary hides everything before it, so the contestant continues with no memory of its task

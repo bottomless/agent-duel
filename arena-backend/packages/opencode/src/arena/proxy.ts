@@ -2,8 +2,10 @@ import { randomUUID } from "crypto"
 import { contestant } from "./model-profile"
 import type { GenerationMetrics } from "./records"
 import {
+  compactionRequiredError,
   networkUnavailableError,
   paymentError,
+  readCompactionRequired,
   readNetworkUnavailable,
   readPaymentError,
   retryableStreamError,
@@ -657,14 +659,13 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const generationID = metadata.generationID
     const type = response.headers.get("content-type") ?? ""
     if (!response.ok) {
-      // Only these two bodies carry a neutral code the engine acts on; every other body is dropped.
-      const body = response.status === 402 || response.status === 503 ? await response.text() : undefined
-      const payload =
-        response.status === 402
-          ? paymentError(readPaymentError(body) ?? "arena_payment_required")
-          : readNetworkUnavailable(body)
-            ? networkUnavailableError()
-            : { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
+      // Rebuild allowlisted control responses so upstream text and capability limits never escape.
+      const knownStatus = [402, 413, 503].includes(response.status)
+      const body = knownStatus ? await response.text() : undefined
+      let payload = { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
+      if (response.status === 402) payload = paymentError(readPaymentError(body) ?? "arena_payment_required")
+      if (response.status === 503 && readNetworkUnavailable(body)) payload = networkUnavailableError()
+      if (response.status === 413 && readCompactionRequired(body)) payload = compactionRequiredError()
       if (body === undefined) await response.body?.cancel().catch(() => undefined)
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
       await telemetry?.complete?.(metadata, new Date())

@@ -53,6 +53,10 @@ const ARENA_COMPACTION_CONTINUE =
   "If the task is already complete, report the result."
 const COMPACTION_EXHAUSTED =
   "The conversation could not be summarized after three recovery attempts. Completed work has been preserved. Retry to continue."
+const ARENA_ROLLING_MAX_BATCHES = 64
+const ARENA_ROLLING_OUTPUT_LIMIT = 4_096
+const ARENA_ROLLING_EXHAUSTED =
+  "The conversation could not be summarized in bounded batches. Completed work has been preserved. Retry to continue."
 type Turn = {
   start: number
   end: number
@@ -186,6 +190,28 @@ function splitTurn(input: {
     }
     return undefined
   })
+}
+
+function serializeRollingTranscript(messages: ModelMessage[]): ModelMessage[] {
+  return [
+    {
+      role: "user",
+      content: messages
+        .map((message, index) => `[Transcript message ${index + 1} role=${message.role}]\n${JSON.stringify(message)}`)
+        .join("\n\n"),
+    },
+  ]
+}
+
+function splitSerializedBatch(messages: ModelMessage[]): [ModelMessage[], ModelMessage[]] | undefined {
+  const message = messages[0]
+  if (!message || messages.length !== 1 || typeof message.content !== "string" || message.content.length < 2)
+    return undefined
+  const middle = Math.ceil(message.content.length / 2)
+  return [
+    [{ role: "user", content: message.content.slice(0, middle) }],
+    [{ role: "user", content: message.content.slice(middle) }],
+  ]
 }
 
 export interface Interface {
@@ -453,7 +479,7 @@ const layer = Layer.effect(
       })
       if (pendingIndex >= 0) selected.tail_start_id ??= history[pendingIndex].info.id
       // Allow plugins to inject context or replace compaction prompt.
-      const compacting = yield* plugin.trigger(
+      const compacting = yield* plugin.trigger<"experimental.session.compacting">(
         "experimental.session.compacting",
         { sessionID: input.sessionID },
         { context: [], prompt: undefined },
@@ -466,9 +492,15 @@ const layer = Layer.effect(
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
       })
       const ctx = yield* InstanceState.context
-      const summarize = Effect.fnUntraced(function* (responseRecovery?: {
-        attempt: number
-        reason: ArenaResponseRecovery.Reason
+      const summarize = Effect.fnUntraced(function* (attemptInput: {
+        messages: ModelMessage[]
+        prompt: string
+        model: Provider.Model
+        summary: boolean
+        responseRecovery?: {
+          attempt: number
+          reason: ArenaResponseRecovery.Reason
+        }
       }) {
         const msg: SessionV1.Assistant = {
           id: MessageID.ascending(),
@@ -478,7 +510,7 @@ const layer = Layer.effect(
           mode: "compaction",
           agent: "compaction",
           variant: compactionUser.model.variant,
-          summary: true,
+          ...(attemptInput.summary ? { summary: true } : {}),
           path: {
             cwd: ctx.directory,
             root: ctx.worktree,
@@ -490,8 +522,8 @@ const layer = Layer.effect(
             reasoning: 0,
             cache: { read: 0, write: 0 },
           },
-          modelID: model.id,
-          providerID: model.providerID,
+          modelID: attemptInput.model.id,
+          providerID: attemptInput.model.providerID,
           time: {
             created: Date.now(),
           },
@@ -500,8 +532,8 @@ const layer = Layer.effect(
         const processor = yield* processors.create({
           assistantMessage: msg,
           sessionID: input.sessionID,
-          model,
-          ...(responseRecovery ? { responseRecovery } : {}),
+          model: attemptInput.model,
+          ...(attemptInput.responseRecovery ? { responseRecovery: attemptInput.responseRecovery } : {}),
         })
         const result = yield* processor.process({
           user: compactionUser,
@@ -512,13 +544,13 @@ const layer = Layer.effect(
           // A large paste can put the summary itself above the savings threshold. Allow it so
           // the user can continue; only the provider's actual context window limits this call.
           messages: [
-            ...modelMessages,
+            ...attemptInput.messages,
             {
               role: "user",
-              content: [{ type: "text", text: nextPrompt }],
+              content: [{ type: "text", text: attemptInput.prompt }],
             },
           ],
-          model,
+          model: attemptInput.model,
         })
         return { processor, result }
       })
@@ -533,7 +565,12 @@ const layer = Layer.effect(
           .pipe(Effect.orElseSucceed(() => Option.none<SessionV1.WithParts>()))
         return Option.isSome(stored) && summaryText(stored.value) ? undefined : ("empty" as const)
       })
-      let { processor, result } = yield* summarize()
+      let { processor, result } = yield* summarize({
+        messages: modelMessages,
+        prompt: nextPrompt,
+        model,
+        summary: true,
+      })
       for (
         let attempt = 1;
         model.providerID === ArenaRuntime.providerID && result === "continue" && !processor.message.error;
@@ -557,7 +594,121 @@ const layer = Layer.effect(
           return "stop"
         }
         yield* session.removeMessage({ sessionID: input.sessionID, messageID: processor.message.id })
-        ;({ processor, result } = yield* summarize(failure === "empty" ? undefined : { attempt, reason: failure }))
+        ;({ processor, result } = yield* summarize({
+          messages: modelMessages,
+          prompt: nextPrompt,
+          model,
+          summary: true,
+          ...(failure === "empty" ? {} : { responseRecovery: { attempt, reason: failure } }),
+        }))
+      }
+
+      if (assignment && result === "compact-request") {
+        // A summary request can be rejected by the hosted envelope too. Start from the original
+        // transformed history and keep every successful rolling summary only in memory until the
+        // final pass succeeds; intermediate assistant rows must never hide source history.
+        yield* session.removeMessage({ sessionID: input.sessionID, messageID: processor.message.id })
+        const rollingModel = {
+          ...model,
+          limit: {
+            ...model.limit,
+            output: Math.min(model.limit.output ?? ARENA_ROLLING_OUTPUT_LIMIT, ARENA_ROLLING_OUTPUT_LIMIT),
+          },
+        }
+        const batches: ModelMessage[][] = [serializeRollingTranscript(modelMessages)]
+        let rollingSummary: string | undefined
+        let processed = 0
+        let terminal: { processor: typeof processor; reason: string } | undefined
+
+        while (batches.length > 0 && !terminal) {
+          if (processed >= ARENA_ROLLING_MAX_BATCHES) {
+            terminal = { processor, reason: ARENA_ROLLING_EXHAUSTED }
+            break
+          }
+          const batch = batches.shift()!
+          let rollingPrompt = nextPrompt
+          if (rollingSummary) {
+            rollingPrompt = compacting.prompt
+              ? `Update the anchored summary below using the next transcript segment. Preserve still-true details and merge in new facts.\n<previous-summary>\n${rollingSummary}\n</previous-summary>\n\n${compacting.prompt}`
+              : buildPrompt({ previousSummary: rollingSummary, context: compacting.context })
+          }
+          let pass = yield* summarize({
+            messages: batch,
+            prompt: rollingPrompt,
+            model: rollingModel,
+            summary: false,
+          })
+          processed++
+
+          for (let attempt = 1; pass.result === "continue" && !pass.processor.message.error; attempt++) {
+            const failure = yield* unusable(pass.processor.message)
+            if (!failure) break
+            if (attempt > ArenaResponseRecovery.MAX_RECOVERIES) {
+              terminal = { processor: pass.processor, reason: COMPACTION_EXHAUSTED }
+              break
+            }
+            yield* session.removeMessage({ sessionID: input.sessionID, messageID: pass.processor.message.id })
+            pass = yield* summarize({
+              messages: batch,
+              prompt: rollingPrompt,
+              model: rollingModel,
+              summary: false,
+              ...(failure === "empty" ? {} : { responseRecovery: { attempt, reason: failure } }),
+            })
+          }
+          if (terminal) break
+
+          if (pass.result === "compact-request") {
+            yield* session.removeMessage({ sessionID: input.sessionID, messageID: pass.processor.message.id })
+            const split = splitSerializedBatch(batch)
+            if (!split) {
+              terminal = { processor: pass.processor, reason: ARENA_ROLLING_EXHAUSTED }
+              break
+            }
+            batches.unshift(split[1])
+            batches.unshift(split[0])
+            continue
+          }
+          if (pass.result !== "continue" || pass.processor.message.error) {
+            terminal = { processor: pass.processor, reason: COMPACTION_EXHAUSTED }
+            break
+          }
+
+          const stored = yield* session
+            .findMessage(input.sessionID, (item) => item.info.id === pass.processor.message.id)
+            .pipe(Effect.orElseSucceed(() => Option.none<SessionV1.WithParts>()))
+          const text = Option.isSome(stored) ? summaryText(stored.value) : undefined
+          if (!text) {
+            terminal = { processor: pass.processor, reason: COMPACTION_EXHAUSTED }
+            break
+          }
+          if (batches.length === 0) {
+            pass.processor.message.summary = true
+            yield* session.updateMessage(pass.processor.message)
+            processor = pass.processor
+            result = "continue"
+            break
+          }
+          rollingSummary = text
+          yield* session.removeMessage({ sessionID: input.sessionID, messageID: pass.processor.message.id })
+        }
+
+        if (terminal) {
+          terminal.processor.message.summary = undefined
+          if (!terminal.processor.message.error) {
+            terminal.processor.message.error = new SessionV1.APIError({
+              message: terminal.reason,
+              isRetryable: true,
+            }).toObject()
+            terminal.processor.message.finish = "error"
+          }
+          yield* session.updateMessage(terminal.processor.message)
+          yield* events.publish(Session.Event.Error, {
+            sessionID: input.sessionID,
+            error: terminal.processor.message.error,
+          })
+          return "stop"
+        }
       }
 
       if (result === "compact" || result === "compact-request") {
@@ -646,8 +797,7 @@ const layer = Layer.effect(
               (message) => message.info.role === "user" && message.info.id < input.parentID,
             )
             // A retained new message brings its own system text; otherwise keep the turn's.
-            const system =
-              pendingUser?.system ?? (answered?.info.role === "user" ? answered.info.system : undefined)
+            const system = pendingUser?.system ?? (answered?.info.role === "user" ? answered.info.system : undefined)
             const continueMsg = yield* session.updateMessage({
               id: MessageID.ascending(),
               role: "user",

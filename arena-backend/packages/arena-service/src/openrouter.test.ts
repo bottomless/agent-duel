@@ -89,6 +89,139 @@ function fakeDb(input: {
 }
 
 describe("OpenRouter proxy", () => {
+  test.each([
+    {
+      route: "chat/completions",
+      input: { messages: [{ role: "user", content: "x".repeat(20_000) }], max_tokens: 9_999 },
+    },
+    {
+      route: "responses",
+      input: {
+        input: [{ role: "user", content: [{ type: "input_text", text: "x".repeat(20_000) }] }],
+        max_output_tokens: 9_999,
+      },
+    },
+  ])("preflights $route against private endpoint context and output limits", async ({ route, input }) => {
+    let model = {
+      ...pool[0],
+      limits: { context: 4_000, output: 500 },
+    }
+    let contacted = 0
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "budget", assignments: [{ assignmentID: "opaque-id", model }] },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () => {
+        contacted++
+        return Response.json({ choices: [] })
+      },
+    })
+    const invoke = () =>
+      proxy(
+        new Request(`https://control.test/api/openrouter/api/v1/${route}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "budget",
+          },
+          body: JSON.stringify({ model: "contestant", ...input }),
+        }),
+      )
+
+    const narrow = await invoke()
+    expect(narrow.status).toBe(413)
+    expect(await narrow.json()).toEqual({
+      error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
+    })
+    expect(contacted).toBe(0)
+
+    model = { ...pool[0], limits: { context: 100_000, output: 500 } }
+    const large = await invoke()
+    expect(large.status).toBe(200)
+    expect(contacted).toBe(1)
+  })
+
+  test("counts instructions, tools, response format and media allowance before contacting the provider", async () => {
+    let contacted = false
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "full-request",
+          assignments: [
+            { assignmentID: "opaque-id", model: { ...pool[0], limits: { context: 20_000, output: 2_000 } } },
+          ],
+        },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () => {
+        contacted = true
+        return Response.json({ choices: [] })
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "full-request",
+        },
+        body: JSON.stringify({
+          model: "contestant",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "x".repeat(60_000) },
+                { type: "image_url", image_url: { url: "A".repeat(2_000_000) } },
+              ],
+            },
+          ],
+          instructions: "system".repeat(4_000),
+          tools: [{ type: "function", function: { name: "read", description: "tool".repeat(4_000), parameters: {} } }],
+          response_format: { type: "json_schema", json_schema: { name: "answer", schema: {} } },
+        }),
+      }),
+    )
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual({
+      error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
+    })
+    expect(contacted).toBe(false)
+  })
+
+  test("sanitizes recognized provider context overflow refusals", async () => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "overflow", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () =>
+        Response.json({ error: { code: "context_length_exceeded", message: "private model 999999" } }, { status: 400 }),
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-SCOPE-ID": "overflow",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [] }),
+      }),
+    )
+    expect(response.status).toBe(413)
+  })
+
   test.each(["done", "eof", "unterminated-eof"])(
     "flushes buffered reasoning at %s without a finish event",
     async (ending) => {
@@ -396,6 +529,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput", max_price: { prompt: 2, completion: 6 } },
           },
         },
@@ -450,7 +584,7 @@ describe("OpenRouter proxy", () => {
       model: "provider/hidden-model",
       messages: [],
       stream: false,
-      max_tokens: 999_999,
+      max_tokens: 32_000,
       reasoning: { effort: "high" },
       provider: { sort: "throughput", max_price: { prompt: 2, completion: 6 } },
       session_id: "opaque-id",
@@ -637,7 +771,13 @@ describe("OpenRouter proxy", () => {
           assignments: [
             {
               assignmentID: "opaque-id",
-              model: { displayName: "Hidden Model", slug, canonicalSlug: slug, routing: { sort: "throughput" } },
+              model: {
+                displayName: "Hidden Model",
+                slug,
+                canonicalSlug: slug,
+                contextWindow: 1_000_000,
+                routing: { sort: "throughput" },
+              },
             },
           ],
         },
@@ -900,6 +1040,7 @@ describe("OpenRouter proxy", () => {
                 displayName: "Hidden Model",
                 slug: "provider/hidden-model",
                 canonicalSlug: "provider/hidden-model",
+                contextWindow: 1_000_000,
                 routing: { require_parameters: true },
               },
             },
@@ -1002,6 +1143,7 @@ describe("OpenRouter proxy", () => {
                     displayName: "GPT Luna 5.6 Xhigh",
                     slug: "openai/gpt-5.6-luna",
                     canonicalSlug: "openai/gpt-5.6-luna",
+                    contextWindow: 1_050_000,
                     routing: { sort: "throughput" },
                   },
                 },
@@ -1045,6 +1187,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1087,6 +1230,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1137,6 +1281,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1210,6 +1355,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1258,7 +1404,13 @@ describe("OpenRouter proxy", () => {
       assignments: [
         {
           assignmentID: "opaque-id",
-          model: { displayName: "Hidden Model", slug: "provider/hidden-model", canonicalSlug: "x", routing: {} },
+          model: {
+            displayName: "Hidden Model",
+            slug: "provider/hidden-model",
+            canonicalSlug: "x",
+            contextWindow: 1_000_000,
+            routing: {},
+          },
         },
       ],
     }
@@ -1332,6 +1484,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1368,6 +1521,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1414,6 +1568,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
