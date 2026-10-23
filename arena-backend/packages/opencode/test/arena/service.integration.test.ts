@@ -3164,6 +3164,10 @@ describe("Arena service vertical slice", () => {
       expect(archived?.chat.status).toBe("archived")
       expect(archived?.turn?.state).toBe("discarded")
       expect(archived?.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
+      // Both sides answered before the archive, so the discard names them as it always has.
+      expect(archived?.turn?.revealed).toBe(true)
+      expect(archived?.turn?.identities?.a.name).toBeDefined()
+      expect(archived?.turn?.identities?.b.name).toBeDefined()
       const after = await memory.store.runsForTurn(turnID)
       expect(after.every((run) => !!run.worktreeRemovedAt && run.retention === "none")).toBe(true)
       expect(await Promise.all(before.map((run) => exists(run.worktree)))).toEqual([false, false])
@@ -3694,6 +3698,13 @@ describe("Arena service vertical slice", () => {
       expect(discarded.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
       expect(discarded.turn?.vote).toBeUndefined()
       expect(router.battleDecision(turnID)).toBe("discard")
+      // Neither side answered, so the discard names nobody.
+      expect(discarded.turn?.revealed).toBe(false)
+      expect(discarded.turn?.identities).toBeUndefined()
+      const stored = await memory.store.turn(turnID)
+      expect(stored?.resolution).toEqual({ kind: "stopped", resolution: "discard", revealed: false })
+      expect(stored?.placement.a.model).toBeUndefined()
+      expect(stored?.placement.b.model).toBeUndefined()
       await waitForReadyChat(memory.store, attached.chat.id)
       expect(await $`git rev-parse HEAD`.cwd(directory.path).text()).toBe(head)
     } finally {

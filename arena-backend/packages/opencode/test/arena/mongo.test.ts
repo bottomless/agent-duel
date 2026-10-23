@@ -655,6 +655,33 @@ describe("ArenaMongo claims", () => {
     expect(updates[0]?.comparisonState).toBe("skipped")
   })
 
+  test("records a discard without names when neither side showed anything", async () => {
+    const stopped = turn("awaiting_vote")
+    const updates: Record<string, unknown>[] = []
+    const arena = store({
+      turns: {
+        findOne: async () => stopped,
+        findOneAndUpdate: async (_filter: unknown, update: { $set: Record<string, unknown> }) => {
+          updates.push(update.$set)
+          return { ...stopped, resolution: update.$set.resolution }
+        },
+      },
+      changed: () => undefined,
+    })
+
+    await arena.recordResolution({
+      turnID: stopped._id,
+      resolution: stoppedResolution("discard", { revealed: false }),
+      expectedState: "awaiting_vote",
+      at: now,
+    })
+
+    expect(updates[0]?.resolution).toEqual({ kind: "stopped", resolution: "discard", revealed: false })
+    expect(updates[0]).not.toHaveProperty("placement.a.model")
+    expect(updates[0]).not.toHaveProperty("placement.b.model")
+    expect(updates[0]).not.toHaveProperty("revealAt")
+  })
+
   test("claims an early selection only while the other side is still unfinalized", async () => {
     let current: TurnDocument = {
       ...turn("running"),

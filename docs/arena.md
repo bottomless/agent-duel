@@ -1115,7 +1115,10 @@ that failed while it was being created: neither side ran, so it is recorded with
 control plane answers, and an unreachable service cannot hold it. The control plane resolves the
 assignments in the background, which stops their routing. Its usage is never persisted, since
 nothing reveals it. The chat shows **Battle couldn't start**, and **Try again** sends
-the same prompt as a new battle with a new pair. Before committing a vote, the service resolves the
+the same prompt as a new battle with a new pair. A discard of a battle in which neither side
+showed the voter anything, no text, reasoning or tool call after the prompt (both failed on their first
+request, or were stopped before answering), is recorded without names too (`anySideShowedOutput`);
+the card reads **Battle discarded**. One side's output is enough to reveal both. Before committing a vote, the service resolves the
 assignment on the control plane. Resolution accepts only the final decisions defined for that kind
 of assignment. The first decision is immutable; a retry returns that committed decision and the
 desktop honours it instead of applying a later choice. Only then does the control plane return

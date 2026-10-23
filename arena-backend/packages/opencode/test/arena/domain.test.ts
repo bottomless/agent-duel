@@ -77,6 +77,7 @@ describe("Arena domain", () => {
     expect(identitiesRevealed(voteResolution("a"))).toBe(true)
     expect(identitiesRevealed(stoppedResolution("discard"))).toBe(true)
     expect(identitiesRevealed(abortedResolution("failed after running"))).toBe(true)
+    expect(identitiesRevealed(stoppedResolution("discard", { revealed: false }))).toBe(false)
     const unstarted = abortedResolution("failed while creating", { revealed: false })
     expect(unstarted).toEqual({ kind: "aborted", reason: "failed while creating", revealed: false })
     expect(identitiesRevealed(unstarted)).toBe(false)

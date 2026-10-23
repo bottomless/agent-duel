@@ -1166,7 +1166,8 @@ export class Store {
     readonly vote?: Vote
     readonly participantID?: string
     readonly appliedSide?: Side
-    readonly models: Readonly<Record<Side, string>>
+    /** Left out for a discard that names nobody (`identitiesRevealed`). */
+    readonly models?: Readonly<Record<Side, string>>
     readonly expectedState: "awaiting_vote" | "awaiting_stop_resolution"
     readonly at: Date
   }) {
@@ -1189,13 +1190,13 @@ export class Store {
             : {}),
           ...(input.resolution.kind === "stopped" ? { comparisonState: "skipped" as const } : {}),
           ...(input.appliedSide ? { appliedSide: input.appliedSide } : {}),
-          "placement.a.model": input.models.a,
-          "placement.b.model": input.models.b,
+          ...(input.models
+            ? { "placement.a.model": input.models.a, "placement.b.model": input.models.b, revealAt: input.at }
+            : {}),
           ...(input.resolution.kind === "vote" && awaitingVoteAt
             ? { timeToVoteMs: Math.max(0, input.at.getTime() - awaitingVoteAt.getTime()) }
             : {}),
           voteAt: input.at,
-          revealAt: input.at,
           updatedAt: input.at,
         },
       },

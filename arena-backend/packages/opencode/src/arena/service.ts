@@ -55,7 +55,7 @@ import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { isRecord } from "@/util/record"
 import { generate as generateComparison, skip as skipComparison } from "./comparison"
 import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
-import { comparisonTimeline } from "./comparison-timeline"
+import { comparisonTimeline, showedOutput } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
 import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
 import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
@@ -334,6 +334,22 @@ async function archivedSessions(store: Store, run: RunDocument): Promise<unknown
   const payload = ArenaTranscriptArtifact.decode(artifact)
   if (!Array.isArray(payload)) throw new Error(`Arena transcript archive is invalid: ${run._id}`)
   return payload
+}
+
+/**
+ * Whether either side showed the voter anything this turn. A discard of a battle neither did, because
+ * both failed on their first request or were stopped before answering, names nobody. A run without a
+ * recorded prompt boundary is from an older build and counts as shown.
+ */
+async function anySideShowedOutput(store: Store, turnID: string) {
+  for (const run of await store.runsForTurn(turnID)) {
+    const boundary = promptBoundary(run)
+    if (boundary === null) continue
+    if (boundary === undefined) return true
+    const sessions = await archivedSessions(store, run).catch(() => undefined)
+    if (!sessions || showedOutput(archivedMessages(sessions), boundary)) return true
+  }
+  return false
 }
 
 function archivedMessages(payload: readonly unknown[]): unknown[] {
@@ -10319,18 +10335,20 @@ export const layer: Layer.Layer<
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
       yield* ensureArchives(store, turn)
+      const reveal = yield* promise(() => anySideShowedOutput(store, turn._id))
       const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
       const recorded = yield* promise(() =>
         store.recordResolution({
           turnID: turn._id,
-          resolution: resolved,
-          models: revealed.models,
+          resolution: reveal ? resolved : stoppedResolution("discard", { revealed: false }),
+          ...(reveal ? { models: revealed.models } : {}),
           expectedState,
           at: new Date(),
         }),
       )
       if (!recorded.recorded) return yield* respond(store, turn.chatID)
-      yield* revealTelemetry(recorded.turn, revealed.metrics)
+      if (reveal) yield* revealTelemetry(recorded.turn, revealed.metrics)
+      else yield* releaseTelemetry(recorded.turn)
       yield* promise(() => store.transitionTurn(turn._id, "discarding"))
       yield* cleanup(store, turn, chat.repository.root)
       const canonical = yield* withGit(inspectCanonical(chat.repository.root)).pipe(Effect.mapError(error))
@@ -10389,19 +10407,20 @@ export const layer: Layer.Layer<
         } else if (turn.state === "awaiting_vote" || turn.state === "awaiting_stop_resolution") {
           const expectedState: "awaiting_vote" | "awaiting_stop_resolution" = turn.state
           yield* ensureArchives(store, turn)
-          const resolved = stoppedResolution("discard")
+          const reveal = yield* promise(() => anySideShowedOutput(store, turn._id))
           const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
           const recorded = yield* promise(() =>
             store.recordResolution({
               turnID: turn._id,
-              resolution: resolved,
-              models: revealed.models,
+              resolution: stoppedResolution("discard", reveal ? undefined : { revealed: false }),
+              ...(reveal ? { models: revealed.models } : {}),
               expectedState,
               at: new Date(),
             }),
           )
           if (recorded.recorded || recorded.turn.resolution?.kind === "stopped") {
-            yield* revealTelemetry(recorded.turn, revealed.metrics)
+            if (identitiesRevealed(recorded.turn.resolution)) yield* revealTelemetry(recorded.turn, revealed.metrics)
+            else yield* releaseTelemetry(recorded.turn)
             yield* promise(() => store.transitionTurn(turn._id, "discarding"))
             yield* cleanup(store, turn, chat.repository.root)
             const canonical = yield* withGit(inspectCanonical(chat.repository.root)).pipe(Effect.mapError(error))

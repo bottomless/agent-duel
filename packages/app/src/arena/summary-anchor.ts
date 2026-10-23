@@ -2,7 +2,7 @@ import type { ArenaHistoryItem, ArenaSnapshot } from "@getpaseo/protocol/arena/r
 import type { AgentTimelinePromptIndexPayload } from "@getpaseo/client/internal/daemon-client";
 import type { AgentTimelineCursorState } from "@/stores/session-store";
 import { createUserMessage, type StreamItem } from "@/types/stream";
-import { battleFailedToStart, isResolvingBattleState } from "./battle-result";
+import { isResolvingBattleState } from "./battle-result";
 import { orderArenaChat } from "./chat-order";
 
 export function isArenaBattleUnresolved(snapshot: ArenaSnapshot | undefined): boolean {
@@ -208,14 +208,10 @@ export function partitionArenaSummaries(
   live: ArenaHistoryItem | null;
 } {
   // Recording the vote reveals identities before application and transcript grafting finish.
-  // That turn still belongs to the live battle, even if its history anchor already exists.
-  // A battle that failed to start is decided without them.
-  const resolved = history.filter(
-    (item) =>
-      item.resolution &&
-      (item.identities || battleFailedToStart(item)) &&
-      !isResolvingBattleState(item.state),
-  );
+  // That turn still belongs to the live battle, even if its history anchor already exists. A
+  // battle nobody saw (it failed to start, or was discarded before either side answered) is
+  // decided without identities.
+  const resolved = history.filter((item) => item.resolution && !isResolvingBattleState(item.state));
   if (battleIsActive || resolved.length === 0) {
     return { inline: resolved, live: null };
   }

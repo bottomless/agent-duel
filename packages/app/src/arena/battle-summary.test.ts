@@ -318,6 +318,21 @@ describe("partitionArenaSummaries", () => {
     },
   );
 
+  it("shows a battle discarded before either side answered, though it names nobody", () => {
+    const unseen = {
+      ...historyItem,
+      id: "turn-unseen",
+      index: 2,
+      state: "discarded",
+      canonicalUserMessageID: undefined,
+      resolution: { kind: "stopped", resolution: "discard" },
+    } as ArenaHistoryItem;
+    expect(partitionArenaSummaries([older, unseen], false)).toEqual({
+      inline: [older],
+      live: unseen,
+    });
+  });
+
   it("shows a battle that failed to start, though it names nobody", () => {
     const unstarted = {
       ...historyItem,

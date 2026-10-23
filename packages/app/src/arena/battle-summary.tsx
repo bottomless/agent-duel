@@ -187,6 +187,18 @@ function runsAreFinal(runA: ArenaRun | undefined, runB: ArenaRun | undefined): b
   return Boolean(runA && runB && runA.runState !== "pending" && runB.runState !== "pending");
 }
 
+/** A thread's title: the side, and its model once the battle has named it. */
+function ThreadTitle({ side, model }: { side: "a" | "b"; model: string | undefined }) {
+  if (!model) return <Text style={styles.threadTitle}>Agent {side.toUpperCase()}</Text>;
+  return (
+    <View style={styles.threadTitleGroup}>
+      <Text style={styles.threadTitle}>Agent {side.toUpperCase()} ·</Text>
+      <ArenaModelVendorIcon model={model} size={ICON_SIZE.sm} />
+      <Text style={styles.threadTitle}>{arenaModelDisplayName(model)}</Text>
+    </View>
+  );
+}
+
 /** One side's model, as revealed by the vote: its vendor's mark and its name. */
 function RevealedIdentity({
   side,
@@ -234,12 +246,17 @@ function BattleSummaryHeader({
         <ThemedChevronRight size={17} uniProps={mutedColorMapping} />
       )}
       <View style={styles.headerText}>
-        <View style={styles.identityRow}>
-          <RevealedIdentity side="a" model={item.identities?.a.name} winner={winner === "a"} />
-          <Text style={styles.identities}>·</Text>
-          <RevealedIdentity side="b" model={item.identities?.b.name} winner={winner === "b"} />
-          {showOutcome ? <Text style={styles.identities}>· {chosenLabel(item)}</Text> : null}
-        </View>
+        {item.identities ? (
+          <View style={styles.identityRow}>
+            <RevealedIdentity side="a" model={item.identities.a.name} winner={winner === "a"} />
+            <Text style={styles.identities}>·</Text>
+            <RevealedIdentity side="b" model={item.identities.b.name} winner={winner === "b"} />
+            {showOutcome ? <Text style={styles.identities}>· {chosenLabel(item)}</Text> : null}
+          </View>
+        ) : (
+          // Discarded before either side showed anything, so the battle names nobody.
+          <Text style={styles.identities}>{chosenLabel(item)}</Text>
+        )}
       </View>
       {gitNotice && gitNotice.tone !== "info" ? (
         <Text style={styles.conflictBadge}>{gitNotice.title}</Text>
@@ -346,13 +363,7 @@ function BattleThreads({
       <View style={styles.threadPane}>
         <View style={styles.threadHeader}>
           <View style={styles.threadTitleRow}>
-            <View style={styles.threadTitleGroup}>
-              <Text style={styles.threadTitle}>Agent A ·</Text>
-              <ArenaModelVendorIcon model={item.identities?.a.name} size={ICON_SIZE.sm} />
-              <Text style={styles.threadTitle}>
-                {arenaModelDisplayName(item.identities?.a.name)}
-              </Text>
-            </View>
+            <ThreadTitle side="a" model={item.identities?.a.name} />
             {winner === "a" ? (
               <View accessible accessibilityLabel="Agent A winner">
                 <ThemedCheckSquare size={16} uniProps={successColorMapping} />
@@ -373,13 +384,7 @@ function BattleThreads({
       <View style={styles.threadPane}>
         <View style={styles.threadHeader}>
           <View style={styles.threadTitleRow}>
-            <View style={styles.threadTitleGroup}>
-              <Text style={styles.threadTitle}>Agent B ·</Text>
-              <ArenaModelVendorIcon model={item.identities?.b.name} size={ICON_SIZE.sm} />
-              <Text style={styles.threadTitle}>
-                {arenaModelDisplayName(item.identities?.b.name)}
-              </Text>
-            </View>
+            <ThreadTitle side="b" model={item.identities?.b.name} />
             {winner === "b" ? (
               <View accessible accessibilityLabel="Agent B winner">
                 <ThemedCheckSquare size={16} uniProps={successColorMapping} />
