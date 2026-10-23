@@ -1,10 +1,11 @@
 import { $ } from "bun"
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import fs from "fs/promises"
 import { connectLocalStore } from "@/arena/local-store"
 import type { Store } from "@/arena/mongo"
 import type { RunDocument } from "@/arena/records"
 import { registry, setStoreForTest } from "@/arena/runtime"
+import * as GitState from "@/worktree/git-state"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { arenaRequest, installOpenRouterStub, json, type PublicSnapshot, waitForTurn } from "./harness"
@@ -342,6 +343,51 @@ describe("Arena after an engine restart", () => {
       expect(await callIndexes(store, failed._id)).toEqual([...previous.callIndexes, previous.callIndexes.length])
       expect(await rawEventCount(store, failed._id)).toBeGreaterThan(previous.rawEvents)
     } finally {
+      router.restore()
+      await store.close()
+    }
+  }, 60_000)
+  test("a battle the restart cut off while it failed to start ends without naming either side", async () => {
+    await using directory = await fixture()
+    await using arenaDirectory = await tmpdir()
+    let store = await connectLocalStore({ directory: arenaDirectory.path })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+    const held = spyOn(GitState, "copyGitState").mockRejectedValue(
+      Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" }),
+    )
+    // The engine stops before it can record the abort, as if it was quit during it.
+    const cutOff = spyOn(store, "recordAbort").mockRejectedValueOnce(new Error("Arena engine stopped"))
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const turnID = await startBattle(headers, "Battle cut off while failing", "This battle cannot start.")
+      const deadline = Date.now() + 20_000
+      while (cutOff.mock.calls.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+      expect((await store.turn(turnID))?.state).toBe("creation_failed")
+
+      store = await restartEngine(store, arenaDirectory.path)
+
+      const reopened = await json<PublicSnapshot>(
+        await arenaRequest(`/arena/turns/${encodeURIComponent(turnID)}`, { headers }),
+      )
+      expect(reopened.chat.status).toBe("ready")
+      expect(reopened.turn?.state).toBe("discarded")
+      expect(reopened.turn?.revealed).toBe(false)
+      expect(reopened.turn?.identities).toBeUndefined()
+      const ended = await store.turn(turnID)
+      expect(ended?.resolution).toEqual({
+        kind: "aborted",
+        reason: "Arena battle failed before resolution",
+        revealed: false,
+      })
+      expect(ended?.placement.a.model).toBeUndefined()
+      expect(ended?.placement.b.model).toBeUndefined()
+      expect((await store.runsForTurn(turnID)).map((run) => run.runState)).toEqual(["error", "error"])
+    } finally {
+      cutOff.mockRestore()
+      held.mockRestore()
       router.restore()
       await store.close()
     }

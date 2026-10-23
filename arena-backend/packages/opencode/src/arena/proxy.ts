@@ -46,6 +46,8 @@ export interface Telemetry {
     readonly runIDs: readonly string[]
     readonly metrics: readonly GenerationMetrics[]
   }) => void | Promise<void>
+  /** The runs' battle ended without a reveal: their usage is never persisted, so stop holding it. */
+  readonly release?: (input: { readonly runIDs: readonly string[] }) => void | Promise<void>
 }
 
 export type ProxyOptions = {

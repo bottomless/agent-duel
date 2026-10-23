@@ -1065,9 +1065,11 @@ const revealed = identitiesRevealed(turn.resolution)   // arena/domain.ts
 ```
 
 That one rule governs the public projection. Every resolution reveals except the abort of a battle
-that failed while it was being created: neither side ran, so the service still resolves the
-assignments, which stops their routing, but stores no names. The chat shows **Battle couldn't
-start**, and **Try again** sends the same prompt as a new battle with a new pair. Before committing a vote, the service resolves the
+that failed while it was being created: neither side ran, so it is recorded without names before the
+control plane answers, and an unreachable service cannot hold it. The control plane resolves the
+assignments in the background, which stops their routing. Its usage is never persisted, since
+nothing reveals it. The chat shows **Battle couldn't start**, and **Try again** sends
+the same prompt as a new battle with a new pair. Before committing a vote, the service resolves the
 assignment on the control plane. Resolution accepts only the final decisions defined for that kind
 of assignment. The first decision is immutable; a retry returns that committed decision and the
 desktop honours it instead of applying a later choice. Only then does the control plane return
@@ -1116,7 +1118,9 @@ Failure has first-class states — `creation_failed`, `finalization_failed`, `ap
 they failed, so a resolution can be retried instead of losing the battle. A battle that fails
 before anyone decides it is aborted at once (`abortUnresolved` in `arena/service.ts`): its pending
 sides are cancelled and settled, so no pane keeps reading as working, its worktrees go, and the chat
-is ready again. `interrupted_recovery` is where a turn lands when the daemon dies mid-battle.
+is ready again. A turn startup finds in `creation_failed`, because the previous process stopped
+while ending it, is ended the same way rather than parked for Keep or Discard, which would name the
+pair. `interrupted_recovery` is where a turn lands when the daemon dies mid-battle.
 
 A battle the restart cut off goes back to the vote (`reopenInterruptedTurn`), because quitting the
 app is not a decision about the battle. A side that had finished keeps its result. A side that was

@@ -1310,6 +1310,9 @@ export const layer: Layer.Layer<
 
     const revealTelemetry = (turn: TurnDocument, metrics: Awaited<ReturnType<typeof resolvedPlacement>>["metrics"]) =>
       promise(() => telemetry?.reveal?.({ runIDs: Object.values(turn.runIDs), metrics }) ?? Promise.resolve())
+    /** For a battle that ends unrevealed: its generations' usage stays blind and is not held for a reveal. */
+    const releaseTelemetry = (turn: TurnDocument) =>
+      promise(() => telemetry?.release?.({ runIDs: Object.values(turn.runIDs) }) ?? Promise.resolve())
 
     const inDirectory = <A, E, R>(directory: string, effect: Effect.Effect<A, E, R>) =>
       instances.provide({ directory }, effect)
@@ -7955,8 +7958,10 @@ export const layer: Layer.Layer<
      * their worktrees and give the chat back. False when another caller recorded a different
      * decision first.
      *
-     * A battle that failed while it was being created is still resolved on the control plane, so its
-     * assignments stop routing, but its pair is not stored or named (`identitiesRevealed`).
+     * A battle that failed while it was being created is recorded before the control plane answers,
+     * so an unreachable service cannot leave it stuck, and its pair is never stored or named
+     * (`identitiesRevealed`). The control plane still resolves it in the background, which stops the
+     * assignments routing.
      */
     const abortUnresolved = Effect.fn("Arena.abortUnresolved")(function* (
       store: Store,
@@ -7966,19 +7971,30 @@ export const layer: Layer.Layer<
       reason: string,
     ) {
       const reveal = expectedState !== "creation_failed"
-      const resolved = yield* promise(() => modelsForDecision(turn, "aborted"))
+      const resolved = reveal ? yield* promise(() => modelsForDecision(turn, "aborted")) : undefined
       const aborted = yield* promise(() =>
         store.recordAbort({
           turnID: turn._id,
           expectedState,
           reason,
-          ...(reveal ? { models: resolved.models } : {}),
+          ...(resolved ? { models: resolved.models } : {}),
           at: new Date(),
         }),
       )
       if (!aborted.recorded && aborted.turn.resolution?.kind !== "aborted") return false
-      if (identitiesRevealed(aborted.turn.resolution)) yield* revealTelemetry(aborted.turn, resolved.metrics)
-      yield* settleAbandonedRuns(store, turn, reveal ? "interrupted" : "error")
+      if (resolved && identitiesRevealed(aborted.turn.resolution)) {
+        yield* revealTelemetry(aborted.turn, resolved.metrics)
+        yield* settleAbandonedRuns(store, turn, "interrupted", reason)
+      } else {
+        yield* promise(() => modelsForDecision(turn, "aborted")).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena could not resolve a battle that never started", { turnID: turn._id, cause }),
+          ),
+          Effect.forkIn(scope),
+        )
+        yield* releaseTelemetry(turn)
+        yield* settleAbandonedRuns(store, turn, "error", "Arena battle could not start")
+      }
       yield* promise(() => store.transitionTurn(turn._id, "discarding"))
       yield* cleanup(store, turn, chat.repository.root)
       const canonical = yield* withGit(inspectCanonical(chat.repository.root)).pipe(Effect.mapError(error))
@@ -8007,6 +8023,7 @@ export const layer: Layer.Layer<
       store: Store,
       turn: TurnDocument,
       runState: "error" | "interrupted",
+      message: string,
     ) {
       const runs = yield* promise(() => store.runsForTurn(turn._id))
       yield* Effect.forEach(
@@ -8019,7 +8036,7 @@ export const layer: Layer.Layer<
                 runState,
                 durationMs: null,
                 selectable: false,
-                error: runState === "error" ? "Arena battle could not start" : "Arena battle failed before resolution",
+                error: message,
                 completedAt: new Date(),
               }),
             )
@@ -8676,6 +8693,12 @@ export const layer: Layer.Layer<
               return
             }
 
+            // The previous process stopped while ending a battle that never started. Recovery would
+            // park it for Keep or Discard, which names the pair; it ends as it would have.
+            if (turn.state === "creation_failed") {
+              yield* abortUnresolved(store, turn, "creation_failed", currentChat, "Arena battle failed before resolution")
+              return
+            }
             if (
               turn.state === "creating" ||
               turn.state === "worktrees_ready" ||
@@ -8683,7 +8706,6 @@ export const layer: Layer.Layer<
               turn.state === "early_selected" ||
               turn.state === "finalizing" ||
               turn.state === "stopping" ||
-              turn.state === "creation_failed" ||
               turn.state === "finalization_failed" ||
               turn.state === "interrupted_recovery"
             ) {

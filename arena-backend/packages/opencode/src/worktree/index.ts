@@ -568,6 +568,9 @@ const layer: Layer.Layer<
       }
       const commonDir = common.text.trim();
       const parent = pathSvc.dirname(host);
+      // Before anything is written under the local state directory: a copy that fails leaves a
+      // checkout whose next battle would otherwise snapshot what it left as untracked work.
+      yield* excludeLocalState(ctx.worktree);
       yield* fs.makeDirectory(parent, { recursive: true }).pipe(Effect.orDie);
       if (options?.fresh) yield* discardEntry(host);
 
@@ -601,12 +604,15 @@ const layer: Layer.Layer<
               host,
               durationMs: Math.round(performance.now() - started),
               error,
-            }),
+            }).pipe(
+              // A copy that never reached its name is not reused: the next battle copies to a
+              // new generation's name.
+              Effect.andThen(discardEntry(`${host}.partial`).pipe(Effect.ignore)),
+            ),
           ),
         );
       }
 
-      yield* excludeLocalState(ctx.worktree);
       // The copy carries the checkout's excludes, but the checkout may have changed them
       // since, and a repaired host keeps its old file. Those paths are environment state in
       // the canonical checkout and must remain ignored when copied into a contestant.

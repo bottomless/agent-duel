@@ -8,6 +8,7 @@ import {
 import type {
   ArenaComparisonDiff,
   ArenaHistoryItem,
+  ArenaRun,
   ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
@@ -18,6 +19,7 @@ import {
   isResolvingBattleState,
   resolutionRetryDetail,
   RESOLVING_BATTLE_STATES,
+  settledHistoryRun,
 } from "./battle-result";
 import { canRequestBattleDiff, canReviewBattle, hasBattleDiff } from "./comparison-visibility";
 import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
@@ -242,6 +244,16 @@ describe("partitionArenaSummaries", () => {
       inline: [older],
       live: unstarted,
     });
+  });
+});
+
+describe("settledHistoryRun", () => {
+  it("shows a run an older build left pending in a decided battle as interrupted", () => {
+    const pending = { side: "a", runState: "pending" } as ArenaRun;
+    expect(settledHistoryRun(pending)?.runState).toBe("interrupted");
+    const complete = { side: "b", runState: "complete" } as ArenaRun;
+    expect(settledHistoryRun(complete)).toBe(complete);
+    expect(settledHistoryRun(undefined)).toBeUndefined();
   });
 });
 

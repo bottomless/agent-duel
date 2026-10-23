@@ -45,6 +45,19 @@ describe("renameRetrying", () => {
     expect(missing.calls).toHaveLength(1)
   })
 
+  test("fails at once when the target already exists, which waiting does not change", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "rename-retry-"))
+    try {
+      const taken = failing("EPERM", 10)
+      await expect(
+        renameRetrying(path.join(root, "missing"), root, { platform: "win32", delayMs: 1, rename: taken.rename }),
+      ).rejects.toMatchObject({ code: "EPERM" })
+      expect(taken.calls).toHaveLength(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test("fails at once outside Windows, where EPERM is a real permission error", async () => {
     const denied = failing("EPERM", 1)
     await expect(

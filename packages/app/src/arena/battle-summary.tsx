@@ -2,7 +2,7 @@ import { arenaSubscription } from "./stream-subscription";
 import { arenaSizeErrorOr } from "./chat-too-large";
 import { ArenaStreamStatus } from "./stream-status";
 import { useArenaStream } from "./use-arena-stream";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Animated, {
@@ -47,6 +47,7 @@ import {
   battleWinnerSide,
   gitApplicationNotice,
   isStoppedByEarlyPick,
+  settledHistoryRun,
 } from "./battle-result";
 import { ArenaPathList } from "./path-list";
 import { useContainerWidth } from "@/hooks/use-container-width";
@@ -567,7 +568,7 @@ function ExpandedBattleSummary({
         workspaceId={workspaceId}
         item={snapshot?.turn ?? item}
       />
-      <BattleThreads runA={runA} runB={runB} item={item} />
+      <BattleThreads runA={settledHistoryRun(runA)} runB={settledHistoryRun(runB)} item={item} />
       <ArchivedBattleComparison
         serverId={serverId}
         agentId={agentId}
@@ -602,9 +603,15 @@ function FailedBattleStart({
 }) {
   const toast = useToast();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
-  const arenaStart = useArenaStartMutation(serverId, agentId);
-  const startArena = arenaStart.mutateAsync;
+  const { mutateAsync: startArena } = useArenaStartMutation(serverId, agentId);
+  // Held from the press, through the prompt lookup, until the start settles: a second press in
+  // between would send the prompt twice.
+  const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false);
   const handleStartAgain = useCallback(() => {
+    if (startingRef.current) return;
+    startingRef.current = true;
+    setStarting(true);
     const run = async () => {
       if (!client) throw new Error("Arena daemon connection is unavailable");
       const turn = (await client.arenaTurn(agentId, item.id)).turn;
@@ -615,7 +622,12 @@ function FailedBattleStart({
       }
       await startArena({ prompt: turn.prompt });
     };
-    void run().catch((error) => toast.error(toErrorMessage(error)));
+    void run()
+      .catch((error) => toast.error(toErrorMessage(error)))
+      .finally(() => {
+        startingRef.current = false;
+        setStarting(false);
+      });
   }, [agentId, client, item.id, startArena, toast]);
   return (
     <View style={[styles.card, styles.failedStart]} testID={`arena-summary-${item.id}`}>
@@ -629,7 +641,7 @@ function FailedBattleStart({
         <Button
           size="xs"
           variant="outline"
-          loading={arenaStart.isPending}
+          loading={starting}
           onPress={handleStartAgain}
           testID="arena-failed-start-retry"
         >
