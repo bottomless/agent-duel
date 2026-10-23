@@ -1,3 +1,4 @@
+import { ArenaModelProfile } from "@/arena/model-profile"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import path from "path"
@@ -634,7 +635,23 @@ const layer = Layer.effect(
       sessionID: SessionID,
     ) {
       const exit = yield* provider.getModel(providerID, modelID).pipe(Effect.exit)
-      if (Exit.isSuccess(exit)) return exit.value
+      if (Exit.isSuccess(exit)) {
+        const model = exit.value
+        if (model.providerID !== ArenaRuntime.providerID) return model
+        let current = sessionID
+        const descendants: SessionID[] = []
+        while (true) {
+          const assigned = ArenaRuntime.registry.assignments.get(current)
+          if (assigned) {
+            for (const child of descendants) ArenaRuntime.registry.assign(child, assigned)
+            return ArenaModelProfile.withLimits(model, assigned.limits)
+          }
+          const info = yield* sessions.get(current).pipe(Effect.orDie)
+          if (!info.parentID) return model
+          descendants.push(current)
+          current = info.parentID
+        }
+      }
       const err = Cause.squash(exit.cause)
       if (Provider.ModelNotFoundError.isInstance(err)) {
         const hint = err.suggestions?.length ? ` Did you mean: ${err.suggestions.join(", ")}?` : ""

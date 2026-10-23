@@ -45,6 +45,26 @@ const pool: ModelPool = [
   },
 ]
 
+const defaultLimits = { context: 500_000, output: 131_072 }
+
+const limitedPool: ModelPool = [
+  {
+    displayName: "Fixture Alpha",
+    slug: "fixture/alpha",
+    canonicalSlug: "fixture/alpha-2026",
+    contextWindow: 65_536,
+    limits: { context: 65_536, output: 32_768 },
+    routing: { provider: "fixture-alpha" },
+  },
+  {
+    displayName: "Fixture Beta",
+    slug: "fixture/beta",
+    canonicalSlug: "fixture/beta-2026",
+    contextWindow: 262_144,
+    routing: { provider: "fixture-beta" },
+  },
+]
+
 beforeAll(async () => {
   if (!uri) throw new Error("OPENCODE_ARENA_MONGODB_URI must be set to run the assignment tests")
   mongo = await connectMongoDb({ uri, database })
@@ -70,14 +90,19 @@ function request(body: unknown) {
 }
 
 function service(
-  options: { readonly userId?: string; readonly ids?: readonly string[]; readonly random?: readonly number[] } = {},
+  options: {
+    readonly userId?: string
+    readonly ids?: readonly string[]
+    readonly random?: readonly number[]
+    readonly pool?: ModelPool
+  } = {},
 ) {
   const ids = [...(options.ids ?? ["assignment-a", "assignment-b"])]
   const random = [...(options.random ?? [0, 0.999])]
   return createArenaService({
     resolveCaller: async () => ({ id: options.userId ?? "user-1" }),
     db: async () => mongo.db,
-    pool,
+    pool: options.pool ?? pool,
     openRouterApiKey: "server-secret",
     uuid: () => ids.shift() ?? crypto.randomUUID(),
     random: () => random.shift() ?? 0,
@@ -87,11 +112,44 @@ function service(
 }
 
 describe("Arena assignment control plane", () => {
+  test("uses one neutral envelope for every draw and preserves a stored lower cap on retry", async () => {
+    const first = await service({ pool: limitedPool, random: [0, 0] }).assignments(
+      request({ action: "create", kind: "battle", scopeID: "turn-limits" }),
+    )
+    expect(await first.json()).toEqual({
+      assignments: [
+        { assignmentID: "assignment-a", limits: { context: 65_536, output: 32_768 } },
+        { assignmentID: "assignment-b", limits: { context: 65_536, output: 32_768 } },
+      ],
+    })
+
+    const otherDraw = await service({ pool: limitedPool, random: [0.999, 0] }).assignments(
+      request({ action: "create", kind: "battle", scopeID: "turn-other-draw" }),
+    )
+    expect((await otherDraw.json()).assignments.map((item: { limits: unknown }) => item.limits)).toEqual([
+      { context: 65_536, output: 32_768 },
+      { context: 65_536, output: 32_768 },
+    ])
+
+    const retry = await service({ pool, ids: ["retry-a", "retry-b"], random: [0.5, 0] }).assignments(
+      request({ action: "create", kind: "battle", scopeID: "turn-limits" }),
+    )
+    expect(await retry.json()).toEqual({
+      assignments: [
+        { assignmentID: "assignment-a", limits: { context: 65_536, output: 32_768 } },
+        { assignmentID: "assignment-b", limits: { context: 65_536, output: 32_768 } },
+      ],
+    })
+  })
+
   test("keeps the model mapping private until an immutable decision is committed", async () => {
     const create = await service().assignments(request({ action: "create", kind: "battle", scopeID: "turn-1" }))
     const publicPayload = (await create.json()) as Record<string, unknown>
     expect(publicPayload).toEqual({
-      assignments: [{ assignmentID: "assignment-a" }, { assignmentID: "assignment-b" }],
+      assignments: [
+        { assignmentID: "assignment-a", limits: defaultLimits },
+        { assignmentID: "assignment-b", limits: defaultLimits },
+      ],
     })
     expect(JSON.stringify(publicPayload)).not.toContain("routingToken")
     expect(JSON.stringify(publicPayload)).not.toContain("GLM")
@@ -255,7 +313,9 @@ describe("Arena assignment control plane", () => {
     const response = await service({ ids: ["medium-assignment"] }).assignments(
       request({ action: "create", kind: "single", scopeID: "rating-medium", modelSize: "medium" }),
     )
-    expect(await response.json()).toEqual({ assignments: [{ assignmentID: "medium-assignment" }] })
+    expect(await response.json()).toEqual({
+      assignments: [{ assignmentID: "medium-assignment", limits: defaultLimits }],
+    })
     const stored = await mongo.db
       .collection<{
         _id: string
@@ -276,7 +336,9 @@ describe("Arena assignment control plane", () => {
     const created = await service({ ids: ["legacy-assignment"] }).assignments(
       request({ action: "create", kind: "single", scopeID: "rating-legacy" }),
     )
-    expect(await created.json()).toEqual({ assignments: [{ assignmentID: "legacy-assignment" }] })
+    expect(await created.json()).toEqual({
+      assignments: [{ assignmentID: "legacy-assignment", limits: defaultLimits }],
+    })
     const stored = await mongo.db
       .collection<{
         _id: string

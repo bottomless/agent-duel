@@ -1,7 +1,10 @@
+import type { ModelLimits } from "@agent-duel/arena-service/pool"
 import { randomUUID } from "crypto"
 import { contestant } from "./model-profile"
 import type { GenerationMetrics } from "./records"
 import {
+  contextOverflowError,
+  readContextOverflow,
   networkUnavailableError,
   paymentError,
   readNetworkUnavailable,
@@ -11,6 +14,7 @@ import {
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 
 export type Assignment = {
+  readonly limits?: ModelLimits
   readonly runID: string
   readonly rootSessionID: string
   readonly scopeID: string
@@ -211,6 +215,7 @@ function retryableStreamPayload() {
 export function sanitizePayload(value: unknown, generationID: string, stream = false): unknown {
   if (!record(value)) return value
   if (value.error !== undefined) {
+    if (readContextOverflow(value)) return contextOverflowError()
     if (
       stream &&
       record(value.error) &&
@@ -655,10 +660,17 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const generationID = metadata.generationID
     const type = response.headers.get("content-type") ?? ""
     if (!response.ok) {
-      // Only these two bodies carry a neutral code the engine acts on; every other body is dropped.
-      const body = response.status === 402 || response.status === 503 ? await response.text() : undefined
-      const payload =
-        response.status === 402
+      const supportedStatus = [400, 402, 413, 503].includes(response.status)
+      const body = supportedStatus ? await response.text() : undefined
+      let failure: unknown
+      try {
+        failure = body ? JSON.parse(body) : undefined
+      } catch {
+        failure = undefined
+      }
+      const payload = readContextOverflow(failure)
+        ? contextOverflowError()
+        : response.status === 402
           ? paymentError(readPaymentError(body) ?? "arena_payment_required")
           : readNetworkUnavailable(body)
             ? networkUnavailableError()

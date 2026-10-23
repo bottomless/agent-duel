@@ -57,7 +57,12 @@ import { generate as generateComparison, skip as skipComparison } from "./compar
 import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
 import { comparisonTimeline } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
-import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
+import {
+  createBattleAssignments,
+  createSingleAssignment,
+  resolveAssignments,
+  type OpaqueAssignment,
+} from "./assignment-client"
 import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
@@ -549,13 +554,11 @@ async function arenaCopyConfiguration(root: string): Promise<unknown> {
   return await file.json()
 }
 
-function assignment(
-  value: { readonly assignmentID: string },
-  modelSize: SingleAgentModelSize = "frontier",
-): HiddenAssignment {
+function assignment(value: OpaqueAssignment, modelSize: SingleAgentModelSize = "frontier"): HiddenAssignment {
   const reasoning = modelSize === "medium" ? xhighReasoning.reasoning : highReasoning.reasoning
   return {
     assignmentID: value.assignmentID,
+    limits: value.limits,
     requestedReasoning: reasoning,
     enforcedReasoning: reasoning,
   }
@@ -2279,12 +2282,16 @@ export const layer: Layer.Layer<
       const store = yield* available()
       const existing = yield* promise(() => store.singleAgentRating(rawSessionID, messageID))
       if (existing) {
+        const limits =
+          existing.assignment.limits ??
+          (yield* promise(() => createSingleAssignment(existing._id, existing.modelSize ?? "frontier"))).limits
         registry.replaceSingle(rawSessionID, {
           runID: existing._id,
           rootSessionID: rawSessionID,
           scopeID: existing._id,
           assignmentID: existing.assignment.assignmentID,
           ...(existing.modelSize ? { modelSize: existing.modelSize } : { modelSize: "frontier" as const }),
+          limits,
           telemetry: false,
         })
         return existing
@@ -2311,6 +2318,7 @@ export const layer: Layer.Layer<
         scopeID: rating._id,
         assignmentID: rating.assignment.assignmentID,
         ...(rating.modelSize ? { modelSize: rating.modelSize } : { modelSize: "frontier" as const }),
+        limits: selected.limits,
         telemetry: false,
       })
       return rating
@@ -4209,11 +4217,14 @@ export const layer: Layer.Layer<
     // bound in this process. A battle binds each run as it starts it. After an engine restart a
     // settled run is bound to nothing, so resuming it for a reply or a retry binds it again.
     const bindRun = Effect.fnUntraced(function* (run: RunDocument) {
+      // Old persisted runs predate negotiated limits; the idempotent draw retains their model snapshot.
+      const limits = run.assignment.limits ?? (yield* promise(() => createBattleAssignments(run.turnID))).a.limits
       const assignment = {
         runID: run._id,
         rootSessionID: run.rootSessionID,
         scopeID: run.turnID,
         assignmentID: run.proxyAssignmentID,
+        limits,
         telemetry: true,
       }
       registry.assign(run.rootSessionID, assignment)

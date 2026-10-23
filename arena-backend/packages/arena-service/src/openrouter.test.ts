@@ -557,6 +557,24 @@ describe("OpenRouter proxy", () => {
       expect(String(record.upstream)).toContain("Too many images")
       expect(String(logged[0]?.detail).length).toBeLessThan(5_000)
 
+      upstreamFailure = Response.json(
+        {
+          error: {
+            code: 400,
+            message: "secret-model maximum context length is 65536 tokens",
+            metadata: { provider_name: "secret-provider" },
+          },
+        },
+        { status: 400 },
+      )
+      const overflow = await invoke(request())
+      expect(await overflow.json()).toEqual({
+        error: {
+          message: "Arena request exceeds the context window",
+          type: "arena_context_overflow",
+        },
+      })
+
       upstreamFailure = new Response("upstream gateway text", { status: 400 })
       await invoke(request())
       expect(lastRecord()).toMatchObject({ status: 400, upstream: "upstream gateway text" })

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { defaultPool } from "@agent-duel/arena-service/default-pool"
+import { defaultPool, mediumModel } from "@agent-duel/arena-service/default-pool"
 import { comparisonModel } from "@agent-duel/arena-service/utility-model"
 import { createBattleAssignments, resolveAssignments } from "@/arena/assignment-client"
 import { createArenaBackend } from "@/arena/backend"
@@ -38,12 +38,12 @@ function fakeNetwork() {
     })
     if (request.url === "https://openrouter.ai/api/v1/models/user") {
       return Response.json({
-        data: defaultPool.map((profile) => ({
+        data: [...defaultPool, mediumModel].map((profile) => ({
           canonical_slug: profile.canonicalSlug,
           context_length: profile.contextWindow,
           architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] },
           supported_parameters: ["tools", "tool_choice", "reasoning", "reasoning_effort"],
-          reasoning: { supported_efforts: ["high"] },
+          reasoning: { supported_efforts: ["high", "xhigh"] },
         })),
       })
     }
@@ -63,6 +63,47 @@ function fakeNetwork() {
 }
 
 describe("Arena backend", () => {
+  test("reads and validates negotiated budgets from the hosted assignment service", async () => {
+    let limits: unknown = { context: 65_536, output: 32_768 }
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        expect(request.headers.get("authorization")).toBe("Bearer assignment-test-token")
+        return Response.json({
+          assignments: [
+            { assignmentID: "opaque-a", limits },
+            { assignmentID: "opaque-b", limits },
+          ],
+        })
+      },
+    })
+    try {
+      setArenaCredentials({
+        mode: "hosted",
+        token: "assignment-test-token",
+        controlPlaneUrl: server.url.toString(),
+        controlTokenHash: "0".repeat(64),
+      })
+      const pair = await createBattleAssignments("turn-limits")
+      expect(pair).toEqual({
+        a: { assignmentID: "opaque-a", limits: { context: 65_536, output: 32_768 } },
+        b: { assignmentID: "opaque-b", limits: { context: 65_536, output: 32_768 } },
+      })
+      for (const invalid of [
+        undefined,
+        { context: 0, output: 1 },
+        { context: 65_536, output: 65_536 },
+        { context: 65_536, output: -1 },
+      ]) {
+        limits = invalid
+        await expect(createBattleAssignments("turn-invalid")).rejects.toThrow("Arena assignment limits are invalid")
+      }
+    } finally {
+      server.stop(true)
+    }
+  })
+
   test("BYOK credentials answer assignments and contestant calls in process from the local SQLite store", async () => {
     await using directory = await tmpdir()
     process.env.PASEO_HOME = directory.path

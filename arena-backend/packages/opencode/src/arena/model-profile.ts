@@ -1,10 +1,13 @@
+import { defaultModelLimits, type ModelLimits } from "@agent-duel/arena-service/pool"
+import type { Provider } from "@/provider/provider"
+
 // The desktop runtime intentionally knows one capability envelope and no model
 // identities. The control plane replaces this placeholder after authenticating
 // the account and matching a battle-scoped opaque assignment ID.
 export const contestant = {
   id: "contestant",
-  contextWindow: 500_000,
-  outputLimit: 131_072,
+  contextWindow: defaultModelLimits.context,
+  outputLimit: defaultModelLimits.output,
 } as const
 
 export const medium = {
@@ -39,5 +42,17 @@ export const xhighReasoning = {
     effort: "xhigh",
   },
 } as const
+
+/** Copy the model: cached provider metadata is shared with other sessions. */
+export function withLimits(model: Provider.Model, limits?: ModelLimits): Provider.Model {
+  if (!limits || model.providerID !== "arena") return model
+  return {
+    ...model,
+    limit: {
+      context: Math.min(model.limit.context, limits.context),
+      output: Math.min(model.limit.output, limits.output),
+    },
+  }
+}
 
 export * as ArenaModelProfile from "./model-profile"

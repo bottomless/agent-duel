@@ -1,3 +1,4 @@
+import type { ModelLimits } from "@agent-duel/arena-service/pool"
 import type { BattleState, Resolution, Side, Vote } from "./domain"
 import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-tracker"
 import type { RefChange, RefOutcome } from "./ref-types"
@@ -275,6 +276,7 @@ export type CheckoutEvictionDocument = {
 }
 
 export type HiddenAssignment = {
+  readonly limits?: ModelLimits
   readonly assignmentID: string
   model?: string
   readonly requestedReasoning: Readonly<Record<string, unknown>>

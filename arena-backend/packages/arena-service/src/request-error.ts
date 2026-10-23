@@ -103,3 +103,26 @@ export function runPaymentMessage(error: string) {
     if (payload.data.statusCode === 402) return paymentMessage(402, body)
   }
 }
+
+export function contextOverflowError() {
+  return { error: { message: "Arena request exceeds the context window", type: "arena_context_overflow" } }
+}
+
+/** Recognize overflow privately; none of the provider's message or token counts leave the service. */
+export function isContextOverflow(payload: unknown): boolean {
+  if (!isRecord(payload) || !isRecord(payload.error)) return false
+  const error = payload.error
+  const code = error.code ?? error.type
+  if (code === "context_length_exceeded" || code === "model_context_window_exceeded") return true
+  if (code === 429 || code === "429" || code === "rate_limit_exceeded") return false
+  const raw = isRecord(error.metadata) ? error.metadata.raw : undefined
+  const message = [error.message, raw].filter((value) => typeof value === "string").join(" ")
+  if (/rate limit|too many requests|tokens per minute/i.test(message)) return false
+  return /maximum context length|context[_ ]length[_ ]exceeded|exceeds the context window|prompt is too long|input is too long|too many tokens/i.test(
+    message,
+  )
+}
+
+export function readContextOverflow(payload: unknown): boolean {
+  return isRecord(payload) && isRecord(payload.error) && payload.error.type === "arena_context_overflow"
+}

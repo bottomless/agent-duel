@@ -2,7 +2,13 @@ import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
 import { authorize, type ArenaContext, type Fetch } from "./context"
 import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
-import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
+import {
+  classifyPaymentError,
+  contextOverflowError,
+  isContextOverflow,
+  networkUnavailableError,
+  retryableStreamError,
+} from "./request-error"
 import type { ModelPool, ModelProfile } from "./pool"
 import { createReasoningRedactor } from "./reasoning"
 import {
@@ -111,6 +117,7 @@ function metricsCollector(generationID: string, startedAt: number) {
 function sanitizePayload(value: unknown, generationID: string, stream = false): unknown {
   if (!record(value)) return value
   if (value.error !== undefined) {
+    if (isContextOverflow(value)) return contextOverflowError()
     return {
       error: {
         message: "Arena contestant request failed",
@@ -406,15 +413,14 @@ async function sanitizeAssignedResponse(
   if (!response.ok) {
     const upstream = await response.text().catch(() => "")
     logRefusal(refusal, response.status, upstream)
-    if (response.status === 402) {
-      let payload: unknown = null
-      try {
-        payload = JSON.parse(upstream)
-      } catch {
-        payload = null
-      }
-      return Response.json(classifyPaymentError(payload), { status: 402, headers })
+    let payload: unknown
+    try {
+      payload = JSON.parse(upstream)
+    } catch {
+      payload = null
     }
+    if (isContextOverflow(payload)) return Response.json(contextOverflowError(), { status: response.status, headers })
+    if (response.status === 402) return Response.json(classifyPaymentError(payload), { status: 402, headers })
     return Response.json(
       { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } },
       { status: response.status, headers },

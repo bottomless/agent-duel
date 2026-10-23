@@ -1,8 +1,19 @@
+export interface ModelLimits {
+  readonly context: number
+  readonly output: number
+}
+
+export const defaultModelLimits: ModelLimits = {
+  context: 500_000,
+  output: 131_072,
+}
+
 export type ModelProfile = {
   readonly displayName: string
   readonly slug: string
   readonly canonicalSlug: string
   readonly contextWindow: number
+  readonly limits?: ModelLimits
   /** Sent to OpenRouter as `provider`. */
   readonly routing: Readonly<Record<string, unknown>>
   /** Null enables reasoning without an effort level for models that do not expose one. */
@@ -10,6 +21,37 @@ export type ModelProfile = {
 }
 
 export type ModelPool = readonly ModelProfile[]
+
+function validOverride(value: number, name: string) {
+  if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`Arena model ${name} limit must be a finite positive integer`)
+  }
+}
+
+function profileLimits(profile: ModelProfile): ModelLimits {
+  const context = profile.limits?.context ?? profile.contextWindow
+  const output = profile.limits?.output ?? defaultModelLimits.output
+  if (profile.limits?.context !== undefined) validOverride(profile.limits.context, "context")
+  if (profile.limits?.output !== undefined) validOverride(profile.limits.output, "output")
+  if (context > profile.contextWindow) {
+    throw new Error(`Arena model context limit exceeds its catalog window: ${profile.displayName}`)
+  }
+  if (output >= context) {
+    throw new Error(`Arena model output limit must be smaller than its context limit: ${profile.displayName}`)
+  }
+  return { context, output }
+}
+
+export function poolLimits(pool: ModelPool): ModelLimits {
+  let context = defaultModelLimits.context
+  let output = defaultModelLimits.output
+  for (const profile of pool) {
+    const limits = profileLimits(profile)
+    context = Math.min(context, limits.context)
+    output = Math.min(output, limits.output)
+  }
+  return { context, output }
+}
 
 type CatalogModel = {
   readonly id?: unknown
@@ -29,6 +71,7 @@ function strings(value: unknown) {
 }
 
 export function validateCatalog(pool: ModelPool, value: unknown) {
+  poolLimits(pool)
   if (!record(value) || !Array.isArray(value.data)) throw new Error("OpenRouter returned an invalid model catalog")
   const catalog = value.data.filter(record) as CatalogModel[]
   for (const profile of pool) {

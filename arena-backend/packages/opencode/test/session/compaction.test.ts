@@ -320,6 +320,7 @@ function compactionRouting() {
   const contestant = ProviderTest.model({
     id: ModelV2.ID.make("contestant"),
     providerID: ProviderV2.ID.make(ArenaRuntime.providerID),
+    limit: { context: 500_000, output: 131_072 },
     api: {
       id: "contestant",
       url: "https://arena.invalid/api/v1",
@@ -1259,6 +1260,148 @@ describe("session.compaction.process", () => {
         expect(result).toBe("continue")
         expect(summaries(yield* ssn.messages({ sessionID: session.id }))).toHaveLength(1)
       }).pipe(withCompaction({ llm: stub.llmLayer }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "applies negotiated Arena limits to root and descendant compactions",
+    () => {
+      const routing = compactionRouting()
+      const stub = llm()
+      const captured: LLM.StreamInput[] = []
+      stub.push(reply("root summary", (input) => captured.push(input)))
+      stub.push(reply("child summary", (input) => captured.push(input)))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const root = yield* ssn.create({})
+        const assignment = ArenaRuntime.registry.assign(root.id, {
+          runID: "run-a",
+          rootSessionID: root.id,
+          scopeID: "turn-a",
+          assignmentID: "assignment-a",
+          telemetry: true,
+          limits: { context: 65_536, output: 32_768 },
+        })
+        const rootMessage = yield* createUserMessage(root.id, "root")
+        yield* SessionCompaction.use.process({
+          parentID: rootMessage.id,
+          messages: yield* ssn.messages({ sessionID: root.id }),
+          sessionID: root.id,
+          auto: false,
+        })
+        const child = yield* ssn.create({ parentID: root.id })
+        const childMessage = yield* createUserMessage(child.id, "child")
+        yield* SessionCompaction.use.process({
+          parentID: childMessage.id,
+          messages: yield* ssn.messages({ sessionID: child.id }),
+          sessionID: child.id,
+          auto: false,
+        })
+        expect(ArenaRuntime.registry.assignments.get(child.id)).toBe(assignment)
+        expect(captured.map((input) => input.model.limit)).toEqual([
+          { context: 65_536, output: 32_768 },
+          { context: 65_536, output: 32_768 },
+        ])
+      }).pipe(withCompaction({ llm: stub.llmLayer, provider: routing.provider, config: routing.config }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "rolls oversized Arena history through bounded requests and persists one final summary",
+    () => {
+      const routing = compactionRouting()
+      const stub = llm()
+      const captured: LLM.StreamInput[] = []
+      for (let i = 0; i < 6; i++) stub.push(reply("rolling summary", (input) => captured.push(input)))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        ArenaRuntime.registry.assign(session.id, {
+          runID: "run-a",
+          rootSessionID: session.id,
+          scopeID: "turn-a",
+          assignmentID: "assignment-a",
+          telemetry: true,
+          limits: { context: 65_536, output: 32_768 },
+        })
+        const sourceText = `first-${"a".repeat(140_000)}-middle-${"b".repeat(140_000)}-last`
+        yield* createUserMessage(session.id, sourceText)
+        yield* createCompactionMarker(session.id)
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        const parent = msgs.at(-1)?.info.id
+        expect(parent).toBeTruthy()
+        yield* SessionCompaction.use.process({ parentID: parent!, messages: msgs, sessionID: session.id, auto: false })
+        expect(captured.length).toBeGreaterThan(1)
+        const transcript = captured
+          .map((input) => {
+            expect(input.model.limit).toEqual({ context: 65_536, output: 8_192 })
+            expect(Token.estimate(JSON.stringify(input.messages)) + input.model.limit.output).toBeLessThan(65_536)
+            const first = input.messages[0]
+            if (!first || first.role !== "user" || !Array.isArray(first.content))
+              throw new Error("Expected transcript chunk")
+            return first.content
+              .map((part) => {
+                if (part.type !== "text") throw new Error("Expected transcript text")
+                return part.text
+              })
+              .join("")
+          })
+          .join("")
+        expect(transcript).toContain(JSON.stringify(sourceText).slice(1, -1))
+        const requests = captured.map((input) => JSON.stringify(input.messages)).join("\n")
+        expect(requests).toContain("first-")
+        expect(requests).toContain("middle-")
+        expect(requests).toContain("-last")
+        expect(captured.slice(1).some((input) => JSON.stringify(input.messages).includes("rolling summary"))).toBe(true)
+        const saved = yield* ssn.messages({ sessionID: session.id })
+        expect(saved.filter((message) => message.info.role === "assistant" && message.info.summary)).toHaveLength(1)
+        expect(
+          saved
+            .filter((message) => message.info.role === "assistant" && message.info.summary)
+            .flatMap((message) => message.parts)
+            .filter((part) => part.type === "text"),
+        ).toMatchObject([{ text: "rolling summary" }])
+      }).pipe(withCompaction({ llm: stub.llmLayer, provider: routing.provider, config: routing.config }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "leaves original Arena history resumable when a bounded pass fails",
+    () => {
+      const routing = compactionRouting()
+      const stub = llm()
+      stub.push(reply("rolling summary"))
+      stub.push(Stream.make(LLMEvent.providerError({ message: "boom" })))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        ArenaRuntime.registry.assign(session.id, {
+          runID: "run-a",
+          rootSessionID: session.id,
+          scopeID: "turn-a",
+          assignmentID: "assignment-a",
+          telemetry: true,
+          limits: { context: 65_536, output: 32_768 },
+        })
+        const source = yield* createUserMessage(session.id, `first-${"a".repeat(300_000)}-last`)
+        yield* createCompactionMarker(session.id)
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        const parent = msgs.at(-1)?.info.id
+        expect(parent).toBeTruthy()
+        const result = yield* SessionCompaction.use.process({
+          parentID: parent!,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+        expect(result).toBe("stop")
+        const saved = yield* ssn.messages({ sessionID: session.id })
+        expect(saved.some((message) => message.info.id === source.id)).toBe(true)
+        expect(saved.some((message) => message.info.role === "assistant" && message.info.summary)).toBe(false)
+      }).pipe(withCompaction({ llm: stub.llmLayer, provider: routing.provider, config: routing.config }))
     },
     { git: true },
   )

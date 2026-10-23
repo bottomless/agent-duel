@@ -677,6 +677,13 @@ in `arenaAssignmentSets` and returns one opaque assignment id per side. The set 
 turn-scoped and idempotent for retries. The local turn and run records contain those opaque ids, not
 model names or slugs, until resolution. Changing a pool does not change assignments already stored.
 
+The assignment response includes one context/output envelope shared by the whole active pool. A
+provider-specific endpoint can have a smaller window than its model's catalog entry; its private
+profile supplies those limits. Persist the shared envelope with the assignment and use it for root
+and descendant generation, automatic compaction, and summary requests. Per-draw limits would
+fingerprint the contestant. Compaction must summarize oversized inherited history in bounded passes;
+only its completed final summary may replace history.
+
 In hosted mode the control plane draws from its active model set.
 Development is the default and uses `defaultPool`: GLM 5.3 FlashX, Qwen 3.8 Max, and Grok 4.6. Production
 uses the [current hosted models](../README.md#current-models). Set `OPENCODE_ARENA_MODEL_SET=production`

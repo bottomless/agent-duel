@@ -8,9 +8,11 @@ import {
 } from "@agent-duel/arena-service/assignment-decision"
 import type { GenerationMetrics, UsageTotals } from "./records"
 import type { SingleAgentModelSize } from "./records"
+import type { ModelLimits } from "@agent-duel/arena-service/pool"
 
 export type OpaqueAssignment = {
   readonly assignmentID: string
+  readonly limits: ModelLimits
 }
 
 export type RevealedAssignment = {
@@ -48,7 +50,25 @@ function opaque(value: unknown): OpaqueAssignment {
   if (typeof input.assignmentID !== "string" || !input.assignmentID) {
     throw new Error("Arena assignment ID is invalid")
   }
-  return { assignmentID: input.assignmentID }
+  const limits = input.limits
+  if (!limits || typeof limits !== "object" || Array.isArray(limits)) {
+    throw new Error("Arena assignment limits are invalid")
+  }
+  const budget = limits as Record<string, unknown>
+  const context = budget.context
+  const output = budget.output
+  if (
+    typeof context !== "number" ||
+    !Number.isSafeInteger(context) ||
+    context <= 0 ||
+    typeof output !== "number" ||
+    !Number.isSafeInteger(output) ||
+    output <= 0 ||
+    output >= context
+  ) {
+    throw new Error("Arena assignment limits are invalid")
+  }
+  return { assignmentID: input.assignmentID, limits: { context, output } }
 }
 
 function revealed(value: unknown): RevealedAssignment {

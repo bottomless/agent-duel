@@ -23,7 +23,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-event"
 import { ArenaRuntime } from "@/arena/runtime"
-import { contestant as arenaContestant, medium as arenaMedium } from "@/arena/model-profile"
+import { contestant as arenaContestant, medium as arenaMedium, withLimits } from "@/arena/model-profile"
 import type { Assignment } from "@/arena/proxy"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import type { ModelMessage } from "ai"
@@ -42,6 +42,8 @@ const MAX_PRESERVE_RECENT_TOKENS = 8_000
 const ARENA_MEDIA_TOKEN_ALLOWANCE = 4_000
 const COMPACTION_EXHAUSTED =
   "The conversation could not be summarized after three recovery attempts. Completed work has been preserved. Retry to continue."
+const ARENA_COMPACTION_OUTPUT_MAX = 8_192
+const ARENA_COMPACTION_INPUT_HEADROOM = 0.8
 type Turn = {
   start: number
   end: number
@@ -407,11 +409,12 @@ const layer = Layer.effect(
             variant: assignment.modelSize === "medium" ? "xhigh" : "high",
           }
         : userMessage.model
-      const model = assignment
+      const selectedModel = assignment
         ? yield* provider.getModel(compactionModel.providerID, compactionModel.modelID).pipe(Effect.orDie)
         : agent.model
           ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
           : yield* provider.getModel(compactionModel.providerID, compactionModel.modelID).pipe(Effect.orDie)
+      const model = withLimits(selectedModel, assignment?.limits)
       const compactionUser = assignment ? { ...userMessage, model: compactionModel } : userMessage
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
@@ -437,42 +440,36 @@ const layer = Layer.effect(
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
       })
       const ctx = yield* InstanceState.context
-      const summarize = Effect.fnUntraced(function* (responseRecovery?: {
-        attempt: number
-        reason: ArenaResponseRecovery.Reason
+      const createAssistant = (passModel: Provider.Model, summary: boolean): SessionV1.Assistant => ({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: input.parentID,
+        sessionID: input.sessionID,
+        mode: "compaction",
+        agent: "compaction",
+        variant: compactionUser.model.variant,
+        summary,
+        path: { cwd: ctx.directory, root: ctx.worktree },
+        cost: 0,
+        tokens: { output: 0, input: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: passModel.id,
+        providerID: passModel.providerID,
+        time: { created: Date.now() },
+      })
+
+      const summarize = Effect.fnUntraced(function* (summarizeInput: {
+        model: Provider.Model
+        messages: ModelMessage[]
+        summary: boolean
+        responseRecovery?: { attempt: number; reason: ArenaResponseRecovery.Reason }
       }) {
-        const msg: SessionV1.Assistant = {
-          id: MessageID.ascending(),
-          role: "assistant",
-          parentID: input.parentID,
-          sessionID: input.sessionID,
-          mode: "compaction",
-          agent: "compaction",
-          variant: compactionUser.model.variant,
-          summary: true,
-          path: {
-            cwd: ctx.directory,
-            root: ctx.worktree,
-          },
-          cost: 0,
-          tokens: {
-            output: 0,
-            input: 0,
-            reasoning: 0,
-            cache: { read: 0, write: 0 },
-          },
-          modelID: model.id,
-          providerID: model.providerID,
-          time: {
-            created: Date.now(),
-          },
-        }
+        const msg = createAssistant(summarizeInput.model, summarizeInput.summary)
         yield* session.updateMessage(msg)
         const processor = yield* processors.create({
           assistantMessage: msg,
           sessionID: input.sessionID,
-          model,
-          ...(responseRecovery ? { responseRecovery } : {}),
+          model: summarizeInput.model,
+          ...(summarizeInput.responseRecovery ? { responseRecovery: summarizeInput.responseRecovery } : {}),
         })
         const result = yield* processor.process({
           user: compactionUser,
@@ -480,14 +477,8 @@ const layer = Layer.effect(
           sessionID: input.sessionID,
           tools: {},
           system: [],
-          messages: [
-            ...modelMessages,
-            {
-              role: "user",
-              content: [{ type: "text", text: nextPrompt }],
-            },
-          ],
-          model,
+          messages: summarizeInput.messages,
+          model: summarizeInput.model,
         })
         return { processor, result }
       })
@@ -502,31 +493,137 @@ const layer = Layer.effect(
           .pipe(Effect.orElseSucceed(() => Option.none<SessionV1.WithParts>()))
         return Option.isSome(stored) && summaryText(stored.value) ? undefined : ("empty" as const)
       })
-      let { processor, result } = yield* summarize()
-      for (
-        let attempt = 1;
-        model.providerID === ArenaRuntime.providerID && result === "continue" && !processor.message.error;
-        attempt++
-      ) {
-        const failure = yield* unusable(processor.message)
-        if (!failure) break
-        yield* Effect.logWarning("arena compaction summary unusable", {
-          "session.id": input.sessionID,
-          messageID: processor.message.id,
-          failure,
-          attempt,
-        })
-        if (attempt > ArenaResponseRecovery.MAX_RECOVERIES) {
-          processor.message.error = new SessionV1.APIError({
-            message: COMPACTION_EXHAUSTED,
-            isRetryable: true,
-          }).toObject()
-          yield* session.updateMessage(processor.message)
-          yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: processor.message.error })
-          return "stop"
+      const summarizeWithRecovery = Effect.fnUntraced(function* (summarizeInput: {
+        model: Provider.Model
+        messages: ModelMessage[]
+        summary: boolean
+      }) {
+        let { processor, result } = yield* summarize(summarizeInput)
+        for (
+          let attempt = 1;
+          summarizeInput.model.providerID === ArenaRuntime.providerID &&
+          result === "continue" &&
+          !processor.message.error;
+          attempt++
+        ) {
+          const failure = yield* unusable(processor.message)
+          if (!failure) break
+          yield* Effect.logWarning("arena compaction summary unusable", {
+            "session.id": input.sessionID,
+            messageID: processor.message.id,
+            failure,
+            attempt,
+          })
+          if (attempt > ArenaResponseRecovery.MAX_RECOVERIES) {
+            processor.message.error = new SessionV1.APIError({
+              message: COMPACTION_EXHAUSTED,
+              isRetryable: true,
+            }).toObject()
+            yield* session.updateMessage(processor.message)
+            yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: processor.message.error })
+            return { processor, result: "stop" as const }
+          }
+          yield* session.removeMessage({ sessionID: input.sessionID, messageID: processor.message.id })
+          ;({ processor, result } = yield* summarize({
+            ...summarizeInput,
+            responseRecovery: failure === "empty" ? undefined : { attempt, reason: failure },
+          }))
         }
-        yield* session.removeMessage({ sessionID: input.sessionID, messageID: processor.message.id })
-        ;({ processor, result } = yield* summarize(failure === "empty" ? undefined : { attempt, reason: failure }))
+        return { processor, result }
+      })
+
+      let processor: SessionProcessor.Handle
+      let result: SessionProcessor.Result
+      const boundedArena =
+        assignment !== undefined &&
+        estimateArenaModelMessages([...modelMessages, { role: "user", content: nextPrompt }]) >
+          usable({ cfg, model, outputTokenMax: flags.outputTokenMax })
+
+      if (!boundedArena) {
+        ;({ processor, result } = yield* summarizeWithRecovery({
+          model,
+          messages: [...modelMessages, { role: "user", content: [{ type: "text", text: nextPrompt }] }],
+          summary: true,
+        }))
+      } else {
+        const transcript = modelMessages.map((message) => JSON.stringify(message)).join("\n")
+        const passModel = {
+          ...model,
+          limit: { ...model.limit, output: Math.min(model.limit.output, ARENA_COMPACTION_OUTPUT_MAX) },
+        }
+        const inputBudget = Math.floor(
+          usable({ cfg, model: passModel, outputTokenMax: flags.outputTokenMax }) * ARENA_COMPACTION_INPUT_HEADROOM,
+        )
+        let offset = 0
+        let rollingSummary = previousSummary
+        let pass = 0
+        let lastProcessor: SessionProcessor.Handle | undefined
+        let lastResult: SessionProcessor.Result = "stop"
+
+        while (offset < transcript.length || pass === 0) {
+          const prompt = compacting.prompt
+            ? `${compacting.prompt}\n\nPrevious summary:\n${rollingSummary ?? ""}`
+            : buildPrompt({ previousSummary: rollingSummary, context: compacting.context })
+          const promptSize = estimateArenaModelMessages([
+            { role: "user", content: [{ type: "text", text: "" }] },
+            { role: "user", content: [{ type: "text", text: prompt }] },
+          ])
+          let end = offset
+          if (inputBudget > promptSize) {
+            let low = offset + 1
+            let high = transcript.length
+            while (low <= high) {
+              const middle = Math.floor((low + high) / 2)
+              const candidate: ModelMessage[] = [
+                { role: "user", content: [{ type: "text", text: transcript.slice(offset, middle) }] },
+                { role: "user", content: [{ type: "text", text: prompt }] },
+              ]
+              if (estimateArenaModelMessages(candidate) <= inputBudget) {
+                end = middle
+                low = middle + 1
+              } else high = middle - 1
+            }
+          }
+          const emptyTranscript = transcript.length === 0 && pass === 0
+          if (end <= offset && !emptyTranscript) {
+            throw new SessionV1.ContextOverflowError({
+              message: "Session history cannot fit within the assigned model context limit",
+            })
+          }
+
+          const currentResult = yield* summarizeWithRecovery({
+            model: passModel,
+            messages: [
+              { role: "user", content: [{ type: "text", text: transcript.slice(offset, end) }] },
+              { role: "user", content: [{ type: "text", text: prompt }] },
+            ],
+            summary: false,
+          })
+          lastProcessor = currentResult.processor
+          lastResult = currentResult.result
+          if (lastResult !== "continue" || lastProcessor.message.error) break
+          const saved = (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
+            (message) => message.info.id === lastProcessor!.message.id,
+          )
+          rollingSummary = saved && saved.info.role === "assistant" ? summaryText(saved) : undefined
+          offset = end
+          pass++
+          if (offset < transcript.length) {
+            yield* session.removeMessage({ sessionID: input.sessionID, messageID: lastProcessor.message.id })
+          }
+        }
+
+        if (!lastProcessor) {
+          throw new SessionV1.ContextOverflowError({
+            message: "Session history cannot fit within the assigned model context limit",
+          })
+        }
+        processor = lastProcessor
+        result = lastResult
+        if (result === "continue" && !processor.message.error) {
+          processor.message.summary = true
+          yield* session.updateMessage(processor.message)
+        }
       }
 
       if (result === "compact") {

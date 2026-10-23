@@ -14,6 +14,10 @@ export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outpu
   const reserved =
     input.cfg.compaction?.reserved ??
     Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
+  // Arena's blinded estimate covers history, so leave room for instructions and tool schemas too.
+  if (input.model.providerID === "arena") {
+    return Math.max(0, context - ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax) - reserved)
+  }
   return input.model.limit.input
     ? Math.max(0, input.model.limit.input - reserved)
     : Math.max(0, context - ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))

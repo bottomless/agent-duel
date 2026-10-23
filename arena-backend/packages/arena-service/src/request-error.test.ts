@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
 import {
   paymentError,
+  contextOverflowError,
+  isContextOverflow,
+  readContextOverflow,
   classifyPaymentError,
   networkUnavailableError,
   readNetworkUnavailable,
@@ -49,4 +52,18 @@ test("recognizes only the offline body", () => {
   ]) {
     expect(readNetworkUnavailable(body)).toBe(false)
   }
+})
+
+test("recognizes context overflow while keeping provider identities and token limits private", () => {
+  for (const error of [
+    { code: "context_length_exceeded", message: "secret-model" },
+    { type: "model_context_window_exceeded" },
+    { code: 400, message: "This model's maximum context length is 65536 tokens. secret-provider" },
+    { code: 400, metadata: { raw: '{"error":{"message":"prompt is too long for secret-model"}}' } },
+  ])
+    expect(isContextOverflow({ error })).toBe(true)
+  expect(isContextOverflow({ error: { code: 429, message: "too many requests" } })).toBe(false)
+  expect(readContextOverflow({ error: { message: "prompt is too long" } })).toBe(false)
+  expect(readContextOverflow(contextOverflowError())).toBe(true)
+  expect(JSON.stringify(contextOverflowError())).not.toMatch(/secret|65536/)
 })

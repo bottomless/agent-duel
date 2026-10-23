@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createServer } from "node:net"
 import type { AddressInfo } from "node:net"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
-import { streamText } from "ai"
+import { APICallError, streamText } from "ai"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Effect } from "effect"
 import { AssignmentRegistry, proxy, rewriteBody, sanitizePayload, streamProgress } from "../../src/arena/proxy"
@@ -40,6 +40,32 @@ function transportError(code: string) {
 }
 
 describe("ArenaProxy", () => {
+  test("preserves neutral overflow errors so the engine can compact", async () => {
+    const overflow = { error: { message: "Arena request exceeds the context window", type: "arena_context_overflow" } }
+    expect(sanitizePayload(overflow, "gen-test")).toEqual(overflow)
+    expect(sanitizePayload(overflow, "gen-test", true)).toEqual(overflow)
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const response = await proxy(request(), registry, {
+      upstream: "https://control.test/api/openrouter",
+      fetch: async () => Response.json(overflow, { status: 400 }),
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual(overflow)
+    const failure = MessageV2.fromError(
+      new APICallError({
+        message: overflow.error.message,
+        url: "https://arena.invalid/api/v1/chat/completions",
+        requestBodyValues: {},
+        statusCode: 400,
+        responseBody: JSON.stringify(overflow),
+        isRetryable: false,
+      }),
+      { providerID: ProviderV2.ID.make("arena") },
+    )
+    expect(failure.name).toBe("ContextOverflowError")
+  })
+
   test("preserves output exhaustion when OpenRouter labels an unfinished call as tool_calls", () => {
     for (const reason of ["length", "max_tokens", "max_output_tokens"]) {
       expect(

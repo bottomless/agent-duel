@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import type { ArenaDb } from "./collection"
-import { sampleOne, samplePair, validateCatalog, validateOpenRouter, type ModelPool, type ModelProfile } from "./pool"
+import {
+  defaultModelLimits,
+  poolLimits,
+  sampleOne,
+  samplePair,
+  validateCatalog,
+  validateOpenRouter,
+  type ModelPool,
+  type ModelProfile,
+} from "./pool"
 import { createArenaService } from "./service"
 import { mediumModel } from "./default-pool"
 
@@ -108,7 +117,10 @@ describe("Arena model pool", () => {
       userId: "user-1",
       kind: "battle",
       scopeID: "turn-1",
-      assignments: [{ assignmentID: "assignment-a" }, { assignmentID: "assignment-b" }],
+      assignments: [
+        { assignmentID: "assignment-a", model: pool[0] },
+        { assignmentID: "assignment-b", model: pool[1] },
+      ],
     }
     const arena = createArenaService({
       resolveCaller: async () => ({ id: "user-1" }),
@@ -143,6 +155,8 @@ describe("Arena model pool", () => {
   test("validates only the injected pool against the catalog", () => {
     expect(() => validateCatalog(pool, { data: pool.map(catalogModel) })).not.toThrow()
     expect(() => validateCatalog([pool[0]], { data: [catalogModel(pool[0])] })).not.toThrow()
+    const limited = { ...pool[0], limits: { context: 65_536, output: 32_768 } }
+    expect(() => validateCatalog([limited], { data: [catalogModel(limited)] })).not.toThrow()
     expect(() =>
       validateCatalog(pool, {
         data: pool.map((profile) => ({
@@ -151,6 +165,26 @@ describe("Arena model pool", () => {
         })),
       }),
     ).toThrow("Arena contestant context window drifted: Qwen 3.8 Max")
+  })
+
+  test("computes one neutral envelope across the whole pool", () => {
+    const medium = { ...pool[0], limits: { context: 65_536, output: 32_768 } }
+    expect(poolLimits([pool[0], medium, pool[1]])).toEqual({ context: 65_536, output: 32_768 })
+    expect(poolLimits([])).toEqual(defaultModelLimits)
+  })
+
+  test("rejects invalid limit overrides", () => {
+    for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => poolLimits([{ ...pool[0], limits: { context: value, output: 32_768 } }])).toThrow(
+        "Arena model context limit must be a finite positive integer",
+      )
+      expect(() => poolLimits([{ ...pool[0], limits: { context: 65_536, output: value } }])).toThrow(
+        "Arena model output limit must be a finite positive integer",
+      )
+    }
+    expect(() => poolLimits([{ ...pool[0], limits: { context: 32_768, output: 65_536 } }])).toThrow(
+      "Arena model output limit must be smaller than its context limit",
+    )
   })
 
   test("samples contestants from the injected pool", () => {
