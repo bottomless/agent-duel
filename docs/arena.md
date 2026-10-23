@@ -605,7 +605,13 @@ A branch switch can make a JavaScript diff block both contestants for minutes. S
 patches use native Git with time and output limits; battle review owns its separate comparison.
 
 Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
-`.localhost` hostnames, and never retarget an old URL to a later process.
+`.localhost` hostnames, and never retarget an old URL to a later process. The winner's old ports and
+preview URLs in copied history are rewritten to the new side's (`canonical-path.ts`), so a literal
+from an earlier round reaches a contestant only when the user types it. A contestant command that
+binds such a port, or names such a preview hostname, is refused by the shell with this round's
+values (`arena/ports.ts`). Keep the rule out of the prompt: in a 36-contestant comparison the
+sentence that carried it made no difference for the rewritten cases and halved, not removed, the
+stale binds for user-typed ports, while the refusal names the port to use.
 
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
