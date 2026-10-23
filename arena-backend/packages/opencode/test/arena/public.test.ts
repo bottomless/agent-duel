@@ -709,7 +709,10 @@ test("keeps a trimmed run's count of left-out messages through the public snapsh
   // `hydrateRuns` merges the thread, with `activityOmitted`, into each run before this parse.
   const projected = project(snapshot(false))
   const parsed = parseSnapshot(
-    jsonValue({ ...projected, runs: projected.runs.map((run) => ({ ...run, messages: [], parts: {}, activityOmitted: 7 })) }),
+    jsonValue({
+      ...projected,
+      runs: projected.runs.map((run) => ({ ...run, messages: [], parts: {}, activityOmitted: 7 })),
+    }),
   )
   expect(projected.runs.length).toBeGreaterThan(0)
   expect(parsed.runs.map((run) => run.activityOmitted)).toEqual(projected.runs.map(() => 7))

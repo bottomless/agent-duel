@@ -28,27 +28,16 @@ function validOverride(value: number, name: string) {
   }
 }
 
-function profileLimits(profile: ModelProfile): ModelLimits {
+export function modelLimits(profile: ModelProfile): ModelLimits {
   const context = profile.limits?.context ?? profile.contextWindow
   const output = profile.limits?.output ?? defaultModelLimits.output
-  if (profile.limits?.context !== undefined) validOverride(profile.limits.context, "context")
-  if (profile.limits?.output !== undefined) validOverride(profile.limits.output, "output")
+  validOverride(context, "context")
+  validOverride(output, "output")
   if (context > profile.contextWindow) {
     throw new Error(`Arena model context limit exceeds its catalog window: ${profile.displayName}`)
   }
   if (output >= context) {
     throw new Error(`Arena model output limit must be smaller than its context limit: ${profile.displayName}`)
-  }
-  return { context, output }
-}
-
-export function poolLimits(pool: ModelPool): ModelLimits {
-  let context = defaultModelLimits.context
-  let output = defaultModelLimits.output
-  for (const profile of pool) {
-    const limits = profileLimits(profile)
-    context = Math.min(context, limits.context)
-    output = Math.min(output, limits.output)
   }
   return { context, output }
 }
@@ -71,10 +60,10 @@ function strings(value: unknown) {
 }
 
 export function validateCatalog(pool: ModelPool, value: unknown) {
-  poolLimits(pool)
   if (!record(value) || !Array.isArray(value.data)) throw new Error("OpenRouter returned an invalid model catalog")
   const catalog = value.data.filter(record) as CatalogModel[]
   for (const profile of pool) {
+    modelLimits(profile)
     const model = catalog.find(
       (item) =>
         item.canonical_slug === profile.canonicalSlug ||

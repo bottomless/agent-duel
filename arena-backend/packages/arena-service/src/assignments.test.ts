@@ -46,6 +46,10 @@ const pool: ModelPool = [
 ]
 
 const defaultLimits = { context: 500_000, output: 131_072 }
+const frontierLimits = { context: 1_048_576, output: 131_072 }
+const grokLimits = defaultLimits
+const mediumLimits = { context: 1_050_000, output: 131_072 }
+const fixtureBetaLimits = { context: 262_144, output: 131_072 }
 
 const limitedPool: ModelPool = [
   {
@@ -112,14 +116,14 @@ function service(
 }
 
 describe("Arena assignment control plane", () => {
-  test("uses one neutral envelope for every draw and preserves a stored lower cap on retry", async () => {
+  test("keeps per-model limits independent and preserves each stored snapshot on retry", async () => {
     const first = await service({ pool: limitedPool, random: [0, 0] }).assignments(
       request({ action: "create", kind: "battle", scopeID: "turn-limits" }),
     )
     expect(await first.json()).toEqual({
       assignments: [
         { assignmentID: "assignment-a", limits: { context: 65_536, output: 32_768 } },
-        { assignmentID: "assignment-b", limits: { context: 65_536, output: 32_768 } },
+        { assignmentID: "assignment-b", limits: fixtureBetaLimits },
       ],
     })
 
@@ -127,7 +131,7 @@ describe("Arena assignment control plane", () => {
       request({ action: "create", kind: "battle", scopeID: "turn-other-draw" }),
     )
     expect((await otherDraw.json()).assignments.map((item: { limits: unknown }) => item.limits)).toEqual([
-      { context: 65_536, output: 32_768 },
+      fixtureBetaLimits,
       { context: 65_536, output: 32_768 },
     ])
 
@@ -137,7 +141,7 @@ describe("Arena assignment control plane", () => {
     expect(await retry.json()).toEqual({
       assignments: [
         { assignmentID: "assignment-a", limits: { context: 65_536, output: 32_768 } },
-        { assignmentID: "assignment-b", limits: { context: 65_536, output: 32_768 } },
+        { assignmentID: "assignment-b", limits: fixtureBetaLimits },
       ],
     })
   })
@@ -147,8 +151,8 @@ describe("Arena assignment control plane", () => {
     const publicPayload = (await create.json()) as Record<string, unknown>
     expect(publicPayload).toEqual({
       assignments: [
-        { assignmentID: "assignment-a", limits: defaultLimits },
-        { assignmentID: "assignment-b", limits: defaultLimits },
+        { assignmentID: "assignment-a", limits: frontierLimits },
+        { assignmentID: "assignment-b", limits: grokLimits },
       ],
     })
     expect(JSON.stringify(publicPayload)).not.toContain("routingToken")
@@ -314,7 +318,7 @@ describe("Arena assignment control plane", () => {
       request({ action: "create", kind: "single", scopeID: "rating-medium", modelSize: "medium" }),
     )
     expect(await response.json()).toEqual({
-      assignments: [{ assignmentID: "medium-assignment", limits: defaultLimits }],
+      assignments: [{ assignmentID: "medium-assignment", limits: mediumLimits }],
     })
     const stored = await mongo.db
       .collection<{
@@ -337,7 +341,7 @@ describe("Arena assignment control plane", () => {
       request({ action: "create", kind: "single", scopeID: "rating-legacy" }),
     )
     expect(await created.json()).toEqual({
-      assignments: [{ assignmentID: "legacy-assignment", limits: defaultLimits }],
+      assignments: [{ assignmentID: "legacy-assignment", limits: frontierLimits }],
     })
     const stored = await mongo.db
       .collection<{

@@ -4218,7 +4218,13 @@ export const layer: Layer.Layer<
     // settled run is bound to nothing, so resuming it for a reply or a retry binds it again.
     const bindRun = Effect.fnUntraced(function* (run: RunDocument) {
       // Old persisted runs predate negotiated limits; the idempotent draw retains their model snapshot.
-      const limits = run.assignment.limits ?? (yield* promise(() => createBattleAssignments(run.turnID))).a.limits
+      let limits = run.assignment.limits
+      if (!limits) {
+        const pair = yield* promise(() => createBattleAssignments(run.turnID))
+        const selected = [pair.a, pair.b].find((item) => item.assignmentID === run.proxyAssignmentID)
+        if (!selected) throw new Error("Arena restored limits do not match the run assignment")
+        limits = selected.limits
+      }
       const assignment = {
         runID: run._id,
         rootSessionID: run.rootSessionID,

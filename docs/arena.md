@@ -677,12 +677,13 @@ in `arenaAssignmentSets` and returns one opaque assignment id per side. The set 
 turn-scoped and idempotent for retries. The local turn and run records contain those opaque ids, not
 model names or slugs, until resolution. Changing a pool does not change assignments already stored.
 
-The assignment response includes one context/output envelope shared by the whole active pool. A
-provider-specific endpoint can have a smaller window than its model's catalog entry; its private
-profile supplies those limits. Persist the shared envelope with the assignment and use it for root
-and descendant generation, automatic compaction, and summary requests. Per-draw limits would
-fingerprint the contestant. Compaction must summarize oversized inherited history in bounded passes;
-only its completed final summary may replace history.
+The assignment response includes the assigned model's supported context/output limits. An endpoint
+can have a smaller window than its model's catalog entry; its private profile supplies those limits.
+Persist them with each assignment and use them for root and descendant generation and summaries.
+Automatic compaction uses the smaller of that model's usable input budget and Arena's 272,000-token
+ceiling. Adding a smaller endpoint does not lower the budget for other contestants. Compaction
+summarizes inherited history that exceeds the endpoint window in bounded passes; only a completed
+final summary may replace history.
 
 In hosted mode the control plane draws from its active model set.
 Development is the default and uses `defaultPool`: GLM 5.3 FlashX, Qwen 3.8 Max, and Grok 4.6. Production
@@ -1254,6 +1255,10 @@ times out. The deadline pauses while a local tool runs or waits for approval; a 
 not be mistaken for a silent model stream. When the runtime abandons a request, the daemon's Arena
 proxy aborts its control-plane request too; otherwise the hosted function keeps streaming, and
 billing, until its own time limit.
+
+A request above the estimated savings threshold triggers compaction. Keep a new user message and
+its attachments intact while summarizing the earlier history. The summary request must be allowed
+to exceed the savings threshold; the provider's context window still applies.
 
 A compaction summary that ends idle, at its output cap, or empty must never become the history. A
 finished summary hides everything before it, so the contestant continues with no memory of its task

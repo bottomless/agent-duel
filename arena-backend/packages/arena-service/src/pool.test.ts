@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { ArenaDb } from "./collection"
 import {
-  defaultModelLimits,
-  poolLimits,
+  modelLimits,
   sampleOne,
   samplePair,
   validateCatalog,
@@ -167,23 +166,26 @@ describe("Arena model pool", () => {
     ).toThrow("Arena contestant context window drifted: Qwen 3.8 Max")
   })
 
-  test("computes one neutral envelope across the whole pool", () => {
+  test("computes endpoint limits independently", () => {
     const medium = { ...pool[0], limits: { context: 65_536, output: 32_768 } }
-    expect(poolLimits([pool[0], medium, pool[1]])).toEqual({ context: 65_536, output: 32_768 })
-    expect(poolLimits([])).toEqual(defaultModelLimits)
+    expect(modelLimits(medium)).toEqual({ context: 65_536, output: 32_768 })
+    expect(modelLimits(pool[1])).toEqual({ context: 1_000_000, output: 131_072 })
   })
 
   test("rejects invalid limit overrides", () => {
     for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => poolLimits([{ ...pool[0], limits: { context: value, output: 32_768 } }])).toThrow(
+      expect(() => modelLimits({ ...pool[0], limits: { context: value, output: 32_768 } })).toThrow(
         "Arena model context limit must be a finite positive integer",
       )
-      expect(() => poolLimits([{ ...pool[0], limits: { context: 65_536, output: value } }])).toThrow(
+      expect(() => modelLimits({ ...pool[0], limits: { context: 65_536, output: value } })).toThrow(
         "Arena model output limit must be a finite positive integer",
       )
     }
-    expect(() => poolLimits([{ ...pool[0], limits: { context: 32_768, output: 65_536 } }])).toThrow(
+    expect(() => modelLimits({ ...pool[0], limits: { context: 32_768, output: 65_536 } })).toThrow(
       "Arena model output limit must be smaller than its context limit",
+    )
+    expect(() => modelLimits({ ...pool[0], limits: { context: pool[0].contextWindow + 1, output: 32_768 } })).toThrow(
+      "Arena model context limit exceeds its catalog window",
     )
   })
 

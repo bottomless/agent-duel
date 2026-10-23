@@ -35,6 +35,7 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ArenaRuntime } from "@/arena/runtime"
 import { ModelIdleError } from "@/arena/model-idle"
+import { contestant, medium } from "@/arena/model-profile"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -497,6 +498,68 @@ function autocontinue(enabled: boolean) {
 }
 
 describe("session.compaction.isOverflow", () => {
+  const profiles = [
+    { ...contestant, compactionLimit: 272_000 },
+    { ...medium, compactionLimit: 272_000 },
+    { id: "small-fixture", contextWindow: 65_536, outputLimit: 32_768, compactionLimit: 33_536 },
+  ]
+  for (const profile of profiles) {
+    for (const auto of [true, false]) {
+      it.live(
+        `caps Arena ${profile.id} history at ${profile.compactionLimit} estimated tokens with auto=${auto}`,
+        provideTmpdirInstance(
+          () =>
+            Effect.gen(function* () {
+              const compact = yield* SessionCompaction.Service
+              const model = createModel({ context: profile.contextWindow, output: profile.outputLimit })
+              const blinded = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+              const sessionID = SessionID.descending()
+              const messageID = MessageID.ascending()
+              const part: SessionV1.TextPart = {
+                id: PartID.ascending(),
+                sessionID,
+                messageID,
+                type: "text",
+                text: "",
+              }
+              const messages: SessionV1.WithParts[] = [
+                {
+                  info: { id: messageID, sessionID, role: "user", agent: "build", model: ref, time: { created: 1 } },
+                  parts: [part],
+                },
+              ]
+              part.text = "x"
+              const serialized = JSON.stringify(yield* MessageV2.toModelMessagesEffect(messages, model))
+              const overhead = serialized.length - 1
+              const previous = process.env.OPENCODE_ARENA
+              const results = yield* Effect.gen(function* () {
+                delete process.env.OPENCODE_ARENA
+                part.text = "x".repeat(profile.compactionLimit * 4 - overhead)
+                expect(Token.estimate(JSON.stringify(yield* MessageV2.toModelMessagesEffect(messages, model)))).toBe(
+                  profile.compactionLimit,
+                )
+                const outsideArena = yield* compact.isOverflow({ tokens: blinded, model, messages })
+                process.env.OPENCODE_ARENA = "1"
+                const atLimit = yield* compact.isOverflow({ tokens: blinded, model, messages })
+                part.text = part.text.slice(4)
+                const belowLimit = yield* compact.isOverflow({ tokens: blinded, model, messages })
+                return [outsideArena, belowLimit, atLimit]
+              }).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    if (previous === undefined) delete process.env.OPENCODE_ARENA
+                    else process.env.OPENCODE_ARENA = previous
+                  }),
+                ),
+              )
+              expect(results).toEqual([false, false, auto])
+            }),
+          { config: { compaction: { auto } } },
+        ),
+      )
+    }
+  }
+
   it.live(
     "returns true when token count exceeds usable context",
     provideTmpdirInstance(() =>
@@ -1179,6 +1242,89 @@ describe("session.compaction.process", () => {
     messages.filter((message) =>
       message.parts.some((part) => part.type === "text" && part.metadata?.compaction_continue === true),
     )
+
+  itCompaction.instance(
+    "continues unfinished Arena work after an automatic summary",
+    () => {
+      const routing = compactionRouting()
+      const stub = llm()
+      stub.push(reply("Completed steps 1–3. Remaining: implement steps 4–6 and verify the result."))
+      return Effect.gen(function* () {
+        const { result, messages } = yield* arenaCompaction
+        expect(result).toBe("continue")
+        expect(continues(messages)).toHaveLength(1)
+        expect(continues(messages)[0].parts).toEqual([
+          expect.objectContaining({
+            type: "text",
+            synthetic: true,
+            metadata: { compaction_continue: true },
+            text: expect.stringContaining(
+              "Carry out the remaining steps, including verification, until the task is complete.",
+            ),
+          }),
+        ])
+      }).pipe(
+        withCompaction({
+          llm: stub.llmLayer,
+          provider: ProviderTest.fake({ model: routing.contestant }),
+          config: routing.config,
+        }),
+      )
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "keeps the unfinished-work instruction when replaying an Arena request after overflow",
+    () => {
+      const routing = compactionRouting()
+      const stub = llm()
+      stub.push(reply("Steps 1–3 complete; steps 4–6 remain."))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        ArenaRuntime.registry.assign(session.id, {
+          runID: "run-a",
+          rootSessionID: session.id,
+          scopeID: "turn-a",
+          assignmentID: "assignment-a",
+          telemetry: true,
+        })
+        yield* createUserMessage(session.id, "Complete all six steps")
+        yield* createUserMessage(session.id, "Implement the remaining steps and verify the result")
+        yield* createSummaryCompaction(session.id)
+        const messages = yield* ssn.messages({ sessionID: session.id })
+        const parentID = messages.at(-1)!.info.id
+        const result = yield* SessionCompaction.use.process({
+          parentID,
+          messages,
+          sessionID: session.id,
+          auto: true,
+          overflow: true,
+        })
+        const last = (yield* ssn.messages({ sessionID: session.id })).at(-1)
+        expect(result).toBe("continue")
+        expect(last?.parts).toEqual([
+          expect.objectContaining({ type: "text", text: "Implement the remaining steps and verify the result" }),
+          expect.objectContaining({
+            type: "text",
+            synthetic: true,
+            metadata: { arena_compaction_replay: true },
+            text: expect.stringContaining(
+              "Carry out the remaining steps, including verification, until the task is complete.",
+            ),
+          }),
+        ])
+      }).pipe(
+        withCompaction({
+          llm: stub.llmLayer,
+          provider: ProviderTest.fake({ model: routing.contestant }),
+          config: routing.config,
+        }),
+      )
+    },
+    { git: true },
+  )
 
   itCompaction.instance(
     "retries an Arena summary that timed out or came back empty, and keeps only the one that worked",

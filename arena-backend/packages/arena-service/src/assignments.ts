@@ -4,7 +4,7 @@ import { isDuplicateKeyError, type ArenaCollection, type ArenaDb } from "./colle
 import { authorize, type ArenaContext } from "./context"
 import type { StoredGenerationMetrics } from "./metrics"
 import { mediumModel } from "./default-pool"
-import { poolLimits, sampleOne, samplePair, type ModelLimits, type ModelProfile } from "./pool"
+import { modelLimits, sampleOne, samplePair, type ModelLimits, type ModelProfile } from "./pool"
 
 export type SingleAgentModelSize = "medium" | "frontier"
 
@@ -21,7 +21,6 @@ type AssignmentSetDocument = {
   readonly kind: "battle" | "single"
   readonly assignments: readonly PrivateAssignment[]
   readonly createdAt: Date
-  readonly limits?: ModelLimits
   decision?: AssignmentDecision
   revealedAt?: Date
 }
@@ -48,18 +47,8 @@ function setID(userId: string, kind: AssignmentSetDocument["kind"], scopeID: str
   return createHash("sha256").update(`${userId.length}:${userId}|${kind}|${scopeID}`).digest("hex")
 }
 
-function publicAssignments(document: AssignmentSetDocument, limits: ModelLimits): readonly PublicAssignment[] {
-  return document.assignments.map(({ assignmentID }) => ({ assignmentID, limits }))
-}
-
-function assignmentLimits(context: ArenaContext, document?: AssignmentSetDocument) {
-  const snapshot = document?.assignments.map(({ model }) => model) ?? []
-  const limits = poolLimits([...context.pool, mediumModel, ...snapshot])
-  if (!document?.limits) return limits
-  return {
-    context: Math.min(limits.context, document.limits.context),
-    output: Math.min(limits.output, document.limits.output),
-  }
+function publicAssignments(document: AssignmentSetDocument): readonly PublicAssignment[] {
+  return document.assignments.map(({ assignmentID, model }) => ({ assignmentID, limits: modelLimits(model) }))
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -97,7 +86,7 @@ async function createSet(db: ArenaDb, context: ArenaContext, userId: string, inp
   const assignments = collection(db)
   const id = setID(userId, kind, scopeID)
   const existing = await assignments.findOne({ _id: id, userId, kind, scopeID })
-  if (existing) return Response.json({ assignments: publicAssignments(existing, assignmentLimits(context, existing)) })
+  if (existing) return Response.json({ assignments: publicAssignments(existing) })
 
   const profiles =
     kind === "battle"
@@ -114,17 +103,16 @@ async function createSet(db: ArenaDb, context: ArenaContext, userId: string, inp
     scopeID,
     kind,
     assignments: privateAssignments,
-    limits: assignmentLimits(context),
     createdAt: now,
   }
   try {
     await assignments.insertOne(document)
-    return Response.json({ assignments: publicAssignments(document, assignmentLimits(context, document)) })
+    return Response.json({ assignments: publicAssignments(document) })
   } catch (error) {
     if (!isDuplicateKeyError(error)) throw error
     const raced = await assignments.findOne({ _id: id, userId, kind, scopeID })
     if (!raced) throw error
-    return Response.json({ assignments: publicAssignments(raced, assignmentLimits(context, raced)) })
+    return Response.json({ assignments: publicAssignments(raced) })
   }
 }
 

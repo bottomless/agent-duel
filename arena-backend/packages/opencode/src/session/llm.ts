@@ -27,6 +27,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { ArenaRuntime } from "@/arena/runtime"
+import { ArenaRequestBudget } from "@/arena/request-budget"
+import { markInitialRequestDeferred } from "@/arena/dispatch"
 import { MODEL_IDLE_TIMEOUT_MS, timeoutModelIdle, type ModelIdleActivity } from "@/arena/model-idle"
 import { streamProgress } from "@/arena/proxy"
 import { LLMAISDK } from "./llm/ai-sdk"
@@ -53,6 +55,7 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  arenaRequestCompaction?: boolean
 }
 
 export type StreamRequest = StreamInput & {
@@ -346,6 +349,32 @@ const live: Layer.Layer<
                       input.model,
                       prepared.messageTransformOptions,
                     )
+                    if (
+                      input.model.providerID === ArenaRuntime.providerID &&
+                      input.arenaRequestCompaction &&
+                      cfg.compaction?.auto !== false
+                    ) {
+                      try {
+                        ArenaRequestBudget.check(
+                          {
+                            prompt: args.params.prompt,
+                            tools: args.params.tools,
+                            toolChoice: args.params.toolChoice,
+                            responseFormat: args.params.responseFormat,
+                          },
+                          ArenaRequestBudget.inputLimit({
+                            cfg,
+                            model: input.model,
+                            outputTokenMax: flags.outputTokenMax,
+                          }),
+                        )
+                      } catch (error) {
+                        if (error instanceof ArenaRequestBudget.CompactionRequired) {
+                          markInitialRequestDeferred(input.sessionID)
+                        }
+                        throw error
+                      }
+                    }
                   }
                   return args.params
                 },

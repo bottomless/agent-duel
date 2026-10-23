@@ -1,9 +1,8 @@
 import { defaultModelLimits, type ModelLimits } from "@agent-duel/arena-service/pool"
 import type { Provider } from "@/provider/provider"
 
-// The desktop runtime intentionally knows one capability envelope and no model
-// identities. The control plane replaces this placeholder after authenticating
-// the account and matching a battle-scoped opaque assignment ID.
+// Startup metadata before an assignment supplies its endpoint's context/output limits.
+// Model identities stay on the control plane behind opaque assignment IDs.
 export const contestant = {
   id: "contestant",
   contextWindow: defaultModelLimits.context,

@@ -73,7 +73,7 @@ describe("Arena backend", () => {
         return Response.json({
           assignments: [
             { assignmentID: "opaque-a", limits },
-            { assignmentID: "opaque-b", limits },
+            { assignmentID: "opaque-b", limits: { context: 1_000_000, output: 131_072 } },
           ],
         })
       },
@@ -88,7 +88,7 @@ describe("Arena backend", () => {
       const pair = await createBattleAssignments("turn-limits")
       expect(pair).toEqual({
         a: { assignmentID: "opaque-a", limits: { context: 65_536, output: 32_768 } },
-        b: { assignmentID: "opaque-b", limits: { context: 65_536, output: 32_768 } },
+        b: { assignmentID: "opaque-b", limits: { context: 1_000_000, output: 131_072 } },
       })
       for (const invalid of [
         undefined,
