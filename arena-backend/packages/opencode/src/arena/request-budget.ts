@@ -2,8 +2,6 @@ import type { LanguageModelV3CallOptions } from "@ai-sdk/provider"
 import { Token } from "@/util/token"
 
 export const LIMIT = 272_000
-export const EXCEEDED =
-  "The request exceeds the context budget. Reduce attached context or enabled tools and try again."
 const MEDIA_TOKENS = 4_000
 
 type Request = Pick<LanguageModelV3CallOptions, "prompt" | "tools" | "toolChoice" | "responseFormat">
@@ -11,12 +9,6 @@ type Request = Pick<LanguageModelV3CallOptions, "prompt" | "tools" | "toolChoice
 export class CompactionRequired extends Error {
   constructor() {
     super("Arena request needs compaction")
-  }
-}
-
-export class RequestTooLarge extends Error {
-  constructor() {
-    super(EXCEEDED)
   }
 }
 
@@ -63,10 +55,9 @@ export function exceeds(input: Request) {
   return estimate(input) >= LIMIT
 }
 
-export function check(input: Request, action: "compact" | "stop") {
+export function check(input: Request) {
   if (!exceeds(input)) return
-  if (action === "compact") throw new CompactionRequired()
-  throw new RequestTooLarge()
+  throw new CompactionRequired()
 }
 
 export * as ArenaRequestBudget from "./request-budget"

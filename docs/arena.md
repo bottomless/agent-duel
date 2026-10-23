@@ -1130,6 +1130,10 @@ not be mistaken for a silent model stream. When the runtime abandons a request, 
 proxy aborts its control-plane request too; otherwise the hosted function keeps streaming, and
 billing, until its own time limit.
 
+A request above the estimated savings threshold triggers compaction. Keep a new user message and
+its attachments intact while summarizing the earlier history. The summary request must be allowed
+to exceed the savings threshold; the provider's context window still applies.
+
 A compaction summary that ends idle, at its output cap, or empty must never become the history. A
 finished summary hides everything before it, so the contestant continues with no memory of its task
 and asks what it was working on. `session/compaction.ts` removes the unusable summary and asks again,

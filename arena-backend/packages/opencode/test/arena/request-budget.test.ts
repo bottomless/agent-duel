@@ -13,7 +13,7 @@ test("includes system instructions and tool schemas before accepting an Arena re
   ).toBe(true)
 })
 
-test("counts the newest user message and refuses repeated compaction of an oversized request", () => {
+test("counts the newest user message when requesting compaction", () => {
   const request: LanguageModelV3CallOptions = {
     prompt: [
       { role: "user", content: [{ type: "text", text: "history".repeat(140_000) }] },
@@ -22,8 +22,7 @@ test("counts the newest user message and refuses repeated compaction of an overs
     ],
   }
   expect(ArenaRequestBudget.exceeds({ prompt: request.prompt.slice(0, 2) })).toBe(false)
-  expect(() => ArenaRequestBudget.check(request, "compact")).toThrow(ArenaRequestBudget.CompactionRequired)
-  expect(() => ArenaRequestBudget.check(request, "stop")).toThrow(ArenaRequestBudget.RequestTooLarge)
+  expect(() => ArenaRequestBudget.check(request)).toThrow(ArenaRequestBudget.CompactionRequired)
 })
 
 test("bounds user and tool-result media without counting encoded bytes or mutating the request", () => {

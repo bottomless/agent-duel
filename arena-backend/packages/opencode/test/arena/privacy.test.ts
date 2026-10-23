@@ -10,7 +10,6 @@ import { hashArenaControlToken, setArenaCredentials } from "@/arena/credentials"
 import type { Store } from "@/arena/mongo"
 import { ArenaAttachments } from "@/arena/attachments"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
-import { ArenaRequestBudget } from "@/arena/request-budget"
 import { ArenaPrivacy } from "@/arena/privacy"
 import { setStoreForTest } from "@/arena/runtime"
 import { GlobalBus } from "@/bus/global"
@@ -175,18 +174,6 @@ afterEach(async () => {
 })
 
 describe("ArenaPrivacy", () => {
-  test("keeps the neutral request-budget error without allowing arbitrary provider error text", () => {
-    enableArenaControl()
-    const message = contestantMessage()
-    if (message.info.role !== "assistant") throw new Error("Expected assistant fixture")
-    message.info.error = { name: "UnknownError", data: { message: ArenaRequestBudget.EXCEEDED } }
-    expect(ArenaPrivacy.messages([message])[0]?.info).toMatchObject({
-      error: { data: { message: ArenaRequestBudget.EXCEEDED } },
-    })
-    message.info.error.data.message += hiddenSlug
-    expect(JSON.stringify(ArenaPrivacy.messages([message]))).not.toContain(hiddenSlug)
-  })
-
   test("keeps neutral idle recovery status and exhaustion while stripping provider details", () => {
     enableArenaControl()
     expect(

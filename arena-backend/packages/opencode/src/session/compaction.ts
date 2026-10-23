@@ -429,14 +429,29 @@ const layer = Layer.effect(
       const compactionUser = assignment ? { ...userMessage, model: compactionModel } : userMessage
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
-      const prior = completedCompactions(history)
+      // A new Arena request has not been acted on yet. Summarize only its earlier history;
+      // retain the original message IDs and parts so pasted text and attachments stay exact.
+      const finished = MessageV2.latest(history).finished
+      const pendingIndex =
+        input.auto && !input.overflow && userMessage.model.providerID === ArenaRuntime.providerID && finished
+          ? history.findIndex(
+              (message) =>
+                message.info.role === "user" &&
+                message.info.id > finished.id &&
+                message.parts.some((part) => part.type !== "compaction" && (part.type !== "text" || !part.synthetic)),
+            )
+          : -1
+      const pendingUser = pendingIndex >= 0 ? MessageV2.latest(history.slice(pendingIndex)).user : undefined
+      const compactable = pendingIndex >= 0 ? history.slice(0, pendingIndex) : history
+      const prior = completedCompactions(compactable)
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
       const previousSummary = prior.at(-1)?.summary
       const selected = yield* select({
-        messages: history.filter((_, index) => !hidden.has(index)),
+        messages: compactable.filter((_, index) => !hidden.has(index)),
         cfg,
         model,
       })
+      if (pendingIndex >= 0) selected.tail_start_id ??= history[pendingIndex].info.id
       // Allow plugins to inject context or replace compaction prompt.
       const compacting = yield* plugin.trigger(
         "experimental.session.compacting",
@@ -494,7 +509,8 @@ const layer = Layer.effect(
           sessionID: input.sessionID,
           tools: {},
           system: [],
-          arenaRequestBudget: "stop",
+          // A large paste can put the summary itself above the savings threshold. Allow it so
+          // the user can continue; only the provider's actual context window limits this call.
           messages: [
             ...modelMessages,
             {
@@ -629,16 +645,25 @@ const layer = Layer.effect(
               role: "user",
               sessionID: input.sessionID,
               time: { created: Date.now() },
-              agent: userMessage.agent,
-              model: userMessage.model,
+              agent: pendingUser?.agent ?? userMessage.agent,
+              model: pendingUser?.model ?? userMessage.model,
+              system: pendingUser?.system,
+              tools: pendingUser?.tools,
+              format: pendingUser?.format
+                ? pendingUser.format.type === "json_schema"
+                  ? new SessionV1.OutputFormatJsonSchema(pendingUser.format)
+                  : new SessionV1.OutputFormatText(pendingUser.format)
+                : undefined,
             })
             const continuation = assignment
               ? ARENA_COMPACTION_CONTINUE
               : "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
             const text =
+              (pendingUser ? "Process the new user message and attachments retained above. " : "") +
               (input.overflow
                 ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
-                : "") + continuation
+                : "") +
+              continuation
             yield* session.updatePart({
               id: PartID.ascending(),
               messageID: continueMsg.id,

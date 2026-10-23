@@ -1,5 +1,4 @@
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
-import { ArenaRequestBudget } from "@/arena/request-budget"
 import { describe, expect, test } from "bun:test"
 import type { ArenaActiveOperation } from "../../src/arena/operation-tracker"
 import { jsonValue, parseSnapshot, project } from "../../src/arena/public"
@@ -198,16 +197,6 @@ describe("ArenaPublic", () => {
       expect(project(input).runs[0]?.error).toBe(ArenaResponseRecovery.IDLE_EXHAUSTED)
     },
   )
-
-  test.each([false, true])("explains the request budget without exposing provider details, revealed=%s", (revealed) => {
-    const input = snapshot(revealed)
-    input.runs[0]!.runState = "error"
-    input.runs[0]!.error = `Contestant assistant error: ${JSON.stringify({
-      name: "UnknownError",
-      data: { message: ArenaRequestBudget.EXCEEDED, detail: "private-provider" },
-    })}`
-    expect(project(input).runs[0]?.error).toBe(ArenaRequestBudget.EXCEEDED)
-  })
 
   test.each([false, true])("hides billing details in payment errors, revealed=%s", (revealed) => {
     const input = snapshot(revealed)

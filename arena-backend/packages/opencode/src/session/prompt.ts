@@ -1434,9 +1434,9 @@ const layer = Layer.effect(
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
-              // A first request has no completed history to compact. Do not summarize away the
-              // user's original instructions, or keep retrying when a summary still cannot fit.
-              arenaRequestBudget: !lastFinished || lastFinished.summary ? "stop" : "compact",
+              // The savings threshold must not block a first request or loop on a request that
+              // remains large after compaction. Let those calls proceed at the provider's rates.
+              arenaRequestCompaction: !!lastFinished && !lastFinished.summary,
             })
 
             if (result === "compact-request") {

@@ -55,7 +55,7 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
-  arenaRequestBudget?: "compact" | "stop"
+  arenaRequestCompaction?: boolean
 }
 
 export type StreamRequest = StreamInput & {
@@ -351,24 +351,18 @@ const live: Layer.Layer<
                     )
                     if (
                       input.model.providerID === ArenaRuntime.providerID &&
-                      input.arenaRequestBudget &&
+                      input.arenaRequestCompaction &&
                       cfg.compaction?.auto !== false
                     ) {
                       try {
-                        ArenaRequestBudget.check(
-                          {
-                            prompt: args.params.prompt,
-                            tools: args.params.tools,
-                            toolChoice: args.params.toolChoice,
-                            responseFormat: args.params.responseFormat,
-                          },
-                          input.arenaRequestBudget,
-                        )
+                        ArenaRequestBudget.check({
+                          prompt: args.params.prompt,
+                          tools: args.params.tools,
+                          toolChoice: args.params.toolChoice,
+                          responseFormat: args.params.responseFormat,
+                        })
                       } catch (error) {
-                        if (
-                          error instanceof ArenaRequestBudget.CompactionRequired ||
-                          error instanceof ArenaRequestBudget.RequestTooLarge
-                        ) {
+                        if (error instanceof ArenaRequestBudget.CompactionRequired) {
                           markInitialRequestDeferred(input.sessionID)
                         }
                         throw error
