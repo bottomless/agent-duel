@@ -143,8 +143,12 @@ finished side expands. The engine's diff stands the
 unfinished side in as the frozen base, the shape a stopped battle already uses; a side working
 again after a reply keeps its last result's commit, so its run state decides, not the commit.
 The first result is fetched under its own query key, so the comparison is fetched again when the
-other side lands, and the review stays up from then on rather than dropping out until the vote opens. A row opens its file's diff right under it and closes it again, several can be open
-at once, and the first diverging file opens on arrival. Past eight rows the rest wait behind Show more, so a
+other side lands; until it arrives the review keeps showing the first result. A run reads `complete`
+a moment before the engine records its commit, so a side counts as finished only once its commit is
+there; going by run state alone dropped the review out for that moment. A row opens its file's diff
+right under it and closes it again, several can be open at once, and the first diverging file opens
+on arrival. A file the card opened on the first result stays open when both are in, even though the
+first diverging file is then a different one. Past eight rows the rest wait behind Show more, so a
 battle that touched hundreds of files does not push the threads off screen; an open row past them still shows.
 The list names every file either side changed, in path order, without contents; each diff reads its own file
 when it opens (`arena.turn.get_file_diff`). Do not cap the list to bound the response: a cap hid every file B

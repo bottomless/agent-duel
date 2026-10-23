@@ -178,6 +178,24 @@ describe("BattleReview", () => {
     expect(container.querySelector('[aria-label="Expand Agent B"]')).toBeNull();
   });
 
+  it("keeps the file it opened on the first result open once both are in", () => {
+    const files = ["src/f0.py", "src/f1.py"];
+    const firstResult = comparisonDiff({
+      files: files.map((file) =>
+        threeWayFile({ file, base: "x = 1\n", a: "x = 2\n", b: "x = 1\n" }),
+      ),
+      divergence: files.map((file) => ({ file, status: "only_a" as const })),
+    });
+    render({ summaryAvailable: false, waitingFor: "b", diff: firstResult });
+    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
+    expect(byTestId("arena-changes-diff-src/f0.py")).not.toBeNull();
+
+    // Both results make src/f1.py the first diverging file, which would be the default.
+    render({ summaryAvailable: true, diff: manyFiles(2, 1) });
+    expect(byTestId("arena-changes-diff-src/f0.py")).not.toBeNull();
+    expect(byTestId("arena-changes-diff-src/f1.py")).toBeNull();
+  });
+
   it("says so when the finished side changed nothing", () => {
     render({
       summaryAvailable: false,

@@ -10,6 +10,7 @@ import {
 import { ArrowDown, Maximize2, Minimize2 } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type {
+  ArenaComparisonDiff,
   ArenaHistoryItem,
   ArenaRun,
   ArenaSide,
@@ -411,6 +412,12 @@ function useBattleDiff(
   });
 }
 
+interface ShownBattleDiff {
+  diff: ArenaComparisonDiff;
+  /** The side still working when this diff was fetched; its column is a placeholder. */
+  waitingFor: ArenaSide | null;
+}
+
 /**
  * The card once both results are in: the review region, fed from the same diff
  * query the summary uses.
@@ -445,7 +452,17 @@ function BattleJudging({
   const retryDiff = useCallback(() => {
     void refetchDiff();
   }, [refetchDiff]);
-  const diff = diffQuery.data;
+  // When the other side lands, the full comparison is fetched under a new key and arrives a moment
+  // later. Until it does, the review keeps the first result it was showing, with the placeholder
+  // column it was fetched with, rather than collapsing every open diff into a spinner.
+  const phaseWaitingFor = phase.kind === "partial" ? phase.waitingFor : null;
+  const live: ShownBattleDiff | null = diffQuery.data
+    ? { diff: diffQuery.data, waitingFor: phaseWaitingFor }
+    : null;
+  const [held, setHeld] = useState<ShownBattleDiff | null>(null);
+  if (live && (live.diff !== held?.diff || live.waitingFor !== held.waitingFor)) setHeld(live);
+  const shown = live ?? (held?.diff.turnID === turnId ? held : null);
+  const diff = shown?.diff;
   const rows = useMemo(() => arenaChangesRows(diff), [diff]);
   return (
     <BattleReview
@@ -455,7 +472,7 @@ function BattleJudging({
       summaryAvailable={summary.available}
       summaryPending={summary.pending}
       summaryFailed={summary.failed}
-      waitingFor={phase.kind === "partial" ? phase.waitingFor : null}
+      waitingFor={shown ? shown.waitingFor : phaseWaitingFor}
       comparison={comparison}
       retrying={retrying}
       onRetry={onRetry}

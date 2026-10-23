@@ -230,6 +230,26 @@ describe("InlineFileDiff", () => {
     expect(container.querySelector('[aria-label="Expand Agent B"]')).toBeNull();
   });
 
+  it("keeps the first result's diff while the full one is read", () => {
+    act(() => root.render(mainDiff(shortConflict(), "split", "turn-1", "b")));
+    expect(byTestId("arena-diff-pending-b")).not.toBeNull();
+    // The other side landed, so the file is read again, and nothing has arrived yet.
+    servedFileDiffs.delete("main.py");
+    act(() =>
+      root.render(
+        <InlineFileDiff
+          serverId="server-1"
+          agentId="agent-1"
+          turnId="turn-1"
+          file="main.py"
+          layout="split"
+        />,
+      ),
+    );
+    expect(byTestId("arena-inline-diff-loading")).toBeNull();
+    expect(byTestId("arena-diff-pending-b")).not.toBeNull();
+  });
+
   it("names its file on the viewer, so a scroll is credited to the right diff", () => {
     act(() => root.render(mainDiff(shortConflict(), "split")));
     expect(byTestId("arena-inline-diff")?.getAttribute("data-diff-file")).toBe("main.py");

@@ -18,12 +18,7 @@ import type { ArenaChangesRow } from "./changes-rows";
 import { useArenaDiffLayout, type ArenaDiffLayout } from "./diff-layout";
 import { DiffLayoutControl } from "./diff-layout-control";
 import { useArenaFileDiff } from "./file-diff-query";
-import {
-  defaultChangesFile,
-  InlineFileDiff,
-  openChangesFiles,
-  toggleChangesFile,
-} from "./inline-file-diff";
+import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { PaneIconAction } from "./pane-icon-action";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
 import { VerdictBody } from "./verdict-body";
@@ -355,13 +350,19 @@ export function BattleReview({
   const tabs = summaryAvailable || waitingFor !== null;
   // The summary is the first tab whenever there is one; a reader's pick stands.
   const tab: ArenaReviewTab = chosen.tab ?? (tabs ? "verdict" : "changes");
-  const openFiles = useMemo(() => openChangesFiles(rows, chosen.files), [rows, chosen.files]);
+  // Until the reader picks, the file the card already opened stays open: the default moves to the
+  // first diverging file once both results are in, and that must not close the one being read.
+  const openFiles = useMemo(
+    () =>
+      openChangesFiles(rows, chosen.files ?? (chosen.shownFile ? [chosen.shownFile] : undefined)),
+    [rows, chosen.files, chosen.shownFile],
+  );
   // Changes opens on this file, so its contents are read while the summary is still on screen.
   useArenaFileDiff({
     serverId,
     agentId,
     turnId,
-    file: defaultChangesFile(rows),
+    file: openFiles[0] ?? null,
     waitingFor: waitingFor ?? undefined,
   });
   // Picking a tab on a folded section opens it on that tab.
