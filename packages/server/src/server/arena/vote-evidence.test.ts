@@ -39,6 +39,35 @@ describe("vote input evidence", () => {
     expect(verifier.consume(target, evidence.source, evidence.receipt)).toBe("unverified");
   });
 
+  it("cannot replay proof by changing its base64 encoding", () => {
+    const { issuer, verifier } = fixture();
+    const evidence = issuer.issue(target, "native");
+    if (!evidence.receipt) throw new Error("Issuer did not supply evidence");
+    expect(verifier.consume(target, "native", evidence.receipt)).toBe("native");
+    const reencoded = {
+      payload: Buffer.from(evidence.receipt.payload, "base64url").toString("base64"),
+      signature: Buffer.from(evidence.receipt.signature, "base64url").toString("base64"),
+    };
+    expect(verifier.consume(target, "native", reencoded)).toBe("unverified");
+  });
+
+  it("does not evict consumed proof when an attacker fills the replay cache", () => {
+    const { issuer, verifier, advance } = fixture();
+    const first = issuer.issue(target, "native");
+    expect(verifier.consume(target, first.source, first.receipt)).toBe("native");
+    for (let index = 1; index < 4096; index++) {
+      const evidence = issuer.issue(target, "native");
+      expect(verifier.consume(target, evidence.source, evidence.receipt)).toBe("native");
+    }
+    const overflow = issuer.issue(target, "native");
+    expect(verifier.consume(target, overflow.source, overflow.receipt)).toBe("unverified");
+    expect(verifier.consume(target, first.source, first.receipt)).toBe("unverified");
+    advance(60_001);
+    const fresh = issuer.issue(target, "native");
+    expect(verifier.consume(target, fresh.source, fresh.receipt)).toBe("native");
+    expect(verifier.consume(target, first.source, first.receipt)).toBe("unverified");
+  });
+
   it("refuses a replacement issuer supplied by the attacker", () => {
     const { verifier } = fixture();
     const attacker = createVoteEvidenceIssuer();
