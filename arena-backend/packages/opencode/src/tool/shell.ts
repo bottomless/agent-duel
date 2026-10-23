@@ -22,6 +22,8 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
 import { withoutArenaCredentials } from "@/arena/credentials"
+import { ArenaPorts } from "@/arena/ports"
+import { ArenaRuntime } from "@/arena/runtime"
 
 export { Parameters } from "./shell/prompt"
 
@@ -677,6 +679,16 @@ export const ShellTool = Tool.define(
                   yield* ask(ctx, scan, params)
                 }),
               )
+              // A contestant command that binds a port of an earlier round, carried by a literal the
+              // history rewrite keeps (user messages, file content, long JSON). The refusal names
+              // this round's values; a failed lookup refuses nothing.
+              if (ctx.tmpDirectory && ArenaRuntime.enabled()) {
+                const refusal = yield* Effect.tryPromise(async () => {
+                  const environment = await ArenaPorts.environment(await ArenaRuntime.store(), ctx.sessionID)
+                  return environment ? ArenaPorts.violation(environment, params.command) : undefined
+                }).pipe(Effect.orElseSucceed(() => undefined))
+                if (refusal) throw new Error(refusal)
+              }
 
               return yield* run(
                 {

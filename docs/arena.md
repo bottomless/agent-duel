@@ -628,7 +628,10 @@ A branch switch can make a JavaScript diff block both contestants for minutes. S
 patches use native Git with time and output limits; battle review owns its separate comparison.
 
 Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
-`.localhost` hostnames, and never retarget an old URL to a later process.
+`.localhost` hostnames, and never retarget an old URL to a later process. The retarget below leaves
+some earlier-round ports in place (user messages, file content, long JSON), so a contestant command
+that binds a port of an earlier round, or names an earlier round's preview hostname, is refused by
+the shell with this round's values (`arena/ports.ts`).
 
 Banks come from 20000–29999, below every OS ephemeral range, in order from a cursor the store keeps
 (`portCursors`, `sequentialAllocator` in `arena/preview.ts`). A port an earlier turn used is not
