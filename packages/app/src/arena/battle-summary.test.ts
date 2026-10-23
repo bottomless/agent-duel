@@ -336,6 +336,19 @@ describe("battleReviewPhase", () => {
     );
   });
 
+  it("stays on the first result while the other side's run is complete but its commit is not", () => {
+    expect(battleReviewPhase(turn("running"), run("complete", "a1"), run("complete"))).toEqual({
+      kind: "partial",
+      finished: "a",
+      waitingFor: "b",
+    });
+    expect(battleReviewPhase(turn("running"), run("complete"), run("complete", "b1"))).toEqual({
+      kind: "partial",
+      finished: "b",
+      waitingFor: "a",
+    });
+  });
+
   it("reviews both results as soon as both are in, and otherwise once the turn can be diffed", () => {
     expect(battleReviewPhase(turn("awaiting_vote"), run("complete", "a1"), run("error")).kind).toBe(
       "full",

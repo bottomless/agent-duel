@@ -60,6 +60,12 @@ function hasResult(run: ArenaRun | undefined): boolean {
   return settled(run) && Boolean(run?.finalCommit);
 }
 
+// A run reads complete a moment before the engine records its commit; until then the side is
+// still working, so the review stays on the first result instead of dropping out for that moment.
+function finishing(run: ArenaRun | undefined): boolean {
+  return run?.runState === "pending" || (run?.runState === "complete" && !run.finalCommit);
+}
+
 /**
  * What the card can review: both results once both sides settle, or the first result alone
  * while the other side still works, so the voter can read it before deciding early.
@@ -76,10 +82,12 @@ export function battleReviewPhase(
     // that rather than vanishing for a moment and coming back.
     const ready =
       canRequestBattleDiff(turn.state) || (working && hasResult(runA) && hasResult(runB));
-    return ready ? { kind: "full" } : { kind: "none" };
+    if (ready) return { kind: "full" };
   }
   if (!working) return { kind: "none" };
-  if (hasResult(runA) && !settled(runB)) return { kind: "partial", finished: "a", waitingFor: "b" };
-  if (hasResult(runB) && !settled(runA)) return { kind: "partial", finished: "b", waitingFor: "a" };
+  if (hasResult(runA) && finishing(runB))
+    return { kind: "partial", finished: "a", waitingFor: "b" };
+  if (hasResult(runB) && finishing(runA))
+    return { kind: "partial", finished: "b", waitingFor: "a" };
   return { kind: "none" };
 }
