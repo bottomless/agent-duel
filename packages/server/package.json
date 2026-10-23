@@ -14,6 +14,11 @@
   "type": "module",
   "types": "./dist/server/server/exports.d.ts",
   "exports": {
+    "./arena/vote-evidence": {
+      "types": "./dist/server/server/arena/vote-evidence.d.ts",
+      "source": "./src/server/arena/vote-evidence.ts",
+      "default": "./dist/server/server/arena/vote-evidence.js"
+    },
     ".": {
       "types": "./dist/server/server/exports.d.ts",
       "source": "./src/server/exports.ts",

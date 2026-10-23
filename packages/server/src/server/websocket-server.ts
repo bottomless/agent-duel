@@ -105,6 +105,7 @@ import {
 } from "@getpaseo/protocol/accounts/schemas";
 import type { AccountsService } from "./accounts/service.js";
 import type { ArenaByokService } from "./accounts/byok.js";
+import { createVoteEvidenceVerifier, type VoteEvidenceVerifier } from "./arena/vote-evidence.js";
 import type { BrowserAutomationExecuteResponse } from "@getpaseo/protocol/browser-automation/rpc-schemas";
 import {
   BrowserAutomationHostCapabilitySchema,
@@ -160,6 +161,7 @@ interface WebSocketServerConfig {
   relayConfig?: boolean;
   accounts?: AccountsService | null;
   arenaByok?: ArenaByokService | null;
+  arenaVoteEvidence?: VoteEvidenceVerifier;
 }
 
 type WebSocketRuntimeMetrics = SessionRuntimeMetrics & CheckoutDiffMetrics;
@@ -572,6 +574,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly providerUsageService: ProviderUsageService;
   private readonly arenaActivity: ArenaActivityService;
   private readonly arenaByok: ArenaByokService | null;
+  private readonly arenaVoteEvidence: VoteEvidenceVerifier;
   private readonly workspaceCleanup: WorkspaceCleanupService;
   private readonly workspaceCleanupReady: Promise<void>;
   private readonly cleanupSubscriptions: Array<() => void> = [];
@@ -629,6 +632,7 @@ export class VoiceAssistantWebSocketServer {
     this.advertiseDaemonStatusRpc = wsConfig.daemonStatusRpc !== false;
     this.advertiseRelayConfig = wsConfig.relayConfig !== false;
     this.arenaByok = wsConfig.arenaByok ?? null;
+    this.arenaVoteEvidence = wsConfig.arenaVoteEvidence ?? createVoteEvidenceVerifier();
     this.serverId = serverId;
     if (typeof daemonVersion !== "string" || daemonVersion.trim().length === 0) {
       throw new MissingDaemonVersionError();
@@ -1408,6 +1412,7 @@ export class VoiceAssistantWebSocketServer {
     return new Session({
       arenaActivity: this.arenaActivity,
       arenaByok: this.arenaByok,
+      arenaVoteEvidence: this.arenaVoteEvidence,
       restoreCleanedWorkspace: (workspaceId) => this.workspaceCleanup.restore(workspaceId),
       trimArenaEnvironments: (keep) => this.workspaceCleanup.trimEnvironments(keep),
       getArenaEnvironmentStatus: () => this.workspaceCleanup.environmentStatus(),

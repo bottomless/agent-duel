@@ -282,6 +282,7 @@ export type HiddenAssignment = {
 }
 
 export type SingleAgentVote = "up" | "down"
+export type VoteSource = "synthetic" | "unknown" | "api" | "native" | "injected" | "unverified"
 export type SingleAgentModelSize = "medium" | "frontier"
 
 export type SingleAgentRatingDocument = {
@@ -304,6 +305,7 @@ export type SingleAgentRatingDocument = {
   precedingTurnCount?: number
   resultTree?: string
   vote?: SingleAgentVote
+  voteSource?: VoteSource
   voteParticipantID?: string
   voteAt?: Date
   revealAt?: Date
@@ -372,6 +374,7 @@ export type TurnDocument = {
   failureReason?: string
   resolution?: Resolution
   vote?: Vote
+  voteSource?: VoteSource
   voteParticipantID?: string
   selectedEarly?: boolean
   /** Replies sent to the contestants while the battle ran. */
@@ -781,7 +784,7 @@ export type ReviewEventInput = {
 export const reviewFlushLimit = 500
 
 /** Bump when a derived field changes meaning, then recompute the whole table. */
-export const battleMetricsSchemaVersion = 6
+export const battleMetricsSchemaVersion = 7
 
 export type ReviewEffort = {
   /** From the card opening to the first act of reviewing, ignoring window focus events. */
@@ -892,6 +895,8 @@ export type BattleMetricsDocument = {
   readonly modelPair: readonly string[]
   /** The vote as cast. `won` is false on both sides for a tie; this is how you find them. */
   readonly vote?: Vote
+  /** Where the vote came from. Absent on historical metrics rows. */
+  readonly voteSource?: VoteSource
   readonly resolutionKind?: string
   readonly selectedEarly: boolean
   /** A steer reaches both contestants, so it belongs to the turn, not a side. */

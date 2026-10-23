@@ -171,6 +171,7 @@ import type {
   SingleAgentVote,
   SingleAgentModelSize,
   TurnDocument,
+  VoteSource,
   SlotSyncTimings,
   TurnSetupTimings,
   WarmPreparation,
@@ -1141,6 +1142,7 @@ export interface Interface {
     ratingID: string,
     vote: SingleAgentVote,
     participantID?: string,
+    voteSource?: VoteSource,
   ) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly startTurn: (
     chatID: string,
@@ -1172,6 +1174,7 @@ export interface Interface {
     turnID: string,
     vote: Vote,
     participantID?: string,
+    voteSource?: VoteSource,
   ) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly recordReview: (
     turnID: string,
@@ -3926,6 +3929,7 @@ export const layer: Layer.Layer<
       ratingID: string,
       vote: SingleAgentVote,
       rawParticipantID?: string,
+      rawVoteSource?: VoteSource,
     ) {
       const store = yield* available()
       const chat = yield* promise(() => store.chatForSession(rawSessionID))
@@ -3940,6 +3944,7 @@ export const layer: Layer.Layer<
       if (!rating.completedAt) return yield* Effect.fail(new Error("Arena single-agent pass is not complete"))
       const resolved = yield* promise(() => resolveAssignments("single", ratingID, `rate:${vote}`))
       const committedVote = resolved.decision === "rate:up" ? "up" : "down"
+      const voteSource = rawVoteSource ?? "api"
       const model = resolved.assignments[0]?.model
       if (!model) return yield* Effect.fail(new Error("Arena single-agent reveal is invalid"))
       yield* promise(() =>
@@ -3948,6 +3953,7 @@ export const layer: Layer.Layer<
           ratingID,
           vote: committedVote,
           model,
+          voteSource,
           ...(admittedParticipantID ? { participantID: admittedParticipantID } : {}),
         }),
       )
@@ -9419,6 +9425,7 @@ export const layer: Layer.Layer<
       vote?: Vote,
       retry?: boolean,
       rawParticipantID?: string,
+      rawVoteSource?: VoteSource,
     ) => Effect.Effect<ReturnType<typeof project>, Error> = Effect.fn("Arena.promote")(function* (
       store: Store,
       turn: TurnDocument,
@@ -9430,6 +9437,7 @@ export const layer: Layer.Layer<
       vote?: Vote,
       retry = false,
       rawParticipantID?: string,
+      rawVoteSource?: VoteSource,
     ) {
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
@@ -9443,6 +9451,7 @@ export const layer: Layer.Layer<
             turnID: turn._id,
             resolution,
             vote,
+            voteSource: rawVoteSource,
             participantID: participantID(rawParticipantID),
             appliedSide: side,
             models: revealed.models,
@@ -9895,8 +9904,14 @@ export const layer: Layer.Layer<
       return yield* respond(store, chat._id)
     })
 
-    const vote = Effect.fn("Arena.vote")(function* (id: string, selected: Vote, rawParticipantID?: string) {
+    const vote = Effect.fn("Arena.vote")(function* (
+      id: string,
+      selected: Vote,
+      rawParticipantID?: string,
+      rawVoteSource?: VoteSource,
+    ) {
       const store = yield* available()
+      const voteSource = rawVoteSource ?? "api"
       const votingParticipantID = yield* Effect.try({
         try: () => participantID(rawParticipantID),
         catch: error,
@@ -9916,6 +9931,7 @@ export const layer: Layer.Layer<
             turnID: turn._id,
             side: committed.vote,
             participantID: votingParticipantID,
+            voteSource,
             models: revealed.models,
             at: new Date(),
           }),
@@ -9942,14 +9958,32 @@ export const layer: Layer.Layer<
       }
       if (turn.state === "awaiting_stop_resolution" && selected === "tie") {
         const resolved = voteResolution(selected)
-        return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
+        return yield* promote(
+          store,
+          turn,
+          resolved.appliedSide,
+          resolved,
+          selected,
+          false,
+          votingParticipantID,
+          voteSource,
+        )
       }
       if (turn.state !== "awaiting_vote") return yield* Effect.fail(new Error("Arena turn is not ready for a vote"))
       if (canResumeBattle(turn, yield* promise(() => store.runsForTurn(turn._id)))) {
         return yield* Effect.fail(new Error("Resume or discard this battle before choosing"))
       }
       const resolved = voteResolution(selected)
-      return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
+      return yield* promote(
+        store,
+        turn,
+        resolved.appliedSide,
+        resolved,
+        selected,
+        false,
+        votingParticipantID,
+        voteSource,
+      )
     })
 
     const recordReview = Effect.fn("Arena.recordReview")(function* (

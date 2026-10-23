@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import net from "node:net";
+import { generateKeyPairSync } from "node:crypto";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -57,6 +58,13 @@ if (process.platform === "darwin") {
   );
 }
 
+const voteKeyPair = generateKeyPairSync("ed25519");
+const votePublicKey = voteKeyPair.publicKey
+  .export({ format: "der", type: "spki" })
+  .toString("base64");
+const votePrivateKey = voteKeyPair.privateKey
+  .export({ format: "der", type: "pkcs8" })
+  .toString("base64");
 const children = new Map();
 let stopping = false;
 let exitCode = 0;
@@ -415,6 +423,39 @@ async function waitForExternalControlPlane() {
   }
 }
 
+if (process.env.PASEO_DEV_START_DAEMON === "1") {
+  execFileSync(
+    process.execPath,
+    [
+      path.join(rootDir, "packages/cli/dist/index.js"),
+      "daemon",
+      "start",
+      "--listen",
+      process.env.PASEO_LISTEN,
+      "--home",
+      process.env.PASEO_HOME,
+      "--no-relay",
+      "--no-web-ui",
+    ],
+    {
+      cwd: rootDir,
+      stdio: "inherit",
+      env: { ...process.env, PASEO_DESKTOP_MANAGED: "1", PASEO_VOTE_PUBLIC_KEY: votePublicKey },
+    },
+  );
+  process.env.PASEO_DEV_OWNS_DAEMON = "1";
+}
+execFileSync(
+  process.execPath,
+  [
+    path.join(scriptDir, "dev-daemon-state.mjs"),
+    "verify",
+    process.env.PASEO_LISTEN,
+    process.env.PASEO_DEV_EXPECTED_SERVER_ID,
+  ],
+  { stdio: "inherit" },
+);
+
 if (controlPlaneMode === "bundled") {
   await startControlPlane();
 } else if (controlPlaneMode === "external") {
@@ -445,16 +486,15 @@ try {
 }
 
 if (!stopping) {
-  const electronProcess = spawnChild(
-    "electron",
-    electron,
-    [...electronArgs, desktopDir],
-    createElectronSpawnOptions({
-      env: process.env,
+  const electronProcess = spawnChild("electron", electron, [...electronArgs, desktopDir], {
+    ...createElectronSpawnOptions({
+      env: { ...process.env, PASEO_VOTE_SIGNING_FD: "3" },
       colorEnv,
       expoDevUrl,
     }),
-  );
+    stdio: ["ignore", "pipe", "pipe", "pipe"],
+  });
+  electronProcess.stdio[3].end(votePrivateKey);
   const debuggerPort = Number(process.env.PASEO_ELECTRON_REMOTE_DEBUGGING_PORT);
   if (Number.isInteger(debuggerPort) && debuggerPort > 0) {
     try {

@@ -1,6 +1,7 @@
 import { completeWorkspaceFork } from "./fork-workspace-recovery.js";
 import type { ArenaActivityService } from "./arena/activity-service.js";
 import type { ArenaByokService } from "./accounts/byok.js";
+import type { VoteEvidenceVerifier } from "./arena/vote-evidence.js";
 import {
   buildArenaPromptAttachments,
   type ArenaPromptAttachment,
@@ -546,6 +547,7 @@ export interface SessionOptions {
   arenaActivity?: ArenaActivityService;
   /** Present only on a daemon without a control plane, which runs Arena on the user's key. */
   arenaByok?: ArenaByokService | null;
+  arenaVoteEvidence?: VoteEvidenceVerifier;
   serviceProxy?: ServiceProxySubsystem;
   scriptRuntimeStore?: WorkspaceScriptRuntimeStore;
   workspaceSetupSnapshots?: Map<string, WorkspaceSetupSnapshot>;
@@ -704,6 +706,7 @@ export class Session {
   private readonly trimArenaEnvironments: SessionOptions["trimArenaEnvironments"];
   private readonly getArenaEnvironmentStatus: SessionOptions["getArenaEnvironmentStatus"];
   private readonly arenaByok: ArenaByokService | null;
+  private readonly arenaVoteEvidence: VoteEvidenceVerifier | undefined;
   private arenaActivitySubscribed = false;
   private readonly projectRegistry: ProjectRegistry;
   private readonly workspaceRegistry: WorkspaceRegistry;
@@ -826,6 +829,7 @@ export class Session {
     this.trimArenaEnvironments = options.trimArenaEnvironments;
     this.getArenaEnvironmentStatus = options.getArenaEnvironmentStatus;
     this.arenaByok = options.arenaByok ?? null;
+    this.arenaVoteEvidence = options.arenaVoteEvidence;
     this.clientId = clientId;
     this.remoteAddress = options.remoteAddress;
     this.accountUserId = accountUserId;
@@ -4201,7 +4205,13 @@ export class Session {
           return;
         }
         case "arena.turn.vote.request": {
-          const result = await arena.vote(msg.turnId, msg.vote, this.clientId);
+          const source =
+            this.arenaVoteEvidence?.consume(
+              { kind: "battle", agentId: msg.agentId, targetId: msg.turnId, vote: msg.vote },
+              msg.voteSource,
+              msg.voteReceipt,
+            ) ?? "api";
+          const result = await arena.vote(msg.turnId, msg.vote, this.clientId, source);
           this.syncArenaPreviewRoutes(result);
           this.emit({
             type: "arena.turn.vote.response",
@@ -4357,7 +4367,13 @@ export class Session {
     if (!msg.ratingId) {
       throw new Error("Update Agent Duel before revealing a single-agent pass");
     }
-    const result = await arena.singleAgentVote(msg.ratingId, msg.vote, this.clientId);
+    const source =
+      this.arenaVoteEvidence?.consume(
+        { kind: "single_agent", agentId: msg.agentId, targetId: msg.ratingId, vote: msg.vote },
+        msg.voteSource,
+        msg.voteReceipt,
+      ) ?? "api";
+    const result = await arena.singleAgentVote(msg.ratingId, msg.vote, this.clientId, source);
     this.emit({
       type: "arena.single_agent.vote.response",
       payload: { requestId: msg.requestId, snapshot: result },

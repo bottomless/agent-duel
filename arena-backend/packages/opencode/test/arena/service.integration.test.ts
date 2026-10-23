@@ -2516,6 +2516,7 @@ describe("Arena service vertical slice", () => {
           body: JSON.stringify({
             ratingID: firstRating._id,
             vote: "up",
+            voteSource: "synthetic",
             participantID: "cid_single-agent-voter",
           }),
         }),
@@ -2593,6 +2594,7 @@ describe("Arena service vertical slice", () => {
       expect(memory.singleAgentRatings.values).toHaveLength(2)
       expect(memory.singleAgentRatings.values[0]).toMatchObject({
         vote: "up",
+        voteSource: "synthetic",
         voteParticipantID: "cid_single-agent-voter",
       })
       expect(memory.singleAgentRatings.values[1]?.vote).toBeUndefined()
@@ -6199,6 +6201,7 @@ describe("Arena service vertical slice", () => {
       await waitForTurn(memory.store, turnID, "application_failed")
       const unchanged = await memory.store.turn(turnID)
       expect(unchanged?.resolution).toEqual({ kind: "vote", vote: "a", appliedSide: "a" })
+      expect(unchanged?.voteSource).toBe("api")
       expect((await $`git rev-parse HEAD`.cwd(canonical).quiet().text()).trim()).toBe(head)
       expect(await Promise.all(runs.map((run) => exists(run.worktree)))).toEqual([true, true])
       expect(

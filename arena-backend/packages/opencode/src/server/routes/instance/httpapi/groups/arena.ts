@@ -107,11 +107,13 @@ export const ReviewEventsResult = Schema.Struct({
 export const VotePayload = Schema.Struct({
   vote: Schema.Literals(["a", "b", "tie"]),
   participantID: Schema.optional(Schema.String),
+  voteSource: Schema.optional(Schema.Literals(["synthetic", "unknown", "api", "native", "injected", "unverified"])),
 })
 export const SingleAgentVotePayload = Schema.Struct({
   ratingID: Schema.String,
   vote: Schema.Literals(["up", "down"]),
   participantID: Schema.optional(Schema.String),
+  voteSource: Schema.optional(Schema.Literals(["synthetic", "unknown", "api", "native", "injected", "unverified"])),
 })
 export const RetryResolutionPayload = Schema.Struct({
   /**

@@ -41,6 +41,7 @@ import { isRunningUnderARM64Translation } from "../system/arm64-translation.js";
 import { getDesktopAppLogs } from "../diagnostics/app-logs.js";
 import { tailFile } from "../diagnostics/tail-file.js";
 import { readPackagedDeploymentConfig } from "../deployment-config.js";
+import { voteEvidenceIssuer } from "../features/vote-evidence.js";
 
 const DAEMON_LOG_FILENAME = "daemon.log";
 const STARTUP_POLL_INTERVAL_MS = 200;
@@ -421,6 +422,7 @@ async function startDaemon(): Promise<DesktopDaemonStatus> {
     env: invocation.env,
     envOverlay: {
       PASEO_DESKTOP_MANAGED: "1",
+      PASEO_VOTE_PUBLIC_KEY: voteEvidenceIssuer.publicKey,
       PASEO_CLI: getBundledCliShimPath(),
       PASEO_WEB_UI_ENABLED: "false",
       ...packagedArenaEnvironment(),

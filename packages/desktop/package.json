@@ -18,16 +18,18 @@
     "build": "npm --prefix ../.. run build:server:clean && npm run build:main && npm run build:arena-runtime && npm run build:deployment-config && electron-builder --config electron-builder.yml",
     "build:arena-runtime": "node scripts/build-arena-runtime.mjs",
     "build:deployment-config": "node scripts/build-deployment-config.mjs",
-    "build:main": "tsc -p tsconfig.json && npm run build:notification-permissions",
+    "build:main": "tsc -p tsconfig.json && npm run build:notification-permissions && npm run build:vote-input",
     "capture-harness": "./capture-harness/run.sh",
     "dev": "./scripts/dev.sh",
     "dev:win": "powershell ./scripts/dev.ps1",
     "test:e2e:renderer": "cross-env E2E_DESKTOP_RUNTIME=1 playwright test --config=playwright.config.ts --project=desktop",
     "test:e2e:browser-tabs": "npm run build:main && node ./e2e/browser-tabs.e2e.mjs",
+    "test:e2e:vote-input": "node ./e2e/vote-input.electron.mjs",
     "verify:electron-cdp": "node ./scripts/verify-electron-cdp.mjs",
     "test": "vitest run --exclude \"e2e/**\"",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
-    "build:notification-permissions": "node ./scripts/build-notification-permissions.mjs"
+    "build:notification-permissions": "node ./scripts/build-notification-permissions.mjs",
+    "build:vote-input": "node ./scripts/build-vote-input.mjs"
   },
   "dependencies": {
     "@getpaseo/cli": "*",

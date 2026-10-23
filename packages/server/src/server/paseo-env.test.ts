@@ -17,6 +17,8 @@ describe("paseo env contract", () => {
     PATH: "/usr/bin",
     PASEO_AGENT_ID: "agent-123",
     PASEO_DESKTOP_MANAGED: "1",
+    PASEO_VOTE_PUBLIC_KEY: "launch-verifier",
+    PASEO_VOTE_SIGNING_FD: "3",
     [PASEO_NODE_ENV]: "production",
     PASEO_SUPERVISED: "1",
   };
@@ -24,6 +26,8 @@ describe("paseo env contract", () => {
     "ELECTRON_RUN_AS_NODE",
     "PASEO_NODE_ENV",
     "PASEO_DESKTOP_MANAGED",
+    "PASEO_VOTE_PUBLIC_KEY",
+    "PASEO_VOTE_SIGNING_FD",
     "PASEO_SUPERVISED",
     "ELECTRON_NO_ATTACH_CONSOLE",
   ] as const;

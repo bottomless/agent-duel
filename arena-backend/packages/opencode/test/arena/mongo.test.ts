@@ -138,12 +138,14 @@ describe("ArenaMongo claims", () => {
       createdAt: now,
       updatedAt: now,
     }
+    let update: { $set: Record<string, unknown> } | undefined
     const arena = store({
       latestSingleAgentRating: async () => rating,
       singleAgentRatings: {
-        findOneAndUpdate: async () => {
+        findOneAndUpdate: async (_filter: unknown, next: { $set: Record<string, unknown> }) => {
           if (rating.vote) return null
-          rating = { ...rating, vote: "up", voteAt: now, revealAt: now, updatedAt: now }
+          update = next
+          rating = { ...rating, vote: "up", voteSource: "synthetic", voteAt: now, revealAt: now, updatedAt: now }
           return rating
         },
         findOne: async () => rating,
@@ -151,11 +153,17 @@ describe("ArenaMongo claims", () => {
     })
 
     const input = { sessionID: "session", ratingID: rating._id, model: "Contestant", at: now } as const
-    expect(await arena.recordSingleAgentVote({ ...input, vote: "up" })).toMatchObject({
+    expect(await arena.recordSingleAgentVote({ ...input, vote: "up", voteSource: "synthetic" })).toMatchObject({
       vote: "up",
+      voteSource: "synthetic",
       revealAt: now,
     })
-    expect(await arena.recordSingleAgentVote({ ...input, vote: "up" })).toMatchObject({ vote: "up" })
+    expect(update?.$set.voteSource).toBe("synthetic")
+    expect(await arena.recordSingleAgentVote({ ...input, vote: "up", voteSource: "native" })).toMatchObject({
+      vote: "up",
+      voteSource: "synthetic",
+    })
+    expect(update?.$set.voteSource).toBe("synthetic")
     await expect(arena.recordSingleAgentVote({ ...input, vote: "down" })).rejects.toThrow("already been recorded")
   })
 
@@ -584,6 +592,7 @@ describe("ArenaMongo claims", () => {
       turnID: current._id,
       resolution: voteResolution("a"),
       vote: "a",
+      voteSource: "native",
       appliedSide: "a",
       expectedState: "awaiting_vote",
       models: { a: "Model A", b: "Model B" },
@@ -591,6 +600,7 @@ describe("ArenaMongo claims", () => {
     })
 
     expect(fields.timeToVoteMs).toBe(1_500)
+    expect(fields.voteSource).toBe("native")
     expect(fields.selectedEarly).toBe(false)
     expect(fields.state).toBe("applying")
     expect(fields["transitionTimestamps.applying"]).toEqual(now)
@@ -654,6 +664,7 @@ describe("ArenaMongo claims", () => {
     const claimed = await arena.claimEarlyResolution({
       turnID: current._id,
       side: "a",
+      voteSource: "unknown",
       models: { a: "Model A", b: "Model B" },
       at: now,
     })
@@ -661,6 +672,7 @@ describe("ArenaMongo claims", () => {
     expect(claimed.claimed).toBe(true)
     expect(current.resolution).toEqual(earlyResolution("a"))
     expect(current.selectedEarly).toBe(true)
+    expect(current.voteSource).toBe("unknown")
     expect(current.comparisonState).toBe("skipped")
     expect(filter).toMatchObject({
       state: "running",

@@ -1484,6 +1484,7 @@ export class SingleAgent extends HeyApiClient {
       ratingID?: string
       vote?: "up" | "down"
       participantID?: string
+      voteSource?: "synthetic" | "unknown" | "api" | "native" | "injected" | "unverified"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1498,6 +1499,7 @@ export class SingleAgent extends HeyApiClient {
             { in: "body", key: "ratingID" },
             { in: "body", key: "vote" },
             { in: "body", key: "participantID" },
+            { in: "body", key: "voteSource" },
           ],
         },
       ],
@@ -1923,6 +1925,7 @@ export class Turn extends HeyApiClient {
       workspace?: string
       vote?: "a" | "b" | "tie"
       participantID?: string
+      voteSource?: "synthetic" | "unknown" | "api" | "native" | "injected" | "unverified"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1936,6 +1939,7 @@ export class Turn extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "vote" },
             { in: "body", key: "participantID" },
+            { in: "body", key: "voteSource" },
           ],
         },
       ],

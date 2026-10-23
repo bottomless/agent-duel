@@ -48,6 +48,30 @@ to 3 MiB and a record to 2 MiB; oversized records are logged and dropped while t
 intact. The control plane still owns authentication, the OpenRouter proxy, and research
 ingestion.
 
+Battle votes and single-agent ratings record `voteSource`. On macOS and Windows, a matching
+app-local OS activation is `native`, or `injected` when the OS identifies injected input. A
+browser-trusted activation without a matching OS event is `unverified`: CDP clicks take this path.
+A DOM-dispatched event is `synthetic`, a missing API source is `api`, and unavailable input
+evidence is `unknown`. Research uploads keep this field; historical records can lack it.
+
+The daemon accepts OS provenance only with a signed, single-use receipt for the exact agent,
+turn or rating, and choice. Desktop main holds the private key in memory; the daemon pins its public
+key at launch. Source development hands the private key to Electron through an inherited pipe.
+No RPC can register a replacement issuer. Receipts expire after one minute; invalid, expired,
+replayed, or missing proof downgrades an OS source claim to `unverified` without preventing the vote.
+Attaching a new desktop process to an already-running daemon cannot replace its pinned issuer;
+its OS evidence remains unverified until that daemon next starts with the desktop's launch key.
+
+Consume native activations once, in the same window, within two seconds, matching the pointer
+position or Enter/Space key. Deduplicate OS message redelivery even after consumption. The monitors
+observe only these releases delivered to the app and keep a bounded in-memory history. No key text,
+position, source process ID, receipt, or signature is stored with a vote. Windows matches physical
+screen coordinates after Electron converts the renderer's logical coordinates.
+
+Treat provenance as input evidence, not human attestation. Windows reports input from privileged
+UIAccess applications as hardware ([Microsoft's origin definitions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ne-winuser-input_message_origin_id)).
+A process controlling desktop main, the daemon, or local SQLite can tamper with local records.
+
 A session holds its images inline: a pasted one and every screenshot a contestant reads. A long
 run's transcript is then mostly images, and over the 10 MB artifact limit it is not kept at all,
 which stops the turn instead of asking for a vote. So the archive keeps each image as its own `image`

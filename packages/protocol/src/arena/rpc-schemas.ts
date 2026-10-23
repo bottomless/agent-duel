@@ -3,6 +3,52 @@ import { z } from "zod";
 export const ArenaSideSchema = z.enum(["a", "b"]);
 export const ArenaReplyTargetSchema = z.enum(["a", "b", "both"]);
 export const ArenaVoteSchema = z.enum(["a", "b", "tie"]);
+export const ArenaVoteSourceSchema = z.enum([
+  "synthetic",
+  "unknown",
+  "api",
+  "native",
+  "injected",
+  "unverified",
+]);
+export const ArenaVoteInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("pointer"),
+    screenX: z.number().finite(),
+    screenY: z.number().finite(),
+  }),
+  z.object({ kind: z.literal("keyboard"), key: z.enum(["Enter", " ", "Spacebar"]) }),
+]);
+export const ArenaVoteTargetSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("battle"),
+    agentId: z.string().min(1),
+    targetId: z.string().min(1),
+    vote: ArenaVoteSchema,
+  }),
+  z.object({
+    kind: z.literal("single_agent"),
+    agentId: z.string().min(1),
+    targetId: z.string().min(1),
+    vote: z.enum(["up", "down"]),
+  }),
+]);
+export const ArenaVoteReceiptSchema = z.object({
+  payload: z.string().min(1).max(8192),
+  signature: z.string().min(1).max(128),
+});
+export const ArenaVoteEvidenceSchema = z.object({
+  source: ArenaVoteSourceSchema,
+  receipt: ArenaVoteReceiptSchema.optional(),
+});
+export const ArenaVoteInputRequestSchema = z.object({
+  target: ArenaVoteTargetSchema,
+  input: ArenaVoteInputSchema,
+});
+export type ArenaVoteTarget = z.infer<typeof ArenaVoteTargetSchema>;
+export type ArenaVoteReceipt = z.infer<typeof ArenaVoteReceiptSchema>;
+export type ArenaVoteEvidence = z.infer<typeof ArenaVoteEvidenceSchema>;
+export type ArenaVoteInputRequest = z.infer<typeof ArenaVoteInputRequestSchema>;
 export const ArenaBattleStateSchema = z.enum([
   "creating",
   "worktrees_ready",
@@ -618,6 +664,8 @@ export const ArenaSingleAgentVoteRequestSchema = z.object({
   ...ArenaAgentRequestFields,
   ratingId: z.string().optional(),
   vote: z.enum(["up", "down"]),
+  voteSource: ArenaVoteSourceSchema.default("api"),
+  voteReceipt: ArenaVoteReceiptSchema.optional(),
 });
 export const ArenaSingleAgentVoteResponseSchema = z.object({
   type: z.literal("arena.single_agent.vote.response"),
@@ -820,6 +868,8 @@ export const ArenaTurnVoteRequestSchema = z.object({
   ...ArenaAgentRequestFields,
   turnId: z.string(),
   vote: ArenaVoteSchema,
+  voteSource: ArenaVoteSourceSchema.default("api"),
+  voteReceipt: ArenaVoteReceiptSchema.optional(),
 });
 export const ArenaTurnVoteResponseSchema = z.object({
   type: z.literal("arena.turn.vote.response"),
@@ -1000,5 +1050,7 @@ export type ArenaFileContent = z.infer<typeof ArenaFileContentSchema>;
 export type ArenaSide = z.infer<typeof ArenaSideSchema>;
 export type ArenaReplyTarget = z.infer<typeof ArenaReplyTargetSchema>;
 export type ArenaVote = z.infer<typeof ArenaVoteSchema>;
+export type ArenaVoteSource = z.infer<typeof ArenaVoteSourceSchema>;
+export type ArenaVoteInput = z.infer<typeof ArenaVoteInputSchema>;
 export type ArenaSingleAgentVote = "up" | "down";
 export type ArenaPermissionReply = z.infer<typeof ArenaPermissionReplySchema>;
