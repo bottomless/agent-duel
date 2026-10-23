@@ -5208,6 +5208,13 @@ const readComparisonTrees = Effect.fnUntraced(function* (git: Git.Interface, roo
   return { base, a, b }
 })
 
+/** The base and result trees a comparison names, without its file lists or patches. */
+export const comparisonTrees = Effect.fn("ArenaGit.comparisonTrees")(function* (input: ComparisonInput) {
+  const git = yield* Git.Service
+  const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+  return yield* readComparisonTrees(git, root, input)
+})
+
 const readDiffMetadata = Effect.fnUntraced(function* (
   git: Git.Interface,
   root: string,

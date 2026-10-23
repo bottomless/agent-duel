@@ -22,8 +22,11 @@ afterEach(async () => {
 async function waitForSettledComparison(store: Store, turnID: string) {
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
-    const state = (await store.turn(turnID))?.comparisonState
-    if (state === "complete" || state === "failed" || state === "skipped") return
+    const turn = await store.turn(turnID)
+    const state = turn?.comparisonState
+    if (state === "complete" || state === "failed") return
+    // Skipped while the title request is out; settled once its record is written.
+    if (state === "skipped" && turn?.comparisonID && (await store.comparisons.findOne({ turnID }))) return
     await Bun.sleep(10)
   }
   throw new Error("Arena comparison did not settle")

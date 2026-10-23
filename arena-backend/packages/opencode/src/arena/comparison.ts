@@ -165,14 +165,13 @@ function documentID(turnID: string) {
 }
 
 /**
- * Records a turn where a side failed: there is nothing to weigh the other side against, so no
- * report is paid for and no evidence is computed. The first turn is still named. The record is
- * written once complete, so a restart during the title request leaves nothing running.
+ * The record of a turn where a side failed: there is nothing to weigh the other side against, so no
+ * report is paid for and no evidence is computed. The first turn is still named. The caller saves it
+ * (`Store.saveSkippedComparison`) only while the turn still waits on it.
  */
 export async function skip(
   input: Pick<
     Input,
-    | "store"
     | "turnID"
     | "turnIndex"
     | "userPrompt"
@@ -186,10 +185,10 @@ export async function skip(
     | "artifactIDs"
     | "execute"
   >,
-) {
+): Promise<ComparisonDocument> {
   const named = input.turnIndex === 0 ? await nameChat(input) : {}
   const now = new Date()
-  return input.store.saveComparison({
+  return {
     _id: documentID(input.turnID),
     turnID: input.turnID,
     baseCommit: input.baseCommit,
@@ -206,11 +205,12 @@ export async function skip(
     model,
     provider,
     state: "complete",
+    skipReason: "failed_side",
     latencyMs: 0,
     ...named,
     createdAt: now,
     updatedAt: now,
-  })
+  }
 }
 
 export async function generate(input: Input) {

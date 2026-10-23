@@ -154,16 +154,8 @@ describe("ArenaComparison", () => {
       controlPlaneUrl: "https://control.test",
       controlTokenHash: "0".repeat(64),
     })
-    const saved: ComparisonDocument[] = []
-    const arena = store({
-      saveComparison: async (input: ComparisonDocument) => {
-        saved.push(input)
-        return input
-      },
-    })
     const prompts: string[] = []
     const input = {
-      store: arena,
       turnID: "failed-side",
       userPrompt: "Fix the login form",
       baseCommit: "base",
@@ -182,10 +174,9 @@ describe("ArenaComparison", () => {
     const first = await skip({ ...input, turnIndex: 0 })
     expect(prompts).toHaveLength(1)
     expect(prompts[0]).toContain("Name the task in the user prompt")
-    // Written once, already complete: a restart during the title request leaves nothing running.
-    expect(saved).toHaveLength(1)
     expect(first).toMatchObject({
       state: "complete",
+      skipReason: "failed_side",
       title: "Login form fix",
       artifactIDs: ["transcript-a", "transcript-b"],
     })
@@ -194,7 +185,7 @@ describe("ArenaComparison", () => {
 
     const later = await skip({ ...input, turnID: "failed-side-later", turnIndex: 1 })
     expect(prompts).toHaveLength(1)
-    expect(later).toMatchObject({ state: "complete", latencyMs: 0 })
+    expect(later).toMatchObject({ state: "complete", skipReason: "failed_side", latencyMs: 0 })
     expect(later.output).toBeUndefined()
     expect(later.title).toBeUndefined()
   })

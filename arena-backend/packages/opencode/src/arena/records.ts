@@ -688,6 +688,8 @@ export type ComparisonDocument = {
   requestArtifactID?: Identifier
   responseArtifactID?: Identifier
   state: "pending" | "running" | "complete" | "failed"
+  /** Set when no report was written because a side failed; the record then only names the chat. */
+  readonly skipReason?: "failed_side"
   output?: string
   /** The chat's name, which only the first turn's comparison writes. */
   title?: string

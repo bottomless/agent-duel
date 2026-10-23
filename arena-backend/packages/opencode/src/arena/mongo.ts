@@ -972,6 +972,23 @@ export class Store {
     return insertIdempotent(this.sessionArchives, archive)
   }
 
+  /**
+   * Saves a skipped comparison only while its turn is still skipped. A reply, retry or resume that
+   * claimed the turn while the title request was out resets its comparison, and this late record
+   * must not land on the turn's next comparison.
+   */
+  async saveSkippedComparison(comparison: ComparisonDocument) {
+    const updated = await this.turns.findOneAndUpdate(
+      { _id: comparison.turnID, comparisonState: "skipped" },
+      { $set: { comparisonID: comparison._id, updatedAt: new Date() } },
+      { returnDocument: "after" },
+    )
+    if (!updated) return undefined
+    const saved = await insertIdempotent(this.comparisons, comparison)
+    this.changed({ chatID: updated.chatID, turnID: comparison.turnID })
+    return saved
+  }
+
   async saveComparison(comparison: ComparisonDocument) {
     const result = await insertIdempotent(this.comparisons, comparison)
     this.changed({ turnID: comparison.turnID })

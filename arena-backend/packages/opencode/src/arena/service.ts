@@ -89,6 +89,7 @@ import {
   battleRefs,
   compare,
   comparisonFiles,
+  comparisonTrees,
   containsCommit,
   diffHostRefs,
   finalize,
@@ -4580,28 +4581,34 @@ export const layer: Layer.Layer<
       canonical: string,
     ) {
       const runs = yield* promise(() => store.runsForTurn(turn._id))
-      const [runA, runB] = (["a", "b"] as const).map((side) => runs.find((run) => run._id === turn.runIDs[side]))
+      const finished = (side: Side) => runs.find((run) => run._id === turn.runIDs[side])?.runState === "complete"
       // A failed side leaves nothing to weigh the other side against, so only a battle both sides
       // finished pays for a report. The first turn still asks for the chat's name.
-      if (runA?.runState !== "complete" || runB?.runState !== "complete") {
+      if (!finished("a") || !finished("b")) {
         yield* promise(() => store.updateTurn(turn._id, { comparisonState: "skipped" }))
+        const commits = {
+          canonical,
+          baseCommit: turn.frozenBaseSHA,
+          aCommit: a.result.finalCommit,
+          bCommit: b.result.finalCommit,
+        }
+        const trees = yield* withGit(comparisonTrees(commits)).pipe(Effect.mapError(error))
         const skipped = yield* promise(() =>
           skipComparison({
-            store,
             turnID: turn._id,
             turnIndex: turn.turnIndex,
             userPrompt: turn.userPrompt,
             userAttachments: ArenaAttachments.describeForJudge(turn.userAttachments),
-            baseCommit: turn.frozenBaseSHA,
-            aCommit: a.result.finalCommit,
-            bCommit: b.result.finalCommit,
-            baseTree: turn.baseSnapshot?.tree ?? turn.frozenBaseSHA,
-            aTree: runA?.finalTree ?? a.result.finalCommit,
-            bTree: runB?.finalTree ?? b.result.finalCommit,
+            baseCommit: commits.baseCommit,
+            aCommit: commits.aCommit,
+            bCommit: commits.bCommit,
+            baseTree: trees.base,
+            aTree: trees.a,
+            bTree: trees.b,
             artifactIDs: [a.artifactID, b.artifactID],
           }),
         )
-        yield* promise(() => store.updateTurn(turn._id, { comparisonState: "skipped", comparisonID: skipped._id }))
+        yield* promise(() => store.saveSkippedComparison(skipped))
         return
       }
       yield* promise(() => store.updateTurn(turn._id, { comparisonState: "running" }))

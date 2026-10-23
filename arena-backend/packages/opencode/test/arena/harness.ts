@@ -551,9 +551,8 @@ export function installOpenRouterStub(options?: {
     contestantRequests,
     modelForAssignment: (assignmentID: string) => assignmentsByID.get(assignmentID)?.model.slug,
     utilityCalls: () => utilityCalls,
-    /** Utility requests that asked for a comparison report rather than only the chat's name. */
-    reportCalls: () =>
-      utilityPrompts.filter((prompt) => prompt.includes("neutral coding-run comparison utility")).length,
+    /** Utility requests other than the chat's title alone; anything unrecognized counts as a report. */
+    reportCalls: () => utilityPrompts.filter((prompt) => !prompt.startsWith("Name the task in the user prompt")).length,
     restore: () => {
       setArenaCredentials(undefined)
       globalThis.fetch = original
