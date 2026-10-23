@@ -68,6 +68,17 @@ describe("vote input evidence", () => {
     expect(verifier.consume(target, first.source, first.receipt)).toBe("unverified");
   });
 
+  it("cannot crowd out OS evidence with renderer-only receipts", () => {
+    const { issuer, verifier } = fixture();
+    for (let index = 0; index < 4096; index++) {
+      const evidence = issuer.issue(target, "unverified");
+      expect(verifier.consume(target, evidence.source, evidence.receipt)).toBe("unverified");
+    }
+    const native = issuer.issue(target, "native");
+    expect(verifier.consume(target, native.source, native.receipt)).toBe("native");
+    expect(verifier.consume(target, native.source, native.receipt)).toBe("unverified");
+  });
+
   it("refuses a replacement issuer supplied by the attacker", () => {
     const { verifier } = fixture();
     const attacker = createVoteEvidenceIssuer();

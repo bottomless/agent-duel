@@ -131,6 +131,9 @@ export function createVoteEvidenceVerifier(
     const time = now();
     if (signed.issuedAt > time + 1000 || time - signed.issuedAt > RECEIPT_LIFETIME_MS)
       return "unverified";
+    // Receipts without OS evidence cannot promote provenance. Do not let them
+    // fill the replay cache and crowd out receipts for actual OS activations.
+    if (!claimedOsInput) return source;
     for (const [nonce, expiresAt] of consumed) {
       if (expiresAt < time) consumed.delete(nonce);
     }
