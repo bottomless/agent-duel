@@ -21,6 +21,7 @@ import type {
   ComparisonDocument,
   CheckoutEvictionDocument,
   GenerationDocument,
+  PortCursorDocument,
   RawEventDocument,
   ReviewEventDocument,
   RunDocument,
@@ -260,6 +261,7 @@ function memoryStore() {
   const checkoutEvictions = collection<CheckoutEvictionDocument>()
   const reviewEvents = collection<ReviewEventDocument>()
   const battleMetrics = collection<BattleMetricsDocument>()
+  const portCursors = collection<PortCursorDocument>()
   const restart = () =>
     Object.assign(Object.create(Store.prototype), {
       chats,
@@ -275,6 +277,7 @@ function memoryStore() {
       checkoutEvictions,
       reviewEvents,
       battleMetrics,
+      portCursors,
       artifactQueues: new Map<string, Promise<void>>(),
     }) as Store
   return {
