@@ -7,6 +7,7 @@ import type { Provider } from "@/provider/provider"
 import type { ProviderAuth } from "@/provider/auth"
 import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
 import { ArenaResponseRecovery } from "./response-recovery"
+import { ArenaRequestBudget } from "./request-budget"
 import { DateTime, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { ArenaAttachments } from "./attachments"
@@ -296,7 +297,14 @@ function assistantError(input: AssistantError): AssistantError {
   if (input.name === "ProviderAuthError") {
     return { name: input.name, data: { providerID, message: errorMessage } }
   }
-  if (input.name === "UnknownError") return { name: input.name, data: { message: errorMessage } }
+  if (input.name === "UnknownError") {
+    return {
+      name: input.name,
+      data: {
+        message: input.data.message === ArenaRequestBudget.EXCEEDED ? ArenaRequestBudget.EXCEEDED : errorMessage,
+      },
+    }
+  }
   if (input.name === "MessageAbortedError") {
     return { name: input.name, data: { message: "Arena contestant stopped" } }
   }
@@ -333,7 +341,14 @@ function unknownError(input: unknown) {
     name: input.name,
     data: {
       ...scrubRecord(input.data, errorKeys),
-      ...(typeof input.data.message === "string" ? { message: errorMessage } : {}),
+      ...(typeof input.data.message === "string"
+        ? {
+            message:
+              input.name === "UnknownError" && input.data.message === ArenaRequestBudget.EXCEEDED
+                ? ArenaRequestBudget.EXCEEDED
+                : errorMessage,
+          }
+        : {}),
       ...(typeof input.data.providerID === "string" ? { providerID } : {}),
     },
   }

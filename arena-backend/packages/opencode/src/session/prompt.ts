@@ -1434,7 +1434,21 @@ const layer = Layer.effect(
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
+              // A first request has no completed history to compact. Do not summarize away the
+              // user's original instructions, or keep retrying when a summary still cannot fit.
+              arenaRequestBudget: !lastFinished || lastFinished.summary ? "stop" : "compact",
             })
+
+            if (result === "compact-request") {
+              yield* sessions.removeMessage({ sessionID, messageID: handle.message.id })
+              yield* compaction.create({
+                sessionID,
+                agent: lastUser.agent,
+                model: lastUser.model,
+                auto: true,
+              })
+              return "continue" as const
+            }
 
             if (structured !== undefined) {
               handle.message.structured = structured

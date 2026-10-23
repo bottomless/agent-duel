@@ -19,6 +19,7 @@ import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { ModelIdleError } from "@/arena/model-idle"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { ArenaRequestBudget } from "@/arena/request-budget"
 import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
 import { Question } from "@/question"
@@ -30,7 +31,7 @@ import { Usage, type LLMEvent } from "@opencode-ai/llm"
 import type { ToolExecutionProvider } from "./tool-execution-gate"
 
 const DOOM_LOOP_THRESHOLD = 3
-export type Result = "compact" | "stop" | "continue"
+export type Result = "compact" | "compact-request" | "stop" | "continue"
 
 export interface Handle {
   readonly message: SessionV1.Assistant
@@ -670,6 +671,7 @@ const layer = Layer.effect(
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
         const arena = input.model.providerID === "arena"
         let receivedOutput = false
+        let requestCompaction = false
         // Per attempt: where its parts start, the cost before it, and whether it started a local tool.
         let attemptStart = PartID.ascending()
         let attemptCost = ctx.assistantMessage.cost
@@ -736,6 +738,13 @@ const layer = Layer.effect(
                   ctx.assistantMessage.finish = "arena-idle"
                 }),
             ),
+            Effect.catchIf(
+              (error) => arena && error instanceof ArenaRequestBudget.CompactionRequired,
+              () =>
+                Effect.sync(() => {
+                  requestCompaction = true
+                }),
+            ),
             Effect.retry(
               SessionRetry.policy({
                 provider: input.model.providerID,
@@ -766,6 +775,7 @@ const layer = Layer.effect(
             Effect.ensuring(cleanup()),
           )
 
+          if (requestCompaction) return "compact-request"
           if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
           return "continue"

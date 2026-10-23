@@ -26,6 +26,7 @@ import { ArenaRuntime } from "@/arena/runtime"
 import { contestant as arenaContestant, medium as arenaMedium } from "@/arena/model-profile"
 import type { Assignment } from "@/arena/proxy"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { ArenaRequestBudget } from "@/arena/request-budget"
 import type { ModelMessage } from "ai"
 
 export const Event = SessionCompactionEvent
@@ -42,7 +43,7 @@ const MAX_PRESERVE_RECENT_TOKENS = 8_000
 const ARENA_MEDIA_TOKEN_ALLOWANCE = 4_000
 // Keep the same early-compaction policy for every blinded Arena model, including medium
 // sessions. This is an estimate of history, not a provider-specific billed-token limit.
-const ARENA_COMPACTION_TOKEN_LIMIT = 272_000
+const ARENA_COMPACTION_TOKEN_LIMIT = ArenaRequestBudget.LIMIT
 // Compaction is an internal checkpoint, not a new user task or permission to stop after one step.
 const ARENA_COMPACTION_CONTINUE =
   "Resume the original user task from the summary and retained context. " +
@@ -493,6 +494,7 @@ const layer = Layer.effect(
           sessionID: input.sessionID,
           tools: {},
           system: [],
+          arenaRequestBudget: "stop",
           messages: [
             ...modelMessages,
             {
@@ -542,7 +544,7 @@ const layer = Layer.effect(
         ;({ processor, result } = yield* summarize(failure === "empty" ? undefined : { attempt, reason: failure }))
       }
 
-      if (result === "compact") {
+      if (result === "compact" || result === "compact-request") {
         processor.message.error = new SessionV1.ContextOverflowError({
           message: replay
             ? "Conversation history too large to compact - exceeds model context limit"
