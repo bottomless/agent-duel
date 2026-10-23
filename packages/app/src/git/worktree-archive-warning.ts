@@ -1,4 +1,4 @@
-import { confirmDialog } from "@/utils/confirm-dialog";
+import { confirmDialog, type ConfirmDialogInput } from "@/utils/confirm-dialog";
 import { i18n } from "@/i18n/i18next";
 
 export interface WorktreeArchiveRisk {
@@ -21,6 +21,7 @@ export interface WorktreeArchiveWarningLabels {
   title: (workspaceName: string) => string;
   confirm: string;
   cancel: string;
+  message: string;
   uncommittedChanges: string;
   uncommittedChangesWithDiff: (diffStat: string) => string;
   addedLine: (count: number) => string;
@@ -32,6 +33,7 @@ export const DEFAULT_WORKTREE_ARCHIVE_WARNING_LABELS: WorktreeArchiveWarningLabe
   title: (workspaceName) => i18n.t("workspace.git.actions.archiveWarning.title", { workspaceName }),
   confirm: i18n.t("workspace.git.actions.archiveWarning.confirm"),
   cancel: i18n.t("workspace.git.actions.archiveWarning.cancel"),
+  message: i18n.t("workspace.git.actions.archiveWarning.message"),
   uncommittedChanges: i18n.t("workspace.git.actions.archiveWarning.uncommittedChanges"),
   uncommittedChangesWithDiff: (diffStat) =>
     i18n.t("workspace.git.actions.archiveWarning.uncommittedChangesWithDiff", { diffStat }),
@@ -129,4 +131,23 @@ export async function confirmRiskyWorktreeArchive(
     cancelLabel: labels.cancel,
     destructive: true,
   });
+}
+
+export interface WorkspaceArchiveConfirmationInput extends WorktreeArchiveConfirmationInput {
+  isWorktree: boolean;
+}
+
+/** Archiving one chat always asks; a worktree's unsaved work is listed under the message. */
+export function buildWorkspaceArchiveConfirmation(
+  input: WorkspaceArchiveConfirmationInput,
+  labels: WorktreeArchiveWarningLabels = DEFAULT_WORKTREE_ARCHIVE_WARNING_LABELS,
+): ConfirmDialogInput {
+  const risks = input.isWorktree ? buildWorktreeArchiveConfirmationMessage(input, labels) : null;
+  return {
+    title: labels.title(input.workspaceName),
+    message: risks ? `${labels.message}\n\n${risks}` : labels.message,
+    confirmLabel: labels.confirm,
+    cancelLabel: labels.cancel,
+    destructive: true,
+  };
 }

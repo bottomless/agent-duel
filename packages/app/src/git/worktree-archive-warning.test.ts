@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildWorkspaceArchiveConfirmation,
   buildWorktreeArchiveConfirmationMessage,
   buildWorktreeArchiveRiskReasons,
   toWorktreeArchiveRisk,
@@ -71,5 +72,39 @@ describe("workspace archive warning for worktree backing", () => {
       aheadOfOrigin: 3,
       diffStat: { additions: 2, deletions: 1 },
     });
+  });
+});
+
+describe("chat archive confirmation", () => {
+  const clean = { isDirty: false, aheadOfOrigin: 0, diffStat: null };
+  const risky = { isDirty: true, aheadOfOrigin: 1, diffStat: { additions: 1, deletions: 3 } };
+
+  it("asks before archiving a clean chat", () => {
+    expect(
+      buildWorkspaceArchiveConfirmation({ workspaceName: "feature", isWorktree: true, ...clean }),
+    ).toEqual({
+      title: 'Archive "feature"?',
+      message: "The chat moves to Archived, where you can unarchive it.",
+      confirmLabel: "Archive",
+      cancelLabel: "Cancel",
+      destructive: true,
+    });
+  });
+
+  it("lists a worktree's unsaved work under the message", () => {
+    expect(
+      buildWorkspaceArchiveConfirmation({ workspaceName: "feature", isWorktree: true, ...risky })
+        .message,
+    ).toBe(
+      "The chat moves to Archived, where you can unarchive it.\n\n" +
+        "Uncommitted changes (1 added line, 3 deleted lines)\n1 unpushed commit",
+    );
+  });
+
+  it("leaves git state out for a chat that is not a worktree", () => {
+    expect(
+      buildWorkspaceArchiveConfirmation({ workspaceName: "feature", isWorktree: false, ...risky })
+        .message,
+    ).toBe("The chat moves to Archived, where you can unarchive it.");
   });
 });

@@ -810,6 +810,7 @@ export const en = {
           title: 'Archive "{{workspaceName}}"?',
           confirm: "Archive",
           cancel: "Cancel",
+          message: "The chat moves to Archived, where you can unarchive it.",
           uncommittedChanges: "Uncommitted changes",
           uncommittedChangesWithDiff: "Uncommitted changes ({{diffStat}})",
           addedLine: "{{count}} added line",

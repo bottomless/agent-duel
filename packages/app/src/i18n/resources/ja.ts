@@ -814,6 +814,7 @@ export const ja: TranslationResources = {
           title: '"{{workspaceName}}"をアーカイブしますか？',
           confirm: "アーカイブ",
           cancel: "キャンセル",
+          message: "チャットはアーカイブ済みに移動し、そこでアーカイブ解除できます。",
           uncommittedChanges: "未コミットの変更",
           uncommittedChangesWithDiff: "未コミットの変更（{{diffStat}}）",
           addedLine: "{{count}}行追加",

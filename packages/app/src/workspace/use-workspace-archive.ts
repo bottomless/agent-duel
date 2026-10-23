@@ -1,14 +1,15 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useToast } from "@/contexts/toast-context";
 import {
-  confirmRiskyWorktreeArchive,
+  buildWorkspaceArchiveConfirmation,
   DEFAULT_WORKTREE_ARCHIVE_WARNING_LABELS,
   type WorktreeArchiveWarningLabels,
 } from "@/git/worktree-archive-warning";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
+import { confirmDialog } from "@/utils/confirm-dialog";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import { archiveWorkspaceOptimistically } from "@/workspace/workspace-archive";
 
@@ -51,6 +52,8 @@ export function useWorkspaceArchive(input: ArchiveWorkspaceInput): WorkspaceArch
   } = input;
   const { t } = useTranslation();
   const toast = useToast();
+  // Pressing the shortcut again while the dialog is open must not queue a second one.
+  const isConfirmingRef = useRef(false);
 
   const archiveWorkspaceRecord = useCallback(async () => {
     const client = getHostRuntimeStore().getClient(serverId);
@@ -79,20 +82,30 @@ export function useWorkspaceArchive(input: ArchiveWorkspaceInput): WorkspaceArch
   }, [onArchiveStarted, onSetHiding, serverId, t, toast, workspaceId]);
 
   const archive = useCallback(() => {
+    if (isConfirmingRef.current) {
+      return;
+    }
+    isConfirmingRef.current = true;
     void (async () => {
-      if (workspaceKind === "worktree") {
-        const confirmed = await confirmRiskyWorktreeArchive(
-          {
-            workspaceName: name,
-            isDirty,
-            aheadOfOrigin,
-            diffStat,
-          },
-          warningLabels,
+      let confirmed: boolean;
+      try {
+        confirmed = await confirmDialog(
+          buildWorkspaceArchiveConfirmation(
+            {
+              workspaceName: name,
+              isWorktree: workspaceKind === "worktree",
+              isDirty,
+              aheadOfOrigin,
+              diffStat,
+            },
+            warningLabels,
+          ),
         );
-        if (!confirmed) {
-          return;
-        }
+      } finally {
+        isConfirmingRef.current = false;
+      }
+      if (!confirmed) {
+        return;
       }
       await archiveWorkspaceRecord();
     })();

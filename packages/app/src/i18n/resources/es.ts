@@ -834,6 +834,7 @@ export const es: TranslationResources = {
           title: '¿Archivo "{{workspaceName}}"?',
           confirm: "Archivo",
           cancel: "Cancelar",
+          message: "El chat pasa a Archivados, donde puedes desarchivarlo.",
           uncommittedChanges: "Cambios no confirmados",
           uncommittedChangesWithDiff: "Cambios no confirmados ({{diffStat}})",
           addedLine: "Línea añadida{{count}}",

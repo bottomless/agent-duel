@@ -809,6 +809,7 @@ export const ko: TranslationResources = {
           title: '"{{workspaceName}}"를 보관하시겠습니까?',
           confirm: "보관",
           cancel: "취소",
+          message: "채팅이 보관됨으로 이동하며, 그곳에서 보관 해제할 수 있습니다.",
           uncommittedChanges: "커밋되지 않은 변경 사항",
           uncommittedChangesWithDiff: "커밋되지 않은 변경 사항 ({{diffStat}})",
           addedLine: "추가된 줄 {{count}}개",
