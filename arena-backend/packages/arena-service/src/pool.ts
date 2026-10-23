@@ -3,10 +3,42 @@ export type ModelProfile = {
   readonly slug: string
   readonly canonicalSlug: string
   readonly contextWindow: number
+  /** Private endpoint limits. These are never part of a public assignment response. */
+  readonly limits?: {
+    readonly context?: number
+    readonly output?: number
+  }
   /** Sent to OpenRouter as `provider`. */
   readonly routing: Readonly<Record<string, unknown>>
   /** Null enables reasoning without an effort level for models that do not expose one. */
   readonly reasoningEffort?: "high" | "xhigh" | null
+}
+
+export const DEFAULT_MODEL_OUTPUT_LIMIT = 32_000
+
+export type ModelLimits = {
+  readonly context: number
+  readonly output: number
+}
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+}
+
+/**
+ * Resolves private endpoint limits without making them part of the assignment contract. A small
+ * model that does not specify an output limit gets the normal 32k cap, reduced to half its context
+ * when the endpoint is smaller so requests retain useful input space.
+ */
+export function modelLimits(profile: Pick<ModelProfile, "contextWindow" | "limits">): ModelLimits {
+  const advertisedContext = profile.contextWindow
+  if (!positiveInteger(advertisedContext)) throw new Error("Arena model context limit is invalid")
+  const context = profile.limits?.context ?? advertisedContext
+  if (!positiveInteger(context)) throw new Error("Arena model context limit is invalid")
+  if (context > advertisedContext) throw new Error("Arena model context limit is invalid")
+  const output = profile.limits?.output ?? Math.min(DEFAULT_MODEL_OUTPUT_LIMIT, Math.max(1, Math.floor(context / 2)))
+  if (!positiveInteger(output) || output >= context) throw new Error("Arena model output limit is invalid")
+  return { context, output }
 }
 
 export type ModelPool = readonly ModelProfile[]
@@ -32,6 +64,7 @@ export function validateCatalog(pool: ModelPool, value: unknown) {
   if (!record(value) || !Array.isArray(value.data)) throw new Error("OpenRouter returned an invalid model catalog")
   const catalog = value.data.filter(record) as CatalogModel[]
   for (const profile of pool) {
+    modelLimits(profile)
     const model = catalog.find(
       (item) =>
         item.canonical_slug === profile.canonicalSlug ||

@@ -2,8 +2,15 @@ import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
 import { authorize, type ArenaContext, type Fetch } from "./context"
 import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
-import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
-import type { ModelPool, ModelProfile } from "./pool"
+import {
+  classifyPaymentError,
+  compactionRequiredError,
+  isContextOverflow,
+  networkUnavailableError,
+  retryableStreamError,
+} from "./request-error"
+import { modelLimits, type ModelPool, type ModelProfile } from "./pool"
+import { prepareRequest } from "./request-budget"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -406,6 +413,9 @@ async function sanitizeAssignedResponse(
   if (!response.ok) {
     const upstream = await response.text().catch(() => "")
     logRefusal(refusal, response.status, upstream)
+    if (isContextOverflow(response.status, upstream)) {
+      return Response.json(compactionRequiredError(), { status: 413, headers })
+    }
     if (response.status === 402) {
       let payload: unknown = null
       try {
@@ -521,20 +531,25 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     const restored = reasoning.restore(input)
     const generationID = requestedGenerationID || `gen_${randomUUID().replaceAll("-", "")}`
     const startedAt = Date.now()
-    body = new TextEncoder().encode(
-      JSON.stringify({
-        ...withoutSampling(restored),
-        ...assignedRouting(
-          routeAssignment.model,
-          routeAssignment.modelSize,
-          cacheKey(apiKey, caller.id, assignment.scopeID, routeAssignment),
-        ),
-        ...promptCache(routeAssignment.model.slug, input),
-        stream_options: record(input.stream_options)
-          ? { ...input.stream_options, include_usage: true }
-          : { include_usage: true },
-      }),
-    ).buffer
+    const endpoint = suffix === "/api/v1/responses" ? "responses" : "chat"
+    const routed = {
+      ...withoutSampling(restored),
+      ...assignedRouting(
+        routeAssignment.model,
+        routeAssignment.modelSize,
+        cacheKey(apiKey, caller.id, assignment.scopeID, routeAssignment),
+      ),
+      ...promptCache(routeAssignment.model.slug, input),
+      stream_options: record(input.stream_options)
+        ? { ...input.stream_options, include_usage: true }
+        : { include_usage: true },
+    }
+    const limits = modelLimits(routeAssignment.model)
+    const budget = prepareRequest(routed, endpoint, limits)
+    if (budget.estimate > limits.context) {
+      return Response.json(compactionRequiredError(), { status: 413 })
+    }
+    body = new TextEncoder().encode(JSON.stringify(budget.request)).buffer
     const response = await context.fetch(upstream, {
       method: request.method,
       headers,

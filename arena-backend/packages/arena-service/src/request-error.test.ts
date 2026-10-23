@@ -1,8 +1,11 @@
 import { expect, test } from "bun:test"
 import {
+  compactionRequiredError,
   paymentError,
   classifyPaymentError,
+  isContextOverflow,
   networkUnavailableError,
+  readCompactionRequired,
   readNetworkUnavailable,
   readPaymentError,
 } from "./request-error"
@@ -49,4 +52,20 @@ test("recognizes only the offline body", () => {
   ]) {
     expect(readNetworkUnavailable(body)).toBe(false)
   }
+})
+
+test("uses an exact neutral compaction contract", () => {
+  expect(compactionRequiredError()).toEqual({
+    error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
+  })
+  expect(readCompactionRequired(JSON.stringify(compactionRequiredError()))).toBe(true)
+  expect(readCompactionRequired(JSON.stringify({ error: { message: "Arena request needs compaction" } }))).toBe(false)
+  expect(readCompactionRequired(JSON.stringify({ error: { type: "arena_compaction_required_extra" } }))).toBe(false)
+})
+
+test("recognizes provider context overflow without trusting its details", () => {
+  expect(isContextOverflow(400, '{"error":{"code":"context_length_exceeded","message":"secret model 123"}}')).toBe(true)
+  expect(isContextOverflow(413, '{"error":{"message":"prompt is too long"}}')).toBe(true)
+  expect(isContextOverflow(400, '{"error":{"message":"invalid tool choice"}}')).toBe(false)
+  expect(isContextOverflow(500, '{"error":{"message":"context length exceeded"}}')).toBe(false)
 })
