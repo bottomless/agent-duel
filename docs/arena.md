@@ -596,18 +596,17 @@ a random point.
 The canonical chat keeps the winner's literal ports and preview URLs, so the reader sees the URLs
 that worked. A contestant's copy retargets them to its own bank as it forks
 (`retargetArenaTranscriptPart`, `arena/port-retarget.ts`). Everything may change except a
-blacklist, and text and tool calls match differently:
-
-- **Text** (answers, reasoning, a subagent's answer in `task` output): every number equal to one of
-  the producing run's ports, unless it is part of a name: glued to a letter or `_`, a dashed name
-  (`req-N-ab12`, `web-N.txt`), a version (`1.N.0`), or a path segment.
-- **Tool calls** (inputs, outputs and errors): port contexts only. `:N` after a loopback host, `*`
-  or a `*.localhost` name; `--port N`, `-p N` (the host side of `N:M`), `NAME_PORT=N`, `port N`,
-  `lsof -i :N`, `nc host N`, `http.server N`, `N/tcp`, `listening on N`, and `:N` after a space.
-- **Both:** whole preview URLs and preview hosts.
+blacklist. In answers, reasoning, and tool inputs, outputs and errors, every number equal to one of
+the producing run's ports changes, unless it is part of a name: glued to a letter or `_`, a dashed
+name (`req-N-ab12`, `web-N.txt`), a version (`1.N.0`), or a path segment. Whole preview URLs and
+preview hosts change too. Tool calls get no narrower rule: on production transcripts a list of
+port shapes (`localhost:N`, `--port N`, ...) missed shapes nobody listed (`lsof -iTCP:"N"`,
+`printenv PASEO_PORT`, a socket tuple, a LAN URL), and plain matching almost never changed a number
+that was not a port.
 
 Never changed: user messages; files, attachments, tool metadata, titles and IDs; `data:` URIs,
-base64 runs, hex runs of 12 or more, UUIDs; JSON (a string or any `{"…` span that parses); binary
+base64 runs, hex runs of 12 or more, UUIDs; JSON longer than 2,500 characters (a string or any
+`{"…` span that parses), which is data a program wrote rather than a command's own result; binary
 output; `websearch` output; reasoning that carries metadata. Agent Duel saves reasoning without
 its metadata (`arena/privacy.ts`), so a forked copy never carries a signature to break. File
 content changes only in logs (`.log`, `.out`, `.err`, `nohup.out`, or under a `log/` or `logs/`

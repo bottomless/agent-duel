@@ -1,18 +1,13 @@
 /**
  * A contestant's copy of the chat's history is retargeted from the port bank of the run that wrote
- * each message to the contestant's own bank. Everything may change except a blacklist, and text and
- * tool calls are matched differently:
- *
- * - Text (answers, reasoning without a signature, a subagent's answer): every standalone number
- *   equal to one of the producing run's ports.
- * - Tool calls (inputs, outputs and errors): only numbers in a port context (`localhost:N`,
- *   `--port N`, `PORT=N`, `lsof -i :N`, `listening on port N`, ...).
- * - Both: whole preview URLs and preview hosts.
+ * each message to the contestant's own bank. Everything may change except a blacklist: in answers,
+ * reasoning without a signature, and tool inputs, outputs and errors, every standalone number equal
+ * to one of the producing run's ports, and whole preview URLs and preview hosts.
  *
  * Never changed: user messages, files and attachments, tool metadata and IDs, `data:` URIs, base64
- * and long hex runs, UUIDs, JSON, binary output, the content of files that are not logs (`read`
- * output, `write`/`edit`/`apply_patch` input, `grep` matches, shell reads and writes of a file),
- * and `websearch` output.
+ * and long hex runs, UUIDs, JSON documents longer than `MAX_REWRITTEN_JSON`, binary output, the
+ * content of files that are not logs (`read` output, `write`/`edit`/`apply_patch` input, `grep`
+ * matches, shell reads and writes of a file), and `websearch` output.
  */
 
 const PORT_ALIASES = ["PASEO_PORT", "PASEO_PORT2", "PASEO_PORT3"] as const
@@ -89,7 +84,6 @@ export function producingArenaEnvironment(messageID: string, turns: readonly Are
 type Env = Readonly<Record<string, string | undefined>>
 type Range = readonly [start: number, end: number]
 type Rewrite = (value: string, keep?: readonly Range[]) => string
-type Tiers = { readonly text: Rewrite; readonly tool: Rewrite }
 
 /**
  * Retargets one copied part for a contestant: the producing run's literal ports and preview URLs
@@ -103,9 +97,9 @@ export function retargetArenaTranscriptPart<T>(
   input: { readonly role: string; readonly producedIn: ArenaEnvironmentBank | undefined; readonly env: Env },
 ): T {
   if (input.role !== "assistant" || !input.producedIn || !plainObject(part)) return part
-  const tiers = rewriters(input.producedIn, input.env)
-  if (!tiers) return part
-  return retargetPart(part, tiers) as T
+  const rewrite = rewriter(input.producedIn, input.env)
+  if (!rewrite) return part
+  return retargetPart(part, rewrite) as T
 }
 
 /**
@@ -119,12 +113,12 @@ export function localizeArenaPreviewUrls<T>(part: T, env: Env): T {
   return text === part.text ? part : ({ ...part, text } as T)
 }
 
-function retargetPart(part: Record<string, unknown>, tiers: Tiers): Record<string, unknown> {
-  if (part.type === "text") return withField(part, "text", tiers.text)
+function retargetPart(part: Record<string, unknown>, rewrite: Rewrite): Record<string, unknown> {
+  if (part.type === "text") return withField(part, "text", rewrite)
   // Agent Duel saves reasoning without its metadata (`arena/privacy.ts`), so a fork never copies a
   // signature. One that does carry metadata is signed or encrypted with its text and stays as is.
-  if (part.type === "reasoning") return hasEntries(part.metadata) ? part : withField(part, "text", tiers.text)
-  if (part.type === "tool") return retargetTool(part, tiers)
+  if (part.type === "reasoning") return hasEntries(part.metadata) ? part : withField(part, "text", rewrite)
+  if (part.type === "tool") return retargetTool(part, rewrite)
   return part
 }
 
@@ -138,22 +132,22 @@ function withField(part: Record<string, unknown>, key: string, rewrite: Rewrite)
 // Tools whose output is a page from elsewhere: it names ports of machines that are not this one.
 const EXTERNAL_OUTPUT = new Set(["websearch", "codesearch"])
 
-function retargetTool(part: Record<string, unknown>, tiers: Tiers) {
+function retargetTool(part: Record<string, unknown>, rewrite: Rewrite) {
   const state = part.state
   if (!plainObject(state)) return part
   const tool = typeof part.tool === "string" ? part.tool : ""
   const input = plainObject(state.input) ? state.input : undefined
   const next: Record<string, unknown> = {}
   if (input) {
-    const rewritten = retargetInput(tool, input, tiers.tool)
+    const rewritten = retargetInput(tool, input, rewrite)
     if (rewritten !== input) next.input = rewritten
   }
   if (typeof state.output === "string") {
-    const rewritten = retargetOutput(tool, input ?? {}, state.output, tiers)
+    const rewritten = retargetOutput(tool, input ?? {}, state.output, rewrite)
     if (rewritten !== state.output) next.output = rewritten
   }
   if (typeof state.error === "string") {
-    const rewritten = tiers.tool(state.error)
+    const rewritten = rewrite(state.error)
     if (rewritten !== state.error) next.error = rewritten
   }
   if (Object.keys(next).length === 0) return part
@@ -177,17 +171,15 @@ function retargetInput(tool: string, input: Record<string, unknown>, rewrite: Re
   return mapLeaves(input, rewrite, [])
 }
 
-function retargetOutput(tool: string, input: Record<string, unknown>, output: string, tiers: Tiers) {
+function retargetOutput(tool: string, input: Record<string, unknown>, output: string, rewrite: Rewrite) {
   if (EXTERNAL_OUTPUT.has(tool)) return output
-  // A subagent's answer is prose, as the parent's own answer is.
-  if (tool === "task") return tiers.text(output)
   if (tool === "read") {
     const file = filePath(input)
-    return file !== undefined && logFile(file) ? tiers.tool(output) : output
+    return file !== undefined && logFile(file) ? rewrite(output) : output
   }
-  if (tool === "grep") return retargetGrep(output, tiers.tool)
+  if (tool === "grep") return retargetGrep(output, rewrite)
   if (tool === "bash" && typeof input.command === "string" && readsFiles(input.command)) return output
-  return tiers.tool(output)
+  return rewrite(output)
 }
 
 function filePath(input: Record<string, unknown>) {
@@ -260,7 +252,7 @@ function retargetGrep(output: string, rewrite: Rewrite) {
   return next.some((line, index) => line !== lines[index]) ? next.join("\n") : output
 }
 
-function rewriters(bank: ArenaEnvironmentBank, env: Env): Tiers | undefined {
+function rewriter(bank: ArenaEnvironmentBank, env: Env): Rewrite | undefined {
   const ports = new Map<string, string>()
   for (const alias of PORT_ALIASES) {
     const port = bank.portAliases?.[alias]
@@ -280,31 +272,24 @@ function rewriters(bank: ArenaEnvironmentBank, env: Env): Tiers | undefined {
       "gi",
     ),
   }))
-  const rewrite =
-    (numbers: (value: string) => Match[]): Rewrite =>
-    (value, keep = []) => {
-      if (opaque(value)) return value
-      const found: Match[] = []
-      for (const preview of patterns) {
-        for (const match of value.matchAll(preview.pattern)) {
-          const scheme = match[1]
-          const port = match[2]
-          const replacement = preview.current
-            ? `${scheme ? `${preview.current.protocol}//` : ""}${preview.current.hostname}${(scheme || port) && preview.current.port ? `:${preview.current.port}` : ""}`
-            : scheme
-              ? preview.variable
-              : undefined
-          if (replacement !== undefined)
-            found.push({ start: match.index, end: match.index + match[0].length, replacement })
-        }
+  return (value, keep = []) => {
+    if (opaque(value)) return value
+    const found: Match[] = []
+    for (const preview of patterns) {
+      for (const match of value.matchAll(preview.pattern)) {
+        const scheme = match[1]
+        const port = match[2]
+        const replacement = preview.current
+          ? `${scheme ? `${preview.current.protocol}//` : ""}${preview.current.hostname}${(scheme || port) && preview.current.port ? `:${preview.current.port}` : ""}`
+          : scheme
+            ? preview.variable
+            : undefined
+        if (replacement !== undefined) found.push({ start: match.index, end: match.index + match[0].length, replacement })
       }
-      found.push(...numbers(value))
-      if (found.length === 0) return value
-      return apply(value, found, [...keep, ...protectedRanges(value)])
     }
-  return {
-    text: rewrite((value) => textPorts(value, ports)),
-    tool: rewrite((value) => contextPorts(value, ports)),
+    found.push(...standalonePorts(value, ports))
+    if (found.length === 0) return value
+    return apply(value, found, [...keep, ...protectedRanges(value)])
   }
 }
 
@@ -330,12 +315,12 @@ const WORD = /[A-Za-z0-9_]/
 const LETTER = /[A-Za-z_]/
 
 /**
- * Text: any number equal to a port, unless it is part of a name: glued to a letter, digit or
+ * Any number equal to a port, unless it is part of a name: glued to a letter, digit or
  * underscore (`ord_ab51101`), a dashed name (`req-51101-ab12`, `web-51101.txt`), a version or file
  * extension (`1.51101.0`, `51101.txt`), or a path segment (`/proc/51101`). A slash between two
  * numbers is a list (`51101/51102/51103`), whose values all change together.
  */
-function textPorts(value: string, ports: ReadonlyMap<string, string>): Match[] {
+function standalonePorts(value: string, ports: ReadonlyMap<string, string>): Match[] {
   return [...value.matchAll(/\d+/g)].flatMap((match) => {
     const replacement = ports.get(match[0])
     if (replacement === undefined) return []
@@ -349,41 +334,6 @@ function textPorts(value: string, ports: ReadonlyMap<string, string>): Match[] {
     if ((before === "." && WORD.test(before2)) || (before === "-" && LETTER.test(before2))) return []
     if ((after === "." && WORD.test(after2)) || (after === "-" && LETTER.test(after2))) return []
     return [{ start, end, replacement }]
-  })
-}
-
-// Tool calls: a number only where a port belongs.
-const PORT_CONTEXTS = [
-  // localhost:N, http://127.0.0.1:N/path, 0.0.0.0:N, [::1]:N, [::]:N, name.localhost:N, *:N
-  String.raw`(?<![\w.-])(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|\[::ffff:127\.0\.0\.1\]|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.localhost):`,
-  String.raw`(?<![\w.*-])\*:`,
-  // --port N, --port=N, --dev-port N, PORT=N, VITE_PORT="N", server.port=N, port N, Port: N,
-  // "port": N. Not "ports: N, M": a list with one value changed names two banks.
-  String.raw`(?<![\w.])(?:[a-z0-9_.-]*[_.-])?port\d*["']?[ \t]*[:=]?[ \t]*["']?`,
-  // -p N (docker -p N:M changes only the host side), --listen N
-  String.raw`(?<![\w-])(?:-p|--listen)(?:=|[ \t]+)`,
-  // lsof -i :N, lsof -iTCP:N, lsof -ti:N
-  String.raw`(?<![\w-])-[a-z]*i[46]?(?:tcp|udp)?[ \t]*:`,
-  // nc -z localhost N, telnet 127.0.0.1 N
-  String.raw`(?<![\w-])(?:nc|ncat|netcat|telnet)(?:[ \t]+-[a-z]+)*[ \t]+[^\s;|&]+[ \t]+`,
-  // python3 -m http.server N
-  String.raw`(?<![\w-])(?:http\.server|SimpleHTTPServer)(?:[ \t]+(?:--bind|-b|--directory|-d)[ \t]+\S+)*[ \t]+`,
-  // Listening on N, serving on :N, running at port N
-  String.raw`(?<!\w)(?:listening|listens|listen|serving|running|bound|started)[ \t]+(?:on|at|to)[ \t]+(?:port[ \t]+)?:?`,
-  // grep :N, addr=":N"
-  String.raw`(?<![^\s"'=(\[,]):`,
-]
-const PORT_CONTEXT = new RegExp(String.raw`(?:${PORT_CONTEXTS.join("|")})(\d{1,5})(?![\w]|\.\d)`, "gi")
-// fuser -k N/tcp
-const PORT_SUFFIX = /(?<![\w.-])(\d{1,5})\/(?:tcp|udp)\b/gi
-
-function contextPorts(value: string, ports: ReadonlyMap<string, string>): Match[] {
-  return [...value.matchAll(PORT_CONTEXT), ...value.matchAll(PORT_SUFFIX)].flatMap((match) => {
-    const number = match[1]!
-    const replacement = ports.get(number)
-    if (replacement === undefined) return []
-    const start = match[0] === number ? match.index : match.index + match[0].lastIndexOf(number)
-    return [{ start, end: start + number.length, replacement }]
   })
 }
 
@@ -411,7 +361,7 @@ export function protectedRanges(value: string): Range[] {
   }
   add(/(?<![A-Za-z0-9])[0-9a-f]{12,}(?![A-Za-z0-9])/gi)
   add(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)
-  ranges.push(...jsonRanges(value))
+  ranges.push(...jsonRanges(value).filter(([start, end]) => end - start > MAX_REWRITTEN_JSON))
   return ranges
 }
 
@@ -425,9 +375,13 @@ function base64Like(run: string) {
 const MAX_JSON = 1_000_000
 
 /**
- * JSON documents inside a string: the whole string, or any `{"…` / `[…` span that parses. JSON is
- * data a program wrote or reads (a config, an API response), never rewritten.
+ * A short JSON document is a command's own result (the URL a browser tool opened, a mock rule it
+ * added) and changes like the rest of the output. A long one is data a program wrote or reads (an
+ * API response, a dump) and keeps every byte.
  */
+const MAX_REWRITTEN_JSON = 2500
+
+/** JSON documents inside a string: the whole string, or any `{"…` / `[…` span that parses. */
 function jsonRanges(value: string): Range[] {
   const trimmed = value.trim()
   if (/^[[{]/.test(trimmed) && /[\]}]$/.test(trimmed) && parses(trimmed)) return [[0, value.length]]

@@ -68,6 +68,7 @@ describe("Arena port retargeting: text", () => {
     ],
     ["curl -H 'Host: turn1-a--abc.localhost' it", "curl -H 'Host: turn3-b--xyz.localhost' it"],
     ["URL: turn1-a--abc.localhost:6768/whoami", "URL: turn3-b--xyz.localhost:6768/whoami"],
+    ['It printed {"bound_port": 51101, "turn_side": "turn1-a"}', 'It printed {"bound_port": 53728, "turn_side": "turn1-a"}'],
   ])("rewrites every standalone port number and preview URL: %s", (before, after) => {
     expect(retarget(text(before)).text).toBe(after)
   })
@@ -84,11 +85,10 @@ describe("Arena port retargeting: text", () => {
     `blob ${BASE64}`,
     "uuid 3f2a5110-1abc-4def-8a51-101b51101cde",
     "data:text/plain,localhost:51101",
-    'It printed {"bound_port": 51101, "turn_side": "turn1-a"}',
     "localhost:511010 and 151101",
     "echo $PASEO_PORT ${PASEO_PORT2} $ARENA_PREVIEW_URL",
     "http://xturn1-a--abc.localhost:6768 and turn1-a--abc.localhostname",
-  ])("keeps names, encoded data and JSON: %s", (value) => {
+  ])("keeps names and encoded data: %s", (value) => {
     const part = text(value)
     expect(retarget(part)).toBe(part)
   })
@@ -113,14 +113,14 @@ describe("Arena port retargeting: text", () => {
     expect(retarget(encrypted)).toBe(encrypted)
   })
 
-  test("treats a subagent's answer as text and its prompt as a tool input", () => {
+  test("rewrites a subagent's prompt and answer", () => {
     const part = tool(
       "task",
       { prompt: "Start the server with --port 51101 and report pid 51101", description: "start" },
       '<task id="ses_0a1B51101c" state="completed">\n<task_result>\nServer up on 51101 (pid 4242).\n</task_result>\n</task>',
     )
     const state = retarget(part).state
-    expect(state.input.prompt).toBe("Start the server with --port 53728 and report pid 51101")
+    expect(state.input.prompt).toBe("Start the server with --port 53728 and report pid 53728")
     expect(state.output).toBe(
       '<task id="ses_0a1B51101c" state="completed">\n<task_result>\nServer up on 53728 (pid 4242).\n</task_result>\n</task>',
     )
@@ -138,7 +138,7 @@ describe("Arena port retargeting: tool calls", () => {
     ["vite --port 51102", "vite --port 53729"],
     ["vite --port=51102 --dev-port 51103", "vite --port=53729 --dev-port 53730"],
     ["python server.py -p 51103", "python server.py -p 53730"],
-    ["docker run -p 51101:51102 img", "docker run -p 53728:51102 img"],
+    ["docker run -p 51101:51102 img", "docker run -p 53728:53729 img"],
     ["PORT=51101 npm run dev", "PORT=53728 npm run dev"],
     [
       "export PASEO_PORT2=51102 PASEO_PORT3='51103' VITE_PORT=\"51101\"",
@@ -155,27 +155,40 @@ describe("Arena port retargeting: tool calls", () => {
     ["The server listens on port 51101. Port: 51102", "The server listens on port 53728. Port: 53729"],
     ["detached port-fixture role=metrics port=51103", "detached port-fixture role=metrics port=53730"],
     ["open http://turn1-a--abc.localhost:6768/", "open http://turn3-b--xyz.localhost:6768/"],
-  ])("rewrites a port in a port context: %s", (before, after) => {
+    // Shapes a list of port contexts missed on production transcripts.
+    ['lsof -iTCP:"51101" -sTCP:LISTEN -n -P', 'lsof -iTCP:"53728" -sTCP:LISTEN -n -P'],
+    ["create_connection(('127.0.0.1', 51101), 5)", "create_connection(('127.0.0.1', 53728), 5)"],
+    ["- Network:      http://10.197.64.144:51101", "- Network:      http://10.197.64.144:53728"],
+    ["Error: listen EADDRINUSE: address already in use :::51101", "Error: listen EADDRINUSE: address already in use :::53728"],
+    ['ps aux | rg "next start|51101|51102"', 'ps aux | rg "next start|53728|53729"'],
+    ['echo -n "worker:51102 -> "', 'echo -n "worker:53729 -> "'],
+  ])("rewrites every standalone port number: %s", (before, after) => {
+    expect(bash(before, before)).toMatchObject({ input: { command: after }, output: after })
+  })
+
+  test("rewrites the values a command prints for the port variables", () => {
+    expect(bash("printenv PASEO_PORT PORT PASEO_PORT2", "51101\n51101\n51102\n").output).toBe("53728\n53728\n53729\n")
+  })
+
+  // The cost of matching every standalone number: a pid or a size equal to a port changes too.
+  test.each([
+    ["kill 51101", "kill 53728"],
+    ["wrote 51101 bytes to out/blob.bin", "wrote 53728 bytes to out/blob.bin"],
+  ])("rewrites a number equal to a port that is not one: %s", (before, after) => {
     expect(bash(before, before)).toMatchObject({ input: { command: after }, output: after })
   })
 
   test.each([
-    "kill 51101",
-    "Started dev server (pid 51101)",
-    "wrote 51101 bytes to out/blob.bin",
-    "out/lines.txt line 51101 says: MARKER line 51101",
-    "build 1.51101.0 finished, elapsed_ms=51101",
-    "ports: 51101, 51102",
-    "example: 51101",
     "dashed_id: req-51101-ab12",
-    "sleep 51101",
-    "-p 8080:51101",
+    "build 1.51101.0 finished",
+    "glued_id: ord_ab12c351101d4e5f6",
+    "see /proc/51101/status",
     "localhost:511010",
-  ])("keeps a number outside a port context: %s", (value) => {
+  ])("keeps a number that is part of a name: %s", (value) => {
     expect(bash(value, value)).toMatchObject({ input: { command: value }, output: value })
   })
 
-  test("keeps the canary output except its real port references", () => {
+  test("keeps the canary's encoded data and names", () => {
     const output = [
       `CANARY base64_blob: ${BASE64}`,
       `CANARY sha256(pt-7): ${SHA}`,
@@ -186,21 +199,40 @@ describe("Arena port retargeting: tool calls", () => {
       "CANARY build 1.51101.0 finished, elapsed_ms=51101",
       "port-fixture role=web listening on http://127.0.0.1:51101 turn_side=turn1-a pid=51101 root=/x",
     ].join("\n")
-    const expected = output.replace("http://127.0.0.1:51101", "http://127.0.0.1:53728")
+    const expected = [
+      `CANARY base64_blob: ${BASE64}`,
+      `CANARY sha256(pt-7): ${SHA}`,
+      "CANARY glued_id: ord_ab12c351101d4e5f6",
+      "CANARY dashed_id: req-51101-ab12",
+      "CANARY wrote 53728 bytes to out/blob.bin",
+      "CANARY out/fake.pid contains pid 53728",
+      "CANARY build 1.51101.0 finished, elapsed_ms=53728",
+      "port-fixture role=web listening on http://127.0.0.1:53728 turn_side=turn1-a pid=53728 root=/x",
+    ].join("\n")
     expect(bash("python3 tools/canary.py", output).output).toBe(expected)
   })
 
-  test("never changes JSON output or a JSON line inside other output", () => {
+  test("rewrites short JSON in a command and its output", () => {
     const json = '{"turn_side": "turn1-a", "bound_port": 51101, "url": "http://127.0.0.1:51101"}'
-    expect(bash("curl -s http://127.0.0.1:51101/whoami", json)).toMatchObject({
-      input: { command: "curl -s http://127.0.0.1:53728/whoami" },
-      output: json,
+    const rule = `bsk debug rule_add --rule '{"match":{"url":"http://localhost:51101/api"}}' --json`
+    expect(bash(rule, json)).toMatchObject({
+      input: { command: `bsk debug rule_add --rule '{"match":{"url":"http://localhost:53728/api"}}' --json` },
+      output: '{"turn_side": "turn1-a", "bound_port": 53728, "url": "http://127.0.0.1:53728"}',
     })
     const pretty = `{\n  "web_url": "http://127.0.0.1:51101",\n  "api_url": null\n}`
-    const mixed = `serving on http://127.0.0.1:51101\n${json}exit=0\nconfig:\n${pretty}\nport 51101 ok`
-    expect(bash("scripts/smoke.sh", mixed).output).toBe(
-      `serving on http://127.0.0.1:53728\n${json}exit=0\nconfig:\n${pretty}\nport 53728 ok`,
-    )
+    const mixed = `serving on http://127.0.0.1:51101\n${pretty}\nport 51101 ok`
+    expect(bash("scripts/smoke.sh", mixed).output).toBe(mixed.replaceAll("51101", "53728"))
+  })
+
+  test("keeps JSON longer than 2,500 characters", () => {
+    const rows = Array.from({ length: 80 }, (_, index) => ({ id: index, url: "http://127.0.0.1:51101/item" }))
+    const long = JSON.stringify({ port: 51101, rows }, null, 2)
+    expect(long.length).toBeGreaterThan(2500)
+    expect(bash("curl -s localhost:51101/dump", long)).toMatchObject({
+      input: { command: "curl -s localhost:53728/dump" },
+      output: long,
+    })
+    expect(bash("scripts/dump.sh", `serving on :51101\n${long}`).output).toBe(`serving on :53728\n${long}`)
   })
 
   test("keeps the output of a shell read of a file that is not a log", () => {
@@ -256,7 +288,7 @@ describe("Arena port retargeting: tool calls", () => {
     }
     expect(bash("echo 'PORT=51101' >> logs/app.log").input.command).toBe("echo 'PORT=53728' >> logs/app.log")
     expect(bash("python3 - <<EOF\nconnect(('127.0.0.1', 51101)); port=51101\nEOF").input.command).toBe(
-      "python3 - <<EOF\nconnect(('127.0.0.1', 51101)); port=53728\nEOF",
+      "python3 - <<EOF\nconnect(('127.0.0.1', 53728)); port=53728\nEOF",
     )
   })
 
