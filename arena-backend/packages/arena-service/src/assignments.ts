@@ -2,7 +2,7 @@ import { createHash } from "crypto"
 import { isAssignmentDecision, type AssignmentDecision } from "./assignment-decision"
 import { isDuplicateKeyError, type ArenaCollection, type ArenaDb } from "./collection"
 import { authorize, type ArenaContext } from "./context"
-import type { GenerationMetrics } from "./metrics"
+import type { StoredGenerationMetrics } from "./metrics"
 import { mediumModel } from "./default-pool"
 import { sampleOne, samplePair, type ModelProfile } from "./pool"
 
@@ -27,7 +27,7 @@ type AssignmentSetDocument = {
 
 type PublicAssignment = Pick<PrivateAssignment, "assignmentID">
 
-type AssignmentGenerationMetricsDocument = GenerationMetrics & {
+type AssignmentGenerationMetricsDocument = StoredGenerationMetrics & {
   readonly _id: string
   readonly userId: string
   readonly scopeID: string
@@ -165,7 +165,7 @@ export async function recordAssignmentGenerationMetrics(
     readonly userId: string
     readonly scopeID: string
     readonly assignmentID: string
-    readonly metrics: GenerationMetrics
+    readonly metrics: StoredGenerationMetrics
     readonly at?: Date
   },
 ) {

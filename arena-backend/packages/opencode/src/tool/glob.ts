@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryEffect, excludedBelow } from "./external-directory"
 import DESCRIPTION from "./glob.txt"
 import * as Tool from "./tool"
 
@@ -48,7 +48,12 @@ export const GlobTool = Tool.define(
           })
 
           const limit = 100
-          const files = yield* ripgrep.glob({ cwd: search, pattern: params.pattern, limit })
+          const files = yield* ripgrep.glob({
+            cwd: search,
+            pattern: params.pattern,
+            limit,
+            exclude: excludedBelow(search, ctx.blockedDirectories),
+          })
           const truncated = files.length === limit
 
           const output = []

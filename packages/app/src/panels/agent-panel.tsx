@@ -1941,6 +1941,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
         forkBoundaryAfterItemId={forkBoundaryAfterItemId}
         liveContent={liveContentWithConnection}
         bottomOverlayHeight={bottomOverlayHeight}
+        arenaChat={arenaSession.data !== undefined}
       />
     </ArenaPartSourceContext.Provider>
   );

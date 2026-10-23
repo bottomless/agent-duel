@@ -17,3 +17,11 @@ export type GenerationMetrics = {
   readonly usage?: UsageTotals
   readonly finishReason?: string
 }
+
+/**
+ * What the control plane stores for a call. The provider that served it stays here: no response or
+ * reveal returns it, and the engine shares `GenerationMetrics`, which has no field to hold it.
+ */
+export type StoredGenerationMetrics = GenerationMetrics & {
+  readonly provider?: string
+}

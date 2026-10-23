@@ -37,6 +37,7 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import {
   ArenaComparisonDiffSchema,
+  ArenaComparisonFileDiffSchema,
   ArenaReviewIngestResultSchema,
   ArenaSnapshotSchema,
   type ArenaComparisonDiff,
@@ -3962,6 +3963,8 @@ class OpenCodeAgentSession implements AgentSession {
         }),
       retryRun: (runId) =>
         this.arenaRequest(`/arena/runs/${encodeURIComponent(runId)}/retry`, { method: "POST" }),
+      resumeBattle: (turnId) =>
+        this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/resume`, { method: "POST" }),
       interruptSteer: (runId, messageId) =>
         this.arenaRequest(
           `/arena/runs/${encodeURIComponent(runId)}/steer/${encodeURIComponent(messageId)}/interrupt`,
@@ -4006,6 +4009,11 @@ class OpenCodeAgentSession implements AgentSession {
           body: { ...(mode ? { mode } : {}), ...(answers?.length ? { answers } : {}) },
         }),
       diff: (turnId) => this.arenaDiff(`/arena/turns/${encodeURIComponent(turnId)}/diff`),
+      fileDiff: (turnId, file) =>
+        this.arenaFetch(
+          `/arena/turns/${encodeURIComponent(turnId)}/diff/file?${new URLSearchParams({ path: file })}`,
+          ArenaComparisonFileDiffSchema,
+        ),
       runPart: async (runId, partId, location) => {
         // The part's session and message let the engine read one row instead of the whole run.
         const query = new URLSearchParams({
@@ -4684,6 +4692,15 @@ class OpenCodeAgentSession implements AgentSession {
       return;
     }
     this.startAutonomousTurn();
+  }
+
+  async reloadProviderSubagents(): Promise<void> {
+    await this.childHydrationPromise?.catch(() => undefined);
+    // Detection reports a child once; the caller has dropped every child it reported.
+    this.knownChildSessionIds.clear();
+    this.childHydrationCompleted = false;
+    this.startChildSessionHydration();
+    await this.childHydrationPromise?.catch(() => undefined);
   }
 
   private startChildSessionHydration(): void {

@@ -8,7 +8,7 @@ import { connectLocalStore } from "@/arena/local-store"
 import { MAX_RUN_ARTIFACT_BYTES } from "@/arena/artifact"
 import { ArenaTranscriptArtifact } from "@/arena/transcript-artifact"
 import type { ArenaRecord } from "@agent-duel/arena-service/collection"
-import type { ChatDocument, GenerationDocument } from "@/arena/records"
+import type { ChatDocument, ComparisonDocument, GenerationDocument } from "@/arena/records"
 
 const now = new Date("2026-01-01T00:00:00.000Z")
 
@@ -184,6 +184,40 @@ describe("local Arena store", () => {
         _id: "run",
         outcomes: [{ kind: "permission", at: now }],
       })
+      await store.close()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("saves a skipped comparison only while its turn is still skipped", async () => {
+    const directory = await temporaryDirectory()
+    try {
+      const store = await connectLocalStore({ directory })
+      const turns = store.db.collection<ArenaRecord>("turns")
+      await turns.insertOne({ _id: "turn-skipped", chatID: "chat", comparisonState: "skipped" })
+      // A retry claimed this one while its title request was out, which resets its comparison.
+      await turns.insertOne({ _id: "turn-claimed", chatID: "chat", comparisonState: "pending" })
+      const record = (turnID: string) =>
+        ({
+          _id: `comparison|${turnID}`,
+          turnID,
+          state: "complete",
+          skipReason: "failed_side",
+          title: "Login form fix",
+          createdAt: now,
+          updatedAt: now,
+        }) as unknown as ComparisonDocument
+
+      expect(await store.saveSkippedComparison(record("turn-skipped"))).toMatchObject({ title: "Login form fix" })
+      expect(await store.turn("turn-skipped")).toMatchObject({
+        comparisonState: "skipped",
+        comparisonID: "comparison|turn-skipped",
+      })
+
+      expect(await store.saveSkippedComparison(record("turn-claimed"))).toBeUndefined()
+      expect(await store.comparisons.findOne({ turnID: "turn-claimed" })).toBeNull()
+      expect((await store.turn("turn-claimed"))?.comparisonID).toBeUndefined()
       await store.close()
     } finally {
       await rm(directory, { recursive: true, force: true })

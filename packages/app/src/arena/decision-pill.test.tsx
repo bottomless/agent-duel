@@ -23,6 +23,7 @@ vi.mock("./use-battle-actions", () => ({
     tie: vi.fn(),
     stop: vi.fn(),
     resolveStop: vi.fn(),
+    resume: vi.fn(),
   }),
 }));
 
@@ -50,7 +51,7 @@ function run(input: Partial<ArenaRun>): ArenaRun {
 
 function awaitingVote(
   runs: ArenaRun[],
-  turn: { canTie: boolean; canDiscardBattle: boolean },
+  turn: { canTie: boolean; canDiscardBattle: boolean; canResumeBattle?: boolean },
 ): ArenaSnapshot {
   return {
     chat: {
@@ -73,6 +74,7 @@ function awaitingVote(
       revealed: false,
       createdAt: "2026-10-14T10:00:00.000Z",
       updatedAt: "2026-10-14T10:00:00.000Z",
+      canResumeBattle: false,
       ...turn,
     },
     history: [],
@@ -142,5 +144,55 @@ describe("ArenaDecisionPill", () => {
     expect(view.queryByTestId("arena-choose-tie")).not.toBeNull();
     expect(view.queryByTestId("arena-stopped-discard")).toBeNull();
     expect(view.queryByText(/Both agents failed/)).toBeNull();
+  });
+
+  const interrupted = (side: "a" | "b") =>
+    run({
+      id: `run-${side}`,
+      side,
+      runState: "interrupted",
+      selectable: false,
+      applicable: false,
+    });
+
+  it("offers only Resume and Discard when the restart cut off both agents", () => {
+    const view = render(
+      <ArenaDecisionPill
+        serverId="server"
+        agentId="agent"
+        snapshot={awaitingVote([interrupted("a"), interrupted("b")], {
+          canTie: false,
+          canDiscardBattle: true,
+          canResumeBattle: true,
+        })}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.getByText("Agent Duel closed during the battle · resume or discard")).toBeTruthy();
+    expect(view.queryByTestId("arena-resume-interrupted")).not.toBeNull();
+    expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+    expect(view.queryByTestId("arena-choose-a")).toBeNull();
+    expect(view.queryByTestId("arena-choose-b")).toBeNull();
+    expect(view.queryByText(/Both agents failed/)).toBeNull();
+  });
+
+  it("offers no choice of the side that finished before the restart", () => {
+    const view = render(
+      <ArenaDecisionPill
+        serverId="server"
+        agentId="agent"
+        snapshot={awaitingVote([run({ id: "run-a", side: "a" }), interrupted("b")], {
+          canTie: false,
+          canDiscardBattle: true,
+          canResumeBattle: true,
+        })}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.getByText("Agent Duel closed during the battle · resume or discard")).toBeTruthy();
+    expect(view.queryByTestId("arena-resume-interrupted")).not.toBeNull();
+    expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+    expect(view.queryByTestId("arena-choose-a")).toBeNull();
+    expect(view.queryByTestId("arena-choose-tie")).toBeNull();
   });
 });

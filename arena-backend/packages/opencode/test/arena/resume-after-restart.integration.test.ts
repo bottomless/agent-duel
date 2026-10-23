@@ -17,13 +17,16 @@ afterEach(async () => {
   await resetDatabase()
 })
 
-// The shared stub does not answer the comparison route, so the comparison fails; a failed one never
-// blocks a reply or a vote. Wait for it to settle so it cannot finish under the restart.
+// A comparison never blocks a reply or a vote. Wait for it to settle so it cannot finish under the
+// restart.
 async function waitForSettledComparison(store: Store, turnID: string) {
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
-    const state = (await store.turn(turnID))?.comparisonState
-    if (state === "complete" || state === "failed" || state === "skipped") return
+    const turn = await store.turn(turnID)
+    const state = turn?.comparisonState
+    if (state === "complete" || state === "failed") return
+    // Skipped while the title request is out; settled once its record is written.
+    if (state === "skipped" && turn?.comparisonID && (await store.comparisons.findOne({ turnID }))) return
     await Bun.sleep(10)
   }
   throw new Error("Arena comparison did not settle")
@@ -221,6 +224,94 @@ describe("Arena after an engine restart", () => {
     }
   }, 60_000)
 
+  test("a battle the restart cut off reopens to the vote and resumes both sides together", async () => {
+    await using directory = await fixture()
+    await using arenaDirectory = await tmpdir()
+    let store = await connectLocalStore({ directory: arenaDirectory.path })
+    // Both models' first step runs a command that outlives the engine.
+    const router = installOpenRouterStub({ contestantCommands: { 1: "sleep 30", 2: "sleep 30" } })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const turnID = await startBattle(headers, "Interrupted Arena battle", "Create a result.")
+      const deadline = Date.now() + 20_000
+      let runs = await store.runsForTurn(turnID)
+      while (
+        Date.now() < deadline &&
+        !(runs.length === 2 && runs.every((run) => !run.finalizedAt && run.environmentReadyAt && run.firstToolAt))
+      ) {
+        await Bun.sleep(20)
+        runs = await store.runsForTurn(turnID)
+      }
+      if (!runs.every((run) => run.firstToolAt)) throw new Error("The contestants did not reach their commands")
+      expect((await store.turn(turnID))?.state).toBe("running")
+      const models = runs.map((run) => router.modelForAssignment(run.assignment.assignmentID))
+      if (models.some((model) => !model)) throw new Error("A run did not retain an opaque assignment")
+      expect(models.map((model) => router.calls.get(model!))).toEqual([1, 1])
+
+      store = await restartEngine(store, arenaDirectory.path)
+
+      const reopened = await json<PublicSnapshot>(
+        await arenaRequest(`/arena/turns/${encodeURIComponent(turnID)}`, { headers }),
+      )
+      expect(reopened.turn?.state).toBe("awaiting_vote")
+      expect(reopened.turn?.canResumeBattle).toBe(true)
+      expect(reopened.runs.map((run) => [run.side, run.runState, run.selectable, run.canRetry, run.error])).toEqual([
+        ["a", "interrupted", false, false, "Interrupted when Agent Duel closed"],
+        ["b", "interrupted", false, false, "Interrupted when Agent Duel closed"],
+      ])
+      // Nothing the restart cut off is left running in the panes.
+      const toolStates = reopened.runs.flatMap((run) =>
+        Object.values(run.parts ?? {})
+          .flat()
+          .flatMap((part) => (part.type === "tool" ? [(part.state as { status: string }).status] : [])),
+      )
+      expect(toolStates.filter((status) => status === "pending" || status === "running")).toEqual([])
+      expect(reopened.turn?.canDiscardBattle).toBe(true)
+      // Interrupted sides have nothing to compare yet, so no report is paid for.
+      await waitForSettledComparison(store, turnID)
+      expect((await store.turn(turnID))?.comparisonState).toBe("skipped")
+      expect(router.reportCalls()).toBe(0)
+      // The battle is resumed or discarded, never voted on as it stands.
+      const voted = await arenaRequest(`/arena/turns/${encodeURIComponent(turnID)}/vote`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ vote: "a" }),
+      })
+      expect(voted.ok).toBe(false)
+      // A side cannot be resumed alone.
+      const single = await arenaRequest(`/arena/runs/${encodeURIComponent(runs[0]!._id)}/retry`, {
+        method: "POST",
+        headers,
+      })
+      expect(single.ok).toBe(false)
+
+      const resumed = await json<PublicSnapshot>(
+        await arenaRequest(`/arena/turns/${encodeURIComponent(turnID)}/resume`, { method: "POST", headers }),
+      )
+      expect(resumed.turn?.state).toBe("running")
+      expect(resumed.runs.map((run) => run.runState)).toEqual(["pending", "pending"])
+      await waitForTurn(store, turnID, "awaiting_vote")
+
+      const continued = await store.runsForTurn(turnID)
+      expect(continued.map((run) => [run.side, run.runState, run.selectable, run.manualRetries])).toEqual([
+        ["a", "complete", true, undefined],
+        ["b", "complete", true, undefined],
+      ])
+      // Each side continued its session on its own assignment.
+      expect(models.map((model) => router.calls.get(model!))).toEqual([2, 2])
+      // Both sides finished after the resume, so the turn is compared again; their trees are
+      // identical, so that needs no report.
+      await waitForSettledComparison(store, turnID)
+      expect((await store.turn(turnID))?.comparisonState).toBe("complete")
+    } finally {
+      router.restore()
+      await store.close()
+    }
+  }, 60_000)
+
   test("a retry runs a failed contestant again on its assignment and keeps its telemetry", async () => {
     await using directory = await fixture()
     await using arenaDirectory = await tmpdir()
@@ -239,8 +330,11 @@ describe("Arena after an engine restart", () => {
       const failedModel = router.modelForAssignment(failed.assignment.assignmentID)
       if (!failedModel) throw new Error("Failed run did not retain an opaque assignment")
       expect(router.calls.get(failedModel)).toBe(1)
-      const settledTurn = await store.turn(turnID)
-      if (settledTurn?.state === "awaiting_vote") await waitForSettledComparison(store, turnID)
+      await waitForTurn(store, turnID, "awaiting_vote")
+      await waitForSettledComparison(store, turnID)
+      // The finished side has nothing to be compared against yet, so no report is paid for.
+      expect((await store.turn(turnID))?.comparisonState).toBe("skipped")
+      expect(router.reportCalls()).toBe(0)
       const before = await recorded(store, [failed])
 
       store = await restartEngine(store, arenaDirectory.path)
@@ -257,6 +351,10 @@ describe("Arena after an engine restart", () => {
         ["b", "complete", true, undefined],
       ])
       expect(router.calls.get(failedModel)).toBe(2)
+      // Both sides finished after the retry, so the turn now gets its report.
+      await waitForSettledComparison(store, turnID)
+      expect((await store.turn(turnID))?.comparisonState).toBe("complete")
+      expect(router.reportCalls()).toBe(1)
       const previous = before.get(failed._id)!
       expect(previous.callIndexes.length).toBeGreaterThan(0)
       expect(await callIndexes(store, failed._id)).toEqual([...previous.callIndexes, previous.callIndexes.length])

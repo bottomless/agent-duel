@@ -324,7 +324,21 @@ const group = HttpApiGroup.make("arena")
       OpenApi.annotations({
         identifier: "arena.turn.diff",
         summary: "Compare Arena results",
-        description: "Return the bounded deterministic Git diff from result A to result B.",
+        description: "List every file either result changed, with Git's merge status for each, without contents.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.get("fileDiff", "/arena/turns/:turnID/diff/file", {
+      params: { turnID: Schema.String },
+      query: InspectFileQuery,
+      success: ArenaSchema.ComparisonFileDiff,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.turn.diff.file",
+        summary: "Read one compared file",
+        description: "Return one changed file's bounded contents at the base and in both results.",
       }),
     ),
   )
@@ -495,6 +509,20 @@ const group = HttpApiGroup.make("arena")
         identifier: "arena.run.retry",
         summary: "Retry a failed contestant",
         description: "Run a contestant whose model request failed again, from its last finished step.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("resumeBattle", "/arena/turns/:turnID/resume", {
+      params: { turnID: Schema.String },
+      query: WorkspaceRoutingQuery,
+      success: ArenaSchema.Snapshot,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.turn.resume",
+        summary: "Resume an interrupted battle",
+        description: "Continue every contestant an engine restart cut off, together, from where it stopped.",
       }),
     ),
   )

@@ -287,6 +287,16 @@ function createArenaPreviewRouteManagerIfAvailable(
   return serviceProxy ? createArenaPreviewRouteManager(serviceProxy) : null;
 }
 
+/** Requests scoped to one contestant run, which the Arena request handler passes on as a group. */
+type ArenaRunRequest = Extract<
+  SessionInboundMessage,
+  { type: `arena.run.${string}.request`; agentId: string }
+>;
+
+function isArenaRunRequest(msg: { type: string }): msg is ArenaRunRequest {
+  return msg.type.startsWith("arena.run.");
+}
+
 type ProviderSubagentManagerEvent = Extract<
   AgentManagerEvent,
   { type: "provider_subagent" }
@@ -2113,10 +2123,12 @@ export class Session {
       case "arena.turn.record_review.request":
       case "arena.turn.vote.request":
       case "arena.turn.stop.request":
+      case "arena.turn.resume.request":
       case "arena.turn.resolve_stop.request":
       case "arena.turn.retry_comparison.request":
       case "arena.turn.retry_resolution.request":
       case "arena.turn.diff.request":
+      case "arena.turn.get_file_diff.request":
         return this.runArenaRequest(msg);
       case "arena.run.get_part.request":
         return this.handleArenaRunGetPart(msg, source);
@@ -3943,6 +3955,7 @@ export class Session {
       "arena.snapshot.get.request",
       "arena.turn.get.request",
       "arena.turn.diff.request",
+      "arena.turn.get_file_diff.request",
     ];
     if (reads.includes(msg.type)) return this.handleArenaRequest(msg);
     const finishMutation = this.arenaActivity?.beginMutation(msg.agentId);
@@ -4097,6 +4110,10 @@ export class Session {
     const { snapshot, arena } = await this.loadArenaAgent(msg.agentId);
 
     try {
+      if (isArenaRunRequest(msg)) {
+        await this.handleArenaRunRequest(msg, arena);
+        return;
+      }
       switch (msg.type) {
         case "arena.session.resolve.request": {
           const result = await arena.resolve(this.accountUserId);
@@ -4170,33 +4187,6 @@ export class Session {
           });
           return;
         }
-        case "arena.run.steer.discard.request": {
-          const result = await arena.discardSteer(msg.runId, msg.messageIds);
-          this.syncArenaPreviewRoutes(result);
-          this.emit({
-            type: "arena.run.steer.discard.response",
-            payload: { requestId: msg.requestId, snapshot: result },
-          });
-          return;
-        }
-        case "arena.run.steer.interrupt.request": {
-          const result = await arena.interruptSteer(msg.runId, msg.messageId);
-          this.syncArenaPreviewRoutes(result);
-          this.emit({
-            type: "arena.run.steer.interrupt.response",
-            payload: { requestId: msg.requestId, snapshot: result },
-          });
-          return;
-        }
-        case "arena.run.retry.request": {
-          const result = await arena.retryRun(msg.runId);
-          this.syncArenaPreviewRoutes(result);
-          this.emit({
-            type: "arena.run.retry.response",
-            payload: { requestId: msg.requestId, snapshot: result },
-          });
-          return;
-        }
         case "arena.turn.record_review.request": {
           const result = await arena.recordReview(
             msg.turnId,
@@ -4230,6 +4220,15 @@ export class Session {
           this.syncArenaPreviewRoutes(result);
           this.emit({
             type: "arena.turn.stop.response",
+            payload: { requestId: msg.requestId, snapshot: result },
+          });
+          return;
+        }
+        case "arena.turn.resume.request": {
+          const result = await arena.resumeBattle(msg.turnId);
+          this.syncArenaPreviewRoutes(result);
+          this.emit({
+            type: "arena.turn.resume.response",
             payload: { requestId: msg.requestId, snapshot: result },
           });
           return;
@@ -4270,40 +4269,83 @@ export class Session {
           });
           return;
         }
-        case "arena.run.question.reply.request": {
-          const result = await arena.replyQuestion(msg.runId, msg.questionRequestId, msg.answers);
-          this.syncArenaPreviewRoutes(result);
+        case "arena.turn.get_file_diff.request": {
+          const fileDiff = await arena.fileDiff(msg.turnId, msg.file);
           this.emit({
-            type: "arena.run.question.reply.response",
-            payload: { requestId: msg.requestId, snapshot: result },
-          });
-          return;
-        }
-        case "arena.run.question.reject.request": {
-          const result = await arena.rejectQuestion(msg.runId, msg.questionRequestId);
-          this.syncArenaPreviewRoutes(result);
-          this.emit({
-            type: "arena.run.question.reject.response",
-            payload: { requestId: msg.requestId, snapshot: result },
-          });
-          return;
-        }
-        case "arena.run.permission.reply.request": {
-          const result = await arena.replyPermission(
-            msg.runId,
-            msg.permissionRequestId,
-            msg.response,
-          );
-          this.syncArenaPreviewRoutes(result);
-          this.emit({
-            type: "arena.run.permission.reply.response",
-            payload: { requestId: msg.requestId, snapshot: result },
+            type: "arena.turn.get_file_diff.response",
+            payload: { requestId: msg.requestId, fileDiff },
           });
           return;
         }
       }
     } finally {
       this.invalidateArenaStreamAfterRequest(arena.streamKey, msg.type);
+    }
+  }
+
+  private async handleArenaRunRequest(
+    msg: ArenaRunRequest,
+    arena: NonNullable<AgentSession["arena"]>,
+  ): Promise<void> {
+    switch (msg.type) {
+      case "arena.run.steer.discard.request": {
+        const result = await arena.discardSteer(msg.runId, msg.messageIds);
+        this.syncArenaPreviewRoutes(result);
+        this.emit({
+          type: "arena.run.steer.discard.response",
+          payload: { requestId: msg.requestId, snapshot: result },
+        });
+        return;
+      }
+      case "arena.run.steer.interrupt.request": {
+        const result = await arena.interruptSteer(msg.runId, msg.messageId);
+        this.syncArenaPreviewRoutes(result);
+        this.emit({
+          type: "arena.run.steer.interrupt.response",
+          payload: { requestId: msg.requestId, snapshot: result },
+        });
+        return;
+      }
+      case "arena.run.retry.request": {
+        const result = await arena.retryRun(msg.runId);
+        this.syncArenaPreviewRoutes(result);
+        this.emit({
+          type: "arena.run.retry.response",
+          payload: { requestId: msg.requestId, snapshot: result },
+        });
+        return;
+      }
+      case "arena.run.question.reply.request": {
+        const result = await arena.replyQuestion(msg.runId, msg.questionRequestId, msg.answers);
+        this.syncArenaPreviewRoutes(result);
+        this.emit({
+          type: "arena.run.question.reply.response",
+          payload: { requestId: msg.requestId, snapshot: result },
+        });
+        return;
+      }
+      case "arena.run.question.reject.request": {
+        const result = await arena.rejectQuestion(msg.runId, msg.questionRequestId);
+        this.syncArenaPreviewRoutes(result);
+        this.emit({
+          type: "arena.run.question.reject.response",
+          payload: { requestId: msg.requestId, snapshot: result },
+        });
+        return;
+      }
+      case "arena.run.permission.reply.request": {
+        const result = await arena.replyPermission(
+          msg.runId,
+          msg.permissionRequestId,
+          msg.response,
+        );
+        this.syncArenaPreviewRoutes(result);
+        this.emit({
+          type: "arena.run.permission.reply.response",
+          payload: { requestId: msg.requestId, snapshot: result },
+        });
+        return;
+      }
     }
   }
 
@@ -4332,6 +4374,7 @@ export class Session {
       "arena.snapshot.get.request",
       "arena.turn.get.request",
       "arena.turn.diff.request",
+      "arena.turn.get_file_diff.request",
       "arena.turn.record_review.request",
     ].includes(type);
     if (!leavesSnapshotUnchanged) arenaStreamHub(this.agentManager).invalidateBackend(streamKey);

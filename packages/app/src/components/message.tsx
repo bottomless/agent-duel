@@ -2528,6 +2528,11 @@ interface ExpandableBadgeProps {
    * keep their padding so they stay readable as a list.
    */
   flushRow?: boolean;
+  /**
+   * The icon takes its label's size tier, 16px beside a 16px label, as a compact label's does.
+   * For rows that sit in prose and should read at its weight, such as a battle chat's.
+   */
+  labelSizedIcon?: boolean;
   testID?: string;
 }
 
@@ -2744,12 +2749,15 @@ function renderExpandableBadgeIcon({
   isActive,
   ThemedIcon,
   compact,
+  labelSized,
 }: {
   isError: boolean;
   isActive: boolean;
   ThemedIcon: ComponentType<{ size?: number; uniProps?: typeof foregroundColorMapping }> | null;
   /** The compact label is 14px, so its icon takes the 14px tier beside it. */
   compact: boolean;
+  /** A full-size label's icon at the label's 16px tier; see `labelSizedIcon`. */
+  labelSized: boolean;
 }): ReactNode {
   if (isError) {
     return (
@@ -2762,13 +2770,18 @@ function renderExpandableBadgeIcon({
     return (
       <View style={LUCIDE_TOOL_ICON_NUDGE_LEFT}>
         <ThemedIcon
-          size={compact ? ICON_SIZE.sm : 12}
+          size={iconSizeFor(compact, labelSized)}
           uniProps={isActive ? foregroundColorMapping : mutedForegroundColorMapping}
         />
       </View>
     );
   }
   return null;
+}
+
+function iconSizeFor(compact: boolean, labelSized: boolean): number {
+  if (compact) return ICON_SIZE.sm;
+  return labelSized ? ICON_SIZE.md : 12;
 }
 
 function renderExpandableBadgeIconSlot({
@@ -2911,6 +2924,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   bandWhenExpanded,
   compactLabel = false,
   flushRow,
+  labelSizedIcon,
   testID,
 }: ExpandableBadgeProps) {
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
@@ -3168,6 +3182,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
     isActive,
     ThemedIcon,
     compact: compactLabel,
+    labelSized: labelSizedIcon === true,
   });
   const iconSlotNode = renderExpandableBadgeIconSlot({
     showChevron: isInteractive && (isHovered || isExpanded),

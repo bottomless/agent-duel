@@ -640,6 +640,14 @@ const layer = Layer.effect(
               { enabled: true },
             )).enabled
           ) {
+            // The request that hit the limit took its system text from the user message before the
+            // compaction one. Carry it on, as a replay does, or the turn continues without it.
+            const answered = input.messages.findLast(
+              (message) => message.info.role === "user" && message.info.id < input.parentID,
+            )
+            // A retained new message brings its own system text; otherwise keep the turn's.
+            const system =
+              pendingUser?.system ?? (answered?.info.role === "user" ? answered.info.system : undefined)
             const continueMsg = yield* session.updateMessage({
               id: MessageID.ascending(),
               role: "user",
@@ -647,7 +655,7 @@ const layer = Layer.effect(
               time: { created: Date.now() },
               agent: pendingUser?.agent ?? userMessage.agent,
               model: pendingUser?.model ?? userMessage.model,
-              system: pendingUser?.system,
+              ...(system ? { system } : {}),
               tools: pendingUser?.tools,
               format: pendingUser?.format
                 ? pendingUser.format.type === "json_schema"

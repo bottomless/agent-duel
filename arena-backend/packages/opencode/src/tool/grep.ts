@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryEffect, excludedBelow } from "./external-directory"
 import DESCRIPTION from "./grep.txt"
 import * as Tool from "./tool"
 
@@ -65,6 +65,7 @@ export const GrepTool = Tool.define(
             cwd,
             pattern: params.pattern,
             include: params.include,
+            exclude: excludedBelow(cwd, ctx.blockedDirectories),
             limit: 100,
           })
           if (result.length === 0) return empty

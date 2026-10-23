@@ -13,12 +13,14 @@ import {
   attachSideBranch,
   battleRefs,
   compare,
+  comparisonFiles,
   containsCommit,
   diffHostRefs,
   finalize,
   OperationError,
   preparePromotion,
   prepareSideBranch,
+  readComparisonFile,
   recoverFailedPromotion,
   refLabel,
   refreshAttachedSide,
@@ -1464,26 +1466,23 @@ describe("ArenaGit", () => {
         { concurrency: 2 },
       )
 
-      const evidence = yield* compare({
-        canonical: canonical.path,
-        baseCommit: base,
-        aCommit: a.finalCommit,
-        bCommit: b.finalCommit,
-      })
-      const divergence = evidence.divergence
-      expect(divergence).toBeDefined()
-      expect(divergence!.conflicted).toBe(false)
-      expect(divergence!.files.map((entry) => entry.file)).toEqual(evidence.files.map((entry) => entry.file))
-      const byFile = new Map(divergence!.files.map((entry) => [entry.file, entry]))
-      expect(byFile.get("shared.txt")?.status).toBe("compatible")
-      expect(byFile.get("shared.txt")?.merged?.content).toContain("line 2 by A")
-      expect(byFile.get("shared.txt")?.merged?.content).toContain("line 9 by B")
-      expect(byFile.get("shared.txt")?.merged?.content).not.toContain("<<<<<<<")
-      expect(byFile.get("only-a.txt")?.status).toBe("only_a")
-      expect(byFile.get("only-a.txt")?.merged).toBeUndefined()
-      expect(byFile.get("only-b.txt")?.status).toBe("only_b")
-      expect(byFile.get("same.txt")?.status).toBe("identical")
-      expect(byFile.get("same.txt")?.merged).toBeUndefined()
+      const input = { canonical: canonical.path, baseCommit: base, aCommit: a.finalCommit, bCommit: b.finalCommit }
+      const listed = yield* comparisonFiles(input)
+      expect(listed.files.map((entry) => [entry.file, entry.status])).toEqual([
+        ["only-a.txt", "only_a"],
+        ["only-b.txt", "only_b"],
+        ["same.txt", "identical"],
+        ["shared.txt", "compatible"],
+      ])
+      const read = (file: string) => readComparisonFile({ ...input, file })
+      const sharedFile = (yield* read("shared.txt")).divergence
+      expect(sharedFile.status).toBe("compatible")
+      expect(sharedFile.merged?.content).toContain("line 2 by A")
+      expect(sharedFile.merged?.content).toContain("line 9 by B")
+      expect(sharedFile.merged?.content).not.toContain("<<<<<<<")
+      expect((yield* read("only-a.txt")).divergence).toEqual({ file: "only-a.txt", status: "only_a" })
+      expect((yield* read("only-b.txt")).divergence.status).toBe("only_b")
+      expect((yield* read("same.txt")).divergence).toEqual({ file: "same.txt", status: "identical" })
     }),
   )
 
@@ -1531,16 +1530,11 @@ describe("ArenaGit", () => {
         { concurrency: 2 },
       )
 
-      const evidence = yield* compare({
-        canonical: canonical.path,
-        baseCommit: base,
-        aCommit: a.finalCommit,
-        bCommit: b.finalCommit,
-      })
-      expect(evidence.divergence?.conflicted).toBe(true)
-      const entry = evidence.divergence?.files.find((file) => file.file === "greet.py")
-      expect(entry?.status).toBe("diverging")
-      const merged = entry?.merged?.content ?? ""
+      const input = { canonical: canonical.path, baseCommit: base, aCommit: a.finalCommit, bCommit: b.finalCommit }
+      expect((yield* comparisonFiles(input)).files.map((file) => file.status)).toEqual(["diverging"])
+      const entry = (yield* readComparisonFile({ ...input, file: "greet.py" })).divergence
+      expect(entry.status).toBe("diverging")
+      const merged = entry.merged?.content ?? ""
       expect(merged).toContain("<<<<<<<")
       // The base section proves the zdiff3 style reached merge-ort; plain "merge" has none.
       expect(merged).toContain("|||||||")
@@ -1550,14 +1544,8 @@ describe("ArenaGit", () => {
       expect(merged).toContain('print("hello from B")')
 
       // A stopped side is represented by the base itself: nothing is A's, so nothing conflicts.
-      const stopped = yield* compare({
-        canonical: canonical.path,
-        baseCommit: base,
-        aCommit: base,
-        bCommit: b.finalCommit,
-      })
-      expect(stopped.divergence?.conflicted).toBe(false)
-      expect(stopped.divergence?.files.map((file) => file.status)).toEqual(["only_b"])
+      const stopped = yield* comparisonFiles({ ...input, aCommit: base })
+      expect(stopped.files.map((file) => file.status)).toEqual(["only_b"])
     }),
   )
 
@@ -1609,14 +1597,13 @@ describe("ArenaGit", () => {
         { concurrency: 2 },
       )
 
-      const evidence = yield* compare({
+      const { file: lock } = yield* readComparisonFile({
         canonical: canonical.path,
         baseCommit: base,
         aCommit: a.finalCommit,
         bCommit: b.finalCommit,
+        file: "lock.json",
       })
-      const lock = evidence.files.find((entry) => entry.file === "lock.json")
-      expect(lock).toBeDefined()
       // Both agents' edits reach the viewer, from opposite ends of a file far too big to send.
       expect(lock?.a?.content).toContain('"entry-26480": "9.9.9"')
       expect(lock?.b?.content).toContain('"entry-17": "2.5.1"')
@@ -1654,18 +1641,21 @@ describe("ArenaGit", () => {
       })
       expect(evidence.baseToATruncated).toBe(true)
       expect(evidence.truncated).toBe(true)
-      expect(evidence.stats.map((file) => file.file)).toEqual(["data.json", "z-small.txt"])
-      const large = evidence.files.find((file) => file.file === "data.json")!
+      expect(evidence.files.map((file) => [file.file, file.status])).toEqual([
+        ["data.json", "only_a"],
+        ["z-small.txt", "only_a"],
+      ])
+      const input = { canonical: canonical.path, baseCommit: base, aCommit: result, bCommit: base }
+      const large = (yield* readComparisonFile({ ...input, file: "data.json" })).file
       for (const side of [large.base!, large.a!, large.b!]) {
         expect(side.truncated).toBe(true)
         expect(side.missing).toBe(false)
         expect(side.content.length).toBeLessThanOrEqual(256 * 1024)
       }
-      const small = evidence.files.find((file) => file.file === "z-small.txt")!
+      const small = (yield* readComparisonFile({ ...input, file: "z-small.txt" })).file
       expect(small.base).toEqual({ content: "before\n", missing: false, truncated: false })
       expect(small.a).toEqual({ content: "after\n", missing: false, truncated: false })
       expect(small.b).toEqual(small.base)
-      expect(evidence.divergence?.files.map((file) => file.status)).toEqual(["only_a", "only_a"])
 
       const prepared = prepareEvidence({
         baseToA: evidence.baseToA,
@@ -1688,7 +1678,8 @@ describe("ArenaGit", () => {
         bCommit: result,
       })
       expect(reversed.baseToBTruncated).toBe(true)
-      expect(reversed.files.find((file) => file.file === "data.json")).toEqual({
+      const flipped = { ...input, aCommit: base, bCommit: result }
+      expect((yield* readComparisonFile({ ...flipped, file: "data.json" })).file).toEqual({
         ...large,
         additionsA: large.additionsB,
         deletionsA: large.deletionsB,
@@ -1697,8 +1688,72 @@ describe("ArenaGit", () => {
         a: large.b,
         b: large.a,
       })
-      expect(reversed.files.find((file) => file.file === "z-small.txt")?.b).toEqual(small.a)
-      expect(reversed.divergence?.files.map((file) => file.status)).toEqual(["only_b", "only_b"])
+      expect((yield* readComparisonFile({ ...flipped, file: "z-small.txt" })).file.b).toEqual(small.a)
+      expect(reversed.files.map((file) => file.status)).toEqual(["only_b", "only_b"])
+    }),
+  )
+
+  it.live("lists every file either side changed, in path order, however many A changed", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const commit = (message: string) =>
+        Effect.promise(async () => {
+          await $`git add -A && git commit -m ${message}`.cwd(canonical.path).quiet()
+          return (await $`git rev-parse HEAD`.cwd(canonical.path).quiet().text()).trim()
+        })
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/sqlite_rs.rs`, "fn base() {}\n"))
+      const base = yield* commit("base")
+      // A changes thirty files ahead of everything B touches, which a cap on A's first files hid.
+      for (let index = 0; index < 30; index++) {
+        yield* Effect.promise(() => fs.writeFile(`${canonical.path}/a-${String(index).padStart(2, "0")}.ts`, "a\n"))
+      }
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/sqlite_rs.rs`, "fn by_a() {}\n"))
+      const aCommit = yield* commit("a")
+      yield* Effect.promise(() => $`git checkout --detach ${base}`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/b-only.ts`, "b\n"))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/sqlite_rs.rs`, "fn by_b() {}\n"))
+      const bCommit = yield* commit("b")
+      const input = { canonical: canonical.path, baseCommit: base, aCommit, bCommit }
+
+      const listed = yield* comparisonFiles(input)
+      expect(listed.files).toHaveLength(32)
+      const paths = listed.files.map((file) => file.file)
+      expect(paths).toEqual([...paths].sort())
+      expect(listed.files.find((file) => file.file === "b-only.ts")).toEqual({
+        file: "b-only.ts",
+        binary: false,
+        additionsA: 0,
+        deletionsA: 0,
+        additionsB: 1,
+        deletionsB: 0,
+        status: "only_b",
+      })
+      expect(listed.files.at(-1)).toMatchObject({ file: "sqlite_rs.rs", status: "diverging" })
+      const sqlite = yield* readComparisonFile({ ...input, file: "sqlite_rs.rs" })
+      expect(sqlite.file.a?.content).toBe("fn by_a() {}\n")
+      expect(sqlite.file.b?.content).toBe("fn by_b() {}\n")
+      expect(sqlite.divergence.merged?.content).toContain("<<<<<<<")
+    }),
+  )
+
+  it.live("refuses to read a file neither side changed", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/secret.txt`, "kept\n"))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/changed.txt`, "before\n"))
+      yield* Effect.promise(() => $`git add -A && git commit -m base`.cwd(canonical.path).quiet())
+      const base = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/changed.txt`, "after\n"))
+      yield* Effect.promise(() => $`git commit -am result`.cwd(canonical.path).quiet())
+      const result = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      const input = { canonical: canonical.path, baseCommit: base, aCommit: result, bCommit: base }
+
+      for (const file of ["secret.txt", "*.txt", "missing.txt"]) {
+        const exit = yield* readComparisonFile({ ...input, file }).pipe(Effect.exit)
+        if (!Exit.isFailure(exit)) throw new Error(`Expected ${file} to be refused`)
+        expect(Cause.squash(exit.cause)).toBeInstanceOf(OperationError)
+      }
+      expect((yield* readComparisonFile({ ...input, file: "changed.txt" })).file.a?.content).toBe("after\n")
     }),
   )
 

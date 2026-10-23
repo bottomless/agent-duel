@@ -1,4 +1,4 @@
-import type { ArenaComparisonDiff } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaComparisonDiff, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
 const diffReadyStates = new Set([
   "awaiting_vote",
@@ -19,4 +19,12 @@ export function hasBattleDiff(diff: ArenaComparisonDiff | undefined): diff is Ar
 
 export function canRequestBattleDiff(state: string): boolean {
   return diffReadyStates.has(state);
+}
+
+/**
+ * Whether the battle shows its summary and changes once both sides are final. A battle the engine's
+ * restart cut off has nothing to compare until it resumes.
+ */
+export function canReviewBattle(turn: ArenaSnapshot["turn"]): boolean {
+  return turn !== undefined && !turn.canResumeBattle && canRequestBattleDiff(turn.state);
 }

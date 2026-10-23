@@ -11,7 +11,7 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Cause, Effect, Exit, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Option, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
@@ -235,11 +235,21 @@ export const TaskTool = Tool.define(
         text: string,
       ) {
         const currentParent = yield* sessions.get(ctx.sessionID)
+        // A request takes its system text from the last user message, which this result becomes.
+        // Copy that message's own system, none included: without it a contestant loses its Arena
+        // instructions for the rest of the turn, and an older one (a winner's grafted into the
+        // canonical session) is wrong for a single agent. Either way the system changes and the
+        // provider re-reads the whole conversation uncached.
+        const lastUser = arenaParent
+          ? yield* sessions.findMessage(ctx.sessionID, (message) => message.info.role === "user")
+          : Option.none()
+        const system =
+          Option.isSome(lastUser) && lastUser.value.info.role === "user" ? lastUser.value.info.system : undefined
         const delivery = ops.prompt({
           sessionID: ctx.sessionID,
           agent: currentParent.agent ?? ctx.agent,
           variant,
-          ...(arenaParent ? { model, noReply: true } : {}),
+          ...(arenaParent ? { model, noReply: true, ...(system ? { system } : {}) } : {}),
           parts: [
             {
               type: "text",

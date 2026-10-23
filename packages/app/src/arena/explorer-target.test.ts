@@ -43,6 +43,7 @@ function snapshot(input: {
     canVote: false,
     canTie: false,
     canDiscardBattle: false,
+    canResumeBattle: false,
     canRetryResolution: false,
     revealed: false,
     createdAt: "2026-08-26T10:00:00.000Z",

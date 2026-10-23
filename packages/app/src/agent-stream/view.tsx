@@ -69,7 +69,11 @@ import {
 import { OverviewToolCallGroupView } from "@/tool-calls/detail-level/overview/view";
 import { type AgentStreamRenderModel, buildAgentStreamRenderModel } from "./model";
 import { resolveStreamRenderStrategy } from "./strategy-resolver";
-import { type StreamSegmentRenderers, type StreamViewportHandle } from "./strategy";
+import {
+  type StreamFrameChildOrder,
+  type StreamSegmentRenderers,
+  type StreamViewportHandle,
+} from "./strategy";
 import { ChatOutlineRail } from "@/agent-stream/chat-outline/rail";
 import { useChatOutline } from "@/agent-stream/chat-outline/use-chat-outline";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
@@ -102,10 +106,26 @@ import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store"
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { useForkAgent } from "@/hooks/use-fork-agent";
 import { isWeb } from "@/constants/platform";
-import { ICON_SIZE, type Theme } from "@/styles/theme";
+import { ICON_SIZE, SPACING, type Theme } from "@/styles/theme";
 import { recordRenderProfileReasons } from "@/utils/render-profiler";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
+import { arenaChatPendingWorkStart, orderArenaChat, orderArenaChatHead } from "@/arena/chat-order";
+import {
+  ArenaChatSubagent,
+  ArenaChatTaskPrompt,
+  type ArenaChatSubagentTimeline,
+} from "@/arena/chat-subagent";
+import {
+  prepareGroupedHistory,
+  type ToolCallGroupLookup,
+} from "@/tool-calls/detail-level/grouping";
+import {
+  buildOverviewGroup,
+  type OverviewToolCallGroup,
+} from "@/tool-calls/detail-level/overview/model";
+import { getArenaGapBetweenStreamItems } from "./spacing";
+import { ArenaChatReasoning } from "@/arena/chat-reasoning";
 
 function renderLiveAuxiliaryNode(input: {
   liveContent: ReactNode;
@@ -267,6 +287,11 @@ export interface AgentStreamViewProps {
   /** Height of floating composer controls that the jump button must clear. */
   bottomOverlayHeight?: number;
   readOnly?: boolean;
+  /**
+   * An Agent Duel chat, which reads the way its battle panes do: work before a turn's first text
+   * sits beneath it (`orderArenaChat`) and reasoning folds into the work it leads into.
+   */
+  arenaChat?: boolean;
   historyPagination?: {
     hasOlder: boolean;
     isLoadingOlder: boolean;
@@ -288,6 +313,66 @@ const AGENT_CAPABILITY_FLAG_KEYS: (keyof AgentCapabilityFlags)[] = [
 ];
 
 const EMPTY_STREAM_HEAD: StreamItem[] = [];
+
+/**
+ * `afterItems` keyed by the row that draws each anchor: an item folded into a work row is drawn by
+ * that row's host, so what follows the item follows the row.
+ */
+function afterItemsByRow(
+  afterItems: ReadonlyMap<string, ReactNode> | undefined,
+  lanes: readonly (readonly StreamItem[])[],
+  groupsByHostId: ToolCallGroupLookup<OverviewToolCallGroup>,
+): ReadonlyMap<string, ReactNode> | undefined {
+  if (!afterItems?.size || groupsByHostId.size === 0) return afterItems;
+  let byRow: Map<string, ReactNode> | null = null;
+  for (const row of lanes.flat()) {
+    const hostId = row.id;
+    const group = groupsByHostId.get(hostId);
+    if (!group) continue;
+    for (const item of group.run.items) {
+      const after = item.id === hostId ? undefined : afterItems.get(item.id);
+      if (after === undefined) continue;
+      byRow ??= new Map(afterItems);
+      byRow.delete(item.id);
+      const existing = byRow.get(hostId);
+      byRow.set(
+        hostId,
+        existing === undefined ? (
+          after
+        ) : (
+          <>
+            {existing}
+            {after}
+          </>
+        ),
+      );
+    }
+  }
+  return byRow ?? afterItems;
+}
+
+/**
+ * An Agent Duel chat's tail and head in the order its battle panes show them (`orderArenaChat`).
+ * The turn's leading work can sit in the tail while the text it belongs beneath is still in the
+ * head; splitting once per tail keeps the history's memoized work off the live-head flush path.
+ */
+function useArenaChatOrder(
+  arenaChat: boolean,
+  tail: StreamItem[],
+  head: StreamItem[] | undefined,
+): { tail: StreamItem[]; head: StreamItem[] | undefined } {
+  const ordered = useMemo(() => (arenaChat ? orderArenaChat(tail) : tail), [arenaChat, tail]);
+  const pendingWorkStart = useMemo(
+    () => (arenaChat ? arenaChatPendingWorkStart(ordered) : ordered.length),
+    [arenaChat, ordered],
+  );
+  const settled = useMemo(() => ordered.slice(0, pendingWorkStart), [ordered, pendingWorkStart]);
+  const orderedHead = useMemo(
+    () => orderArenaChatHead(ordered.slice(pendingWorkStart), head ?? EMPTY_STREAM_HEAD),
+    [head, ordered, pendingWorkStart],
+  );
+  return orderedHead ? { tail: settled, head: orderedHead } : { tail: ordered, head };
+}
 
 function useRetainedValue<T>(value: T, active: boolean): T {
   const retainedRef = useRef(value);
@@ -319,6 +404,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       liveContent,
       bottomOverlayHeight = 0,
       readOnly = false,
+      arenaChat,
       historyPagination,
     },
     ref,
@@ -492,14 +578,19 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     // When isActive flips back to true, the context change triggers a re-render and
     // the component reads the current (fresh) streamItems/streamHead from props.
     const isActive = useRetainedPanelActive();
-    const effectiveStreamItems = useRetainedValue(streamItems, isActive);
-    const effectiveStreamHead = useRetainedValue(streamHead, isActive);
+    const retainedStreamItems = useRetainedValue(streamItems, isActive);
+    const retainedStreamHead = useRetainedValue(streamHead, isActive);
+    const { tail: effectiveStreamItems, head: effectiveStreamHead } = useArenaChatOrder(
+      arenaChat === true,
+      retainedStreamItems,
+      retainedStreamHead,
+    );
     const effectiveTurnPresentation = useRetainedValue(turnPresentation, isActive);
     const isTurnActive = effectiveTurnPresentation.isActive;
     // Keep retained history outside the 48ms live-head flush path.
     const preparedToolCallHistory = useMemo(
-      () => prepareToolCallHistory(toolCallDetailLevel, effectiveStreamItems),
-      [effectiveStreamItems, toolCallDetailLevel],
+      () => prepareToolCallHistory(toolCallDetailLevel, effectiveStreamItems, { arena: arenaChat }),
+      [arenaChat, effectiveStreamItems, toolCallDetailLevel],
     );
     const projectedToolCalls = useMemo(
       () =>
@@ -509,8 +600,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           head: effectiveStreamHead ?? EMPTY_STREAM_HEAD,
           preparedHistory: preparedToolCallHistory,
           isTurnActive,
+          arena: arenaChat,
         }),
       [
+        arenaChat,
         effectiveStreamHead,
         effectiveStreamItems,
         isTurnActive,
@@ -543,8 +636,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           history: baseRenderModel.history,
           liveHead: baseRenderModel.segments.liveHead,
           timingByAssistantId: baseRenderModel.turnTiming.byAssistantId,
+          arena: arenaChat,
         }),
       [
+        arenaChat,
         baseRenderModel.history,
         baseRenderModel.segments.liveHead,
         baseRenderModel.turnTiming.byAssistantId,
@@ -680,6 +775,17 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const renderThoughtItem = useCallback(
       (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "thought" }>) => {
+        if (arenaChat) {
+          return (
+            <ArenaChatReasoning
+              itemId={item.id}
+              text={item.text}
+              active={item.status !== "ready"}
+              expanded={expandedToolCallGroupIds.has(item.id)}
+              onExpandedChange={setToolCallGroupExpanded}
+            />
+          );
+        }
         return (
           <ThinkingBlock
             text={item.text}
@@ -689,7 +795,17 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [autoExpandReasoning],
+      [arenaChat, autoExpandReasoning, expandedToolCallGroupIds, setToolCallGroupExpanded],
+    );
+
+    // A subagent row draws its transcript with the renderers below, which draw subagent rows in turn.
+    // The ref breaks that cycle; it is set on every render, before any row draws.
+    const subagentTranscriptRef = useRef<(timeline: ArenaChatSubagentTimeline) => ReactNode>(
+      () => null,
+    );
+    const renderSubagentTranscriptFromRef = useCallback(
+      (timeline: ArenaChatSubagentTimeline) => subagentTranscriptRef.current(timeline),
+      [],
     );
 
     const renderSingleToolCallItem = useCallback(
@@ -704,6 +820,25 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
         if (payload.source === "agent") {
           const data = payload.data;
+
+          if (arenaChat && data.detail.type === "sub_agent" && data.detail.childSessionId) {
+            return (
+              <ArenaChatSubagent
+                callId={item.id}
+                expanded={expandedToolCallGroupIds.has(item.id)}
+                onExpandedChange={setToolCallGroupExpanded}
+                serverId={resolvedServerId}
+                parentAgentId={agentId}
+                subagentId={data.detail.childSessionId}
+                description={
+                  data.detail.description?.trim() || data.detail.subAgentType || "Subagent"
+                }
+                status={data.status}
+                renderTranscript={renderSubagentTranscriptFromRef}
+                transcriptRevision={expandedToolCallGroupIds}
+              />
+            );
+          }
 
           if (
             data.name === "speak" &&
@@ -748,18 +883,33 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [context.cwd, setInlineDetailsExpanded, handleToolCallOpenFile],
+      [
+        agentId,
+        arenaChat,
+        context.cwd,
+        expandedToolCallGroupIds,
+        handleToolCallOpenFile,
+        renderSubagentTranscriptFromRef,
+        resolvedServerId,
+        setInlineDetailsExpanded,
+        setToolCallGroupExpanded,
+      ],
     );
 
     const renderToolCallItem = useCallback(
-      (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "tool_call" }>) => {
-        const group = projectedToolCalls.groupsByHostId.get(item.id);
+      (
+        layoutItem: StreamLayoutItem,
+        item: Extract<StreamItem, { kind: "tool_call" }>,
+        groups: ToolCallGroupLookup<OverviewToolCallGroup> = projectedToolCalls.groupsByHostId,
+      ) => {
+        const group = groups.get(item.id);
         if (!group) {
           return renderSingleToolCallItem(item, layoutItem.isLastInToolSequence);
         }
         const expanded = expandedToolCallGroupIds.has(group.run.id);
         return (
           <OverviewToolCallGroupView
+            arena={arenaChat}
             group={group}
             expanded={expanded}
             isLastInSequence={layoutItem.isLastInToolSequence}
@@ -789,6 +939,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         );
       },
       [
+        arenaChat,
         autoExpandReasoning,
         projectedToolCalls.groupsByHostId,
         expandedToolCallGroupIds,
@@ -842,7 +993,61 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [renderUserMessageItem, renderAssistantMessageItem, renderThoughtItem, renderToolCallItem],
     );
 
+    // A battle chat's subagent opens its transcript where it was called, inline and read the same
+    // way: its prompt as a row, its groups from its own items.
+    const renderTranscriptItem = useCallback(
+      (layoutItem: StreamLayoutItem, groups: ToolCallGroupLookup<OverviewToolCallGroup>) => {
+        const item = layoutItem.item;
+        if (item.kind === "user_message") {
+          return (
+            <ArenaChatTaskPrompt
+              itemId={item.id}
+              text={item.text}
+              expanded={expandedToolCallGroupIds.has(item.id)}
+              onExpandedChange={setToolCallGroupExpanded}
+            />
+          );
+        }
+        if (item.kind === "tool_call") return renderToolCallItem(layoutItem, item, groups);
+        return renderStreamItemContent(layoutItem);
+      },
+      [
+        expandedToolCallGroupIds,
+        renderStreamItemContent,
+        renderToolCallItem,
+        setToolCallGroupExpanded,
+      ],
+    );
+    const frameOrder = streamRenderStrategy.getFrameChildOrder();
+    const renderSubagentTranscript = useCallback(
+      (timeline: ArenaChatSubagentTimeline) => (
+        <InlineArenaTranscript
+          timeline={timeline}
+          frameOrder={frameOrder}
+          renderItem={renderTranscriptItem}
+        />
+      ),
+      [frameOrder, renderTranscriptItem],
+    );
+    subagentTranscriptRef.current = renderSubagentTranscript;
+
     const bottomTurnFooterHost = streamLayout.auxiliaryTurnFooter;
+
+    // A summary anchored to an item that a work row holds draws after that row.
+    const rowAfterItems = useMemo(
+      () =>
+        afterItemsByRow(
+          afterItems,
+          [projectedToolCalls.tail, projectedToolCalls.head],
+          projectedToolCalls.groupsByHostId,
+        ),
+      [
+        afterItems,
+        projectedToolCalls.groupsByHostId,
+        projectedToolCalls.head,
+        projectedToolCalls.tail,
+      ],
+    );
 
     const renderStreamItem = useCallback(
       (layoutItem: StreamLayoutItem) => {
@@ -854,7 +1059,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
         });
-        const after = afterItems?.get(layoutItem.item.id);
+        const after = rowAfterItems?.get(layoutItem.item.id);
         const showForkBoundary = forkBoundaryAfterItemId === layoutItem.item.id;
         if (!after && !showForkBoundary) return streamItem;
         return (
@@ -878,7 +1083,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         );
       },
       [
-        afterItems,
+        rowAfterItems,
         forkBoundaryAfterItemId,
         handleForkAssistantTurn,
         readOnly,
@@ -1032,8 +1237,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     // `renderLiveHeadRow` is stable, so head rows redraw only on this revision. Arena summaries
     // attach after a head item without changing it; without them here the summary never drew.
     const liveHeadRowRevision = useMemo(
-      () => ({ expandedToolCallGroupIds, afterItems }),
-      [afterItems, expandedToolCallGroupIds],
+      () => ({ expandedToolCallGroupIds, afterItems: rowAfterItems }),
+      [rowAfterItems, expandedToolCallGroupIds],
     );
 
     return (
@@ -1223,6 +1428,7 @@ function agentStreamViewPropsEqual(
   if (left.liveContent !== right.liveContent) reasons.push("liveContent");
   if (left.bottomOverlayHeight !== right.bottomOverlayHeight) reasons.push("bottomOverlayHeight");
   if (left.readOnly !== right.readOnly) reasons.push("readOnly");
+  if (left.arenaChat !== right.arenaChat) reasons.push("arenaChat");
   if (!historyPaginationPropsEqual(left.historyPagination, right.historyPagination)) {
     reasons.push("historyPagination");
   }
@@ -1232,6 +1438,67 @@ function agentStreamViewPropsEqual(
 
 export const AgentStreamView = memo(AgentStreamViewComponent, agentStreamViewPropsEqual);
 AgentStreamView.displayName = "AgentStreamView";
+
+/** A battle chat subagent's transcript, inline at full height in the chat's own scroll. */
+function InlineArenaTranscript({
+  timeline,
+  frameOrder,
+  renderItem,
+}: {
+  timeline: ArenaChatSubagentTimeline;
+  frameOrder: StreamFrameChildOrder;
+  renderItem: (
+    layoutItem: StreamLayoutItem,
+    groups: ToolCallGroupLookup<OverviewToolCallGroup>,
+  ) => ReactNode;
+}) {
+  const rows = useMemo(() => {
+    const grouped = prepareGroupedHistory({
+      tail: orderArenaChat([...timeline.tail, ...timeline.head]),
+      buildGroup: buildOverviewGroup,
+      arena: true,
+    });
+    return { items: grouped.tail, groups: grouped.groupsByHostId };
+  }, [timeline.head, timeline.tail]);
+  return (
+    <View>
+      {rows.items.map((item, index) => {
+        const belowItem = rows.items[index + 1] ?? null;
+        // The prompt is a row here, so it takes a row's gap rather than a user message's.
+        const gapBelow =
+          item.kind === "user_message" && belowItem
+            ? SPACING[3]
+            : getArenaGapBetweenStreamItems(item, belowItem);
+        const layoutItem: StreamLayoutItem = {
+          item,
+          index,
+          items: rows.items,
+          aboveItem: rows.items[index - 1] ?? null,
+          belowItem,
+          gapBelow,
+          assistantSpacing: "compactBoth",
+          completedFooter: null,
+          toolSequence: "none",
+          isFirstInUserGroup: false,
+          isLastInUserGroup: false,
+          isLastInToolSequence: false,
+          frameOrder,
+          phase: "complete",
+        };
+        return (
+          <InlineTranscriptRow key={item.id} gapBelow={gapBelow}>
+            {renderItem(layoutItem, rows.groups)}
+          </InlineTranscriptRow>
+        );
+      })}
+    </View>
+  );
+}
+
+function InlineTranscriptRow({ gapBelow, children }: { gapBelow: number; children: ReactNode }) {
+  const style = useMemo(() => ({ marginBottom: gapBelow }), [gapBelow]);
+  return <View style={style}>{children}</View>;
+}
 
 interface ToolCallSlotProps extends Omit<
   ComponentProps<typeof ToolCall>,

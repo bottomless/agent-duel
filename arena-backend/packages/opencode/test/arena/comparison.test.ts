@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { generate } from "@/arena/comparison"
+import { generate, skip } from "@/arena/comparison"
 import { setArenaCredentials } from "@/arena/credentials"
 import { Store } from "@/arena/mongo"
 import type { ComparisonDocument } from "@/arena/records"
@@ -145,6 +145,49 @@ describe("ArenaComparison", () => {
     })
     expect(unnamed.state).toBe("complete")
     expect(unnamed.title).toBeUndefined()
+  })
+
+  test("records a failed side's turn without a report, and only names a first-turn chat", async () => {
+    setArenaCredentials({
+      mode: "hosted",
+      token: "test-key",
+      controlPlaneUrl: "https://control.test",
+      controlTokenHash: "0".repeat(64),
+    })
+    const prompts: string[] = []
+    const input = {
+      turnID: "failed-side",
+      userPrompt: "Fix the login form",
+      baseCommit: "base",
+      aCommit: "a",
+      bCommit: "b",
+      baseTree: "base-tree",
+      aTree: "a-tree",
+      bTree: "b-tree",
+      artifactIDs: ["transcript-a", "transcript-b"],
+      execute: async (_url: string | URL | Request, init?: RequestInit) => {
+        prompts.push(JSON.parse(String(init?.body)).messages[0].content)
+        return Response.json({ choices: [{ message: { content: "Login form fix" } }] })
+      },
+    }
+
+    const first = await skip({ ...input, turnIndex: 0 })
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain("Name the task in the user prompt")
+    expect(first).toMatchObject({
+      state: "complete",
+      skipReason: "failed_side",
+      title: "Login form fix",
+      artifactIDs: ["transcript-a", "transcript-b"],
+    })
+    expect(first.output).toBeUndefined()
+    expect(first.requestArtifactID).toBeUndefined()
+
+    const later = await skip({ ...input, turnID: "failed-side-later", turnIndex: 1 })
+    expect(prompts).toHaveLength(1)
+    expect(later).toMatchObject({ state: "complete", skipReason: "failed_side", latencyMs: 0 })
+    expect(later.output).toBeUndefined()
+    expect(later.title).toBeUndefined()
   })
 
   test("anchors both agents on base and stores raw artifacts", async () => {

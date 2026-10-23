@@ -834,6 +834,7 @@ export const fr: TranslationResources = {
           title: "Archiver «{{workspaceName}}»?",
           confirm: "Archive",
           cancel: "Annuler",
+          message: "La conversation passe dans Archivées, où vous pourrez la désarchiver.",
           uncommittedChanges: "Modifications non validées",
           uncommittedChangesWithDiff: "Modifications non validées ({{diffStat}})",
           addedLine: "Ligne ajoutée{{count}}",

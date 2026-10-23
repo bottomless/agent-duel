@@ -77,6 +77,7 @@ const historyProjection = {
   selectedEarly: 1,
   appliedSide: 1,
   canonicalUserMessageID: 1,
+  canonicalLastMessageID: 1,
   gitApplication: 1,
   transitionEvent: 1,
   transitionTimestamps: 1,
@@ -969,6 +970,23 @@ export class Store {
 
   saveSessionArchive(archive: SessionArchiveDocument) {
     return insertIdempotent(this.sessionArchives, archive)
+  }
+
+  /**
+   * Saves a skipped comparison only while its turn is still skipped. A reply, retry or resume that
+   * claimed the turn while the title request was out resets its comparison, and this late record
+   * must not land on the turn's next comparison.
+   */
+  async saveSkippedComparison(comparison: ComparisonDocument) {
+    const updated = await this.turns.findOneAndUpdate(
+      { _id: comparison.turnID, comparisonState: "skipped" },
+      { $set: { comparisonID: comparison._id, updatedAt: new Date() } },
+      { returnDocument: "after" },
+    )
+    if (!updated) return undefined
+    const saved = await insertIdempotent(this.comparisons, comparison)
+    this.changed({ chatID: updated.chatID, turnID: comparison.turnID })
+    return saved
   }
 
   async saveComparison(comparison: ComparisonDocument) {

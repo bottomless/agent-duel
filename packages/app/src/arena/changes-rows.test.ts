@@ -2,15 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { ArenaComparisonDiff } from "@getpaseo/protocol/arena/rpc-schemas";
 import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 
-type ThreeWayFile = NonNullable<ArenaComparisonDiff["files"]>[number];
+type ComparisonFile = ArenaComparisonDiff["files"][number];
 
-function file(input: Partial<ThreeWayFile> & { file: string }): ThreeWayFile {
+function file(input: Partial<ComparisonFile> & { file: string }): ComparisonFile {
   return {
     binary: false,
     additionsA: 0,
     deletionsA: 0,
     additionsB: 0,
     deletionsB: 0,
+    status: "compatible",
     ...input,
   };
 }
@@ -23,11 +24,6 @@ function diff(input: Partial<ArenaComparisonDiff> = {}): ArenaComparisonDiff {
     b: { commit: "b", tree: "tree-b" },
     treesEqual: false,
     files: [],
-    filesTruncated: false,
-    patch: "",
-    truncated: false,
-    stats: [],
-    divergence: { mergeTree: "tree-merged", conflicted: false, files: [] },
     ...input,
   };
 }
@@ -62,12 +58,7 @@ describe("arenaChangesRows", () => {
     const rows = arenaChangesRows(
       diff({
         treesEqual: true,
-        files: [file({ file: "main.py", additionsA: 10, additionsB: 10 })],
-        divergence: {
-          mergeTree: "shared-result",
-          conflicted: false,
-          files: [{ file: "main.py", status: "identical" }],
-        },
+        files: [file({ file: "main.py", additionsA: 10, additionsB: 10, status: "identical" })],
       }),
     );
     expect(rows).toEqual([

@@ -13,6 +13,7 @@ import {
   relative as relativePath,
   resolve as resolvePath,
 } from "path"
+import { homedir } from "os"
 import { promisify } from "util"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -46,13 +47,13 @@ import { MessageID, PartID, SessionID } from "@/session/schema"
 import { clearToolExecutionEnvironment, gateToolExecution, isToolExecutionGated } from "@/session/tool-execution-gate"
 import { Permission } from "@/permission"
 import { Question } from "@/question"
-import { Skill } from "@/skill"
 import { QuestionID } from "@/question/schema"
 import { hostRepoPath, isolatedRoot, Worktree } from "@/worktree"
 import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
-import { generate as generateComparison } from "./comparison"
+import { isRecord } from "@/util/record"
+import { generate as generateComparison, skip as skipComparison } from "./comparison"
 import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
 import { comparisonTimeline } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
@@ -62,14 +63,19 @@ import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
 import {
   canDiscardBattle,
+  canReopenInterruptedBattle,
+  canResumeBattle,
   canRetryRun,
   canTie,
   earlyResolution,
+  chatSlug,
   generationName,
+  INTERRUPTED_RUN_MESSAGE,
   isFinalState,
   isParkedPromotion,
   isStopAbort,
   operationID,
+  spareName,
   stoppedResolution,
   turnID as makeTurnID,
   voteResolution,
@@ -82,6 +88,8 @@ import {
   acceptWinnerConflicts,
   battleRefs,
   compare,
+  comparisonFiles,
+  comparisonTrees,
   containsCommit,
   diffHostRefs,
   finalize,
@@ -90,6 +98,7 @@ import {
   importWinnerRef,
   inspectCanonical,
   readCanonicalBranch,
+  readComparisonFile,
   readResultRefs,
   removeBrokenPrivateRefs,
   mirrorCanonicalRefs,
@@ -470,10 +479,6 @@ function refRoot(turn: Pick<TurnDocument, "chatID" | "turnIndex">) {
 
 function singleAgentResultRef(chatID: string, ratingID: string) {
   return `refs/battles/${chatSlug(chatID)}/single-agent/${createHash("sha256").update(ratingID).digest("hex")}`
-}
-
-function chatSlug(id: string) {
-  return createHash("sha256").update(id).digest("hex").slice(0, 16)
 }
 
 function contestantWorktreeName(id: string, generation: number, side: Side) {
@@ -1010,6 +1015,46 @@ type EnvironmentRelease =
   | { readonly kind: "absent" }
   | { readonly kind: "kept"; readonly reason: string }
 
+/**
+ * Where the chat's last finished turn starts in its canonical transcript. Contestant forks keep
+ * that turn's tool output (its test runs, the files it just read) and clear the output before it.
+ * A battle turn starts at its grafted prompt and holds its replies and subagent results too; a
+ * prompt written after that graft starts a single-agent turn of its own, and a steer sent while
+ * that agent worked belongs to the turn it steered.
+ */
+export function lastTurnStart(
+  turns: readonly Pick<TurnDocument, "canonicalGraftedAt" | "canonicalUserMessageID">[],
+  transcript: readonly SessionV1.WithParts[],
+) {
+  const battle = turns.findLast((turn) => turn.canonicalGraftedAt && turn.canonicalUserMessageID)
+  const graftedAt = battle?.canonicalGraftedAt ? new Date(battle.canonicalGraftedAt).getTime() : -Infinity
+  const isPrompt = (message: SessionV1.WithParts) =>
+    message.info.role === "user" &&
+    message.info.time.created > graftedAt &&
+    message.parts.some((part) => part.type === "text" && !part.synthetic)
+  let index = transcript.findLastIndex(isPrompt)
+  while (index >= 0 && steered(transcript, index)) {
+    const steer = index
+    index = transcript.findLastIndex((message, at) => at < steer && isPrompt(message))
+  }
+  return transcript[index]?.info.id ?? battle?.canonicalUserMessageID
+}
+
+/**
+ * Whether the user message at `index` reached the agent before its turn ended, the way the prompt
+ * loop decides: the reply before it was still being written, or stopped only to call tools or to
+ * recover from a cut-off response. A reply that failed or was aborted ended its turn.
+ */
+function steered(transcript: readonly SessionV1.WithParts[], index: number) {
+  const reply = transcript.slice(0, index).findLast((message) => message.info.role === "assistant")?.info
+  if (reply?.role !== "assistant" || reply.error) return false
+  const sent = transcript[index].info.time.created
+  if (reply.time.completed === undefined || reply.time.completed > sent) return true
+  return (
+    !reply.finish || ["tool-calls", "unknown"].includes(reply.finish) || !!ArenaResponseRecovery.reason(reply.finish)
+  )
+}
+
 /** Turn activity used by checkout eviction; environment/setup timestamps are intentionally absent. */
 export function latestArenaChatActivity(turns: readonly TurnDocument[], runs: readonly RunDocument[]) {
   const dates = turns.flatMap((turn) => [
@@ -1066,6 +1111,7 @@ export interface Interface {
     location?: { readonly sessionID?: string; readonly messageID?: string },
   ) => Effect.Effect<{ readonly part: unknown }, Error>
   readonly diff: (turnID: string) => Effect.Effect<ArenaSchema.ComparisonDiff, Error>
+  readonly fileDiff: (turnID: string, file: string) => Effect.Effect<ArenaSchema.ComparisonFileDiff, Error>
   readonly inspect: (chatID: string, turnID: string, side: Side) => Effect.Effect<ArenaSchema.Snapshot, Error>
   readonly inspectTree: (chatID: string, turnID: string, side: Side) => Effect.Effect<ArenaSchema.InspectTree, Error>
   readonly inspectFile: (
@@ -1121,6 +1167,8 @@ export interface Interface {
   ) => Effect.Effect<ReturnType<typeof project>, Error>
   /** Run a failed contestant again from its last finished step; see `canRetryRun`. */
   readonly retryRun: (runID: string) => Effect.Effect<ReturnType<typeof project>, Error>
+  /** Resume every contestant the engine's restart cut off, together; see `canResumeBattle`. */
+  readonly resumeBattle: (turnID: string) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly vote: (
     turnID: string,
     vote: Vote,
@@ -1177,7 +1225,6 @@ export const layer: Layer.Layer<
   | Question.Service
   | Worktree.Service
   | MoveSession.Service
-  | Skill.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -1192,7 +1239,6 @@ export const layer: Layer.Layer<
     const questions = yield* Question.Service
     const worktrees = yield* Worktree.Service
     const mover = yield* MoveSession.Service
-    const skills = yield* Skill.Service
     const scope = yield* Scope.Scope
     const operationTrackers = new WeakMap<Store, ReturnType<typeof createArenaOperationTracker>>()
     const operationTrackerFor = (store: Store) => {
@@ -1310,28 +1356,21 @@ export const layer: Layer.Layer<
     const withGit = <A, E, R>(effect: Effect.Effect<A, E, R | Git.Service>) =>
       effect.pipe(Effect.provideService(Git.Service, git))
     /**
-     * What a contestant session may reach outside its worktree. Skill directories come from the
-     * canonical checkout's instance, which is loaded before either side's worktree exists, so both
-     * sides get the same list. Project skills are left out: the worktree copies them and the
-     * contestant reaches them there.
+     * What a contestant session may not change or reach outside its worktree: it reads the main
+     * checkout but does not write to it, and does not reach the checkout's `.agent-duel`, which holds
+     * the other side's worktree and every earlier turn's, except for its own worktree and host
+     * repository. Each path is listed under both its spelling and its real path, so a contestant
+     * cannot reach the checkout through `/private/tmp` when it lives under `/tmp`.
      */
-    const contestantSandbox = Effect.fnUntraced(function* (repositoryRoot: string, sessionID: string) {
-      const dirs = yield* inDirectory(repositoryRoot, skills.dirs()).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Arena could not list skill directories for a contestant", { cause }).pipe(
-            Effect.as([] as string[]),
-          ),
-        ),
-      )
-      const outside = (dir: string) => {
-        const relative = relativePath(repositoryRoot, dir)
-        return relative.startsWith("..") || isAbsolutePath(relative)
-      }
+    const contestantSandbox = (repositoryRoot: string, sessionID: string, worktree: string) => {
+      const spellings = ArenaContestant.spellings
       return {
         tmp: ArenaContestant.tmpDirectory(sessionID),
-        skills: dirs.filter(outside).toSorted(),
+        readOnly: spellings(repositoryRoot),
+        blocked: spellings(localStatePath(repositoryRoot)),
+        own: [...spellings(worktree), ...spellings(hostRepoPath(worktree))],
       } satisfies ArenaContestant.Sandbox
-    })
+    }
     const forkInto = (input: ArenaFork.Input) =>
       forkSessionInto(input).pipe(
         Effect.provideService(Session.Service, sessions),
@@ -1339,6 +1378,16 @@ export const layer: Layer.Layer<
         Effect.provideService(InstanceStore.Service, instances),
         Effect.provideService(Git.Service, git),
       )
+    /** `lastTurnStart` for a chat. A failed read only leaves the history whole. */
+    const contestantPruneBoundary = Effect.fn("Arena.contestantPruneBoundary")(function* (
+      store: Store,
+      chatID: string,
+      transcript: readonly SessionV1.WithParts[],
+    ) {
+      const turns = yield* promise(() => store.turnsForChat(chatID)).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      const start = turns ? lastTurnStart(turns, transcript) : undefined
+      return start ? MessageID.make(start) : undefined
+    })
     const repositoryMutationLock = (commonGitDir: string) => {
       const existing = repositoryMutationLocks.get(commonGitDir)
       if (existing) return existing
@@ -1873,7 +1922,8 @@ export const layer: Layer.Layer<
       return { part: jsonValue(ArenaTranscript.wholePart(transcript, partID)) }
     })
 
-    const comparisonDiff = Effect.fn("Arena.comparisonDiff")(function* (id: string) {
+    // The commits a battle's review compares, and the checkout holding them.
+    const comparedCommits = Effect.fn("Arena.comparedCommits")(function* (id: string) {
       const store = yield* available()
       const turn = yield* promise(() => store.turn(id))
       if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${id}`))
@@ -1894,38 +1944,44 @@ export const layer: Layer.Layer<
       // A stopped battle deliberately permits partial and failed contestants. Keep its
       // diff inspectable by representing a side without a finalized result as the
       // frozen base revision; the public run still reports that the side has no result.
-      const aCommit = a?.finalCommit ?? turn.frozenBaseSHA
-      const bCommit = b?.finalCommit ?? turn.frozenBaseSHA
-      const evidence = yield* withGit(
-        compare({
+      return {
+        turn,
+        a,
+        b,
+        input: {
           canonical: chat.repository.root,
           baseCommit: turn.frozenBaseSHA,
-          aCommit,
-          bCommit,
-          maxOutputBytes: 5 * 1024 * 1024,
-        }),
-      ).pipe(Effect.mapError(error))
+          aCommit: a?.finalCommit ?? turn.frozenBaseSHA,
+          bCommit: b?.finalCommit ?? turn.frozenBaseSHA,
+        },
+      }
+    })
+
+    const comparisonDiff = Effect.fn("Arena.comparisonDiff")(function* (id: string) {
+      const { turn, a, b, input } = yield* comparedCommits(id)
+      const listed = yield* withGit(comparisonFiles(input)).pipe(Effect.mapError(error))
       return Schema.decodeUnknownSync(ArenaSchema.ComparisonDiff)({
         turnID: turn._id,
         baseCommit: turn.frozenBaseSHA,
         a: {
-          commit: aCommit,
-          tree: evidence.aTree,
+          commit: input.aCommit,
+          tree: listed.aTree,
           ...(a?.finalCommit && a.permanentRef ? { ref: a.permanentRef } : {}),
         },
         b: {
-          commit: bCommit,
-          tree: evidence.bTree,
+          commit: input.bCommit,
+          tree: listed.bTree,
           ...(b?.finalCommit && b.permanentRef ? { ref: b.permanentRef } : {}),
         },
-        treesEqual: evidence.aTree === evidence.bTree,
-        files: evidence.files,
-        filesTruncated: evidence.filesTruncated,
-        patch: evidence.patch,
-        truncated: evidence.truncated,
-        stats: evidence.stats,
-        divergence: evidence.divergence,
+        treesEqual: listed.aTree === listed.bTree,
+        files: listed.files,
       })
+    })
+
+    const comparisonFileDiff = Effect.fn("Arena.comparisonFileDiff")(function* (id: string, file: string) {
+      const { turn, input } = yield* comparedCommits(id)
+      const contents = yield* withGit(readComparisonFile({ ...input, file })).pipe(Effect.mapError(error))
+      return Schema.decodeUnknownSync(ArenaSchema.ComparisonFileDiff)({ turnID: turn._id, ...contents })
     })
 
     const inspect = Effect.fn("Arena.inspect")(function* (requestedChatID: string, id: string, side: Side) {
@@ -4124,6 +4180,31 @@ export const layer: Layer.Layer<
       )
     })
 
+    // The system text the run's first prompt carried. A reply sends it again rather than building a
+    // new one: the first may hold the staging note a later build leaves out, and a system that
+    // changes mid-session makes the provider re-read the whole conversation uncached. It is reused
+    // only while a build now gives the same text, with or without that note: preview routes live in
+    // this process, so after a restart its URLs can be dead, and one uncached request costs less.
+    const startedSystem = Effect.fnUntraced(function* (
+      worktree: string,
+      sessionID: SessionID,
+      promptMessageID: string | undefined,
+    ) {
+      if (!promptMessageID) return undefined
+      const messages = yield* inDirectory(worktree, sessions.messages({ sessionID })).pipe(
+        Effect.catchCause(() => Effect.succeed([])),
+      )
+      const started = messages
+        .flatMap((message) =>
+          message.info.role === "user" && message.info.id >= promptMessageID && message.info.system
+            ? [message.info.system]
+            : [],
+        )
+        .at(0)
+      const current = [contestantSystemInstruction(worktree, true), contestantSystemInstruction(worktree)]
+      return started !== undefined && current.includes(started) ? started : undefined
+    })
+
     // The proxy routes a contestant's requests, and the recorder keeps its events, only for a run
     // bound in this process. A battle binds each run as it starts it. After an engine restart a
     // settled run is bound to nothing, so resuming it for a reply or a retry binds it again.
@@ -4174,6 +4255,10 @@ export const layer: Layer.Layer<
       const beforeDispatch = yield* promise(() => store.turn(run.turnID))
       if (beforeDispatch?.state === "stopping" || beforeDispatch?.state === "early_selected") return Exit.void
       if (prompt) yield* allowReading(run.worktree.directory, run.sessionID, prompt.readable)
+      // Read before the boundary moves: a reply resumes the run its first prompt started.
+      const system =
+        (yield* startedSystem(run.worktree.directory, run.sessionID, storedRun?.promptMessageID)) ??
+        contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID))
       if (hostDirectory !== run.worktree.directory) promptHosts.set(run.sessionID, hostDirectory)
       let result = yield* Effect.exit(
         inDirectory(
@@ -4188,7 +4273,7 @@ export const layer: Layer.Layer<
                 },
                 agent,
                 variant: "high",
-                system: contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID)),
+                system,
                 parts: prompt.parts,
               })
             : // A retry adds no message: the loop answers the last user message again, from the
@@ -4495,6 +4580,37 @@ export const layer: Layer.Layer<
       b: { result: Pick<FinalizedResult, "finalCommit">; transcript: string; artifactID: string },
       canonical: string,
     ) {
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      const finished = (side: Side) => runs.find((run) => run._id === turn.runIDs[side])?.runState === "complete"
+      // A failed side leaves nothing to weigh the other side against, so only a battle both sides
+      // finished pays for a report. The first turn still asks for the chat's name.
+      if (!finished("a") || !finished("b")) {
+        yield* promise(() => store.updateTurn(turn._id, { comparisonState: "skipped" }))
+        const commits = {
+          canonical,
+          baseCommit: turn.frozenBaseSHA,
+          aCommit: a.result.finalCommit,
+          bCommit: b.result.finalCommit,
+        }
+        const trees = yield* withGit(comparisonTrees(commits)).pipe(Effect.mapError(error))
+        const skipped = yield* promise(() =>
+          skipComparison({
+            turnID: turn._id,
+            turnIndex: turn.turnIndex,
+            userPrompt: turn.userPrompt,
+            userAttachments: ArenaAttachments.describeForJudge(turn.userAttachments),
+            baseCommit: commits.baseCommit,
+            aCommit: commits.aCommit,
+            bCommit: commits.bCommit,
+            baseTree: trees.base,
+            aTree: trees.a,
+            bTree: trees.b,
+            artifactIDs: [a.artifactID, b.artifactID],
+          }),
+        )
+        yield* promise(() => store.saveSkippedComparison(skipped))
+        return
+      }
       yield* promise(() => store.updateTurn(turn._id, { comparisonState: "running" }))
       const evidence = yield* withGit(
         compare({
@@ -4576,6 +4692,11 @@ export const layer: Layer.Layer<
       }
       const claimed = yield* promise(() => store.claimTurnFinalization(turn._id))
       if (!claimed.claimed) return
+      yield* openVote(store, turn, canonical)
+    })
+
+    /** Take a finalizing turn whose sides have all settled to the vote, and start its comparison. */
+    const openVote = Effect.fn("Arena.openVote")(function* (store: Store, turn: TurnDocument, canonical: string) {
       const inputs = yield* Effect.all([comparisonInput(store, turn, "a"), comparisonInput(store, turn, "b")]).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -4649,8 +4770,9 @@ export const layer: Layer.Layer<
 
     /**
      * Whether the session forked at warm-up is the one this send can prompt. Everything the fork
-     * copied has to be unchanged: the canonical session and its transcript, and the port bank its
-     * paths were localized against, which is process-local and so also requires a trusted pair.
+     * copied has to be unchanged: the canonical session and its transcript, the output it cleared,
+     * which the other side may fork again now, and the port bank its paths were localized against,
+     * which is process-local and so also requires a trusted pair.
      */
     const usableWarmFork = (
       trusted: boolean,
@@ -4658,6 +4780,7 @@ export const layer: Layer.Layer<
       warm: WarmWorktreeRecord,
       directory: string,
       sourceID: string,
+      pruneToolOutputBefore: MessageID | undefined,
       portAliases: PreviewRoute["portAliases"],
     ) => {
       if (!warm.forkedSessionID || !warm.forkMessageMap || !warm.portAliases) return undefined
@@ -4666,6 +4789,7 @@ export const layer: Layer.Layer<
       if (warm.forkSourceSessionID !== sourceID || warm.forkTranscriptHash !== turn.canonicalTranscriptHash) {
         return undefined
       }
+      if (warm.forkPruneToolOutputBefore !== pruneToolOutputBefore) return undefined
       if (PORT_ALIASES.some((alias) => warm.portAliases?.[alias] !== portAliases[alias])) return undefined
       return { forkedSessionID: warm.forkedSessionID, forkMessageMap: warm.forkMessageMap }
     }
@@ -4689,6 +4813,7 @@ export const layer: Layer.Layer<
       const transcript = yield* Effect.exit(sessions.messages({ sessionID: sourceID }))
       if (Exit.isFailure(source) || Exit.isFailure(transcript)) return slots
       const transcriptHash = digest(transcript.value)
+      const pruneToolOutputBefore = yield* contestantPruneBoundary(store, chat._id, transcript.value)
       const agent = source.value.agent ?? "build"
       const branch = current.canonicalCheckout?.branch ?? current.arenaBranch
       const historicalEnvironments = yield* historicalEnvironmentsForChat(store, chat._id)
@@ -4719,6 +4844,7 @@ export const layer: Layer.Layer<
                   destination: slot.directory,
                   roots: { canonical: chat.repository.root, worktree: slot.directory },
                   pathMode: "transcript",
+                  ...(pruneToolOutputBefore ? { pruneToolOutputBefore } : {}),
                   onMessageMapping(mapping) {
                     mapping.forEach((target, from) => messageMapping.set(from, target))
                   },
@@ -4746,7 +4872,7 @@ export const layer: Layer.Layer<
                   sessionID: session.id,
                   permission: contestantPermissions(
                     source.value.permission,
-                    yield* contestantSandbox(chat.repository.root, session.id),
+                    contestantSandbox(chat.repository.root, session.id, slot.directory),
                   ),
                 })
                 return {
@@ -4754,6 +4880,7 @@ export const layer: Layer.Layer<
                   forkedSessionID: session.id,
                   forkSourceSessionID: sourceID,
                   forkTranscriptHash: transcriptHash,
+                  ...(pruneToolOutputBefore ? { forkPruneToolOutputBefore: pruneToolOutputBefore } : {}),
                   forkMessageMap: Object.fromEntries(messageMapping),
                   portAliases: preview.portAliases,
                 } satisfies WarmWorktreeRecord
@@ -4778,6 +4905,8 @@ export const layer: Layer.Layer<
       prompt: ArenaAttachments.ContestantPrompt,
       warmForksTrusted: boolean,
       autoAccept: boolean,
+      /** Read with the transcript the turn froze, so both sides clear the same output. */
+      pruneToolOutputBefore: MessageID | undefined,
     ) {
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
@@ -4903,7 +5032,15 @@ export const layer: Layer.Layer<
         const env = previewEnvironment(info.directory)
         const forkStartedAt = Date.now()
         const warmFork = warm
-          ? usableWarmFork(warmForksTrusted, turn, warm, info.directory, sourceID, preview.portAliases)
+          ? usableWarmFork(
+              warmForksTrusted,
+              turn,
+              warm,
+              info.directory,
+              sourceID,
+              pruneToolOutputBefore,
+              preview.portAliases,
+            )
           : undefined
         if (warm?.forkedSessionID && !warmFork) {
           // Forked from an older transcript or in another process; nothing else refers to it.
@@ -4923,6 +5060,7 @@ export const layer: Layer.Layer<
             destination: info.directory,
             roots: { canonical: chat.repository.root, worktree: info.directory },
             pathMode: "transcript",
+            ...(pruneToolOutputBefore ? { pruneToolOutputBefore } : {}),
             onMessageMapping(mapping) {
               mapping.forEach((target, source) => messageMapping.set(source, target))
             },
@@ -4949,7 +5087,7 @@ export const layer: Layer.Layer<
             sessionID: forked.id,
             permission: contestantPermissions(
               source.permission,
-              yield* contestantSandbox(chat.repository.root, forked.id),
+              contestantSandbox(chat.repository.root, forked.id, info.directory),
             ),
           })
           forkedID = forked.id
@@ -5337,8 +5475,10 @@ export const layer: Layer.Layer<
       // mutate files. Cold sides retain their independent completion gates.
       const settleEnvironment = Effect.fnUntraced(function* (run: SideRuntime, outcome: Exit.Exit<void, unknown>) {
         const gate = executionGates.get(run.side)
-        if (Exit.isSuccess(outcome)) gate?.release()
-        else gate?.fail(Cause.squash(outcome.cause))
+        if (Exit.isSuccess(outcome)) {
+          gate?.release()
+          yield* promise(() => store.updateRun(run.runID, { environmentReadyAt: new Date() })).pipe(Effect.ignore)
+        } else gate?.fail(Cause.squash(outcome.cause))
         yield* Deferred.succeed(environmentSettled[run.side], undefined)
         // Stop cancels both runs itself.
         if (Exit.isFailure(outcome) && !copyStopped(outcome.cause)) {
@@ -5654,6 +5794,7 @@ export const layer: Layer.Layer<
           new Error("Arena canonical Git state and transcript changed without a reconciled single-agent turn"),
         )
       }
+      const pruneToolOutputBefore = yield* contestantPruneBoundary(store, chat._id, transcript)
       const copyConfiguration = yield* promise(() => arenaCopyConfiguration(base.root)).pipe(
         Effect.onError(() => discardBaseRef),
       )
@@ -5813,7 +5954,14 @@ export const layer: Layer.Layer<
         return yield* respond(store, chat._id)
       }
       const activeTurn = activation.turn
-      yield* executeBattle(store, activeTurn, contestantPrompt.prompt, warmForksTrusted, autoAccept).pipe(
+      yield* executeBattle(
+        store,
+        activeTurn,
+        contestantPrompt.prompt,
+        warmForksTrusted,
+        autoAccept,
+        pruneToolOutputBefore,
+      ).pipe(
         Effect.scoped,
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -6129,7 +6277,8 @@ export const layer: Layer.Layer<
         (run) => {
           // A working contestant whose request started early is still run by its host's runner.
           return allowReading(run.worktree, SessionID.make(run.rootSessionID), prompt.readable).pipe(
-            Effect.andThen(
+            Effect.andThen(startedSystem(run.worktree, SessionID.make(run.rootSessionID), run.promptMessageID)),
+            Effect.flatMap((system) =>
               inDirectory(
                 promptHosts.get(SessionID.make(run.rootSessionID)) ?? run.worktree,
                 prompts.prompt({
@@ -6140,7 +6289,7 @@ export const layer: Layer.Layer<
                   },
                   agent,
                   variant: "high",
-                  system: contestantSystemInstruction(run.worktree),
+                  system: system ?? contestantSystemInstruction(run.worktree),
                   parts: prompt.parts,
                 }),
               ),
@@ -6198,6 +6347,41 @@ export const layer: Layer.Layer<
             return yield* promise(() => store.updateRun(failed._id, { manualRetries: (failed.manualRetries ?? 0) + 1 }))
           }),
         failure: { message: "Arena contestant retry failed", runID },
+      })
+      return yield* respond(store, turn.chatID)
+    })
+
+    /**
+     * Resume every side the engine's restart cut off, together; see `canResumeBattle`. Each continues
+     * its session from the response the restart cut off, which keeps the work it did, and adds no
+     * message, so the battle stays blind.
+     */
+    const resumeBattle = Effect.fn("Arena.resumeBattle")(function* (turnID: string) {
+      const store = yield* available()
+      const turn = yield* promise(() => store.turn(turnID))
+      if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${turnID}`))
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      if (!canResumeBattle(turn, runs)) return yield* Effect.fail(new Error("This battle cannot be resumed"))
+      const interrupted = runs.filter((run) => run.runState === "interrupted")
+      const chat = yield* promise(() => store.chat(turn.chatID))
+      if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
+      const source = yield* sessions.get(SessionID.make(turn.sourceCanonicalSessionID)).pipe(Effect.mapError(error))
+      const claimed = yield* promise(() =>
+        store.claimReplyContinuation(
+          turn._id,
+          interrupted.map((run) => run.side),
+        ),
+      )
+      if (!claimed.claimed) {
+        return yield* Effect.fail(new Error("The battle changed before it resumed. Try again."))
+      }
+      yield* resumeSettledRuns(store, turn, chat.repository.root, interrupted, {
+        comparisonID: claimed.comparisonID,
+        prompt: undefined,
+        agent: source.agent ?? "build",
+        reset: (run) =>
+          closeInterruptedResponses(run).pipe(Effect.andThen(promise(() => store.resetRunForReply(run._id)))),
+        failure: { message: "Arena battle resume failed", turnID },
       })
       return yield* respond(store, turn.chatID)
     })
@@ -6971,7 +7155,7 @@ export const layer: Layer.Layer<
 
     const forkSpareSlot = Effect.fnUntraced(function* (store: Store, turn: TurnDocument, canonical: string) {
       if (spareCreations.has(turn.chatID)) return
-      const name = `${chatSlug(turn.chatID)}/spare-${randomBytes(4).toString("hex")}`
+      const name = `${chatSlug(turn.chatID)}/${spareName(randomBytes(4).toString("hex"))}`
       const fiber = yield* ensureSpareSlot(store, turn, name).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Arena spare worktree creation failed", { chatID: turn.chatID, cause }),
@@ -8029,6 +8213,162 @@ export const layer: Layer.Layer<
       return yield* respond(store, chat._id)
     })
 
+    /**
+     * Close the responses an engine restart cut off, the way a stop closes them: unfinished tool
+     * calls end interrupted and the message ends aborted. A resumed loop then replays what the
+     * response did without running its unfinished calls again, and the pane stops showing it live.
+     */
+    const closeInterruptedResponses = Effect.fn("Arena.closeInterruptedResponses")(function* (run: RunDocument) {
+      const root = SessionID.make(run.rootSessionID)
+      const ids = [root, ...(yield* descendants(root))]
+      yield* inDirectory(
+        run.worktree,
+        Effect.forEach(
+          ids,
+          (sessionID) =>
+            Effect.gen(function* () {
+              const messages = yield* sessions.messages({ sessionID })
+              for (const message of messages) {
+                if (message.info.role !== "assistant" || message.info.time.completed) continue
+                const end = Date.now()
+                for (const part of message.parts) {
+                  if (part.type !== "tool") continue
+                  if (part.state.status !== "pending" && part.state.status !== "running") continue
+                  const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
+                  yield* sessions.updatePart({
+                    ...part,
+                    state: {
+                      ...part.state,
+                      status: "error",
+                      error: "Tool execution aborted",
+                      metadata: { ...metadata, interrupted: true },
+                      time: { start: "time" in part.state ? part.state.time.start : end, end },
+                    },
+                  })
+                }
+                yield* sessions.updateMessage({
+                  ...message.info,
+                  error: message.info.error ?? new SessionV1.AbortedError({ message: "Aborted" }).toObject(),
+                  time: { ...message.info.time, completed: end },
+                })
+              }
+            }),
+          { discard: true },
+        ),
+      ).pipe(Effect.mapError(error))
+    })
+
+    /**
+     * Take a battle the engine's restart cut off back to the vote, as if both sides had settled: a
+     * side that had finished keeps its result, and one that was working is committed as
+     * interrupted, and the voter resumes the battle (`resumeBattle`). See `canReopenInterruptedBattle`.
+     */
+    const reopenInterruptedTurn = Effect.fn("Arena.reopenInterruptedTurn")(function* (
+      store: Store,
+      turn: TurnDocument,
+      runs: readonly RunDocument[],
+      canonical: string,
+    ) {
+      if (turn.state !== "interrupted_recovery") {
+        yield* promise(() => store.transitionTurn(turn._id, "interrupted_recovery"))
+      }
+      yield* Effect.forEach(
+        runs.filter((run) => !run.finalizedAt),
+        (saved) =>
+          Effect.gen(function* () {
+            const runtime: SideRuntime = {
+              side: saved.side,
+              turnID: saved.turnID,
+              runID: saved._id,
+              sessionID: SessionID.make(saved.rootSessionID),
+              worktree: { name: `turn-${turn.turnIndex}-${saved.side}`, directory: saved.worktree },
+              assignment: saved.assignment,
+            }
+            // Finalization had already committed and archived this side's finished result; only
+            // its settlement was lost.
+            const finished = saved.runState === "complete" && saved.archiveComplete === true && !!saved.finalCommit
+            if (!finished) {
+              yield* closeInterruptedResponses(saved)
+              yield* finalizeSide(
+                store,
+                turn,
+                runtime,
+                Exit.fail(new Error(INTERRUPTED_RUN_MESSAGE)),
+                true,
+                "interrupted",
+              )
+            }
+            const settled = yield* promise(() => store.run(saved._id))
+            const selectable = finished && !!settled?.finalCommit && !!settled.finalTree && !!settled.permanentRef
+            yield* promise(() => store.updateRun(saved._id, { selectable, finalizedAt: new Date() }))
+            yield* promise(() =>
+              store.markRunFinalized({ turnID: turn._id, side: saved.side, selectable, at: new Date() }),
+            )
+          }).pipe(
+            // Committed anyway, so the voter can still resume the side or discard the battle.
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning("Arena could not settle an interrupted side", {
+                  turnID: turn._id,
+                  runID: saved._id,
+                  cause,
+                })
+                yield* promise(() =>
+                  store.updateRun(saved._id, {
+                    runState: "interrupted",
+                    durationMs: null,
+                    selectable: false,
+                    error: Cause.pretty(cause),
+                    completedAt: new Date(),
+                    finalizedAt: new Date(),
+                  }),
+                )
+                yield* promise(() =>
+                  store.markRunFinalized({ turnID: turn._id, side: saved.side, selectable: false, at: new Date() }),
+                )
+              }),
+            ),
+          ),
+        { concurrency: 2, discard: true },
+      )
+      yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
+      yield* openVote(store, turn, canonical)
+    })
+
+    /**
+     * Engines before `reopenInterruptedTurn` parked a battle their restart cut off as a stopped one,
+     * with its working sides never settled, and the voter could only keep one as it was or discard
+     * it. Reopen such a battle to the vote so those sides can be resumed. Every side is settled
+     * here, so a battle is reopened once.
+     */
+    const reopenParkedInterruptedTurn = Effect.fn("Arena.reopenParkedInterruptedTurn")(function* (
+      store: Store,
+      turn: TurnDocument,
+    ) {
+      if (turn.resolution || turn.transitionTimestamps.stopping) return
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      if (!runs.some((run) => run.runState === "interrupted" && !run.finalizedAt)) return
+      yield* Effect.forEach(
+        runs.filter((run) => !run.finalizedAt),
+        (run) =>
+          Effect.gen(function* () {
+            yield* closeInterruptedResponses(run).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Arena could not close an interrupted side's responses", { runID: run._id, cause }),
+              ),
+            )
+            const selectable = run.selectable === true
+            yield* promise(() => store.updateRun(run._id, { selectable, finalizedAt: new Date() }))
+            yield* promise(() =>
+              store.markRunFinalized({ turnID: turn._id, side: run.side, selectable, at: new Date() }),
+            )
+          }),
+        { concurrency: 2, discard: true },
+      )
+      yield* promise(() => store.transitionTurn(turn._id, "awaiting_vote"))
+      yield* Effect.logInfo("Arena reopened a battle an earlier restart had parked", { turnID: turn._id })
+    })
+
     const recoverExecutingTurn = Effect.fn("Arena.recoverExecutingTurn")(function* (
       store: Store,
       turn: TurnDocument,
@@ -8089,10 +8429,11 @@ export const layer: Layer.Layer<
           ),
         )
       }
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      if (canReopenInterruptedBattle(turn, runs)) return yield* reopenInterruptedTurn(store, turn, runs, canonical)
       if (turn.state !== "interrupted_recovery") {
         yield* promise(() => store.transitionTurn(turn._id, "interrupted_recovery"))
       }
-      const runs = yield* promise(() => store.runsForTurn(turn._id))
       const recovered = new Map<
         Side,
         { result: Pick<FinalizedResult, "finalCommit">; transcript: string; artifactID: string }
@@ -8430,6 +8771,11 @@ export const layer: Layer.Layer<
               return
             }
 
+            if (turn.state === "awaiting_stop_resolution") {
+              yield* reopenParkedInterruptedTurn(store, turn)
+              return
+            }
+
             if (turn.state === "application_failed" && turn.gitApplication?.state === "conflicted") {
               yield* ensureArchives(store, turn)
               if (!turn.resolution || turn.resolution.kind === "aborted" || !turn.appliedSide) return
@@ -8648,20 +8994,68 @@ export const layer: Layer.Layer<
         )
       }
 
+      // The winner's subagents go under the chat's session too, so the chat can show their
+      // transcripts once the run's own sessions are deleted with its worktree. A partial copy from
+      // an interrupted graft goes first; its ids were recorded before anything was copied into it.
+      yield* Effect.forEach(
+        turn.canonicalSubagentSessionIDs ?? [],
+        (id) => sessions.remove(SessionID.make(id)).pipe(Effect.ignore),
+        { discard: true },
+      )
+      const winnerRoot = SessionID.make(winner.rootSessionID)
+      const sessionMap = new Map<string, SessionID>([[winnerRoot, canonical]])
+      const subagents = yield* descendants(winnerRoot)
+      for (const id of subagents) {
+        const info = yield* sessions.get(id).pipe(Effect.mapError(error))
+        const parentID = info.parentID ? sessionMap.get(info.parentID) : undefined
+        if (!parentID) continue
+        const copy = yield* inDirectory(
+          chat.repository.root,
+          sessions.create({ parentID, title: info.title, ...(info.agent ? { agent: info.agent } : {}) }),
+        )
+        sessionMap.set(id, copy.id)
+      }
+      if (sessionMap.size > 1) {
+        yield* promise(() =>
+          store.updateTurn(turn._id, {
+            canonicalSubagentSessionIDs: [...sessionMap.values()].filter((id) => id !== canonical),
+          }),
+        )
+      }
+      // A subagent's `task` call names its session; point it at the copy.
+      const retargetSessions = <T>(value: T): T => {
+        if (sessionMap.size === 1) return value
+        const visit = (entry: unknown): unknown => {
+          if (typeof entry === "string") {
+            let next = entry
+            for (const [from, to] of sessionMap) if (from !== winnerRoot) next = next.split(from).join(to)
+            return next
+          }
+          if (Array.isArray(entry)) return entry.map(visit)
+          if (!entry || typeof entry !== "object" || Object.getPrototypeOf(entry) !== Object.prototype) return entry
+          return Object.fromEntries(Object.entries(entry).map(([key, item]) => [key, visit(item)]))
+        }
+        return visit(value) as T
+      }
+
       const source = yield* sessions
         .messages({ sessionID: SessionID.make(winner.rootSessionID) })
         .pipe(Effect.mapError(error))
       const paths = {
         worktrees: yield* promise(() => store.worktreesForChat(chat._id)),
         canonical: chat.repository.root,
+        temp: ArenaContestant.tmpParent(),
+        home: homedir(),
       }
-      const canonicalize = <T>(value: T, role?: string) =>
-        promise(() => canonicalizeTranscriptPaths(value, paths, role))
+      const canonicalize = <T>(value: T, role?: string, options?: { readonly subagent?: boolean }) =>
+        promise(() => canonicalizeTranscriptPaths(retargetSessions(value), paths, role, options))
       const idMap = new Map<string, MessageID>()
+      let last: MessageID | undefined
       for (const message of source) {
         if (message.info.id < boundary) continue
         const id = MessageID.ascending()
         idMap.set(message.info.id, id)
+        last = id
         const parentID =
           message.info.role === "assistant" && message.info.parentID ? idMap.get(message.info.parentID) : undefined
         const cloned = yield* sessions.updateMessage(
@@ -8685,7 +9079,36 @@ export const layer: Layer.Layer<
           yield* sessions.updatePart(next)
         }
       }
-      yield* promise(() => store.updateTurn(turn._id, { canonicalGraftedAt: new Date() }))
+      for (const id of subagents) {
+        const copy = sessionMap.get(id)
+        if (!copy) continue
+        const messages = yield* sessions.messages({ sessionID: id }).pipe(Effect.mapError(error))
+        const childIds = new Map<string, MessageID>()
+        for (const message of messages) {
+          const messageID = MessageID.ascending()
+          childIds.set(message.info.id, messageID)
+          const parentID =
+            message.info.role === "assistant" && message.info.parentID ? childIds.get(message.info.parentID) : undefined
+          const cloned = yield* sessions.updateMessage(
+            yield* canonicalize({ ...message.info, sessionID: copy, id: messageID, ...(parentID ? { parentID } : {}) }),
+          )
+          for (const part of message.parts) {
+            const next = yield* canonicalize(
+              { ...part, id: PartID.ascending(), messageID: cloned.id, sessionID: copy },
+              message.info.role,
+              { subagent: true },
+            )
+            if (next.type === "compaction" && next.tail_start_id) next.tail_start_id = childIds.get(next.tail_start_id)
+            yield* sessions.updatePart(next)
+          }
+        }
+      }
+      yield* promise(() =>
+        store.updateTurn(turn._id, {
+          canonicalGraftedAt: new Date(),
+          ...(last ? { canonicalLastMessageID: last } : {}),
+        }),
+      )
     })
 
     const transcriptFor = Effect.fn("Arena.transcriptFor")(function* (store: Store, run: RunDocument) {
@@ -9554,6 +9977,9 @@ export const layer: Layer.Layer<
         return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
       }
       if (turn.state !== "awaiting_vote") return yield* Effect.fail(new Error("Arena turn is not ready for a vote"))
+      if (canResumeBattle(turn, yield* promise(() => store.runsForTurn(turn._id)))) {
+        return yield* Effect.fail(new Error("Resume or discard this battle before choosing"))
+      }
       const resolved = voteResolution(selected)
       return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
     })
@@ -10164,6 +10590,7 @@ export const layer: Layer.Layer<
       turn: turnSnapshot,
       runPart,
       diff: comparisonDiff,
+      fileDiff: comparisonFileDiff,
       inspect,
       inspectTree,
       inspectFile,
@@ -10179,6 +10606,7 @@ export const layer: Layer.Layer<
       interruptSteer,
       discardSteer,
       retryRun,
+      resumeBattle,
       vote,
       recordReview,
       retryResolution,

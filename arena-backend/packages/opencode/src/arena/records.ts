@@ -116,13 +116,14 @@ export type WarmWorktreeRecord = {
   readonly refsMirrored?: boolean
   /**
    * The canonical session forked into this worktree at warm-up, with the transcript hash and
-   * source it was copied from and the port bank its paths were localized against. A send uses
-   * it only when all three still match and the pair is trusted in this process; otherwise it
-   * forks again and disposes of this one.
+   * source it was copied from, the message before which it cleared tool output, and the port bank
+   * its paths were localized against. A send uses it only when all four still match and the pair
+   * is trusted in this process; otherwise it forks again and disposes of this one.
    */
   readonly forkedSessionID?: string
   readonly forkSourceSessionID?: string
   readonly forkTranscriptHash?: string
+  readonly forkPruneToolOutputBefore?: string
   readonly forkMessageMap?: Readonly<Record<string, string>>
   readonly portAliases?: Readonly<Record<ArenaPortAlias, number>>
   /** How this worktree was last brought to its base, and where that time went. */
@@ -393,6 +394,17 @@ export type TurnDocument = {
    * anchor. This marker is how a retry knows the copy already happened and must not drop anything.
    */
   canonicalGraftedAt?: Date
+  /**
+   * The copies of the winner's subagent sessions made under the chat's session, recorded before
+   * their messages are copied so a retried graft can remove a partial copy.
+   */
+  canonicalSubagentSessionIDs?: string[]
+  /**
+   * The last message the graft copied into the canonical session. With `canonicalUserMessageID` it
+   * bounds the battle's rows in the chat: replies sent inside the battle are user messages too, so
+   * the next user message is not where the battle ends.
+   */
+  canonicalLastMessageID?: string
   gitApplication?: {
     readonly state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
     readonly reason?: string
@@ -458,6 +470,11 @@ export type RunDocument = {
   retention?: "none" | "retained_until_next_send" | "cleanup_failed"
   readonly worktreeCreatedAt: Date
   readyAt?: Date
+  /**
+   * The side's environment setup (the copy of ignored content) finished. Only an environment
+   * that finished can be resumed after an engine restart; see `canReopenInterruptedBattle`.
+   */
+  environmentReadyAt?: Date
   startedAt?: Date
   firstEventAt?: Date
   lastEventAt?: Date
@@ -671,6 +688,8 @@ export type ComparisonDocument = {
   requestArtifactID?: Identifier
   responseArtifactID?: Identifier
   state: "pending" | "running" | "complete" | "failed"
+  /** Set when no report was written because a side failed; the record then only names the chat. */
+  readonly skipReason?: "failed_side"
   output?: string
   /** The chat's name, which only the first turn's comparison writes. */
   title?: string
@@ -896,6 +915,7 @@ export type BattleHistoryTurn = Pick<
   | "selectedEarly"
   | "appliedSide"
   | "canonicalUserMessageID"
+  | "canonicalLastMessageID"
   | "gitApplication"
   | "transitionEvent"
   | "transitionTimestamps"

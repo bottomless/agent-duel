@@ -5,6 +5,7 @@ import { createHash, randomBytes } from "crypto"
 import { imageArtifactID } from "@agent-duel/arena-service/research-protocol"
 import { createServer } from "net"
 import { Global } from "@opencode-ai/core/global"
+import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import { rename, rm, stat, writeFile } from "fs/promises"
 import fs from "fs/promises"
 import * as CopySnapshot from "@/arena/copy-snapshot"
@@ -431,6 +432,7 @@ function installOpenRouterStub(options?: {
     }
   }> = []
   let utilityCalls = 0
+  const utilityPrompts: string[] = []
   type TestAssignment = {
     readonly scopeID: string
     readonly assignmentID: string
@@ -494,6 +496,16 @@ function installOpenRouterStub(options?: {
         assignments: set.assignments.map(({ assignmentID, model }) => ({ assignmentID, model: model.displayName })),
       })
     }
+    if (url.pathname === "/api/arena/comparison") {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }
+      utilityCalls++
+      utilityPrompts.push(body.messages[0]?.content ?? "")
+      return Response.json({
+        provider: "groq",
+        choices: [{ message: { content: "The two retained Git results and transcripts were compared." } }],
+        usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
+      })
+    }
     if (url.pathname !== "/api/openrouter/api/v1/chat/completions")
       throw new Error(`Unexpected external request: ${url}`)
     const body = JSON.parse(String(init?.body)) as {
@@ -502,14 +514,6 @@ function installOpenRouterStub(options?: {
         readonly role?: string
         readonly content?: string | Array<{ readonly text?: string }>
       }>
-    }
-    if (body.model === "minimax/minimax-m2.7") {
-      utilityCalls++
-      return Response.json({
-        provider: "groq",
-        choices: [{ message: { content: "The two retained Git results and transcripts were compared." } }],
-        usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
-      })
     }
     const headers = new Headers(init?.headers)
     if (headers.has("x-arena-assignment")) throw new Error("Contestant request carried a legacy routing token")
@@ -574,6 +578,8 @@ function installOpenRouterStub(options?: {
     /** The decision the control plane holds for a battle, if one was resolved. */
     battleDecision: (scopeID: string) => assignmentSets.get(`battle:${scopeID}`)?.decision,
     utilityCalls: () => utilityCalls,
+    /** Utility requests other than the chat's title alone; anything unrecognized counts as a report. */
+    reportCalls: () => utilityPrompts.filter((prompt) => !prompt.startsWith("Name the task in the user prompt")).length,
     restore: () => {
       setArenaCredentials(undefined)
       globalThis.fetch = original
@@ -637,13 +643,14 @@ async function waitForTurn(
 /**
  * The warm pair is prepared after the turn completes, so that the chat reaches `ready` — and
  * the user's next prompt can start a turn — without waiting on the project's setup command.
- * `complete` therefore no longer implies a prepared pair; this is what does.
+ * `complete` therefore no longer implies a prepared pair; this is what does. Until that warm-up
+ * starts, the turn still holds the pair its own send used, so only the next generation counts.
  */
 async function waitForWarmPair(store: Store, turnID: string) {
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
     const turn = await store.turn(turnID)
-    const warm = turn?.warmPreparation
+    const warm = turn && turn.warmPreparation?.generation === turn.turnIndex + 1 ? turn.warmPreparation : undefined
     if (warm?.state === "ready") return turn
     if (warm?.state === "failed") throw new Error(`Arena warm preparation failed: ${warm.error ?? "no error recorded"}`)
     await Bun.sleep(10)
@@ -1938,6 +1945,139 @@ describe("Arena service vertical slice", () => {
     }
   }, 45_000)
 
+  test("keeps the last finished turn's tool output and clears older output for the next contestants only", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure pruning fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const cleared = "[Old tool result content cleared]"
+    // Every turn's prompt names a marker. A fresh prompt runs `echo <marker>-$((40+2))`, whose output
+    // differs from the command, so a request carries `<marker>-42` only as a tool result.
+    let generation = 0
+    const router = installOpenRouterStub({
+      respond({ messages }) {
+        generation++
+        if (messages.at(-1)?.role === "tool")
+          return contestantResponse("contestant", 0, undefined, false, undefined, `p${generation}`)
+        const marker = JSON.stringify(messages.at(-1)?.content).match(/\b([TS]\d)\b/)?.[1]
+        if (!marker) return undefined
+        return contestantResponse("contestant", 0, "bash", false, `echo ${marker}-$((40+2))`, `p${generation}`)
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    const sentToolResults = (request: (typeof router.contestantRequests)[number]) =>
+      JSON.stringify((request.messages as Array<{ role?: string }> | undefined)?.filter((m) => m.role === "tool"))
+    const firstPerModel = (requests: typeof router.contestantRequests) => [
+      ...new Map(requests.toReversed().map((request) => [request.model, request])).values(),
+    ]
+    /** What each side's first request of a turn carries from the history it inherited. */
+    const inherited = (requests: typeof router.contestantRequests) =>
+      firstPerModel(requests).map((request) => {
+        const sent = sentToolResults(request)
+        return {
+          cleared: sent.includes(cleared),
+          kept: ["T1", "T2", "S1", "T3"].filter((marker) => sent.includes(`${marker}-42`)),
+        }
+      })
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await request("/session", { method: "POST", headers, body: JSON.stringify({ title: "Pruning" }) }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const battle = async (marker: string) => {
+        const boundary = router.contestantRequests.length
+        const admitted = await json<PublicSnapshot>(
+          await request(`/arena/chats/${attached.chat.id}/turns`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ prompt: `Run turn ${marker}.` }),
+          }),
+        )
+        const turnID = admitted.turn?.id
+        if (!turnID) throw new Error(`Arena did not admit turn ${marker}`)
+        await waitForTurn(memory.store, turnID, "awaiting_vote")
+        const requests = router.contestantRequests.slice(boundary)
+        await request(`/arena/turns/${turnID}/vote`, { method: "POST", headers, body: JSON.stringify({ vote: "a" }) })
+        await waitForTurn(memory.store, turnID, "complete")
+        await waitForWarmPair(memory.store, turnID)
+        const sides = (await memory.store.turn(turnID))?.setupTimings?.sides
+        return { requests, forkedAtWarmup: [sides?.a?.forkedAtWarmup, sides?.b?.forkedAtWarmup] }
+      }
+
+      // Mid-turn: a side's later requests carry its own tool output.
+      const first = await battle("T1")
+      expect(first.requests.some((request) => sentToolResults(request).includes("T1-42"))).toBe(true)
+      expect(first.requests.every((request) => !sentToolResults(request).includes(cleared))).toBe(true)
+
+      // Forked at warm-up, right after the vote. The last finished turn keeps its output.
+      const second = await battle("T2")
+      expect(second.forkedAtWarmup).toEqual([true, true])
+      expect(inherited(second.requests)).toEqual([
+        { cleared: false, kept: ["T1"] },
+        { cleared: false, kept: ["T1"] },
+      ])
+
+      // A single-agent turn continues the canonical session, which keeps every output.
+      const beforeNormal = (await memory.store.chat(attached.chat.id))?.canonicalTranscriptHash
+      if (!beforeNormal) throw new Error("Arena did not record the canonical transcript")
+      const normalBoundary = router.contestantRequests.length
+      const normal = await request(`/session/${source.id}/message`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          agent: "build",
+          messageID: MessageID.ascending(),
+          model: { providerID: "openrouter", modelID: "deepseek/deepseek-v4-flash" },
+          parts: [{ type: "text", text: "Run single-agent turn S1 without changing files." }],
+        }),
+      })
+      expect(normal.status).toBe(200)
+      await waitForCanonicalTranscriptChange(memory.store, attached.chat.id, beforeNormal)
+      const normalRequests = router.contestantRequests.slice(normalBoundary)
+      expect(normalRequests.length).toBeGreaterThan(0)
+      expect(sentToolResults(normalRequests[0]!)).not.toContain(cleared)
+      expect(["T1-42", "T2-42"].every((output) => sentToolResults(normalRequests[0]!).includes(output))).toBe(true)
+
+      // The single-agent turn is now the last finished one. It changed the transcript the warm pair
+      // was forked from, so this send forks both sides itself.
+      const third = await battle("T3")
+      expect(third.forkedAtWarmup).toEqual([false, false])
+      expect(inherited(third.requests)).toEqual([
+        { cleared: true, kept: ["S1"] },
+        { cleared: true, kept: ["S1"] },
+      ])
+
+      // A battle after it starts at its grafted prompt, though the single-agent prompt came later.
+      // Warm-up forked after the vote, and the send reads the same boundary, so it reuses both forks.
+      const fourth = await battle("T4")
+      expect(fourth.forkedAtWarmup).toEqual([true, true])
+      expect(inherited(fourth.requests)).toEqual([
+        { cleared: true, kept: ["T3"] },
+        { cleared: true, kept: ["T3"] },
+      ])
+
+      // What the chat's history shows comes from the canonical session, still whole.
+      const canonical = await json<SessionV1.WithParts[]>(await request(`/session/${source.id}/message`, { headers }))
+      const outputs = canonical.flatMap((message) =>
+        message.parts.flatMap((part) =>
+          part.type === "tool" && part.state.status === "completed" ? [part.state] : [],
+        ),
+      )
+      for (const marker of ["T1", "T2", "S1", "T3", "T4"]) {
+        expect(outputs.some((state) => state.output.includes(`${marker}-42`))).toBe(true)
+      }
+      expect(outputs.every((state) => !state.time.compacted)).toBe(true)
+    } finally {
+      router.restore()
+    }
+  }, 180_000)
+
   test("waits for the retained winner only while it still serves a port", async () => {
     await using directory = await tmpdir({
       git: true,
@@ -2948,6 +3088,8 @@ describe("Arena service vertical slice", () => {
         : null
       expect(resumedArchive?.contentHash).not.toBe(firstArchive?.contentHash)
       expect(router.utilityCalls()).toBe(1)
+      expect(router.reportCalls()).toBe(1)
+      expect((await memory.store.turn(turnID))?.comparisonState).toBe("complete")
     } finally {
       router.restore()
     }
@@ -3211,9 +3353,7 @@ describe("Arena service vertical slice", () => {
       await waitForTurn(memory.store, turnID, "awaiting_stop_resolution")
       const runs = await memory.store.runsForTurn(turnID)
       expect(runs.map((run) => [run.side, run.runState, run.selectable])).toEqual(
-        runs.map((run) =>
-          run.side === failed.side ? [run.side, "error", false] : [run.side, "complete", true],
-        ),
+        runs.map((run) => (run.side === failed.side ? [run.side, "error", false] : [run.side, "complete", true])),
       )
       const keep = failed.side === "a" ? "apply_b" : "apply_a"
       await json<PublicSnapshot>(
@@ -3276,6 +3416,11 @@ describe("Arena service vertical slice", () => {
       ])
       expect(failed.turn?.canTie).toBe(false)
       expect(failed.turn?.canDiscardBattle).toBe(true)
+      // Two failures leave nothing to compare: no report is paid for, and the first turn is only named.
+      expect((await waitForComparison(memory.store, turnID)).output).toBeUndefined()
+      expect((await memory.store.turn(turnID))?.comparisonState).toBe("skipped")
+      expect(router.reportCalls()).toBe(0)
+      expect(router.utilityCalls()).toBe(1)
 
       // A tie applies A whatever A is, so it would have recorded a vote between two failures.
       const tie = await request(`/arena/turns/${turnID}/vote`, {
@@ -3356,6 +3501,11 @@ describe("Arena service vertical slice", () => {
       expect(settled.runs.filter((run) => run.runState === "error")).toHaveLength(1)
       expect(settled.turn?.canTie).toBe(false)
       expect(settled.turn?.canDiscardBattle).toBe(false)
+      // The finished side has nothing to be compared against, so no report is paid for.
+      expect((await waitForComparison(memory.store, turnID)).output).toBeUndefined()
+      expect((await memory.store.turn(turnID))?.comparisonState).toBe("skipped")
+      expect(router.reportCalls()).toBe(0)
+      expect(router.utilityCalls()).toBe(1)
 
       const tie = await request(`/arena/turns/${turnID}/vote`, {
         method: "POST",
@@ -3692,6 +3842,119 @@ describe("Arena service vertical slice", () => {
     }
   }, 90_000)
 
+  test("a background subagent result keeps the contestant's system text", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure subagent system fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const turnPrompt = "Delegate the child work, then end your response."
+    const childPrompt = "child-only work"
+    const text = (content: unknown) => (typeof content === "string" ? content : JSON.stringify(content ?? ""))
+    const isChild = (messages: ReadonlyArray<{ readonly role?: string; readonly content?: unknown }>) =>
+      messages.some((message) => message.role === "user" && text(message.content).includes(childPrompt))
+    // Each child answers once its parent has ended its response, so the result lands in a loop that
+    // waits only for it.
+    const parentEnded = new Map<string, PromiseWithResolvers<void>>()
+    const ended = (model: string) => {
+      const existing = parentEnded.get(model)
+      if (existing) return existing
+      const created = Promise.withResolvers<void>()
+      parentEnded.set(model, created)
+      return created
+    }
+    let generation = 0
+    const router = installOpenRouterStub({
+      respond: ({ model, messages }) => {
+        const key = `${model}-${++generation}`
+        const last = messages.at(-1)
+        if (isChild(messages)) {
+          return ended(model).promise.then(() => contestantResponse(model, 1, undefined, false, undefined, key))
+        }
+        if (last?.role === "user" && text(last.content).includes(turnPrompt)) {
+          const base = { id: `chatcmpl-${key}`, object: "chat.completion.chunk", model }
+          const call = { description: "Child work", prompt: childPrompt, subagent_type: "general" }
+          return chunks([
+            { ...base, choices: [{ index: 0, delta: { role: "assistant" } }] },
+            {
+              ...base,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: `call-${key}`,
+                        type: "function",
+                        function: { name: "task", arguments: JSON.stringify(call) },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+            {
+              ...base,
+              choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 },
+            },
+            "[DONE]",
+          ])
+        }
+        if (last?.role === "tool") ended(model).resolve()
+        return contestantResponse(model, 2, undefined, false, undefined, key)
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Subagent result system text",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: turnPrompt }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted subagent turn")
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote", 60_000)
+      const runs = await memory.store.runsForTurn(turnID)
+      for (const run of runs) {
+        const model = router.modelForAssignment(run.assignment.assignmentID)
+        const parent = router.contestantRequests.filter((body) => body.model === model && !isChild(body.messages ?? []))
+        // The parent answered its child's result.
+        expect(parent.some((body) => JSON.stringify(body.messages?.at(-1)).includes("Background task completed"))).toBe(
+          true,
+        )
+        // The system text heads the cached prefix: a result without it makes the provider re-read
+        // the whole conversation uncached.
+        expect(new Set(parent.map((body) => JSON.stringify(body.messages?.[0]))).size).toBe(1)
+      }
+    } finally {
+      router.restore()
+    }
+  }, 90_000)
+
   test("discards multiple queued steers without interrupting active work", async () => {
     await using directory = await tmpdir({
       git: true,
@@ -3915,9 +4178,80 @@ describe("Arena service vertical slice", () => {
               body.model === model && JSON.stringify(body.messages).includes("Both sides: keep the change minimal."),
           ),
         ).toBe(true)
+        // A reply sends the system text the run started with: a changed system makes the provider
+        // re-read the whole conversation uncached.
+        const systems = new Set(
+          router.contestantRequests
+            .filter((body) => body.model === model)
+            .map((body) => JSON.stringify(body.messages?.[0])),
+        )
+        expect(systems.size).toBe(1)
       }
     } finally {
       router.restore()
+    }
+  }, 90_000)
+
+  test("a reply builds the system text again once the preview URLs it named have changed", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure stale system fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    const previousBase = process.env.PASEO_ARENA_PREVIEW_BASE_URL
+    process.env.PASEO_ARENA_PREVIEW_BASE_URL = "http://localhost:7101"
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "Stale preview URLs" }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Start the preview." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not admit the stale system turn")
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const models = (await memory.store.runsForTurn(turnID)).map((run) =>
+        router.modelForAssignment(run.assignment.assignmentID),
+      )
+      if (models.some((model) => !model)) throw new Error("A run did not retain an opaque assignment")
+
+      // Preview routes live in the engine process, so after a restart the same run can have new URLs.
+      process.env.PASEO_ARENA_PREVIEW_BASE_URL = "http://localhost:7102"
+      await request(`/arena/turns/${turnID}/reply`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "Check the preview again.", target: "both" }),
+      })
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+
+      for (const model of models) {
+        const systems = router.contestantRequests
+          .filter((body) => body.model === model)
+          .map((body) => JSON.stringify(body.messages?.[0]))
+        expect(systems[0]).toContain("localhost:7101")
+        expect(systems.at(-1)).toContain("localhost:7102")
+        expect(systems.at(-1)).not.toContain("localhost:7101")
+      }
+    } finally {
+      router.restore()
+      if (previousBase === undefined) delete process.env.PASEO_ARENA_PREVIEW_BASE_URL
+      else process.env.PASEO_ARENA_PREVIEW_BASE_URL = previousBase
     }
   }, 90_000)
 
@@ -5399,8 +5733,7 @@ describe("Arena service vertical slice", () => {
         a: { commit: string; ref?: string }
         b: { commit: string; ref?: string }
         treesEqual: boolean
-        patch: string
-        divergence?: { conflicted: boolean; files: { file: string; status: string }[] }
+        files: { file: string; status: string }[]
       }
       const partial = await json<Diff>(await request(`/arena/turns/${turnID}/diff`, { headers }))
       expect(partial).toMatchObject({
@@ -5410,9 +5743,15 @@ describe("Arena service vertical slice", () => {
       })
       expect(partial.b.ref).toBeUndefined()
       // The missing side is the base itself, so every file is A's alone and nothing conflicts.
-      expect(partial.divergence?.conflicted).toBe(false)
-      expect(partial.divergence?.files.length).toBeGreaterThan(0)
-      expect(partial.divergence?.files.every((file) => file.status === "only_a")).toBe(true)
+      expect(partial.files.length).toBeGreaterThan(0)
+      expect(partial.files.every((file) => file.status === "only_a")).toBe(true)
+      const first = partial.files[0]!.file
+      const read = await json<{ file: { file: string; a?: { missing: boolean } }; divergence: { status: string } }>(
+        await request(`/arena/turns/${turnID}/diff/file?${new URLSearchParams({ path: first })}`, { headers }),
+      )
+      expect(read.file.file).toBe(first)
+      expect(read.file.a?.missing).toBe(false)
+      expect(read.divergence.status).toBe("only_a")
 
       delete (a as Mutable).finalCommit
       delete (a as Mutable).finalTree
@@ -5423,7 +5762,7 @@ describe("Arena service vertical slice", () => {
         a: { commit: stopped.frozenBaseSHA },
         b: { commit: stopped.frozenBaseSHA },
         treesEqual: true,
-        patch: "",
+        files: [],
       })
       expect(diff.a.ref).toBeUndefined()
       expect(diff.b.ref).toBeUndefined()
@@ -5627,6 +5966,11 @@ describe("Arena service vertical slice", () => {
       // messages are grafted onto it instead, so it outlives every contestant worktree.
       expect(voted.chat.canonicalSessionID).toBe(source.id)
       expect((await store.turn(firstTurnID))?.canonicalUserMessageID).toBeTruthy()
+      // The battle's rows end at the last message the graft copied, not at the next user message.
+      const grafted = await json<Array<{ readonly info: { readonly id: string } }>>(
+        await request(`/session/${source.id}/message`, { headers }),
+      )
+      expect((await store.turn(firstTurnID))?.canonicalLastMessageID).toBe(grafted.at(-1)?.info.id)
       // The winner stays live through the next-send boundary. The loser lets go of its worktree at
       // once, and the next pair's warm-up adopts it: it leaves its generation's path for the next.
       await waitForRemoved(firstRuns.find((run) => run.side !== "a")!.worktree)
@@ -6103,4 +6447,116 @@ describe("Arena service vertical slice", () => {
       router.restore()
     }
   }, 30_000)
+
+  test("copies the winner's subagent session under the chat, so the chat keeps its transcript", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure subagent graft fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const turnPrompt = "Delegate the reading, then answer."
+    const childPrompt = "child-only reading"
+    const text = (content: unknown) => (typeof content === "string" ? content : JSON.stringify(content ?? ""))
+    let generation = 0
+    const router = installOpenRouterStub({
+      respond: ({ model, messages }) => {
+        const key = `${model}-${++generation}`
+        const last = messages.at(-1)
+        if (messages.some((message) => message.role === "user" && text(message.content).includes(childPrompt))) {
+          return contestantResponse(model, 1, undefined, false, undefined, key)
+        }
+        if (last?.role === "user" && text(last.content).includes(turnPrompt)) {
+          const base = { id: `chatcmpl-${key}`, object: "chat.completion.chunk", model }
+          const call = {
+            description: "Child reading",
+            prompt: childPrompt,
+            subagent_type: "general",
+            background: false,
+          }
+          return chunks([
+            { ...base, choices: [{ index: 0, delta: { role: "assistant" } }] },
+            {
+              ...base,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: `call-${key}`,
+                        type: "function",
+                        function: { name: "task", arguments: JSON.stringify(call) },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+            {
+              ...base,
+              choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 },
+            },
+            "[DONE]",
+          ])
+        }
+        return contestantResponse(model, 3, undefined, false, undefined, key)
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Subagent graft",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: turnPrompt }),
+        }),
+      )
+      const turnID = admitted.turn!.id
+      await waitForTurn(memory.store, turnID, "awaiting_vote", 60_000)
+      const winner = (await memory.store.runsForTurn(turnID)).find((run) => run.side === "a")!
+      expect(winner.descendantSessionIDs).toHaveLength(1)
+      await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/vote`, { method: "POST", headers, body: JSON.stringify({ vote: "a" }) }),
+      )
+      await waitForTurn(memory.store, turnID, "complete")
+
+      const children = await json<Array<{ id: string; parentID?: string }>>(
+        await request(`/session/${source.id}/children`, { headers }),
+      )
+      expect(children).toHaveLength(1)
+      const copy = children[0]!
+      expect(copy.id).not.toBe(winner.descendantSessionIDs[0])
+      expect((await memory.store.turn(turnID))?.canonicalSubagentSessionIDs).toEqual([copy.id])
+
+      type Message = {
+        parts: ReadonlyArray<{ type?: string; tool?: string; state?: { metadata?: { sessionId?: string } } }>
+      }
+      const chat = await json<Message[]>(await request(`/session/${source.id}/message`, { headers }))
+      const task = chat.flatMap((message) => message.parts).find((part) => part.tool === "task")
+      expect(task?.state?.metadata?.sessionId).toBe(copy.id)
+      const transcript = await json<Message[]>(await request(`/session/${copy.id}/message`, { headers }))
+      expect(JSON.stringify(transcript)).toContain(childPrompt)
+      expect(JSON.stringify(transcript)).not.toContain("/.agent-duel/worktrees/")
+    } finally {
+      router.restore()
+    }
+  }, 90_000)
 })

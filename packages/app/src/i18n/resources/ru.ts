@@ -824,6 +824,7 @@ export const ru: TranslationResources = {
           title: 'Архив "{{workspaceName}}"?',
           confirm: "Архив",
           cancel: "Отмена",
+          message: "Чат переместится в Архив, где его можно разархивировать.",
           uncommittedChanges: "Незафиксированные изменения",
           uncommittedChangesWithDiff: "Незафиксированные изменения ({{diffStat}})",
           addedLine: "{{count}}добавлена ​​строка",

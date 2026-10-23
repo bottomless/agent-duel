@@ -133,6 +133,15 @@ export function describeForJudge(summary: readonly Summary[] | undefined) {
     .join("\n")
 }
 
+/**
+ * The upload a prompt's text part names, if it is an upload note: this module's or the one the
+ * daemon writes for a single agent (`prompt-attachments.ts`), which this matches.
+ */
+export function notedUpload(text: string) {
+  if (!text.startsWith("Uploaded file: ")) return undefined
+  return text.match(/^Path: (.+)$/m)?.[1]
+}
+
 /** The note a single agent gets for an upload, so a contestant reads it the same way. */
 function uploadNote(input: Extract<Input, { type: "file" }>) {
   return [

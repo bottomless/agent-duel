@@ -109,10 +109,10 @@ function splitTitle(content: string) {
 }
 
 /**
- * Identical trees leave no report to write, so the first turn asks the same model for the title
- * alone. Best effort: without one the chat keeps its prompt's first line.
+ * Identical trees or a failed side leave no report to write, so the first turn asks the same model
+ * for the title alone. Best effort: without one the chat keeps its prompt's first line.
  */
-async function nameChat(input: Input) {
+async function nameChat(input: Pick<Input, "turnID" | "userPrompt" | "userAttachments" | "execute">) {
   const target = backend()
   if (!target) return {}
   const prompt = [
@@ -160,8 +160,61 @@ function resolvedProvider(value: unknown) {
   return typeof provider === "string" && provider.trim() ? provider : undefined
 }
 
+function documentID(turnID: string) {
+  return `comparison|${turnID.length}:${turnID}`
+}
+
+/**
+ * The record of a turn where a side failed: there is nothing to weigh the other side against, so no
+ * report is paid for and no evidence is computed. The first turn is still named. The caller saves it
+ * (`Store.saveSkippedComparison`) only while the turn still waits on it.
+ */
+export async function skip(
+  input: Pick<
+    Input,
+    | "turnID"
+    | "turnIndex"
+    | "userPrompt"
+    | "userAttachments"
+    | "baseCommit"
+    | "aCommit"
+    | "bCommit"
+    | "baseTree"
+    | "aTree"
+    | "bTree"
+    | "artifactIDs"
+    | "execute"
+  >,
+): Promise<ComparisonDocument> {
+  const named = input.turnIndex === 0 ? await nameChat(input) : {}
+  const now = new Date()
+  return {
+    _id: documentID(input.turnID),
+    turnID: input.turnID,
+    baseCommit: input.baseCommit,
+    aCommit: input.aCommit,
+    bCommit: input.bCommit,
+    baseTree: input.baseTree,
+    aTree: input.aTree,
+    bTree: input.bTree,
+    artifactIDs: [...input.artifactIDs],
+    utilityInputManifest: [],
+    truncated: false,
+    omittedArtifacts: [],
+    promptVersion,
+    model,
+    provider,
+    state: "complete",
+    skipReason: "failed_side",
+    latencyMs: 0,
+    ...named,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
 export async function generate(input: Input) {
-  const comparisonID = `comparison|${input.turnID.length}:${input.turnID}`
+  const comparisonID = documentID(input.turnID)
   const evidence = prepareEvidence(input)
   const transcriptA = bounded(input.transcriptA, MAX_TRANSCRIPT_CHARS)
   const transcriptB = bounded(input.transcriptB, MAX_TRANSCRIPT_CHARS)

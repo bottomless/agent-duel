@@ -824,6 +824,7 @@ export const ptBR: TranslationResources = {
           title: 'Arquivar "{{workspaceName}}"?',
           confirm: "Arquivar",
           cancel: "Cancelar",
+          message: "O chat vai para Arquivados, onde você pode desarquivá-lo.",
           uncommittedChanges: "Alterações sem commit",
           uncommittedChangesWithDiff: "Alterações sem commit ({{diffStat}})",
           addedLine: "{{count}} linha adicionada",

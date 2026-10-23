@@ -1,5 +1,6 @@
 import type {
   ArenaComparisonDiff,
+  ArenaComparisonFileDiff,
   ArenaDivergenceFile,
   ArenaThreeWayFile,
 } from "@getpaseo/protocol/arena/rpc-schemas";
@@ -27,23 +28,52 @@ export function threeWayFile(input: {
   };
 }
 
+/**
+ * Each file's contents as the last fixtures built them, by path. The list carries no contents,
+ * so a test stands `fileDiffQueryStandIn` in for the query that reads them.
+ */
+export const servedFileDiffs = new Map<string, ArenaComparisonFileDiff>();
+
+/** For `vi.mock("./file-diff-query", ...)`: serves `servedFileDiffs` without a daemon. */
+export function fileDiffQueryStandIn() {
+  return {
+    useArenaFileDiff: ({ file }: { file: string | null }) => ({
+      data: file === null ? undefined : servedFileDiffs.get(file),
+      error: null,
+      isFetching: false,
+      refetch: async () => undefined,
+    }),
+  };
+}
+
 export function comparisonDiff(input: {
   files: ArenaThreeWayFile[];
   divergence: ArenaDivergenceFile[];
   treesEqual?: boolean;
 }): ArenaComparisonDiff {
+  const files = input.files.map((file) => {
+    const divergence = input.divergence.find((entry) => entry.file === file.file) ?? {
+      file: file.file,
+      status: "compatible" as const,
+    };
+    servedFileDiffs.set(file.file, { turnID: "turn-1", file, divergence });
+    return {
+      file: file.file,
+      binary: file.binary,
+      additionsA: file.additionsA,
+      deletionsA: file.deletionsA,
+      additionsB: file.additionsB,
+      deletionsB: file.deletionsB,
+      status: divergence.status,
+    };
+  });
   return {
     turnID: "turn-1",
     baseCommit: "base",
     a: { commit: "a", tree: "tree-a" },
     b: { commit: "b", tree: "tree-b" },
     treesEqual: input.treesEqual ?? false,
-    files: input.files,
-    filesTruncated: false,
-    patch: "",
-    truncated: false,
-    stats: [],
-    divergence: { mergeTree: "tree-merged", conflicted: true, files: input.divergence },
+    files,
   };
 }
 

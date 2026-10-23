@@ -34,7 +34,7 @@ import { arenaChangesRows } from "./changes-rows";
 import { BattleReview } from "./battle-review";
 import { useArenaReviewTelemetry } from "./review-telemetry";
 import { isStoppedByEarlyPick } from "./battle-result";
-import { canRequestBattleDiff } from "./comparison-visibility";
+import { canReviewBattle } from "./comparison-visibility";
 import type { ArenaPendingQuestion } from "./question";
 import type { ArenaPendingPermission, ArenaPermissionReply } from "./permission";
 import { Button } from "@/components/ui/button";
@@ -431,6 +431,7 @@ function BattleJudging({
   const rows = useMemo(() => arenaChangesRows(diff), [diff]);
   return (
     <BattleReview
+      serverId={serverId}
       agentId={agentId}
       turnId={turnId}
       summaryAvailable={summaryAvailable}
@@ -653,7 +654,7 @@ export function ArenaBattleView({
     [promptAttachments, promptImages.length],
   );
   const bothFinal = runsAreFinal(runA, runB);
-  const reviewAvailable = bothFinal && Boolean(turn && canRequestBattleDiff(turn.state));
+  const reviewAvailable = bothFinal && canReviewBattle(turn);
   const [paneView, setPaneView] = useArenaPaneView(turn?.index);
   // Observes the review stores and the window; emits nothing into React state,
   // so the card renders exactly as it did without it.

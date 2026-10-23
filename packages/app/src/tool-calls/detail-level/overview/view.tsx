@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { EXPANDABLE_BADGE_DETAIL_INSET, ExpandableBadge } from "@/components/message";
+import { arenaChatWorkLabel } from "@/arena/chat-work";
 import { type OverviewSummary, type OverviewToolCallGroup } from "./model";
 
 interface OverviewGroupProps {
@@ -12,6 +13,8 @@ interface OverviewGroupProps {
   isLastInSequence: boolean;
   onExpandedChange: (groupId: string, expanded: boolean) => void;
   children: ReactNode;
+  /** A battle chat's row: the battle pane's words, flush with the prose around it. */
+  arena?: boolean;
 }
 
 const TOOL_CALL_GROUP_MAX_HEIGHT = 400;
@@ -57,9 +60,14 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
   isLastInSequence,
   onExpandedChange,
   children,
+  arena = false,
 }: OverviewGroupProps) {
   const scrollRef = useRef<ScrollView>(null);
-  const aggregateSummary = useOverviewSummary(group.summary);
+  const overviewSummary = useOverviewSummary(group.summary);
+  const aggregateSummary = useMemo(
+    () => (arena ? arenaChatWorkLabel(group.run, group.isLoading) : overviewSummary),
+    [arena, group.isLoading, group.run, overviewSummary],
+  );
   const scrollToLatest = useCallback(() => {
     scrollRef.current?.scrollToEnd({ animated: false });
   }, []);
@@ -93,6 +101,8 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
       onToggle={toggle}
       renderDetails={renderDetails}
       borderlessWhenExpanded
+      flushRow={arena}
+      labelSizedIcon={arena}
     />
   );
 });

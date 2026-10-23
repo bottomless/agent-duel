@@ -136,6 +136,9 @@ Review has two tabs: **Difference summary**, the generated comparison, and **Cha
 status for each pair. A row opens its file's diff right under it and closes it again, several can be open
 at once, and the first diverging file opens on arrival. Past eight rows the rest wait behind Show more, so a
 battle that touched hundreds of files does not push the threads off screen; an open row past them still shows.
+The list names every file either side changed, in path order, without contents; each diff reads its own file
+when it opens (`arena.turn.get_file_diff`). Do not cap the list to bound the response: a cap hid every file B
+alone changed whenever A changed 25.
 The chevron at the end of the tab row folds the whole review away, and a tab opens it again. A ready summary opens first. When
 the review opens before the summary is ready, Changes stays open after it arrives. Changes
 retries a failed read twice before showing a small manual retry. The summary generator retries
@@ -159,11 +162,13 @@ new battle chat's workspace shows the prompt's first line from the send and that
 comparison arrives; a workspace with any other name keeps it
 (`arena-workspace-auto-name.ts`). When both sides leave identical trees there is no report to write,
 so the first turn sends the comparison route a request for the title alone; if it fails, the chat
-keeps its prompt's first line. A chat started with Battle off also shows its prompt's first line
-from the send, and the same model renames it from that prompt through the metadata route below; if
-that fails it keeps the line. Nothing else names a chat: Paseo named workspaces with an agent, which
-here meant the user's installed Claude Code or a paid contestant with the full agent setup (up to
-$0.25 per new chat).
+keeps its prompt's first line. A turn where either side failed gets no report either, since there
+is nothing to weigh the other side against: its comparison is `skipped`, the card shows only
+Changes, and the first turn still asks for the title alone. A chat started with Battle off also
+shows its prompt's first line from the send, and the same model renames it from that prompt
+through the metadata route below; if that fails it keeps the line. Nothing else names a chat:
+Paseo named workspaces with an agent, which here meant the user's installed Claude Code or a paid
+contestant with the full agent setup (up to $0.25 per new chat).
 The card shows it whole; only a report that measures longer than a screen of the card folds to its
 opening with `Show full summary` (`verdict-body.tsx`). Trimming at the prompt was Michael's call:
 the fold spent latency on prose the voter then had to unfold. The status is `git merge-tree
@@ -302,6 +307,17 @@ Product decisions that are settled, so they do not get relitigated per feature:
   concurrent agents cannot replace each other's current tool.
   Use the activity row for thinking and the pane heading for elapsed time, without a second
   thinking control or timer below the transcript.
+- A battle chat reads the way its panes do, so a winner's transcript keeps its shape after the
+  vote, and so does every later turn of that chat, single-agent ones included. Work before a
+  turn's first text sits beneath it (`orderArenaChat`); reasoning joins the work it leads into
+  instead of standing as its own row; and a subagent is a row of its own, a heading with its status
+  beneath, that opens its transcript in place, inline at full height as in the pane (`ArenaChatSubagent`). Rows carry the pane's words
+  (`arenaChatWorkLabel`, `Reasoned`) and its proportions at the chat's 16px: rows take the prose's
+  size, their icons too (`labelSizedIcon`), and sit flush, so one rhythm runs down the turn
+  (`getArenaGapBetweenStreamItems`): a text sits against the work it led into and every other
+  block starts one gap down. Measure a change against the pane; every gap between blocks there is
+  the same. Task checklists stay inline, where they were written. Other providers' chats keep
+  Paseo's order and spacing.
 - Show automatic context compaction as an inline status, including inside subagents. Keep its
   internal summary and synthetic continuation prompt out of the conversation; they are not
   messages from the voter. Resume the contestant's visible work after the status.
@@ -675,10 +691,10 @@ reply takes the same attachments as a chat message, and both contestants get ide
 - Pasted images travel as bytes and context attachments (PR comments, reviews) as text. An uploaded
   file of any type travels as Paseo sends it to a single agent: a note with its path under
   `$PASEO_HOME/uploads/<id>/`, for the contestant to open with its own tools. The daemon resolves
-  that path from the upload id, never from the client's path. An upload is outside the contestant's
-  sandbox (see **Setup**), so before each prompt and reply the engine adds an `external_directory`
-  allow for each upload's directory to the contestant session (`allowReading`). An upload sits alone
-  in its directory, so that admits the one file, and both sides get the same path.
+  that path from the upload id, never from the client's path. Before each prompt and reply the engine
+  adds an `external_directory` allow for each upload's directory to the contestant session
+  (`allowReading`). It comes after the sandbox's rules (see **Setup**), so an upload stays
+  readable wherever `$PASEO_HOME` sits. Both sides get the same path.
 - Contestants take PDFs. OpenRouter passes one natively to a model that reads PDFs and parses it
   with mistral-ocr for one that does not, so the two sides can read different renderings of the
   same file.
@@ -713,34 +729,91 @@ apply, including the contestant's sandbox.
 The session is forked from canonical, set to provider `arena` with `contestant` as its neutral model
 id, given its sandbox, and moved into the side worktree. Retarget declared file-tool paths,
 attachment paths, assistant locations, literal POSIX Bash arguments, and complete old-worktree path
-references in assistant text. Later turns can reuse a path the assistant printed. Keep user prompts,
-file contents, unknown tool inputs, and arbitrary output unchanged; a shared path prefix alone is not
-enough to rewrite a string. Bash output has two explicit adapters:
-the result of a plain `pwd`, and a complete single-line `cd <literal> [&& pwd]` command example. The latter
-keeps an executable example from referring to a worktree removed after an earlier vote.
-Shell expansions and paths crossing `..` remain unchanged; resolving them requires runtime state.
+references in assistant text. Later turns can reuse a path the assistant printed. Bash output has two
+explicit adapters: the result of a plain `pwd`, and a complete single-line `cd <literal> [&& pwd]`
+command example. Shell expansions and paths crossing `..` remain unchanged; resolving them requires
+runtime state.
 
-The sandbox (`arena/contestant.ts`) is the inherited permissions, then a hard
-`external_directory: deny`, then allows for what both sides need outside the worktree. Rules match
-last first, so the deny overrides the allows every agent gets for `$TMPDIR/opencode`, the truncation
-directory and skill directories, and only the rules after it reopen paths. Never turn the deny into
-`ask`: a prompt the user answers for one side and not the other makes the sides unequal.
+When the winner is copied into the chat (`graft`), every string the model reads again also has its
+Arena references replaced (`arenaReferences` in `arena/canonical-path.ts`): tool output of every
+tool, tool inputs and errors, reasoning, and text the engine adds to a user message. A subagent's
+user messages are rewritten too, since its parent wrote them with `task`. Only text the user typed
+and image bytes keep their bytes. A slot of the checkout's pool, from any turn, either
+side or a spare, becomes the checkout; its host repository, `<slot>.git`, becomes the checkout's
+`.git`; and a contestant temp directory becomes `$TMPDIR`, since it is deleted with its run. They are
+matched in every spelling a tool prints: after `file://`, under `/private`, behind `../`, and from
+`~` or `$HOME`. A slot is matched by the names Arena gives slots (`SLOT_PATH_PATTERN` in
+`arena/domain.ts`), not by reading up to the next separator, which swallowed a sentence's closing
+`.` and a JSON string's `\n` with the path. Before this, the read tool's `<path>` header and grep, glob and shell output kept
+the winner's worktree path, so later turns, and the chat's own agent in the checkout, re-read an
+earlier turn's slot; by then that path is gone or belongs to another side. Chats copied before the
+change keep their old paths, so the fork never localizes a checkout path into `.agent-duel`: it
+would name a directory inside the contestant's own worktree that does not exist.
 
-- Skill directories, read-only. The list comes from the canonical checkout's instance, so both sides
-  get the same one; project skills are left out because the worktree holds its own copy. An
-  `external_directory_write` deny on each keeps file tools and the shell's file commands from
-  writing there (`writes` on the permission request). Shell redirection and other programs are not
-  checked, as for any path.
-- A temp directory per side, `$TMPDIR/opencode/arena/<session id>`, readable and writable. The
-  shell exports it as `TMPDIR` and the shell tool's description names it, and truncated tool output
-  is saved under it, so the hint to read that file works. The two sides never share it, and it is
-  removed when the run gives up its worktree: released for the next pair (`releaseRunSlot`) or
-  removed by archive, eviction or an environment release (`removeStoppedRun`). Subagents inherit
-  the rules and so share their side's directory.
+The fork also clears, for the model, the output of older tool calls the contestant can repeat
+(`pruneToolOutputBefore` in `arena/fork.ts`): those from before the chat's last finished turn
+(`lastTurnStart` in `arena/service.ts`). The last turn keeps its output, since its test runs and
+reads are the freshest context. Output the contestant cannot get back stays: a question's answers,
+a subagent's report, a skill, an MCP tool's result, and a read outside the worktree, such as an
+earlier turn's upload, which the sandbox below closes. The call and its input stay, and the model
+sees OpenCode's "[Old tool result content cleared]" placeholder instead of the output. A battle
+turn starts at its grafted prompt and includes its replies; a prompt written after the graft is a
+single-agent turn, and a steer belongs to the turn it steered. Clearing at the fork costs no cache:
+a turn draws new models and a new worktree path, so its first request never reads the previous
+turn's cache. Never prune mid-turn, which would rewrite the warm prefix. Both sides have to clear
+the same output, so the send reads the boundary once, from the transcript it freezes, and forks
+again a side whose warm fork used another. The canonical session keeps every output, so the chat's
+history, its transcript hash, and single-agent turns, which continue one model whose cache does
+survive, are unchanged.
 
-A contestant denied a path outside the sandbox gets one sentence that names the sandbox, not the
-generic list of matching rules, which holds dozens of home-directory paths that contestants copy
-into their answers and that reach research uploads.
+The winner's subagent sessions are copied too, under the chat's session, and its `task` calls point
+at the copies (`canonicalSubagentSessionIDs` records them so a retried graft can remove a partial
+copy). The run's own sessions are deleted with its worktree, so without the copies the chat would
+lose every subagent transcript. Rebuilding the chat's timeline from history drops the subagents the
+daemon knew of, and OpenCode's history carries none, so loading a winner reloads them from the
+session's children (`reloadProviderSubagents`).
+
+The sandbox (`arena/contestant.ts`) lets a contestant's own tools read the main checkout but not
+write to it, and keeps them out of the checkout's `.agent-duel`, which holds every Arena worktree:
+the other side's and every earlier turn's. The shared temp directories (`/tmp`, `/var/tmp` and the
+system temp directory) are readable but not writable, and every side's temp directory but its own is
+denied. Everything else is open, the home directory and skill directories included. The rules are
+the inherited permissions, then an `external_directory` allow for everything, then an
+`external_directory_write` deny for the shared temp directories, an `external_directory` deny for
+the parent of every side's temp directory, the same two for the checkout and `.agent-duel`, then
+read and write allows for the side's own worktree, host repository and temp directory. Rules match
+last first. The allow overrides the agent's
+own `ask`: never let a contestant ask, since a prompt the user answers for one side and not the
+other makes the sides unequal. Every path is listed in both its spelling and its real path, so
+`/private/tmp/...` cannot route around `/tmp/...`. Subagents inherit the rules.
+
+The checkout's `.git` is readable too. A side's result is imported into it under `refs/battles/`
+as soon as the side finishes, before the vote. File tools see only ref names and commit ids there,
+since objects are compressed; `git` in the shell is not checked and reads them either way.
+
+The check sees only where a tool starts, so glob and grep leave `.agent-duel` out of a search that
+starts above it, from the checkout or `~/code` for example (`excludedBelow`,
+`tool/external-directory.ts`). Such a search skips the side's own worktree too; a search from inside
+it is unaffected. The shell checks
+only the path arguments of its file commands (`cd`, `rm`, `cp`, `mv`, `mkdir`, `touch`, `chmod`,
+`chown`, `cat`) and, for a contestant, the files it redirects output into and `tee`'s arguments;
+other programs reach anything the user can.
+
+Each side has a temp directory, `$TMPDIR/opencode/arena/<session id>`. The shell exports it as
+`TMPDIR`, the shell tool's description names it, and truncated tool output is saved under it, so
+the hint to read that file works. It is removed when the run gives up its worktree: released for the
+next pair (`releaseRunSlot`) or removed by archive, eviction or an environment release
+(`removeStoppedRun`).
+
+Both sides run at once and `/tmp` is one shared folder, so a side that writes where a task says can
+overwrite or read the other side's file. Every model in the production pool writes `/tmp/word.txt`
+when a task names it. Keep the rule out of the system prompt: a contestant learns it from the
+denial, which names the side's own directory to use instead.
+
+A contestant denied `.agent-duel`, another side's temp directory, or a write into the checkout or a
+shared temp directory, gets one sentence that says so, not the generic list of matching
+rules, which holds dozens of home-directory paths that contestants copy into their answers and that
+reach research uploads.
 
 The two sides are prepared **at once**, since each has its own host repository and session, and
 the host repository is a copy-on-write clone of the checkout's git directory where the
@@ -759,6 +832,24 @@ history: the parent was told it would be notified, and Send now and Retry resume
 results before marking their jobs complete; detached notifications can otherwise arrive after
 Arena has captured the final Git state. This behavior does not depend on the experimental
 background-subagent flag used by ordinary OpenCode sessions.
+
+The contestant instruction (`contestantSystemInstruction`) rides on the user message as `system`,
+and each request builds its system prompt from the latest user message. The system text heads the
+cached prefix: when it changes mid-turn the provider re-reads the whole conversation uncached, and a
+message without it leaves the contestant without its instructions. So a user message added in the
+middle of a turn keeps the system the turn already sends:
+
+- A child result copies the system of the parent's last user message, none included
+  (`tool/task.ts`). A single-agent turn in the canonical session follows the winner's grafted
+  prompt, and that prompt's contestant instruction is wrong for it.
+- The follow-up after automatic compaction copies the system of the prompt the compacted request
+  answered (`session/compaction.ts`). The compaction message itself carries none, since only the
+  summary request reads it.
+- A reply or a steer reuses the system the run's first prompt carried (`startedSystem`). A cold
+  side's staging note stays after staging finishes: an instruction built again would leave it out.
+  It is reused only while a fresh build, with or without that note, gives the same text. Preview
+  routes live in the engine process, so after a restart the stored preview URLs can be dead, and
+  the reply takes the new ones at the cost of one uncached request.
 
 The local OpenCode HTTP server is not an Arena client API. In Arena mode the daemon authenticates
 all session and orchestration calls with its private control token, while the OpenCode process keeps
@@ -783,7 +874,9 @@ checkout does not ignore. The contestant is checked against the base, and in a c
 `node_modules` the exclude would drop a new package's files while its edits to tracked ones still
 apply. When both are in, the
 turn becomes `awaiting_vote` and the comparison starts in the background
-(`arena/service.ts:1968`). A failed comparison never blocks a vote.
+(`startUtility` in `arena/service.ts`). When a side failed it writes no report and skips the Git
+evidence: the comparison is `skipped` and only the first turn's title is requested. A failed
+comparison never blocks a vote.
 
 ## Blinding
 
@@ -804,7 +897,14 @@ field. Each layer has its own file:
   titles), whose prefix nothing reads back, and bodies that mark their own cache breakpoints. It
   drops `temperature`, `top_p`, and `top_k` from every request: the engine sets them without knowing
   the model, Claude and OpenAI's reasoning models accept none of them, and under the pool's
-  `require_parameters` OpenRouter would refuse only those draws, which also reveals them.
+  `require_parameters` OpenRouter would refuse only those draws, which also reveals them. It sets
+  `session_id` and `prompt_cache_key`, replacing any the engine sent, so the throughput sort keeps a
+  conversation on the provider that holds its cache. A battle side keys on its assignment id. A
+  single-agent chat draws an assignment per message, so it keys on a hash of the account and session
+  that stays the same across the chat. The same refusal rule applies to both fields, and the catalog
+  check cannot see it: run `probeRouting` (`arena-service/src/openrouter.ts`) on a pool before it
+  ships. A provider that slows down mid-turn keeps the conversation; OpenRouter leaves it only when
+  that provider is unavailable.
   Resolution disables further routing without deleting the assignment.
 - **Response** (`arena-service/src/openrouter.ts`) — before bytes return to the desktop, the control
   plane strips model, provider, fingerprint, OpenRouter metadata, and cost, replaces the generation
@@ -825,7 +925,8 @@ field. Each layer has its own file:
   provider-specific reasoning metadata, identity fields, and raw upstream errors from stored
   responses, and rewrites provider-shaped tool-call ids before saving response artifacts. The
   control plane holds generation usage, cost, and finish reason and returns them only with the
-  committed resolution. Usage keeps OpenRouter's account charge in `cost` and, when supplied, the
+  committed resolution. It also stores the provider that served each call, which no response or
+  reveal returns. Usage keeps OpenRouter's account charge in `cost` and, when supplied, the
   provider's `cost_details.upstream_inference_cost` as `upstreamInferenceCost`; the desktop then
   records both in the research metrics. Local-store startup
   removes those fields and request/response artifacts from legacy unresolved battles; resolved
@@ -1057,6 +1158,23 @@ Failure has first-class states rather than an abort — `creation_failed`, `fina
 `application_failed`, `canonicalization_failed` — each transitioning back into the step it failed,
 so a resolution can be retried instead of losing the battle. `interrupted_recovery` is where a turn
 lands when the daemon dies mid-battle.
+
+A battle the restart cut off goes back to the vote (`reopenInterruptedTurn`), because quitting the
+app is not a decision about the battle. A side that had finished keeps its result. A side that was
+working is committed as `interrupted`: its cut-off response is closed the way a stop closes it, so
+its unfinished tool calls end interrupted and are never run again. The pill then holds only
+**Resume**, its one filled choice, and **Discard** (`canResumeBattle`). Resume (`resumeBattle`)
+claims every interrupted side at once and continues each from its cut-off response. No side resumes
+alone, and an interrupted run has no Retry, because a side that started first would get a head start
+on a battle meant to be fair. Nothing is voted on until it resumes, not even a side that had
+finished: the voter never saw the other side finish. The card hides the summary and changes until then too, since they
+compare work that is not finished. Resume costs no retry, since the models did
+nothing wrong. Never resume automatically at startup: that spends on both contestants
+before the voter is back, and a quit is sometimes meant as a stop. Two cases still recover as a
+stopped battle (`canReopenInterruptedBattle`): one the voter was already stopping, and one with a side
+whose environment never finished copying (`environmentReadyAt`), since a resumed contestant would
+work without those files. Engines before this parked every interrupted battle as stopped; startup
+reopens those once (`reopenParkedInterruptedTurn`).
 
 Payment failures belong to the service account, not the voter's account; in a BYOK build that
 account is the user's own OpenRouter key. Only a classified

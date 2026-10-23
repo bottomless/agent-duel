@@ -3,6 +3,7 @@ import type { ToolCallDetailLevel } from "@/hooks/use-settings/storage";
 import {
   groupLiveToolCalls,
   prepareGroupedHistory,
+  type ArenaGroupingRules,
   type GroupedHistory,
   type GroupedToolCalls,
 } from "./grouping";
@@ -23,13 +24,14 @@ const EMPTY_TOOL_CALL_GROUPS = new Map<string, ToolCallDetailGroup>();
 export function prepareToolCallHistory(
   level: ToolCallDetailLevel,
   tail: StreamItem[],
+  rules: ArenaGroupingRules = {},
 ): PreparedToolCallHistory | null {
   if (level === "detailed") {
     return null;
   }
   return {
     mode: "overview",
-    grouped: prepareGroupedHistory({ tail, buildGroup: buildOverviewGroup }),
+    grouped: prepareGroupedHistory({ tail, buildGroup: buildOverviewGroup, arena: rules.arena }),
   };
 }
 
@@ -39,6 +41,7 @@ export function projectToolCallDetailLevel(input: {
   head: StreamItem[];
   preparedHistory: PreparedToolCallHistory | null;
   isTurnActive: boolean;
+  arena?: boolean;
 }): ToolCallDetailProjection {
   if (input.level === "detailed") {
     return {
@@ -56,5 +59,6 @@ export function projectToolCallDetailLevel(input: {
     head: input.head,
     isTurnActive: input.isTurnActive,
     buildGroup: buildOverviewGroup,
+    arena: input.arena,
   });
 }

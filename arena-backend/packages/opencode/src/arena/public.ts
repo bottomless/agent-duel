@@ -1,6 +1,14 @@
 import { Schema } from "effect"
 import { basename } from "path"
-import { canDiscardBattle, canRetryRun, canTie, type Resolution, type Side } from "./domain"
+import {
+  canDiscardBattle,
+  canResumeBattle,
+  canRetryRun,
+  canTie,
+  INTERRUPTED_RUN_MESSAGE,
+  type Resolution,
+  type Side,
+} from "./domain"
 import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument, SingleAgentRatingDocument } from "./records"
 import { ArenaSchema } from "./schema"
@@ -325,9 +333,10 @@ export function project(snapshot: BattleSnapshot) {
             ...(turn.gitApplication ? { gitApplication: turn.gitApplication } : {}),
             ...(turn.transitionEvent ? { transition: transition(turn.transitionEvent) } : {}),
             ...(revealed ? { identities: { a: identity(turn.placement.a), b: identity(turn.placement.b) } } : {}),
-            canVote: turn.state === "awaiting_vote",
+            canVote: turn.state === "awaiting_vote" && !canResumeBattle(turn, snapshot.runs),
             canTie: canTie(turn, snapshot.runs),
             canDiscardBattle: canDiscardBattle(turn, snapshot.runs),
+            canResumeBattle: canResumeBattle(turn, snapshot.runs),
             canRetryResolution:
               turn.state === "canonicalization_failed" ||
               (turn.state === "application_failed" &&
@@ -354,6 +363,7 @@ export function project(snapshot: BattleSnapshot) {
       ...(item.selectedEarly === undefined ? {} : { selectedEarly: item.selectedEarly }),
       ...(item.appliedSide ? { appliedSide: item.appliedSide } : {}),
       ...(item.canonicalUserMessageID ? { canonicalUserMessageID: item.canonicalUserMessageID } : {}),
+      ...(item.canonicalLastMessageID ? { canonicalLastMessageID: item.canonicalLastMessageID } : {}),
       ...(item.gitApplication ? { gitApplication: item.gitApplication } : {}),
       ...(item.transitionEvent ? { transition: transition(item.transitionEvent) } : {}),
       endedAt: item.transitionTimestamps.complete ?? item.transitionTimestamps.discarded,
@@ -397,7 +407,9 @@ export function project(snapshot: BattleSnapshot) {
           : {}),
         ...(run.retention ? { retention: run.retention } : {}),
         runState: run.runState,
-        ...(run.error
+        ...(run.runState === "interrupted"
+          ? { error: INTERRUPTED_RUN_MESSAGE }
+          : run.error
           ? {
               error: run.error.includes(ArenaResponseRecovery.EXHAUSTED)
                 ? ArenaResponseRecovery.EXHAUSTED

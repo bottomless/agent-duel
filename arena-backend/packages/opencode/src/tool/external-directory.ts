@@ -12,7 +12,7 @@ type Options = {
   kind?: Kind
   /**
    * What the tool does there. Writes are also held to the read-only rules that keep Arena
-   * contestants out of skill directories; the default is the stricter `write`.
+   * contestants from changing the main checkout; the default is the stricter `write`.
    */
   access?: "read" | "write"
 }
@@ -52,4 +52,24 @@ export const assertExternalDirectoryEffect = Effect.fn("Tool.assertExternalDirec
 
 export async function assertExternalDirectory(ctx: Tool.Context, target?: string, options?: Options) {
   return Effect.runPromise(assertExternalDirectoryEffect(ctx, target, options))
+}
+
+/**
+ * Ripgrep globs that leave the blocked directories below `cwd` out of a search started there. The
+ * permission check sees only where a search starts, so a search from a parent directory would
+ * otherwise list files inside a blocked one. Each glob is anchored with a leading `/`: unanchored, a
+ * one-segment path matches that name at any depth.
+ */
+export function excludedBelow(cwd: string, blocked: readonly string[] | undefined): string[] {
+  return (blocked ?? []).flatMap((directory) => {
+    const relative = path.relative(cwd, directory)
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return []
+    const anchored =
+      "/" +
+      relative
+        .split(path.sep)
+        .join("/")
+        .replace(/[\\[\]{}*?!]/g, "\\$&")
+    return [anchored, `${anchored}/**`]
+  })
 }

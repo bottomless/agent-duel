@@ -790,6 +790,7 @@ export const zhCN: TranslationResources = {
           title: "归档「{{workspaceName}}」？",
           confirm: "归档",
           cancel: "取消",
+          message: "聊天将移至已归档，你可以在那里取消归档。",
           uncommittedChanges: "未 commit 的变更",
           uncommittedChangesWithDiff: "未 commit 的变更（{{diffStat}}）",
           addedLine: "新增 {{count}} 行",

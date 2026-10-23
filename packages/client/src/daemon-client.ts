@@ -11,6 +11,7 @@ import type {
   ArenaByokKeySetResult,
   ArenaByokStatus,
   ArenaComparisonDiff,
+  ArenaComparisonFileDiff,
   ArenaEnvironmentStatus,
   ArenaEnvironmentTrim,
   ArenaReplyTarget,
@@ -2211,6 +2212,15 @@ export class DaemonClient {
     return payload.snapshot;
   }
 
+  async arenaResumeBattle(agentId: string, turnId: string): Promise<ArenaSnapshot> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"arena.turn.resume.response">(
+      {
+        message: { type: "arena.turn.resume.request", agentId, turnId },
+      },
+    );
+    return payload.snapshot;
+  }
+
   async arenaResolveStop(
     agentId: string,
     turnId: string,
@@ -2280,6 +2290,19 @@ export class DaemonClient {
       timeout: 120_000,
     });
     return payload.diff;
+  }
+
+  async arenaFileDiff(
+    agentId: string,
+    turnId: string,
+    file: string,
+  ): Promise<ArenaComparisonFileDiff> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"arena.turn.get_file_diff.response">({
+        message: { type: "arena.turn.get_file_diff.request", agentId, turnId, file },
+        timeout: 120_000,
+      });
+    return payload.fileDiff;
   }
 
   async arenaReplyQuestion(

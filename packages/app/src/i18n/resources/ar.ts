@@ -800,6 +800,7 @@ export const ar: TranslationResources = {
           title: 'الأرشيف "{{workspaceName}}"؟',
           confirm: "أرشيف",
           cancel: "يلغي",
+          message: "تنتقل المحادثة إلى المؤرشفة، حيث يمكنك إلغاء أرشفتها.",
           uncommittedChanges: "تغييرات غير ملتزم بها",
           uncommittedChangesWithDiff: "التغييرات غير الملتزم بها ({{diffStat}})",
           addedLine: "تمت إضافة خط{{count}}",

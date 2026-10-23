@@ -327,30 +327,44 @@ export type VerifiedContestantState = {
   readonly head: string
 }
 
-export type ComparisonEvidence = {
-  readonly fileFacts: readonly ComparisonFileFact[]
-  readonly baseTree: string
-  readonly aTree: string
-  readonly bTree: string
-  readonly baseToA: string
-  readonly baseToATruncated: boolean
-  readonly baseToB: string
-  readonly baseToBTruncated: boolean
-  readonly patch: string
-  readonly truncated: boolean
-  readonly stats: readonly DiffStat[]
-  readonly files: readonly ThreeWayFile[]
-  readonly filesTruncated: boolean
-  // Absent when merge-tree could not run; the viewer then falls back to the three columns.
-  readonly divergence: Divergence
-}
-
 // How the two contestants' work on one file relates, decided by git's three-way merge of
 // A and B over the frozen base rather than by any line heuristic on the client:
 // `diverging` is a merge conflict (same region, different content), `compatible` merged
 // cleanly (both touched it, different regions), `identical` is the same result on both
 // sides, and `only_a`/`only_b` means the other side left the file alone.
 export type DivergenceStatus = "identical" | "only_a" | "only_b" | "compatible" | "diverging" | "binary"
+
+/** One file either contestant changed: what each did to it and git's status for the pair. */
+export type ComparisonFile = {
+  readonly file: string
+  readonly binary: boolean
+  readonly additionsA: number
+  readonly deletionsA: number
+  readonly additionsB: number
+  readonly deletionsB: number
+  readonly status: DivergenceStatus
+}
+
+/**
+ * Every file either contestant changed, in path order, without contents. The Changes list names
+ * them all; `readComparisonFile` reads one file's contents when its diff opens.
+ */
+export type ComparisonFiles = {
+  readonly baseTree: string
+  readonly aTree: string
+  readonly bTree: string
+  readonly files: readonly ComparisonFile[]
+}
+
+export type ComparisonEvidence = ComparisonFiles & {
+  readonly fileFacts: readonly ComparisonFileFact[]
+  readonly baseToA: string
+  readonly baseToATruncated: boolean
+  readonly baseToB: string
+  readonly baseToBTruncated: boolean
+  readonly patch: string
+  readonly truncated: boolean
+}
 
 export type DivergenceFile = {
   readonly file: string
@@ -360,11 +374,10 @@ export type DivergenceFile = {
   readonly merged?: FileContent
 }
 
-export type Divergence = {
-  readonly mergeTree: string
-  readonly conflicted: boolean
-  // Same set and order as `ComparisonEvidence.files`.
-  readonly files: readonly DivergenceFile[]
+/** One file's contents at the base and on each side, for the diff under its Changes row. */
+export type ComparisonFileDiff = {
+  readonly file: ThreeWayFile
+  readonly divergence: DivergenceFile
 }
 
 /**
@@ -450,10 +463,6 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
 // finalization after the ref was written but before Mongo was updated.
 const wrapperDate = "2000-01-01T00:00:00.000Z"
 
-// Bounds on the three-way file content fetched per comparison. Battles are scoped
-// coding tasks, not bulk migrations, so a modest cap keeps the response bounded
-// without needing a follow-up "load more" round trip for the common case.
-const MAX_THREE_WAY_FILES = 25
 // Review RPCs and end-of-battle utilities share the same local CPU budget.
 const comparisonSlot = Semaphore.makeUnsafe(1)
 // What one side of one file may put on the wire. Sending whole files is what the viewer
@@ -5131,247 +5140,306 @@ export function divergenceStatus(input: {
 
 // merge-tree exits 0 for a clean merge and 1 for a conflicted one, both with a tree on
 // the first line; anything else is a failure the comparison survives without a merge.
-function parseMergeTree(result: Git.Result): { tree: string; conflicted: boolean; conflicts: Set<string> } | null {
+function parseMergeTree(result: Git.Result): MergeCandidates | null {
   if (result.exitCode !== 0 && result.exitCode !== 1) return null
   const [tree, ...rest] = output(result).split(/\r?\n/)
   if (!tree) return null
-  return {
-    tree,
-    conflicted: result.exitCode === 1,
-    conflicts: new Set(result.exitCode === 0 ? [] : conflictedPaths(rest)),
-  }
+  return { tree, conflicts: new Set(result.exitCode === 0 ? [] : conflictedPaths(rest)) }
 }
 
-export const compare = Effect.fn("ArenaGit.compare")(
-  function* (input: {
-    readonly canonical: string
-    readonly baseCommit: string
-    readonly aCommit: string
-    readonly bCommit: string
-    readonly maxOutputBytes?: number
-  }) {
+type ComparisonInput = {
+  readonly canonical: string
+  readonly baseCommit: string
+  readonly aCommit: string
+  readonly bCommit: string
+}
+
+type MergeCandidates = { readonly tree: string; readonly conflicts: ReadonlySet<string> }
+
+// The merge is the costly part of reading one file's diff, and a battle's commits never change,
+// so the reads after the file list reuse the list's merge. A miss, after a restart or once the
+// oldest entries fall out, merges again.
+const mergeCache = new Map<string, MergeCandidates>()
+const MERGE_CACHE_SIZE = 32
+
+/**
+ * git's own verdict on where the two sides disagree. zdiff3 keeps the conflict blocks as small as
+ * diff3 can make them and carries the base in the middle. A and B are merged as wrappers on the
+ * frozen base so that base is the merge base. Equal trees need no merge: the merge is either side.
+ */
+const mergeCandidates = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  input: ComparisonInput,
+  trees: { readonly a: string; readonly b: string },
+) {
+  if (trees.a === trees.b) return { tree: trees.a, conflicts: new Set<string>() } satisfies MergeCandidates
+  const key = [root, input.baseCommit, input.aCommit, input.bCommit].join("\0")
+  const cached = mergeCache.get(key)
+  if (cached) return cached
+  const a = yield* treeCommit(git, root, trees.a, input.baseCommit)
+  const b = yield* treeCommit(git, root, trees.b, input.baseCommit)
+  const result = yield* git.run(["-c", "merge.conflictStyle=zdiff3", "merge-tree", "--write-tree", a, b], {
+    cwd: root,
+    maxOutputBytes: 16 * 1024 * 1024,
+  })
+  if (result.truncated) {
+    return yield* Effect.fail(
+      new OperationError("merge_candidates", "Comparison merge metadata exceeds the output limit"),
+    )
+  }
+  const merged = parseMergeTree(result)
+  if (!merged) {
+    const detail = result.stderr.toString("utf8").trim() || output(result) || "git merge-tree failed"
+    return yield* Effect.fail(new OperationError("merge_candidates", detail))
+  }
+  mergeCache.set(key, merged)
+  const oldest = mergeCache.keys().next().value
+  if (mergeCache.size > MERGE_CACHE_SIZE && oldest !== undefined) mergeCache.delete(oldest)
+  return merged
+})
+
+const readComparisonTrees = Effect.fnUntraced(function* (git: Git.Interface, root: string, input: ComparisonInput) {
+  const [base, a, b] = yield* Effect.all([
+    read(git, root, "read_base_tree", ["rev-parse", `${input.baseCommit}^{tree}`]),
+    read(git, root, "read_a_tree", ["rev-parse", `${input.aCommit}^{tree}`]),
+    read(git, root, "read_b_tree", ["rev-parse", `${input.bCommit}^{tree}`]),
+  ])
+  return { base, a, b }
+})
+
+/** The base and result trees a comparison names, without its file lists or patches. */
+export const comparisonTrees = Effect.fn("ArenaGit.comparisonTrees")(function* (input: ComparisonInput) {
+  const git = yield* Git.Service
+  const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+  return yield* readComparisonTrees(git, root, input)
+})
+
+const readDiffMetadata = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  operation: string,
+  args: string[],
+) {
+  const result = yield* run(git, root, operation, args, { maxOutputBytes: 16 * 1024 * 1024 })
+  if (result.truncated) {
+    return yield* Effect.fail(new OperationError(operation, "Comparison metadata exceeds the 16 MiB output limit"))
+  }
+  return output(result)
+})
+
+const numstat = (from: string, to: string, pathspec: string) => [
+  "diff",
+  "--no-ext-diff",
+  "--no-renames",
+  "--numstat",
+  from,
+  to,
+  "--",
+  pathspec,
+]
+
+/** Each side's numstat against the base and against each other, over `pathspec`. */
+const readComparisonStats = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  input: ComparisonInput,
+  pathspec: string,
+) {
+  const [aToB, baseToA, baseToB] = yield* Effect.all([
+    readDiffMetadata(git, root, "read_comparison_stats", numstat(input.aCommit, input.bCommit, pathspec)),
+    readDiffMetadata(git, root, "read_base_to_a_stats", numstat(input.baseCommit, input.aCommit, pathspec)),
+    readDiffMetadata(git, root, "read_base_to_b_stats", numstat(input.baseCommit, input.bCommit, pathspec)),
+  ])
+  const statsA = parseStats(baseToA)
+  const statsB = parseStats(baseToB)
+  return {
+    entries: mergeFileStats(statsA, statsB),
+    inA: new Set(statsA.map((stat) => stat.file)),
+    inB: new Set(statsB.map((stat) => stat.file)),
+    differs: new Set(parseStats(aToB).map((stat) => stat.file)),
+  } satisfies ComparisonStats
+})
+
+type ComparisonStats = {
+  readonly entries: ReadonlyMap<string, FileStatsEntry>
+  readonly inA: ReadonlySet<string>
+  readonly inB: ReadonlySet<string>
+  readonly differs: ReadonlySet<string>
+}
+
+function statusOf(stats: ComparisonStats, merge: MergeCandidates, file: string, entry: FileStatsEntry) {
+  return divergenceStatus({
+    binary: entry.binaryA || entry.binaryB,
+    inA: stats.inA.has(file),
+    inB: stats.inB.has(file),
+    differs: stats.differs.has(file),
+    conflicted: merge.conflicts.has(file),
+  })
+}
+
+const listComparisonFiles = Effect.fnUntraced(function* (git: Git.Interface, root: string, input: ComparisonInput) {
+  const [trees, stats] = yield* Effect.all([
+    readComparisonTrees(git, root, input),
+    readComparisonStats(git, root, input, "."),
+  ])
+  const merge = yield* mergeCandidates(git, root, input, trees)
+  // Path order across both sides, so a file only B changed sits among A's rather than after them.
+  const entries = Array.from(stats.entries.entries()).sort(([left], [right]) => byPath(left, right))
+  const files = entries.map(
+    ([file, entry]): ComparisonFile => ({
+      file,
+      binary: entry.binaryA || entry.binaryB,
+      additionsA: entry.additionsA,
+      deletionsA: entry.deletionsA,
+      additionsB: entry.additionsB,
+      deletionsB: entry.deletionsB,
+      status: statusOf(stats, merge, file, entry),
+    }),
+  )
+  return { trees, stats, entries, files }
+})
+
+function byPath(left: string, right: string) {
+  if (left === right) return 0
+  return left < right ? -1 : 1
+}
+
+const comparisonDeadline = Effect.timeoutOrElse({
+  duration: "15 seconds",
+  orElse: () => Effect.fail(new OperationError("compare", "Battle comparison exceeded the 15 second time limit")),
+})
+
+/** The files the Changes list names, with git's status for each pair and no contents. */
+export const comparisonFiles = Effect.fn("ArenaGit.comparisonFiles")(
+  function* (input: ComparisonInput) {
     const git = yield* Git.Service
     const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
-    const readDiffMetadata = Effect.fnUntraced(function* (operation: string, args: string[]) {
-      const result = yield* run(git, root, operation, args, { maxOutputBytes: 16 * 1024 * 1024 })
-      if (result.truncated) {
-        return yield* Effect.fail(new OperationError(operation, "Comparison metadata exceeds the 16 MiB output limit"))
-      }
-      return output(result)
-    })
-    const [baseTree, aTree, bTree, stats, baseToAStats, baseToBStats, baseToA, baseToB, aToB, mergeResult] =
-      yield* Effect.all([
-        read(git, root, "read_base_tree", ["rev-parse", `${input.baseCommit}^{tree}`]),
-        read(git, root, "read_a_tree", ["rev-parse", `${input.aCommit}^{tree}`]),
-        read(git, root, "read_b_tree", ["rev-parse", `${input.bCommit}^{tree}`]),
-        readDiffMetadata("read_comparison_stats", [
-          "diff",
-          "--no-ext-diff",
-          "--no-renames",
-          "--numstat",
-          input.aCommit,
-          input.bCommit,
-          "--",
-          ".",
-        ]),
-        readDiffMetadata("read_base_to_a_stats", [
-          "diff",
-          "--no-ext-diff",
-          "--no-renames",
-          "--numstat",
-          input.baseCommit,
-          input.aCommit,
-          "--",
-          ".",
-        ]),
-        readDiffMetadata("read_base_to_b_stats", [
-          "diff",
-          "--no-ext-diff",
-          "--no-renames",
-          "--numstat",
-          input.baseCommit,
-          input.bCommit,
-          "--",
-          ".",
-        ]),
-        run(
-          git,
-          root,
-          "read_base_to_a_patch",
-          ["diff", "--no-ext-diff", "--no-renames", "--binary", input.baseCommit, input.aCommit, "--", "."],
-          { maxOutputBytes: input.maxOutputBytes ?? 10 * 1024 * 1024 },
-        ),
-        run(
-          git,
-          root,
-          "read_base_to_b_patch",
-          ["diff", "--no-ext-diff", "--no-renames", "--binary", input.baseCommit, input.bCommit, "--", "."],
-          { maxOutputBytes: input.maxOutputBytes ?? 10 * 1024 * 1024 },
-        ),
-        run(
-          git,
-          root,
-          "read_comparison_patch",
-          ["diff", "--no-ext-diff", "--no-renames", "--binary", input.aCommit, input.bCommit, "--", "."],
-          { maxOutputBytes: input.maxOutputBytes ?? 10 * 1024 * 1024 },
-        ),
-        // git's own verdict on where the two sides disagree. zdiff3 keeps the conflict blocks
-        // as small as diff3 can make them and carries the base in the middle. Exit 1 is a
-        // conflicted merge, not a failure; both leave the tree on the first line. A and B are
-        // merged as wrappers on the frozen base so that base is the merge base.
-        Effect.gen(function* () {
-          const a = yield* treeCommit(git, root, `${input.aCommit}^{tree}`, input.baseCommit)
-          const b = yield* treeCommit(git, root, `${input.bCommit}^{tree}`, input.baseCommit)
-          return yield* git.run(["-c", "merge.conflictStyle=zdiff3", "merge-tree", "--write-tree", a, b], {
-            cwd: root,
-            maxOutputBytes: 16 * 1024 * 1024,
-          })
-        }),
-      ])
+    const { trees, files } = yield* listComparisonFiles(git, root, input)
+    return { baseTree: trees.base, aTree: trees.a, bTree: trees.b, files } satisfies ComparisonFiles
+  },
+  comparisonSlot.withPermits(1),
+  comparisonDeadline,
+)
 
-    if (mergeResult.truncated) {
-      return yield* Effect.fail(
-        new OperationError("merge_candidates", "Comparison merge metadata exceeds the output limit"),
-      )
-    }
-    const statsA = parseStats(baseToAStats)
-    const statsB = parseStats(baseToBStats)
-    const merged = mergeFileStats(statsA, statsB)
-    const allFiles = Array.from(merged.entries())
-    const filesToFetch = allFiles.slice(0, MAX_THREE_WAY_FILES)
-    const filesTruncated = allFiles.length > filesToFetch.length
-
-    // Equal trees need no merge: the merge is either side. Anything past exit 1 is a
-    // failure like any other git failure here.
-    const mergeTree =
-      aTree === bTree ? { tree: aTree, conflicted: false, conflicts: new Set<string>() } : parseMergeTree(mergeResult)
-    if (!mergeTree) {
-      const detail = mergeResult.stderr.toString("utf8").trim() || output(mergeResult) || "git merge-tree failed"
-      return yield* Effect.fail(new OperationError("merge_candidates", detail))
-    }
-    const inA = new Set(statsA.map((stat) => stat.file))
-    const inB = new Set(statsB.map((stat) => stat.file))
-    const differs = new Set(parseStats(stats).map((stat) => stat.file))
-    const statusOf = (file: string, binary: boolean) =>
-      divergenceStatus({
-        binary,
-        inA: inA.has(file),
-        inB: inB.has(file),
-        differs: differs.has(file),
-        conflicted: mergeTree.conflicts.has(file),
+/** The file list plus the three patches the difference summary reads. */
+export const compare = Effect.fn("ArenaGit.compare")(
+  function* (input: ComparisonInput & { readonly maxOutputBytes?: number }) {
+    const git = yield* Git.Service
+    const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+    const patch = (operation: string, from: string, to: string) =>
+      run(git, root, operation, ["diff", "--no-ext-diff", "--no-renames", "--binary", from, to, "--", "."], {
+        maxOutputBytes: input.maxOutputBytes ?? 10 * 1024 * 1024,
       })
-
-    const pairs = yield* Effect.forEach(
-      filesToFetch,
-      ([file, entry]) =>
-        Effect.gen(function* () {
-          const binary = entry.binaryA || entry.binaryB
-          if (binary) {
-            return {
-              file: { file, binary: true, ...entry } satisfies ThreeWayFile,
-              divergence: { file, status: "binary" } satisfies DivergenceFile,
-            }
-          }
-          const [base, a, b] = yield* Effect.all([
-            readBlob(git, root, baseTree, file, MAX_BLOB_READ_BYTES),
-            readBlob(git, root, aTree, file, MAX_BLOB_READ_BYTES),
-            readBlob(git, root, bTree, file, MAX_BLOB_READ_BYTES),
-          ])
-          const status = statusOf(file, false)
-          if (
-            base.content.length <= MAX_WHOLE_FILE_BYTES &&
-            a.content.length <= MAX_WHOLE_FILE_BYTES &&
-            b.content.length <= MAX_WHOLE_FILE_BYTES
-          ) {
-            // The merged text is only worth sending where the two sides both touched the
-            // file: elsewhere it equals one side's content, which the viewer already has.
-            const wantsMerged = status === "compatible" || status === "diverging"
-            const mergedBlob = wantsMerged
-              ? yield* readBlob(git, root, mergeTree.tree, file, MAX_MERGED_FILE_BYTES + 1)
-              : null
-            const mergedFits =
-              mergedBlob &&
-              !mergedBlob.missing &&
-              !mergedBlob.truncated &&
-              mergedBlob.content.length <= MAX_MERGED_FILE_BYTES
-            return {
-              file: { file, binary: false, ...entry, base, a, b } satisfies ThreeWayFile,
-              divergence: {
-                file,
-                status,
-                ...(mergedFits ? { merged: mergedBlob } : {}),
-              } satisfies DivergenceFile,
-            }
-          }
-          const [patchA, patchB] = yield* Effect.all([
-            run(
-              git,
-              root,
-              "read_file_hunks_a",
-              ["diff", "--no-ext-diff", "--no-renames", "--unified=0", input.baseCommit, input.aCommit, "--", file],
-              { maxOutputBytes: 16 * 1024 * 1024 },
-            ),
-            run(
-              git,
-              root,
-              "read_file_hunks_b",
-              ["diff", "--no-ext-diff", "--no-renames", "--unified=0", input.baseCommit, input.bCommit, "--", file],
-              { maxOutputBytes: 16 * 1024 * 1024 },
-            ),
-          ])
-          // These reads include changed lines, so a generated file can exhaust the cap.
-          // Incomplete hunk positions cannot align windows safely. Reuse the bounded-head
-          // fallback and mark every present side partial instead of failing the comparison.
-          const incomplete = patchA.truncated || patchB.truncated
-          const windowed = windowFile({
-            base: { ...base, truncated: base.truncated || (incomplete && !base.missing) },
-            a: { ...a, truncated: a.truncated || (incomplete && !a.missing) },
-            b: { ...b, truncated: b.truncated || (incomplete && !b.missing) },
-            hunksA: incomplete ? [] : parseHunks(patchA.text()),
-            hunksB: incomplete ? [] : parseHunks(patchB.text()),
-          })
-          return {
-            file: { file, binary: false, ...entry, ...windowed } satisfies ThreeWayFile,
-            divergence: { file, status } satisfies DivergenceFile,
-          }
-        }),
-      { concurrency: 6 },
-    )
-    const files = pairs.map((pair) => pair.file)
-    const divergence: Divergence = {
-      mergeTree: mergeTree.tree,
-      conflicted: mergeTree.conflicted,
-      files: pairs.map((pair) => pair.divergence),
-    }
-
+    const [list, baseToA, baseToB, aToB] = yield* Effect.all([
+      listComparisonFiles(git, root, input),
+      patch("read_base_to_a_patch", input.baseCommit, input.aCommit),
+      patch("read_base_to_b_patch", input.baseCommit, input.bCommit),
+      patch("read_comparison_patch", input.aCommit, input.bCommit),
+    ])
+    const { trees, stats, entries, files } = list
     return {
-      baseTree,
-      aTree,
-      bTree,
+      baseTree: trees.base,
+      aTree: trees.a,
+      bTree: trees.b,
+      files,
       baseToA: baseToA.text(),
       baseToATruncated: baseToA.truncated,
       baseToB: baseToB.text(),
       baseToBTruncated: baseToB.truncated,
       patch: aToB.text(),
       truncated: aToB.truncated,
-      stats: parseStats(stats),
-      fileFacts: allFiles.map(([file, entry]) => ({
+      fileFacts: entries.map(([file, entry]) => ({
         file,
         ...entry,
-        changedA: inA.has(file),
-        changedB: inB.has(file),
-        sameResult: !differs.has(file),
+        changedA: stats.inA.has(file),
+        changedB: stats.inB.has(file),
+        sameResult: !stats.differs.has(file),
       })),
-      files,
-      filesTruncated,
-      divergence,
     } satisfies ComparisonEvidence
   },
   comparisonSlot.withPermits(1),
-  Effect.timeoutOrElse({
-    duration: "15 seconds",
-    orElse: () => Effect.fail(new OperationError("compare", "Battle comparison exceeded the 15 second time limit")),
-  }),
+  comparisonDeadline,
+)
+
+/**
+ * One changed file's contents at the base and on each side, and git's merge of the two where both
+ * touched it. Refuses a path neither side changed, so the read stays inside the battle's diff.
+ */
+export const readComparisonFile = Effect.fn("ArenaGit.readComparisonFile")(
+  function* (input: ComparisonInput & { readonly file: string }) {
+    const git = yield* Git.Service
+    const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+    const [trees, stats] = yield* Effect.all([
+      readComparisonTrees(git, root, input),
+      readComparisonStats(git, root, input, `:(literal)${input.file}`),
+    ])
+    const entry = stats.entries.get(input.file)
+    if (!entry) {
+      return yield* Effect.fail(
+        new OperationError("read_comparison_file", `Neither contestant changed ${input.file}`, [input.file]),
+      )
+    }
+    const merge = yield* mergeCandidates(git, root, input, trees)
+    const file = input.file
+    const status = statusOf(stats, merge, file, entry)
+    if (entry.binaryA || entry.binaryB) {
+      return {
+        file: { file, binary: true, ...entry },
+        divergence: { file, status },
+      } satisfies ComparisonFileDiff
+    }
+    const [base, a, b] = yield* Effect.all([
+      readBlob(git, root, trees.base, file, MAX_BLOB_READ_BYTES),
+      readBlob(git, root, trees.a, file, MAX_BLOB_READ_BYTES),
+      readBlob(git, root, trees.b, file, MAX_BLOB_READ_BYTES),
+    ])
+    if (
+      base.content.length <= MAX_WHOLE_FILE_BYTES &&
+      a.content.length <= MAX_WHOLE_FILE_BYTES &&
+      b.content.length <= MAX_WHOLE_FILE_BYTES
+    ) {
+      // The merged text is only worth sending where the two sides both touched the
+      // file: elsewhere it equals one side's content, which the viewer already has.
+      const wantsMerged = status === "compatible" || status === "diverging"
+      const mergedBlob = wantsMerged ? yield* readBlob(git, root, merge.tree, file, MAX_MERGED_FILE_BYTES + 1) : null
+      const mergedFits =
+        mergedBlob && !mergedBlob.missing && !mergedBlob.truncated && mergedBlob.content.length <= MAX_MERGED_FILE_BYTES
+      return {
+        file: { file, binary: false, ...entry, base, a, b },
+        divergence: { file, status, ...(mergedFits ? { merged: mergedBlob } : {}) },
+      } satisfies ComparisonFileDiff
+    }
+    const hunks = (operation: string, to: string) =>
+      run(
+        git,
+        root,
+        operation,
+        ["diff", "--no-ext-diff", "--no-renames", "--unified=0", input.baseCommit, to, "--", `:(literal)${file}`],
+        { maxOutputBytes: 16 * 1024 * 1024 },
+      )
+    const [patchA, patchB] = yield* Effect.all([
+      hunks("read_file_hunks_a", input.aCommit),
+      hunks("read_file_hunks_b", input.bCommit),
+    ])
+    // These reads include changed lines, so a generated file can exhaust the cap.
+    // Incomplete hunk positions cannot align windows safely. Reuse the bounded-head
+    // fallback and mark every present side partial instead of failing the comparison.
+    const incomplete = patchA.truncated || patchB.truncated
+    const windowed = windowFile({
+      base: { ...base, truncated: base.truncated || (incomplete && !base.missing) },
+      a: { ...a, truncated: a.truncated || (incomplete && !a.missing) },
+      b: { ...b, truncated: b.truncated || (incomplete && !b.missing) },
+      hunksA: incomplete ? [] : parseHunks(patchA.text()),
+      hunksB: incomplete ? [] : parseHunks(patchB.text()),
+    })
+    return {
+      file: { file, binary: false, ...entry, ...windowed },
+      divergence: { file, status },
+    } satisfies ComparisonFileDiff
+  },
+  comparisonSlot.withPermits(1),
+  comparisonDeadline,
 )
 
 export * as ArenaGit from "./git"

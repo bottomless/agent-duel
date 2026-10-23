@@ -6,6 +6,7 @@ import {
   ArenaRunningPillButton,
   ArenaSideChoiceButton,
   DiscardDecision,
+  ResumeDecision,
   VoteDecision,
 } from "./decision-bar";
 import {
@@ -118,6 +119,16 @@ function BattleStopDecision({
   );
 }
 
+/** The line above the pill that says why the usual choices changed, if they did. */
+function decisionHint(phase: ArenaDecisionPhase): string | null {
+  if (phase.kind === "running") return arenaRunningDecisionHint(phase);
+  if (phase.kind === "awaiting_stop_resolution") return "Battle stopped · choose what to keep";
+  if (phase.kind !== "awaiting_vote") return null;
+  if (phase.canResume) return "Agent Duel closed during the battle · resume or discard";
+  if (!phase.canDiscard) return null;
+  return phase.canRetry ? "Both agents failed · retry or discard" : "Both agents failed";
+}
+
 /** Lives outside the transcript scroller so the decision stays above the composer. */
 export function ArenaDecisionPill({
   serverId,
@@ -134,8 +145,9 @@ export function ArenaDecisionPill({
   const phase = arenaDecisionPhase(snapshot);
   const stopped = phase.kind === "awaiting_stop_resolution";
   const bothFailed = phase.kind === "awaiting_vote" && phase.canDiscard;
-  const runningHint = arenaRunningDecisionHint(phase);
+  const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
   const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
+  const hint = decisionHint(phase);
   const visible = isArenaBattleOnScreen(snapshot) && showChoices;
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
@@ -154,13 +166,7 @@ export function ArenaDecisionPill({
       pointerEvents="box-none"
       testID="arena-decision-pill"
     >
-      {stopped ? <Text style={styles.hint}>Battle stopped · choose what to keep</Text> : null}
-      {bothFailed ? (
-        <Text style={styles.hint}>
-          {phase.canRetry ? "Both agents failed · retry or discard" : "Both agents failed"}
-        </Text>
-      ) : null}
-      {runningHint ? <Text style={styles.hint}>{runningHint}</Text> : null}
+      {hint ? <Text style={styles.hint}>{hint}</Text> : null}
       <View style={styles.pill} testID="arena-battle-choice-row">
         {phase.kind === "running"
           ? arenaRunningDecisionOrder(phase).map((choice) =>
@@ -171,7 +177,13 @@ export function ArenaDecisionPill({
               ),
             )
           : null}
-        {phase.kind !== "running" ? (
+        {interrupted ? (
+          <>
+            <ResumeDecision actions={actions} />
+            <DiscardDecision actions={actions} />
+          </>
+        ) : null}
+        {phase.kind !== "running" && !interrupted ? (
           <>
             <BattlePaneDecision side="a" phase={phase} actions={actions} />
             {phase.kind === "awaiting_vote" && !phase.canDiscard ? (

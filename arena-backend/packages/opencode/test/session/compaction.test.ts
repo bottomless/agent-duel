@@ -1497,6 +1497,46 @@ describe("session.compaction.process", () => {
     }),
   )
 
+  it.instance(
+    "carries the answered prompt's system text onto the continue prompt",
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      const prompt = yield* ssn.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: session.id,
+        agent: "build",
+        model: ref,
+        system: "Prompt instruction",
+        time: { created: Date.now() },
+      })
+      yield* ssn.updatePart({
+        id: PartID.ascending(),
+        messageID: prompt.id,
+        sessionID: session.id,
+        type: "text",
+        text: "hello",
+      })
+      yield* SessionCompaction.use.create({ sessionID: session.id, agent: "build", model: ref, auto: true })
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+      const marker = msgs.at(-1)
+      if (!marker) throw new Error("The compaction message was not saved")
+
+      const result = yield* SessionCompaction.use.process({
+        parentID: marker.info.id,
+        messages: msgs,
+        sessionID: session.id,
+        auto: true,
+      })
+
+      const last = (yield* ssn.messages({ sessionID: session.id })).at(-1)
+      expect(result).toBe("continue")
+      expect(last?.parts[0]).toMatchObject({ metadata: { compaction_continue: true } })
+      expect(last?.info.role === "user" ? last.info.system : undefined).toBe("Prompt instruction")
+    }),
+  )
+
   itCompaction.instance(
     "persists tail_start_id for retained recent turns",
     Effect.gen(function* () {
