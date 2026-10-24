@@ -528,13 +528,19 @@ class LocalDatabase implements ArenaDb, ArenaClient {
     )
     const order = ordering.length ? ` ORDER BY ${ordering.join(", ")}` : ""
     const limit = options.limit === undefined ? -1 : options.limit
-    const rows = this.database
-      .query<
-        { document: string },
-        SQLQueryBindings[]
-      >(`SELECT document FROM arena_documents WHERE collection = ? AND ${predicate.sql}${order} LIMIT ? OFFSET ?`)
-      .all(...parameters, limit, options.offset ?? 0)
-    return rows.map((row) => decode(JSON.parse(row.document)) as ArenaRecord)
+    // Each filter is its own SQL, so the statement is finalized here rather than cached: Bun drops
+    // a statement its query cache evicts without finalizing it, and on Windows that kept
+    // arena.sqlite open after `close()`.
+    const statement = this.database.prepare<{ document: string }, SQLQueryBindings[]>(
+      `SELECT document FROM arena_documents WHERE collection = ? AND ${predicate.sql}${order} LIMIT ? OFFSET ?`,
+    )
+    try {
+      return statement
+        .all(...parameters, limit, options.offset ?? 0)
+        .map((row) => decode(JSON.parse(row.document)) as ArenaRecord)
+    } finally {
+      statement.finalize()
+    }
   }
 
   row(name: string, id: string) {
@@ -605,7 +611,12 @@ class LocalDatabase implements ArenaDb, ArenaClient {
       } finally {
         await handle.close()
       }
-      await rename(temporary, destination)
+      await rename(temporary, destination).catch(async (error: unknown) => {
+        // The name is the hash of the bytes, so a file already there holds them. Windows refuses to
+        // rename over a file another process opened without delete sharing, as a virus scan does.
+        if (!(await stat(destination).then(Boolean, () => false))) throw error
+        await rm(temporary, { force: true })
+      })
       // Windows does not support opening directories for fsync.
       if (process.platform !== "win32") {
         const directoryHandle = await open(this.artifactsRoot, "r")

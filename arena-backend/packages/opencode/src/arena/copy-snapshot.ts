@@ -1,10 +1,17 @@
 import { execFile as nodeExecFile } from "child_process"
 import { createHash, randomUUID } from "crypto"
-import { constants, createReadStream } from "fs"
-import { copyFile, cp, lstat, lutimes, mkdir, readdir, readlink, realpath, rm, symlink, writeFile } from "fs/promises"
+import { type BigIntStats, constants, createReadStream } from "fs"
+import { copyFile, lstat, lutimes, mkdir, readdir, readlink, realpath, rm, symlink, writeFile } from "fs/promises"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "path"
 import { promisify } from "util"
-import { cloneFile, cloneTree, type CloneMethod, type CloneOptions, type CopyMethod } from "@/util/copy-tree"
+import {
+  cloneFile,
+  cloneTree,
+  copyDirectory,
+  type CloneMethod,
+  type CloneOptions,
+  type CopyMethod,
+} from "@/util/copy-tree"
 import { discardTree, TRASH_DIRNAME } from "@/util/discard-tree"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { isolatedRoot, LOCAL_STATE_DIRNAME, localStatePath } from "@/worktree/layout"
@@ -50,6 +57,11 @@ export type CopyManifestEntry = {
   readonly state: "copied" | "omitted"
   readonly omissionReason?: CopyOmissionReason
   readonly sourceIdentity?: SourceIdentity
+  /**
+   * A copied tree's `treeDigest`, from the walk that measured it, in a manifest that scans. A copy
+   * records it as the checkout's tree from before the copy instead of walking the tree again.
+   */
+  readonly sourceTree?: string
 }
 
 export type CopyManifest = {
@@ -59,6 +71,11 @@ export type CopyManifest = {
   readonly entries: readonly CopyManifestEntry[]
   readonly omittedCount: number
   readonly createdAt: string
+  /**
+   * Resyncs digest each copied directory (`treeDigest`) on both sides, so a root no watch covered
+   * can still be kept. Set where no filesystem watch runs.
+   */
+  readonly scan?: boolean
 }
 
 /** A copy-on-write clone of a file or tree, or `undefined` where this filesystem has none. */
@@ -70,6 +87,11 @@ export type IgnoredContentSnapshotInput = {
   readonly defaults?: ResolvedArenaCopyPolicy
   /** Override the clone, for tests that model a filesystem without one. */
   readonly clone?: Clone
+  /**
+   * Digest each copied directory (`treeDigest`) so a resync can keep a root no watch covered.
+   * For where no filesystem watch runs; a watch names what was written and costs no walk.
+   */
+  readonly scan?: boolean
 }
 
 export type SeedCopyInput = {
@@ -116,6 +138,9 @@ export type SlotRootRecord = {
   readonly type: CopyManifestEntry["type"]
   readonly sourceIdentity: SourceIdentity
   readonly targetIdentity: SourceIdentity
+  /** The `treeDigest` of the checkout's root and of the copy, for a manifest taken with `scan`. */
+  readonly sourceTree?: string
+  readonly targetTree?: string
 }
 
 /**
@@ -347,23 +372,102 @@ async function probeClone(canonical: string, clone: Clone) {
   }
 }
 
-/** Bytes under a tree, giving up as soon as the total is known to exceed `limit`. */
+/**
+ * Every entry under a directory as stat data: path, mode, size, modification and change times,
+ * and file index, the data git trusts for its own index. Where no filesystem watch runs, two equal
+ * digests of a tree taken at different times stand in for a watch that saw no write in between:
+ * a write moves the change time even when it puts the size and modification time back. Reading a
+ * file changes nothing here. One `lstat` per entry, all at once: about 0.1s for a 12,000-entry
+ * `node_modules` on Windows, where copying it again takes seconds.
+ */
+export async function treeDigest(root: string): Promise<string> {
+  const lines: string[] = []
+  const walk = async (directory: string, relativePath: string): Promise<void> => {
+    const children = await readdir(directory)
+    await Promise.all(
+      children.map(async (name) => {
+        const path = join(directory, name)
+        const child = relativePath ? `${relativePath}/${name}` : name
+        const stats = await lstat(path, { bigint: true })
+        lines.push(digestLine(child, stats))
+        if (stats.isDirectory()) await walk(path, child)
+      }),
+    )
+  }
+  await walk(root, "")
+  return digestOf(lines)
+}
+
+/** Walks of a checkout's roots under way, by path: both sides of a send resync at once. */
+const digestsUnderWay = new Map<string, Promise<string>>()
+
+/** `treeDigest`, joining a walk of the same tree already under way rather than starting another. */
+function sharedTreeDigest(root: string) {
+  const underWay = digestsUnderWay.get(root)
+  if (underWay) return underWay
+  const walk = treeDigest(root).finally(() => digestsUnderWay.delete(root))
+  digestsUnderWay.set(root, walk)
+  return walk
+}
+
+const digestLine = (relativePath: string, stats: BigIntStats) =>
+  [relativePath, stats.mode, stats.size, stats.mtimeNs, stats.ctimeNs, stats.ino].join("\0")
+const digestOf = (lines: string[]) => createHash("sha256").update(lines.sort().join("\n")).digest("hex")
+
+/**
+ * The bytes under a tree and its `treeDigest`, from one walk. Like `treeBytes` it stops once the
+ * total is known to exceed `limit`, and then, or when an entry could not be read, has no digest.
+ */
+async function measureTree(root: string, limit: number) {
+  const lines: string[] = []
+  let total = 0
+  let complete = true
+  const walk = async (directory: string, relativePath: string): Promise<void> => {
+    if (total > limit) return
+    const children = await readdir(directory).catch(() => {
+      complete = false
+      return [] as string[]
+    })
+    await Promise.all(
+      children.map(async (name) => {
+        if (total > limit) return
+        const path = join(directory, name)
+        const child = relativePath ? `${relativePath}/${name}` : name
+        const stats = await lstat(path, { bigint: true }).catch(() => undefined)
+        if (!stats) {
+          complete = false
+          return
+        }
+        lines.push(digestLine(child, stats))
+        if (stats.isFile()) total += Number(stats.size)
+        if (stats.isDirectory()) await walk(path, child)
+      }),
+    )
+  }
+  await walk(root, "")
+  return { bytes: total, digest: complete && total <= limit ? digestOf(lines) : undefined }
+}
+
+/**
+ * Bytes under a tree, giving up as soon as the total is known to exceed `limit`. Every entry is
+ * measured at once, as `treeDigest` reads them: one `lstat` after another took 1s for a 14k-file
+ * `node_modules` on Windows, the one platform that measures before every cold send.
+ */
 async function treeBytes(root: string, limit: number) {
   let total = 0
-  const pending = [root]
-  while (pending.length > 0) {
-    const directory = pending.pop()!
+  const walk = async (directory: string): Promise<void> => {
+    if (total > limit) return
     const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
-    for (const entry of entries) {
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) {
-        pending.push(path)
-      } else if (entry.isFile()) {
-        total += Number((await lstat(path).catch(() => undefined))?.size ?? 0)
-        if (total > limit) return total
-      }
-    }
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (total > limit) return
+        const path = join(directory, entry.name)
+        if (entry.isDirectory()) return walk(path)
+        if (entry.isFile()) total += Number((await lstat(path).catch(() => undefined))?.size ?? 0)
+      }),
+    )
   }
+  await walk(root)
   return total
 }
 
@@ -467,9 +571,16 @@ export async function createIgnoredContentSnapshot(input: IgnoredContentSnapshot
       continue
     }
     // A plain copy is the one path where size costs something, so it is the one path that
-    // measures. A tree is walked only far enough to know it does not fit.
-    const bytes =
-      type === "file" ? sourceIdentity.size : await treeBytes(source, policy.ignoredTotalMaxBytes - copiedBytes)
+    // measures. A tree is walked only far enough to know it does not fit; where nothing watches
+    // the checkout, the walk that measures it digests it too.
+    const limit = policy.ignoredTotalMaxBytes - copiedBytes
+    const measured =
+      type === "file"
+        ? { bytes: sourceIdentity.size, digest: undefined }
+        : input.scan
+          ? await measureTree(source, limit)
+          : { bytes: await treeBytes(source, limit), digest: undefined }
+    const bytes = measured.bytes
     const decision =
       type === "file"
         ? decideIgnoredCopy(relativePath, bytes, copiedBytes, policy)
@@ -479,7 +590,10 @@ export async function createIgnoredContentSnapshot(input: IgnoredContentSnapshot
       continue
     }
     copiedBytes += bytes
-    entries.push(copied(relativePath, type, bytes, "copy", sourceIdentity))
+    entries.push({
+      ...copied(relativePath, type, bytes, "copy", sourceIdentity),
+      ...(measured.digest ? { sourceTree: measured.digest } : {}),
+    })
   }
 
   return {
@@ -489,6 +603,7 @@ export async function createIgnoredContentSnapshot(input: IgnoredContentSnapshot
     entries,
     omittedCount: entries.filter((entry) => entry.state === "omitted").length,
     createdAt: new Date().toISOString(),
+    ...(input.scan ? { scan: true } : {}),
   }
 }
 
@@ -585,7 +700,7 @@ async function seedEntry(
   if (await clone(source, target, { staging: join(dirname(trash), STAGING_DIRNAME), signal })) {
     return "cloned" as const
   }
-  await cp(source, target, { recursive: true, verbatimSymlinks: true })
+  await copyDirectory(source, target, signal)
   return "copied" as const
 }
 
@@ -758,14 +873,21 @@ function unobserved(observation: RootObservation, relativePath: string, side: st
   return `written to in ${side} since it was cloned`
 }
 
-function slotRootRecord(entry: CopyManifestEntry, stats: Stats): SlotRootRecord | undefined {
+/**
+ * The record of a copy just made. `sourceTree` is the checkout root's `treeDigest` from before the
+ * copy started, so a write during it reads as a change; the copy is digested now, before anything
+ * else writes into it.
+ */
+async function slotRootRecord(entry: CopyManifestEntry, stats: Stats, target: string, sourceTree?: string) {
   if (!entry.sourceIdentity) return undefined
-  return {
+  const record: SlotRootRecord = {
     relativePath: entry.relativePath,
     type: entry.type,
     sourceIdentity: entry.sourceIdentity,
     targetIdentity: identity(stats),
   }
+  if (sourceTree === undefined) return record
+  return { ...record, sourceTree, targetTree: await treeDigest(target) }
 }
 
 /**
@@ -780,9 +902,10 @@ export async function recordIgnoredSeed(input: {
   const targetRoot = resolve(input.targetRoot)
   const records = await Promise.all(
     copiedEntries(input.manifest).map(async (entry) => {
-      const stats = await lstat(join(targetRoot, entry.relativePath)).catch(() => undefined)
+      const target = join(targetRoot, entry.relativePath)
+      const stats = await lstat(target).catch(() => undefined)
       if (!stats || entryType(stats) !== entry.type) return undefined
-      return slotRootRecord(entry, stats)
+      return await slotRootRecord(entry, stats, target)
     }),
   )
   return new Map(
@@ -802,6 +925,8 @@ export async function recordIgnoredSeed(input: {
  *   the one recorded then;
  * - for a directory, nothing was written deeper inside on either side, which no root-level
  *   identity shows: both watches covered the whole window and report nothing under the root.
+ *   Where no watch runs (a manifest taken with `scan`), the checkout root digested now and the
+ *   copy digested now must equal the digests recorded around the copy (`treeDigest`).
  * A symlink is recreated every time, which costs one syscall.
  *
  * A directory root written on either side is patched instead of cloned when both watches
@@ -893,7 +1018,19 @@ export async function planIgnoredResync(input: IgnoredResyncPlanInput): Promise<
     const unseen =
       unobserved(input.canonical, entry.relativePath, "the checkout") ??
       unobserved(input.slot, entry.relativePath, "the worktree")
-    if (unseen !== undefined) return reclone(unseen)
+    if (unseen !== undefined) {
+      // With no watch to say what was written, a scan does: both trees as they were recorded. The
+      // checkout's is read now, not taken from the manifest, which a warm pair reuses at a later
+      // send; the two sides resyncing at once share that walk.
+      const scanned =
+        record.sourceTree !== undefined &&
+        record.targetTree !== undefined &&
+        (await Promise.all([
+          sharedTreeDigest(join(input.manifest.canonicalRoot, entry.relativePath)),
+          treeDigest(target),
+        ]).then(([source, worktree]) => source === record.sourceTree && worktree === record.targetTree))
+      return scanned ? undefined : reclone(unseen)
+    }
     const fromCheckout = input.canonical.paths?.get(entry.relativePath) ?? new Set<string>()
     const fromWorktree = input.slot.paths?.get(entry.relativePath) ?? new Set<string>()
     if (checkoutMoved && fromCheckout.size === 0) return reclone("changed in the checkout since it was cloned")
@@ -1040,7 +1177,7 @@ async function patchEntry(input: {
       await lutimes(target, stats.atime, stats.mtime)
       continue
     }
-    if (!(await input.clone(source, target))) await cp(source, target, { recursive: true, verbatimSymlinks: true })
+    if (!(await input.clone(source, target))) await copyDirectory(source, target)
   }
 }
 
@@ -1172,7 +1309,7 @@ export async function applyIgnoredResync(input: IgnoredResyncApplyInput): Promis
     })
     if (written === undefined) continue
     const stats = await lstat(target).catch(() => undefined)
-    const record = stats && entryType(stats) === "directory" ? slotRootRecord(entry, stats) : undefined
+    const record = stats && entryType(stats) === "directory" ? await slotRootRecord(entry, stats, target) : undefined
     if (!record || stats?.ino !== before.ino) {
       unpatched[relativePath] = "replaced while it was patched"
       continue
@@ -1193,10 +1330,14 @@ export async function applyIgnoredResync(input: IgnoredResyncApplyInput): Promis
     if (!(await ensureParentInside(realRoot, targetRoot, target))) {
       throw new Error(`Copied-content parent escaped the worktree: ${entry.relativePath}`)
     }
+    // The manifest's digest was taken before any copy started, as this one would be. Should the
+    // checkout have moved since, its change times did too, so the next scan reads it as changed.
+    const sourceTree =
+      input.manifest.scan && entry.type === "directory" ? (entry.sourceTree ?? (await treeDigest(source))) : undefined
     await seedEntry(source, target, entry, clone, trash, input.signal)
     const stats = await lstat(target)
     if (entryType(stats) !== entry.type) throw new Error(`Copied-content type changed for ${entry.relativePath}`)
-    return slotRootRecord(entry, stats)
+    return await slotRootRecord(entry, stats, target, sourceTree)
   })
 
   const fresh = new Map(

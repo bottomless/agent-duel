@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import os from "node:os"
+import { pathToFileURL } from "node:url"
 import {
   canonicalizeArenaEnvironment,
   canonicalizeTranscriptPaths,
@@ -6,6 +8,7 @@ import {
   canonicalizeWorktreePaths,
   localizeArenaEnvironment,
   localizeCanonicalPaths,
+  localizeEmbeddedPaths,
 } from "@/arena/canonical-path"
 
 const CANONICAL = "/Users/dev/project"
@@ -13,6 +16,8 @@ const WORKTREE_A = "/Users/dev/.local/share/opencode/worktree/5f90df7c/turn-1-a-
 const WORKTREE_B = "/Users/dev/.local/share/opencode/worktree/5f90df7c/turn-1-b-calm-knight"
 const BOTH = { worktrees: [WORKTREE_A, WORKTREE_B], canonical: CANONICAL }
 const TEMP = "/var/folders/xy/abc/T/opencode/arena"
+// POSIX fixtures: file URLs and the bash adapter read these paths only on a POSIX host.
+const posix = test.skipIf(process.platform === "win32")
 
 describe("Arena canonical path", () => {
   test("rewrites historical preview URLs and ports to current environment variables", () => {
@@ -334,7 +339,7 @@ describe("Arena canonical path", () => {
     expect(await localizeTranscriptPaths(unknown, { canonical: CANONICAL, worktree: WORKTREE_A })).toBe(unknown)
   })
 
-  test("rewrites assistant locations and file attachment paths, preserving labels", async () => {
+  posix("rewrites assistant locations and file attachment paths, preserving labels", async () => {
     const paths = { canonical: CANONICAL, worktree: WORKTREE_A }
     expect(
       await localizeTranscriptPaths({ role: "assistant", path: { cwd: CANONICAL, root: CANONICAL } }, paths),
@@ -360,7 +365,7 @@ describe("Arena canonical path", () => {
     })
   })
 
-  test("retargets patch, summary and tool attachment paths without changing file contents", async () => {
+  posix("retargets patch, summary and tool attachment paths without changing file contents", async () => {
     const paths = { canonical: CANONICAL, worktree: WORKTREE_A }
     expect(await localizeTranscriptPaths({ type: "patch", files: [`${CANONICAL}/file`] }, paths)).toEqual({
       type: "patch",
@@ -385,7 +390,7 @@ describe("Arena canonical path", () => {
     })
   })
 
-  test("distinguishes pwd output from a newline belonging to a path field", async () => {
+  posix("distinguishes pwd output from a newline belonging to a path field", async () => {
     const paths = { canonical: CANONICAL, worktree: WORKTREE_A }
     const part = {
       type: "tool",
@@ -401,7 +406,7 @@ describe("Arena canonical path", () => {
     })
   })
 
-  test("retargets a complete directory-command output across three generations", async () => {
+  posix("retargets a complete directory-command output across three generations", async () => {
     const first = `${CANONICAL}/.agent-duel/generation-0-a`
     const second = `${CANONICAL}/.agent-duel/generation-1-b`
     const third = `${CANONICAL}/.agent-duel/generation-2-a`
@@ -438,5 +443,95 @@ describe("Arena canonical path", () => {
   ])("preserves arbitrary shell output: %s", async (output) => {
     const part = { type: "tool", tool: "bash", state: { input: { command: "printf x" }, output } }
     expect(await localizeTranscriptPaths(part, { canonical: CANONICAL, worktree: WORKTREE_A })).toEqual(part)
+  })
+})
+
+describe.skipIf(process.platform !== "win32")("Arena canonical path on Windows", () => {
+  const root = "C:\\Users\\dev\\project"
+  const worktree = `${root}\\.agent-duel\\generation-0-a`
+  const paths = {
+    worktrees: [worktree],
+    canonical: root,
+    temp: "C:\\Users\\dev\\AppData\\Local\\Temp\\opencode\\arena",
+  }
+
+  test("maps paths under a root with either separator and any letter case", () => {
+    expect(
+      canonicalizeWorktreePaths(
+        {
+          cwd: worktree,
+          back: `${worktree}\\src\\a.ts`,
+          forward: "c:/users/dev/project/.agent-duel/generation-0-a/src/b.ts",
+          sibling: `${worktree}-backup\\a.ts`,
+          parent: `${worktree}\\..\\b.ts`,
+        },
+        paths,
+      ),
+    ).toEqual({
+      cwd: root,
+      back: `${root}\\src\\a.ts`,
+      forward: `${root}/src/b.ts`,
+      sibling: `${worktree}-backup\\a.ts`,
+      parent: `${worktree}\\..\\b.ts`,
+    })
+  })
+
+  test("retargets file attachment URLs", async () => {
+    const part = { type: "file", url: pathToFileURL(`${worktree}\\a.ts`).href, filename: "a.ts" }
+    expect(await canonicalizeTranscriptPaths(part, paths)).toEqual({
+      ...part,
+      url: pathToFileURL(`${root}\\a.ts`).href,
+    })
+  })
+
+  test("retargets complete path references in assistant text", async () => {
+    const text = `Edited ${worktree}\\src\\a.ts and c:/users/dev/project/.agent-duel/generation-0-a/README.md, not ${worktree}-backup`
+    expect((await canonicalizeTranscriptPaths({ type: "text", text }, paths, "assistant")).text).toBe(
+      `Edited ${root}\\src\\a.ts and ${root}/README.md, not ${worktree}-backup`,
+    )
+  })
+
+  test("turns another slot, its host and a contestant temp directory into Arena's own names", async () => {
+    const slot = `${root}\\.agent-duel\\worktrees\\0123456789abcdef\\generation-2-b`
+    const text = `Read ${slot}\\src\\a.ts, c:/users/dev/project/.agent-duel/worktrees/0123456789abcdef/spare-89abcdef/b.ts, ${slot}.git and ${paths.temp}\\ses_abc123\\shot.png`
+    expect((await canonicalizeTranscriptPaths({ type: "text", text }, paths, "assistant")).text).toBe(
+      `Read ${root}\\src\\a.ts, ${root}/b.ts, ${root}\\.git and $TMPDIR\\shot.png`,
+    )
+  })
+
+  test("turns a slot and a contestant temp directory Git Bash printed into Arena's own names", async () => {
+    const temp = `${os.tmpdir()}\\opencode\\arena`
+    const text = [
+      "/c/Users/dev/project/.agent-duel/worktrees/0123456789abcdef/generation-1-a/src/a.ts",
+      "/c/Users/dev/project/.agent-duel/worktrees/0123456789abcdef/generation-1-a.git/HEAD",
+      "/tmp/opencode/arena/ses_abc123/shot.png",
+    ].join("\n")
+    expect((await canonicalizeTranscriptPaths({ type: "text", text }, { ...paths, temp }, "assistant")).text).toBe(
+      ["/c/Users/dev/project/src/a.ts", "/c/Users/dev/project/.git/HEAD", "$TMPDIR/shot.png"].join("\n"),
+    )
+  })
+
+  test("retargets complete path references in the shell command, workdir and output", async () => {
+    const part = {
+      type: "tool",
+      tool: "bash",
+      state: {
+        input: { command: `Set-Location "${worktree}\\src"; Get-ChildItem`, workdir: worktree },
+        output: `Directory: ${worktree}\\src`,
+      },
+    }
+    expect(await canonicalizeTranscriptPaths(part, paths)).toEqual({
+      ...part,
+      state: {
+        input: { command: `Set-Location "${root}\\src"; Get-ChildItem`, workdir: root },
+        output: `Directory: ${root}\\src`,
+      },
+    })
+  })
+
+  test("relocates embedded paths with either separator", () => {
+    expect(
+      localizeEmbeddedPaths({ text: `c:/Users/dev/project/src and ${root}-backup` }, { canonical: root, worktree }),
+    ).toEqual({ text: `${worktree}/src and ${root}-backup` })
   })
 })

@@ -333,48 +333,52 @@ describe("local Arena store", () => {
     }
   })
 
-  test("opens while a scrubbed telemetry file cannot be deleted, and deletes it at a later start", async () => {
-    const directory = await temporaryDirectory()
-    const root = path.join(directory, "artifacts", "sha256")
-    try {
-      const store = await connectLocalStore({ directory })
-      await store.db.collection<ArenaRecord>("turns").insertOne({ _id: "turn", state: "awaiting_vote" })
-      await store.db.collection<ArenaRecord>("runs").insertOne({ _id: "run", turnID: "turn" })
-      await store.db
-        .collection<ArenaRecord>("generations")
-        .insertOne({ _id: "generation", runID: "run", responseArtifactID: "generation|response" })
-      const response = Buffer.from('{"format":"anthropic-claude-v1"}')
-      await store.storeArtifact({
-        _id: "generation|response",
-        runID: "run",
-        kind: "generation_response",
-        mimeType: "application/json",
-        encoding: "utf8",
-        compression: "none",
-        data: response,
-        createdAt: now,
-      })
-      await store.close()
-      const database = new Database(path.join(directory, "arena.sqlite"))
-      database.query("DELETE FROM arena_metadata WHERE key = 'privacy.blinded-generation-telemetry'").run()
-      database.close()
-      const file = createHash("sha256").update(response).digest("hex")
-      // A directory nobody may write to refuses the delete, as a locked file does.
-      await chmod(root, 0o555)
+  // chmod cannot make a Windows directory refuse deletes.
+  test.skipIf(process.platform === "win32")(
+    "opens while a scrubbed telemetry file cannot be deleted, and deletes it at a later start",
+    async () => {
+      const directory = await temporaryDirectory()
+      const root = path.join(directory, "artifacts", "sha256")
+      try {
+        const store = await connectLocalStore({ directory })
+        await store.db.collection<ArenaRecord>("turns").insertOne({ _id: "turn", state: "awaiting_vote" })
+        await store.db.collection<ArenaRecord>("runs").insertOne({ _id: "run", turnID: "turn" })
+        await store.db
+          .collection<ArenaRecord>("generations")
+          .insertOne({ _id: "generation", runID: "run", responseArtifactID: "generation|response" })
+        const response = Buffer.from('{"format":"anthropic-claude-v1"}')
+        await store.storeArtifact({
+          _id: "generation|response",
+          runID: "run",
+          kind: "generation_response",
+          mimeType: "application/json",
+          encoding: "utf8",
+          compression: "none",
+          data: response,
+          createdAt: now,
+        })
+        await store.close()
+        const database = new Database(path.join(directory, "arena.sqlite"))
+        database.query("DELETE FROM arena_metadata WHERE key = 'privacy.blinded-generation-telemetry'").run()
+        database.close()
+        const file = createHash("sha256").update(response).digest("hex")
+        // A directory nobody may write to refuses the delete, as a locked file does.
+        await chmod(root, 0o555)
 
-      const reopened = await connectLocalStore({ directory })
-      expect(await reopened.artifacts.findOne({ _id: "generation|response" })).toBeNull()
-      await reopened.close()
-      expect(await readdir(root)).toEqual([file])
+        const reopened = await connectLocalStore({ directory })
+        expect(await reopened.artifacts.findOne({ _id: "generation|response" })).toBeNull()
+        await reopened.close()
+        expect(await readdir(root)).toEqual([file])
 
-      await chmod(root, 0o755)
-      await (await connectLocalStore({ directory })).close()
-      expect(await readdir(root)).toEqual([])
-    } finally {
-      await chmod(root, 0o755).catch(() => undefined)
-      await rm(directory, { recursive: true, force: true })
-    }
-  })
+        await chmod(root, 0o755)
+        await (await connectLocalStore({ directory })).close()
+        expect(await readdir(root)).toEqual([])
+      } finally {
+        await chmod(root, 0o755).catch(() => undefined)
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+  )
 
   test("does not hydrate artifact bytes for metadata projections", async () => {
     const directory = await temporaryDirectory()
@@ -411,6 +415,57 @@ describe("local Arena store", () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+  test.skipIf(process.platform !== "win32")(
+    "stores bytes it already holds while another process has that file open",
+    async () => {
+      const directory = await temporaryDirectory()
+      try {
+        const store = await connectLocalStore({ directory })
+        const artifact = (_id: string) =>
+          store.storeArtifact({
+            _id,
+            runID: "run",
+            kind: "other",
+            mimeType: "text/plain",
+            encoding: "binary",
+            compression: "none",
+            data: Buffer.from("identical diff"),
+            createdAt: now,
+          })
+        await artifact("a")
+        const file = path.join(
+          directory,
+          "artifacts",
+          "sha256",
+          createHash("sha256").update("identical diff").digest("hex"),
+        )
+        // Opened without delete sharing, as a virus scan of a new file does; Windows then refuses to
+        // rename another file over it. Both sides of a battle that made one change write these bytes.
+        const holder = Bun.spawn(
+          [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            `$h = [IO.File]::Open('${file}', 'Open', 'Read', 'Read'); 'open'; Start-Sleep -Seconds 30`,
+          ],
+          { stdout: "pipe" },
+        )
+        try {
+          const reader = holder.stdout.getReader()
+          while (!new TextDecoder().decode((await reader.read()).value).includes("open")) {}
+          await artifact("b")
+          expect((await store.artifacts.findOne({ _id: "b" }))?.data.toString()).toBe("identical diff")
+          expect(await readdir(path.dirname(file))).toEqual([path.basename(file)])
+        } finally {
+          holder.kill()
+          await holder.exited
+          await store.close()
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+  )
   test("reclaims artifact files no record names on the next start", async () => {
     const directory = await temporaryDirectory()
     try {
@@ -524,38 +579,42 @@ describe("local Arena store", () => {
     }
   })
 
-  test("opens with an artifact file it cannot delete, and deletes it at a later start", async () => {
-    const directory = await temporaryDirectory()
-    const root = path.join(directory, "artifacts", "sha256")
-    try {
-      const writer = await connectLocalStore({ directory })
-      await writer.storeArtifact({
-        _id: "gone",
-        runID: "run",
-        kind: "other",
-        mimeType: "text/plain",
-        encoding: "binary",
-        compression: "none",
-        data: Buffer.from("locked"),
-        createdAt: now,
-      })
-      await writer.artifacts.deleteOne({ _id: "gone" })
-      await writer.close()
-      const locked = createHash("sha256").update("locked").digest("hex")
-      const hourAgo = new Date(Date.now() - 60 * 60_000)
-      await utimes(path.join(root, locked), hourAgo, hourAgo)
-      // A directory nobody may write to refuses the delete, as a locked file does.
-      await chmod(root, 0o555)
+  // chmod cannot make a Windows directory refuse deletes.
+  test.skipIf(process.platform === "win32")(
+    "opens with an artifact file it cannot delete, and deletes it at a later start",
+    async () => {
+      const directory = await temporaryDirectory()
+      const root = path.join(directory, "artifacts", "sha256")
+      try {
+        const writer = await connectLocalStore({ directory })
+        await writer.storeArtifact({
+          _id: "gone",
+          runID: "run",
+          kind: "other",
+          mimeType: "text/plain",
+          encoding: "binary",
+          compression: "none",
+          data: Buffer.from("locked"),
+          createdAt: now,
+        })
+        await writer.artifacts.deleteOne({ _id: "gone" })
+        await writer.close()
+        const locked = createHash("sha256").update("locked").digest("hex")
+        const hourAgo = new Date(Date.now() - 60 * 60_000)
+        await utimes(path.join(root, locked), hourAgo, hourAgo)
+        // A directory nobody may write to refuses the delete, as a locked file does.
+        await chmod(root, 0o555)
 
-      await (await connectLocalStore({ directory })).close()
-      expect(await readdir(root)).toEqual([locked])
+        await (await connectLocalStore({ directory })).close()
+        expect(await readdir(root)).toEqual([locked])
 
-      await chmod(root, 0o755)
-      await (await connectLocalStore({ directory })).close()
-      expect(await readdir(root)).toEqual([])
-    } finally {
-      await chmod(root, 0o755).catch(() => undefined)
-      await rm(directory, { recursive: true, force: true })
-    }
-  })
+        await chmod(root, 0o755)
+        await (await connectLocalStore({ directory })).close()
+        expect(await readdir(root)).toEqual([])
+      } finally {
+        await chmod(root, 0o755).catch(() => undefined)
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+  )
 })

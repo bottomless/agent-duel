@@ -1,5 +1,6 @@
 import { rewritePathCommand } from "./path-command"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { tmpdir } from "node:os"
 import { isolatedRoot, LOCAL_STATE_DIRNAME } from "@/worktree/layout"
 import { SLOT_PATH_PATTERN } from "./domain"
 
@@ -12,6 +13,24 @@ type CanonicalPaths = { readonly worktrees: readonly string[]; readonly canonica
  */
 type ArenaRoots = CanonicalPaths & { readonly temp: string; readonly home?: string }
 type LocalPaths = { readonly canonical: string; readonly worktree: string }
+
+// Windows paths compare case-insensitively and take either separator, and a model writes both
+// `C:\repo\src` and `c:/repo/src`.
+const WINDOWS = process.platform === "win32"
+const SEPARATORS = WINDOWS ? /[\\/]/ : "/"
+
+const separator = (char: string | undefined) => char === "/" || (WINDOWS && char === "\\")
+
+// Folding keeps every character's index, so a match in folded text is the same span in the original.
+function fold(value: string) {
+  if (!WINDOWS) return value
+  let folded = ""
+  for (const char of value) {
+    const lower = char.toLowerCase()
+    folded += char === "\\" ? "/" : lower.length === char.length ? lower : char
+  }
+  return folded
+}
 
 // These helpers accept declared path values, not commands or serialized transcript text.
 export function canonicalizeWorktreePaths<T>(
@@ -35,7 +54,9 @@ export function localizeCanonicalPaths<T>(
 // Ordinary session forks relocate every path mention in their copied objects.
 export function localizeEmbeddedPaths<T>(value: T, input: LocalPaths): T {
   if (!input.canonical) return value
-  const pattern = new RegExp(`${input.canonical.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=/|$)`, "g")
+  const pattern = WINDOWS
+    ? new RegExp(`${input.canonical.split(SEPARATORS).map(escapeRegExp).join("[\\\\/]")}(?=[\\\\/]|$)`, "gi")
+    : new RegExp(`${escapeRegExp(input.canonical)}(?=/|$)`, "g")
   const visit = (entry: unknown): unknown => {
     if (typeof entry === "string") return entry.replace(pattern, () => input.worktree)
     if (Array.isArray(entry)) return entry.map(visit)
@@ -164,8 +185,13 @@ async function transcript<T>(
     return { ...value, state: { ...state, input: fields(input, ["path", "filePath", "directory"]) } }
   }
   // This adapter owns POSIX bash inputs. Other tools and free-form text retain their original bytes.
-  if (value.tool !== "bash" || process.platform === "win32" || typeof input.command !== "string") {
+  if (value.tool !== "bash" || typeof input.command !== "string") {
     return state === value.state ? value : { ...value, state }
+  }
+  // The Windows shell is PowerShell, Git Bash or cmd, which the POSIX parser cannot read. Retarget
+  // complete path references in the command; the output's are retargeted with the rest of the text.
+  if (WINDOWS) {
+    return { ...value, state: { ...state, input: { ...fields(input, ["workdir"]), command: text(input.command) } } }
   }
   const command = await rewritePathCommand(input.command, path)
   let output = state.output
@@ -237,30 +263,62 @@ export function localizeArenaEnvironment<T>(value: T, env: Readonly<Record<strin
  */
 function arenaReferences(input: ArenaRoots): (text: string) => string {
   const pool = isolatedRoot(input.canonical).slice(input.canonical.length)
-  const spellings = [
-    privateOptional(input.canonical),
-    ...(input.home && input.canonical.startsWith(input.home + "/")
-      ? ["~", "\\$HOME", "\\$\\{HOME\\}"].map((home) => home + escapeRegExp(input.canonical.slice(input.home!.length)))
-      : []),
-    ...(encodeURI(input.canonical) === input.canonical ? [] : [escapeRegExp(encodeURI(input.canonical))]),
-  ]
-  // The name ends the match, not the next separator: a sentence's `.` or a JSON string's `\n`
-  // right after a slot stays in the text.
-  const slot = new RegExp(
-    `(?:${spellings.join("|")})${escapeRegExp(pool)}/${SLOT_PATH_PATTERN}(\\.git)?(?![\\w-])`,
-    "g",
+  const flags = WINDOWS ? "gi" : "g"
+  // Each spelling of the checkout is replaced by the checkout in that spelling, so a path Git Bash
+  // printed stays one Git Bash can use.
+  const slots = [input.canonical, ...bashSpellings(input.canonical)].map((canonical, index) => {
+    const spellings = [
+      privateOptional(canonical),
+      ...(index === 0 && input.home && fold(canonical).startsWith(fold(input.home) + "/")
+        ? ["~", "\\$HOME", "\\$\\{HOME\\}"].map((home) => home + pathPattern(canonical.slice(input.home!.length)))
+        : []),
+      ...(index > 0 || encodeURI(canonical) === canonical ? [] : [escapeRegExp(encodeURI(canonical))]),
+    ]
+    // The name ends the match, not the next separator: a sentence's `.` or a JSON string's `\n`
+    // right after a slot stays in the text.
+    const slot = new RegExp(
+      `(?:${spellings.join("|")})${pathPattern(pool)}${SLASH}${SLOT_PATH_PATTERN.replaceAll("/", SLASH)}(\\.git)?(?![\\w-])`,
+      flags,
+    )
+    // The checkout's `.git`, with the separator that spelling of the checkout uses.
+    const git = `${canonical}${WINDOWS && canonical.includes("\\") ? "\\" : "/"}.git`
+    return (text: string) => text.replace(slot, (_match, host?: string) => (host ? git : canonical))
+  })
+  const temps = [input.temp, ...bashSpellings(input.temp)].map(
+    (temp) => new RegExp(`${privateOptional(temp)}${SLASH}ses_[0-9A-Za-z]+(?![0-9A-Za-z])`, flags),
   )
-  const temp = new RegExp(`${privateOptional(input.temp)}/ses_[0-9A-Za-z]+(?![0-9A-Za-z])`, "g")
   return (text) =>
-    text
-      .replace(slot, (_match, git: string | undefined) => (git ? `${input.canonical}/.git` : input.canonical))
-      .replace(temp, () => "$TMPDIR")
+    temps.reduce(
+      (value, temp) => value.replace(temp, () => "$TMPDIR"),
+      slots.reduce((value, slot) => slot(value), text),
+    )
+}
+
+// A Windows path in text takes either separator; elsewhere it matches as written.
+const SLASH = WINDOWS ? "[\\\\/]" : "/"
+function pathPattern(value: string) {
+  return WINDOWS ? value.split(SEPARATORS).map(escapeRegExp).join(SLASH) : escapeRegExp(value)
+}
+
+// Git Bash, the contestant shell on Windows, prints `C:\Users\dev` as `/c/Users/dev` and the user's
+// temp directory as `/tmp`.
+function bashSpellings(directory: string): string[] {
+  if (!WINDOWS) return []
+  const drive = /^([A-Za-z]):[\\/]/.exec(directory)
+  if (!drive) return []
+  const posix = (value: string) => value.split(SEPARATORS).join("/")
+  const temp = tmpdir()
+  const underTemp = fold(directory) === fold(temp) || fold(directory).startsWith(fold(temp) + "/")
+  return [
+    ...(underTemp ? [`/tmp${posix(directory.slice(temp.length))}`] : []),
+    `/${drive[1]!.toLowerCase()}/${posix(directory.slice(3))}`,
+  ]
 }
 
 // macOS reports `/tmp` and `/var` paths under `/private` as well; match a path in either spelling.
 function privateOptional(directory: string) {
   const bare = directory.replace(/^\/private(?=\/(?:tmp|var)\/)/, "")
-  return /^\/(?:tmp|var)\//.test(bare) ? `(?:/private)?${escapeRegExp(bare)}` : escapeRegExp(bare)
+  return /^\/(?:tmp|var)\//.test(bare) ? `(?:/private)?${pathPattern(bare)}` : pathPattern(bare)
 }
 
 // Returns `value` itself when nothing in it changed.
@@ -282,15 +340,18 @@ function pathRoots(worktrees: readonly string[]) {
 }
 
 function mapPath(value: string, roots: readonly string[], destination: string): string {
+  const folded = fold(value)
   for (const root of roots) {
-    if (value === root) return destination
-    if (!value.startsWith(root === "/" ? "/" : `${root}/`)) continue
+    const key = fold(root)
+    if (folded === key) return destination
+    if (!folded.startsWith(key === "/" ? "/" : `${key}/`)) continue
     const suffix = value.slice(root.length)
     // Resolving .. across a relocated root (or a symlink) can change which directory it names.
-    if (suffix.split("/").includes("..")) return value
+    const parts = suffix.split(SEPARATORS)
+    if (parts.includes("..")) return value
     // Arena's own state is not part of the tree a root maps to: a checkout path into its worktree
     // pool would become a path inside the contestant's own worktree that does not exist.
-    if (suffix === `/${LOCAL_STATE_DIRNAME}` || suffix.startsWith(`/${LOCAL_STATE_DIRNAME}/`)) return value
+    if (parts[1] === LOCAL_STATE_DIRNAME) return value
     return root === "/" ? `${destination.replace(/\/$/, "")}/${suffix}` : destination + suffix
   }
   return value
@@ -301,13 +362,14 @@ function mapPath(value: string, roots: readonly string[], destination: string): 
 function rewritePathReferences(value: string, worktrees: readonly string[], destination: string): string {
   const roots = pathRoots(worktrees)
   if (!roots) return value
+  const folded = fold(value)
   let result = ""
   let cursor = 0
   while (cursor < value.length) {
     let start = -1
     let root = ""
     for (const candidate of roots) {
-      const found = value.indexOf(candidate, cursor)
+      const found = folded.indexOf(fold(candidate), cursor)
       if (found !== -1 && (start === -1 || found < start || (found === start && candidate.length > root.length))) {
         start = found
         root = candidate
@@ -318,7 +380,7 @@ function rewritePathReferences(value: string, worktrees: readonly string[], dest
     const after = value[start + root.length]
     if (
       (before !== undefined && !/[\s"'`([{=:]/.test(before)) ||
-      (after !== undefined && after !== "/" && !/[\s"'`)\]};,!?]/.test(after))
+      (after !== undefined && !separator(after) && !/[\s"'`)\]};,!?]/.test(after))
     ) {
       result += value.slice(cursor, start + root.length)
       cursor = start + root.length

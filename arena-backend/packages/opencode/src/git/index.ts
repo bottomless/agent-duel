@@ -1,21 +1,54 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { AppProcess } from "@opencode-ai/core/process"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { GitLayout } from "@opencode-ai/core/git-layout"
 import { Effect, Layer, Context, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 
 const cfg = [
   "--no-optional-locks",
-  "-c",
-  "core.autocrlf=false",
+  // Git for Windows checks text out with CRLF (core.autocrlf=true by default); reading that checkout
+  // with autocrlf off would take every such file for an edit. Elsewhere it stays pinned off.
+  ...(process.platform === "win32" ? [] : ["-c", "core.autocrlf=false"]),
   "-c",
   "core.fsmonitor=false",
   "-c",
   "core.longpaths=true",
   "-c",
-  "core.symlinks=true",
+  `core.symlinks=${FSUtil.canSymlink()}`,
   "-c",
   "core.quotepath=false",
 ] as const
+
+const LAYOUT_CACHE_SIZE = 1024
+const LAYOUT_FLAGS = new Set([
+  "--show-toplevel",
+  "--git-dir",
+  "--absolute-git-dir",
+  "--git-common-dir",
+  "--path-format=absolute",
+  "--path-format=relative",
+])
+
+/**
+ * A `rev-parse` that asks only where the checkout, its git directory, its common directory, its
+ * shared exclude file or its index are. The answer follows from the checkout's `.git` (`GitLayout.layoutKey`)
+ * and the directory asked from, and each ask is a process start: tens of milliseconds on Windows,
+ * for questions the engine repeats for every worktree at every turn.
+ */
+function layoutQuery(args: readonly string[]) {
+  if (args[0] !== "rev-parse" || args.length < 2) return false
+  for (let index = 1; index < args.length; index++) {
+    if (LAYOUT_FLAGS.has(args[index]!)) continue
+    // Without GIT_INDEX_FILE, which `opts.env` would carry, the index is where the layout puts it.
+    if (args[index] === "--git-path" && (args[index + 1] === "info/exclude" || args[index + 1] === "index")) {
+      index++
+      continue
+    }
+    return false
+  }
+  return true
+}
 
 const out = (result: { text(): string }) => result.text().trim()
 const nuls = (text: string) => text.split("\0").filter(Boolean)
@@ -108,8 +141,18 @@ const layer = Layer.effect(
     const encoder = new TextEncoder()
     const stdin = (text: string) => Stream.make(encoder.encode(text))
 
+    // Answers to `layoutQuery`, by the checkout's layout, the directory asked from, and the question.
+    const layouts = new Map<string, Result>()
+
     const run = Effect.fn("Git.run")(
       function* (args: string[], opts: Options) {
+        const layout =
+          opts.env === undefined && opts.stdin === undefined && layoutQuery(args)
+            ? yield* Effect.promise(() => GitLayout.checkoutLayoutKey(opts.cwd))
+            : undefined
+        const key = layout === undefined ? undefined : [layout, opts.cwd, ...args].join("\0")
+        const known = key === undefined ? undefined : layouts.get(key)
+        if (known) return known
         const result = yield* appProcess.run(
           ChildProcess.make("git", [...cfg, ...args], {
             cwd: opts.cwd,
@@ -121,13 +164,18 @@ const layer = Layer.effect(
           }),
           { maxOutputBytes: opts.maxOutputBytes },
         )
-        return {
+        const answer = {
           exitCode: result.exitCode,
           text: () => result.stdout.toString("utf8"),
           stdout: result.stdout,
           stderr: result.stderr,
           truncated: result.stdoutTruncated || result.stderrTruncated,
         } satisfies Result
+        if (key !== undefined && answer.exitCode === 0) {
+          if (layouts.size >= LAYOUT_CACHE_SIZE) layouts.delete(layouts.keys().next().value!)
+          layouts.set(key, answer)
+        }
+        return answer
       },
       Effect.catch((err) => Effect.succeed(fail(err))),
     )
