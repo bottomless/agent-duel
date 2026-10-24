@@ -154,8 +154,10 @@ export function denial(input: {
   if (rule?.action !== "deny") return
   const root = globDirectory(rule.pattern)
   if (input.write) {
-    if (sharedTmp().includes(root)) {
-      return `Arena contestants cannot change files in ${root}, which both sides use while they run. Use the same name under $TMPDIR (${tmp}) instead.`
+    // A rule keeps its directory as `path.join` wrote it, so on Windows the rule for `/tmp` is `\tmp`.
+    const shared = sharedTmp().find((directory) => path.normalize(directory) === path.normalize(root))
+    if (shared) {
+      return `Arena contestants cannot change files in ${shared}, which both sides use while they run. Use the same name under $TMPDIR (${tmp}) instead.`
     }
     return `Arena contestants can read the main checkout but change files only in their own worktree. ${directory} is in the main checkout.`
   }
