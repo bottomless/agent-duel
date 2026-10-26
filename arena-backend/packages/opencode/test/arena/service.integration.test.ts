@@ -1425,8 +1425,10 @@ describe("Arena service vertical slice", () => {
       if (!turnID) throw new Error("Arena did not admit the Auto Accept battle")
       const deadline = Date.now() + 20_000
       let asked: ReadonlyArray<Readonly<Record<string, unknown>>> = []
+      // A turn that failed will not reach the vote, so stop there instead of waiting out the deadline.
+      const failed = ["discarded", "application_failed", "canonicalization_failed"]
       let settled = await memory.store.turn(turnID)
-      while (settled?.state !== "awaiting_vote" && Date.now() < deadline) {
+      while (settled?.state !== "awaiting_vote" && !failed.includes(settled?.state ?? "") && Date.now() < deadline) {
         const snapshot = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
         asked = snapshot.runs.flatMap((run) => run.permissions ?? [])
         if (asked.length > 0) break
@@ -1434,7 +1436,10 @@ describe("Arena service vertical slice", () => {
         settled = await memory.store.turn(turnID)
       }
       expect(asked).toEqual([])
-      expect(settled?.state).toBe("awaiting_vote")
+      expect({ state: settled?.state, failureReason: settled?.failureReason }).toEqual({
+        state: "awaiting_vote",
+        failureReason: undefined,
+      })
 
       for (const run of await memory.store.runsForTurn(turnID)) {
         const messages = await json<

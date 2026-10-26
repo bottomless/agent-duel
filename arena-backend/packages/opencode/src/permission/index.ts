@@ -1,6 +1,7 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { InstanceState } from "@/effect/instance-state"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
@@ -21,6 +22,8 @@ export interface Interface {
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
   readonly setAutoAccept: (enabled: boolean) => Effect.Effect<void>
+  /** Forget a directory's Auto Accept, so the next instance there starts with it off. */
+  readonly clearAutoAccept: (directory: string) => Effect.Effect<void>
 }
 
 interface PendingEntry {
@@ -52,15 +55,15 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
-    // The last Auto Accept value set per directory. A disposed instance loses its state, and Arena
+    // Directories whose last Auto Accept value was on. A disposed instance loses its state, and Arena
     // disposes a contestant's worktree instance while staging it, after the run turned Auto Accept on.
-    const autoAcceptByDirectory = new Map<string, boolean>()
+    const autoAcceptDirectories = new Set<string>()
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         const state = {
           pending: new Map<PermissionV1.ID, PendingEntry>(),
           approved: [],
-          autoAccept: autoAcceptByDirectory.get(ctx.directory) ?? false,
+          autoAccept: autoAcceptDirectories.has(ctx.directory),
         }
 
         yield* Effect.addFinalizer(() =>
@@ -200,14 +203,20 @@ const layer = Layer.effect(
     const setAutoAccept = Effect.fn("Permission.setAutoAccept")(function* (enabled: boolean) {
       const current = yield* InstanceState.get(state)
       current.autoAccept = enabled
-      autoAcceptByDirectory.set(yield* InstanceState.directory, enabled)
+      const directory = yield* InstanceState.directory
+      if (enabled) autoAcceptDirectories.add(directory)
+      else autoAcceptDirectories.delete(directory)
       if (!enabled) return
       for (const request of [...current.pending.values()]) {
         yield* reply({ requestID: request.info.id, reply: "once" }).pipe(Effect.ignore)
       }
     })
 
-    return Service.of({ ask, reply, list, setAutoAccept })
+    const clearAutoAccept = Effect.fn("Permission.clearAutoAccept")(function* (directory: string) {
+      autoAcceptDirectories.delete(FSUtil.resolve(directory))
+    })
+
+    return Service.of({ ask, reply, list, setAutoAccept, clearAutoAccept })
   }),
 )
 

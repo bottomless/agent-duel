@@ -641,6 +641,60 @@ it.instance(
   { git: true },
 )
 
+// Arena clears a released worktree, so the run that adopts it next does not inherit its Auto Accept.
+it.instance(
+  "a cleared directory's next instance starts with Auto Accept off",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const store = yield* InstanceStore.Service
+      const permission = yield* Permission.Service
+      yield* permission.setAutoAccept(true)
+      yield* permission.clearAutoAccept(test.directory)
+      yield* store.disposeDirectory(test.directory)
+
+      const pending = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "read",
+        patterns: [".env.local"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "read", pattern: "*.env.*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      expect(Exit.isFailure(yield* Fiber.await(pending))).toBe(true)
+    }),
+  { git: true },
+)
+
+it.live("Auto Accept carried to a new instance stays with its own directory", () =>
+  Effect.gen(function* () {
+    const on = yield* tmpdirScoped({ git: true })
+    const off = yield* tmpdirScoped({ git: true })
+    const store = yield* InstanceStore.Service
+    const permission = yield* Permission.Service
+    const envRead = (sessionID: string) =>
+      ask({
+        sessionID: SessionID.make(sessionID),
+        permission: "read",
+        patterns: [".env.local"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "read", pattern: "*.env.*", action: "ask" }],
+      })
+    yield* store.provide({ directory: on }, permission.setAutoAccept(true))
+    yield* store.disposeDirectory(on)
+    yield* store.disposeDirectory(off)
+
+    yield* store.provide({ directory: on }, envRead("session_on"))
+    const pending = yield* store.provide({ directory: off }, envRead("session_off")).pipe(Effect.forkScoped)
+    expect(yield* store.provide({ directory: off }, waitForPending(1))).toHaveLength(1)
+    yield* store.provide({ directory: off }, rejectAll())
+    expect(Exit.isFailure(yield* Fiber.await(pending))).toBe(true)
+  }),
+)
+
 it.instance(
   "ask - resolves immediately when action is allow",
   () =>

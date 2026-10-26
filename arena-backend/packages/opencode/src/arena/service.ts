@@ -1079,6 +1079,25 @@ function steered(transcript: readonly SessionV1.WithParts[], index: number) {
   )
 }
 
+/**
+ * Set a run's Auto Accept in its worktree, starting from a value just read from the run. The voter can
+ * toggle it between that read and the set. A toggle writes the run before it sets the worktree, so
+ * reading the run again after each set, until it stops changing, ends on the voter's value.
+ */
+export const settleAutoAccept = Effect.fnUntraced(function* <E1, R1, E2, R2>(
+  initial: boolean,
+  readAgain: Effect.Effect<boolean, E1, R1>,
+  set: (enabled: boolean) => Effect.Effect<void, E2, R2>,
+) {
+  let enabled = initial
+  while (true) {
+    yield* set(enabled)
+    const current = yield* readAgain
+    if (current === enabled) return
+    enabled = current
+  }
+})
+
 /** Turn activity used by checkout eviction; environment/setup timestamps are intentionally absent. */
 export function latestArenaChatActivity(turns: readonly TurnDocument[], runs: readonly RunDocument[]) {
   const dates = turns.flatMap((turn) => [
@@ -4276,7 +4295,11 @@ export const layer: Layer.Layer<
       const turn = yield* promise(() => store.turn(run.turnID))
       if (turn?.state === "stopping" || turn?.state === "early_selected") return Exit.void
       const storedRun = yield* promise(() => store.run(run.runID))
-      yield* inDirectory(run.worktree.directory, permissions.setAutoAccept(storedRun?.autoAccept === true))
+      yield* settleAutoAccept(
+        storedRun?.autoAccept === true,
+        promise(() => store.run(run.runID)).pipe(Effect.map((stored) => stored?.autoAccept === true)),
+        (enabled) => inDirectory(run.worktree.directory, permissions.setAutoAccept(enabled)),
+      )
       const startedAt = new Date()
       const promptMessageID = MessageID.ascending()
       yield* promise(() =>
@@ -6497,6 +6520,8 @@ export const layer: Layer.Layer<
       const historicalServices = yield* endRunEnvironment(store, run, at)
       yield* stopPreparation(run.worktree)
       yield* instances.disposeDirectory(run.worktree)
+      // The next pair to adopt the worktree starts from its own run's Auto Accept.
+      yield* permissions.clearAutoAccept(run.worktree)
       markSlotStopped(run.worktree)
       // The run's sessions are gone with the instance, so nothing writes to its temp directory.
       yield* removeContestantTmp(run)
@@ -8047,6 +8072,7 @@ export const layer: Layer.Layer<
           Effect.gen(function* () {
             yield* stopPreparation(loser.worktree)
             yield* instances.disposeDirectory(loser.worktree)
+            yield* permissions.clearAutoAccept(loser.worktree)
             const instanceStoppedAt = Date.now()
             const stopped = yield* stopRunServices(store, loser)
             const failures = stopped.filter((record) => record.status === "failed" || !record.verified)
