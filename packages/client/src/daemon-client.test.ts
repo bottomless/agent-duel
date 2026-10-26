@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -10,6 +9,7 @@ import {
   type DaemonTransport,
   type Logger,
 } from "./daemon-client";
+import { legacyUsageIcon } from "./legacy-usage-icons";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import { BROWSER_AUTOMATION_COMMAND_NAMES } from "@getpaseo/protocol/browser-automation/rpc-schemas";
 import {
@@ -7083,10 +7083,7 @@ test.each([
           id: "claude",
           sourceId: "claude",
           sourceLabel: "Claude",
-          icon: readFileSync(
-            new URL("../../../plugins/claude-usage-source/icon.svg", import.meta.url),
-            "utf8",
-          ),
+          icon: legacyUsageIcon("claude"),
           account: {},
           fetchedAt: "2026-09-30T00:00:00.000Z",
           report,

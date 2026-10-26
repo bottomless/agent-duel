@@ -56,6 +56,8 @@ const DROP = [
   /^packages\/protocol\/src\/schedule\//,
   /^packages\/server\/src\/server\/hub\//,
   /^packages\/server\/src\/server\/schedule\//,
+  /^plugins\//,
+  /^scripts\/builtin-plugins-dist\.test\.mjs$/,
   /^scripts\/(sync-fdroid-changelogs|build-apk|test-mobile-agent-device|seed-ios-native-cache|paseo-ios-simulator-service)/,
 ];
 

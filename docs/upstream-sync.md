@@ -44,7 +44,7 @@ the sync needs merge commits allowed for it.
 
 - **Drop** — Paseo surfaces Agent Duel removed: the website, public docs, mobile and store
   release, Hub, Schedules, heartbeats, host pairing, the diagnostic report, the in-app changelog,
-  upstream's release workflows. Upstream edits and additions there are removed by `prepare`. A
+  upstream's built-in plugins, upstream's release workflows. Upstream edits and additions there are removed by `prepare`. A
   file Agent Duel deleted stays deleted even when upstream kept editing it.
 - **Ours** — files Agent Duel owns outright: licensing, the root guides, CI and release workflows,
   the app config, the Arena and account docs. `prepare` keeps our side.
@@ -87,11 +87,12 @@ When the team decides against an upstream feature, remove its entry point in Age
 (the route, the menu item, the setting) instead of reverting upstream's files. A revert conflicts
 again the next time upstream touches those files. Record the decision here.
 
-| Feature                                                       | Decision                                                                            | Where it is cut                                                                                |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Send behavior setting                                         | Enter steers a running turn, Cmd/Ctrl+Enter queues; no setting (2026-10-24)         | `packages/app/src/composer/index.tsx`                                                          |
-| Provider account usage                                        | Not shown; Agent Duel does not use local subscriptions (2026-10-24)                 | `components/context-window-details.tsx`; the sidebar's Usage item has no setting to turn it on |
-| Sidebar head rows (New workspace, History, Search, Schedules) | Agent Duel's head (Home, Chats, Archived) stays                                     | `components/sidebar/sidebar-nav-rows.tsx` renders plugin items only                            |
-| `changes_tree` tab                                            | Hidden; the side panel's Changes keeps the list with its optional tree (2026-10-24) | nothing opens it; the side panel launcher and `+` menu open `changes`                          |
-| Terminal profiles in the tab launcher                         | No profile UI                                                                       | `workspace-tabs/launcher/index.tsx`                                                            |
-| Host filters (plugin screens, Usage, label manager)           | One host                                                                            | removed from those screens                                                                     |
+| Feature                                                       | Decision                                                                              | Where it is cut                                                                                |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Send behavior setting                                         | Enter steers a running turn, Cmd/Ctrl+Enter queues; no setting (2026-10-24)           | `packages/app/src/composer/index.tsx`                                                          |
+| Provider account usage                                        | Not shown; Agent Duel does not use local subscriptions (2026-10-24)                   | `components/context-window-details.tsx`; the sidebar's Usage item has no setting to turn it on |
+| Sidebar head rows (New workspace, History, Search, Schedules) | Agent Duel's head (Home, Chats, Archived) stays                                       | `components/sidebar/sidebar-nav-rows.tsx` renders plugin items only                            |
+| `changes_tree` tab                                            | Hidden; the side panel's Changes keeps the list with its optional tree (2026-10-24)   | nothing opens it; the side panel launcher and `+` menu open `changes`                          |
+| Terminal profiles in the tab launcher                         | No profile UI                                                                         | `workspace-tabs/launcher/index.tsx`                                                            |
+| Host filters (plugin screens, Usage, label manager)           | One host                                                                              | removed from those screens                                                                     |
+| Built-in plugins (usage sources, Antigravity, Hoplite, Muse)  | Not shipped; they require Paseo 0.9.2 or newer and failed on every start (2026-10-26) | `plugins/` is dropped; `server/plugins/builtin/index.ts` lists none                            |

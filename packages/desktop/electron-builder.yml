@@ -19,7 +19,6 @@ files:
   - "!node_modules/@getpaseo/**/*.test.*"
   - "!node_modules/@getpaseo/**/*.spec.*"
   - "!node_modules/@getpaseo/server/dist/server/web-ui/**"
-  - "!node_modules/@getpaseo/server/dist/server/builtin-plugins/**"
   # Workspace packages are symlinked, so anything a dev generates inside them
   # lands in the asar. CI never has these; a local .debug run adds gigabytes.
   - "!node_modules/@getpaseo/*/.debug/**"
@@ -41,9 +40,6 @@ extraResources:
     to: licenses/arena-backend/LICENSE
   - from: dist/arena
     to: arena
-  # Preserve physical compiler inputs, including .d.ts files omitted from packaged node_modules.
-  - from: ../server/dist/server/builtin-plugins
-    to: builtin-plugins
   - from: ../app/dist
     to: app-dist
   - from: assets/editor-targets

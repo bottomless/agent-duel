@@ -2,20 +2,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const builtinPlugins = [
-  "antigravity-provider",
-  "claude-usage-source",
-  "codex-usage-source",
-  "copilot-usage-source",
-  "cursor-usage-source",
-  "grok-usage-source",
-  "hoplite-provider",
-  "kimi-usage-source",
-  "minimax-usage-source",
-  "muse-provider",
-  "opencode-go-usage-source",
-  "zai-usage-source",
-] as const;
+// Agent Duel ships none of upstream's built-ins (provider usage sources and extra agent
+// providers); `scripts/upstream-sync.mjs` drops the root `plugins/` folder they live in.
+export const builtinPlugins: readonly string[] = [];
 
 export function resolveBuiltinPluginsRoot(moduleUrl: string | URL = import.meta.url): string {
   const moduleDir = path.dirname(fileURLToPath(moduleUrl));
