@@ -20,7 +20,7 @@ function port() {
 process.env.OPENCODE_ARENA ??= "1"
 
 {
-  const { Global } = await import("@opencode-ai/core/global")
+  const { Global } = await import("@opencode/util/global")
   const { preferDirectGit } = await import("./util/direct-git")
   preferDirectGit(Global.Path.state)
 }

@@ -1,0 +1,10 @@
+{
+  "executable": "<checkout>/packages/desktop/dist/arena/agent-duel-arena",
+  "sha256": "ea175b07bbec9f97d61d973b8d6d52818566d15f4c00806c415a5016a9046ba0",
+  "health": {
+    "healthy": true,
+    "version": "2.0.32"
+  },
+  "isolatedState": "<qa>/astra-compiled-sun9oubj",
+  "newSessionDescriptionBundled": true
+}

@@ -5,16 +5,18 @@ import {
   permissionRules,
   applyResumeOverrides,
   requiresDedicatedV2Server,
+  arenaModelRef,
 } from "./configuration.js";
 import { commands } from "./commands.js";
 
 import { waitForLocationReady, awaitPaseoPlugin } from "./readiness.js";
 
-import type { SessionInfo } from "@opencode/client";
+import type { SessionInfo, ModelRef } from "@opencode/client";
 
 import type { Logger } from "pino";
 import type {
   AgentCapabilityFlags,
+  AgentForkSessionInput,
   AgentClient,
   AgentCreateSessionOptions,
   AgentFeature,
@@ -22,6 +24,10 @@ import type {
   AgentPersistenceHandle,
   AgentSession,
   AgentSessionConfig,
+  ArenaActivitySource,
+  ArenaCheckoutCleanupSource,
+  GitMetadataRequest,
+  GitMetadataResult,
   FetchCatalogOptions,
   ImportableProviderSession,
   ImportProviderSessionInput,
@@ -39,8 +45,12 @@ import { importSessionFromPersistence } from "../../../provider-session-import.j
 
 import type { OpenCodeBridge } from "../bridge.js";
 import { resolveOpenCodeHomeDir } from "../paths.js";
-import { V2Runtime, type V2Connection } from "./runtime.js";
+import { V2Runtime, managedV2ProcessEvents, type V2Connection } from "./runtime.js";
 import { modelRef, modesFromV2, modelsFromV2 } from "./mapping.js";
+import { ArenaEnvironmentTrimSchema } from "@getpaseo/protocol/arena/rpc-schemas";
+import { ArenaSessionActivitySchema } from "@getpaseo/protocol/arena/activity";
+import { z } from "zod";
+import { OpenCodeServerManager, type OpenCodeServerManagerLike } from "../server-manager.js";
 
 interface V2AgentOptions {
   logger: Logger;
@@ -48,6 +58,9 @@ interface V2AgentOptions {
   managedProcesses?: ManagedProcessRegistry;
   bridge?: OpenCodeBridge;
   runtime?: Pick<V2Runtime, "acquire" | "shutdown">;
+  arenaMode?: boolean;
+  serverManager?: OpenCodeServerManagerLike;
+  getArenaPreviewBaseUrl?: () => string | null;
 }
 
 export class OpenCodeV2AgentClient implements AgentClient {
@@ -55,14 +68,208 @@ export class OpenCodeV2AgentClient implements AgentClient {
   readonly capabilities: AgentCapabilityFlags;
   private readonly runtime: Pick<V2Runtime, "acquire" | "shutdown">;
   private readonly connections = new Map<string, V2Connection>();
+  private readonly arenaMode: boolean;
+  private readonly serverManager?: OpenCodeServerManagerLike;
   constructor(private readonly options: V2AgentOptions) {
+    this.arenaMode = options.arenaMode ?? false;
+    this.serverManager =
+      options.serverManager ??
+      (this.arenaMode
+        ? OpenCodeServerManager.getInstance(options.logger, options.settings, {
+            managedProcesses: options.managedProcesses,
+            getArenaPreviewBaseUrl: options.getArenaPreviewBaseUrl,
+            createEventSource: managedV2ProcessEvents,
+          })
+        : undefined);
     this.capabilities = { ...V2_CAPABILITIES, supportsNativePaseoTools: Boolean(options.bridge) };
     this.runtime =
       options.runtime ??
       new V2Runtime({
         ...options,
+        serverManager: this.serverManager,
         decorateEnv: options.bridge ? (env) => options.bridge!.decorateV2ServerEnv(env) : undefined,
       });
+  }
+  private requireArenaManager(): OpenCodeServerManagerLike {
+    if (!this.arenaMode || !this.serverManager)
+      throw new Error("OpenCode Arena runtime is unavailable");
+    return this.serverManager;
+  }
+  private async arenaRequest(
+    path: string,
+    directory: string,
+    options: { method?: "POST"; body?: unknown; signal?: AbortSignal } = {},
+  ): Promise<Response> {
+    const acquisition = await this.requireArenaManager().acquireCurrent(options.signal);
+    try {
+      const response = await fetch(new URL(path, `${acquisition.server.url.replace(/\/$/, "")}/`), {
+        method: options.method ?? "GET",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "x-opencode-directory": directory,
+          "x-paseo-control-token": acquisition.server.controlToken,
+        },
+        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+        signal: options.signal,
+      });
+      const body = await response.text();
+      return new Response(body || null, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    } finally {
+      await acquisition.release();
+    }
+  }
+  async openArenaActivitySource(cwd: string): Promise<ArenaActivitySource | null> {
+    if (!this.arenaMode) return null;
+    return {
+      read: async (sessionIDs) => {
+        const response = await this.arenaRequest("/arena/activity", cwd, {
+          method: "POST",
+          body: { sessionIDs },
+        });
+        if (!response.ok) throw new Error(`Arena activity request failed: ${response.status}`);
+        return ArenaSessionActivitySchema.array().parse(await response.json());
+      },
+      close: async () => undefined,
+    };
+  }
+  async openArenaCheckoutCleanupSource(
+    sourceRepoRoot: string,
+  ): Promise<ArenaCheckoutCleanupSource | null> {
+    if (!this.arenaMode) return null;
+    const request = async (operation: "inspect" | "prepare" | "release", root: string) => {
+      const response = await this.arenaRequest(`/arena/checkout/${operation}`, sourceRepoRoot, {
+        method: "POST",
+        body: { root },
+      });
+      if (!response.ok) throw new Error(`Arena checkout ${operation} failed: ${response.status}`);
+      if (operation !== "inspect") return undefined;
+      const value: unknown = await response.json();
+      return z
+        .object({
+          eligible: z.boolean(),
+          lastActivityAt: z.string().nullable(),
+          reason: z.string().optional(),
+        })
+        .parse(value);
+    };
+    return {
+      inspect: async (root) => {
+        const result = await request("inspect", root);
+        if (!result) throw new Error("Arena checkout inspect returned no data");
+        return result;
+      },
+      prepare: async (root) => void (await request("prepare", root)),
+      release: async (root) => void (await request("release", root)),
+      trimEnvironments: async (keep, volumeOf) => {
+        const response = await this.arenaRequest("/arena/environments/trim", sourceRepoRoot, {
+          method: "POST",
+          body: { keep, volumeOf },
+        });
+        if (!response.ok) throw new Error(`Arena environment trim failed: ${response.status}`);
+        return ArenaEnvironmentTrimSchema.parse(await response.json());
+      },
+      close: async () => undefined,
+    };
+  }
+  async seedWorktreeIgnoredContent(input: { sourceCwd: string; worktreePath: string }) {
+    if (!this.arenaMode) return;
+    const response = await this.arenaRequest("/arena/worktrees/seed", input.sourceCwd, {
+      method: "POST",
+      body: { source: input.sourceCwd, target: input.worktreePath },
+    });
+    if (!response.ok) throw new Error(`Arena worktree seed failed: ${response.status}`);
+  }
+  async writeGitMetadata(
+    cwd: string,
+    request: GitMetadataRequest,
+    signal: AbortSignal,
+  ): Promise<GitMetadataResult | null> {
+    if (!this.arenaMode) return null;
+    const response = await this.arenaRequest("/arena/metadata", cwd, {
+      method: "POST",
+      body: request,
+      signal,
+    });
+    if (!response.ok) throw new Error(`Arena metadata failed: ${response.status}`);
+    return z
+      .union([
+        z.object({ message: z.string().min(1) }),
+        z.object({ title: z.string().min(1), body: z.string() }),
+        z.object({ branch: z.string().min(1) }),
+        z.object({ title: z.string().min(1) }),
+      ])
+      .parse(await response.json());
+  }
+  async refreshProjectDirectory(cwd: string): Promise<void> {
+    if (!this.arenaMode) return;
+    const response = await this.arenaRequest("/api/location/reload", cwd, { method: "POST" });
+    if (!response.ok) throw new Error(`OpenCode location reload failed: ${response.status}`);
+  }
+  async unarchiveArenaChat(handle: AgentPersistenceHandle): Promise<void> {
+    if (!this.arenaMode) return;
+    const cwd = handle.metadata?.cwd;
+    if (typeof cwd !== "string" || !cwd)
+      throw new Error("Arena chat unarchive requires the original working directory");
+    const response = await this.arenaRequest(
+      `/arena/sessions/${encodeURIComponent(handle.sessionId)}/unarchive`,
+      cwd,
+      { method: "POST" },
+    );
+    if (!response.ok) throw new Error(`Failed to unarchive Arena chat (${response.status})`);
+  }
+  async forkSession(input: AgentForkSessionInput): Promise<AgentSession> {
+    if (!this.arenaMode) throw new Error("OpenCode fork requires the Arena runtime");
+    if (input.source.provider !== "opencode")
+      throw new Error(`OpenCode cannot fork a ${input.source.provider} session`);
+    const connection = await this.runtime.acquire();
+    const arena = connection.arena;
+    if (!arena) {
+      await connection.release();
+      throw new Error("OpenCode Arena runtime is unavailable");
+    }
+    let forkedId: string | undefined;
+    try {
+      const response = await fetch(
+        new URL(
+          `/arena/sessions/${encodeURIComponent(input.source.sessionId)}/fork`,
+          `${arena.serverUrl}/`,
+        ),
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-opencode-directory": input.sourceCwd,
+            "x-paseo-control-token": arena.controlToken,
+          },
+          body: JSON.stringify({
+            destination: input.config.cwd,
+            ...(input.throughMessageId ? { messageID: input.throughMessageId } : {}),
+          }),
+        },
+      );
+      const body = await response.text();
+      if (!response.ok)
+        throw new Error(`Failed to fork Arena session (${response.status}): ${body}`);
+      const result = z.object({ sessionID: z.string().min(1) }).parse(JSON.parse(body));
+      forkedId = result.sessionID;
+      const info = await connection.client.session.get({ sessionID: forkedId });
+      return await this.attach(
+        connection,
+        info,
+        input.config,
+        input.launchContext,
+        input.options?.persistSession !== false,
+      );
+    } catch (error) {
+      await connection.release();
+      throw error;
+    }
   }
   async isAvailable() {
     return true;
@@ -90,6 +297,26 @@ export class OpenCodeV2AgentClient implements AgentClient {
         activity("agent.list", () => connection.client.agent.list({ location }, request)),
         activity("provider.list", () => connection.client.provider.list({ location }, request)),
       ]);
+      if (!providers.data.length && this.arenaMode)
+        return {
+          models: ["medium", "contestant"].map((id) => {
+            const ref = arenaModelRef(`arena/${id}`);
+            return {
+              provider: "opencode" as const,
+              id: `arena/${id}`,
+              label: id === "medium" ? "Medium" : "frontier",
+              thinkingOptions: [{ id: ref.variant!, label: ref.variant!, isDefault: true }],
+              defaultThinkingOptionId: ref.variant,
+              metadata: {
+                providerId: "arena",
+                modelId: id,
+                supportsReasoning: true,
+                supportsToolCall: true,
+              },
+            };
+          }),
+          modes: modesFromV2(agents.data),
+        };
       if (!providers.data.length)
         throw new Error(
           "OpenCode has no connected providers. Authenticate using opencode auth login.",
@@ -108,11 +335,14 @@ export class OpenCodeV2AgentClient implements AgentClient {
       requiresDedicatedV2Server(config, launch) ? { env: launch?.env, dedicated: true } : {},
     );
     try {
+      let model: ModelRef | undefined;
+      if (this.arenaMode) model = arenaModelRef(config.model);
+      else if (config.model) model = modelRef(config.model, config.thinkingOptionId);
       const info = await connection.client.session.create({
         location: { directory: config.cwd },
         title: config.title,
         agent: config.modeId ?? "build",
-        model: config.model ? modelRef(config.model, config.thinkingOptionId) : undefined,
+        model,
         permissions: permissionRules(config),
       });
       return await this.attach(connection, info, config, launch, options?.persistSession !== false);
@@ -144,7 +374,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
       const info = await connection.client.session.get({
         sessionID: handle.nativeHandle ?? handle.sessionId,
       });
-      await applyResumeOverrides(connection.client, info, overrides);
+      await applyResumeOverrides(connection.client, info, overrides, this.arenaMode);
       return await this.attach(connection, info, config, launch, true);
     } catch (error) {
       await connection.release();
@@ -198,6 +428,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
       this.options.logger,
       persist,
       Boolean(this.options.bridge),
+      this.arenaMode,
       releaseBindings,
       bindChild,
       acquire,

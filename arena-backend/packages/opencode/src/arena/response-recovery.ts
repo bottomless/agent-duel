@@ -1,5 +1,5 @@
-import type { SessionV1 } from "@opencode-ai/core/v1/session"
-import type { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
+import type { SessionV1 } from "./session-shape"
+import type { SessionStatusEvent } from "@opencode/schema/session-status-event"
 
 export type Reason = "length" | "arena-idle"
 export function reason(finish?: string): Reason | undefined {

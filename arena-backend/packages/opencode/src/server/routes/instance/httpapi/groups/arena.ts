@@ -1,17 +1,14 @@
 import { Schema } from "effect"
-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { Question } from "@/question"
+import { PermissionV1 } from "@opencode/schema/permission-v1"
 import { ArenaActivity } from "@/arena/activity"
 import { ArenaAttachments } from "@/arena/attachments"
 import { ArenaSchema } from "@/arena/schema"
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { Authorization } from "../middleware/authorization"
-import { InstanceContextMiddleware } from "../middleware/instance-context"
-import {
-  WorkspaceRoutingMiddleware,
-  WorkspaceRoutingQuery,
-  WorkspaceRoutingQueryFields,
-} from "../middleware/workspace-routing"
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api"
+const WorkspaceRoutingQueryFields = {
+  directory: Schema.optional(Schema.String),
+  workspace: Schema.optional(Schema.String),
+}
+const WorkspaceRoutingQuery = Schema.Struct(WorkspaceRoutingQueryFields)
 
 // Resolving or subscribing can create a chat. Both carry the account resolved
 // by the daemon so the first watch also records its owner.
@@ -168,14 +165,15 @@ export const EnvironmentTrimResult = Schema.Struct({
   released: Schema.Number,
   kept: Schema.Number,
 })
-export const QuestionReplyPayload = Question.Reply
+export const QuestionReplyPayload = Schema.Struct({ answers: Schema.Array(Schema.Array(Schema.String)) })
 export const ForkSessionPayload = Schema.Struct({
   destination: Schema.String,
   messageID: Schema.optional(Schema.String),
 })
 export const ForkSessionResult = Schema.Struct({ sessionID: Schema.String })
 
-export class ArenaApiError extends Schema.ErrorClass<ArenaApiError>("ArenaApiError")(
+export class ArenaApiError extends Schema.TaggedError<ArenaApiError>()(
+  "ArenaApiError",
   {
     name: Schema.Literal("ArenaApiError"),
     data: Schema.Struct({ message: Schema.String }),
@@ -715,8 +713,5 @@ const group = HttpApiGroup.make("arena")
     ),
   )
   .annotateMerge(OpenApi.annotations({ title: "Arena", description: "Blind A/B coding-agent prototype routes." }))
-  .middleware(InstanceContextMiddleware)
-  .middleware(WorkspaceRoutingMiddleware)
-  .middleware(Authorization)
 
 export const ArenaApi = HttpApi.make("arena").add(group)

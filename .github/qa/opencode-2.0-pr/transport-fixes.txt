@@ -1,0 +1,293 @@
+v2-server-sse-red-final-fixture.log
+
+bun test v1.4.2 (744846f84)
+
+test/arena/v2-server.test.ts:
+[20:41:38.535] INFO (#2): database schema bootstrap started {
+  migrations: 50,
+}
+[20:41:38.541] INFO (#2): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 6,
+}
+warn: Bun.serve() timed out a request after 10 seconds. Pass `idleTimeout` to configure.
+443 |         await reader!.cancel().catch(() => undefined)
+444 |       }
+445 | 
+446 |       expect(connected).toBe(true)
+447 |       expect(streamClosed).toBe(false)
+448 |       expect(streamError).toBeUndefined()
+                                ^
+error: expect(received).toBeUndefined()
+
+Received: "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()"
+
+      at <anonymous> (<checkout>/arena-backend/packages/opencode/test/arena/v2-server.test.ts:448:27)
+(fail) Arena OpenCode v2 native boundary > keeps the authenticated v2 event stream open through its first timed heartbeat [12061.68ms]
+Ran 1 test across 1 file. [12.43s]
+Bailed out after 1 failure
+
+
+v2-canonical-environment-red.log
+
+bun test v1.4.2 (744846f84)
+
+test/arena/v2-server.test.ts:
+[20:47:39.775] INFO (#2): database schema bootstrap started {
+  migrations: 50,
+}
+[20:47:39.784] INFO (#2): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 10,
+}
+430 |       body: JSON.stringify({ providerID: "arena", modelID: "medium" }),
+431 |     })
+432 |     const mutationResult = { status: mutation.status, body: await mutation.text() }
+433 | 
+434 |     expect(mutationResult.status).toBe(409)
+435 |     expect(environmentResult).toEqual({ status: 204, body: "" })
+                                    ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "body": "",
+-   "status": 204,
++   "body": "{"error":"Session is controlled by an unresolved Arena battle"}",
++   "status": 409,
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (<checkout>/arena-backend/packages/opencode/test/arena/v2-server.test.ts:435:31)
+(fail) Arena OpenCode v2 native boundary > allows canonical environment synchronization during an active battle while guarding model changes [107.21ms]
+
+ 0 pass
+ 4 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [512.00ms]
+
+
+v2-server-transport-fixes-green.log
+
+bun test v1.4.2 (744846f84)
+
+test/arena/v2-server.test.ts:
+[21:03:45.345] INFO (#2): database schema bootstrap started {
+  migrations: 50,
+}
+[21:03:45.349] INFO (#2): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 4,
+}
+[21:03:45.390] INFO (#224): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[21:03:45.406] INFO (#224): spawning process {
+  command: "git",
+  args: [ "remote", "get-url", "origin" ],
+  cwd: "<checkout>",
+}
+[21:03:45.419] INFO (#224): spawning process {
+  command: "git",
+  args: [ "worktree", "list", "--porcelain" ],
+  cwd: "<checkout>",
+}
+[21:03:45.471] INFO (#224): location services booted {
+  directory: "<checkout>/arena-backend/packages/opencode",
+  workspaceID: undefined,
+  durationMs: 83,
+}
+[21:03:45.612] INFO (#357): event {
+  event: {
+    id: "evt_17a06c1cc001VDKq7dAZvZwFjL",
+    created: 1793048625612,
+    type: "provider.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:03:45.616] INFO (#361): event {
+  event: {
+    id: "evt_17a06c1d0001MvdXaKlss1V0KM",
+    created: 1793048625616,
+    type: "model.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:03:45.619] INFO (#746): spawning process {
+  command: "git",
+  args: [
+    "--no-optional-locks", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+    "-c", "core.symlinks=true", "-c", "core.quotepath=false", "symbolic-ref", "--quiet", "--short",
+    "HEAD"
+  ],
+  cwd: "<checkout>/arena-backend/packages/opencode",
+}
+[21:03:45.624] INFO (#747): spawning process {
+  command: "git",
+  args: [
+    "--no-optional-locks", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+    "-c", "core.symlinks=true", "-c", "core.quotepath=false", "remote"
+  ],
+  cwd: "<checkout>/arena-backend/packages/opencode",
+}
+[21:03:45.672] INFO (#747): spawning process {
+  command: "git",
+  args: [
+    "--no-optional-locks", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+    "-c", "core.symlinks=true", "-c", "core.quotepath=false", "symbolic-ref", "refs/remotes/origin/HEAD"
+  ],
+  cwd: "<checkout>/arena-backend/packages/opencode",
+}
+[21:03:45.690] INFO (#603): event {
+  event: {
+    id: "evt_17a06c21a001orK91dH7pp7cLO",
+    created: 1793048625690,
+    type: "agent.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:03:45.691] INFO (#603): event {
+  event: {
+    id: "evt_17a06c21b0017Ktwu5HrUoypkh",
+    created: 1793048625691,
+    type: "command.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:03:45.712] INFO (#785): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[21:03:45.855] INFO (#813): location services booted {
+  directory: "<temp>/agent-duel-v2-server-JjtTzw/workspace-zUWuWR",
+  workspaceID: undefined,
+  durationMs: 10,
+}
+[21:03:45.889] INFO (#908): event {
+  event: {
+    id: "evt_17a06c2e100124JSKGyQLTl2Vs",
+    created: 1793048625889,
+    type: "provider.updated",
+    location: {
+      directory: "<temp>/agent-duel-v2-server-JjtTzw/workspace-zUWuWR",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:03:45.898] INFO (#912): event {
+  event: {
+    id: "evt_17a06c2ea001nRMFrm5FzrOGOU",
+    created: 1793048625898,
+    type: "model.updated",
+    location: {
+      directory: "<temp>/agent-duel-v2-server-JjtTzw/workspace-zUWuWR",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:03:45.898] INFO (#1151): event {
+  event: {
+    id: "evt_17a06c2ea002z0fz2qhMj4ywjo",
+    created: 1793048625898,
+    type: "agent.updated",
+    location: {
+      directory: "<temp>/agent-duel-v2-server-JjtTzw/workspace-zUWuWR",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:03:45.899] INFO (#1151): event {
+  event: {
+    id: "evt_17a06c2eb001Fn5OLqyCY0nU5N",
+    created: 1793048625899,
+    type: "command.updated",
+    location: {
+      directory: "<temp>/agent-duel-v2-server-JjtTzw/workspace-zUWuWR",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[arena-research] Dropped research data {
+  reason: "upload_failed",
+  records: 1,
+  bytes: 630,
+  status: 404,
+}
+[arena-research] Dropped research data {
+  reason: "closed",
+  records: 1,
+  bytes: 595,
+}
+(pass) Arena OpenCode v2 native boundary > serves authenticated v2 info, empty catalogs, and normal prompt admission [2010.17ms]
+[21:03:47.344] INFO (#2514): database schema bootstrap started {
+  migrations: 50,
+}
+[21:03:47.345] INFO (#2514): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 1,
+}
+(pass) Arena OpenCode v2 native boundary > blocks an unresolved contestant mutation while allowing session reads [31.21ms]
+[21:03:47.375] INFO (#2981): database schema bootstrap started {
+  migrations: 50,
+}
+[21:03:47.378] INFO (#2981): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 3,
+}
+(pass) Arena OpenCode v2 native boundary > allows canonical environment synchronization during an active battle while guarding model changes [30.33ms]
+[21:03:47.406] INFO (#3450): database schema bootstrap started {
+  migrations: 50,
+}
+[21:03:47.408] INFO (#3450): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 2,
+}
+(pass) Arena OpenCode v2 native boundary > retains native sessions across a server restart using a persistent database [33.81ms]
+[21:03:47.440] INFO (#4381): database schema bootstrap started {
+  migrations: 50,
+}
+[21:03:47.442] INFO (#4381): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 2,
+}
+(pass) Arena OpenCode v2 native boundary > keeps the authenticated v2 event stream open through its first timed heartbeat [15021.97ms]
+
+ 5 pass
+ 0 fail
+ 76 expect() calls
+Ran 5 tests across 1 file. [17.72s]
+
+
+transport-fixes-arena-build-bun142.log
+
+
+> @getpaseo/desktop@0.4.0-beta.13 build:arena-runtime
+> node scripts/build-arena-runtime.mjs
+
+Compiled Arena engine: <checkout>/packages/desktop/dist/arena/agent-duel-arena
+

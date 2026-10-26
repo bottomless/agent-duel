@@ -1,14 +1,14 @@
 import { Effect, Stream } from "effect"
-import * as Sse from "effect/unstable/encoding/Sse"
-import { HttpServerResponse } from "effect/unstable/http"
-import { HttpApiSchema } from "effect/unstable/httpapi"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import * as Sse from "effect/encoding/Sse"
+import { HttpServerResponse } from "effect/http"
+import { HttpApiSchema } from "effect/http-api"
+import { HttpApiBuilder } from "effect/http-api"
 import { seedWorktreeIgnoredContent } from "@/arena/copy-snapshot"
 import { forkSessionInto } from "@/arena/fork"
 import { generate as generateMetadata } from "@/arena/metadata"
 import { ArenaService } from "@/arena/service"
 import { MessageID, SessionID } from "@/session/schema"
-import { InstanceHttpApi } from "../api"
+import { ArenaApi } from "../groups/arena"
 import { ArenaApiError, type ForkSessionPayload } from "../groups/arena"
 import { assertSessionForkAllowed } from "./arena-session-guard"
 
@@ -40,7 +40,7 @@ const forkSession = Effect.fn("ArenaHttpApi.forkSession")(function* (ctx: {
   return { sessionID: forked.id }
 })
 
-export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (handlers) =>
+export const arenaHandlers = HttpApiBuilder.group(ArenaApi, "arena", (handlers) =>
   Effect.gen(function* () {
     const arena = yield* ArenaService.Service
     return handlers
@@ -132,7 +132,9 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
           arena.recordReview(ctx.params.turnID, ctx.payload.events, ctx.payload.participantID, ctx.payload.ipAddress),
         ),
       )
-      .handle("retryResolution", (ctx) => map(arena.retryResolution(ctx.params.turnID, ctx.payload.mode, ctx.payload.answers)))
+      .handle("retryResolution", (ctx) =>
+        map(arena.retryResolution(ctx.params.turnID, ctx.payload.mode, ctx.payload.answers)),
+      )
       .handle("retryComparison", (ctx) => map(arena.retryComparison(ctx.params.turnID)))
       .handle("stop", (ctx) => map(arena.stop(ctx.params.turnID)))
       .handle("resolveStop", (ctx) => map(arena.resolveStop(ctx.params.turnID, ctx.payload.resolution)))

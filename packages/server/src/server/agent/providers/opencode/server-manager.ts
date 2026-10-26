@@ -89,7 +89,7 @@ export interface OpenCodeServerGeneration {
   refCount: number;
   retired: boolean;
   ready: Promise<void>;
-  events: OpenCodeEventConsumer;
+  events: OpenCodeEventSource & { close(): Promise<void> };
   managedProcessId?: string;
   managedProcessRecord?: Promise<{ id: string } | null>;
   arenaRuntimeToken?: string;
@@ -104,7 +104,7 @@ export type OpenCodeCommandPrefixResolver = () => Promise<{
 /** Creates a generation's event source; an Arena backend refuses requests without `controlToken`. */
 export type OpenCodeServerEventSourceFactory = (
   options: Parameters<OpenCodeEventConsumerFactory>[0] & { controlToken: string },
-) => OpenCodeEventConsumer;
+) => OpenCodeEventSource & { close(): Promise<void> };
 export type OpenCodeServerProcessSpawner = (
   command: string,
   args: string[],

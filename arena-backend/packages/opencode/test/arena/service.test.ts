@@ -1,6 +1,7 @@
-import { ModelV2 } from "@opencode-ai/core/model"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { Model as ModelV2 } from "@opencode/schema/model"
+import { Provider as ProviderV2 } from "@opencode/schema/provider"
+import * as SessionV1Schema from "@opencode/schema/v1/session"
+import { SessionV1 } from "@/arena/session-shape"
 import { afterEach, describe, expect, test } from "bun:test"
 import { OperationError, TRUNK_CONFLICT_OPERATION } from "@/arena/git"
 import { clearForTest, hostname, register } from "@/arena/preview"
@@ -145,7 +146,14 @@ describe("lastTurnStart", () => {
       ...model,
       time,
       ...(finish ? { finish } : {}),
-      ...(aborted ? { error: new SessionV1.AbortedError({ message: "Aborted" }).toObject() } : {}),
+      ...(aborted
+        ? {
+            error: SessionV1Schema.AbortedError.Schema.make({
+              name: "MessageAbortedError",
+              data: { message: "Aborted" },
+            }),
+          }
+        : {}),
     },
     parts: [],
   })

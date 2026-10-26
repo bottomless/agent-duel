@@ -33,7 +33,9 @@ function session(value: unknown): { sessionID?: string; parentSessionID?: string
   if (!record(value)) return {}
   const sessionID = typeof value.sessionID === "string" ? value.sessionID : undefined
   const parentSessionID = typeof value.parentID === "string" ? value.parentID : undefined
-  if (sessionID || parentSessionID) return { sessionID, parentSessionID }
+  const rootSessionID = typeof value.rootSessionID === "string" ? value.rootSessionID : undefined
+  if (sessionID || parentSessionID || rootSessionID)
+    return { sessionID, parentSessionID: parentSessionID ?? rootSessionID }
   for (const key of ["info", "part", "message", "session", "properties", "data", "syncEvent", "payload"]) {
     const nested = session(value[key])
     if (nested.sessionID || nested.parentSessionID) return nested

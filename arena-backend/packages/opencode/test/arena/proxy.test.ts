@@ -3,14 +3,34 @@ import { createServer } from "node:net"
 import type { AddressInfo } from "node:net"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { streamText } from "ai"
-import { ProviderV2 } from "@opencode-ai/core/provider"
+import { Provider as ProviderV2 } from "@opencode/schema/provider"
+import { SessionV1 } from "@opencode/schema/v1/session"
 import { Effect } from "effect"
 import { AssignmentRegistry, proxy, rewriteBody, sanitizePayload, streamProgress } from "../../src/arena/proxy"
-import { MessageV2 } from "../../src/session/message-v2"
 import { SessionRetry } from "../../src/session/retry"
 import { createArenaService } from "@agent-duel/arena-service"
 import { isNetworkUnavailable } from "@agent-duel/arena-service/network"
 import type { ArenaDb } from "@agent-duel/arena-service/collection"
+
+/**
+ * Retry tests need only the assistant error wire shape. Keep this local so the pure proxy tests
+ * don't pull the retired V1 message loader (which owns the daemon's legacy storage path).
+ */
+function assistantError(error: unknown, _providerID: ProviderV2.ID): SessionV1.Assistant["error"] {
+  const value = typeof error === "object" && error !== null ? (error as Record<string, unknown>) : undefined
+  const responseBody = typeof value?.responseBody === "string" ? value.responseBody : undefined
+  const statusCode = typeof value?.statusCode === "number" ? value.statusCode : undefined
+  const message = error instanceof Error ? error.message : String(error)
+  return SessionV1.APIError.Schema.make({
+    name: "APIError",
+    data: {
+      message,
+      isRetryable: value?.isRetryable === true || statusCode === undefined || statusCode >= 500,
+      ...(statusCode === undefined ? {} : { statusCode }),
+      ...(responseBody === undefined ? {} : { responseBody }),
+    },
+  })
+}
 
 const assignment = {
   runID: "run-a",
@@ -840,7 +860,7 @@ describe("ArenaProxy", () => {
           Effect.retry(
             SessionRetry.policy({
               provider: "arena",
-              parse: (error) => MessageV2.fromError(error, { providerID: ProviderV2.ID.make("arena") }),
+              parse: (error) => assistantError(error, ProviderV2.ID.make("arena")),
               set: () => Effect.void,
             }),
           ),
@@ -929,7 +949,7 @@ describe("ArenaProxy", () => {
         Effect.retry(
           SessionRetry.policy({
             provider: "arena",
-            parse: (error) => MessageV2.fromError(error, { providerID: ProviderV2.ID.make("arena") }),
+            parse: (error) => assistantError(error, ProviderV2.ID.make("arena")),
             set: (info) =>
               Effect.sync(() => {
                 messages.push(info.message)

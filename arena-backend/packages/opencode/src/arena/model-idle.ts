@@ -1,8 +1,6 @@
-import { ProviderError } from "@/provider/error"
-
 export const MODEL_IDLE_TIMEOUT_MS = 150_000
 
-export class ModelIdleError extends ProviderError.ResponseStreamError {
+export class ModelIdleError extends Error {
   constructor(ms: number) {
     super(`Arena model response was idle for ${ms}ms`)
   }

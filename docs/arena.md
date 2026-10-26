@@ -6,8 +6,14 @@ repository is the Paseo shell it runs inside.
 The engine is `arena-backend/packages/opencode/src/arena/` — a module inside a vendored OpenCode
 fork, isolated from the root npm workspace and installed with Bun. Packaged desktop launches a
 compiled copy; source development launches it from `PASEO_ARENA_BACKEND_ROOT`. The daemon exposes it at `/arena/...`
-(`packages/server/src/server/agent/providers/opencode-agent.ts:4323`), which the protocol wraps as
+through `packages/server/src/server/agent/providers/opencode/v2/arena.ts`, which the protocol wraps as
 `arena.*` RPCs and `packages/app/src/arena/` renders.
+
+Arena uses OpenCode's V2 session store and runner. Install its routes and engine plugin into the
+same Core service graph as the native `/api` routes. A second graph creates a separate session
+lifetime and can race worktree setup or winner promotion. The Arena `info + parts` transcript is a
+wire projection; fork and graft canonical V2 messages so provider replay state, attachments, and
+compaction checkpoints survive a vote.
 
 Arena state is canonical local data. The runtime stores it in SQLite at
 `$PASEO_HOME/arena/arena.sqlite` and keeps artifact bytes in
@@ -963,21 +969,15 @@ field. Each layer has its own file:
   records both in the research metrics. Local-store startup
   removes those fields and request/response artifacts from legacy unresolved battles; resolved
   history already exposes the contestants by design.
-- **Session data** (`arena/privacy.ts`) — the event bridge blinds durable payloads before projectors
-  or SQLite see them, and the Arena recorder applies the same transformation before writing raw-event
-  artifacts. Live-only stream deltas bypass that work. Active execution keeps only continuation
-  metadata and original tool-call IDs in memory, not message text or tool output, and releases the
-  overlay when the run is unregistered. Archives and public responses use the blinded copy. Public
-  transcript and live-part projections also redact legacy reasoning text without
-  changing the private execution history. The durable copy removes
-  provider and model metadata, cost and token usage, flattens errors, and rehashes tool-call IDs to
-  `call_arena_<hash>`. Each upstream mints those IDs in a recognizable shape, and xAI's counter
-  additionally counts calls the voter never saw (`arena/privacy.ts:72`).
-- **System prompt** (`session/system.ts`) — every `arena` session, contestant or single-agent, gets
-  a fixed instruction where other providers get the model line: its identity is hidden until the
-  vote or a reveal, and it must not guess, name, or look up a model or company. Without it, models answer as
-  "opencode" or claim a model they are not, and a strong model can name itself in text the judge
-  reads. The text is static because anything assignment-derived would differ between the sides.
+- **Session data** (`arena/privacy.ts`, `arena/v2-privacy.ts`) — keep canonical Core history intact
+  for provider replay. Blind the native `/api` JSON and SSE boundary, the Arena recorder, and public
+  transcript projections. Remove provider state and identity metadata, redact reasoning, zero usage
+  and cost, flatten provider errors, and rehash tool-call IDs to `call_arena_<hash>`. Never run the
+  native sanitizer over `/arena` responses: resolved battles deliberately reveal identities and
+  costs. The event bridge uses the same part IDs as snapshots and preserves UTF-16 delta offsets.
+- **System prompt** (`arena/engine-runtime/plugin.ts`) — every `arena` session, contestant or
+  single-agent, gets a fixed identity instruction. Replace upstream model branding before a request
+  leaves Core. The text is static because assignment-derived instructions would differ between sides.
 - **The judge** (`arena/comparison-timeline.ts`) — sees narrative text and tool name/status only.
   Reasoning is excluded deliberately: it dwarfs the visible text and sends the comparison model
   after differences that exist only in private deliberation.

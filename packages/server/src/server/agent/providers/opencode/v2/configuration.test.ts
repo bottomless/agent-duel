@@ -1,6 +1,23 @@
 import { describe, expect, test } from "vitest";
 
-import { features, permissionRules, requiresDedicatedV2Server } from "./configuration.js";
+import {
+  features,
+  permissionRules,
+  requiresDedicatedV2Server,
+  arenaModelRef,
+} from "./configuration.js";
+
+test("Arena selects an opaque model and its fixed reasoning profile", () => {
+  expect(arenaModelRef()).toEqual({ providerID: "arena", id: "medium", variant: "xhigh" });
+  expect(arenaModelRef("arena/contestant")).toEqual({
+    providerID: "arena",
+    id: "contestant",
+    variant: "high",
+  });
+  expect(() => arenaModelRef("openrouter/private-model")).toThrow(
+    "Choose an Arena Medium or frontier model",
+  );
+});
 
 describe("OpenCode v2 permission rules", () => {
   test("maps authored native permissions and exact injected MCP grants", () => {

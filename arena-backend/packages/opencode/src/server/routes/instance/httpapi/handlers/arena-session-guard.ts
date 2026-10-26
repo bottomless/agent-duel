@@ -1,7 +1,6 @@
 import { ArenaRuntime } from "@/arena/runtime"
 import { SessionID } from "@/session/schema"
 import { Effect } from "effect"
-import { HttpApiError } from "effect/unstable/httpapi"
 
 export const assertSessionMutationAllowed = Effect.fn("ArenaHttpApi.assertSessionMutationAllowed")(function* (
   sessionID: SessionID,
@@ -9,14 +8,14 @@ export const assertSessionMutationAllowed = Effect.fn("ArenaHttpApi.assertSessio
   if (!ArenaRuntime.enabled()) return
   const blocked = yield* Effect.tryPromise({
     try: () => ArenaRuntime.isUnresolvedContestantSession(sessionID),
-    catch: () => new HttpApiError.BadRequest({}),
+    catch: () => new Error("Session is controlled by an unresolved Arena battle"),
   })
-  if (blocked) return yield* new HttpApiError.BadRequest({})
+  if (blocked) return yield* Effect.fail(new Error("Session is controlled by an unresolved Arena battle"))
   const battleActive = yield* Effect.tryPromise({
     try: () => ArenaRuntime.isBattleActiveCanonicalSession(sessionID),
-    catch: () => new HttpApiError.BadRequest({}),
+    catch: () => new Error("Session is controlled by an unresolved Arena battle"),
   })
-  if (battleActive) return yield* new HttpApiError.BadRequest({})
+  if (battleActive) return yield* Effect.fail(new Error("Session is controlled by an unresolved Arena battle"))
 })
 
 export const assertSessionForkAllowed = Effect.fn("ArenaHttpApi.assertSessionForkAllowed")(function* (
@@ -25,7 +24,7 @@ export const assertSessionForkAllowed = Effect.fn("ArenaHttpApi.assertSessionFor
   if (!ArenaRuntime.enabled()) return
   const blocked = yield* Effect.tryPromise({
     try: () => ArenaRuntime.isUnresolvedContestantSession(sessionID),
-    catch: () => new HttpApiError.BadRequest({}),
+    catch: () => new Error("Session is controlled by an unresolved Arena battle"),
   })
-  if (blocked) return yield* new HttpApiError.BadRequest({})
+  if (blocked) return yield* Effect.fail(new Error("Session is controlled by an unresolved Arena battle"))
 })

@@ -1,12 +1,10 @@
-import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
-import { AbsolutePath } from "@opencode-ai/core/schema"
-import type { SessionV1 } from "@opencode-ai/core/v1/session"
+import type { SessionV1 } from "./session-shape"
 import { Effect } from "effect"
 import path from "path"
+import type { Permission } from "@opencode/schema/permission"
 import { Git } from "@/git"
 import { InstanceStore } from "@/project/instance-store"
-import type { MessageID, SessionID } from "@/session/schema"
-import { Session } from "@/session/session"
+import { MessageID, MoveSessionService, Session, SessionID } from "./session-runtime"
 import { notedUpload } from "./attachments"
 import { localizeEmbeddedPaths, localizeTranscriptPaths } from "./canonical-path"
 
@@ -21,6 +19,12 @@ export interface Input {
   readonly sessionID: SessionID
   /** Absolute directory the copy runs in. */
   readonly destination: string
+  /**
+   * Keep the fork at its source location until the caller has staged a cold worktree. Core's
+   * runner resolves its instance from the persisted session location, so moving a session to a
+   * reserved (still empty) path before the first request deadlocks the initial dispatch.
+   */
+  readonly moveSession?: boolean
   /** Exclusive boundary, as `Session.fork` takes it. */
   readonly messageID?: MessageID
   readonly onMessageMapping?: (mapping: ReadonlyMap<string, MessageID>) => void
@@ -48,51 +52,94 @@ export interface Input {
 }
 
 /**
+ * Core's empty-session fork guard means the fallback has to create a native root directly. Keep
+ * the projected source fields on that root so location startup and the first runner dispatch see
+ * the same agent/model/policy as the canonical session. `SessionV1` permissions use the old wire
+ * names; Core stores the equivalent action/resource/effect rules.
+ */
+const rootFields = (source: SessionV1.SessionInfo) => ({
+  title: source.title,
+  agent: source.agent,
+  model: source.model
+    ? {
+        providerID: source.model.providerID,
+        modelID: source.model.id,
+        ...(source.model.variant ? { variant: source.model.variant } : {}),
+      }
+    : undefined,
+  metadata: source.metadata,
+  permissions: source.permission?.map(
+    (rule) =>
+      ({
+        action: rule.permission === "external_directory_write" ? "edit" : rule.permission,
+        resource: rule.pattern,
+        effect: rule.action,
+      }) satisfies Permission.Rule,
+  ),
+})
+
+/**
  * Fork a session into another directory. `Session.fork` copies the transcript as is and
  * `MoveSession` only relocates the session, so the copy still names the source directory in
  * every tool call and message. A model that reads those paths keeps working in the source
  * checkout; rewriting them here is what makes the copy work where it was moved.
  */
 export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* (input: Input) {
-  const sessions = yield* Session.Service
-  const mover = yield* MoveSession.Service
+  const sessions = yield* Session
+  const mover = yield* MoveSessionService
   const instances = yield* InstanceStore.Service
   const source = yield* sessions.get(input.sessionID)
   let pruneBefore: MessageID | undefined
   const forked = yield* instances.provide(
     { directory: source.directory },
-    sessions.fork({
-      sessionID: input.sessionID,
-      ...(input.messageID ? { messageID: input.messageID } : {}),
-      onMessageMapping(mapping) {
-        if (input.pruneToolOutputBefore) pruneBefore = mapping.get(input.pruneToolOutputBefore)
-        input.onMessageMapping?.(mapping)
-      },
-    }),
+    sessions
+      .fork({
+        sessionID: input.sessionID,
+        ...(input.messageID ? { messageID: input.messageID } : {}),
+        onMessageMapping(mapping) {
+          if (input.pruneToolOutputBefore) pruneBefore = mapping.get(input.pruneToolOutputBefore)
+          input.onMessageMapping?.(mapping)
+        },
+      })
+      .pipe(
+        Effect.catchIf(
+          (error): error is Error => error.message.includes("Cannot fork empty session"),
+          () =>
+            sessions.create({
+              // Core rejects an empty fork. Contestants must remain native roots;
+              // a synthetic canonical parent would consume the default
+              // subagent depth before the contestant can delegate.
+              ...rootFields(source),
+              location: {
+                directory: source.directory,
+                ...(source.workspaceID ? { workspaceID: source.workspaceID } : {}),
+              },
+            }),
+        ),
+      ),
   )
   const roots = input.roots ?? {
     canonical: yield* topLevel(source.directory),
     worktree: yield* topLevel(input.destination),
   }
   if (roots.canonical === roots.worktree && !input.part && !pruneBefore) return forked
-  yield* mover.moveSession({
-    sessionID: forked.id,
-    destination: { directory: AbsolutePath.make(input.destination) },
-    moveChanges: false,
-  })
+  if (input.moveSession !== false)
+    yield* mover.moveSession({ sessionID: forked.id, directory: input.destination, moveChanges: false })
+  // Core Session.fork already copied complete canonical rows.  Localize those rows in place so
+  // provider state, images, compaction metadata, and non-text tool content survive the move.
+  const canonicalMessages = yield* sessions.canonicalMessages(forked.id)
+  for (const message of canonicalMessages) {
+    const localized = localizeEmbeddedPaths(message, roots)
+    // A user's prompt is input, not generated transcript text.  Keep its exact bytes while
+    // still localizing file attachments and any other embedded paths.
+    const transformed = message.type === "user" ? { ...localized, text: message.text } : localized
+    yield* sessions.updateCanonicalMessage({ sessionID: forked.id, message: transformed })
+  }
   const transcript = yield* sessions.messages({ sessionID: forked.id })
   const prune = pruneBefore
     ? { before: pruneBefore, at: Date.now(), worktree: roots.worktree, uploads: uploadDirectories(transcript) }
     : undefined
   for (const message of transcript) {
-    yield* sessions.updateMessage(
-      input.pathMode === "transcript"
-        ? yield* Effect.tryPromise({
-            try: () => localizeTranscriptPaths(message.info, roots),
-            catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-          })
-        : localizeEmbeddedPaths(message.info, roots),
-    )
     for (const part of message.parts) {
       const localized =
         input.pathMode === "transcript"
@@ -177,7 +224,7 @@ function inside(root: string, target: string) {
 }
 
 /** The directories of the uploads the transcript's prompts name; each upload has its own. */
-function uploadDirectories(transcript: readonly SessionV1.WithParts[]) {
+function uploadDirectories(transcript: readonly import("./session-runtime/schema").WithParts[]) {
   const uploads = transcript.flatMap((message) =>
     message.info.role === "user"
       ? message.parts.flatMap((part) => {

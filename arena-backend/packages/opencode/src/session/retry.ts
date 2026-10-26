@@ -1,12 +1,10 @@
-import type { NamedError } from "@opencode-ai/core/util/error"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Cause, Clock, Duration, Effect, Schedule } from "effect"
-import { MessageV2 } from "./message-v2"
+import { SessionV1 } from "@opencode/schema/v1/session"
+import { Cause, Clock, Duration, Effect, Schedule, Schema } from "effect"
 import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
 import { readNetworkUnavailable, readPaymentError } from "@agent-duel/arena-service/request-error"
 
-export type Err = ReturnType<NamedError["toObject"]>
+export type Err = NonNullable<SessionV1.Assistant["error"]>
 
 export const GO_UPSELL_MESSAGE = "Free usage exceeded, subscribe to Go"
 export const GO_UPSELL_URL = "https://opencode.ai/go"
@@ -95,7 +93,7 @@ function arenaDelay(attempt: number, error: SessionV1.APIError | undefined, now:
 /** Whether an Arena request failed because this machine is offline (`arena_network_unavailable`). */
 function networkUnavailable(error: Err) {
   return (
-    SessionV1.APIError.isInstance(error) &&
+    Schema.is(SessionV1.APIError.Schema)(error) &&
     error.data.statusCode === 503 &&
     readNetworkUnavailable(error.data.responseBody)
   )
@@ -103,9 +101,9 @@ function networkUnavailable(error: Err) {
 
 export function retryable(error: Err, provider: string) {
   // context overflow errors should not be retried
-  if (SessionV1.ContextOverflowError.isInstance(error)) return undefined
+  if (Schema.is(SessionV1.ContextOverflowError.Schema)(error)) return undefined
   if (provider === "arena" && networkUnavailable(error)) return { message: ARENA_OFFLINE_MESSAGE }
-  if (SessionV1.APIError.isInstance(error)) {
+  if (Schema.is(SessionV1.APIError.Schema)(error)) {
     const status = error.data.statusCode
     if (provider === "arena" && status === 402) {
       if (readPaymentError(error.data.responseBody) !== "arena_temporary_budget") return undefined
@@ -256,7 +254,7 @@ export function policy(opts: {
         }
         offlineAttempts = 0
         return Effect.gen(function* () {
-          const apiError = SessionV1.APIError.isInstance(error) ? error : undefined
+          const apiError = Schema.is(SessionV1.APIError.Schema)(error) ? error : undefined
           const payment = opts.provider === "arena" && apiError?.data.statusCode === 402
           if (payment && opts.canRetryPayment?.() === false) return yield* Cause.done(meta.attempt)
           const arena = opts.provider === "arena"

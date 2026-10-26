@@ -1,0 +1,43 @@
+bun test v1.4.2 (744846f84)
+
+test/tool-subagent.test.ts:
+[23:18:39.926] ERROR (#2): 416 |           const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+417 |           const progress: Tool.Metadata[] = []
+418 |           const input = { agent: "reviewer", description: "review", prompt: "review this", model: "", sessionID: "" }
+419 | 
+420 |           // The advertised input must permit the new-session value accepted by execution.
+421 |           expect(Schema.is(SubagentTool.Input)(input)).toBe(true)
+      ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at toBe (unknown:1:1)
+      at <checkout>/arena-backend/packages/core/test/tool-subagent.test.ts:421:56
+
+416 |           const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+417 |           const progress: Tool.Metadata[] = []
+418 |           const input = { agent: "reviewer", description: "review", prompt: "review this", model: "", sessionID: "" }
+419 | 
+420 |           // The advertised input must permit the new-session value accepted by execution.
+421 |           expect(Schema.is(SubagentTool.Input)(input)).toBe(true)
+      ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at toBe (unknown:1:1)
+      at <checkout>/arena-backend/packages/core/test/tool-subagent.test.ts:421:56
+      at ~effect/Effect/successCont (<checkout>/arena-backend/node_modules/.bun/effect@4.0.1/node_modules/effect/dist/internal/effect.js:973:28)
+      at runLoop (<checkout>/arena-backend/node_modules/.bun/effect@4.0.1/node_modules/effect/dist/internal/effect.js:448:86)
+      at evaluate (<checkout>/arena-backend/node_modules/.bun/effect@4.0.1/node_modules/effect/dist/internal/effect.js:398:23)
+      at runInAsyncScope (node:async_hooks:207:23)
+      at <checkout>/arena-backend/node_modules/.bun/effect@4.0.1/node_modules/effect/dist/internal/effect.js:802:17
+      at doneUnsafe (<checkout>/arena-backend/node_modules/.bun/effect@4.0.1/node_modules/effect/dist/Deferred.js:685:15)
+      at <checkout>/arena-backend/node_modules/.bun/effect@4.0.1/node_modules/effect/dist/RcMap.js:196:16
+      at evaluate (<checkout>/arena-backend/node_modules/.bun/effect@4.0.1/node_modules/effect/dist/internal/effect.js:419:19)
+(fail) SubagentTool > runs a foreground child session and returns the final assistant text [60.81ms]
+Ran 1 test across 1 file. [479.00ms]
+Bailed out after 1 failure

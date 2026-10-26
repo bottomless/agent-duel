@@ -1,9 +1,9 @@
 import os from "os"
 import path from "path"
 import { realpathSync } from "fs"
-import { Global } from "@opencode-ai/core/global"
-import { Wildcard } from "@opencode-ai/core/util/wildcard"
-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { Global } from "@opencode/util/global"
+import { Wildcard } from "@opencode/core/util/wildcard"
+import { PermissionV1 } from "@opencode/schema/permission-v1"
 
 /**
  * Rules under this key deny writes into external directories that `external_directory` allows.

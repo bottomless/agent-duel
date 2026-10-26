@@ -1,11 +1,8 @@
-import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
-import type { Data, Definition } from "@opencode-ai/core/event"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { ModelV2 } from "@opencode-ai/core/model"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import type { Provider } from "@/provider/provider"
-import type { ProviderAuth } from "@/provider/auth"
-import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
+import type { Data, Definition } from "@opencode/schema/event"
+import { SessionV1 } from "./session-shape"
+import { Model as ModelV2 } from "@opencode/schema/model"
+import { Provider as ProviderV2 } from "@opencode/schema/provider"
+import { SessionStatusEvent } from "@opencode/schema/session-status-event"
 import { ArenaResponseRecovery } from "./response-recovery"
 import { DateTime, Schema } from "effect"
 import { createHash } from "node:crypto"
@@ -433,26 +430,28 @@ function eventValue(input: unknown): unknown {
   return scrubRecord(input, metadataKeys)
 }
 
-export function config(input: ConfigV1.Info): typeof ConfigV1.Info.Type {
+export function config(input: Record<string, unknown>): Record<string, unknown> {
   if (!ArenaRuntime.enabled()) return input
-  return Schema.decodeUnknownSync(ConfigV1.Info)(scrub(input, configurationKeys))
+  return scrubRecord(input, configurationKeys)
 }
 
-export function changesModelConfiguration(input: ConfigV1.Info) {
+export function changesModelConfiguration(input: Record<string, unknown>) {
   return ArenaRuntime.enabled() && contains(input, configurationKeys)
 }
 
-export function providerList(input: Provider.ListResult): Provider.ListResult {
+export function providerList<T extends { all: unknown[]; default: Record<string, unknown>; connected: unknown[] }>(
+  input: T,
+): T {
   if (!ArenaRuntime.enabled()) return input
-  return { all: [], default: {}, connected: [] }
+  return { ...input, all: [], default: {}, connected: [] }
 }
 
-export function configProviders(input: Provider.ConfigProvidersResult): Provider.ConfigProvidersResult {
+export function configProviders<T extends { providers: unknown[]; default: Record<string, unknown> }>(input: T): T {
   if (!ArenaRuntime.enabled()) return input
-  return { providers: [], default: {} }
+  return { ...input, providers: [], default: {} }
 }
 
-export function providerAuth(input: ProviderAuth.Methods): ProviderAuth.Methods {
+export function providerAuth(input: Record<string, unknown>): Record<string, unknown> {
   if (!ArenaRuntime.enabled()) return input
   return {}
 }
