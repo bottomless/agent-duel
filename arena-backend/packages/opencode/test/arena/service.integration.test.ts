@@ -417,6 +417,8 @@ function installOpenRouterStub(options?: {
   readonly contestantReads?: Readonly<Partial<Record<number, readonly string[]>>>
   /** Contestants whose first request fails with a retryable 503 the engine will not wait out. */
   readonly failFirstOrdinals?: ReadonlyArray<number>
+  /** Runs once the control plane holds a newly resolved decision, before the engine reads the answer. */
+  readonly afterResolve?: (resolved: { readonly scopeID: string; readonly decision?: string }) => Promise<void> | void
   /** Scripts a contestant reply outright, subagent requests included; undefined falls back to the rules above. */
   readonly respond?: (request: {
     readonly model: string
@@ -496,6 +498,7 @@ function installOpenRouterStub(options?: {
         })
       }
       assignmentSets.set(key, { ...set, decision: body.decision })
+      await options?.afterResolve?.({ scopeID: body.scopeID, decision: body.decision })
       return Response.json({
         decision: body.decision,
         assignments: set.assignments.map(({ assignmentID, model }) => ({ assignmentID, model: model.displayName })),
@@ -582,6 +585,12 @@ function installOpenRouterStub(options?: {
     modelForAssignment: (assignmentID: string) => assignmentsByID.get(assignmentID)?.model.slug,
     /** The decision the control plane holds for a battle, if one was resolved. */
     battleDecision: (scopeID: string) => assignmentSets.get(`battle:${scopeID}`)?.decision,
+    /** Resolves a battle on the control plane only, as a request whose local write never landed. */
+    resolveBattle: (scopeID: string, decision: string) => {
+      const set = assignmentSets.get(`battle:${scopeID}`)
+      if (!set) throw new Error(`Arena battle has no assignments: ${scopeID}`)
+      assignmentSets.set(`battle:${scopeID}`, { ...set, decision })
+    },
     utilityCalls: () => utilityCalls,
     /** Utility requests other than the chat's title alone; anything unrecognized counts as a report. */
     reportCalls: () => utilityPrompts.filter((prompt) => !prompt.startsWith("Name the task in the user prompt")).length,
@@ -3710,6 +3719,300 @@ describe("Arena service vertical slice", () => {
       expect(stored?.placement.b.model).toBeUndefined()
       await waitForReadyChat(memory.store, attached.chat.id)
       expect(await $`git rev-parse HEAD`.cwd(directory.path).text()).toBe(head)
+    } finally {
+      router.restore()
+    }
+  }, 40_000)
+
+  test("discards a both-failed battle that another window retried during the discard", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure discard and retry race fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    // Another window's Retry, claimed after the control plane holds the discard and before the
+    // engine records it.
+    let retryDuringDiscard: (() => Promise<void>) | undefined
+    const router = installOpenRouterStub({
+      failFirstOrdinals: [1, 2],
+      afterResolve: async ({ decision }) => {
+        const retry = retryDuringDiscard
+        retryDuringDiscard = undefined
+        if (decision === "discard") await retry?.()
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Discard and retry race",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Fail on both sides." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+      const head = await $`git rev-parse HEAD`.cwd(directory.path).text()
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const failed = (await memory.store.runsForTurn(turnID)).find((run) => run.side === "a")
+      if (!failed) throw new Error("Arena did not create contestant A")
+      let claimed: TurnDocument["state"] | undefined
+      let retried: Promise<Response> | undefined
+      retryDuringDiscard = async () => {
+        // The other window's request carries on resetting and restarting the run while the discard
+        // continues, so the discard's stop can land before the retried prompt starts.
+        retried = Promise.resolve(
+          request(`/arena/runs/${encodeURIComponent(failed._id)}/retry`, { method: "POST", headers }),
+        )
+        claimed = (await waitForTurn(memory.store, turnID, "running", 10_000)).state
+      }
+
+      const discarded = await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/stop-resolution`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ resolution: "discard" }),
+        }),
+      )
+      await retried
+      expect(claimed).toBe("running")
+      expect(router.battleDecision(turnID)).toBe("discard")
+      // The control plane's discard is final, so the retried run is stopped and the battle ends
+      // discarded instead of finishing into a vote nothing can record.
+      expect(discarded.turn?.state).toBe("discarded")
+      expect(discarded.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
+      expect(discarded.turn?.vote).toBeUndefined()
+      expect((await memory.store.runsForTurn(turnID)).some((run) => run.runState === "pending")).toBe(false)
+      await waitForReadyChat(memory.store, attached.chat.id)
+      expect(await $`git rev-parse HEAD`.cwd(directory.path).text()).toBe(head)
+    } finally {
+      router.restore()
+    }
+  }, 40_000)
+
+  test("discards a battle the control plane already discarded when the voter chooses a side", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure committed discard fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ failFirstOrdinals: [1] })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Committed discard",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Fail on one side." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+      const head = await $`git rev-parse HEAD`.cwd(directory.path).text()
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const settled = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
+      const chosen = settled.runs.find((run) => run.selectable)
+      if (!chosen) throw new Error("Arena did not finish a selectable result")
+      // Another window discarded the battle on the control plane, and a retry claimed the turn
+      // before that discard was recorded here.
+      router.resolveBattle(turnID, "discard")
+
+      const voted = await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/vote`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ vote: chosen.side }),
+        }),
+      )
+      expect(voted.turn?.state).toBe("discarded")
+      expect(voted.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
+      expect(voted.turn?.vote).toBeUndefined()
+      expect(router.battleDecision(turnID)).toBe("discard")
+      await waitForReadyChat(memory.store, attached.chat.id)
+      expect(await $`git rev-parse HEAD`.cwd(directory.path).text()).toBe(head)
+    } finally {
+      router.restore()
+    }
+  }, 40_000)
+
+  test("stops and discards a running battle the control plane already discarded when the voter picks early", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure committed discard early pick fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    // The second contestant is held long enough for the first one's result to be finalized.
+    const router = installOpenRouterStub({ delayedOrdinal: 2, delayMs: 8_000 })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Committed discard early pick",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Finish one result before the other." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+      const head = await $`git rev-parse HEAD`.cwd(directory.path).text()
+
+      const deadline = Date.now() + 30_000
+      let finished: RunDocument | undefined
+      while (!finished && Date.now() < deadline) {
+        const turn = await memory.store.turn(turnID)
+        const runs = await memory.store.runsForTurn(turnID)
+        finished = runs.find((run) => turn?.selectableSides?.includes(run.side))
+        if (!finished || !runs.some((run) => run.runState === "pending")) finished = undefined
+        if (!finished) await Bun.sleep(10)
+      }
+      if (!finished) throw new Error("Arena runs did not reach one finalized and one working side")
+      router.resolveBattle(turnID, "discard")
+
+      const picked = await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/vote`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ vote: finished.side }),
+        }),
+      )
+      expect(picked.turn?.state).toBe("discarded")
+      expect(picked.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
+      expect(picked.turn?.selectedEarly).toBeFalsy()
+      expect((await memory.store.runsForTurn(turnID)).some((run) => run.runState === "pending")).toBe(false)
+      await waitForReadyChat(memory.store, attached.chat.id)
+      expect(await $`git rev-parse HEAD`.cwd(directory.path).text()).toBe(head)
+    } finally {
+      router.restore()
+    }
+  }, 60_000)
+
+  test("archives a both-failed battle that another window retried during the archive's discard", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure archive and retry race fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    let retryDuringDiscard: (() => Promise<void>) | undefined
+    const router = installOpenRouterStub({
+      failFirstOrdinals: [1, 2],
+      afterResolve: async ({ decision }) => {
+        const retry = retryDuringDiscard
+        retryDuringDiscard = undefined
+        if (decision === "discard") await retry?.()
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Archive and retry race",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Fail on both sides." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      const failed = (await memory.store.runsForTurn(turnID)).find((run) => run.side === "a")
+      if (!failed) throw new Error("Arena did not create contestant A")
+      let claimed: TurnDocument["state"] | undefined
+      retryDuringDiscard = async () => {
+        await json<PublicSnapshot>(
+          await request(`/arena/runs/${encodeURIComponent(failed._id)}/retry`, { method: "POST", headers }),
+        )
+        claimed = (await memory.store.turn(turnID))?.state
+      }
+
+      const archived = await json<PublicSnapshot | null>(
+        await request(`/arena/sessions/${source.id}/archive`, { method: "POST", headers }),
+      )
+      expect(claimed).toBe("running")
+      expect(router.battleDecision(turnID)).toBe("discard")
+      expect(archived?.chat.status).toBe("archived")
+      expect(archived?.turn?.state).toBe("discarded")
+      expect(archived?.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
+      const after = await memory.store.runsForTurn(turnID)
+      expect(after.some((run) => run.runState === "pending")).toBe(false)
+      expect(after.every((run) => !!run.worktreeRemovedAt)).toBe(true)
     } finally {
       router.restore()
     }

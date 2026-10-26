@@ -1223,6 +1223,11 @@ never contains identities. The server keeps the assignment mapping permanently, 
 battle remains resolvable. Failed run text is masked to "Contestant run failed". The UI never has the
 names to leak, so nothing in `packages/app/` needs to enforce secrecy.
 
+A committed `discard` has no side to honour, so any request that meets it discards the battle
+(`discardCommitted`). A Retry or reply from another window can claim the turn back to `running`
+between the reveal and the local write; the engine stops those runs first, or the battle runs on
+into a vote that can only fail.
+
 `identity.name` is the profile's **display name** ("Qwen 3.8 Max"), not the slug — the app matches on
 it for vendor marks and pretty names.
 

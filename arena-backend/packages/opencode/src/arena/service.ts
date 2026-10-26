@@ -628,16 +628,15 @@ function committedResolution(
   requested: Exclude<Resolution, { readonly kind: "aborted" }>,
   decision: BattleAssignmentDecision,
 ): Exclude<Resolution, { readonly kind: "aborted" }> {
+  // A discard holds whatever this request asked for: the battle ends without applying either side.
+  if (decision === "discard") return stoppedResolution("discard")
   const side = selectedSide(decision)
   if (requested.kind === "vote") {
     if (side) return voteResolution(side)
     if (decision === "tie") return voteResolution("tie")
   }
   if (requested.kind === "early" && side) return earlyResolution(side)
-  if (requested.kind === "stopped") {
-    if (side) return stoppedResolution(side === "a" ? "apply_a" : "apply_b")
-    if (decision === "discard") return stoppedResolution("discard")
-  }
+  if (requested.kind === "stopped" && side) return stoppedResolution(side === "a" ? "apply_a" : "apply_b")
   throw new Error(`Arena battle was already resolved as ${decision}`)
 }
 
@@ -9571,7 +9570,11 @@ export const layer: Layer.Layer<
       if (!retry) {
         const revealed = yield* promise(() => resolvedPlacement(turn, assignmentDecision(resolution)))
         resolution = committedResolution(resolution, revealed.decision)
-        side = resolution.appliedSide ?? side
+        if (!resolution.appliedSide) {
+          yield* discardCommitted(store, turn._id, revealed)
+          return yield* respond(store, turn.chatID)
+        }
+        side = resolution.appliedSide
         vote = resolution.kind === "vote" ? resolution.vote : resolution.kind === "early" ? resolution.vote : undefined
         const recorded = yield* promise(() =>
           store.recordResolution({
@@ -10043,6 +10046,10 @@ export const layer: Layer.Layer<
         if (selected === "tie") return yield* Effect.fail(new Error("Arena ties require both contestant results"))
         const revealed = yield* promise(() => resolvedPlacement(turn, `select:${selected}`))
         const committed = committedResolution(earlyResolution(selected), revealed.decision)
+        if (!committed.appliedSide) {
+          yield* discardCommitted(store, turn._id, revealed)
+          return yield* respond(store, turn.chatID)
+        }
         if (committed.kind !== "early") {
           return yield* Effect.fail(new Error(`Arena battle was already resolved as ${revealed.decision}`))
         }
@@ -10330,7 +10337,6 @@ export const layer: Layer.Layer<
           ),
         )
       }
-      const expectedState = turn.state === "awaiting_vote" ? "awaiting_vote" : "awaiting_stop_resolution"
       const resolved = stoppedResolution(selected)
       if (resolved.appliedSide) {
         const side = resolved.appliedSide
@@ -10343,20 +10349,62 @@ export const layer: Layer.Layer<
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
       yield* ensureArchives(store, turn)
-      const reveal = yield* promise(() => anySideShowedOutput(store, turn._id))
       const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
-      const recorded = yield* promise(() =>
+      yield* discardCommitted(store, turn._id, revealed)
+      return yield* respond(store, chat._id)
+    })
+
+    /**
+     * Record a battle's discard. A Retry or reply from another window can claim the turn back to
+     * `running` after the reveal; that lost compare-and-set comes back unrecorded, with the turn as
+     * it now stands, instead of failing.
+     */
+    const recordDiscard = (
+      store: Store,
+      turn: TurnDocument,
+      expectedState: "awaiting_vote" | "awaiting_stop_resolution",
+      models: Readonly<Record<Side, string>>,
+      reveal: boolean,
+    ) =>
+      promise(() =>
         store.recordResolution({
           turnID: turn._id,
-          resolution: reveal ? resolved : stoppedResolution("discard", { revealed: false }),
-          ...(reveal ? { models: revealed.models } : {}),
+          resolution: stoppedResolution("discard", reveal ? undefined : { revealed: false }),
+          ...(reveal ? { models } : {}),
           expectedState,
           at: new Date(),
         }),
+      ).pipe(
+        Effect.catch((cause) =>
+          promise(() => store.turn(turn._id)).pipe(
+            Effect.flatMap((latest) =>
+              latest && latest.state !== expectedState
+                ? Effect.succeed({ turn: latest, recorded: false as const })
+                : Effect.fail(cause),
+            ),
+          ),
+        ),
       )
-      if (!recorded.recorded) return yield* respond(store, turn.chatID)
-      if (reveal) yield* revealTelemetry(recorded.turn, revealed.metrics)
-      else yield* releaseTelemetry(recorded.turn)
+
+    /**
+     * Cancel a stopping battle's runs that are still working. A Retry's prompt starts only after it
+     * resets its run, which can be after Stop's own cancel, so a caller waiting on the stop repeats this.
+     */
+    const cancelWorkingRuns = Effect.fn("Arena.cancelWorkingRuns")(function* (store: Store, turnID: string) {
+      const runs = yield* promise(() => store.runsForTurn(turnID))
+      yield* Effect.forEach(
+        runs.filter((run) => run.runState === "pending"),
+        (run) => cancelRun(run.worktree, SessionID.make(run.rootSessionID)).pipe(Effect.ignore),
+        { concurrency: 2, discard: true },
+      )
+    })
+
+    /** Remove a battle whose discard is recorded, leaving the checkout as it was. */
+    const finishDiscard = Effect.fn("Arena.finishDiscard")(function* (
+      store: Store,
+      turn: TurnDocument,
+      chat: ChatDocument,
+    ) {
       yield* promise(() => store.transitionTurn(turn._id, "discarding"))
       yield* cleanup(store, turn, chat.repository.root)
       const canonical = yield* withGit(inspectCanonical(chat.repository.root)).pipe(Effect.mapError(error))
@@ -10374,7 +10422,47 @@ export const layer: Layer.Layer<
           completedAt: new Date(),
         }),
       )
-      return yield* respond(store, chat._id)
+    })
+
+    /**
+     * Discard a battle the control plane holds as `discard`, whatever this request asked for: that
+     * first decision is final. A Retry or reply from another window can claim the turn back to
+     * `running` between the reveal and the local compare-and-set; its runs are then stopped and the
+     * discard recorded once they settle, so the battle never runs on into a vote nothing can record.
+     */
+    const discardCommitted = Effect.fn("Arena.discardCommitted")(function* (
+      store: Store,
+      turnID: string,
+      revealed: Awaited<ReturnType<typeof resolvedPlacement>>,
+    ) {
+      const deadline = Date.now() + 30_000
+      while (true) {
+        const turn = yield* promise(() => store.turn(turnID))
+        if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${turnID}`))
+        // Another request recorded it first and finishes it.
+        if (turn.resolution) return
+        if (turn.state === "awaiting_vote" || turn.state === "awaiting_stop_resolution") {
+          const expectedState: "awaiting_vote" | "awaiting_stop_resolution" = turn.state
+          const chat = yield* promise(() => store.chat(turn.chatID))
+          if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
+          yield* ensureArchives(store, turn)
+          const reveal = yield* promise(() => anySideShowedOutput(store, turn._id))
+          const recorded = yield* recordDiscard(store, turn, expectedState, revealed.models, reveal)
+          if (!recorded.recorded) continue
+          if (reveal) yield* revealTelemetry(recorded.turn, revealed.metrics)
+          else yield* releaseTelemetry(recorded.turn)
+          return yield* finishDiscard(store, turn, chat)
+        }
+        if (turn.state === "running") yield* stop(turn._id).pipe(Effect.ignore)
+        else if (turn.state === "stopping") yield* cancelWorkingRuns(store, turn._id)
+        else if (turn.state !== "finalizing" && turn.state !== "finalization_failed") {
+          return yield* Effect.fail(new Error("Arena battle was already resolved as discard"))
+        }
+        if (Date.now() >= deadline) {
+          return yield* Effect.fail(new Error(`Arena turn did not settle before its discard: ${turn.state}`))
+        }
+        yield* Effect.sleep(Duration.millis(25))
+      }
     })
 
     const archiveSession = Effect.fn("Arena.archiveSession")(function* (sessionID: string) {
@@ -10412,40 +10500,19 @@ export const layer: Layer.Layer<
             (run) => cancelRun(run.worktree, SessionID.make(run.rootSessionID)).pipe(Effect.ignore),
             { concurrency: 2, discard: true },
           )
+        } else if (turn.state === "stopping") {
+          yield* cancelWorkingRuns(store, turn._id)
         } else if (turn.state === "awaiting_vote" || turn.state === "awaiting_stop_resolution") {
           const expectedState: "awaiting_vote" | "awaiting_stop_resolution" = turn.state
           yield* ensureArchives(store, turn)
           const reveal = yield* promise(() => anySideShowedOutput(store, turn._id))
           const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
-          const recorded = yield* promise(() =>
-            store.recordResolution({
-              turnID: turn._id,
-              resolution: stoppedResolution("discard", reveal ? undefined : { revealed: false }),
-              ...(reveal ? { models: revealed.models } : {}),
-              expectedState,
-              at: new Date(),
-            }),
-          )
+          // A turn claimed back to `running` meanwhile is stopped on the next pass, then discarded.
+          const recorded = yield* recordDiscard(store, turn, expectedState, revealed.models, reveal)
           if (recorded.recorded || recorded.turn.resolution?.kind === "stopped") {
             if (identitiesRevealed(recorded.turn.resolution)) yield* revealTelemetry(recorded.turn, revealed.metrics)
             else yield* releaseTelemetry(recorded.turn)
-            yield* promise(() => store.transitionTurn(turn._id, "discarding"))
-            yield* cleanup(store, turn, chat.repository.root)
-            const canonical = yield* withGit(inspectCanonical(chat.repository.root)).pipe(Effect.mapError(error))
-            yield* promise(() => store.transitionTurn(turn._id, "discarded"))
-            yield* promise(() =>
-              store.completeTurn({
-                chatID: chat._id,
-                turnID: turn._id,
-                canonicalSHA: canonical.head,
-                canonicalSessionID: chat.canonicalSessionID,
-                ...(canonical.branch ? { branch: canonical.branch } : {}),
-                detached: canonical.detached,
-                indexTree: canonical.indexTree,
-                trunkConflicts: canonical.conflicts,
-                completedAt: new Date(),
-              }),
-            )
+            yield* finishDiscard(store, turn, chat)
           }
         } else if (
           turn.state === "creation_failed" ||
