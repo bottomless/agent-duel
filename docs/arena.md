@@ -630,8 +630,15 @@ patches use native Git with time and output limits; battle review owns its separ
 Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
 `.localhost` hostnames, and never retarget an old URL to a later process. The retarget below leaves
 some earlier-round ports in place (user messages, file content, long JSON), so a contestant command
-that binds a port of an earlier round, or names an earlier round's preview hostname, is refused by
+that names a port of an earlier round, or names an earlier round's preview hostname, is refused by
 the shell with this round's values (`arena/ports.ts`).
+
+The refusal matches any standalone number, not bind flags: a flag list missed
+`python3 -m http.server N`, `php -S host:N` and a port in a variable, so reads such as `curl` and
+`lsof` of an old port are refused too. Only bank ports a server listened on count, as recorded
+when the run's services were stopped. That keeps the list to a few numbers, so a PID that happens to
+equal one is rare, and it leaves out a project's own fixed ports, which every round runs again. A
+port the command does not spell out, in a config file or a script, still gets through.
 
 Banks come from 20000–29999, below every OS ephemeral range, in order from a cursor the store keeps
 (`portCursors`, `sequentialAllocator` in `arena/preview.ts`). A port an earlier turn used is not

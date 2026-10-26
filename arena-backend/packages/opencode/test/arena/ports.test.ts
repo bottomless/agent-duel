@@ -9,7 +9,7 @@ const environment: ArenaPorts.Environment = {
 }
 
 describe("Arena contestant ports", () => {
-  test("refuses binding a retired port in every spelling and names this round's values", () => {
+  test("refuses any mention of a retired port and names this round's values", () => {
     for (const command of [
       "npx vite --host 127.0.0.1 --port 20000 --strictPort",
       "npx vite --port=20001",
@@ -17,6 +17,16 @@ describe("Arena contestant ports", () => {
       "E2E_PORT=20003 npm run e2e",
       "nohup npm run dev -- -p 20000 &",
       'HOST=127.0.0.1 PORT="20000" nohup npm run dev > log 2>&1 &',
+      "python3 -m http.server 20000 --bind 127.0.0.1",
+      "nohup python3 -m http.server 20001 > /tmp/server.log 2>&1 &",
+      "php -S 127.0.0.1:20000",
+      "python manage.py runserver 127.0.0.1:20000",
+      "npx serve -l 20000",
+      "P=20000; npx vite --port $P",
+      `node -e "require('http').createServer().listen(20000)"`,
+      "socat TCP-LISTEN:20000,fork -",
+      "curl -s http://127.0.0.1:20000/",
+      "lsof -iTCP:20000 -sTCP:LISTEN",
     ]) {
       const refusal = ArenaPorts.violation(environment, command)
       expect(refusal).toContain("earlier round")
@@ -25,17 +35,30 @@ describe("Arena contestant ports", () => {
     }
   })
 
-  test("lets a current port, an unrelated port and a read of a retired port through", () => {
+  test("lets a current port, an unrelated port and a retired port inside a name through", () => {
     for (const command of [
       "npx vite --port 20113",
       "PORT=$PASEO_PORT npm run dev",
       "npx vite preview --port 4317",
-      "lsof -iTCP:20000 -sTCP:LISTEN",
-      "curl -s http://127.0.0.1:20000/",
-      "kill 20000",
+      "cat logs/web-20000.txt",
+      "ls /proc/20000",
+      "git show v1.20000.0",
+      "echo req-20000-ab12 build_20000",
     ]) {
       expect(ArenaPorts.violation(environment, command)).toBeUndefined()
     }
+  })
+
+  test("retires only the bank ports a server listened on", () => {
+    const listening = (...ports: number[]) => ({ listeners: ports.map((port) => ({ port })) })
+    const ports = ArenaPorts.retired(new Set([20113, 20114, 20115]), [
+      // A server on the bank's first port, an unused second and third, and the project's own 5173.
+      { portAliases: { PASEO_PORT: 20000, PASEO_PORT2: 20001, PASEO_PORT3: 20002 }, services: [listening(20000, 5173)] },
+      // The current bank handed out a port this run listened on again.
+      { portAliases: { PASEO_PORT: 20113, PASEO_PORT2: 20004, PASEO_PORT3: 20005 }, services: [listening(20113, 20004)] },
+      { portAliases: { PASEO_PORT: 20006, PASEO_PORT2: 20007, PASEO_PORT3: 20008 } },
+    ])
+    expect([...ports].toSorted()).toEqual([20000, 20004])
   })
 
   test("refuses a retired preview hostname and names the current URL", () => {
