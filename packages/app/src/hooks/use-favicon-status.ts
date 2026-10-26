@@ -96,7 +96,7 @@ async function updateMacDockBadge(entries: Record<string, string>) {
 }
 
 export function useFaviconStatus() {
-  const { agents } = useAggregatedAgents();
+  const { agents } = useAggregatedAgents({ demand: !isNative });
   const arenaHosts = useArenaActivityStore((state) => state.hosts);
   const selectBadgeEntries = useMemo(() => createArenaDockBadgeSelector(arenaHosts), [arenaHosts]);
   const dockBadgeEntries = useSessionStore(

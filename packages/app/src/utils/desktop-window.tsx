@@ -3,13 +3,14 @@ import { View, type ViewProps } from "react-native";
 import {
   DESKTOP_TRAFFIC_LIGHT_HEIGHT,
   DESKTOP_TRAFFIC_LIGHT_WIDTH,
-  DESKTOP_WINDOW_CONTROLS_GAP,
-  DESKTOP_WINDOW_CONTROLS_HEIGHT,
-  DESKTOP_WINDOW_CONTROLS_WIDTH,
   getIsElectronRuntime,
-  getIsElectronRuntimeMac,
 } from "@/constants/layout";
 import { getDesktopWindow } from "@/desktop/electron/window";
+import { getDesktopWindowChromeMode, type DesktopWindowChromeMode } from "@/desktop/host";
+import {
+  getDesktopWindowControlsPresentation,
+  getDesktopWindowControlsWidth,
+} from "@/desktop/window-chrome-presentation";
 import { isNative } from "@/constants/platform";
 
 export type WindowChromeCorners = "none" | "top-left" | "top-right" | "both";
@@ -32,6 +33,11 @@ type WindowChromeSafeAreaStyle = { height: number } | { paddingLeft: number; pad
 const EMPTY_OBSTRUCTION: WindowChromeObstruction = { topLeft: null, topRight: null };
 const WindowChromeContext = createContext<WindowChromeObstruction>(EMPTY_OBSTRUCTION);
 const WindowChromeCornersContext = createContext<WindowChromeCorners>("none");
+const DesktopWindowChromeContext = createContext<{
+  mode: DesktopWindowChromeMode | null;
+  isFullscreen: boolean;
+  isMaximized: boolean;
+}>({ mode: null, isFullscreen: false, isMaximized: false });
 
 function windowChromeCornersFromFlags(topLeft: boolean, topRight: boolean): WindowChromeCorners {
   if (topLeft && topRight) return "both";
@@ -77,120 +83,34 @@ export function intersectWindowChromeCorners(
   );
 }
 
+export function removeWindowChromeCorner(
+  corners: WindowChromeCorners,
+  corner: WindowChromeCorner,
+): WindowChromeCorners {
+  if (!windowChromeCornersInclude(corners, corner)) return corners;
+  if (corners !== "both") return "none";
+  return corner === "top-left" ? "top-right" : "top-left";
+}
+
 export function resolveWindowChromeObstruction(input: {
-  isElectron: boolean;
-  isMac: boolean;
+  mode: DesktopWindowChromeMode | null;
   isFullscreen: boolean;
-  /** Width the window controls overlay reports for the Windows/Linux controls, when it does. */
-  windowControlsWidth?: number | null;
 }): WindowChromeObstruction {
-  if (!input.isElectron || input.isFullscreen) return EMPTY_OBSTRUCTION;
-  if (input.isMac) {
+  if (!input.mode || input.isFullscreen) return EMPTY_OBSTRUCTION;
+  if (input.mode === "native-mac") {
     return {
       topLeft: { width: DESKTOP_TRAFFIC_LIGHT_WIDTH, height: DESKTOP_TRAFFIC_LIGHT_HEIGHT },
       topRight: null,
     };
   }
-  const width =
-    input.windowControlsWidth != null
-      ? Math.ceil(input.windowControlsWidth) + DESKTOP_WINDOW_CONTROLS_GAP
-      : DESKTOP_WINDOW_CONTROLS_WIDTH;
+  const presentation = getDesktopWindowControlsPresentation(input.mode);
   return {
     topLeft: null,
-    topRight: { width, height: DESKTOP_WINDOW_CONTROLS_HEIGHT },
+    topRight: {
+      width: getDesktopWindowControlsWidth(input.mode),
+      height: presentation.railHeight,
+    },
   };
-}
-
-interface WindowControlsOverlayLike {
-  visible: boolean;
-  getTitlebarAreaRect(): { x: number; width: number };
-  addEventListener(type: "geometrychange", listener: () => void): void;
-  removeEventListener(type: "geometrychange", listener: () => void): void;
-}
-
-function getWindowControlsOverlay(): WindowControlsOverlayLike | null {
-  if (typeof navigator === "undefined") return null;
-  const overlay = (navigator as { windowControlsOverlay?: WindowControlsOverlayLike })
-    .windowControlsOverlay;
-  return overlay ?? null;
-}
-
-/**
- * The Windows/Linux controls are a native strip over the page, so the page cannot paint
- * under them: an open agent list or its scrim stops at the strip unless its colour follows.
- * "drawer" is the compact full-width list, "floating" the desktop one over a 50% black scrim.
- */
-export function resolveWindowControlsBackground(input: {
-  isMac: boolean;
-  agentList: "pinned" | "drawer" | "floating";
-  agentListOpen: boolean;
-  surface0: string;
-  surfaceSidebar: string;
-}): string {
-  if (input.isMac || !input.agentListOpen || input.agentList === "pinned") return input.surface0;
-  if (input.agentList === "drawer") return input.surfaceSidebar;
-  return darkenHexColor(input.surface0, 0.5) ?? input.surface0;
-}
-
-function darkenHexColor(color: string, keep: number): string | null {
-  const match = /^#([0-9a-f]{6})$/i.exec(color);
-  if (!match) return null;
-  const value = parseInt(match[1], 16);
-  const channels = [value >> 16, (value >> 8) & 0xff, value & 0xff];
-  return `#${channels
-    .map((channel) =>
-      Math.round(channel * keep)
-        .toString(16)
-        .padStart(2, "0"),
-    )
-    .join("")}`;
-}
-
-/**
- * The controls sit right of the title bar area the overlay leaves to the page. A width beyond
- * twice the fallback is a reading taken mid-resize, not a control strip, so it falls back.
- */
-export function readWindowControlsWidth(input: {
-  overlayVisible: boolean;
-  titlebarArea: { x: number; width: number };
-  viewportWidth: number;
-}): number | null {
-  if (!input.overlayVisible) return null;
-  const width = input.viewportWidth - (input.titlebarArea.x + input.titlebarArea.width);
-  return width > 0 && width <= DESKTOP_WINDOW_CONTROLS_WIDTH * 2 ? width : null;
-}
-
-// Windows draws its controls 136px wide and Linux 96px; the overlay knows which, the app does not.
-// `geometrychange` fires before `innerWidth` follows a resize, so both are read a frame later.
-function useWindowControlsWidth(enabled: boolean): number | null {
-  const [width, setWidth] = useState<number | null>(null);
-  useEffect(() => {
-    if (!enabled) return;
-    const overlay = getWindowControlsOverlay();
-    if (!overlay) return;
-    let frame = 0;
-    const sync = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() =>
-        setWidth(
-          readWindowControlsWidth({
-            overlayVisible: overlay.visible,
-            titlebarArea: overlay.getTitlebarAreaRect(),
-            viewportWidth: window.innerWidth,
-          }),
-        ),
-      );
-    };
-    sync();
-    overlay.addEventListener("geometrychange", sync);
-    window.addEventListener("resize", sync);
-    return () => {
-      cancelAnimationFrame(frame);
-      overlay.removeEventListener("geometrychange", sync);
-      window.removeEventListener("resize", sync);
-    };
-  }, [enabled]);
-  return width;
 }
 
 export function resolveWindowChromeSafeArea(input: {
@@ -210,7 +130,7 @@ export function resolveWindowChromeSafeArea(input: {
 
 export function WindowChromeProvider({ children }: { children: ReactNode }) {
   const [isElectronReady, setIsElectronReady] = useState(getIsElectronRuntime);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [windowState, setWindowState] = useState({ isFullscreen: false, isMaximized: false });
 
   useEffect(() => {
     let active = true;
@@ -245,23 +165,27 @@ export function WindowChromeProvider({ children }: { children: ReactNode }) {
       )
         return scheduleRetry(true);
       const readFullscreen = desktopWindow.isFullscreen;
+      const readMaximized = desktopWindow.isMaximized;
       const subscribeToResized = desktopWindow.onResized;
       connecting = true;
       void (async () => {
-        async function syncFullscreen() {
+        async function syncWindowState() {
           try {
-            const fullscreen = await readFullscreen();
-            if (active) setIsFullscreen(fullscreen);
+            const [isFullscreen, isMaximized] = await Promise.all([
+              readFullscreen(),
+              readMaximized?.() ?? false,
+            ]);
+            if (active) setWindowState({ isFullscreen, isMaximized });
           } catch (error) {
-            if (active) console.warn("[DesktopWindow] Failed to read fullscreen state", error);
+            if (active) console.warn("[DesktopWindow] Failed to read window state", error);
           }
         }
         try {
-          const nextDispose = await subscribeToResized(syncFullscreen);
+          const nextDispose = await subscribeToResized(syncWindowState);
           if (!active) return nextDispose();
           dispose = nextDispose;
           setIsElectronReady(true);
-          await syncFullscreen();
+          await syncWindowState();
         } catch (error) {
           if (active) console.warn("[DesktopWindow] Failed to subscribe to resize", error);
         } finally {
@@ -280,26 +204,46 @@ export function WindowChromeProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const windowControlsWidth = useWindowControlsWidth(
-    !isNative && isElectronReady && !getIsElectronRuntimeMac(),
-  );
   const obstruction = useMemo(
     () =>
       resolveWindowChromeObstruction({
-        isElectron: isElectronReady,
-        isMac: getIsElectronRuntimeMac(),
-        isFullscreen,
-        windowControlsWidth,
+        mode: isElectronReady ? getDesktopWindowChromeMode() : null,
+        isFullscreen: windowState.isFullscreen,
       }),
-    [isElectronReady, isFullscreen, windowControlsWidth],
+    [isElectronReady, windowState.isFullscreen],
+  );
+  const desktopWindowChrome = useMemo(
+    () => ({
+      mode: isElectronReady ? getDesktopWindowChromeMode() : null,
+      isFullscreen: windowState.isFullscreen,
+      isMaximized: windowState.isMaximized,
+    }),
+    [isElectronReady, windowState],
   );
   return (
-    <WindowChromeContext.Provider value={obstruction}>
-      <WindowChromeCornersContext.Provider value="both">
-        {children}
-      </WindowChromeCornersContext.Provider>
-    </WindowChromeContext.Provider>
+    <DesktopWindowChromeContext.Provider value={desktopWindowChrome}>
+      <WindowChromeContext.Provider value={obstruction}>
+        <WindowChromeCornersContext.Provider value="both">
+          {children}
+        </WindowChromeCornersContext.Provider>
+      </WindowChromeContext.Provider>
+    </DesktopWindowChromeContext.Provider>
   );
+}
+
+export function useCustomDesktopWindowControls(): {
+  visible: boolean;
+  mode: "custom-windows" | "custom-linux" | null;
+  isMaximized: boolean;
+} {
+  const chrome = useContext(DesktopWindowChromeContext);
+  const customMode =
+    chrome.mode === "custom-windows" || chrome.mode === "custom-linux" ? chrome.mode : null;
+  return {
+    visible: customMode !== null && !chrome.isFullscreen,
+    mode: customMode,
+    isMaximized: chrome.isMaximized,
+  };
 }
 
 /** Narrows inherited corner ownership to the corners occupied by this child surface. */

@@ -311,7 +311,7 @@ describe("fetchAgentHistoryPage", () => {
     });
 
     expect(client.calls[0]?.search).toBe("stripe");
-    expect(page.searchScoreByAgentKey).toEqual({ "server-1:match": 1000 });
+    expect(page.agents.map((agent) => agent.id)).toEqual(["match"]);
   });
 
   it("asks every host for archived sessions only, on every page", async () => {
@@ -339,7 +339,7 @@ describe("fetchAgentHistoryPage", () => {
     expect(serverBClient.calls.map((call) => call.archivedOnly)).toEqual([true, true]);
   });
 
-  it("keeps per-host scores apart when two hosts issue the same agent id", async () => {
+  it("keeps sessions with the same id on different hosts and sorts by recency", async () => {
     const sharedId = "collision";
     const serverAClient = createClient([
       historyPayload({
@@ -377,13 +377,9 @@ describe("fetchAgentHistoryPage", () => {
       search: "match",
     });
 
-    expect(page.searchScoreByAgentKey).toEqual({
-      "server-a:collision": 4000,
-      "server-b:collision": 1000,
-    });
     expect(page.agents.map((agent) => agent.title)).toEqual([
-      "Strong match on B",
       "Weak match on A",
+      "Strong match on B",
     ]);
   });
 
@@ -420,9 +416,8 @@ describe("fetchAgentHistoryPage", () => {
     });
   });
 
-  it("reports truncation when two complete host pages overflow the merge", async () => {
-    // Neither host is locally truncated; together they exceed what the merged
-    // list can show, and the footer has to say so.
+  it("preserves every matching row when merging complete host pages", async () => {
+    // Each host owns its cursor; merging must not discard rows already consumed.
     const buildHost = (serverId: string, count: number) =>
       createClient([
         historyPayload({
@@ -447,8 +442,8 @@ describe("fetchAgentHistoryPage", () => {
       search: "match",
     });
 
-    expect(page.isSearchTruncated).toBe(true);
-    expect(page.agents).toHaveLength(200);
+    expect(page.isSearchTruncated).toBe(false);
+    expect(page.agents).toHaveLength(300);
   });
 
   it("names the host that failed instead of quietly shortening the list", async () => {
@@ -540,7 +535,7 @@ describe("fetchAgentHistoryPage", () => {
       }),
     ).toEqual([{ serverId: "server-b", serverName: "Linux box" }]);
   });
-  it("orders a searched all-host page by relevance instead of recency", async () => {
+  it("orders searched history chronologically regardless of match strength", async () => {
     const serverAClient = createClient([
       historyPayload({
         entries: [
@@ -578,8 +573,8 @@ describe("fetchAgentHistoryPage", () => {
     });
 
     expect(page.agents.map((agent) => agent.id)).toEqual([
-      "older-strong-match",
       "newer-weak-match",
+      "older-strong-match",
     ]);
   });
 
@@ -613,6 +608,7 @@ describe("fetchAgentHistoryPage", () => {
         { serverId: "server-b", serverLabel: "Linux box", client: serverBClient },
       ] satisfies AgentHistoryHost[],
       cursorByServerId: { "server-b": "cursor-b" },
+      search: "match",
     });
 
     expect(page.agents.map((agent) => agent.id)).toEqual(["next-b"]);
@@ -621,6 +617,7 @@ describe("fetchAgentHistoryPage", () => {
       {
         sort: [{ key: "updated_at", direction: "desc" }],
         page: { limit: 200, cursor: "cursor-b" },
+        search: "match",
       } satisfies FetchAgentHistoryOptions,
     ]);
   });

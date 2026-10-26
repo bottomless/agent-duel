@@ -1,3 +1,4 @@
+import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import type { AgentStreamEventPayload } from "@getpaseo/protocol/messages";
 import { selectAgentTimelineState, useSessionStore } from "@/stores/session-store";
 import type { AssistantMessageItem, StreamItem, TodoEntry } from "@/types/stream";
@@ -10,9 +11,12 @@ import {
   mergeAgentToolCallItem,
   replaceWithCanonicalStream,
   reduceStreamUpdate,
+  streamTimelineItemIdentity,
   upsertUserMessageAcrossStream,
 } from "@/types/stream";
 
+// Ceiling for a pending commit. A frame callback normally gets there first; this
+// is the fallback for when nothing is painting.
 const AGENT_STREAM_REDUCER_FLUSH_DELAY_MS = 16 * 3;
 
 // ---------------------------------------------------------------------------
@@ -126,7 +130,8 @@ interface TimelineResponseEntry {
   sourceSeqRanges?: TimelineSeqRange[];
   collapsed?: string[];
   provider: string;
-  item: Record<string, unknown>;
+  turnId?: string;
+  item: AgentTimelineItem;
   timestamp: string;
 }
 
@@ -188,8 +193,9 @@ interface TimelinePathResult {
 }
 
 function matchesProjectedRow(existing: StreamItem, incoming: StreamItem): boolean {
-  if (isAgentToolCallItem(existing) && isAgentToolCallItem(incoming)) {
-    return existing.payload.data.callId === incoming.payload.data.callId;
+  const incomingIdentity = streamTimelineItemIdentity(incoming);
+  if (incomingIdentity !== null) {
+    return streamTimelineItemIdentity(existing) === incomingIdentity;
   }
   if (existing.kind === "assistant_message" && incoming.kind === "assistant_message") {
     return (
@@ -416,16 +422,13 @@ function mergeTimelineWindow(args: {
     return cursor?.epoch !== payload.epoch || cursor.seq < startSeq || cursor.seq > endSeq;
   });
   const retainedHead = projected.head;
-  const reservedItemIds = new Set(
-    [...retainedTail, ...retainedHead].flatMap((item) =>
-      item.kind === "assistant_message" && item.blockGroupId
-        ? [item.id, item.blockGroupId]
-        : [item.id],
-    ),
-  );
+  const reservedItemIds = new Set([...retainedTail, ...retainedHead].map((item) => item.id));
   const hydrated = hydrateStreamState(
     toHydratedEvents(timelineUnits.filter((unit) => !projected.reconciledUnits.has(unit))),
-    { source: "canonical", reservedItemIds },
+    {
+      source: "canonical",
+      reservedItemIds,
+    },
   );
   const reconciled = reconcilePromptWindowItems({
     hydrated,
@@ -514,7 +517,9 @@ function applyTimelineReplacePath(args: {
     preserveContinuity,
     toHydratedEvents,
   } = args;
-  const hydratedTail = hydrateStreamState(toHydratedEvents(timelineUnits), { source: "canonical" });
+  const hydratedTail = hydrateStreamState(toHydratedEvents(timelineUnits), {
+    source: "canonical",
+  });
   const { tail, head, acknowledgedClientMessageIds } = replaceWithCanonicalStream({
     canonical: hydratedTail,
     previousTail: currentTail,
@@ -684,19 +689,8 @@ function mergePrependedCanonicalTail(olderTail: StreamItem[], currentTail: Strea
   const olderLast = olderTail.at(-1);
   const currentFirst = currentTail[0];
 
-  if (
-    olderLast &&
-    currentFirst &&
-    isAgentToolCallItem(olderLast) &&
-    isAgentToolCallItem(currentFirst) &&
-    olderLast.payload.data.callId === currentFirst.payload.data.callId
-  ) {
-    return [
-      ...olderTail.slice(0, -1),
-      mergeAgentToolCallItem(olderLast, currentFirst.payload.data, currentFirst.timestamp),
-      ...currentTail.slice(1),
-    ];
-  }
+  const identityMerge = mergeTimelineIdentityBoundary(olderTail, currentTail);
+  if (identityMerge) return identityMerge;
 
   if (olderLast?.kind !== "assistant_message" || currentFirst?.kind !== "assistant_message") {
     return [...olderTail, ...currentTail];
@@ -711,6 +705,28 @@ function mergePrependedCanonicalTail(olderTail: StreamItem[], currentTail: Strea
   }
 
   return [...olderTail.slice(0, -1), mergedAssistant, ...currentTail.slice(1)];
+}
+
+function mergeTimelineIdentityBoundary(
+  olderTail: StreamItem[],
+  currentTail: StreamItem[],
+): StreamItem[] | null {
+  const olderLast = olderTail.at(-1);
+  const currentFirst = currentTail[0];
+  if (!olderLast || !currentFirst) return null;
+  const olderIdentity = streamTimelineItemIdentity(olderLast);
+  if (olderIdentity === null || olderIdentity !== streamTimelineItemIdentity(currentFirst)) {
+    return null;
+  }
+  if (olderLast.kind === "plugin" && currentFirst.kind === "plugin") {
+    return [...olderTail.slice(0, -1), currentFirst, ...currentTail.slice(1)];
+  }
+  if (!isAgentToolCallItem(olderLast) || !isAgentToolCallItem(currentFirst)) return null;
+  return [
+    ...olderTail.slice(0, -1),
+    mergeAgentToolCallItem(olderLast, currentFirst.payload.data, currentFirst.timestamp),
+    ...currentTail.slice(1),
+  ];
 }
 
 function mergeOlderTimelinePage(input: {
@@ -795,57 +811,49 @@ function reconcileOverlappingProjectedAssistant(params: {
   };
 
   const headMatch = findMatch(params.head);
-  const tailMatch = headMatch ? null : findMatch(params.tail);
+  const tailMatch = findMatch(params.tail);
   const match = headMatch ?? tailMatch;
   if (!match) {
     return { tail: params.tail, head: params.head, reconciled: false };
   }
 
-  const blockGroupId = match.current.blockGroupId;
   const messageId = projectedMessageId ?? match.current.messageId;
   const replacement: AssistantMessageItem = {
     kind: "assistant_message",
-    id: blockGroupId ?? match.current.id,
+    id: match.current.id,
     ...(messageId !== undefined ? { messageId } : {}),
     text: projectedText,
     timestamp: unit.timestamp,
     timelineCursor: { epoch: params.epoch, seq: unit.seqEnd },
   };
-  const belongsToBlockGroup = (item: StreamItem) =>
-    blockGroupId !== undefined &&
-    item.kind === "assistant_message" &&
-    item.blockGroupId === blockGroupId;
-  const removeBlockGroup = (items: StreamItem[]) =>
-    blockGroupId !== undefined ? items.filter((item) => !belongsToBlockGroup(item)) : items;
   const replaceMatch = (items: StreamItem[], index: number) => {
-    if (!blockGroupId) {
-      const next = [...items];
-      next[index] = replacement;
-      return next;
-    }
-    const next: StreamItem[] = [];
-    let inserted = false;
-    for (const item of items) {
-      if (!belongsToBlockGroup(item)) {
-        next.push(item);
-      } else if (!inserted) {
-        next.push(replacement);
-        inserted = true;
-      }
-    }
+    const next = [...items];
+    next[index] = replacement;
     return next;
   };
 
   if (headMatch) {
+    const tailCursor = tailMatch?.current.timelineCursor;
+    const replacesCachedPrefix =
+      tailMatch !== null &&
+      tailCursor?.epoch === params.epoch &&
+      unit.sourceSeqRanges.some(
+        (range) => range.startSeq <= tailCursor.seq && tailCursor.seq <= range.endSeq,
+      );
     return {
-      tail: removeBlockGroup(params.tail),
+      // Live chunks can arrive before catch-up while their cached prefix is still painted.
+      // The projected reply owns both copies; keeping the prefix would duplicate it and
+      // cause completion to discard the updated head as an already-committed item.
+      tail: replacesCachedPrefix
+        ? [...params.tail.slice(0, tailMatch.index), ...params.tail.slice(tailMatch.index + 1)]
+        : params.tail,
       head: replaceMatch(params.head, headMatch.index),
       reconciled: true,
     };
   }
   return {
     tail: replaceMatch(params.tail, match.index),
-    head: removeBlockGroup(params.head),
+    head: params.head,
     reconciled: true,
   };
 }
@@ -1024,7 +1032,12 @@ function applyAcceptedForwardTimelineUnits(params: {
 
   for (const unit of params.units) {
     if (reconciled.reconciledUnits.has(unit)) continue;
-    const applied = applyCanonicalForwardUnit({ tail, head, unit, epoch: params.epoch });
+    const applied = applyCanonicalForwardUnit({
+      tail,
+      head,
+      unit,
+      epoch: params.epoch,
+    });
     tail = applied.tail;
     head = applied.head;
   }
@@ -1135,13 +1148,7 @@ function applyAcceptedTimelinePage(input: {
     })),
     {
       source: "canonical",
-      reservedItemIds: new Set(
-        currentTail.flatMap((item) =>
-          item.kind === "assistant_message" && item.blockGroupId
-            ? [item.id, item.blockGroupId]
-            : [item.id],
-        ),
-      ),
+      reservedItemIds: new Set(currentTail.map((item) => item.id)),
     },
   );
   return {
@@ -1269,6 +1276,7 @@ export function processTimelineResponse(
       type: "timeline",
       provider: entry.provider,
       item: entry.item,
+      ...(entry.turnId ? { turnId: entry.turnId } : {}),
     } as AgentStreamEventPayload,
     timestamp: new Date(entry.timestamp),
   }));
@@ -1584,7 +1592,6 @@ export function processAgentStreamEvent(
     event.type === "timeline" && seq !== undefined && epoch !== undefined
       ? { epoch, seq }
       : undefined;
-
   // ------------------------------------------------------------------
   // Apply stream event to tail/head
   // ------------------------------------------------------------------
@@ -1829,20 +1836,62 @@ export interface CreateSessionAgentStreamReducerQueueInput {
     state: (prev: Map<string, TimelineCursor>) => Map<string, TimelineCursor>,
   ) => void;
   recoverTimelineGap: (agentId: string, cursor: { epoch: string; endSeq: number }) => void;
+  onCommitted?: (agentId: string) => void;
 }
 
+interface ScheduledReducerFlush {
+  frameId: number | null;
+  timerId: ReturnType<typeof setTimeout>;
+}
+
+const scheduledReducerFlushes = new Map<number, ScheduledReducerFlush>();
+let nextScheduledReducerFlushId = 1;
+
+function clearScheduledReducerFlush(handle: ScheduledReducerFlush): void {
+  if (handle.frameId !== null) {
+    cancelAnimationFrame(handle.frameId);
+  }
+  clearTimeout(handle.timerId);
+}
+
+// Commit deltas on a frame boundary so text lands in step with paint instead of on
+// an arbitrary timer that drifts on and off the display beat. A frame callback
+// never fires in a hidden tab, so a timer races it and wins when nothing is
+// painting — the store has to keep advancing either way.
 function scheduleAgentStreamReducerFlush(callback: () => void): number {
-  return setTimeout(callback, AGENT_STREAM_REDUCER_FLUSH_DELAY_MS) as unknown as number;
+  const id = nextScheduledReducerFlushId;
+  nextScheduledReducerFlushId += 1;
+
+  const run = () => {
+    const handle = scheduledReducerFlushes.get(id);
+    if (!handle) {
+      return;
+    }
+    scheduledReducerFlushes.delete(id);
+    clearScheduledReducerFlush(handle);
+    callback();
+  };
+
+  const timerId = setTimeout(run, AGENT_STREAM_REDUCER_FLUSH_DELAY_MS);
+  const frameId = typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : null;
+  scheduledReducerFlushes.set(id, { frameId, timerId });
+  return id;
 }
 
 function cancelAgentStreamReducerFlush(id: number) {
-  clearTimeout(id);
+  const handle = scheduledReducerFlushes.get(id);
+  if (!handle) {
+    return;
+  }
+  scheduledReducerFlushes.delete(id);
+  clearScheduledReducerFlush(handle);
 }
 
 export function createSessionAgentStreamReducerQueue(
   input: CreateSessionAgentStreamReducerQueueInput,
 ): AgentStreamReducerQueue {
-  const { serverId, setAgentStreamState, setAgentTimelineCursor, recoverTimelineGap } = input;
+  const { serverId, setAgentStreamState, setAgentTimelineCursor, recoverTimelineGap, onCommitted } =
+    input;
 
   return createAgentStreamReducerQueue({
     getSnapshot: (agentId) => {
@@ -1901,6 +1950,7 @@ export function createSessionAgentStreamReducerQueue(
           return next;
         });
       }
+      onCommitted?.(agentId);
     },
     handleSideEffects: (agentId, sideEffects) => {
       for (const effect of sideEffects) {

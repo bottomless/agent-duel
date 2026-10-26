@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
-import { View, Text, Pressable } from "react-native";
+import { View, Text, Pressable, ScrollView } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { FolderOpen } from "lucide-react-native";
 import { MenuHeader } from "@/components/headers/menu-header";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
+import { useHosts, useHostRuntimeLastError } from "@/runtime/host-runtime";
 import { usePanelStore } from "@/stores/panel-store";
 import { useHeaderMetrics, useIsCompactFormFactor } from "@/constants/layout";
 import { SPACING } from "@/styles/theme";
-import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
+
+const WINDOW_CONTENT_DATASET = { "window-content": "" };
 
 export function OpenProjectScreen() {
   const { t } = useTranslation();
+  const hosts = useHosts();
   const openDesktopAgentList = usePanelStore((s) => s.openDesktopAgentList);
   const openProjectPicker = useOpenAddProject();
 
@@ -36,21 +39,38 @@ export function OpenProjectScreen() {
   return (
     <View style={styles.container}>
       <MenuHeader borderless />
-      <View style={contentStyle}>
-        <TitlebarDragRegion />
-        <View style={styles.tiles}>
-          <HomeTile
-            icon={FolderOpen}
-            title={t("openProject.tiles.addProject.title")}
-            description={t("openProject.tiles.addProject.description")}
-            onPress={handleOpenPicker}
-            testID="open-project-submit"
-            accent
-          />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        dataSet={WINDOW_CONTENT_DATASET}
+      >
+        <View style={contentStyle}>
+          {hosts.map((host) => (
+            <HostError key={host.serverId} serverId={host.serverId} label={host.label} />
+          ))}
+          <View style={styles.tiles}>
+            <HomeTile
+              icon={FolderOpen}
+              title={t("openProject.tiles.addProject.title")}
+              description={t("openProject.tiles.addProject.description")}
+              onPress={handleOpenPicker}
+              testID="open-project-submit"
+              accent
+            />
+          </View>
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
+}
+
+function HostError({ serverId, label }: { serverId: string; label: string }) {
+  const error = useHostRuntimeLastError(serverId);
+  return error ? (
+    <Text accessibilityRole="alert" style={styles.hostError}>
+      {label}: {error}
+    </Text>
+  ) : null;
 }
 
 interface HomeTileProps {
@@ -103,14 +123,27 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface0,
     userSelect: "none",
   },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
   content: {
     position: "relative",
-    flex: 1,
+    flexGrow: 1,
+    flexShrink: 0,
     justifyContent: { xs: "flex-start", md: "center" },
     alignItems: "center",
     gap: 0,
     padding: theme.spacing[6],
     paddingTop: { xs: theme.spacing[12], md: theme.spacing[6] },
+  },
+  hostError: {
+    color: theme.colors.destructive,
+    fontSize: theme.fontSize.base,
+    maxWidth: 452,
+    textAlign: "center",
   },
   tiles: {
     marginTop: { xs: theme.spacing[6], md: theme.spacing[12] },
@@ -147,7 +180,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   tileDescription: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     lineHeight: 18,
   },
 }));

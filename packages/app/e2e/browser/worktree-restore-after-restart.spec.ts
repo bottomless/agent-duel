@@ -4,7 +4,7 @@ import { expect, type Page } from "@playwright/test";
 import { metroTest as test } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import {
-  createIdleAgent,
+  createMockIdleAgent,
   expectArchivedChatVisible,
   openArchived,
 } from "../support/helpers/archive-tab";
@@ -87,7 +87,7 @@ test.describe("Worktree restore after daemon restart", () => {
           label: "restart daemon",
           nowIso,
         }),
-        preferences: buildCreateAgentPreferences(serverId),
+        preferences: buildCreateAgentPreferences(),
       },
     );
   }
@@ -109,7 +109,7 @@ test.describe("Worktree restore after daemon restart", () => {
     createdProjectIds.add(worktree.projectKey);
     createdWorktreeDirectories.add(worktree.workspaceDirectory);
 
-    const agent = await createIdleAgent(client, {
+    const agent = await createMockIdleAgent(client, {
       cwd: worktree.workspaceDirectory,
       workspaceId: worktree.workspaceId,
       title: `restart-restore-${randomUUID().slice(0, 8)}`,

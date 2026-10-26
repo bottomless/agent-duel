@@ -58,17 +58,17 @@ function inFlightTurn(page: Page) {
 
 async function openForkMenu(page: Page, trigger: ReturnType<Page["getByRole"]>): Promise<void> {
   await trigger.click();
-  await expect(page.getByRole("button", { name: "Fork in this worktree" })).toBeVisible({
+  await expect(page.getByRole("menuitem", { name: "Fork in this worktree" })).toBeVisible({
     timeout: 10_000,
   });
-  await expect(page.getByRole("button", { name: "Fork in a new worktree" })).toBeVisible({
+  await expect(page.getByRole("menuitem", { name: "Fork in a new worktree" })).toBeVisible({
     timeout: 10_000,
   });
 }
 
 async function selectForkTarget(page: Page, name: string): Promise<void> {
   const sourcePath = new URL(page.url()).pathname;
-  await page.getByRole("button", { name }).click();
+  await page.getByRole("menuitem", { name }).click();
   await page.waitForURL(
     (url) => url.pathname.includes("/workspace/") && url.pathname !== sourcePath,
     { timeout: 60_000 },

@@ -1,7 +1,7 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Text, TextInput, View } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Monitor, Moon, Sun } from "lucide-react-native";
 import {
@@ -15,30 +15,41 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
+import { SettingsSection } from "@/components/settings/headings/settings-section";
+import { useContributedThemes } from "@/appearance/provider";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { toErrorMessage } from "@/utils/error-messages";
-import { Switch } from "@/components/ui/switch";
-import { SettingsSection } from "@/screens/settings/settings-section";
-import { SettingsSelectTrigger } from "@/screens/settings/settings-select-trigger";
+import {
+  EditingTextInput as TextInput,
+  type EditingTextInputHandle,
+} from "@/components/ui/text-input";
 import {
   MAX_CODE_FONT_SIZE,
-  MAX_UI_FONT_SIZE,
+  MAX_CONTENT_FONT_SIZE,
+  MAX_UI_BASE_FONT_SIZE,
   MIN_CODE_FONT_SIZE,
-  MIN_UI_FONT_SIZE,
+  MIN_CONTENT_FONT_SIZE,
+  MIN_UI_BASE_FONT_SIZE,
+  parseContentMaxWidth,
+  resolveContentMaxWidth,
   sanitizeFontFamily,
   useAppSettings,
   type AppSettings,
+  DEFAULT_THEME_PREFERENCE,
 } from "@/hooks/use-settings";
 import {
   DEFAULT_MONO_FONT_STACK,
   DEFAULT_UI_FONT_STACK,
   ICON_SIZE,
+  PLUGIN_THEME_PREFERENCE,
   THEME_OPTIONS,
   THEME_SWATCHES,
   type Theme,
 } from "@/styles/theme";
 import { isNative } from "@/constants/platform";
+import type { PluginThemeOption } from "@/plugins/themes";
 import { settingsStyles } from "@/styles/settings";
 import { matchesSettingsSearch } from "../settings-search";
 import { AppearancePreview } from "./appearance-preview";
@@ -55,7 +66,9 @@ const ThemedMonitor = withUnistyles(Monitor);
 
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
-function getThemeLabel(t: TFunction, value: AppSettings["theme"]): string {
+type BuiltInThemePreference = Exclude<AppSettings["theme"], typeof PLUGIN_THEME_PREFERENCE>;
+
+function getThemeLabel(t: TFunction, value: BuiltInThemePreference): string {
   return t(`settings.appearance.theme.options.${value}`);
 }
 
@@ -67,14 +80,26 @@ function resolveDefaultStackPlaceholder(t: TFunction, stack: string): string {
   return BARE_DEFAULT_STACKS.has(stack) ? t("settings.appearance.fonts.systemDefault") : stack;
 }
 
-// Local size string (digits only) -> preview override number. Empty/invalid
+// Local size string -> preview override number. Empty, invalid or out-of-range
 // yields undefined so the preview falls back to the committed theme value.
-function sizeDraftToOverride(value: string): number | undefined {
+function sizeDraftToOverride(value: string, min: number, max: number): number | undefined {
   if (value.length === 0) return undefined;
   const parsed = Number(value);
-  return /^\d+$/.test(value) && parsed >= MIN_CODE_FONT_SIZE && parsed <= MAX_CODE_FONT_SIZE
-    ? parsed
-    : undefined;
+  return /^\d+$/.test(value) && parsed >= min && parsed <= max ? parsed : undefined;
+}
+
+// A typed size that is not a whole number in range is reported, not clamped, so
+// the field never silently changes what the reader typed.
+function validateFontSizeDraft(draft: string, min: number, max: number): number | null {
+  const next = Number(draft);
+  if (!/^\d+$/.test(draft) || !Number.isInteger(next) || next < min || next > max) {
+    return null;
+  }
+  return next;
+}
+
+function fontSizeRangeError(min: number, max: number): string {
+  return `Enter a whole number from ${min} to ${max} px`;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +107,7 @@ function sizeDraftToOverride(value: string): number | undefined {
 // ---------------------------------------------------------------------------
 
 interface ThemeLeadingProps {
-  themeValue: AppSettings["theme"];
+  themeValue: BuiltInThemePreference;
 }
 
 function ThemeLeading({ themeValue }: ThemeLeadingProps) {
@@ -108,9 +133,9 @@ function ThemeSwatch({ color }: ThemeSwatchProps) {
 }
 
 interface ThemeMenuItemProps {
-  themeValue: AppSettings["theme"];
+  themeValue: BuiltInThemePreference;
   selected: boolean;
-  onChange: (theme: AppSettings["theme"]) => void;
+  onChange: (theme: BuiltInThemePreference) => void;
 }
 
 function ThemeMenuItem({ themeValue, selected, onChange }: ThemeMenuItemProps) {
@@ -126,29 +151,69 @@ function ThemeMenuItem({ themeValue, selected, onChange }: ThemeMenuItemProps) {
   );
 }
 
-interface ThemeRowProps {
-  value: AppSettings["theme"];
-  onChange: (theme: AppSettings["theme"]) => void;
+interface PluginThemeMenuItemProps {
+  option: PluginThemeOption;
+  selected: boolean;
+  onSelect: (option: PluginThemeOption) => void;
 }
 
-function ThemeRow({ value, onChange }: ThemeRowProps) {
+function PluginThemeMenuItem({ option, selected, onSelect }: PluginThemeMenuItemProps) {
+  const handleSelect = useCallback(() => {
+    onSelect(option);
+  }, [onSelect, option]);
+  const leading = useMemo(() => <ThemeSwatch color={option.swatch} />, [option.swatch]);
+  return (
+    <DropdownMenuItem selected={selected} onSelect={handleSelect} leading={leading}>
+      {option.name}
+    </DropdownMenuItem>
+  );
+}
+
+interface ThemeRowProps {
+  value: AppSettings["theme"];
+  pluginThemes: PluginThemeOption[];
+  selectedPluginTheme: PluginThemeOption | null;
+  onChange: (theme: BuiltInThemePreference) => void;
+  onSelectPluginTheme: (option: PluginThemeOption) => void;
+}
+
+function ThemeRow({
+  value,
+  pluginThemes,
+  selectedPluginTheme,
+  onChange,
+  onSelectPluginTheme,
+}: ThemeRowProps) {
   const { t } = useTranslation();
-  const selectedLabel = getThemeLabel(t, value);
+  // A selected contribution that is no longer installed shows the fallback the app renders.
+  const builtInValue = value === PLUGIN_THEME_PREFERENCE ? DEFAULT_THEME_PREFERENCE : value;
+  const selectedLabel = selectedPluginTheme
+    ? selectedPluginTheme.name
+    : getThemeLabel(t, builtInValue);
+  const leading = useMemo(
+    () =>
+      selectedPluginTheme ? (
+        <ThemeSwatch color={selectedPluginTheme.swatch} />
+      ) : (
+        <ThemeLeading themeValue={builtInValue} />
+      ),
+    [builtInValue, selectedPluginTheme],
+  );
   return (
     <View style={settingsStyles.row}>
       <View style={settingsStyles.rowContent}>
         <Text style={settingsStyles.rowTitle}>{t("settings.appearance.theme.title")}</Text>
       </View>
       <DropdownMenu>
-        <SettingsSelectTrigger
-          label={selectedLabel}
+        <DropdownTrigger
           accessibilityLabel={t("settings.appearance.theme.accessibilityLabel", {
             value: selectedLabel,
           })}
+          leading={leading}
         >
-          <ThemeLeading themeValue={value} />
-        </SettingsSelectTrigger>
-        <DropdownMenuContent side="bottom" align="end" width={200}>
+          {selectedLabel}
+        </DropdownTrigger>
+        <DropdownMenuContent side="bottom" align="end" width={200} scrollable>
           {THEME_OPTIONS.map((option, index) => {
             const previousOption = THEME_OPTIONS[index - 1];
             return (
@@ -158,12 +223,21 @@ function ThemeRow({ value, onChange }: ThemeRowProps) {
                 ) : null}
                 <ThemeMenuItem
                   themeValue={option.name}
-                  selected={value === option.name}
+                  selected={selectedPluginTheme === null && builtInValue === option.name}
                   onChange={onChange}
                 />
               </Fragment>
             );
           })}
+          {pluginThemes.length > 0 ? <DropdownMenuSeparator /> : null}
+          {pluginThemes.map((option) => (
+            <PluginThemeMenuItem
+              key={option.id}
+              option={option}
+              selected={selectedPluginTheme?.id === option.id}
+              onSelect={onSelectPluginTheme}
+            />
+          ))}
         </DropdownMenuContent>
       </DropdownMenu>
     </View>
@@ -190,12 +264,13 @@ function SidePanelPlacementRow({ value, onChange }: SidePanelPlacementRowProps) 
         <Text style={settingsStyles.rowTitle}>{t("settings.appearance.sidePanel.placement")}</Text>
       </View>
       <DropdownMenu>
-        <SettingsSelectTrigger
-          label={selectedLabel}
+        <DropdownTrigger
           accessibilityLabel={t("settings.appearance.sidePanel.accessibilityLabel", {
             value: selectedLabel,
           })}
-        />
+        >
+          {selectedLabel}
+        </DropdownTrigger>
         <DropdownMenuContent side="bottom" align="end" width={200}>
           <DropdownMenuItem selected={value === "right"} showSelectedCheck onSelect={dockRight}>
             {t("settings.appearance.sidePanel.options.right")}
@@ -203,122 +278,6 @@ function SidePanelPlacementRow({ value, onChange }: SidePanelPlacementRowProps) 
           <DropdownMenuItem selected={value === "bottom"} showSelectedCheck onSelect={dockBottom}>
             {t("settings.appearance.sidePanel.options.bottom")}
           </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </View>
-  );
-}
-
-interface AutoExpandReasoningRowProps {
-  value: boolean;
-  onChange: (value: boolean) => void;
-}
-
-function AutoExpandReasoningRow({ value, onChange }: AutoExpandReasoningRowProps) {
-  const { t } = useTranslation();
-  return (
-    <View style={settingsStyles.row}>
-      <View style={settingsStyles.rowContent}>
-        <Text style={settingsStyles.rowTitle}>
-          {t("settings.general.autoExpandReasoning.label")}
-        </Text>
-        <Text style={settingsStyles.rowHint}>
-          {t("settings.general.autoExpandReasoning.description")}
-        </Text>
-      </View>
-      <Switch
-        value={value}
-        onValueChange={onChange}
-        accessibilityLabel={t("settings.general.autoExpandReasoning.label")}
-      />
-    </View>
-  );
-}
-
-interface ChatOutlineRowProps {
-  value: boolean;
-  onChange: (value: boolean) => void;
-}
-
-function ChatOutlineRow({ value, onChange }: ChatOutlineRowProps) {
-  const { t } = useTranslation();
-  return (
-    <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
-      <View style={settingsStyles.rowContent}>
-        <Text style={settingsStyles.rowTitle}>{t("settings.appearance.chatOutline.title")}</Text>
-        <Text style={settingsStyles.rowHint}>
-          {t("settings.appearance.chatOutline.description")}
-        </Text>
-      </View>
-      <Switch
-        value={value}
-        onValueChange={onChange}
-        accessibilityLabel={t("settings.appearance.chatOutline.title")}
-      />
-    </View>
-  );
-}
-
-const TOOL_CALL_DETAIL_LEVELS: readonly AppSettings["toolCallDetailLevel"][] = [
-  "detailed",
-  "overview",
-];
-
-function getToolCallDetailLevelLabel(
-  t: TFunction,
-  value: AppSettings["toolCallDetailLevel"],
-): string {
-  return t(`settings.general.toolCallDetail.options.${value}`);
-}
-
-interface ToolCallDetailMenuItemProps {
-  value: AppSettings["toolCallDetailLevel"];
-  selected: boolean;
-  onChange: (value: AppSettings["toolCallDetailLevel"]) => void;
-}
-
-function ToolCallDetailMenuItem({ value, selected, onChange }: ToolCallDetailMenuItemProps) {
-  const { t } = useTranslation();
-  const handleSelect = useCallback(() => onChange(value), [onChange, value]);
-  return (
-    <DropdownMenuItem selected={selected} onSelect={handleSelect}>
-      {getToolCallDetailLevelLabel(t, value)}
-    </DropdownMenuItem>
-  );
-}
-
-interface ToolCallDetailRowProps {
-  value: AppSettings["toolCallDetailLevel"];
-  onChange: (value: AppSettings["toolCallDetailLevel"]) => void;
-}
-
-function ToolCallDetailRow({ value, onChange }: ToolCallDetailRowProps) {
-  const { t } = useTranslation();
-  const selectedLabel = getToolCallDetailLevelLabel(t, value);
-  return (
-    <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
-      <View style={settingsStyles.rowContent}>
-        <Text style={settingsStyles.rowTitle}>{t("settings.general.toolCallDetail.label")}</Text>
-        <Text style={settingsStyles.rowHint}>
-          {t("settings.general.toolCallDetail.description")}
-        </Text>
-      </View>
-      <DropdownMenu>
-        <SettingsSelectTrigger
-          label={selectedLabel}
-          accessibilityLabel={t("settings.general.toolCallDetail.accessibilityLabel", {
-            value: selectedLabel,
-          })}
-        />
-        <DropdownMenuContent side="bottom" align="end" width={200}>
-          {TOOL_CALL_DETAIL_LEVELS.map((option) => (
-            <ToolCallDetailMenuItem
-              key={option}
-              value={option}
-              selected={value === option}
-              onChange={onChange}
-            />
-          ))}
         </DropdownMenuContent>
       </DropdownMenu>
     </View>
@@ -339,6 +298,7 @@ const CODE_FONT_PRESETS = [
   { label: "Menlo", value: "Menlo, monospace" },
   { label: "Courier New", value: '"Courier New", monospace' },
 ];
+
 function FontPresetItem({
   label,
   value,
@@ -368,7 +328,7 @@ interface FontFamilyRowProps {
   draft: string;
   withBorder: boolean;
   onChangeDraft: (value: string) => void;
-  onCommit: (value: string) => void;
+  onCommit: (value: string) => string;
 }
 
 function FontFamilyRow({
@@ -383,6 +343,7 @@ function FontFamilyRow({
   onChangeDraft,
   onCommit,
 }: FontFamilyRowProps) {
+  const inputRef = useRef<EditingTextInputHandle>(null);
   const presets = kind === "code" ? CODE_FONT_PRESETS : UI_FONT_PRESETS;
   const preset = presets.find((option) => option.value === value);
   const [custom, setCustom] = useState(!preset);
@@ -395,12 +356,14 @@ function FontFamilyRow({
     [onCommit],
   );
   const handleCommit = useCallback(() => {
-    onCommit(draft);
+    const committed = onCommit(draft);
+    inputRef.current?.replaceText(committed);
   }, [draft, onCommit]);
 
   // Resync from the committed value when it changes elsewhere.
   useEffect(() => {
     onChangeDraft(value);
+    inputRef.current?.replaceText(value);
     // Only resync on external value changes, not on local keystrokes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
@@ -413,10 +376,9 @@ function FontFamilyRow({
       </View>
       <View style={styles.fontPicker}>
         <DropdownMenu>
-          <SettingsSelectTrigger
-            label={custom ? "Custom font" : (preset?.label ?? "Custom font")}
-            accessibilityLabel={accessibilityLabel}
-          />
+          <DropdownTrigger accessibilityLabel={accessibilityLabel}>
+            {custom ? "Custom font" : (preset?.label ?? "Custom font")}
+          </DropdownTrigger>
           <DropdownMenuContent side="bottom" align="end" width={220}>
             {presets.map((option) => (
               <FontPresetItem
@@ -433,7 +395,8 @@ function FontFamilyRow({
         {custom ? (
           <>
             <TextInput
-              value={draft}
+              ref={inputRef}
+              initialValue={draft}
               onChangeText={onChangeDraft}
               onBlur={handleCommit}
               onSubmitEditing={handleCommit}
@@ -458,6 +421,7 @@ function FontFamilyRow({
 
 interface FontSizeRowProps {
   title: string;
+  hint: string;
   accessibilityLabel: string;
   draft: string;
   error: string | null;
@@ -470,6 +434,7 @@ interface FontSizeRowProps {
 
 function FontSizeRow({
   title,
+  hint,
   accessibilityLabel,
   draft,
   error,
@@ -479,6 +444,15 @@ function FontSizeRow({
   onChangeDraft,
   onCommit,
 }: FontSizeRowProps) {
+  const inputRef = useRef<EditingTextInputHandle>(null);
+
+  // The field is uncontrolled: a draft resynced from a value saved elsewhere is
+  // written into it, while the reader's own typing is left alone.
+  useEffect(() => {
+    if (inputRef.current?.isFocused()) return;
+    inputRef.current?.replaceText(draft);
+  }, [draft]);
+
   return (
     <View style={withBorder ? styles.rowWithBorder : settingsStyles.row}>
       <View style={settingsStyles.rowContent}>
@@ -487,12 +461,13 @@ function FontSizeRow({
           style={error ? styles.fieldError : settingsStyles.rowHint}
           accessibilityLiveRegion="polite"
         >
-          {error ?? `${min}–${max} px`}
+          {error ?? `${hint} (${min}–${max} px)`}
         </Text>
       </View>
       <View style={styles.sizeField}>
         <TextInput
-          value={draft}
+          ref={inputRef}
+          initialValue={draft}
           onChangeText={onChangeDraft}
           onBlur={onCommit}
           onSubmitEditing={onCommit}
@@ -503,6 +478,74 @@ function FontSizeRow({
           style={styles.sizeInput}
           accessibilityLabel={accessibilityLabel}
           aria-invalid={Boolean(error)}
+        />
+        <Text style={styles.unit}>px</Text>
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Content width: numeric field (commit on blur/submit) + reset to the default
+// ---------------------------------------------------------------------------
+
+interface ContentWidthRowProps {
+  value: AppSettings["contentMaxWidth"];
+  onChange: (value: AppSettings["contentMaxWidth"]) => void;
+}
+
+function ContentWidthRow({ value, onChange }: ContentWidthRowProps) {
+  const { t } = useTranslation();
+  const width = resolveContentMaxWidth({ contentMaxWidth: value });
+  // The field is uncontrolled, so a saved or reset width is written into it directly.
+  const input = useRef<EditingTextInputHandle>(null);
+
+  useEffect(() => {
+    input.current?.replaceText(String(width));
+  }, [width]);
+
+  const commit = useCallback(() => {
+    const next = parseContentMaxWidth(input.current?.getText()) ?? width;
+    input.current?.replaceText(String(next));
+    // Typing the width already in effect keeps following the default.
+    if (next !== width) {
+      onChange(next);
+    }
+  }, [onChange, width]);
+
+  const reset = useCallback(() => {
+    onChange(null);
+  }, [onChange]);
+
+  return (
+    <View style={settingsStyles.row}>
+      <View style={settingsStyles.rowContent}>
+        <Text style={settingsStyles.rowTitle}>{t("settings.appearance.layout.contentWidth")}</Text>
+        <Text style={settingsStyles.rowHint}>
+          {t("settings.appearance.layout.contentWidthHint")}
+        </Text>
+      </View>
+      <View style={styles.sizeField}>
+        {value === null ? null : (
+          <Button
+            variant="ghost"
+            size="sm"
+            onPress={reset}
+            accessibilityLabel={t("settings.appearance.layout.resetAccessibility")}
+          >
+            {t("settings.appearance.layout.reset")}
+          </Button>
+        )}
+        <TextInput
+          ref={input}
+          initialValue={String(width)}
+          onBlur={commit}
+          onSubmitEditing={commit}
+          keyboardType="number-pad"
+          inputMode="numeric"
+          selectTextOnFocus
+          style={styles.widthInput}
+          accessibilityLabel={t("settings.appearance.layout.contentWidthAccessibility")}
         />
         <Text style={styles.unit}>px</Text>
       </View>
@@ -555,12 +598,13 @@ function SyntaxRow({ value, onChange }: SyntaxRowProps) {
         </Text>
       </View>
       <DropdownMenu>
-        <SettingsSelectTrigger
-          label={selectedLabel}
+        <DropdownTrigger
           accessibilityLabel={t("settings.appearance.syntax.highlightThemeAccessibility", {
             value: selectedLabel,
           })}
-        />
+        >
+          {selectedLabel}
+        </DropdownTrigger>
         <DropdownMenuContent side="bottom" align="end" width={200}>
           {SYNTAX_THEME_OPTIONS.map((option) => (
             <SyntaxMenuItem
@@ -582,6 +626,7 @@ function SyntaxRow({ value, onChange }: SyntaxRowProps) {
 
 export function AppearanceSection({ search: inputSearch = "" }: { search?: string }) {
   const { t } = useTranslation();
+  // A search that names the page itself shows the whole page.
   const search = matchesSettingsSearch(inputSearch, t("settings.sections.appearance"))
     ? ""
     : inputSearch;
@@ -608,35 +653,59 @@ export function AppearanceSection({ search: inputSearch = "" }: { search?: strin
   const retrySave = useCallback(() => {
     if (saveFailure) void updateSettings(saveFailure.patch);
   }, [saveFailure, updateSettings]);
-  const [uiSizeError, setUiSizeError] = useState<string | null>(null);
-  const [codeSizeError, setCodeSizeError] = useState<string | null>(null);
-  const showFontFamilyRows = !isNative;
+  const {
+    options: pluginThemes,
+    selected: selectedPluginTheme,
+    select: selectPluginTheme,
+  } = useContributedThemes();
+  const showInterfaceFontFamilyRow = !isNative;
   const uiFontPlaceholder = resolveDefaultStackPlaceholder(t, DEFAULT_UI_FONT_STACK);
   const monoFontPlaceholder = resolveDefaultStackPlaceholder(t, DEFAULT_MONO_FONT_STACK);
 
   const [uiFontDraft, setUiFontDraft] = useState(settings.uiFontFamily);
   const [monoFontDraft, setMonoFontDraft] = useState(settings.monoFontFamily);
-  const [uiSizeDraft, setUiSizeDraft] = useState(String(settings.uiFontSize));
+  const [uiBaseSizeDraft, setUiBaseSizeDraft] = useState(String(settings.uiBaseFontSize));
+  const [contentSizeDraft, setContentSizeDraft] = useState(String(settings.contentFontSize));
   const [codeSizeDraft, setCodeSizeDraft] = useState(String(settings.codeFontSize));
+  const [uiBaseSizeError, setUiBaseSizeError] = useState<string | null>(null);
+  const [contentSizeError, setContentSizeError] = useState<string | null>(null);
+  const [codeSizeError, setCodeSizeError] = useState<string | null>(null);
 
   // Resync numeric drafts when the committed value changes elsewhere.
   useEffect(() => {
-    setUiSizeDraft(String(settings.uiFontSize));
-  }, [settings.uiFontSize]);
+    setUiBaseSizeDraft(String(settings.uiBaseFontSize));
+  }, [settings.uiBaseFontSize]);
+  useEffect(() => {
+    setContentSizeDraft(String(settings.contentFontSize));
+  }, [settings.contentFontSize]);
   useEffect(() => {
     setCodeSizeDraft(String(settings.codeFontSize));
   }, [settings.codeFontSize]);
 
   const handleThemeChange = useCallback(
-    (theme: AppSettings["theme"]) => {
+    (theme: BuiltInThemePreference) => {
       void updateSettings({ theme });
     },
     [updateSettings],
   );
 
+  const handlePluginThemeChange = useCallback(
+    (option: PluginThemeOption) => {
+      selectPluginTheme(option);
+    },
+    [selectPluginTheme],
+  );
+
   const handleSidePanelPlacementChange = useCallback(
     (sidePanelPlacement: AppSettings["sidePanelPlacement"]) => {
       void updateSettings({ sidePanelPlacement });
+    },
+    [updateSettings],
+  );
+
+  const handleContentMaxWidthChange = useCallback(
+    (contentMaxWidth: AppSettings["contentMaxWidth"]) => {
+      void updateSettings({ contentMaxWidth });
     },
     [updateSettings],
   );
@@ -648,38 +717,18 @@ export function AppearanceSection({ search: inputSearch = "" }: { search?: strin
     [updateSettings],
   );
 
-  const handleAutoExpandReasoningChange = useCallback(
-    (autoExpandReasoning: boolean) => {
-      void updateSettings({ autoExpandReasoning });
-    },
-    [updateSettings],
-  );
-
-  const handleToolCallDetailLevelChange = useCallback(
-    (toolCallDetailLevel: AppSettings["toolCallDetailLevel"]) => {
-      void updateSettings({ toolCallDetailLevel });
-    },
-    [updateSettings],
-  );
-
-  const handleChatOutlineChange = useCallback(
-    (chatOutlineEnabled: boolean) => {
-      void updateSettings({ chatOutlineEnabled });
-    },
-    [updateSettings],
-  );
-
   const commitUiFontFamily = useCallback(
     (value: string) => {
       const sanitized = sanitizeFontFamily(value);
       if (sanitized === null) {
         setUiFontDraft(settings.uiFontFamily);
-        return;
+        return settings.uiFontFamily;
       }
       setUiFontDraft(sanitized);
       if (sanitized !== settings.uiFontFamily) {
         void updateSettings({ uiFontFamily: sanitized });
       }
+      return sanitized;
     },
     [settings.uiFontFamily, updateSettings],
   );
@@ -689,50 +738,49 @@ export function AppearanceSection({ search: inputSearch = "" }: { search?: strin
       const sanitized = sanitizeFontFamily(value);
       if (sanitized === null) {
         setMonoFontDraft(settings.monoFontFamily);
-        return;
+        return settings.monoFontFamily;
       }
       setMonoFontDraft(sanitized);
       if (sanitized !== settings.monoFontFamily) {
         void updateSettings({ monoFontFamily: sanitized });
       }
+      return sanitized;
     },
     [settings.monoFontFamily, updateSettings],
   );
 
-  const handleUiSizeChange = useCallback((value: string) => {
-    setUiSizeDraft(value);
-  }, []);
-
-  const handleCodeSizeChange = useCallback((value: string) => {
-    setCodeSizeDraft(value);
-  }, []);
-
-  const commitUiSize = useCallback(() => {
-    const next = Number(uiSizeDraft);
-    if (
-      !/^\d+$/.test(uiSizeDraft) ||
-      !Number.isInteger(next) ||
-      next < MIN_UI_FONT_SIZE ||
-      next > MAX_UI_FONT_SIZE
-    ) {
-      setUiSizeError(`Enter a whole number from ${MIN_UI_FONT_SIZE} to ${MAX_UI_FONT_SIZE} px`);
+  const commitUiBaseSize = useCallback(() => {
+    const next = validateFontSizeDraft(
+      uiBaseSizeDraft,
+      MIN_UI_BASE_FONT_SIZE,
+      MAX_UI_BASE_FONT_SIZE,
+    );
+    if (next === null) {
+      setUiBaseSizeError(fontSizeRangeError(MIN_UI_BASE_FONT_SIZE, MAX_UI_BASE_FONT_SIZE));
       return;
     }
-    setUiSizeError(null);
-    if (next !== settings.uiFontSize) void updateSettings({ uiFontSize: next });
-  }, [settings.uiFontSize, uiSizeDraft, updateSettings]);
+    setUiBaseSizeError(null);
+    if (next !== settings.uiBaseFontSize) void updateSettings({ uiBaseFontSize: next });
+  }, [settings.uiBaseFontSize, uiBaseSizeDraft, updateSettings]);
+
+  const commitContentSize = useCallback(() => {
+    const next = validateFontSizeDraft(
+      contentSizeDraft,
+      MIN_CONTENT_FONT_SIZE,
+      MAX_CONTENT_FONT_SIZE,
+    );
+    if (next === null) {
+      setContentSizeError(fontSizeRangeError(MIN_CONTENT_FONT_SIZE, MAX_CONTENT_FONT_SIZE));
+      return;
+    }
+    setContentSizeError(null);
+    if (next !== settings.contentFontSize) void updateSettings({ contentFontSize: next });
+  }, [contentSizeDraft, settings.contentFontSize, updateSettings]);
 
   const commitCodeSize = useCallback(() => {
-    const next = Number(codeSizeDraft);
-    if (
-      !/^\d+$/.test(codeSizeDraft) ||
-      !Number.isInteger(next) ||
-      next < MIN_CODE_FONT_SIZE ||
-      next > MAX_CODE_FONT_SIZE
-    ) {
-      setCodeSizeError(
-        `Enter a whole number from ${MIN_CODE_FONT_SIZE} to ${MAX_CODE_FONT_SIZE} px`,
-      );
+    const next = validateFontSizeDraft(codeSizeDraft, MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE);
+    if (next === null) {
+      setCodeSizeError(fontSizeRangeError(MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE));
       return;
     }
     setCodeSizeError(null);
@@ -744,11 +792,24 @@ export function AppearanceSection({ search: inputSearch = "" }: { search?: strin
   // theme value inside the preview.
   const previewOverrides = useMemo(
     () => ({
+      contentFontSize: sizeDraftToOverride(
+        contentSizeDraft,
+        MIN_CONTENT_FONT_SIZE,
+        MAX_CONTENT_FONT_SIZE,
+      ),
       monoFontFamily: monoFontDraft,
-      codeFontSize: sizeDraftToOverride(codeSizeDraft),
+      codeFontSize: sizeDraftToOverride(codeSizeDraft, MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE),
     }),
-    [codeSizeDraft, monoFontDraft],
+    [codeSizeDraft, contentSizeDraft, monoFontDraft],
   );
+
+  const showInterfaceFontFamily =
+    showInterfaceFontFamilyRow &&
+    matchesSettingsSearch(
+      search,
+      t("settings.appearance.fonts.interfaceFont"),
+      t("settings.appearance.fonts.interfaceFontHint"),
+    );
 
   return (
     <View>
@@ -767,7 +828,13 @@ export function AppearanceSection({ search: inputSearch = "" }: { search?: strin
       {matchesSettingsSearch(search, t("settings.appearance.theme", { returnObjects: true })) ? (
         <SettingsSection title={t("settings.appearance.theme.title")}>
           <View style={settingsStyles.card}>
-            <ThemeRow value={settings.theme} onChange={handleThemeChange} />
+            <ThemeRow
+              value={settings.theme}
+              pluginThemes={pluginThemes}
+              selectedPluginTheme={selectedPluginTheme}
+              onChange={handleThemeChange}
+              onSelectPluginTheme={handlePluginThemeChange}
+            />
           </View>
         </SettingsSection>
       ) : null}
@@ -784,54 +851,10 @@ export function AppearanceSection({ search: inputSearch = "" }: { search?: strin
           </View>
         </SettingsSection>
       ) : null}
-      {matchesSettingsSearch(
-        search,
-        t("settings.general.autoExpandReasoning", { returnObjects: true }),
-        t("settings.general.toolCallDetail", { returnObjects: true }),
-        t("settings.appearance.chatOutline", { returnObjects: true }),
-      ) ? (
-        <SettingsSection title={t("settings.appearance.detailLevel.title")}>
-          <View style={settingsStyles.card}>
-            {matchesSettingsSearch(
-              search,
-              t("settings.general.autoExpandReasoning", { returnObjects: true }),
-            ) ? (
-              <AutoExpandReasoningRow
-                value={settings.autoExpandReasoning}
-                onChange={handleAutoExpandReasoningChange}
-              />
-            ) : null}
-            {matchesSettingsSearch(
-              search,
-              t("settings.general.toolCallDetail", { returnObjects: true }),
-            ) ? (
-              <ToolCallDetailRow
-                value={settings.toolCallDetailLevel}
-                onChange={handleToolCallDetailLevelChange}
-              />
-            ) : null}
-            {!isNative &&
-            matchesSettingsSearch(
-              search,
-              t("settings.appearance.chatOutline", { returnObjects: true }),
-            ) ? (
-              <ChatOutlineRow
-                value={settings.chatOutlineEnabled}
-                onChange={handleChatOutlineChange}
-              />
-            ) : null}
-          </View>
-        </SettingsSection>
-      ) : null}
       {matchesSettingsSearch(search, t("settings.appearance.fonts", { returnObjects: true })) ? (
         <SettingsSection title={t("settings.appearance.fonts.title")}>
           <View style={settingsStyles.card}>
-            {showFontFamilyRows &&
-            matchesSettingsSearch(
-              search,
-              t("settings.appearance.fonts.interfaceFont"),
-              t("settings.appearance.fonts.interfaceFontHint"),
-            ) ? (
+            {showInterfaceFontFamily ? (
               <FontFamilyRow
                 kind="interface"
                 title={t("settings.appearance.fonts.interfaceFont")}
@@ -845,21 +868,42 @@ export function AppearanceSection({ search: inputSearch = "" }: { search?: strin
                 onCommit={commitUiFontFamily}
               />
             ) : null}
-            {matchesSettingsSearch(search, t("settings.appearance.fonts.interfaceSize")) ? (
+            {matchesSettingsSearch(
+              search,
+              t("settings.appearance.fonts.interfaceSize"),
+              t("settings.appearance.fonts.interfaceSizeHint"),
+            ) ? (
               <FontSizeRow
                 title={t("settings.appearance.fonts.interfaceSize")}
+                hint={t("settings.appearance.fonts.interfaceSizeHint")}
                 accessibilityLabel={t("settings.appearance.fonts.interfaceSizeAccessibility")}
-                draft={uiSizeDraft}
-                error={uiSizeError}
-                min={MIN_UI_FONT_SIZE}
-                max={MAX_UI_FONT_SIZE}
-                withBorder={showFontFamilyRows}
-                onChangeDraft={handleUiSizeChange}
-                onCommit={commitUiSize}
+                draft={uiBaseSizeDraft}
+                error={uiBaseSizeError}
+                min={MIN_UI_BASE_FONT_SIZE}
+                max={MAX_UI_BASE_FONT_SIZE}
+                withBorder={showInterfaceFontFamily}
+                onChangeDraft={setUiBaseSizeDraft}
+                onCommit={commitUiBaseSize}
               />
             ) : null}
-            {showFontFamilyRows &&
-            matchesSettingsSearch(
+            {matchesSettingsSearch(
+              search,
+              t("settings.appearance.fonts.contentSize"),
+              t("settings.appearance.fonts.contentSizeHint"),
+            ) ? (
+              <FontSizeRow
+                title={t("settings.appearance.fonts.contentSize")}
+                hint={t("settings.appearance.fonts.contentSizeHint")}
+                accessibilityLabel={t("settings.appearance.fonts.contentSizeAccessibility")}
+                draft={contentSizeDraft}
+                error={contentSizeError}
+                min={MIN_CONTENT_FONT_SIZE}
+                max={MAX_CONTENT_FONT_SIZE}
+                onChangeDraft={setContentSizeDraft}
+                onCommit={commitContentSize}
+              />
+            ) : null}
+            {matchesSettingsSearch(
               search,
               t("settings.appearance.fonts.codeFont"),
               t("settings.appearance.fonts.codeFontHint"),
@@ -877,18 +921,33 @@ export function AppearanceSection({ search: inputSearch = "" }: { search?: strin
                 onCommit={commitMonoFontFamily}
               />
             ) : null}
-            {matchesSettingsSearch(search, t("settings.appearance.fonts.codeSize")) ? (
+            {matchesSettingsSearch(
+              search,
+              t("settings.appearance.fonts.codeSize"),
+              t("settings.appearance.fonts.codeSizeHint"),
+            ) ? (
               <FontSizeRow
                 title={t("settings.appearance.fonts.codeSize")}
+                hint={t("settings.appearance.fonts.codeSizeHint")}
                 accessibilityLabel={t("settings.appearance.fonts.codeSizeAccessibility")}
                 draft={codeSizeDraft}
                 error={codeSizeError}
                 min={MIN_CODE_FONT_SIZE}
                 max={MAX_CODE_FONT_SIZE}
-                onChangeDraft={handleCodeSizeChange}
+                onChangeDraft={setCodeSizeDraft}
                 onCommit={commitCodeSize}
               />
             ) : null}
+          </View>
+        </SettingsSection>
+      ) : null}
+      {matchesSettingsSearch(search, t("settings.appearance.layout", { returnObjects: true })) ? (
+        <SettingsSection title={t("settings.appearance.layout.title")}>
+          <View style={settingsStyles.card}>
+            <ContentWidthRow
+              value={settings.contentMaxWidth}
+              onChange={handleContentMaxWidthChange}
+            />
           </View>
         </SettingsSection>
       ) : null}
@@ -908,7 +967,7 @@ export function AppearanceSection({ search: inputSearch = "" }: { search?: strin
 
 const styles = StyleSheet.create((theme) => ({
   fontPicker: { flex: 1, minWidth: 0, alignItems: "flex-end", gap: theme.spacing[2] },
-  fieldError: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
+  fieldError: { color: theme.colors.destructive, fontSize: theme.fontSize.base },
   saveError: { gap: theme.spacing[2], marginBottom: theme.spacing[4] },
   preview: {
     marginTop: theme.spacing[4],
@@ -941,7 +1000,7 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface2,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     textAlign: "left",
   },
   sizeField: {
@@ -959,12 +1018,25 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface2,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
+    textAlign: "right",
+  },
+  widthInput: {
+    width: 80,
+    minHeight: 36,
+    paddingVertical: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+    borderRadius: theme.borderRadius.md,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface2,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
     textAlign: "right",
   },
   unit: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   placeholderColor: {
     color: theme.colors.foregroundMuted,

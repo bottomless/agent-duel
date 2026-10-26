@@ -110,10 +110,9 @@ describe("arenaSummaryAnchors", () => {
   });
 
   it("anchors after the end of an answer that is still in the head", () => {
-    // Completed blocks move to the tail; the last one stays in the head. Searching the tail
-    // alone put the summary above the answer's last paragraph.
+    // A streaming answer stays in the head as one message. Searching the tail alone put the
+    // summary above the answer.
     const stream = liveAnswer([prompt], [], "First paragraph.\n\nLast paragraph.");
-    expect(stream.tail.length).toBeGreaterThan(1);
     expect(stream.head).toHaveLength(1);
     expect(arenaSummaryAnchors([historyItem], stream)).toEqual([stream.head[0].id]);
   });

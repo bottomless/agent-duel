@@ -2,17 +2,15 @@ import * as Linking from "expo-linking";
 import { getDesktopHost } from "@/desktop/host";
 import { isWeb } from "@/constants/platform";
 
-const ALLOWED_EXTERNAL_URL_PROTOCOLS = new Set(["http:", "https:"]);
+import { isHttpUrl } from "./http-url";
 
+/** Whether `openExternalUrl` opens this URL: plain http(s) only. */
 export function canOpenExternalUrl(url: string): boolean {
-  try {
-    return ALLOWED_EXTERNAL_URL_PROTOCOLS.has(new URL(url).protocol);
-  } catch {
-    return false;
-  }
+  return isHttpUrl(url);
 }
 
 export async function openExternalUrl(url: string): Promise<void> {
+  if (!isHttpUrl(url)) return;
   if (isWeb) {
     const opener = getDesktopHost()?.opener?.openUrl;
     if (typeof opener === "function") {
@@ -20,18 +18,7 @@ export async function openExternalUrl(url: string): Promise<void> {
       return;
     }
 
-    // Mirror the Electron opener's scheme allowlist: forge-supplied URLs
-    // (check target_url, job links) reach this sink, so refuse anything that
-    // is not plain http(s) instead of handing it to window.open.
-    if (!canOpenExternalUrl(url)) {
-      return;
-    }
-
     window.open(url, "_blank", "noopener,noreferrer");
-    return;
-  }
-
-  if (!canOpenExternalUrl(url)) {
     return;
   }
 

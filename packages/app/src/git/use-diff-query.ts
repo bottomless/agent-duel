@@ -1,3 +1,5 @@
+import { shareCheckoutDiff } from "./diff-sharing";
+import { useSessionStore } from "@/stores/session-store";
 import { useMemo } from "react";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useReplicaQuery } from "@/data/query";
@@ -9,7 +11,7 @@ import { checkoutDiffQueryKey } from "@/git/query-keys";
 interface UseCheckoutDiffQueryOptions {
   serverId: string;
   cwd: string;
-  mode: "uncommitted" | "base";
+  mode: "uncommitted" | "base" | "all";
   baseRef?: string;
   ignoreWhitespace?: boolean;
   enabled?: boolean;
@@ -25,18 +27,18 @@ export type DiffLine = DiffHunk["lines"][number];
 export type HighlightToken = NonNullable<DiffLine["tokens"]>[number];
 
 function normalizeCheckoutDiffCompare(compare: {
-  mode: "uncommitted" | "base";
+  mode: "uncommitted" | "base" | "all";
   baseRef?: string;
   ignoreWhitespace?: boolean;
-}): { mode: "uncommitted" | "base"; baseRef?: string; ignoreWhitespace?: boolean } {
+}): { mode: "uncommitted" | "base" | "all"; baseRef?: string; ignoreWhitespace?: boolean } {
   const ignoreWhitespace = compare.ignoreWhitespace === true;
   if (compare.mode === "uncommitted") {
     return { mode: "uncommitted", ignoreWhitespace };
   }
   const trimmedBaseRef = compare.baseRef?.trim();
   return trimmedBaseRef
-    ? { mode: "base", baseRef: trimmedBaseRef, ignoreWhitespace }
-    : { mode: "base", ignoreWhitespace };
+    ? { mode: compare.mode, baseRef: trimmedBaseRef, ignoreWhitespace }
+    : { mode: compare.mode, ignoreWhitespace };
 }
 
 export function useCheckoutDiffQuery({
@@ -48,6 +50,11 @@ export function useCheckoutDiffQuery({
   enabled = true,
   queryScope,
 }: UseCheckoutDiffQueryOptions) {
+  // COMPAT(checkoutDiffAll): added in v0.12.0, remove after 2027-04-21 once host floor includes All changes.
+  const allSupported = useSessionStore(
+    (state) => state.sessions[serverId]?.serverInfo?.features?.checkoutDiffAll === true,
+  );
+  const requiresUpdate = mode === "all" && !allSupported;
   const retainedPanelActive = useRetainedPanelActive();
   const queryEnabled = enabled && retainedPanelActive;
   const isConnected = useHostRuntimeIsConnected(serverId);
@@ -70,10 +77,11 @@ export function useCheckoutDiffQuery({
     return normalizedScope ? [...comparisonKey, "scope", normalizedScope] : comparisonKey;
   }, [serverId, cwd, compareMode, compareBaseRef, compareIgnoreWhitespace, queryScope]);
   const subscriptionId = useMemo(() => `checkoutDiff:${JSON.stringify(queryKey)}`, [queryKey]);
-  const routeEnabled = Boolean(queryEnabled && isConnected && cwd);
+  const routeEnabled = Boolean(queryEnabled && isConnected && cwd && !requiresUpdate);
 
   const query = useReplicaQuery<CheckoutDiffQueryPayload>({
     queryKey,
+    structuralSharing: shareCheckoutDiff,
     enabled: routeEnabled,
     pushEvent: "checkout_diff_update",
     meta: checkoutDiffPushRoute({
@@ -89,14 +97,44 @@ export function useCheckoutDiffQuery({
     }),
   });
 
-  const payload = query.data ?? null;
-  const payloadError = payload?.error ?? null;
+  return deriveCheckoutDiffResult(
+    requiresUpdate && isConnected
+      ? {
+          requestId: "unsupported",
+          cwd,
+          files: [],
+          error: { code: "UNKNOWN", message: "Update the host to view All changes" },
+        }
+      : (query.data ?? null),
+  );
+}
 
+export interface CheckoutDiffResult {
+  files: ParsedDiffFile[];
+  payloadError: CheckoutDiffQueryPayload["error"];
+  diffTooLarge: boolean;
+  isLoading: boolean;
+  isFetching: boolean;
+  isError: boolean;
+  error: null;
+}
+
+/**
+ * The result derives from the payload alone. Until a payload arrives there is no
+ * diff to describe, so the boundary reports loading rather than an empty diff —
+ * whether the query is idle (an inactive retained panel), in flight, or the host
+ * is disconnected. Reporting `files: []` as settled made callers render "+0 -0"
+ * and "No changes" for a diff nobody has fetched yet.
+ */
+export function deriveCheckoutDiffResult(
+  payload: CheckoutDiffQueryPayload | null,
+): CheckoutDiffResult {
+  const payloadError = payload?.error ?? null;
   return {
     files: payload?.files ?? [],
     payloadError,
     diffTooLarge: payload?.diffTooLarge === true,
-    isLoading: payload === null && queryEnabled && isConnected,
+    isLoading: payload === null,
     isFetching: false,
     isError: Boolean(payloadError),
     error: null,

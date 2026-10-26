@@ -1,4 +1,5 @@
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
+import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import type { ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { WorkspaceFileTabTarget } from "@/workspace/file-open";
 
@@ -17,7 +18,23 @@ export interface WorkspaceWorkingDiffTabTarget {
   focusRequestId?: number;
 }
 
+export type PluginWorkspaceTabTarget =
+  | {
+      kind: "plugin";
+      pluginId: string;
+      panelId: string;
+      context: "workspace";
+    }
+  | {
+      kind: "plugin";
+      pluginId: string;
+      panelId: string;
+      context: "agent";
+      agentId: string;
+    };
+
 export type WorkspaceTabTarget =
+  | { kind: "new_tab" }
   | { kind: "draft"; draftId: string; setup?: WorkspaceDraftTabSetup }
   | { kind: "agent"; agentId: string }
   | { kind: "provider_subagent"; parentAgentId: string; subagentId: string }
@@ -27,20 +44,22 @@ export type WorkspaceTabTarget =
   // shell itself is in the seat-terminal store, keyed by the same instance.
   | { kind: "arena_terminal"; agentId: string; side: ArenaSide; instanceId: string }
   | { kind: "browser"; browserId: string }
+  | { kind: "changes_tree" }
+  | { kind: "files" }
+  | { kind: "pull_request" }
   | WorkspaceFileTabTarget
   | WorkspaceWorkingDiffTabTarget
+  | PluginWorkspaceTabTarget
   | { kind: "setup"; workspaceId: string }
   | { kind: "commit_diff"; sha: string }
-  // Side panel surfaces that used to live in the Explorer sidebar. One per
-  // workspace, so they carry no identity beyond their kind.
-  | { kind: "changes" }
-  | { kind: "files" }
-  | { kind: "pull_request" };
+  // The side panel's Changes surface. One per workspace, so it carries no identity beyond its kind.
+  | { kind: "changes" };
 
 export interface WorkspaceTab {
   tabId: string;
   target: WorkspaceTabTarget;
   createdAt: number;
+  state?: JsonValue;
 }
 
 export function buildWorkspaceTabPersistenceKey(input: {

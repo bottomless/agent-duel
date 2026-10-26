@@ -2,13 +2,14 @@ import { router, usePathname } from "expo-router";
 import {
   Archive,
   ArrowLeft,
+  CircleGauge,
   FolderPlus,
   GitBranch,
   Home,
   MessageSquareText,
   Search,
   Settings,
-  X,
+  type LucideIcon,
 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
@@ -27,6 +28,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { useShallow } from "zustand/shallow";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
+import { SidebarCloseButton } from "@/components/headers/sidebar-close-button";
 import { resolveDesktopSidebarWidth } from "@/components/desktop-sidebar-layout";
 import {
   SIDEBAR_RESIZE_ACTIVATION_OFFSET,
@@ -34,7 +36,13 @@ import {
 } from "@/components/sidebar-resize-handle-layout";
 import { SidebarArchivedChats } from "@/components/sidebar/archived-chats";
 import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/display-preferences/menu";
+import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
+import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
+import { SidebarNavRows } from "@/components/sidebar/sidebar-nav-rows";
+import { SidebarFooterIconHighlight } from "@/components/sidebar/sidebar-footer-icon-highlight";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
+import { DensityIcon } from "@/components/ui/density-icon";
+import { SidebarSectionHeader } from "@/components/sidebar/sidebar-section-header";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Theme } from "@/styles/theme";
@@ -46,46 +54,56 @@ import {
   type SidebarProjectEntry,
   type SidebarWorkspaceEntry,
 } from "@/hooks/use-sidebar-workspaces-list";
+import { density } from "@/styles/density";
 import { useSidebarModel } from "@/components/sidebar/sidebar-model";
 import type { PinnedSidebarGroups } from "@/hooks/use-sidebar-pins";
 import { RetainedPanelActivity } from "@/components/retained-panel";
 import { useFeedbackAvailable } from "@/feedback/availability";
 import { FeedbackSheet } from "@/feedback/feedback-sheet";
 import { resolveCurrentFeedbackChat } from "@/feedback/current-chat";
-import type { StatusGroup } from "@/hooks/sidebar-status-view-model";
+import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels";
+import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model";
 import { type SidebarGroupMode, useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
+import { PluginSidebarItem } from "@/plugins/sidebar-items";
+import { builtinSidebarNavLabelKey } from "@/sidebar-nav/model";
+import { useSidebarNavItems } from "@/sidebar-nav/use-sidebar-nav-items";
 import { usePanelStore } from "@/stores/panel-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { useOwnsWindowChromeCorner, WindowChromeSafeArea } from "@/utils/desktop-window";
 import { useCloseAgentListGesture } from "@/mobile-panels/gestures";
 import { MobilePanelOverlay } from "@/mobile-panels/presentation";
-import { useIsMobilePanelPresented } from "@/mobile-panels/provider";
 import { buildOpenProjectRoute, buildSettingsRoute } from "@/utils/host-routes";
+import {
+  UsageSidebarItem,
+  UsageSidebarRoot,
+  useHasUsageSummary,
+  useOpenSidebarUsage,
+} from "@/usage";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
 
 type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
 
-// Footer icon colors come from the active theme through uniProps. Read off the JS theme object, the
+// Header icon colors come from the active theme through uniProps. Read off the JS theme object, the
 // hover color could belong to the other theme and turn the icon white on white (or black on black).
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const ThemedArchive = withUnistyles(Archive);
 const ThemedArrowLeft = withUnistyles(ArrowLeft);
-const ThemedFolderPlus = withUnistyles(FolderPlus);
-const ThemedMessageSquareText = withUnistyles(MessageSquareText);
 const ThemedSearch = withUnistyles(Search);
-const ThemedX = withUnistyles(X);
 
 const DEV_BUILD_LABEL = process.env.EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL?.trim() || null;
 
 interface SidebarSharedProps {
   theme: SidebarTheme;
-  statusGroups: StatusGroup[];
+  workspaceGroups: SidebarWorkspaceGroup[];
+  projectIconTargets: SidebarProjectIconTarget[];
   pinnedGroups: PinnedSidebarGroups;
   projects: SidebarProjectEntry[];
+  hasProjectsBeforeFilter: boolean;
+  hasActiveProjectFilter: boolean;
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   isInitialLoad: boolean;
   isRevalidating: boolean;
@@ -108,10 +126,12 @@ interface SidebarLabels {
   home: string;
   settings: string;
   feedback: string;
+  usage: string;
   closeSidebar: string;
 }
 
 interface MobileSidebarProps extends SidebarSharedProps {
+  active: boolean;
   insetsTop: number;
   insetsBottom: number;
   closeSidebar: () => void;
@@ -138,11 +158,14 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
 
   const {
     projects,
+    hasProjectsBeforeFilter,
+    resolvedProjectFilters,
     workspaceEntriesByKey,
     isInitialLoad,
     isRevalidating,
     refreshAll,
-    statusGroups,
+    workspaceGroups,
+    projectIconTargets,
     pinnedGroups,
     collapsedProjectKeys,
     toggleProjectCollapsed,
@@ -169,9 +192,8 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
   const openProjectPicker = useOpenAddProject();
 
   const handleOpenProjectMobile = useCallback(() => {
-    showMobileAgent();
     void openProjectPicker();
-  }, [showMobileAgent, openProjectPicker]);
+  }, [openProjectPicker]);
 
   const handleOpenProjectDesktop = useCallback(() => {
     void openProjectPicker();
@@ -206,6 +228,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
       home: t("sidebar.actions.home"),
       settings: t("sidebar.actions.settings"),
       feedback: t("feedback.sidebarAction"),
+      usage: t(builtinSidebarNavLabelKey("usage")),
       closeSidebar: t("sidebar.actions.closeSidebar"),
     }),
     [t],
@@ -213,9 +236,12 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
 
   const sharedProps = {
     theme,
-    statusGroups,
+    workspaceGroups,
+    projectIconTargets,
     pinnedGroups,
     projects,
+    hasProjectsBeforeFilter,
+    hasActiveProjectFilter: resolvedProjectFilters.length > 0,
     workspaceEntriesByKey,
     isInitialLoad,
     isRevalidating,
@@ -233,6 +259,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     <RetainedPanelActivity active={active}>
       <MobileSidebar
         {...sharedProps}
+        active={active}
         insetsTop={insets.top}
         insetsBottom={insets.bottom}
         closeSidebar={showMobileAgent}
@@ -273,21 +300,19 @@ function FooterIconButton({
   onPress,
   testID,
   label,
-  icon: Icon,
-  iconSize,
+  icon,
+  iconSizeAdjustment = 0,
   shortcutKeys,
-  theme,
 }: {
   onPress: () => void;
   testID: string;
   label: string;
-  icon: typeof FolderPlus;
-  iconSize?: number;
+  icon: LucideIcon;
+  /** Only for a glyph that reads larger than the others at the same size. */
+  iconSizeAdjustment?: number;
   shortcutKeys?: ReturnType<typeof useShortcutKeys>;
-  theme: SidebarTheme;
   buttonRef?: RefObject<View | null>;
 }) {
-  const ThemedIcon = useMemo(() => withUnistyles(Icon), [Icon]);
   return (
     <Tooltip delayDuration={300}>
       <TooltipTrigger asChild>
@@ -302,87 +327,20 @@ function FooterIconButton({
           accessibilityRole="button"
           onPress={onPress}
         >
-          {({ hovered }) => (
-            <ThemedIcon
-              size={iconSize ?? theme.iconSize.md}
-              uniProps={hovered ? foregroundColorMapping : foregroundMutedColorMapping}
-            />
+          {({ hovered, pressed }) => (
+            <>
+              <SidebarFooterIconHighlight visible={pressed} />
+              <DensityIcon
+                icon={icon}
+                size="md"
+                sizeAdjustment={iconSizeAdjustment}
+                color={hovered ? "foreground" : "foregroundMuted"}
+              />
+            </>
           )}
         </Pressable>
       </TooltipTrigger>
-      <TooltipContent side="top" align="center" offset={8}>
-        <IconTooltipContent label={label} shortcutKeys={shortcutKeys} />
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-function footerAddProjectButtonStyle({
-  hovered,
-}: PressableStateCallbackType & { hovered?: boolean }) {
-  return [
-    styles.footerLabeledButton,
-    styles.footerAddProjectButton,
-    Boolean(hovered) && styles.footerLabeledButtonHovered,
-  ];
-}
-
-function footerFeedbackButtonStyle({
-  hovered,
-}: PressableStateCallbackType & { hovered?: boolean }) {
-  return [
-    styles.footerLabeledButton,
-    styles.footerFeedbackButton,
-    Boolean(hovered) && styles.footerLabeledButtonHovered,
-  ];
-}
-
-function FooterAddProjectButton({
-  onPress,
-  label,
-  shortcutKeys,
-  theme,
-}: {
-  onPress: () => void;
-  label: string;
-  shortcutKeys: ReturnType<typeof useShortcutKeys>;
-  theme: SidebarTheme;
-}) {
-  return (
-    <Tooltip delayDuration={300}>
-      <TooltipTrigger asChild>
-        <Pressable
-          style={footerAddProjectButtonStyle}
-          testID="sidebar-add-project"
-          nativeID="sidebar-add-project"
-          accessible
-          accessibilityLabel={label}
-          accessibilityRole="button"
-          onPress={onPress}
-        >
-          {({ hovered }) => {
-            const isHovered = Boolean(hovered);
-            return (
-              <>
-                <ThemedFolderPlus
-                  size={theme.iconSize.sm}
-                  uniProps={isHovered ? foregroundColorMapping : foregroundMutedColorMapping}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.footerLabeledButtonLabel,
-                    isHovered && styles.footerLabeledButtonLabelHovered,
-                  ]}
-                >
-                  {label}
-                </Text>
-              </>
-            );
-          }}
-        </Pressable>
-      </TooltipTrigger>
-      <TooltipContent side="top" align="center" offset={8}>
+      <TooltipContent side="top" align="center" offset={8} testID={`${testID}-tooltip`}>
         <IconTooltipContent label={label} shortcutKeys={shortcutKeys} />
       </TooltipContent>
     </Tooltip>
@@ -405,14 +363,13 @@ function IconTooltipContent({
 }
 
 function SidebarFooter({
-  theme,
   handleOpenProject,
   handleHome,
   handleSettings,
   handleFeedback,
   labels,
+  onBeforeNavigate,
 }: {
-  theme: SidebarTheme;
   handleOpenProject: () => void;
   handleHome: () => void;
   handleSettings: () => void;
@@ -422,59 +379,37 @@ function SidebarFooter({
     home: string;
     settings: string;
     feedback: string;
+    usage: string;
   };
+  onBeforeNavigate?: () => void;
 }) {
   const newAgentKeys = useShortcutKeys("new-agent");
   const settingsKeys = useShortcutKeys("toggle-settings");
 
+  // One line of icons: Add project and Usage, then Home and Settings at the end.
   return (
-    <View style={styles.sidebarFooter}>
-      {handleFeedback ? (
-        <Pressable
-          style={footerFeedbackButtonStyle}
-          onPress={handleFeedback}
-          testID="sidebar-feedback"
-          nativeID="sidebar-feedback"
-          accessible
-          accessibilityLabel={labels.feedback}
-          accessibilityRole="button"
-        >
-          {({ hovered }) => {
-            const isHovered = Boolean(hovered);
-            return (
-              <>
-                <ThemedMessageSquareText
-                  size={theme.iconSize.sm}
-                  uniProps={isHovered ? foregroundColorMapping : foregroundMutedColorMapping}
-                />
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.footerLabeledButtonLabel,
-                    isHovered && styles.footerLabeledButtonLabelHovered,
-                  ]}
-                >
-                  {labels.feedback}
-                </Text>
-              </>
-            );
-          }}
-        </Pressable>
-      ) : null}
-      <View style={styles.footerMainRow}>
-        <FooterAddProjectButton
-          onPress={handleOpenProject}
-          label={labels.addProject}
-          shortcutKeys={newAgentKeys}
-          theme={theme}
+    <UsageSidebarRoot>
+      <View style={styles.footerContainer} testID="sidebar-footer">
+        <SidebarFooterRows
+          onBeforeNavigate={onBeforeNavigate}
+          feedbackLabel={labels.feedback}
+          onFeedback={handleFeedback}
         />
-        <View style={styles.footerIconRow}>
+        <View style={styles.sidebarFooter} testID="sidebar-footer-bottom-line">
+          <FooterIconButton
+            onPress={handleOpenProject}
+            testID="sidebar-add-project"
+            label={labels.addProject}
+            icon={FolderPlus}
+            shortcutKeys={newAgentKeys}
+          />
+          <SidebarUsageIcon label={labels.usage} />
+          <View style={styles.footerSpacer} />
           <FooterIconButton
             onPress={handleHome}
             testID="sidebar-home"
             label={labels.home}
             icon={Home}
-            theme={theme}
           />
           <FooterIconButton
             onPress={handleSettings}
@@ -482,19 +417,86 @@ function SidebarFooter({
             label={labels.settings}
             icon={Settings}
             shortcutKeys={settingsKeys}
-            theme={theme}
           />
         </View>
       </View>
-    </View>
+    </UsageSidebarRoot>
+  );
+}
+
+function SidebarUsageIcon({ label }: { label: string }) {
+  const openUsage = useOpenSidebarUsage();
+  return (
+    <FooterIconButton
+      onPress={openUsage}
+      testID="sidebar-usage-icon"
+      label={label}
+      icon={CircleGauge}
+    />
+  );
+}
+
+/**
+ * The footer rows: Feedback when this daemon takes it, then the Usage item and plugin rows in the
+ * user's `sidebarFooterItems` order. The Usage item is left out while it has no summary to show.
+ */
+function SidebarFooterRows({
+  onBeforeNavigate,
+  feedbackLabel,
+  onFeedback,
+}: {
+  onBeforeNavigate?: () => void;
+  feedbackLabel: string;
+  onFeedback: (() => void) | null;
+}) {
+  const { items } = useSidebarNavItems("footer");
+  const hasUsageSummary = useHasUsageSummary();
+  const rowsRef = useRef<View | null>(null);
+  const visibleItems = items.filter(
+    (item) => item.visible && (item.kind === "plugin" || hasUsageSummary),
+  );
+  if (visibleItems.length === 0 && !onFeedback) return null;
+  return (
+    <>
+      <View ref={rowsRef} collapsable={false} style={styles.footerRows}>
+        {onFeedback ? (
+          <SidebarHeaderRow
+            icon={MessageSquareText}
+            label={feedbackLabel}
+            onPress={onFeedback}
+            testID="sidebar-feedback"
+            nativeID="sidebar-feedback"
+            variant="inline"
+          />
+        ) : null}
+        {visibleItems.map((item) =>
+          item.kind === "plugin" ? (
+            <PluginSidebarItem
+              key={item.key}
+              group={item.group}
+              section="footer"
+              fallbackAnchorRef={rowsRef}
+              onBeforeNavigate={onBeforeNavigate}
+            />
+          ) : (
+            <UsageSidebarItem key={item.key} />
+          ),
+        )}
+      </View>
+      <SidebarSeparator testID="sidebar-footer-separator" />
+    </>
   );
 }
 
 function MobileSidebar({
+  active,
   theme,
-  statusGroups,
+  workspaceGroups,
+  projectIconTargets,
   pinnedGroups,
   projects,
+  hasProjectsBeforeFilter,
+  hasActiveProjectFilter,
   workspaceEntriesByKey,
   isInitialLoad,
   isRevalidating,
@@ -516,7 +518,6 @@ function MobileSidebar({
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
   const listView = useSidebarViewStore((state) => state.listView);
   const { gesture: closeGesture, gestureRef: closeGestureRef } = useCloseAgentListGesture();
-  const dragGestureHostPresented = useIsMobilePanelPresented("agent-list");
 
   const handleWorkspacePress = useCallback(() => {
     closeSidebar();
@@ -543,28 +544,19 @@ function MobileSidebar({
     >
       <View style={styles.sidebarContent} pointerEvents="auto" testID="left-sidebar">
         <WindowChromeSafeArea placement="below" />
-        {/* Holds the overlay's close button, which sits over it. */}
+        {/* Holds the overlay's close button, which sits over it, and any plugin header rows. */}
         <View style={styles.sidebarHeaderGroup}>
           <View style={styles.mobileCloseButtonSlot} />
+          <SidebarNavRows onBeforeNavigate={closeSidebar} />
         </View>
         <WindowChromeSafeArea placement="inline" style={closeButtonRowStyle}>
-          <Pressable
-            style={styles.mobileCloseButton}
+          <SidebarCloseButton
+            label={labels.closeSidebar}
             onPress={closeSidebar}
             testID="sidebar-close"
             nativeID="sidebar-close"
-            accessible
-            accessibilityRole="button"
-            accessibilityLabel={labels.closeSidebar}
-            hitSlop={8}
-          >
-            {({ hovered, pressed }) => (
-              <ThemedX
-                size={theme.iconSize.md}
-                uniProps={hovered || pressed ? foregroundColorMapping : foregroundMutedColorMapping}
-              />
-            )}
-          </Pressable>
+            style={styles.mobileCloseButton}
+          />
         </WindowChromeSafeArea>
 
         {listView === "archived" ? <SidebarArchivedView onChatPress={closeSidebar} /> : null}
@@ -577,27 +569,30 @@ function MobileSidebar({
             onToggleProjectCollapsed={toggleProjectCollapsed}
             shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
             groupMode={groupMode}
-            statusGroups={statusGroups}
+            workspaceGroups={workspaceGroups}
+            projectIconTargets={projectIconTargets}
             pinnedGroups={pinnedGroups}
             projects={projects}
+            hasProjectsBeforeFilter={hasProjectsBeforeFilter}
+            hasActiveProjectFilter={hasActiveProjectFilter}
             workspaceEntriesByKey={workspaceEntriesByKey}
             isRefreshing={isManualRefresh && isRevalidating}
             onRefresh={handleRefresh}
             onWorkspacePress={handleWorkspacePress}
             onAddProject={handleOpenProject}
             parentGestureRef={closeGestureRef}
-            dragGestureHostPresented={dragGestureHostPresented}
+            dragGestureHostActive={active}
             listHeaderComponent={workspaceListActionsElement}
           />
         ) : null}
 
         <SidebarFooter
-          theme={theme}
           handleOpenProject={handleOpenProject}
           handleHome={handleHome}
           handleSettings={handleSettings}
           handleFeedback={handleFeedback}
           labels={labels}
+          onBeforeNavigate={closeSidebar}
         />
       </View>
     </MobilePanelOverlay>
@@ -606,9 +601,12 @@ function MobileSidebar({
 
 function DesktopSidebar({
   theme,
-  statusGroups,
+  workspaceGroups,
+  projectIconTargets,
   pinnedGroups,
   projects,
+  hasProjectsBeforeFilter,
+  hasActiveProjectFilter,
   workspaceEntriesByKey,
   isInitialLoad,
   isRevalidating,
@@ -631,7 +629,9 @@ function DesktopSidebar({
   const listView = useSidebarViewStore((state) => state.listView);
   const sidebarWidth = usePanelStore((state) => state.sidebarWidth);
   const setSidebarWidth = usePanelStore((state) => state.setSidebarWidth);
-  const { width: viewportWidth } = useWindowDimensions();
+  const { width: windowWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const viewportWidth = windowWidth - insets.left - insets.right;
   const visibleSidebarWidth = resolveDesktopSidebarWidth({
     requestedWidth: sidebarWidth,
     viewportWidth,
@@ -706,8 +706,11 @@ function DesktopSidebar({
     [active, resizeAnimatedStyle],
   );
   const desktopSidebarBorderStyle = useMemo(
-    () => [styles.desktopSidebarBorder, { flex: 1, paddingTop: insetsTop }],
-    [insetsTop],
+    () => [
+      styles.desktopSidebarBorder,
+      { flex: 1, paddingTop: insetsTop, paddingBottom: insets.bottom },
+    ],
+    [insetsTop, insets.bottom],
   );
   return (
     <Animated.View
@@ -740,6 +743,7 @@ function DesktopSidebar({
               <TitlebarDragRegion />
             </View>
           )}
+          <SidebarNavRows style={styles.desktopNavRows} />
         </View>
 
         {listView === "archived" ? <SidebarArchivedView /> : null}
@@ -752,9 +756,12 @@ function DesktopSidebar({
             onToggleProjectCollapsed={toggleProjectCollapsed}
             shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
             groupMode={groupMode}
-            statusGroups={statusGroups}
+            workspaceGroups={workspaceGroups}
+            projectIconTargets={projectIconTargets}
             pinnedGroups={pinnedGroups}
             projects={projects}
+            hasProjectsBeforeFilter={hasProjectsBeforeFilter}
+            hasActiveProjectFilter={hasActiveProjectFilter}
             workspaceEntriesByKey={workspaceEntriesByKey}
             isRefreshing={isManualRefresh && isRevalidating}
             onRefresh={handleRefresh}
@@ -766,7 +773,6 @@ function DesktopSidebar({
         <SidebarCalloutSlot />
 
         <SidebarFooter
-          theme={theme}
           handleOpenProject={handleOpenProject}
           handleHome={handleHome}
           handleSettings={handleSettings}
@@ -807,69 +813,60 @@ function WorkspaceListActions() {
   const handleArchivedPress = useCallback(() => setListView("archived"), [setListView]);
 
   return (
-    <View style={styles.workspaceListActionsHeader}>
-      <Text style={styles.sidebarListTitle} numberOfLines={1}>
-        {t("sidebar.sections.chats")}
-      </Text>
-      <View style={styles.workspacesSectionActions}>
-        <Tooltip delayDuration={300}>
-          <TooltipTrigger asChild>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open command center"
-              testID="sidebar-command-center-search"
-              style={sidebarHeaderIconButtonStyle}
-              onPress={handleSearchPress}
-            >
-              {({ hovered, pressed }) => (
-                <ThemedSearch
-                  size={14}
-                  uniProps={
-                    hovered || pressed ? foregroundColorMapping : foregroundMutedColorMapping
-                  }
-                />
-              )}
-            </Pressable>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="center" offset={8}>
-            <IconTooltipContent label="Search" shortcutKeys={commandCenterKeys} />
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip delayDuration={300}>
-          <TooltipTrigger asChild>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t("sidebar.archived.open")}
-              testID="sidebar-archived-open"
-              style={sidebarHeaderIconButtonStyle}
-              onPress={handleArchivedPress}
-            >
-              {({ hovered, pressed }) => (
-                <ThemedArchive
-                  size={14}
-                  uniProps={
-                    hovered || pressed ? foregroundColorMapping : foregroundMutedColorMapping
-                  }
-                />
-              )}
-            </Pressable>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="center" offset={8}>
-            <IconTooltipContent label={t("sidebar.archived.open")} />
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip delayDuration={300}>
-          <TooltipTrigger asChild>
-            <View>
-              <SidebarDisplayPreferencesMenu />
-            </View>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="center" offset={8}>
-            <IconTooltipContent label="Display preferences" />
-          </TooltipContent>
-        </Tooltip>
-      </View>
-    </View>
+    <SidebarSectionHeader title={t("sidebar.sections.chats")}>
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open command center"
+            testID="sidebar-command-center-search"
+            style={sidebarHeaderIconButtonStyle}
+            onPress={handleSearchPress}
+          >
+            {({ hovered, pressed }) => (
+              <ThemedSearch
+                size={14}
+                uniProps={hovered || pressed ? foregroundColorMapping : foregroundMutedColorMapping}
+              />
+            )}
+          </Pressable>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="center" offset={8}>
+          <IconTooltipContent label="Search" shortcutKeys={commandCenterKeys} />
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("sidebar.archived.open")}
+            testID="sidebar-archived-open"
+            style={sidebarHeaderIconButtonStyle}
+            onPress={handleArchivedPress}
+          >
+            {({ hovered, pressed }) => (
+              <ThemedArchive
+                size={14}
+                uniProps={hovered || pressed ? foregroundColorMapping : foregroundMutedColorMapping}
+              />
+            )}
+          </Pressable>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="center" offset={8}>
+          <IconTooltipContent label={t("sidebar.archived.open")} />
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <View>
+            <SidebarDisplayPreferencesMenu />
+          </View>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="center" offset={8}>
+          <IconTooltipContent label="Display preferences" />
+        </TooltipContent>
+      </Tooltip>
+    </SidebarSectionHeader>
   );
 }
 
@@ -945,36 +942,18 @@ const styles = StyleSheet.create((theme) => ({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
+  // The drag area above it already spaces the rows from the window's top edge.
+  desktopNavRows: {
+    gap: 2,
+    paddingBottom: theme.spacing[1.5],
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
   mobileCloseButtonSlot: {
     height: 36,
   },
   sidebarTopInset: {
     paddingTop: theme.spacing[2],
-  },
-  workspaceListActionsHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: theme.spacing[2],
-    // Lines the title up with the rows' text, which sits inside their own padding.
-    paddingLeft: theme.spacing[2],
-    // Rendered inside the scroll's listContent (paddingHorizontal spacing[2]). Settings2's
-    // painted path stops inside its 14px SVG, so 4px aligns the ink to the row rail.
-    paddingRight: 4,
-    paddingTop: theme.spacing[1],
-    paddingBottom: theme.spacing[1],
-  },
-  workspacesSectionActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1],
-  },
-  sidebarListTitle: {
-    flexShrink: 1,
-    minWidth: 0,
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-    fontWeight: theme.fontWeight.medium,
   },
   archivedView: {
     flex: 1,
@@ -984,21 +963,20 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[2],
   },
   archivedHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1],
     // Same height as the Chats header, so swapping lists leaves the search field and rows
     // where the eye expects them. The arrow's ink sits 7px inside its 28px button; 1px more
     // puts it on the rows' text rail.
+    minHeight: density.rowHeight,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
     marginLeft: 1,
-    paddingTop: theme.spacing[1],
-    paddingBottom: theme.spacing[1],
   },
   archivedTitle: {
     flexShrink: 1,
     minWidth: 0,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
   },
   workspacesHeaderIconButton: {
@@ -1030,15 +1008,7 @@ const styles = StyleSheet.create((theme) => ({
     top: 7.5,
   },
   mobileCloseButton: {
-    // The 16px X paints farther inside its 32px hit target than the 14px Settings2 glyph.
-    // This optical inset puts their painted right edges on the same sidebar rail.
-    marginRight: theme.spacing[2] + 1.5,
-    width: 32,
-    height: 32,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.borderRadius.lg,
-    backgroundColor: theme.colors.surfaceSidebar,
+    marginRight: theme.spacing[2],
   },
   desktopSidebarBorder: {
     borderRightWidth: 1,
@@ -1072,59 +1042,34 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     flexShrink: 1,
     color: theme.colors.accentForeground,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
-  sidebarFooter: {
-    gap: theme.spacing[2],
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[3],
+  footerContainer: {
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
   },
-  footerFeedbackButton: {
-    width: "100%",
-  },
-  footerMainRow: {
+  // Buttons sit edge to edge; their own inset spaces the glyphs.
+  sidebarFooter: {
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[2],
-  },
-  footerIconRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
-    flexShrink: 0,
-  },
-  footerLabeledButton: {
-    minWidth: 0,
-    minHeight: 32,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
-    paddingVertical: theme.spacing[1.5],
     paddingHorizontal: theme.spacing[2],
-    borderRadius: theme.borderRadius.lg,
+    paddingVertical: theme.spacing[1.5],
   },
-  footerAddProjectButton: {
+  // Pushes Home and Settings to the end of the icon line.
+  footerSpacer: {
     flex: 1,
   },
-  footerLabeledButtonHovered: {
-    backgroundColor: theme.colors.surfaceSidebarHover,
-  },
-  footerLabeledButtonLabel: {
-    minWidth: 0,
-    flexShrink: 1,
-    fontSize: theme.fontSize.sm,
-    fontWeight: theme.fontWeight.normal,
-    color: theme.colors.foregroundMuted,
-  },
-  footerLabeledButtonLabelHovered: {
-    color: theme.colors.foreground,
+  // Feedback, Usage and plugin rows sit above the footer's icon line, spaced like the header nav
+  // rows.
+  footerRows: {
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1.5],
+    gap: 2,
   },
   footerIconButton: {
-    width: 28,
-    height: 28,
+    width: density.iconButton,
+    height: density.iconButton,
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: theme.spacing[1],
@@ -1136,7 +1081,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
   },
   tooltipText: {
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     color: theme.colors.popoverForeground,
   },
 }));

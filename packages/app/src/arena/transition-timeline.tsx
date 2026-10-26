@@ -138,11 +138,11 @@ const styles = StyleSheet.create((theme) => ({
     paddingBottom: theme.spacing[3],
   },
   title: {
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foreground,
   },
-  caption: { fontSize: theme.fontSize.xs, color: theme.colors.foregroundMuted },
+  caption: { fontSize: theme.fontSize.sm, color: theme.colors.foregroundMuted },
   // Reserve space for this transition's operations so new rows do not move the chat above it.
   timeline: { justifyContent: "flex-start" },
   setupTimeline: { minHeight: theme.spacing[8] * 4 },
@@ -164,10 +164,10 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[3],
     paddingTop: theme.spacing[1],
   },
-  label: { flex: 1, fontSize: theme.fontSize.xs, color: theme.colors.foregroundMuted },
+  label: { flex: 1, fontSize: theme.fontSize.sm, color: theme.colors.foregroundMuted },
   activeLabel: { color: theme.colors.foreground },
   duration: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
     fontVariant: ["tabular-nums"],
   },

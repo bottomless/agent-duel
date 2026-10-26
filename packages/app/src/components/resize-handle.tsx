@@ -1,35 +1,36 @@
 import type { KeyboardEvent } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { View, type PointerEvent as RNPointerEvent } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { MIN_SPLIT_SIZE } from "@/stores/workspace-layout-constants";
 import { computeResizeHandleSizes } from "@/components/resize-handle-sizes";
+import type { ResizeHandleDrag } from "@/components/resize-handle-drag";
 import type { ResizeHandleFloors } from "@/components/split-container-floors";
+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+import {
+  SIDEBAR_RESIZE_ACTIVATION_OFFSET,
+  SIDEBAR_RESIZE_FAIL_OFFSET,
+} from "@/components/sidebar-resize-handle-layout";
 
 export interface ResizeHandleProps {
+  testID?: string;
   direction: "horizontal" | "vertical";
+  hitAreaAlignment?: "center" | "end";
   groupId: string;
   index: number;
   sizes: number[];
+  containerSize: number;
+  onPreviewResizeSplit: (groupId: string, sizes: number[]) => void;
   onResizeSplit: (groupId: string, sizes: number[]) => void;
   /** Floors each pane keeps however far the handle is dragged. */
   floors?: ResizeHandleFloors;
-  testID?: string;
 }
 
 interface PointerState {
   containerSize: number;
   pointerStart: number;
-}
-
-function measureContainerSize(
-  hitAreaElement: HTMLElement | null,
-  direction: ResizeHandleProps["direction"],
-): number {
-  const containerElement = hitAreaElement?.parentElement?.parentElement ?? null;
-  if (!containerElement) return 0;
-  const rect = containerElement.getBoundingClientRect();
-  return direction === "horizontal" ? rect.width : rect.height;
+  drag: ResizeHandleDrag;
 }
 
 function floorSizes(floors: ResizeHandleFloors | undefined, containerSize: number) {
@@ -37,6 +38,36 @@ function floorSizes(floors: ResizeHandleFloors | undefined, containerSize: numbe
   return {
     leadingMinSize: Math.max((floors.leadingPx ?? 0) / containerSize, floors.leadingShare ?? 0),
     trailingMinSize: (floors.trailingPx ?? 0) / containerSize,
+  };
+}
+
+/** Previews every move and commits the last one, stopping each pane at its floor. */
+function startFlooredResizeDrag(input: {
+  sizes: number[];
+  index: number;
+  floors: ResizeHandleFloors | undefined;
+  containerSize: number;
+  preview: (sizes: number[]) => void;
+  commit: (sizes: number[]) => void;
+}): ResizeHandleDrag {
+  const { sizes, index, floors, containerSize, preview, commit } = input;
+  let pendingSizes: number[] | null = null;
+  return {
+    move(deltaRatio) {
+      pendingSizes = computeResizeHandleSizes({
+        sizes,
+        index,
+        deltaRatio,
+        ...floorSizes(floors, containerSize),
+      });
+      preview(pendingSizes);
+    },
+    finish() {
+      if (pendingSizes) {
+        commit(pendingSizes);
+        pendingSizes = null;
+      }
+    },
   };
 }
 
@@ -49,16 +80,21 @@ function resetWindowHorizontalScroll() {
 }
 
 export function ResizeHandle({
+  testID,
   direction,
+  hitAreaAlignment = "center",
   groupId,
   index,
   sizes,
+  containerSize,
+  onPreviewResizeSplit,
   onResizeSplit,
   floors,
-  testID,
 }: ResizeHandleProps) {
   const { theme } = useUnistyles();
+  const finePointer = useHasFinePointer();
   const pointerStatesRef = useRef(new Map<number, PointerState>());
+  const touchDragRef = useRef<ResizeHandleDrag | null>(null);
   const cursorBeforeDragRef = useRef<string | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [active, setActive] = useState(false);
@@ -74,7 +110,6 @@ export function ResizeHandle({
         return;
       }
 
-      const containerSize = measureContainerSize(hitAreaElement, direction);
       if (containerSize <= 0) {
         return;
       }
@@ -90,6 +125,14 @@ export function ResizeHandle({
         containerSize,
         pointerStart:
           direction === "horizontal" ? event.nativeEvent.clientX : event.nativeEvent.clientY,
+        drag: startFlooredResizeDrag({
+          sizes,
+          index,
+          floors,
+          containerSize,
+          preview: (nextSizes) => onPreviewResizeSplit(groupId, nextSizes),
+          commit: (nextSizes) => onResizeSplit(groupId, nextSizes),
+        }),
       });
 
       if (pointerStatesRef.current.size === 1) {
@@ -135,15 +178,7 @@ export function ResizeHandle({
         const deltaRatio =
           (pointerCurrent - pointerState.pointerStart) / pointerState.containerSize;
 
-        onResizeSplit(
-          groupId,
-          computeResizeHandleSizes({
-            sizes,
-            index,
-            deltaRatio,
-            ...floorSizes(floors, pointerState.containerSize),
-          }),
-        );
+        pointerState.drag.move(deltaRatio);
       }
 
       function handlePointerUp(upEvent: PointerEvent) {
@@ -151,6 +186,7 @@ export function ResizeHandle({
           return;
         }
 
+        pointerStatesRef.current.get(pointerId)?.drag.finish();
         cleanup();
       }
 
@@ -158,7 +194,7 @@ export function ResizeHandle({
       window.addEventListener("pointerup", handlePointerUp);
       window.addEventListener("pointercancel", handlePointerUp);
     },
-    [direction, floors, groupId, index, onResizeSplit, sizes],
+    [containerSize, direction, floors, groupId, index, onPreviewResizeSplit, onResizeSplit, sizes],
   );
 
   const handleKeyDown = useCallback(
@@ -171,7 +207,6 @@ export function ResizeHandle({
       let deltaRatio = event.key === decrease ? -step : step;
       if (event.key === "Home") deltaRatio = -1;
       if (event.key === "End") deltaRatio = 1;
-      const containerSize = measureContainerSize(event.currentTarget, direction);
       onResizeSplit(
         groupId,
         computeResizeHandleSizes({
@@ -182,8 +217,51 @@ export function ResizeHandle({
         }),
       );
     },
-    [direction, floors, groupId, index, onResizeSplit, sizes],
+    [containerSize, direction, floors, groupId, index, onResizeSplit, sizes],
   );
+
+  const touchGesture = useMemo(() => {
+    const gesture = Gesture.Pan()
+      .runOnJS(true)
+      .onBegin(() => setDragging(true))
+      .onStart(() => {
+        touchDragRef.current = startFlooredResizeDrag({
+          sizes,
+          index,
+          floors,
+          containerSize,
+          preview: (nextSizes) => onPreviewResizeSplit(groupId, nextSizes),
+          commit: (nextSizes) => onResizeSplit(groupId, nextSizes),
+        });
+      })
+      .onUpdate((event) => {
+        if (containerSize <= 0) return;
+        const translation = direction === "horizontal" ? event.translationX : event.translationY;
+        touchDragRef.current?.move(translation / containerSize);
+      })
+      .onEnd(() => touchDragRef.current?.finish())
+      .onFinalize(() => {
+        touchDragRef.current = null;
+        setDragging(false);
+      });
+
+    return direction === "horizontal"
+      ? gesture
+          .activeOffsetX([-SIDEBAR_RESIZE_ACTIVATION_OFFSET, SIDEBAR_RESIZE_ACTIVATION_OFFSET])
+          .failOffsetY([-SIDEBAR_RESIZE_FAIL_OFFSET, SIDEBAR_RESIZE_FAIL_OFFSET])
+      : gesture
+          .activeOffsetY([-SIDEBAR_RESIZE_ACTIVATION_OFFSET, SIDEBAR_RESIZE_ACTIVATION_OFFSET])
+          .failOffsetX([-SIDEBAR_RESIZE_FAIL_OFFSET, SIDEBAR_RESIZE_FAIL_OFFSET]);
+  }, [
+    containerSize,
+    direction,
+    floors,
+    groupId,
+    index,
+    onPreviewResizeSplit,
+    onResizeSplit,
+    sizes,
+  ]);
 
   const handlePointerEnter = useCallback(() => {
     hoverTimerRef.current = setTimeout(() => {
@@ -220,11 +298,36 @@ export function ResizeHandle({
       styles.hitArea,
       direction === "horizontal" ? styles.hitAreaHorizontal : styles.hitAreaVertical,
       {
+        ...(direction === "horizontal"
+          ? { left: hitAreaAlignment === "end" ? 0 : -5 }
+          : { top: hitAreaAlignment === "end" ? 0 : -5 }),
         cursor: direction === "horizontal" ? "col-resize" : "row-resize",
         touchAction: "none",
       } as object,
     ],
-    [direction],
+    [direction, hitAreaAlignment],
+  );
+  const touchHitAreaStyle = useMemo(
+    () => [
+      styles.touchHitArea,
+      direction === "horizontal" ? styles.touchHitAreaHorizontal : styles.touchHitAreaVertical,
+      {
+        ...(direction === "horizontal"
+          ? { left: hitAreaAlignment === "end" ? 0 : -12 }
+          : { top: hitAreaAlignment === "end" ? 0 : -12 }),
+        touchAction: "none",
+      } as object,
+    ],
+    [direction, hitAreaAlignment],
+  );
+  const touchGripStyle = useMemo(
+    () => [
+      styles.touchGrip,
+      direction === "horizontal" ? styles.touchGripHorizontal : styles.touchGripVertical,
+      highlighted ? styles.touchGripVisible : styles.touchGripHidden,
+      { backgroundColor: theme.colors.foreground },
+    ],
+    [direction, highlighted, theme.colors.foreground],
   );
 
   return (
@@ -236,21 +339,35 @@ export function ResizeHandle({
           testID={testID ? `${testID}-highlight` : undefined}
         />
       )}
-      <View
-        testID={testID}
-        role="separator"
-        tabIndex={0}
-        aria-label="Resize panes"
-        aria-valuenow={Math.round((sizes[index] ?? 0) * 100)}
-        aria-valuemin={Math.round(adjacentMin * 100)}
-        aria-valuemax={Math.round((pairSize - adjacentMin) * 100)}
-        {...{ onKeyDown: handleKeyDown }}
-        aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
-        style={hitAreaStyle}
-        onPointerDown={handlePointerDown}
-        onPointerEnter={handlePointerEnter}
-        onPointerLeave={handlePointerLeave}
-      />
+      {finePointer ? (
+        <View
+          testID={testID}
+          role="separator"
+          tabIndex={0}
+          aria-label="Resize panes"
+          aria-valuenow={Math.round((sizes[index] ?? 0) * 100)}
+          aria-valuemin={Math.round(adjacentMin * 100)}
+          aria-valuemax={Math.round((pairSize - adjacentMin) * 100)}
+          {...{ onKeyDown: handleKeyDown }}
+          aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
+          style={hitAreaStyle}
+          onPointerDown={handlePointerDown}
+          onPointerEnter={handlePointerEnter}
+          onPointerLeave={handlePointerLeave}
+        />
+      ) : (
+        <GestureDetector gesture={touchGesture}>
+          <View
+            testID={testID}
+            role="separator"
+            aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
+            collapsable={false}
+            style={touchHitAreaStyle}
+          >
+            <View pointerEvents="none" style={touchGripStyle} />
+          </View>
+        </GestureDetector>
+      )}
     </View>
   );
 }
@@ -259,6 +376,7 @@ const styles = StyleSheet.create((_theme) => ({
   handle: {
     position: "relative",
     flexShrink: 0,
+    zIndex: 10,
   },
   handleHorizontal: {
     width: 1,
@@ -289,15 +407,48 @@ const styles = StyleSheet.create((_theme) => ({
     zIndex: 10,
   },
   hitAreaHorizontal: {
-    left: -5,
     top: 0,
     bottom: 0,
     width: 10,
   },
   hitAreaVertical: {
-    top: -5,
     left: 0,
     right: 0,
     height: 10,
+  },
+  touchHitArea: {
+    position: "absolute",
+    zIndex: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  touchHitAreaHorizontal: {
+    top: "50%",
+    width: 24,
+    height: 88,
+    transform: [{ translateY: -44 }],
+  },
+  touchHitAreaVertical: {
+    left: "50%",
+    width: 88,
+    height: 24,
+    transform: [{ translateX: -44 }],
+  },
+  touchGrip: {
+    borderRadius: 2,
+  },
+  touchGripHorizontal: {
+    width: 4,
+    height: 36,
+  },
+  touchGripVertical: {
+    width: 36,
+    height: 4,
+  },
+  touchGripHidden: {
+    opacity: 0.12,
+  },
+  touchGripVisible: {
+    opacity: 0.3,
   },
 }));

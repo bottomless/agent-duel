@@ -1,6 +1,5 @@
 import type { Logger } from "pino";
 import type { ProviderOptions, ToolPolicy } from "@getpaseo/protocol/agent-types";
-import { z } from "zod";
 
 import type {
   AgentClient,
@@ -13,6 +12,7 @@ import type {
   AgentSession,
   AgentStreamEvent,
   FetchCatalogOptions,
+  ProviderRefreshContext,
   ProviderCatalog,
   ResolveAgentCreateConfigInput,
   ResolveAgentCreateConfigResult,
@@ -24,6 +24,7 @@ import {
   resolveDefaultAgentCreateConfig,
 } from "./create-agent-mode.js";
 import { normalizeAgentModelDefinition } from "./agent-sdk-types.js";
+import { runProviderRefreshActivity } from "./provider-refresh-deadline.js";
 import type { WorkspaceGitService } from "../workspace-git-service.js";
 import type { ManagedProcessRegistry } from "../managed-processes/managed-processes.js";
 import type {
@@ -39,17 +40,19 @@ import { CursorACPAgentClient } from "./providers/cursor-acp-agent.js";
 import { GenericACPAgentClient } from "./providers/generic-acp-agent.js";
 import { KimiACPAgentClient } from "./providers/kimi-acp-agent.js";
 import { KiroACPAgentClient } from "./providers/kiro-acp-agent.js";
-import { OpenCodeAgentClient } from "./providers/opencode-agent.js";
+import {
+  isOpenCodeArenaBackendConfigured,
+  OpenCodeAgentClient,
+} from "./providers/opencode-agent.js";
+import { OpenCodeRuntimeClient } from "./providers/opencode/runtime-client.js";
+import type { OpenCodeBridge } from "./providers/opencode/bridge.js";
 import { OmpAgentClient } from "./providers/omp/agent.js";
 import type { OmpRuntime } from "./providers/omp/runtime.js";
 import { PiRpcAgentClient } from "./providers/pi/agent.js";
 import { TraeACPAgentClient } from "./providers/trae-acp-agent.js";
 import { MockLoadTestAgentClient } from "./providers/mock-load-test-agent.js";
 import { MockSlowProviderClient } from "./providers/mock-slow-provider.js";
-import { ClaudeProviderOptionsSchema } from "./providers/claude/options.js";
-import { CodexProviderOptionsSchema } from "./providers/codex/options.js";
-import { OpenCodeProviderOptionsSchema } from "./providers/opencode/options.js";
-import { ToolPolicyUnsupportedError, validateProviderOptions } from "./provider-options.js";
+import { ToolPolicyUnsupportedError, mergeProviderOptions } from "./provider-options.js";
 import {
   AGENT_PROVIDER_DEFINITIONS,
   BUILTIN_PROVIDER_IDS,
@@ -67,6 +70,9 @@ export type { AgentProviderDefinition };
 export { AGENT_PROVIDER_DEFINITIONS, getAgentProviderDefinition };
 
 export interface ProviderDefinition extends AgentProviderDefinition {
+  /** Effective inputs after overrides and inheritance; plugin registrations are owned separately. */
+  configuration: Omit<ResolvedProvider, "createBaseClient" | "contract"> | null;
+  iconSvg?: string;
   enabled: boolean;
   /**
    * The id of another *registered* provider this one extends (e.g. a Z.AI
@@ -74,13 +80,7 @@ export interface ProviderDefinition extends AgentProviderDefinition {
    * generic ACP providers (which only extend the literal "acp" sentinel).
    */
   derivedFromProviderId: string | null;
-  optionsSchema: z.ZodType<ProviderOptions>;
   supportsExactMcpPreapproval: boolean;
-  validateOptions: (options: ProviderOptions | undefined) => ProviderOptions | undefined;
-  applyOptions: (
-    config: AgentSessionConfig,
-    options: ProviderOptions | undefined,
-  ) => AgentSessionConfig;
   applyToolPolicy: (
     config: AgentSessionConfig,
     toolPolicy: ToolPolicy | undefined,
@@ -92,16 +92,30 @@ export interface ProviderDefinition extends AgentProviderDefinition {
    * Single catalog discovery call used by ProviderSnapshotManager. Should spawn
    * at most one provider runtime process and return both models and modes.
    */
-  fetchCatalog: (options: FetchCatalogOptions, client?: AgentClient) => Promise<ProviderCatalog>;
+  fetchCatalog: (
+    options: FetchCatalogOptions,
+    client?: AgentClient,
+    context?: ProviderRefreshContext,
+  ) => Promise<ProviderCatalog>;
+}
+
+/** Provider metadata and an unconfigured factory; the registry owns override application. */
+export interface RegisteredProviderDefinition extends AgentProviderDefinition {
+  requiresConfiguration?: boolean;
+  iconSvg?: string;
+  supportsExactMcpPreapproval: boolean;
+  createClient: (logger: Logger, runtimeSettings?: ProviderRuntimeSettings) => AgentClient;
 }
 
 export interface BuildProviderRegistryOptions {
+  pluginProviders?: Record<string, RegisteredProviderDefinition>;
   runtimeSettings?: AgentProviderRuntimeSettingsMap;
   providerOverrides?: Record<string, ProviderOverride>;
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   managedProcesses?: ManagedProcessRegistry;
   isDev?: boolean;
   ompRuntime?: OmpRuntime;
+  openCodeBridge?: OpenCodeBridge;
   getArenaPreviewBaseUrl?: () => string | null;
   /** The daemon's `$PASEO_HOME/uploads`, whose per-upload directories an agent may open. */
   uploadsRoot?: string;
@@ -115,7 +129,7 @@ interface ProviderClientFactoryOptions extends Pick<
   | "getArenaPreviewBaseUrl"
   | "uploadsRoot"
 > {
-  providerParams?: unknown;
+  openCodeBridge?: OpenCodeBridge;
   customProvider?: {
     id: string;
     label: string;
@@ -137,27 +151,23 @@ interface ResolvedProvider {
   profileModelsAreAdditive: boolean;
   enabled: boolean;
   derivedFromProviderId: string | null;
-  providerParams?: unknown;
+  providerOptions?: ProviderOptions;
   createBaseClient: (logger: Logger) => AgentClient;
   contract: ProviderContract;
 }
 
 interface ProviderContract {
-  optionsSchema: z.ZodType<ProviderOptions>;
   supportsExactMcpPreapproval: boolean;
   applyToolPolicy?: (provider: string, toolPolicy: ToolPolicy) => ToolPolicy;
 }
 
-const EmptyProviderOptionsSchema: z.ZodType<ProviderOptions> = z.object({}).strict();
-
 const PROVIDER_CONTRACTS: Record<string, ProviderContract> = {
-  claude: { optionsSchema: ClaudeProviderOptionsSchema, supportsExactMcpPreapproval: true },
-  codex: { optionsSchema: CodexProviderOptionsSchema, supportsExactMcpPreapproval: true },
-  opencode: { optionsSchema: OpenCodeProviderOptionsSchema, supportsExactMcpPreapproval: true },
+  claude: { supportsExactMcpPreapproval: true },
+  codex: { supportsExactMcpPreapproval: true },
+  opencode: { supportsExactMcpPreapproval: true },
 };
 
 const UNSUPPORTED_PROVIDER_CONTRACT: ProviderContract = {
-  optionsSchema: EmptyProviderOptionsSchema,
   supportsExactMcpPreapproval: false,
 };
 
@@ -183,23 +193,28 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
       command: getCursorACPCommand(runtimeSettings),
       env: runtimeSettings?.env,
     }),
-  opencode: (logger, runtimeSettings, options) =>
-    new OpenCodeAgentClient(logger, runtimeSettings, {
+  opencode: (logger, runtimeSettings, options) => {
+    const openCodeOptions = {
       managedProcesses: options?.managedProcesses,
+      bridge: options?.openCodeBridge,
       getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
       uploadsRoot: options?.uploadsRoot,
-    }),
-  pi: (logger, runtimeSettings, options) =>
+    };
+    // The Arena backend is its own OpenCode build, so a version probe of a stock `opencode`
+    // binary says nothing about it, and only the v1 client carries the battle routes.
+    return isOpenCodeArenaBackendConfigured()
+      ? new OpenCodeAgentClient(logger, runtimeSettings, openCodeOptions)
+      : new OpenCodeRuntimeClient(logger, runtimeSettings, openCodeOptions);
+  },
+  pi: (logger, runtimeSettings) =>
     new PiRpcAgentClient({
       logger,
       runtimeSettings,
-      providerParams: options?.providerParams,
     }),
   omp: (logger, runtimeSettings, options) =>
     new OmpAgentClient({
       logger,
       runtimeSettings,
-      providerParams: options?.providerParams,
       runtime: options?.ompRuntime,
     }),
   mock: (logger) => new MockLoadTestAgentClient(logger),
@@ -410,16 +425,28 @@ function mergeModelAdditions(
   );
 }
 
+// Every session member must cross this boundary, including optional capabilities.
+type ForwardedAgentSession = { [K in keyof Required<AgentSession>]: AgentSession[K] };
+
 export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession): AgentSession {
   return {
     provider,
-    id: inner.id,
-    capabilities: inner.capabilities,
+    get id() {
+      return inner.id;
+    },
+    get capabilities() {
+      return inner.capabilities;
+    },
+    get initialTimeline() {
+      return inner.initialTimeline;
+    },
     get features() {
       return inner.features;
     },
+    usageSession: inner.usageSession?.bind(inner),
     run: (prompt, options) => inner.run(prompt, options),
     startTurn: (prompt, options) => inner.startTurn(prompt, options),
+    steerActiveTurn: inner.steerActiveTurn?.bind(inner),
     subscribe: (callback) => inner.subscribe((event) => callback(mapStreamEvent(provider, event))),
     async *streamHistory() {
       for await (const event of inner.streamHistory()) {
@@ -435,6 +462,7 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     describePersistence: () => mapPersistenceHandle(provider, inner.describePersistence()),
     interrupt: () => inner.interrupt(),
     close: () => inner.close(),
+    reloadProviderSubagents: inner.reloadProviderSubagents?.bind(inner),
     listCommands: inner.listCommands?.bind(inner),
     setModel: inner.setModel?.bind(inner),
     setThinkingOption: inner.setThinkingOption?.bind(inner),
@@ -442,7 +470,63 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     revertConversation: inner.revertConversation?.bind(inner),
     revertFiles: inner.revertFiles?.bind(inner),
     revertBoth: inner.revertBoth?.bind(inner),
+    get arena() {
+      return inner.arena;
+    },
     tryHandleOutOfBand: inner.tryHandleOutOfBand?.bind(inner),
+  } satisfies ForwardedAgentSession;
+}
+
+type ArenaClientExtensions = Pick<
+  AgentClient,
+  | "forkSession"
+  | "unarchiveArenaChat"
+  | "openArenaActivitySource"
+  | "openArenaCheckoutCleanupSource"
+  | "seedWorktreeIgnoredContent"
+  | "writeGitMetadata"
+  | "refreshProjectDirectory"
+>;
+
+interface ArenaClientExtensionsInput {
+  provider: AgentProvider;
+  inner: AgentClient;
+  providerOptions: ProviderOptions | undefined;
+  configuredModelIds: string[];
+}
+
+function wrapArenaClientExtensions(input: ArenaClientExtensionsInput): ArenaClientExtensions {
+  const { provider, inner, providerOptions, configuredModelIds } = input;
+  const forkSession = inner.forkSession?.bind(inner);
+  const unarchiveArenaChat = inner.unarchiveArenaChat?.bind(inner);
+  return {
+    forkSession: forkSession
+      ? async (forkInput) =>
+          wrapSessionProvider(
+            provider,
+            await forkSession({
+              ...forkInput,
+              source: { ...forkInput.source, provider: inner.provider },
+              config: {
+                ...forkInput.config,
+                provider: inner.provider,
+                providerOptions: mergeProviderOptions(
+                  providerOptions,
+                  forkInput.config.providerOptions,
+                ),
+              },
+              options: { ...forkInput.options, configuredModelIds },
+            }),
+          )
+      : undefined,
+    unarchiveArenaChat: unarchiveArenaChat
+      ? async (handle) => await unarchiveArenaChat({ ...handle, provider: inner.provider })
+      : undefined,
+    openArenaActivitySource: inner.openArenaActivitySource?.bind(inner),
+    openArenaCheckoutCleanupSource: inner.openArenaCheckoutCleanupSource?.bind(inner),
+    seedWorktreeIgnoredContent: inner.seedWorktreeIgnoredContent?.bind(inner),
+    writeGitMetadata: inner.writeGitMetadata?.bind(inner),
+    refreshProjectDirectory: inner.refreshProjectDirectory?.bind(inner),
   };
 }
 
@@ -452,23 +536,32 @@ function wrapClientProvider(
   profileModels: ProviderProfileModel[],
   additionalModels: ProviderProfileModel[],
   profileModelsAreAdditive: boolean,
+  providerOptions: ProviderOptions | undefined,
 ): AgentClient {
   const listImportableSessions = inner.listImportableSessions?.bind(inner);
   const importSession = inner.importSession?.bind(inner);
   const listFeatures = inner.listFeatures?.bind(inner);
+  const archiveNativeSession = inner.archiveNativeSession?.bind(inner);
+  const unarchiveNativeSession = inner.unarchiveNativeSession?.bind(inner);
+  const configuredModelIds = [...profileModels, ...additionalModels].map((model) => model.id);
 
   return {
     provider,
-    capabilities: inner.capabilities,
-    createSession: async (config, launchContext) =>
+    get capabilities() {
+      return inner.capabilities;
+    },
+    shutdown: inner.shutdown?.bind(inner),
+    createSession: async (config, launchContext, options) =>
       wrapSessionProvider(
         provider,
         await inner.createSession(
           {
             ...config,
             provider: inner.provider,
+            providerOptions: mergeProviderOptions(providerOptions, config.providerOptions),
           },
           launchContext,
+          { ...options, configuredModelIds },
         ),
       ),
     resumeSession: async (handle, overrides, launchContext, options) =>
@@ -479,18 +572,17 @@ function wrapClientProvider(
             ...handle,
             provider: inner.provider,
           },
-          overrides
-            ? {
-                ...overrides,
-                provider: inner.provider,
-              }
-            : undefined,
+          {
+            ...overrides,
+            provider: inner.provider,
+            providerOptions: mergeProviderOptions(providerOptions, overrides?.providerOptions),
+          },
           launchContext,
-          options,
+          { ...options, configuredModelIds },
         ),
       ),
-    fetchCatalog: async (options) => {
-      const catalog = await inner.fetchCatalog(options);
+    fetchCatalog: async (options, context) => {
+      const catalog = await inner.fetchCatalog({ ...options, providerOptions }, context);
       return {
         ...catalog,
         models: mergeModels(provider, profileModels, additionalModels, catalog.models, {
@@ -500,20 +592,30 @@ function wrapClientProvider(
       };
     },
     resolveDefaultModeId: inner.resolveDefaultModeId
-      ? async ({ config, env }: ResolveAgentDefaultModeInput) =>
+      ? async ({ config, env, signal }: ResolveAgentDefaultModeInput) =>
           await inner.resolveDefaultModeId?.({
-            config: { ...config, provider: inner.provider },
+            config: {
+              ...config,
+              provider: inner.provider,
+              providerOptions: mergeProviderOptions(providerOptions, config.providerOptions),
+            },
             env,
+            signal,
           })
       : undefined,
     resolveCreateConfig: inner.resolveCreateConfig?.bind(inner),
     resolveConfiguredModel: inner.resolveConfiguredModel?.bind(inner),
     isCreateConfigUnattended: inner.isCreateConfigUnattended?.bind(inner),
     listFeatures: listFeatures
-      ? async (config) => await listFeatures({ ...config, provider: inner.provider })
+      ? async (config) =>
+          await listFeatures({
+            ...config,
+            provider: inner.provider,
+            providerOptions: mergeProviderOptions(providerOptions, config.providerOptions),
+          })
       : undefined,
     listImportableSessions: listImportableSessions
-      ? async (options) => await listImportableSessions(options)
+      ? async (options) => await listImportableSessions({ ...options, providerOptions })
       : undefined,
     importSession: importSession
       ? async (input, context) => {
@@ -522,6 +624,10 @@ function wrapClientProvider(
             config: {
               ...context.config,
               provider: inner.provider,
+              providerOptions: mergeProviderOptions(
+                providerOptions,
+                context.config.providerOptions,
+              ),
             },
             storedConfig: {
               ...context.storedConfig,
@@ -538,12 +644,21 @@ function wrapClientProvider(
             config: {
               ...imported.config,
               provider,
+              providerOptions: context.storedConfig.providerOptions,
             },
             persistence,
           };
         }
       : undefined,
-    isAvailable: () => inner.isAvailable(),
+    archiveNativeSession: archiveNativeSession
+      ? async (handle) => await archiveNativeSession({ ...handle, provider: inner.provider })
+      : undefined,
+    unarchiveNativeSession: unarchiveNativeSession
+      ? async (handle) => await unarchiveNativeSession({ ...handle, provider: inner.provider })
+      : undefined,
+    ...wrapArenaClientExtensions({ provider, inner, providerOptions, configuredModelIds }),
+    getCatalogCacheKey: inner.getCatalogCacheKey?.bind(inner),
+    isAvailable: (signal, options) => inner.isAvailable(signal, options),
     getDiagnostic: inner.getDiagnostic?.bind(inner),
   };
 }
@@ -553,7 +668,7 @@ function createRegistryEntry(
   provider: AgentProvider,
   resolved: ResolvedProvider,
 ): ProviderDefinition {
-  const modelClient = resolved.createBaseClient(logger);
+  const modelClient = createResolvedProviderClient(logger, provider, resolved);
   const profileModels = resolveConfiguredModels(provider, modelClient, resolved.profileModels);
   const additionalModels = resolveConfiguredModels(
     provider,
@@ -578,15 +693,13 @@ function createRegistryEntry(
 
   const hasStaticModes = resolved.definition.modes.length > 0;
 
+  const { createBaseClient: _createBaseClient, contract: _contract, ...configuration } = resolved;
   return {
     ...resolved.definition,
+    configuration,
     enabled: resolved.enabled,
     derivedFromProviderId: resolved.derivedFromProviderId,
-    optionsSchema: resolved.contract.optionsSchema,
     supportsExactMcpPreapproval: resolved.contract.supportsExactMcpPreapproval,
-    validateOptions: (options) =>
-      validateProviderOptions(provider, resolved.contract.optionsSchema, options),
-    applyOptions: (config, options) => ({ ...config, providerOptions: options }),
     applyToolPolicy: (config, toolPolicy) => {
       if (toolPolicy && !resolved.contract.supportsExactMcpPreapproval) {
         throw new ToolPolicyUnsupportedError(provider);
@@ -603,7 +716,11 @@ function createRegistryEntry(
     resolveCreateConfig: modelClient.resolveCreateConfig ?? resolveDefaultAgentCreateConfig,
     isCreateConfigUnattended:
       modelClient.isCreateConfigUnattended ?? isDefaultAgentCreateConfigUnattended,
-    fetchCatalog: async (options: FetchCatalogOptions, client?: AgentClient) => {
+    fetchCatalog: async (
+      options: FetchCatalogOptions,
+      client?: AgentClient,
+      context?: ProviderRefreshContext,
+    ) => {
       const catalogClient = client ?? modelClient;
       if (hasReplacementModels) {
         // Replacement models skip runtime model discovery, but additionalModels
@@ -611,23 +728,29 @@ function createRegistryEntry(
         // the single catalog API; otherwise use static/empty modes with no runtime.
         const models = mergeModelAdditions(provider, replacementModels, additionalModels);
         if (hasStaticModes) {
-          const defaultModeId = await catalogClient.resolveDefaultModeId?.({
-            config: {
-              provider,
-              cwd: options.scope === "workspace" ? options.cwd : process.cwd(),
-            },
-          });
+          const defaultModeId = await runProviderRefreshActivity(
+            context,
+            "default-mode",
+            async () =>
+              await catalogClient.resolveDefaultModeId?.({
+                config: {
+                  provider,
+                  cwd: options.scope === "workspace" ? options.cwd : process.cwd(),
+                },
+                signal: context?.signal,
+              }),
+          );
           return {
             models,
             modes: decorateModes(resolved.definition.modes),
             defaultModeId,
           };
         }
-        const catalog = await catalogClient.fetchCatalog(options);
+        const catalog = await catalogClient.fetchCatalog(options, context);
         return { ...catalog, models, modes: decorateModes(catalog.modes) };
       }
 
-      const catalog = await catalogClient.fetchCatalog(options);
+      const catalog = await catalogClient.fetchCatalog(options, context);
       return {
         ...catalog,
         models: mergeModels(provider, profileModels, additionalModels, catalog.models, {
@@ -647,17 +770,39 @@ function createResolvedProviderClient(
   const inner = resolved.createBaseClient(logger);
   const profileModels = resolveConfiguredModels(provider, inner, resolved.profileModels);
   const additionalModels = resolveConfiguredModels(provider, inner, resolved.additionalModels);
-  const hasModelOverrides = profileModels.length > 0 || additionalModels.length > 0;
-  if (inner.provider === provider && !hasModelOverrides) {
-    return inner;
-  }
   return wrapClientProvider(
     provider,
     inner,
     profileModels,
     additionalModels,
     resolved.profileModelsAreAdditive,
+    resolved.providerOptions,
   );
+}
+
+interface RegisteredProvider {
+  definition: AgentProviderDefinition;
+  createClient: ProviderClientFactory;
+  contract: ProviderContract;
+  runtimeSettings?: ProviderRuntimeSettings;
+  override?: ProviderOverride;
+}
+
+function resolveRegisteredProvider(input: RegisteredProvider): ResolvedProvider {
+  const { definition, override, contract } = input;
+  const runtimeSettings = mergeRuntimeSettings(input.runtimeSettings, toRuntimeSettings(override));
+  return {
+    definition: applyOverrideToDefinition(definition, override),
+    runtimeSettings,
+    profileModels: override?.models ?? [],
+    additionalModels: override?.additionalModels ?? [],
+    profileModelsAreAdditive: false,
+    enabled: override?.enabled ?? definition.enabledByDefault ?? true,
+    derivedFromProviderId: null,
+    providerOptions: configuredProviderOptions(override),
+    createBaseClient: (logger) => input.createClient(logger, runtimeSettings),
+    contract,
+  };
 }
 
 function buildResolvedBuiltinProviders(
@@ -668,6 +813,7 @@ function buildResolvedBuiltinProviders(
     | "workspaceGitService"
     | "managedProcesses"
     | "ompRuntime"
+    | "openCodeBridge"
     | "getArenaPreviewBaseUrl"
     | "uploadsRoot"
   >,
@@ -682,31 +828,24 @@ function buildResolvedBuiltinProviders(
   for (const definition of definitions) {
     const override = providerOverrides[definition.id];
     const factory = getProviderClientFactory(definition.id);
-    const mergedRuntimeSettings = mergeRuntimeSettings(
-      runtimeSettings?.[definition.id],
-      toRuntimeSettings(override),
+    resolvedProviders.set(
+      definition.id,
+      resolveRegisteredProvider({
+        definition,
+        override,
+        runtimeSettings: runtimeSettings?.[definition.id],
+        createClient: (logger, settings) =>
+          factory(logger, settings, {
+            workspaceGitService: options.workspaceGitService,
+            managedProcesses: options.managedProcesses,
+            ompRuntime: options.ompRuntime,
+            openCodeBridge: options.openCodeBridge,
+            getArenaPreviewBaseUrl: options.getArenaPreviewBaseUrl,
+            uploadsRoot: options.uploadsRoot,
+          }),
+        contract: PROVIDER_CONTRACTS[definition.id] ?? UNSUPPORTED_PROVIDER_CONTRACT,
+      }),
     );
-
-    resolvedProviders.set(definition.id, {
-      definition: applyOverrideToDefinition(definition, override),
-      runtimeSettings: mergedRuntimeSettings,
-      profileModels: override?.models ?? [],
-      additionalModels: override?.additionalModels ?? [],
-      profileModelsAreAdditive: false,
-      enabled: override?.enabled ?? definition.enabledByDefault ?? true,
-      derivedFromProviderId: null,
-      providerParams: override?.params,
-      createBaseClient: (logger) =>
-        factory(logger, mergedRuntimeSettings, {
-          workspaceGitService: options.workspaceGitService,
-          managedProcesses: options.managedProcesses,
-          ompRuntime: options.ompRuntime,
-          getArenaPreviewBaseUrl: options.getArenaPreviewBaseUrl,
-          uploadsRoot: options.uploadsRoot,
-          providerParams: override?.params,
-        }),
-      contract: PROVIDER_CONTRACTS[definition.id] ?? UNSUPPORTED_PROVIDER_CONTRACT,
-    });
   }
 
   return resolvedProviders;
@@ -715,7 +854,7 @@ function buildResolvedBuiltinProviders(
 function addDerivedProviders(
   resolvedProviders: Map<string, ResolvedProvider>,
   providerOverrides: Record<string, ProviderOverride>,
-  options: Pick<BuildProviderRegistryOptions, "managedProcesses">,
+  options: Pick<BuildProviderRegistryOptions, "managedProcesses" | "openCodeBridge">,
 ): void {
   for (const [providerId, override] of Object.entries(providerOverrides)) {
     if (resolvedProviders.has(providerId) || BUILTIN_PROVIDER_IDS.includes(providerId)) {
@@ -723,7 +862,8 @@ function addDerivedProviders(
     }
 
     if (!override.extends) {
-      throw new Error(`Custom provider '${providerId}' requires an extends value`);
+      // Plugin overrides can precede registration (including disabled or removed plugins).
+      continue;
     }
 
     if (override.extends === "acp") {
@@ -751,7 +891,7 @@ function addDerivedProviders(
         profileModelsAreAdditive: false,
         enabled: override.enabled !== false,
         derivedFromProviderId: null,
-        providerParams: override.params,
+        providerOptions: configuredProviderOptions(override),
         createBaseClient: (logger) => {
           const acpOptions = {
             logger,
@@ -759,7 +899,6 @@ function addDerivedProviders(
             env: override.env,
             providerId,
             label: override.label ?? providerId,
-            providerParams: override.params,
           };
           if (providerId === "cursor") {
             return new CursorACPAgentClient(acpOptions);
@@ -794,7 +933,7 @@ function addDerivedProviders(
     );
     const baseDefinition = baseProvider.definition;
     const baseFactory = getProviderClientFactory(baseProviderId);
-    const providerParams = override.params ?? baseProvider.providerParams;
+    const providerOptions = configuredProviderOptions(override) ?? baseProvider.providerOptions;
 
     resolvedProviders.set(providerId, {
       definition: createDerivedDefinition(providerId, baseDefinition, override),
@@ -804,11 +943,11 @@ function addDerivedProviders(
       profileModelsAreAdditive: false,
       enabled: override.enabled !== false,
       derivedFromProviderId: baseProviderId,
-      providerParams,
+      providerOptions,
       createBaseClient: (logger) =>
         baseFactory(logger, mergedRuntimeSettings, {
           managedProcesses: options.managedProcesses,
-          providerParams,
+          openCodeBridge: options.openCodeBridge,
           customProvider: {
             id: providerId,
             label: override.label ?? providerId,
@@ -818,6 +957,15 @@ function addDerivedProviders(
       contract: baseProvider.contract,
     });
   }
+}
+
+function arenaProviderClientOptions(
+  options: BuildProviderRegistryOptions | undefined,
+): Pick<ProviderClientFactoryOptions, "getArenaPreviewBaseUrl" | "uploadsRoot"> {
+  return {
+    getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
+    uploadsRoot: options?.uploadsRoot,
+  };
 }
 
 export function buildProviderRegistry(
@@ -833,13 +981,38 @@ export function buildProviderRegistry(
       workspaceGitService: options?.workspaceGitService,
       managedProcesses: options?.managedProcesses,
       ompRuntime: options?.ompRuntime,
-      getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
-      uploadsRoot: options?.uploadsRoot,
+      openCodeBridge: options?.openCodeBridge,
+      ...arenaProviderClientOptions(options),
     },
     options?.isDev === true,
   );
+  for (const [provider, definition] of Object.entries(options?.pluginProviders ?? {})) {
+    if (resolvedProviders.has(provider)) {
+      throw new Error(`Plugin provider '${provider}' conflicts with a built-in provider`);
+    }
+    const override = providerOverrides[provider];
+    if (definition.requiresConfiguration && !override) continue;
+
+    if (override?.extends) {
+      logger.warn({ provider }, "Plugin provider shadowed by configured provider");
+      continue;
+    }
+    resolvedProviders.set(
+      provider,
+      resolveRegisteredProvider({
+        definition,
+        override,
+        runtimeSettings: runtimeSettings?.[provider],
+        createClient: definition.createClient,
+        contract: {
+          supportsExactMcpPreapproval: definition.supportsExactMcpPreapproval,
+        },
+      }),
+    );
+  }
   addDerivedProviders(resolvedProviders, providerOverrides, {
     managedProcesses: options?.managedProcesses,
+    openCodeBridge: options?.openCodeBridge,
   });
 
   return Object.fromEntries(
@@ -901,4 +1074,12 @@ export async function shutdownAgentClients(
       }
     }),
   );
+}
+
+function configuredProviderOptions(
+  override: ProviderOverride | undefined,
+): ProviderOptions | undefined {
+  // COMPAT(providerParams): added in v0.10.0, remove after 2027-03-30 once configs use options.
+  // options wins as a whole record when both spellings are supplied.
+  return override?.options ?? override?.params;
 }

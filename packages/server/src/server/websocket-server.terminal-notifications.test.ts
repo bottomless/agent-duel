@@ -1,3 +1,5 @@
+import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
+import { SessionDelivery } from "./session/owned-subscriptions/index.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Server as HTTPServer } from "http";
 import type pino from "pino";
@@ -73,19 +75,19 @@ function createWorkspaceAutoNameStub(): WorkspaceAutoName {
 }
 
 function createTerminalManager() {
-  let listener: TerminalActivityListener | null = null;
+  const listeners = new Set<TerminalActivityListener>();
 
   const manager = createStub<TerminalManager>({
     subscribeTerminalActivity: vi.fn((l: TerminalActivityListener) => {
-      listener = l;
+      listeners.add(l);
       return () => {
-        listener = null;
+        listeners.delete(l);
       };
     }),
   });
 
   function emit(event: TerminalActivityTransitionEvent): void {
-    listener?.(event);
+    for (const listener of listeners) listener(event);
   }
 
   return { manager, emit };
@@ -108,6 +110,7 @@ function workspaceRecord(overrides?: Partial<PersistedWorkspaceRecord>): Persist
 function createWorkspaceRegistry(records: PersistedWorkspaceRecord[]): WorkspaceRegistry {
   return createStub<WorkspaceRegistry>({
     list: vi.fn(async () => records),
+    subscribeToMutations: vi.fn(() => () => {}),
   });
 }
 
@@ -129,6 +132,8 @@ function createServer(terminalManager: TerminalManager, workspaceRegistry?: Work
     })),
   };
   const daemonConfigStore = {
+    get: vi.fn(() => ({})),
+    onApply: vi.fn(() => () => {}),
     onChange: vi.fn(() => () => {}),
   };
 
@@ -144,6 +149,7 @@ function createServer(terminalManager: TerminalManager, workspaceRegistry?: Work
     null,
     { allowedOrigins: new Set() },
     createWorkspaceAutoNameStub(),
+    createWorkspaceRuntimeStore(),
     undefined,
     undefined,
     terminalManager,
@@ -188,12 +194,17 @@ function createOpenSocket() {
   };
 }
 
-function connectClient(server: VoiceAssistantWebSocketServer) {
+function connectClient(server: VoiceAssistantWebSocketServer, subscribed = true) {
   const ws = createOpenSocket();
+  const delivery = new SessionDelivery(() => {});
+  delivery.attach(ws, false);
   asInternals<{ sessions: Map<unknown, unknown> }>(server).sessions.set(ws, {
     kind: "trusted",
     session: {
+      delivery,
+      wantsSourceNotification: () => true,
       getClientActivity: vi.fn(() => null),
+      subscribesToTerminalDirectory: vi.fn(async () => subscribed),
     },
     clientId: "client-test",
     appVersion: null,
@@ -268,6 +279,25 @@ function transition(input: {
 describe("VoiceAssistantWebSocketServer terminal attention notifications", () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("does not emit attention without a matching terminal-directory subscription", async () => {
+    const { manager, emit } = createTerminalManager();
+    const { server, pushNotifications } = createServer(manager);
+    const ws = connectClient(server, false);
+
+    emit(
+      transition({
+        previousState: "working",
+        previousChangedAt: 1000,
+        state: "idle",
+        changedAt: 11001,
+      }),
+    );
+    await flushAsync();
+
+    expectNoTerminalAttentionMessage(ws);
+    expect(pushNotifications.sent).toHaveLength(1);
   });
 
   it("broadcasts terminal_attention_required after working -> idle", async () => {

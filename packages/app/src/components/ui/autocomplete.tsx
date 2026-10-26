@@ -13,7 +13,7 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { File, Folder } from "lucide-react-native";
 import type { Theme } from "@/styles/theme";
-import { getAutocompleteScrollOffset } from "./autocomplete-utils";
+import { getScrollOffsetToRevealItem } from "./scroll-reveal";
 
 export interface AutocompleteOption {
   id: string;
@@ -146,7 +146,7 @@ export function Autocomplete({
       return;
     }
 
-    const nextOffset = getAutocompleteScrollOffset({
+    const nextOffset = getScrollOffsetToRevealItem({
       currentOffset: scrollOffsetRef.current,
       viewportHeight: viewportHeightRef.current,
       itemTop: layout.top,
@@ -288,6 +288,8 @@ export function Autocomplete({
 
 const styles = StyleSheet.create((theme: Theme) => ({
   outerWrapper: {
+    flexShrink: 1,
+    minHeight: 0,
     gap: theme.spacing[1],
   },
   detailCard: {
@@ -301,20 +303,22 @@ const styles = StyleSheet.create((theme: Theme) => ({
   },
   detailLabel: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.normal,
   },
   detailDescription: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     marginTop: theme.spacing[1],
   },
   detailHint: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     marginTop: theme.spacing[1],
   },
   container: {
+    flexShrink: 1,
+    minHeight: 0,
     backgroundColor: theme.colors.surface1,
     borderWidth: theme.borderWidth[1],
     borderColor: theme.colors.borderAccent,
@@ -363,22 +367,22 @@ const styles = StyleSheet.create((theme: Theme) => ({
   },
   itemLabel: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.normal,
   },
   itemDetail: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   itemDescription: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     marginTop: 2,
   },
   itemDescriptionInline: {
     flex: 1,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   emptyItem: {
     paddingHorizontal: theme.spacing[3],
@@ -386,6 +390,6 @@ const styles = StyleSheet.create((theme: Theme) => ({
   },
   emptyText: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 })) as unknown as Record<string, object>;

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { connectToDaemon, getDaemonHost } from "../../utils/client.js";
+import { resolveCallerAgentId } from "../../utils/caller-agent.js";
 import type { CommandError, CommandOptions, SingleResult } from "../../output/index.js";
 import { toWorkspaceRow, workspaceSchema, type WorkspaceRow } from "./shared.js";
 
@@ -15,6 +16,7 @@ export interface WorkspaceCreateOptions extends CommandOptions {
   branch?: string;
   prNumber?: string;
   forge?: string;
+  background?: boolean;
 }
 
 interface WorktreeSourceBase {
@@ -134,8 +136,8 @@ export async function runCreateCommand(
   options: WorkspaceCreateOptions,
   _command: Command,
 ): Promise<SingleResult<WorkspaceRow>> {
-  const host = getDaemonHost({ host: options.host });
-  const client = await connectToDaemon({ host: options.host }).catch((error: unknown) => {
+  const host = getDaemonHost({ target: options.daemonTarget });
+  const client = await connectToDaemon({ target: options.daemonTarget }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     throw {
       code: "DAEMON_NOT_RUNNING",
@@ -144,15 +146,19 @@ export async function runCreateCommand(
   });
 
   try {
+    const callerAgentId = await resolveCallerAgentId(client);
     const payload = await client.createWorkspace({
       source: buildWorkspaceSource(options),
       ...(options.title ? { title: options.title } : {}),
+      ...(options.background !== undefined ? { background: options.background } : {}),
+      ...(callerAgentId ? { callerAgentId } : {}),
     });
     if (!payload.workspace) {
       throw new Error(payload.error ?? "Workspace creation failed");
     }
     return { type: "single", data: toWorkspaceRow(payload.workspace), schema: workspaceSchema };
   } catch (error) {
+    if (error && typeof error === "object" && "code" in error) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw { code: "WORKSPACE_CREATE_FAILED", message } satisfies CommandError;
   } finally {

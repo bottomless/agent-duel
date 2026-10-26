@@ -10,18 +10,10 @@ import {
   extractRelayMessage,
 } from "./daemon-client-transport.js";
 
-const createClientChannelMock = vi.hoisted(() => vi.fn());
-
-vi.mock("@getpaseo/relay/e2ee", () => ({
-  createClientChannel: createClientChannelMock,
-}));
-
 describe("daemon-client transport helpers", () => {
   test("createEncryptedTransport closes handshake failures with browser-safe code", async () => {
-    createClientChannelMock.mockReset();
-    createClientChannelMock.mockRejectedValueOnce(new Error("handshake failed"));
-
-    let openHandler: (() => void) | null = null;
+    // An unusable daemon key fails the handshake before any frame is sent.
+    const connection: { open: (() => void) | null } = { open: null };
     const close = vi.fn();
 
     createEncryptedTransport(
@@ -29,10 +21,10 @@ describe("daemon-client transport helpers", () => {
         send: vi.fn(),
         close,
         onOpen: (handler) => {
-          openHandler = handler;
+          connection.open = handler;
           return () => {
-            if (openHandler === handler) {
-              openHandler = null;
+            if (connection.open === handler) {
+              connection.open = null;
             }
           };
         },
@@ -40,12 +32,11 @@ describe("daemon-client transport helpers", () => {
         onError: () => () => {},
         onMessage: () => () => {},
       },
-      "daemon-public-key",
-      { warn: vi.fn() },
+      { daemonPublicKeyB64: "not-a-key", logger: { warn: vi.fn() } },
     );
 
-    expect(openHandler).not.toBeNull();
-    openHandler?.();
+    expect(connection.open).not.toBeNull();
+    connection.open?.();
 
     await vi.waitFor(() => {
       expect(close).toHaveBeenCalledWith(4001, "E2EE handshake failed");

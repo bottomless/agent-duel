@@ -1,7 +1,11 @@
 import { Command, Option } from "commander";
-import { getStructuredAgentResponse, StructuredAgentResponseError } from "@getpaseo/server";
+import {
+  getStructuredAgentResponse,
+  StructuredAgentResponseError,
+} from "@getpaseo/server/agent-response";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
-import { connectToDaemon, getDaemonHost } from "../../utils/client.js";
+import { resolveCallerAgentId } from "../../utils/caller-agent.js";
+import { connectToDaemon } from "../../utils/client.js";
 import type {
   CommandOptions,
   SingleResult,
@@ -23,10 +27,13 @@ export function addRunOptions(cmd: Command): Command {
     cmd
       .description("Create and start an agent with a task")
       .argument("<prompt>", "The task/prompt for the agent")
-      .option("-d, --background", "Run in background")
+      .option("--no-wait", "Return immediately without waiting for completion")
+      // COMPAT(backgroundRunFlag): --background was the documented spelling of
+      // --no-wait. Added in v0.2.0; remove after 2027-04-01.
+      .addOption(new Option("-d, --background", "Legacy alias for --no-wait").hideHelp())
       // COMPAT(detachRunFlag): --detach used to mean background execution, not
       // ownership transfer. Added in v0.2.0; remove after 2027-01-17.
-      .addOption(new Option("--detach", "Legacy alias for --background").hideHelp())
+      .addOption(new Option("--detach", "Legacy alias for --no-wait").hideHelp())
       .option("--title <title>", "Assign a title to the agent")
       .addOption(new Option("--name <name>", "Hidden alias for --title").hideHelp())
       .option(
@@ -107,6 +114,7 @@ export const agentRunSchema: OutputSchema<AgentRunResult> = {
 };
 
 export interface AgentRunOptions extends CommandOptions {
+  wait?: boolean;
   background?: boolean;
   detach?: boolean;
   title?: string;
@@ -140,6 +148,7 @@ function resolveNewWorkspaceKind(options: AgentRunOptions): string | undefined {
 function buildRunWorkspaceSource(options: AgentRunOptions, cwd: string) {
   const newWorkspace = resolveNewWorkspaceKind(options) ?? "local";
   return buildWorkspaceSource({
+    daemonTarget: options.daemonTarget,
     isolation: newWorkspace,
     path: cwd,
     mode: options.worktreeMode,
@@ -181,6 +190,7 @@ function loadOutputSchema(value: string): Record<string, unknown> {
     try {
       source = readFileSync(resolve(trimmed), "utf8");
     } catch (err) {
+      if (err && typeof err === "object" && "code" in err) throw err;
       const message = err instanceof Error ? err.message : String(err);
       const error: CommandError = {
         code: "INVALID_OUTPUT_SCHEMA",
@@ -195,6 +205,7 @@ function loadOutputSchema(value: string): Record<string, unknown> {
   try {
     parsed = JSON.parse(source);
   } catch (err) {
+    if (err && typeof err === "object" && "code" in err) throw err;
     const message = err instanceof Error ? err.message : String(err);
     const error: CommandError = {
       code: "INVALID_OUTPUT_SCHEMA",
@@ -382,19 +393,25 @@ function validateRunOptions(prompt: string, options: AgentRunOptions, outputSche
     } satisfies CommandError;
   }
 
+  if (options.background) {
+    console.error("Warning: --background (-d) is deprecated. Use --no-wait instead.");
+  }
+
   validateRunWorkspaceOptions(options);
 
-  if (outputSchema && runsInBackground(options)) {
+  if (outputSchema && !waitsForFinish(options)) {
     throw {
       code: "INVALID_OPTIONS",
-      message: "--output-schema cannot be used with --background",
+      message: "--output-schema cannot be used with --no-wait",
       details: "Structured output requires waiting for the agent to finish",
     } satisfies CommandError;
   }
 }
 
-function runsInBackground(options: Pick<AgentRunOptions, "background" | "detach">): boolean {
-  return Boolean(options.background || options.detach);
+export function waitsForFinish(
+  options: Pick<AgentRunOptions, "wait" | "background" | "detach">,
+): boolean {
+  return options.wait !== false && !options.background && !options.detach;
 }
 
 function parseWaitTimeoutOption(waitTimeout: string | undefined): number {
@@ -406,6 +423,7 @@ function parseWaitTimeoutOption(waitTimeout: string | undefined): number {
     }
     return ms;
   } catch (err) {
+    if (err && typeof err === "object" && "code" in err) throw err;
     const message = err instanceof Error ? err.message : String(err);
     throw {
       code: "INVALID_TIMEOUT",
@@ -432,6 +450,7 @@ function loadRunImages(
         mimeType,
       };
     } catch (err) {
+      if (err && typeof err === "object" && "code" in err) throw err;
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`Failed to read image ${imagePath}: ${message}`, { cause: err });
     }
@@ -482,22 +501,6 @@ function parseKeyValueFlags(
   return labels;
 }
 
-async function connectToDaemonOrThrow(
-  hostOption: string | undefined,
-  host: string,
-): Promise<ConnectedDaemonClient> {
-  try {
-    return await connectToDaemon({ host: hostOption });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw {
-      code: "DAEMON_NOT_RUNNING",
-      message: `Cannot connect to daemon at ${host}: ${message}`,
-      details: "Start the daemon with: paseo daemon start",
-    } satisfies CommandError;
-  }
-}
-
 // A workspace is the explicit home of a run: it owns the directory the agent
 // runs in. The CLI resolves one before creating any agent, so no run leans on
 // createAgent's legacy cwd->workspace fallback.
@@ -534,7 +537,7 @@ export async function resolveExistingRunWorkspace(
 
 // Workspace policy for `paseo run`. Precedence:
 //   1. --workspace <id>            -> run in that existing workspace
-//   2. $PASEO_AGENT_ID             -> daemon resolves the caller's workspace
+//   2. caller agent                -> daemon resolves the caller's workspace
 //   3. $PASEO_WORKSPACE_ID         -> exported by workspace terminals
 //   4. --new-workspace <kind>      -> mint a new workspace explicitly
 //   5. bare run                    -> mint a new local-backed workspace for cwd
@@ -542,6 +545,7 @@ async function resolveRunWorkspace(
   client: ConnectedDaemonClient,
   options: AgentRunOptions,
   cwd: string,
+  callerAgentId: string | undefined,
 ): Promise<RunWorkspace> {
   const newWorkspace = resolveNewWorkspaceKind(options);
   const explicit = newWorkspace ? undefined : options.workspace?.trim();
@@ -550,7 +554,7 @@ async function resolveRunWorkspace(
     return resolveExistingRunWorkspace(client, explicit);
   }
 
-  if (!newWorkspace && resolveRunCallerAgentId()) {
+  if (!newWorkspace && callerAgentId) {
     return { cwd };
   }
 
@@ -563,7 +567,10 @@ async function resolveRunWorkspace(
   // TODO: thread the run `prompt` as firstAgentContext so workspace-level
   // title/branch generation picks up the task description (U8/U6 deferred).
   const source = buildRunWorkspaceSource(options, cwd);
-  const result = await client.createWorkspace({ source });
+  const result = await client.createWorkspace({
+    source,
+    ...(callerAgentId ? { callerAgentId } : {}),
+  });
 
   if (!result.workspace) {
     throw {
@@ -575,6 +582,7 @@ async function resolveRunWorkspace(
   const branch = result.workspace.gitRuntime?.currentBranch;
   const label = branch ? `${result.workspace.name} (${branch})` : result.workspace.name;
   console.error(`Created workspace ${result.workspace.id} - ${label}`);
+  if (result.setupSkippedReason) console.error(result.setupSkippedReason);
   console.error(
     "Tip: pass --workspace <id> (or set PASEO_WORKSPACE_ID) to run in an existing workspace.",
   );
@@ -586,7 +594,6 @@ export async function runRunCommand(
   options: AgentRunOptions,
   _command: Command,
 ): Promise<SingleResult<AgentRunResult>> {
-  const host = getDaemonHost({ host: options.host });
   const outputSchema = options.outputSchema ? loadOutputSchema(options.outputSchema) : undefined;
 
   validateRunOptions(prompt, options, outputSchema);
@@ -595,7 +602,7 @@ export async function runRunCommand(
   const resolvedProviderModel = resolveProviderAndModel(options);
   const resolvedTitle = options.title ?? options.name;
 
-  const client = await connectToDaemonOrThrow(options.host, host);
+  const client = await connectToDaemon({ target: options.daemonTarget });
 
   try {
     // Resolve working directory
@@ -617,9 +624,9 @@ export async function runRunCommand(
     const env = parseRunEnv(options.env);
     const requestEnv = Object.keys(env).length > 0 ? env : undefined;
 
-    const workspace = await resolveRunWorkspace(client, options, cwd);
+    const callerAgentId = await resolveCallerAgentId(client);
+    const workspace = await resolveRunWorkspace(client, options, cwd, callerAgentId);
     const workspaceId = workspace.id;
-    const callerAgentId = resolveRunCallerAgentId();
     const runCwd = workspace.cwd;
 
     if (outputSchema) {
@@ -713,8 +720,8 @@ export async function runRunCommand(
       labels: Object.keys(labels).length > 0 ? labels : undefined,
     });
 
-    // Default run behavior is foreground: wait for completion unless background execution is set.
-    if (!runsInBackground(options)) {
+    // Default run behavior is foreground: wait for completion unless --no-wait is set.
+    if (waitsForFinish(options)) {
       const state = await client.waitForFinish(agent.id, waitTimeoutMs);
       await client.close();
 
@@ -749,10 +756,4 @@ export async function runRunCommand(
     };
     throw error;
   }
-}
-
-export function resolveRunCallerAgentId(
-  env: { PASEO_AGENT_ID?: string } = process.env,
-): string | undefined {
-  return env.PASEO_AGENT_ID?.trim() || undefined;
 }

@@ -1,105 +1,163 @@
 import { isSyntaxThemeId, type SyntaxThemeId } from "@getpaseo/highlight";
 import type { QueryClient } from "@tanstack/react-query";
 import type { DesktopSettings } from "@/desktop/settings/desktop-settings";
-import { parseAppLanguage, type AppLanguage } from "@/i18n/locales";
+import type { AppLanguage } from "@/i18n/locales";
+import type { SidebarNavPreference } from "@/sidebar-nav/model";
+import {
+  DEFAULT_USAGE_PREFERENCES,
+  UsagePreferencesSchema,
+  type UsagePreferences,
+} from "@/usage/preferences";
 import {
   DEFAULT_SIDEBAR_CHECKS_DISPLAY,
-  parseSidebarChecksDisplay,
   type SidebarChecksDisplay,
 } from "@/components/sidebar/display-preferences/checks-display";
 import {
   DEFAULT_SIDEBAR_ROW_ITEMS,
   isChecksHiddenByLegacyRowItem,
-  parseSidebarRowItems,
   type SidebarRowItems,
 } from "@/components/sidebar/display-preferences/row-items";
-import { THEME_OPTIONS, type ThemePreference } from "@/styles/theme";
+import { isNative } from "@/constants/platform";
+import {
+  DEFAULT_CONTENT_MAX_WIDTH,
+  FONT_SIZE,
+  PLUGIN_THEME_PREFERENCE,
+  THEME_OPTIONS,
+  type ThemePreference,
+} from "@/styles/theme";
+import { z } from "zod";
+import { APP_SETTINGS_KEY, LEGACY_SETTINGS_KEY } from "./keys";
+import { migrateAppSettings } from "./migrations";
 
-export const APP_SETTINGS_KEY = "@paseo:app-settings";
+export { APP_SETTINGS_KEY } from "./keys";
 export const APP_SETTINGS_QUERY_KEY = ["app-settings"];
-const LEGACY_SETTINGS_KEY = "@paseo:settings";
 
 export type ReleaseChannel = "stable" | "beta";
 export type WorkspaceTitleSource = "title" | "branch";
+export type PullRequestOpenLocation = "main" | "side" | "explorer";
 /** What a sidebar workspace row shows in the space to the right of its title. */
 export type SidebarWorkspaceTrailing = "diff" | "timestamp" | "none";
 export type ToolCallDetailLevel = "overview" | "detailed";
 /** Which edge of the workspace the side panel is docked to. */
 export type SidePanelPlacement = "right" | "bottom";
 
-const VALID_THEMES = new Set<string>(THEME_OPTIONS.map((option) => option.name));
-const VALID_WORKSPACE_TITLE_SOURCES = new Set<WorkspaceTitleSource>(["title", "branch"]);
-const VALID_SIDEBAR_WORKSPACE_TRAILINGS = new Set<SidebarWorkspaceTrailing>([
-  "diff",
-  "timestamp",
-  "none",
+const ThemePreferenceSchema = z.enum([
+  ...THEME_OPTIONS.map((option) => option.name),
+  PLUGIN_THEME_PREFERENCE,
 ]);
-const VALID_TOOL_CALL_DETAIL_LEVELS = new Set<ToolCallDetailLevel>(["overview", "detailed"]);
-const VALID_SIDE_PANEL_PLACEMENTS = new Set<SidePanelPlacement>(["right", "bottom"]);
+/** Where the theme picker lands when the persisted preference cannot be honoured. */
+export const DEFAULT_THEME_PREFERENCE = "auto" satisfies ThemePreference;
 export const DEFAULT_TERMINAL_SCROLLBACK_LINES = 10_000;
 export const MIN_TERMINAL_SCROLLBACK_LINES = 0;
 export const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000;
-export const DEFAULT_UI_FONT_SIZE = 16; // == FONT_SIZE.base
-export const MIN_UI_FONT_SIZE = 11;
-export const MAX_UI_FONT_SIZE = 24;
+export function defaultUiBaseFontSize(native: boolean): number {
+  return native ? 15 : FONT_SIZE.base;
+}
+
+export const DEFAULT_UI_BASE_FONT_SIZE = defaultUiBaseFontSize(isNative);
+export const MIN_UI_BASE_FONT_SIZE = 10;
+export const MAX_UI_BASE_FONT_SIZE = 21;
+export function defaultContentFontSize(native: boolean): number {
+  return native ? 16 : FONT_SIZE.content;
+}
+
+export const DEFAULT_CONTENT_FONT_SIZE = defaultContentFontSize(isNative);
+export const MIN_CONTENT_FONT_SIZE = 10;
+export const MAX_CONTENT_FONT_SIZE = 21;
 export const DEFAULT_CODE_FONT_SIZE = 12; // == FONT_SIZE.code
 export const MIN_CODE_FONT_SIZE = 9;
 export const MAX_CODE_FONT_SIZE = 22; // line-height 1.5×22=33 stays safe
 export const MAX_FONT_FAMILY_LENGTH = 200;
+export { DEFAULT_CONTENT_MAX_WIDTH };
+export const MIN_CONTENT_MAX_WIDTH = 600;
+export const MAX_CONTENT_MAX_WIDTH = 4000;
 
 export interface AppSettings {
   theme: ThemePreference;
+  /** Which contributed theme `theme: "plugin"` selects. */
+  pluginThemeId: string | null;
   language: AppLanguage;
   terminalScrollbackLines: number;
-  useLegacyTerminalRenderer: boolean;
   uiFontFamily: string; // "" = platform default UI stack
   monoFontFamily: string; // "" = platform default mono stack
-  uiFontSize: number; // clamped px, default 16
+  uiBaseFontSize: number; // clamped px, platform default 14 or 15
+  contentFontSize: number; // clamped px, platform default 15 or 16
   codeFontSize: number; // clamped px, default 12
+  /** Max width of chat and markdown content in px; null follows the current default. */
+  contentMaxWidth: number | null;
   syntaxTheme: SyntaxThemeId; // default "one"
   workspaceTitleSource: WorkspaceTitleSource;
   sidebarWorkspaceTrailing: SidebarWorkspaceTrailing;
   sidebarRowItems: SidebarRowItems;
   sidebarChecksDisplay: SidebarChecksDisplay;
+  /** Top-level sidebar rows in display order; empty means the default order, all visible. */
+  sidebarNavItems: SidebarNavPreference[];
+  /** Sidebar footer items in display order; empty means the default order, all visible. */
+  sidebarFooterItems: SidebarNavPreference[];
+  /** How usage reads and which windows the sidebar summary shows. */
+  usage: UsagePreferences;
   autoExpandReasoning: boolean;
   toolCallDetailLevel: ToolCallDetailLevel;
   chatOutlineEnabled: boolean;
   vimKeybindings: boolean;
+  filePanelAssociations: Record<string, string>;
+  /** Desktop-only preferences for implicit opens into the ordinary side pane. */
+  openInSidePane: OpenInSidePanePreferences;
+  pullRequestOpenLocation: PullRequestOpenLocation;
   sidePanelPlacement: SidePanelPlacement;
 }
+
+export type AppSettingsUpdate =
+  | Partial<AppSettings>
+  | ((current: AppSettings) => Partial<AppSettings>);
+
+export interface OpenInSidePanePreferences {
+  explorerFiles: boolean;
+  diffs: boolean;
+  chatFiles: boolean;
+  diffFiles: boolean;
+  subagents: boolean;
+}
+
+export const DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES: OpenInSidePanePreferences = {
+  explorerFiles: false,
+  diffs: false,
+  chatFiles: false,
+  diffFiles: false,
+  subagents: false,
+};
 
 export interface Settings extends AppSettings {
   manageBuiltInDaemon: boolean;
   releaseChannel: ReleaseChannel;
 }
 
-/**
- * `sidebarRowItems` is widened back to `unknown` because it is still read for a value the
- * current shape no longer has — see `isChecksHiddenByLegacyRowItem`.
- */
-type StoredAppSettings = Partial<Omit<AppSettings, "sidebarRowItems">> & {
-  compactToolCalls?: unknown;
-  sidebarRowItems?: unknown;
-};
-
 export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
-  theme: "auto",
+  theme: DEFAULT_THEME_PREFERENCE,
+  pluginThemeId: null,
   language: "system",
   terminalScrollbackLines: DEFAULT_TERMINAL_SCROLLBACK_LINES,
-  useLegacyTerminalRenderer: false,
   uiFontFamily: "",
   monoFontFamily: "",
-  uiFontSize: DEFAULT_UI_FONT_SIZE,
+  uiBaseFontSize: DEFAULT_UI_BASE_FONT_SIZE,
+  contentFontSize: DEFAULT_CONTENT_FONT_SIZE,
   codeFontSize: DEFAULT_CODE_FONT_SIZE,
+  contentMaxWidth: null,
   syntaxTheme: "one",
   workspaceTitleSource: "title",
-  sidebarWorkspaceTrailing: "diff",
+  sidebarWorkspaceTrailing: "timestamp",
   sidebarRowItems: DEFAULT_SIDEBAR_ROW_ITEMS,
   sidebarChecksDisplay: DEFAULT_SIDEBAR_CHECKS_DISPLAY,
+  sidebarNavItems: [],
+  sidebarFooterItems: [],
+  usage: DEFAULT_USAGE_PREFERENCES,
   autoExpandReasoning: false,
   toolCallDetailLevel: "overview",
   chatOutlineEnabled: true,
   vimKeybindings: false,
+  filePanelAssociations: {},
+  openInSidePane: DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
+  pullRequestOpenLocation: "explorer",
   sidePanelPlacement: "right",
 };
 
@@ -109,9 +167,168 @@ export const DEFAULT_APP_SETTINGS: Settings = {
   releaseChannel: "stable",
 };
 
+function clampedNumber(min: number, max: number) {
+  return z
+    .unknown()
+    .transform((value) => parseClampedFontSize(value, { min, max }))
+    .pipe(z.number());
+}
+
+function sanitizedFontFamily() {
+  return z.unknown().transform(sanitizeFontFamily).pipe(z.string());
+}
+
+const SidebarRowItemsSchema = z
+  .looseObject({
+    branch: z.boolean().catch(DEFAULT_SIDEBAR_ROW_ITEMS.branch),
+    project: z.boolean().catch(DEFAULT_SIDEBAR_ROW_ITEMS.project),
+    changeRequest: z.boolean().catch(DEFAULT_SIDEBAR_ROW_ITEMS.changeRequest),
+    services: z.boolean().optional().catch(undefined),
+    labels: z.boolean().catch(DEFAULT_SIDEBAR_ROW_ITEMS.labels),
+    // COMPAT(sidebarRowItemsChecks): migrated in v0.3.0, remove after 2027-08-05.
+    checks: z.boolean().optional().catch(undefined),
+    // COMPAT(sidebarRowItemsScripts): migrated in v0.3.0, remove after 2027-08-05.
+    scripts: z.boolean().optional().catch(undefined),
+  })
+  .catch(DEFAULT_SIDEBAR_ROW_ITEMS);
+
+type StoredAppSettingsFallback = AppSettings & {
+  uiFontSize?: number;
+  compactToolCalls?: boolean;
+  manageBuiltInDaemon?: boolean;
+  releaseChannel?: ReleaseChannel;
+  needsWrite: boolean;
+};
+
+const DEFAULT_STORED_APP_SETTINGS = {
+  ...DEFAULT_CLIENT_SETTINGS,
+  needsWrite: false,
+} satisfies StoredAppSettingsFallback;
+
+const StoredAppSettingsSchema = z
+  .looseObject({
+    theme: ThemePreferenceSchema.catch(DEFAULT_THEME_PREFERENCE),
+    pluginThemeId: z.string().nullable().catch(null),
+    language: z
+      .enum(["system", "ar", "en", "es", "fr", "ja", "ko", "pt-BR", "ru", "zh-CN"])
+      .catch("system"),
+    terminalScrollbackLines: clampedNumber(
+      MIN_TERMINAL_SCROLLBACK_LINES,
+      MAX_TERMINAL_SCROLLBACK_LINES,
+    ).catch(DEFAULT_TERMINAL_SCROLLBACK_LINES),
+    uiFontFamily: sanitizedFontFamily().catch(""),
+    monoFontFamily: sanitizedFontFamily().catch(""),
+    uiBaseFontSize: clampedNumber(MIN_UI_BASE_FONT_SIZE, MAX_UI_BASE_FONT_SIZE)
+      .optional()
+      .catch(undefined),
+    contentFontSize: clampedNumber(MIN_CONTENT_FONT_SIZE, MAX_CONTENT_FONT_SIZE)
+      .optional()
+      .catch(DEFAULT_CONTENT_FONT_SIZE),
+    // COMPAT(uiFontSizeScale): replaced by the literal base size in v0.4, remove after 2027-08-17.
+    uiFontSize: clampedNumber(11, 24).optional().catch(undefined),
+    codeFontSize: clampedNumber(MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE).catch(
+      DEFAULT_CODE_FONT_SIZE,
+    ),
+    contentMaxWidth: z
+      .null()
+      .or(clampedNumber(MIN_CONTENT_MAX_WIDTH, MAX_CONTENT_MAX_WIDTH))
+      .catch(null),
+    syntaxTheme: z.string().refine(isSyntaxThemeId).catch("one"),
+    workspaceTitleSource: z.enum(["title", "branch"]).catch("title"),
+    sidebarWorkspaceTrailing: z.enum(["diff", "timestamp", "none"]).catch("timestamp"),
+    sidebarRowItems: SidebarRowItemsSchema,
+    sidebarChecksDisplay: z
+      .enum(["iconAndText", "icon", "none"])
+      .optional()
+      .catch(DEFAULT_SIDEBAR_CHECKS_DISPLAY),
+    sidebarNavItems: z.array(z.object({ key: z.string(), visible: z.boolean() })).catch([]),
+    sidebarFooterItems: z.array(z.object({ key: z.string(), visible: z.boolean() })).catch([]),
+    usage: UsagePreferencesSchema,
+    autoExpandReasoning: z.boolean().catch(false),
+    toolCallDetailLevel: z
+      .enum(["overview", "detailed"])
+      .or(z.literal("concise").transform(() => "overview" as const))
+      .optional()
+      .catch("overview"),
+    // COMPAT(compactToolCalls): migrated in v0.1.105, remove after 2027-01-12.
+    compactToolCalls: z.boolean().optional().catch(undefined),
+    chatOutlineEnabled: z.boolean().catch(true),
+    vimKeybindings: z.boolean().catch(false),
+    filePanelAssociations: z.record(z.string(), z.string()).catch({}),
+    openInSidePane: z
+      .object({
+        explorerFiles: z.boolean().catch(false),
+        diffs: z.boolean().optional(),
+        // COMPAT(diffDestinationPreference): legacy split preferences, remove after 2027-02-26.
+        explorerChanges: z.boolean().optional(),
+        changesLinks: z.boolean().optional(),
+        chatFiles: z.boolean().catch(false),
+        diffFiles: z.boolean().catch(false),
+        subagents: z.boolean().catch(false),
+        // COMPAT(pullRequestOpenLocation): legacy side-pane toggle, remove after 2027-02-26.
+        pullRequests: z.boolean().optional(),
+      })
+      .transform(({ explorerChanges, changesLinks, pullRequests, ...preferences }) => ({
+        ...preferences,
+        diffs: preferences.diffs ?? explorerChanges ?? changesLinks ?? false,
+        legacyPullRequestsInSidePane: pullRequests,
+      }))
+      .catch({
+        ...DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
+        legacyPullRequestsInSidePane: undefined,
+      }),
+    pullRequestOpenLocation: z.enum(["main", "side", "explorer"]).optional(),
+    sidePanelPlacement: z.enum(["right", "bottom"]).catch("right"),
+    // COMPAT(explorerSidebarRouting): replaced by source-specific side-pane preferences in v0.6.
+    openSupportingTabsInSidePanel: z.boolean().optional().catch(undefined),
+    // COMPAT(rendererDesktopSettings): these fields used to share this renderer-owned key.
+    manageBuiltInDaemon: z.boolean().optional().catch(undefined),
+    releaseChannel: z.enum(["stable", "beta"]).optional().catch(undefined),
+  })
+  .transform((stored) => {
+    const { legacyPullRequestsInSidePane, ...openInSidePane } = stored.openInSidePane;
+    const needsWrite =
+      (stored.uiBaseFontSize === undefined && stored.uiFontSize !== undefined) ||
+      stored.contentFontSize === undefined;
+    const uiBaseFontSize =
+      stored.uiBaseFontSize ??
+      (stored.uiFontSize === undefined
+        ? DEFAULT_UI_BASE_FONT_SIZE
+        : Math.round((FONT_SIZE.base * stored.uiFontSize) / 16));
+    const sidebarChecksDisplay =
+      stored.sidebarChecksDisplay ??
+      (isChecksHiddenByLegacyRowItem(stored.sidebarRowItems)
+        ? "none"
+        : DEFAULT_SIDEBAR_CHECKS_DISPLAY);
+    const toolCallDetailLevel =
+      stored.toolCallDetailLevel ?? (stored.compactToolCalls === false ? "detailed" : "overview");
+    return {
+      ...stored,
+      openInSidePane,
+      pullRequestOpenLocation:
+        stored.pullRequestOpenLocation ?? (legacyPullRequestsInSidePane ? "side" : "explorer"),
+      uiBaseFontSize,
+      contentFontSize: stored.contentFontSize ?? uiBaseFontSize,
+      sidebarChecksDisplay,
+      sidebarRowItems: {
+        ...stored.sidebarRowItems,
+        services:
+          stored.sidebarRowItems.services ??
+          (stored.sidebarRowItems.scripts === false ? false : DEFAULT_SIDEBAR_ROW_ITEMS.services),
+      },
+      toolCallDetailLevel,
+      needsWrite,
+    };
+  })
+  .catch(DEFAULT_STORED_APP_SETTINGS);
+
+type StoredAppSettings = z.output<typeof StoredAppSettingsSchema>;
+export type PersistedAppSettings = Omit<StoredAppSettings, "needsWrite">;
+
 export interface KeyValueStorage {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
 }
 
 export interface DesktopSettingsBridge {
@@ -132,7 +349,7 @@ const settingsWrites = new WeakMap<QueryClient, Promise<void>>();
 
 export async function saveAppSettings(input: {
   queryClient: QueryClient;
-  updates: Partial<AppSettings>;
+  updates: AppSettingsUpdate;
   deps: SettingsDeps;
 }): Promise<void> {
   const previous = settingsWrites.get(input.queryClient) ?? Promise.resolve();
@@ -141,8 +358,15 @@ export async function saveAppSettings(input: {
     const storedCurrent =
       input.queryClient.getQueryData<AppSettings>(APP_SETTINGS_QUERY_KEY) ??
       (await loadAppSettingsFromStorage(input.deps));
-    const next = { ...normalizeAppSettings(storedCurrent), ...input.updates };
-    await input.deps.storage.setItem(APP_SETTINGS_KEY, JSON.stringify(next));
+    const current = normalizeAppSettings(storedCurrent);
+    const updates = typeof input.updates === "function" ? input.updates(current) : input.updates;
+    const next = { ...current, ...updates };
+    await writeAppSettings(
+      input.deps.storage,
+      (await readSettingsObject(input.deps.storage, APP_SETTINGS_KEY)) ??
+        StoredAppSettingsSchema.parse({}),
+      next,
+    );
     input.queryClient.setQueryData<AppSettings>(APP_SETTINGS_QUERY_KEY, next);
   })();
   settingsWrites.set(input.queryClient, write);
@@ -151,28 +375,49 @@ export async function saveAppSettings(input: {
 
 export async function loadAppSettingsFromStorage(deps: SettingsDeps): Promise<AppSettings> {
   try {
-    const stored = await deps.storage.getItem(APP_SETTINGS_KEY);
-    if (stored) {
-      return normalizeAppSettings(JSON.parse(stored));
+    const read = await readAppSettings(deps);
+    if (read.needsWrite) {
+      await writeAppSettings(deps.storage, read.stored, read.settings);
     }
-
-    const legacyStored = await deps.storage.getItem(LEGACY_SETTINGS_KEY);
-    if (legacyStored) {
-      const legacyParsed = JSON.parse(legacyStored) as Record<string, unknown>;
-      const next = {
-        ...DEFAULT_CLIENT_SETTINGS,
-        ...pickAppSettingsFromLegacy(legacyParsed),
-      } satisfies AppSettings;
-      await deps.storage.setItem(APP_SETTINGS_KEY, JSON.stringify(next));
-      return next;
-    }
-
-    await deps.storage.setItem(APP_SETTINGS_KEY, JSON.stringify(DEFAULT_CLIENT_SETTINGS));
-    return DEFAULT_CLIENT_SETTINGS;
+    const { needsWrite: _needsWrite, ...stored } = read.stored;
+    return await migrateAppSettings(read.settings, deps.storage, stored, { native: isNative });
   } catch (error) {
     console.error("[AppSettings] Failed to load settings:", error);
     throw error;
   }
+}
+
+/**
+ * Reads whichever of the settings blobs exists, without migrating. `needsWrite` covers the reads
+ * that produce settings the stored blob does not already spell out.
+ */
+async function readAppSettings(
+  deps: SettingsDeps,
+): Promise<{ settings: AppSettings; needsWrite: boolean; stored: StoredAppSettings }> {
+  const stored = await readSettingsObject(deps.storage, APP_SETTINGS_KEY);
+  if (stored) {
+    return {
+      settings: normalizeAppSettings(stored),
+      // COMPAT(uiFontSizeScale): persist the converted base size, remove after 2027-08-17.
+      needsWrite: stored.needsWrite,
+      stored,
+    };
+  }
+
+  const legacyStored = await readSettingsObject(deps.storage, LEGACY_SETTINGS_KEY);
+  if (legacyStored) {
+    return {
+      settings: {
+        ...DEFAULT_CLIENT_SETTINGS,
+        ...pickAppSettingsFromLegacy(legacyStored),
+      } satisfies AppSettings,
+      needsWrite: true,
+      stored: legacyStored,
+    };
+  }
+
+  const defaultStored = StoredAppSettingsSchema.parse({});
+  return { settings: DEFAULT_CLIENT_SETTINGS, needsWrite: true, stored: defaultStored };
 }
 
 export async function loadSettingsFromStorage(deps: SettingsDeps): Promise<Settings> {
@@ -202,146 +447,25 @@ export async function loadSettingsFromStorage(deps: SettingsDeps): Promise<Setti
 }
 
 export function normalizeAppSettings(value: unknown): AppSettings {
-  const stored =
-    typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as StoredAppSettings)
-      : {};
-  return { ...DEFAULT_CLIENT_SETTINGS, ...pickAppSettings(stored) };
+  const {
+    needsWrite: _needsWrite,
+    manageBuiltInDaemon: _manageBuiltInDaemon,
+    releaseChannel: _releaseChannel,
+    compactToolCalls: _compactToolCalls,
+    uiFontSize: _uiFontSize,
+    ...settings
+  } = StoredAppSettingsSchema.parse(value);
+  return settings;
 }
 
-function parseToolCallDetailLevel(stored: StoredAppSettings): ToolCallDetailLevel | null {
-  if (stored.toolCallDetailLevel !== undefined) {
-    if (
-      typeof stored.toolCallDetailLevel === "string" &&
-      VALID_TOOL_CALL_DETAIL_LEVELS.has(stored.toolCallDetailLevel)
-    ) {
-      return stored.toolCallDetailLevel;
-    }
-    // COMPAT(toolCallDetailLevelConcise): removed in v0.1.107; legacy "concise" values
-    // deliberately follow the unknown-value fallback. Remove after 2027-01-14.
-    return "overview";
-  }
-  if (typeof stored.compactToolCalls === "boolean") {
-    // COMPAT(compactToolCalls): migrated in v0.1.105, remove after 2027-01-12.
-    return stored.compactToolCalls ? "overview" : "detailed";
-  }
-  return null;
-}
-
-function parseStoredSidebarChecksDisplay(stored: StoredAppSettings): SidebarChecksDisplay | null {
-  const display = parseSidebarChecksDisplay(stored.sidebarChecksDisplay);
-  if (display !== null) {
-    return display;
-  }
-  // COMPAT(sidebarRowItemsChecks): migrated in v0.3.0, remove after 2027-08-05.
-  return isChecksHiddenByLegacyRowItem(stored.sidebarRowItems) ? "none" : null;
-}
-
-function pickBooleanAppSettings(stored: StoredAppSettings): Partial<AppSettings> {
-  const result: Partial<AppSettings> = {};
-  if (typeof stored.useLegacyTerminalRenderer === "boolean") {
-    result.useLegacyTerminalRenderer = stored.useLegacyTerminalRenderer;
-  }
-  if (typeof stored.vimKeybindings === "boolean") {
-    result.vimKeybindings = stored.vimKeybindings;
-  }
-  if (typeof stored.chatOutlineEnabled === "boolean") {
-    result.chatOutlineEnabled = stored.chatOutlineEnabled;
-  }
-  return result;
-}
-
-/**
- * The settings whose stored value only has to be a member of a fixed set. Grouped like the
- * boolean settings are: the numeric and font settings need real parsing and clamping, these
- * need a membership check and nothing else.
- */
-function pickEnumAppSettings(stored: StoredAppSettings): Partial<AppSettings> {
-  const result: Partial<AppSettings> = {};
-  if (typeof stored.theme === "string" && VALID_THEMES.has(stored.theme)) {
-    result.theme = stored.theme;
-  }
-  if (typeof stored.syntaxTheme === "string" && isSyntaxThemeId(stored.syntaxTheme)) {
-    result.syntaxTheme = stored.syntaxTheme;
-  }
-  if (
-    typeof stored.workspaceTitleSource === "string" &&
-    VALID_WORKSPACE_TITLE_SOURCES.has(stored.workspaceTitleSource)
-  ) {
-    result.workspaceTitleSource = stored.workspaceTitleSource;
-  }
-  if (
-    typeof stored.sidebarWorkspaceTrailing === "string" &&
-    VALID_SIDEBAR_WORKSPACE_TRAILINGS.has(stored.sidebarWorkspaceTrailing)
-  ) {
-    result.sidebarWorkspaceTrailing = stored.sidebarWorkspaceTrailing;
-  }
-  if (
-    typeof stored.sidePanelPlacement === "string" &&
-    VALID_SIDE_PANEL_PLACEMENTS.has(stored.sidePanelPlacement)
-  ) {
-    result.sidePanelPlacement = stored.sidePanelPlacement;
-  }
-  return result;
-}
-
-function pickAppSettings(stored: StoredAppSettings): Partial<AppSettings> {
-  const result: Partial<AppSettings> = {};
-  Object.assign(result, pickEnumAppSettings(stored));
-  if (stored.sidebarRowItems !== undefined) {
-    result.sidebarRowItems = parseSidebarRowItems(stored.sidebarRowItems);
-  }
-  const sidebarChecksDisplay = parseStoredSidebarChecksDisplay(stored);
-  if (sidebarChecksDisplay !== null) {
-    result.sidebarChecksDisplay = sidebarChecksDisplay;
-  }
-  const language = parseAppLanguage(stored.language);
-  if (language !== null) {
-    result.language = language;
-  }
-  const terminalScrollbackLines = parseTerminalScrollbackLines(stored.terminalScrollbackLines);
-  if (terminalScrollbackLines !== null) {
-    result.terminalScrollbackLines = terminalScrollbackLines;
-  }
-  const uiFontFamily = sanitizeFontFamily(stored.uiFontFamily);
-  if (uiFontFamily !== null) {
-    result.uiFontFamily = uiFontFamily;
-  }
-  const monoFontFamily = sanitizeFontFamily(stored.monoFontFamily);
-  if (monoFontFamily !== null) {
-    result.monoFontFamily = monoFontFamily;
-  }
-  const uiFontSize = parseClampedFontSize(stored.uiFontSize, {
-    min: MIN_UI_FONT_SIZE,
-    max: MAX_UI_FONT_SIZE,
-  });
-  if (uiFontSize !== null) {
-    result.uiFontSize = uiFontSize;
-  }
-  const codeFontSize = parseClampedFontSize(stored.codeFontSize, {
-    min: MIN_CODE_FONT_SIZE,
-    max: MAX_CODE_FONT_SIZE,
-  });
-  if (codeFontSize !== null) {
-    result.codeFontSize = codeFontSize;
-  }
-  Object.assign(result, pickBooleanAppSettings(stored));
-  if (typeof stored.autoExpandReasoning === "boolean") {
-    result.autoExpandReasoning = stored.autoExpandReasoning;
-  }
-  const toolCallDetailLevel = parseToolCallDetailLevel(stored);
-  if (toolCallDetailLevel !== null) {
-    result.toolCallDetailLevel = toolCallDetailLevel;
-  }
-  return result;
-}
-
-function pickAppSettingsFromLegacy(legacy: Record<string, unknown>): Partial<AppSettings> {
-  const result: Partial<AppSettings> = {};
-  if (legacy.theme === "dark" || legacy.theme === "light" || legacy.theme === "auto") {
-    result.theme = legacy.theme;
-  }
-  return result;
+function pickAppSettingsFromLegacy(legacy: StoredAppSettings): AppSettings {
+  const settings = normalizeAppSettings(legacy);
+  return {
+    ...settings,
+    // The legacy key rendered content on the interface ramp. Freeze that
+    // rendered value into the new independent preference during migration.
+    contentFontSize: legacy.uiBaseFontSize,
+  };
 }
 
 export function parseTerminalScrollbackLines(value: unknown): number | null {
@@ -358,6 +482,14 @@ export function parseTerminalScrollbackLines(value: unknown): number | null {
     MAX_TERMINAL_SCROLLBACK_LINES,
     Math.max(MIN_TERMINAL_SCROLLBACK_LINES, Math.floor(numericValue)),
   );
+}
+
+export function parseContentMaxWidth(value: unknown): number | null {
+  return parseClampedFontSize(value, { min: MIN_CONTENT_MAX_WIDTH, max: MAX_CONTENT_MAX_WIDTH });
+}
+
+export function resolveContentMaxWidth(settings: Pick<AppSettings, "contentMaxWidth">): number {
+  return settings.contentMaxWidth ?? DEFAULT_CONTENT_MAX_WIDTH;
 }
 
 export function parseClampedFontSize(
@@ -393,7 +525,24 @@ export function sanitizeFontFamily(value: unknown): string | null {
   if ([...trimmed].some((char) => char.charCodeAt(0) <= 0x1f)) {
     return null; // control chars would corrupt the font-family string
   }
-  return trimmed; // quotes/commas are legit in stacks
+  // Unistyles serializes theme values into one shared stylesheet. An unfinished
+  // string, escape, comment, or block consumes the declarations that follow.
+  let quote: string | null = null;
+  let escaped = false;
+  for (const char of trimmed) {
+    if (escaped) {
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+    } else if (quote !== null) {
+      if (char === quote) quote = null;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+    } else if (/[()[\]/*]/.test(char)) {
+      return null;
+    }
+  }
+  return quote === null && !escaped ? trimmed : null;
 }
 
 async function loadLegacyDesktopSettingsFromStorage(storage: KeyValueStorage): Promise<{
@@ -410,10 +559,10 @@ async function loadLegacyDesktopSettingsFromStorage(storage: KeyValueStorage): P
     releaseChannel?: ReleaseChannel;
   } = {};
 
-  if (typeof stored.manageBuiltInDaemon === "boolean") {
+  if (stored.manageBuiltInDaemon !== undefined) {
     result.manageBuiltInDaemon = stored.manageBuiltInDaemon;
   }
-  if (stored.releaseChannel === "stable" || stored.releaseChannel === "beta") {
+  if (stored.releaseChannel !== undefined) {
     result.releaseChannel = stored.releaseChannel;
   }
 
@@ -422,15 +571,48 @@ async function loadLegacyDesktopSettingsFromStorage(storage: KeyValueStorage): P
 
 async function loadRendererSettingsPayload(
   storage: KeyValueStorage,
-): Promise<Record<string, unknown> | null> {
-  const current = await storage.getItem(APP_SETTINGS_KEY);
+): Promise<StoredAppSettings | null> {
+  const current = await readSettingsObject(storage, APP_SETTINGS_KEY);
   if (current) {
-    return JSON.parse(current) as Record<string, unknown>;
+    return current;
   }
 
-  const legacy = await storage.getItem(LEGACY_SETTINGS_KEY);
-  if (!legacy) {
+  return readSettingsObject(storage, LEGACY_SETTINGS_KEY);
+}
+
+async function readSettingsObject(
+  storage: KeyValueStorage,
+  key: string,
+): Promise<StoredAppSettings | null> {
+  const raw = await storage.getItem(key);
+  if (raw === null) {
     return null;
   }
-  return JSON.parse(legacy) as Record<string, unknown>;
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    console.warn(`[AppSettings] Removing corrupt ${key}: invalid JSON.`);
+    await storage.removeItem(key);
+    return null;
+  }
+  return StoredAppSettingsSchema.parse(decoded);
+}
+
+async function writeAppSettings(
+  storage: KeyValueStorage,
+  stored: StoredAppSettings,
+  settings: AppSettings,
+): Promise<void> {
+  const { needsWrite: _needsWrite, ...persistedStored } = stored;
+  const storedSidebarRowItems = persistedStored.sidebarRowItems;
+  await storage.setItem(
+    APP_SETTINGS_KEY,
+    JSON.stringify({
+      ...persistedStored,
+      ...settings,
+      sidebarRowItems: { ...storedSidebarRowItems, ...settings.sidebarRowItems },
+    }),
+  );
 }

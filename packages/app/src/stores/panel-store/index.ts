@@ -1,37 +1,43 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
+  clampTreeRailWidth,
   clampSidebarWidth,
+  DEFAULT_TREE_RAIL_WIDTH,
   DEFAULT_SIDEBAR_WIDTH,
+  MAX_TREE_RAIL_WIDTH,
   MAX_SIDEBAR_WIDTH,
+  MIN_TREE_RAIL_WIDTH,
   MIN_SIDEBAR_WIDTH,
   migratePanelState,
+  PanelPersistedStateSchema,
   selectIsAgentListOpen,
   setMobilePanelTarget,
-  selectPanelVisibility,
   type DesktopSidebarState,
   type MobilePanelView,
   type MobilePanelSelection,
   type PanelLayoutInput,
-  type PanelVisibilityState,
   type SortOption,
 } from "./state";
 import { isWeb } from "@/constants/platform";
+import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 export type {
   DesktopSidebarState,
   MobilePanelView,
   MobilePanelSelection,
   PanelLayoutInput,
-  PanelVisibilityState,
   SortOption,
 } from "./state";
 export {
+  DEFAULT_TREE_RAIL_WIDTH,
   DEFAULT_SIDEBAR_WIDTH,
+  MAX_TREE_RAIL_WIDTH,
   MAX_SIDEBAR_WIDTH,
+  MIN_TREE_RAIL_WIDTH,
   MIN_SIDEBAR_WIDTH,
+  clampTreeRailWidth,
   selectIsAgentListOpen,
-  selectPanelVisibility,
 };
 
 export type ExpandedPathsUpdate = string[] | ((currentPaths: string[]) => string[]);
@@ -46,15 +52,19 @@ export interface PanelState {
 
   // Files and Changes tab settings (shared between mobile/desktop)
   expandedPathsByWorkspace: Record<string, string[]>;
-  diffExpandedPathsByWorkspace: Record<string, string[]>;
   // Changes-view folder tree. Inverted semantics vs the fields above:
   // this stores COLLAPSED directory paths (empty = all folders expanded), keyed
   // by full uncompressed dir path, so folders default to expanded and new
   // folders stay expanded as the diff changes.
   diffCollapsedFoldersByWorkspace: Record<string, string[]>;
+  collapsedFilePathsByWorkspace: Record<string, string[]>;
   sidebarWidth: number;
   explorerSortOption: SortOption;
   explorerShowHiddenFiles: boolean;
+  treeRailWidth: number;
+  // File panel's tree rail. The changes panel keeps its own flag in
+  // `useChangesPreferences`; the two rails open and close independently.
+  fileTreeVisible: boolean;
 
   // Actions
   toggleFocusMode: () => void;
@@ -71,11 +81,13 @@ export interface PanelState {
 
   // Files and Changes tab settings actions
   setExpandedPathsForWorkspace: (workspaceKey: string, paths: ExpandedPathsUpdate) => void;
-  setDiffExpandedPathsForWorkspace: (workspaceKey: string, paths: string[]) => void;
   setDiffCollapsedFoldersForWorkspace: (workspaceKey: string, dirPaths: string[]) => void;
+  setCollapsedFilePathsForWorkspace: (workspaceKey: string, paths: string[]) => void;
   setSidebarWidth: (width: number) => void;
   setExplorerSortOption: (option: SortOption) => void;
   toggleExplorerShowHiddenFiles: () => void;
+  setTreeRailWidth: (width: number) => void;
+  toggleFileTreeVisible: () => void;
 }
 
 const DEFAULT_DESKTOP_OPEN = isWeb;
@@ -100,12 +112,15 @@ export const usePanelStore = create<PanelState>()(
         focusModeEnabled: false,
       },
 
+      // Files and Changes tab defaults
       expandedPathsByWorkspace: {},
-      diffExpandedPathsByWorkspace: {},
       diffCollapsedFoldersByWorkspace: {},
+      collapsedFilePathsByWorkspace: {},
       sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
       explorerSortOption: "name",
       explorerShowHiddenFiles: true,
+      treeRailWidth: DEFAULT_TREE_RAIL_WIDTH,
+      fileTreeVisible: true,
 
       toggleFocusMode: () =>
         set((state) => ({
@@ -196,13 +211,6 @@ export const usePanelStore = create<PanelState>()(
             },
           };
         }),
-      setDiffExpandedPathsForWorkspace: (workspaceKey, paths) =>
-        set((state) => ({
-          diffExpandedPathsByWorkspace: {
-            ...state.diffExpandedPathsByWorkspace,
-            [workspaceKey]: paths,
-          },
-        })),
       setDiffCollapsedFoldersForWorkspace: (workspaceKey, dirPaths) =>
         set((state) => ({
           diffCollapsedFoldersByWorkspace: {
@@ -210,25 +218,35 @@ export const usePanelStore = create<PanelState>()(
             [workspaceKey]: dirPaths,
           },
         })),
+      setCollapsedFilePathsForWorkspace: (workspaceKey, paths) =>
+        set((state) => ({
+          collapsedFilePathsByWorkspace: {
+            ...state.collapsedFilePathsByWorkspace,
+            [workspaceKey]: paths,
+          },
+        })),
       setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
       setExplorerSortOption: (option) => set({ explorerSortOption: option }),
       toggleExplorerShowHiddenFiles: () =>
         set((state) => ({ explorerShowHiddenFiles: !state.explorerShowHiddenFiles })),
+      setTreeRailWidth: (width) => set({ treeRailWidth: clampTreeRailWidth(width) }),
+      toggleFileTreeVisible: () => set((state) => ({ fileTreeVisible: !state.fileTreeVisible })),
     }),
     {
       name: "panel-state",
-      version: 13,
-      storage: createJSONStorage(() => AsyncStorage),
-      migrate: (persistedState, version) =>
-        migratePanelState(persistedState, version) as unknown as PanelState,
+      version: 17,
+      storage: createValidatedPersistStorage(AsyncStorage, PanelPersistedStateSchema),
+      migrate: (persistedState, version) => migratePanelState(persistedState, version),
       partialize: (state) => ({
         desktop: state.desktop,
         expandedPathsByWorkspace: state.expandedPathsByWorkspace,
-        diffExpandedPathsByWorkspace: state.diffExpandedPathsByWorkspace,
         diffCollapsedFoldersByWorkspace: state.diffCollapsedFoldersByWorkspace,
+        collapsedFilePathsByWorkspace: state.collapsedFilePathsByWorkspace,
         sidebarWidth: state.sidebarWidth,
         explorerSortOption: state.explorerSortOption,
         explorerShowHiddenFiles: state.explorerShowHiddenFiles,
+        treeRailWidth: state.treeRailWidth,
+        fileTreeVisible: state.fileTreeVisible,
       }),
     },
   ),

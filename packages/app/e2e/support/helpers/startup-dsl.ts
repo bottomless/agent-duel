@@ -106,7 +106,7 @@ class StartupScenario {
     if (!firstHost) {
       throw new Error("Expected at least one startup test host.");
     }
-    const createAgentPreferences = buildStoredCreateAgentPreferences(firstHost.serverId);
+    const createAgentPreferences = buildStoredCreateAgentPreferences();
 
     await this.page.evaluate(
       ({ keys, registry: storedRegistry, createAgentPreferences: storedPreferences }) => {
@@ -163,7 +163,6 @@ class StartupAssertions {
     await expect(hostRow).toBeVisible({ timeout: 15_000 });
     await expect(hostRow).toContainText(input.label);
     await expect(this.page.getByTestId("sidebar-add-project")).toBeVisible();
-    await expect(this.page.getByTestId("sidebar-home")).toBeVisible();
     await expect(this.page.getByTestId("sidebar-settings")).toBeVisible();
     await expect(this.page.getByTestId("welcome-screen")).toHaveCount(0);
     return this;
@@ -245,6 +244,6 @@ function buildStoredHost(input: {
   return buildSeededHost(input);
 }
 
-function buildStoredCreateAgentPreferences(serverId: string) {
-  return buildCreateAgentPreferences(serverId);
+function buildStoredCreateAgentPreferences() {
+  return buildCreateAgentPreferences();
 }

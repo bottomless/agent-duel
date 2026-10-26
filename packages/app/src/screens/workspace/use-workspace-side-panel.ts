@@ -34,7 +34,7 @@ export function useWorkspaceSidePanel({
   workspaceDirectory,
 }: UseWorkspaceSidePanelInput) {
   const { t } = useTranslation();
-  const openWorkspaceTabFocused = useWorkspaceLayoutStore((state) => state.openTabFocused);
+  const openWorkspaceTab = useWorkspaceLayoutStore((state) => state.openTab);
   const toggleWorkspaceSidePanel = useWorkspaceLayoutStore((state) => state.toggleSidePanel);
   const isSidePanelOpen = useWorkspaceLayoutStore((state) =>
     selectIsWorkspaceSidePanelOpen(state, persistenceKey),
@@ -47,10 +47,10 @@ export function useWorkspaceSidePanel({
   const handleOpenSidePanelTab = useCallback(
     (target: WorkspaceTabTarget) => {
       if (persistenceKey) {
-        openWorkspaceTabFocused(persistenceKey, target);
+        openWorkspaceTab({ workspaceKey: persistenceKey, target, intent: "reveal" });
       }
     },
-    [openWorkspaceTabFocused, persistenceKey],
+    [openWorkspaceTab, persistenceKey],
   );
   const handleOpenChangesTab = useCallback(() => {
     handleOpenSidePanelTab({ kind: "changes" });

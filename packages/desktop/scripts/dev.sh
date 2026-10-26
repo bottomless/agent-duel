@@ -123,12 +123,13 @@ fi
 
 daemon_endpoint="$(resolve_dev_daemon_endpoint)"
 if [ "$reuse_daemon" != "1" ]; then
+  # The daemon reads its endpoint, relay and web UI settings from the home's config.
+  for setting in "daemon.listen=$PASEO_LISTEN" daemon.relay.enabled=false features.webUi.enabled=false; do
+    node "$ROOT_DIR/packages/cli/dist/index.js" daemon config set \
+      "${setting%%=*}" "${setting#*=}" --home "$PASEO_HOME" >/dev/null
+  done
   PASEO_DESKTOP_MANAGED=1 \
-    node "$ROOT_DIR/packages/cli/dist/index.js" daemon start \
-      --listen "$PASEO_LISTEN" \
-      --home "$PASEO_HOME" \
-      --no-relay \
-      --no-web-ui
+    node "$ROOT_DIR/packages/cli/dist/index.js" daemon start --home "$PASEO_HOME"
   export PASEO_DEV_OWNS_DAEMON=1
 fi
 

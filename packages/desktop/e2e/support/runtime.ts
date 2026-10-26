@@ -6,9 +6,13 @@ export interface DesktopRuntimeConfig {
   updateAvailable?: boolean;
   latestVersion?: string;
   updateReadyToInstall?: boolean;
+  manualUpdateBypassesRollout?: boolean;
   slowInstall?: boolean;
   /** Initial PID reported by desktop_daemon_status. Defaults to null. */
   daemonPid?: number | null;
+  daemonHome?: string;
+  /** Current-session ownership, independent of the legacy management flag. */
+  ownedByDesktop?: boolean;
   daemonVersion?: string | null;
   daemonLogPath?: string;
   /** Initial manageBuiltInDaemon setting. Defaults to false. */
@@ -72,7 +76,8 @@ export async function installDesktopRuntime(
     let manageDaemon = cfg.manageBuiltInDaemon ?? false;
     let daemonRunning = true;
     let currentPid: number | null = cfg.daemonPid ?? null;
-    let startCount = 0;
+    let ownedByDesktop = cfg.ownedByDesktop ?? false;
+    let manualUpdateAdmitted = false;
     window.__desktopDaemonStartRequested = false;
 
     function buildDaemonStatus() {
@@ -82,7 +87,9 @@ export async function installDesktopRuntime(
         listen: cfg.daemonListen ?? "127.0.0.1:6767",
         hostname: null,
         pid: currentPid,
-        home: "",
+        home: cfg.daemonHome ?? "",
+        startedAt: currentPid === null ? null : "2026-09-01T00:00:00.000Z",
+        ownedByDesktop,
         version: cfg.daemonVersion ?? null,
         desktopManaged: manageDaemon,
         error: null,
@@ -94,11 +101,11 @@ export async function installDesktopRuntime(
       if (cfg.hangDaemonStart) {
         return new Promise(() => undefined);
       }
-      startCount += 1;
+      if (!daemonRunning) {
+        currentPid = (cfg.daemonPid ?? 10000) + 1000;
+        ownedByDesktop = true;
+      }
       daemonRunning = true;
-      // First start (bootstrap) returns the configured PID; subsequent starts
-      // (after a stop) get a fresh PID so tests can observe the change.
-      currentPid = (cfg.daemonPid ?? 10000) + (startCount - 1) * 1000;
       return buildDaemonStatus();
     }
 
@@ -107,6 +114,33 @@ export async function installDesktopRuntime(
       if (delayMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
       }
+    }
+
+    function buildAppUpdateCheckResult(hasUpdate: boolean, readyToInstall: boolean) {
+      return {
+        hasUpdate,
+        readyToInstall,
+        currentVersion: "1.0.0",
+        latestVersion: hasUpdate ? (cfg.latestVersion ?? "1.2.3") : null,
+        body: null,
+        date: null,
+      };
+    }
+
+    function checkAppUpdate(intent: unknown) {
+      if (!cfg.manualUpdateBypassesRollout) {
+        return buildAppUpdateCheckResult(
+          cfg.updateAvailable === true,
+          cfg.updateAvailable === true && (cfg.updateReadyToInstall ?? true),
+        );
+      }
+
+      if (intent === "manual") {
+        manualUpdateAdmitted = true;
+        return buildAppUpdateCheckResult(true, false);
+      }
+
+      return buildAppUpdateCheckResult(manualUpdateAdmitted, manualUpdateAdmitted);
     }
 
     const desktopBridge: {
@@ -125,23 +159,7 @@ export async function installDesktopRuntime(
       platform: "darwin",
       invoke: async (command: string, args?: Record<string, unknown>) => {
         if (command === "check_app_update") {
-          return cfg.updateAvailable
-            ? {
-                hasUpdate: true,
-                readyToInstall: cfg.updateReadyToInstall ?? true,
-                currentVersion: "1.0.0",
-                latestVersion: cfg.latestVersion ?? "1.2.3",
-                body: null,
-                date: null,
-              }
-            : {
-                hasUpdate: false,
-                readyToInstall: false,
-                currentVersion: "1.0.0",
-                latestVersion: null,
-                body: null,
-                date: null,
-              };
+          return checkAppUpdate(args?.intent);
         }
 
         if (command === "install_app_update") {
@@ -188,6 +206,7 @@ export async function installDesktopRuntime(
         }
 
         if (command === "stop_desktop_daemon") {
+          ownedByDesktop = false;
           daemonRunning = false;
           currentPid = null;
           return buildDaemonStatus();

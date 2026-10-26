@@ -4,7 +4,7 @@ import { Globe } from "lucide-react-native";
 import invariant from "tiny-invariant";
 import { BrowserPane } from "@/desktop/browser/pane";
 import { usePaneContext, usePaneFocus } from "@/panels/pane-context";
-import type { PanelDescriptor, PanelIconProps, PanelRegistration } from "@/panels/panel-registry";
+import { definePanel, type PanelDescriptor, type PanelIconProps } from "@/panels/panel-registry";
 import { useBrowserStore } from "@/desktop/browser/store";
 
 function getBrowserLabel(input: { title: string; url: string }): string {
@@ -67,8 +67,7 @@ function BrowserPanel() {
   );
 }
 
-export const browserPanelRegistration: PanelRegistration<"browser"> = {
-  kind: "browser",
+export const browserPanelRegistration = definePanel("browser", {
   component: BrowserPanel,
   useDescriptor: useBrowserPanelDescriptor,
-};
+});

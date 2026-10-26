@@ -17,7 +17,9 @@ Each layout owns only the routes directly inside its directory.
   `h/[serverId]/index`.
 - `packages/app/src/app/h/[serverId]/_layout.tsx` owns the host leaves with
   relative screen names: `index`, `workspace/[workspaceId]/index`,
-  `agent/[agentId]`, `open-project`, and `settings`.
+  `agent/[agentId]`, `open-project`, `settings`,
+  `plugin/[pluginId]/[surfaceId]`, and
+  `plugin/[pluginId]/[contributionKind]/[contributionId]`.
 
 Expo Router warns with `[Layout children]: No route named ...` when a layout
 registers grandchildren. Treat that warning as a route-tree bug. On native, that
@@ -45,6 +47,15 @@ state.
 This split is deliberate. The host layout must mount first so native local
 dynamic params exist before any nested workspace leaf is selected.
 
+## Error Recovery
+
+The root error boundary lives above `ExpoRoot` in `src/root-app.tsx`. Reload
+remounts the router at `/open-project`, preserving saved workspace layouts and
+the remembered selection. Do not move the boundary inside the root layout:
+catching a render error there unmounts the navigator, so the recovery button
+cannot reliably dispatch a navigation reset. Starting recovery at `/` would
+restore the same workspace and could repeat the crash.
+
 ## App-Wide Route Hops
 
 When app-wide routes such as `/new` or `/settings` navigate back
@@ -62,10 +73,15 @@ root host route and pass the nested workspace screen when a host route is
 already mounted, or Expo Router can append extra hidden workspace deck entries.
 The workspace navigation helper inspects the mounted navigation state to make
 that decision; if no host route is mounted yet, it falls back to ordinary route
-navigation.
+navigation. Both paths wait for the root navigation container to be ready. The
+workspace navigation owner keeps the latest pending intent across ref
+re-registration and applies it on the container's `ready` event; routes must not
+add their own readiness retries.
 
 Those hidden entries are not harmless: composer floating panels can measure
-against the wrong deck and disappear offscreen.
+against the wrong deck and disappear offscreen. Follow the
+[retained panel measurement rules](coding-standards.md#retained-panel-measurements)
+for components that intentionally remain mounted while hidden.
 
 Hidden host routes may keep their local params while an app-wide route is
 foregrounded. Active-workspace observers must prefer the current pathname and
@@ -73,19 +89,39 @@ only use local param fallback during cold mount (`/` or empty pathname), or a
 hidden workspace can overwrite the remembered workspace before Settings
 returns.
 
+Plugin settings use the distinct `settings/hosts/[serverId]/plugins/[pluginId]/[screenId]` leaf;
+Back returns to that host's Plugins page.
+
+Settings detail routes are separate siblings on purpose. Keep
+`settings/[section]`, the host routes, the projects index, and project detail as
+distinct route names. `router.dismissTo()` ultimately matches stack entries by
+route name. A single catch-all Settings route would make project detail and the
+projects index the same route; Back would update params in place and leave a
+phantom detail entry underneath. The host routes also stay outside the
+store-ready protected group so a cold host deep link can survive daemon startup.
+Do not collapse this topology with a catch-all, `getId`, or
+`dangerouslySingular` workaround.
+
 ## Agent Targets
 
-Notifications and agent URLs enter the router with different authoritative
-targets.
+Notifications and agent URLs name a host and agent. Both use
+`navigateToAgent()`, which reads the agent's current workspace from the store
+or routes through `/h/[serverId]/agent/[agentId]`. The agent route waits for
+the named host, demands its directory, and waits for workspace and layout
+hydration before opening the tab. Keep the stable agent URL free of a workspace
+hint. [Notifications](notifications.md) owns tap delivery and native lifecycle
+constraints.
 
-- Notifications carry `serverId`, `workspaceId`, and `agentId`. Route them
-  directly to the workspace with the agent open intent.
-- Agent URLs carry only `serverId` and `agentId`. Route them through
-  `/h/[serverId]/agent/[agentId]`; that route waits for the named host, resolves
-  the agent's workspace from the host, and then opens the agent there.
+When a workspace target cannot open yet, `navigateToWorkspace()` records a
+pending open in the layout model under that host and workspace key. The owning
+workspace screen consumes it once after hydration. Archived-workspace recovery
+reads the same pending target, so startup redirects cannot discard it and a
+retained screen cannot consume another workspace's request.
 
-Both paths converge on `navigateToAgent()`. Do not make notification routing
-guess a workspace, and do not add a workspace to the stable agent URL format.
+Legacy `?open=` links seed this model state at the matched route boundary and
+then lose the query parameter. Internal navigation does not use the query as a
+handoff. Read matched route params locally; global search params let retained
+workspace screens observe requests for other workspaces.
 
 ## Params
 
@@ -129,6 +165,16 @@ Do not read the active theme with `useUnistyles()` in a layout to build
 `screenOptions`. `ThemedStack` keeps that third-party prop theme-reactive through
 a small `withUnistyles` boundary without subscribing the route tree itself to
 every Unistyles runtime update.
+
+Navigators keep their identity across appearance changes. `ThemedStack` remounts
+each ordinary screen's content below the native stack when appearance tokens change.
+Workspace screens own retained panel lifetimes and update appearance at their
+leaves through `screenOwnedAppearance` ([Explorer](explorer-sidebar.md)). A
+keyed wrapper above a stack remounts the stack itself, and Android crashes when
+that happens while a FragmentManager transaction is running, which settings
+hydration at startup makes likely. A screen that mounts a nested navigator (the
+root stack's `h/[serverId]`) is passed in `nestedNavigatorScreens` so the nested
+stack owns its own screens. See [unistyles.md](unistyles.md).
 
 ## Regression Shape
 

@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import {
   FolderTree,
@@ -14,6 +14,7 @@ import { agentLabel } from "@/arena/environment";
 import type { Theme } from "@/styles/theme";
 import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
 import type { SidePanelLaunchers } from "@/screens/workspace/workspace-desktop-tabs-row";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 const ThemedGitCompareArrows = withUnistyles(GitCompareArrows);
 const ThemedFolderTree = withUnistyles(FolderTree);
@@ -146,7 +147,7 @@ export function SidePanelLauncher({
 
 function LauncherButton({ entry }: { entry: LauncherEntry }) {
   return (
-    <Pressable
+    <PressHighlight
       testID={entry.testID}
       accessibilityRole="button"
       accessibilityLabel={entry.label}
@@ -155,7 +156,7 @@ function LauncherButton({ entry }: { entry: LauncherEntry }) {
     >
       {entry.icon}
       <Text style={styles.label}>{entry.label}</Text>
-    </Pressable>
+    </PressHighlight>
   );
 }
 
@@ -173,7 +174,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   title: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   list: {
     width: "100%",
@@ -201,7 +202,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   groupTitle: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     paddingHorizontal: theme.spacing[3],
   },
   buttonHovered: {
@@ -209,6 +210,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   label: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

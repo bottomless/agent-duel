@@ -583,7 +583,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: theme.spacing[1],
   },
   actions: { flexDirection: "row", gap: theme.spacing[1] },
-  caption: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
+  caption: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   pair: { flexDirection: "row", minWidth: 0 },
   column: { flex: 1, minWidth: 0 },
   columnHeader: {
@@ -597,13 +597,13 @@ const styles = StyleSheet.create((theme) => ({
     borderLeftWidth: 1,
     borderLeftColor: theme.colors.border,
   },
-  agentLabel: { fontSize: theme.fontSize.sm, fontWeight: theme.fontWeight.medium },
+  agentLabel: { fontSize: theme.fontSize.base, fontWeight: theme.fontWeight.medium },
   agentA: { color: theme.colors.statusDotRunning },
   agentB: { color: theme.colors.statusDotWarning },
   regionLabel: {
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     backgroundColor: theme.colors.surface1,
   },
@@ -612,7 +612,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     backgroundColor: theme.colors.surface1,
   },
   stackedRegion: { minWidth: 0 },
@@ -631,7 +631,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   number: {
     fontFamily: theme.fontFamily.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     lineHeight: diffTextHeight(theme),
     color: theme.colors.foregroundMuted,
     textAlign: "right",
@@ -641,13 +641,13 @@ const styles = StyleSheet.create((theme) => ({
   sign: {
     width: 12,
     textAlign: "center",
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontFamily: theme.fontFamily.mono,
   },
   both: {
-    width: Math.ceil(theme.fontSize.xs * 3.5),
+    width: Math.ceil(theme.fontSize.sm * 3.5),
     flexShrink: 0,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     lineHeight: diffTextHeight(theme),
     color: theme.colors.foregroundMuted,
     textAlign: "center",
@@ -675,13 +675,13 @@ const styles = StyleSheet.create((theme) => ({
   notice: {
     padding: theme.spacing[2],
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     backgroundColor: theme.colors.surface1,
   },
   warning: {
     padding: theme.spacing[2],
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   pad: { padding: theme.spacing[2] },
   // Expand's box without its action, so the header keeps its height and the pair its rhythm.
@@ -707,12 +707,12 @@ const styles = StyleSheet.create((theme) => ({
     padding: theme.spacing[4],
   },
   pendingTitle: {
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     color: theme.colors.foreground,
     textAlign: "center",
   },
   pendingHint: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
     textAlign: "center",
     maxWidth: 280,
@@ -729,12 +729,12 @@ const styles = StyleSheet.create((theme) => ({
     },
   },
   pendingWho: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
   pendingText: {
     flexShrink: 1,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
   },
 }));

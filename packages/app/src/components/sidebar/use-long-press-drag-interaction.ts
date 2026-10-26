@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef } from "react";
-import { Platform, StatusBar, type GestureResponderEvent } from "react-native";
+import type { GestureResponderEvent } from "react-native";
 import * as Haptics from "expo-haptics";
 import { isWeb as platformIsWeb } from "@/constants/platform";
 import { decideLongPressMove } from "@/utils/sidebar-gesture-arbitration";
 import type { useContextMenu } from "@/components/ui/context-menu";
 
 export function useLongPressDragInteraction(input: {
-  drag: () => void;
+  drag?: () => void;
   menuController: ReturnType<typeof useContextMenu> | null;
 }) {
+  const { drag, menuController } = input;
   const didLongPressRef = useRef(false);
   const dragArmedRef = useRef(false);
   const dragActivatedRef = useRef(false);
@@ -32,20 +33,19 @@ export function useLongPressDragInteraction(input: {
   }, []);
 
   const openContextMenuAtStartPoint = useCallback(() => {
-    if (!input.menuController || !touchStartRef.current) {
+    if (!menuController || !touchStartRef.current) {
       return;
     }
-    const statusBarHeight = Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) : 0;
-    input.menuController.setAnchorRect({
+    menuController.setAnchorRect({
       x: touchStartRef.current.x,
-      y: touchStartRef.current.y + statusBarHeight,
+      y: touchStartRef.current.y,
       width: 0,
       height: 0,
     });
-    input.menuController.setOpen(true);
+    menuController.setOpen(true);
     menuOpenedRef.current = true;
     didLongPressRef.current = true;
-  }, [input.menuController]);
+  }, [menuController]);
 
   const handleLongPress = useCallback(() => {
     // Manual timers own long-press behavior on mobile.
@@ -59,7 +59,7 @@ export function useLongPressDragInteraction(input: {
 
   const armTimers = useCallback(() => {
     clearTimers();
-    if (platformIsWeb) {
+    if (platformIsWeb || !drag) {
       return;
     }
 
@@ -87,10 +87,10 @@ export function useLongPressDragInteraction(input: {
       dragActivatedRef.current = true;
       didLongPressRef.current = true;
       void Haptics.selectionAsync().catch(() => {});
-      input.drag();
+      drag();
     }, DRAG_ARM_DELAY_MS);
 
-    if (!input.menuController) {
+    if (!menuController) {
       return;
     }
 
@@ -112,7 +112,7 @@ export function useLongPressDragInteraction(input: {
       void Haptics.selectionAsync().catch(() => {});
       openContextMenuAtStartPoint();
     }, CONTEXT_MENU_DELAY_MS);
-  }, [clearTimers, input, openContextMenuAtStartPoint]);
+  }, [clearTimers, drag, menuController, openContextMenuAtStartPoint]);
 
   const handleDragIntent = useCallback(
     (_details: { dx: number; dy: number; distance: number }) => {

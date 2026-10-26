@@ -12,6 +12,7 @@ export interface EnsureSherpaOnnxModelOptions {
   modelsDir: string;
   modelId: SherpaOnnxModelId;
   logger: pino.Logger;
+  signal?: AbortSignal;
 }
 
 export function getSherpaOnnxModelDir(modelsDir: string, modelId: SherpaOnnxModelId): string {
@@ -40,11 +41,12 @@ async function hasRequiredFiles(modelDir: string, requiredFiles: string[]): Prom
 interface DownloadToFileOptions {
   url: string;
   outputPath: string;
+  signal?: AbortSignal;
 }
 
 async function downloadToFile(options: DownloadToFileOptions): Promise<void> {
   const { url, outputPath } = options;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: options.signal });
   if (!res.ok) {
     throw new Error(`Failed to download ${url}: ${res.status} ${res.statusText}`);
   }
@@ -60,7 +62,7 @@ async function downloadToFile(options: DownloadToFileOptions): Promise<void> {
   const nodeStream = Readable.fromWeb(res.body as any);
 
   try {
-    await pipeline(nodeStream, createWriteStream(tmpPath));
+    await pipeline(nodeStream, createWriteStream(tmpPath), { signal: options.signal });
     await rename(tmpPath, outputPath);
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => undefined);
@@ -68,12 +70,17 @@ async function downloadToFile(options: DownloadToFileOptions): Promise<void> {
   }
 }
 
-async function extractTarArchive(archivePath: string, destDir: string): Promise<void> {
+async function extractTarArchive(
+  archivePath: string,
+  destDir: string,
+  signal?: AbortSignal,
+): Promise<void> {
   await mkdir(destDir, { recursive: true });
 
   await new Promise<void>((resolve, reject) => {
     const child = spawnProcess("tar", ["xf", archivePath, "-C", destDir], {
       stdio: "inherit",
+      signal,
     });
     child.on("error", reject);
     child.on("exit", (code) => {
@@ -81,6 +88,38 @@ async function extractTarArchive(archivePath: string, destDir: string): Promise<
       else reject(new Error(`tar exited with code ${code}`));
     });
   });
+}
+
+interface SherpaOnnxModelPaths {
+  modelDir: string;
+  archivePath: string;
+  extractionDir: string;
+}
+
+function getSherpaOnnxModelPaths(
+  modelsDir: string,
+  modelId: SherpaOnnxModelId,
+): SherpaOnnxModelPaths {
+  const spec = getSherpaOnnxModelSpec(modelId);
+  const downloadsDir = path.join(modelsDir, ".downloads");
+  return {
+    modelDir: path.join(modelsDir, spec.extractedDir),
+    archivePath: path.join(downloadsDir, path.basename(new URL(spec.archiveUrl).pathname)),
+    extractionDir: path.join(downloadsDir, `${spec.extractedDir}.extracting`),
+  };
+}
+
+// The archive is removed only as its model moves into place, so a model whose archive is
+// still in .downloads did not finish installing and may hold truncated files.
+export async function isSherpaOnnxModelInstalled(
+  modelsDir: string,
+  modelId: SherpaOnnxModelId,
+): Promise<boolean> {
+  const spec = getSherpaOnnxModelSpec(modelId);
+  const { modelDir, archivePath } = getSherpaOnnxModelPaths(modelsDir, modelId);
+  return (
+    !(await isNonEmptyFile(archivePath)) && (await hasRequiredFiles(modelDir, spec.requiredFiles))
+  );
 }
 
 async function isNonEmptyFile(filePath: string): Promise<boolean> {
@@ -103,22 +142,22 @@ export async function ensureSherpaOnnxModel(
   });
 
   const spec = getSherpaOnnxModelSpec(options.modelId);
-  const modelDir = path.join(options.modelsDir, spec.extractedDir);
-  if (await hasRequiredFiles(modelDir, spec.requiredFiles)) {
+  const { modelDir, archivePath, extractionDir } = getSherpaOnnxModelPaths(
+    options.modelsDir,
+    options.modelId,
+  );
+  if (await isSherpaOnnxModelInstalled(options.modelsDir, options.modelId)) {
     return modelDir;
   }
 
   logger.info({ modelsDir: options.modelsDir }, "Starting model download");
 
   try {
-    const downloadsDir = path.join(options.modelsDir, ".downloads");
-    const archiveFilename = path.basename(new URL(spec.archiveUrl).pathname);
-    const archivePath = path.join(downloadsDir, archiveFilename);
-
     if (!(await isNonEmptyFile(archivePath))) {
       await downloadToFile({
         url: spec.archiveUrl,
         outputPath: archivePath,
+        signal: options.signal,
       });
     }
 
@@ -130,32 +169,40 @@ export async function ensureSherpaOnnxModel(
       },
       "Extracting model archive",
     );
-    await extractTarArchive(archivePath, options.modelsDir);
-
-    logger.info(
-      {
-        modelId: options.modelId,
-        modelDir,
-      },
-      "Verifying downloaded model files",
-    );
-    if (!(await hasRequiredFiles(modelDir, spec.requiredFiles))) {
-      throw new Error(
-        `Downloaded and extracted ${archiveFilename}, but required files are still missing in ${modelDir}.`,
-      );
-    }
-
-    logger.info(
-      {
-        modelId: options.modelId,
-        archivePath,
-      },
-      "Finalizing model artifacts",
-    );
+    // Extract beside the archive and move into place once complete, so an interrupted
+    // extraction never leaves partial files at modelDir.
+    await rm(extractionDir, { recursive: true, force: true });
     try {
-      await rm(archivePath, { force: true });
-    } catch {
-      // ignore
+      await extractTarArchive(archivePath, extractionDir, options.signal);
+      const extractedModelDir = path.join(extractionDir, spec.extractedDir);
+
+      logger.info(
+        {
+          modelId: options.modelId,
+          modelDir,
+        },
+        "Verifying downloaded model files",
+      );
+      if (!(await hasRequiredFiles(extractedModelDir, spec.requiredFiles))) {
+        throw new Error(
+          `Downloaded and extracted ${path.basename(archivePath)}, but required files are missing.`,
+        );
+      }
+
+      logger.info(
+        {
+          modelId: options.modelId,
+          archivePath,
+        },
+        "Finalizing model artifacts",
+      );
+      // A retained archive marks the model as not installed, so remove it before the model
+      // is moved into place. If removal fails, nothing at modelDir looks installed.
+      await rm(modelDir, { recursive: true, force: true });
+      await rm(archivePath, { force: true, maxRetries: 3 });
+      await rename(extractedModelDir, modelDir);
+    } finally {
+      await rm(extractionDir, { recursive: true, force: true });
     }
 
     logger.info({ modelDir }, "Model download completed");
@@ -170,6 +217,7 @@ export async function ensureSherpaOnnxModels(options: {
   modelsDir: string;
   modelIds: SherpaOnnxModelId[];
   logger: pino.Logger;
+  signal?: AbortSignal;
 }): Promise<Record<SherpaOnnxModelId, string>> {
   const uniq = Array.from(new Set(options.modelIds));
   const entries: Array<[SherpaOnnxModelId, string]> = await Promise.all(
@@ -178,6 +226,7 @@ export async function ensureSherpaOnnxModels(options: {
         modelsDir: options.modelsDir,
         modelId: id,
         logger: options.logger,
+        signal: options.signal,
       });
       return [id, modelPath] as [SherpaOnnxModelId, string];
     }),

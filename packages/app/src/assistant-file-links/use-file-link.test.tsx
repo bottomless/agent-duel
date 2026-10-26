@@ -2,9 +2,9 @@
  * @vitest-environment jsdom
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import React, { useCallback, useMemo, useState, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToastApi } from "@/components/toast-host";
 import type { InlinePathTarget } from "./parse";
 import { AssistantFileLinkResolverProvider } from "./provider";
@@ -110,6 +110,12 @@ function createWrapper(input: {
 }
 
 describe("useFileLink", () => {
+  // Lookups resolve after a test's last assertion; an unmounted hook cannot re-render
+  // once jsdom is torn down.
+  afterEach(() => {
+    cleanup();
+  });
+
   it("opens external URLs in the workspace browser when handled", async () => {
     const onOpenExternalUrl = vi.fn(() => true);
     const { result } = renderHook(() => useFileLink({ href: "https://example.com" }), {
@@ -186,7 +192,6 @@ describe("useFileLink", () => {
     expect(result.current).toBe(first);
     expect(result.current.onHoverIn).toBe(first.onHoverIn);
     expect(result.current.onPress).toBe(first.onPress);
-    expect(result.current.onAuxPress).toBe(first.onAuxPress);
     expect(result.current.open).toBe(first.open);
   });
 
@@ -227,7 +232,7 @@ describe("useFileLink", () => {
             lineStart: undefined,
             lineEnd: undefined,
           },
-          disposition: "main",
+          disposition: "preferred",
         },
       ]);
     });

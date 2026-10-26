@@ -1,5 +1,5 @@
-import { expect, type Page } from "@playwright/test";
-import { openSidePanelTab } from "./side-panel";
+import { expect, type Download, type Page } from "@playwright/test";
+import { openFilesPanel } from "./workspace-tabs";
 
 function fileExplorerTree(page: Page) {
   return page.getByTestId("file-explorer-tree-scroll");
@@ -10,7 +10,7 @@ function fileExplorerEntry(page: Page, name: string) {
 }
 
 export async function openFileExplorer(page: Page): Promise<void> {
-  await openSidePanelTab(page, "files");
+  await openFilesPanel(page);
   await expect(fileExplorerTree(page)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -38,4 +38,11 @@ export async function expectFileTabOpen(page: Page, filePath: string): Promise<v
   await expect(page.getByTestId(`workspace-tab-file_${filePath}`).first()).toBeVisible({
     timeout: 30_000,
   });
+}
+
+export async function downloadFileFromExplorer(page: Page, fileName: string): Promise<Download> {
+  await fileExplorerEntry(page, fileName).click({ button: "right" });
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("menuitem", { name: "Download", exact: true }).click();
+  return downloaded;
 }

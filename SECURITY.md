@@ -60,6 +60,8 @@ its one-time startup pipe; the renderer, command line, environment, logs, and co
 never receive the token. The legacy `/api/*` surface is disabled, and `/doc` stays hidden unless
 `OPENCODE_ARENA_ENABLE_DOCS=1` is set for local development.
 
+When a daemon password is configured, relay clients send it in the encrypted `hello` message, so the relay never sees it. The daemon rejects a relay client that sends a wrong password or none, so a leaked pairing link alone does not grant access to a password-protected daemon.
+
 ## Local daemon trust boundary
 
 The daemon binds to `127.0.0.1` by default. With no password configured, anything that can reach

@@ -40,6 +40,9 @@ const NONE: ShortcutAction = { kind: "none" };
 // Action ids whose routing is a no-payload pass-through to the dispatcher.
 const PASSTHROUGH_DISPATCH: Record<string, KeyboardActionDefinition> = {
   "agent.interrupt": { id: "agent.interrupt", scope: "global" },
+  "workspace.tab.target.browser": { id: "workspace.tab.target.browser", scope: "workspace" },
+  "workspace.tab.target.changes": { id: "workspace.tab.target.changes", scope: "workspace" },
+  "workspace.tab.target.files": { id: "workspace.tab.target.files", scope: "workspace" },
   "workspace.new": { id: "workspace.new", scope: "sidebar" },
   "workspace.project.pick": { id: "workspace.project.pick", scope: "workspace" },
   "workspace.archive": { id: "workspace.archive", scope: "sidebar" },
@@ -164,6 +167,13 @@ export function routeKeyboardShortcut(
 ): ShortcutAction {
   const passthrough = PASSTHROUGH_DISPATCH[input.action];
   if (passthrough) {
+    if (
+      input.action === "agent.interrupt" &&
+      ctx.pathname.startsWith("/settings") &&
+      !ctx.isMobile
+    ) {
+      return { kind: "navigate-last-workspace" };
+    }
     return dispatch(passthrough);
   }
 

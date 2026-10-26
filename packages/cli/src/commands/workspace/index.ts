@@ -5,9 +5,17 @@ import { runArchiveCommand } from "./archive.js";
 import { runCreateCommand } from "./create.js";
 import { runLsCommand } from "./ls.js";
 import { runRenameCommand } from "./rename.js";
+import { runSetupCommand } from "./setup.js";
 
 export function createWorkspaceCommand(): Command {
   const workspace = new Command("workspace").description("Manage workspaces");
+
+  addJsonAndDaemonHostOptions(
+    workspace
+      .command("setup")
+      .description("Allow and run setup for a workspace")
+      .argument("<workspace-id>", "Workspace id"),
+  ).action(withOutput(runSetupCommand));
 
   addJsonAndDaemonHostOptions(
     workspace
@@ -26,12 +34,17 @@ export function createWorkspaceCommand(): Command {
       .option("--base <ref>", "Base ref (--mode branch-off)")
       .option("--branch <name>", "Existing branch (--mode checkout-branch)")
       .option("--pr-number <n>", "Pull request or change request number (--mode checkout-pr)")
-      .option("--forge <forge>", "Forge for --mode checkout-pr (default: source checkout)"),
+      .option("--forge <forge>", "Forge for --mode checkout-pr (default: source checkout)")
+      .option("--background", "Create a background workspace")
+      .option("--no-background", "Create a visible workspace instead of inheriting background"),
   ).action(withOutput(runCreateCommand));
 
-  addJsonAndDaemonHostOptions(workspace.command("ls").description("List active workspaces")).action(
-    withOutput(runLsCommand),
-  );
+  addJsonAndDaemonHostOptions(
+    workspace
+      .command("ls")
+      .description("List active workspaces")
+      .option("--background", "Include background workspaces"),
+  ).action(withOutput(runLsCommand));
 
   addJsonAndDaemonHostOptions(
     workspace

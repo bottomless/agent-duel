@@ -1,4 +1,4 @@
-import { runGitCommand } from "../utils/run-git-command.js";
+import { runGitCommand, type RunGitCommand } from "../utils/run-git-command.js";
 
 export interface WorkspaceGitFetchResult {
   changes: WorkspaceGitRemoteRefChange[] | null;
@@ -87,7 +87,7 @@ export async function fetchWorkspaceGitRemoteWithLogin(
   await run(["credential", "approve"], {
     cwd,
     envOverlay: NON_INTERACTIVE_GIT_ENV,
-    stdin: `url=${stdout.trim()}\nusername=${login.username}\npassword=${login.password}\n\n`,
+    input: `url=${stdout.trim()}\nusername=${login.username}\npassword=${login.password}\n\n`,
   });
 }
 
@@ -120,19 +120,20 @@ export function gitFailureReason(error: unknown): string {
 export async function fetchWorkspaceGitRemote(
   cwd: string,
   observer: WorkspaceGitFetchObserver,
+  run: RunGitCommand = runGitCommand,
 ): Promise<WorkspaceGitFetchResult> {
   let before: Map<string, string> | null = null;
   let after: Map<string, string> | null = null;
   let error: unknown | null = null;
   let signInRequired = false;
   try {
-    before = await readWorkspaceGitRefs(cwd);
+    before = await readWorkspaceGitRefs(cwd, run);
     observer.onRefSnapshot("before");
   } catch (caught) {
     error = caught;
   }
   try {
-    await runGitCommand(["fetch", "origin", "--prune"], {
+    await run(["fetch", "origin", "--prune"], {
       cwd,
       envOverlay: NON_INTERACTIVE_GIT_ENV,
       timeout: 120_000,
@@ -142,7 +143,7 @@ export async function fetchWorkspaceGitRemote(
     signInRequired = isSignInFailure(caught);
   }
   try {
-    after = await readWorkspaceGitRefs(cwd);
+    after = await readWorkspaceGitRefs(cwd, run);
   } catch (caught) {
     error ??= caught;
   }
@@ -170,8 +171,8 @@ function collectWorkspaceGitRemoteRefs(refs: ReadonlyMap<string, string>): Set<s
   );
 }
 
-async function readWorkspaceGitRefs(cwd: string): Promise<Map<string, string>> {
-  const { stdout } = await runGitCommand(["for-each-ref", "--format=%(refname)%00%(objectname)"], {
+async function readWorkspaceGitRefs(cwd: string, run: RunGitCommand): Promise<Map<string, string>> {
+  const { stdout } = await run(["for-each-ref", "--format=%(refname)%00%(objectname)"], {
     cwd,
   });
   return parseWorkspaceGitRefs(stdout);

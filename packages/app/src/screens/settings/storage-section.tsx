@@ -15,7 +15,7 @@ import { useFetchQuery } from "@/data/query";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
-import { SettingsSection } from "@/screens/settings/settings-section";
+import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { SettingsSelectTrigger } from "@/screens/settings/settings-select-trigger";
 import { settingsStyles } from "@/styles/settings";
 import { toErrorMessage } from "@/utils/error-messages";

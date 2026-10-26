@@ -17,7 +17,7 @@ import type {
   ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
-import { ARENA_MAX_CONTENT_WIDTH, MAX_CONTENT_WIDTH } from "@/constants/layout";
+import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { MessageOuterSpacingProvider, UserMessage } from "@/components/message";
@@ -700,7 +700,6 @@ export function ArenaBattleView({
     [promptAttachments, promptImages.length],
   );
   const reviewPhase = battleReviewPhase(turn, runA, runB);
-  const reviewAvailable = reviewPhase.kind !== "none";
   const [paneView, setPaneView] = useArenaPaneView(turn?.index);
   const bothFinal = runsAreFinal(runA, runB);
   // Observes the review stores and the window; emits nothing into React state,
@@ -874,7 +873,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   battleReadingColumn: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
+    maxWidth: theme.contentMaxWidth,
     alignSelf: "center",
     paddingHorizontal: theme.spacing[2],
   },
@@ -936,12 +935,12 @@ const styles = StyleSheet.create((theme) => ({
   // The contestants are the headline of the card, so their names are the largest type on it.
   agentName: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.lg,
+    fontSize: theme.fontSize.xl,
     fontWeight: theme.fontWeight.semibold,
   },
   status: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     lineHeight: ARENA_RUN_META_HEIGHT,
   },
   threadArea: {

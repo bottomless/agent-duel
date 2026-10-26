@@ -3,7 +3,6 @@ import { View } from "react-native";
 import { Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
-import { thinkingMarkdownParser } from "@/components/markdown/thinking-parser";
 import { EXPANDABLE_BADGE_DETAIL_INSET, ExpandableBadge } from "@/components/message";
 
 /**
@@ -30,14 +29,7 @@ export const ArenaChatReasoning = memo(function ArenaChatReasoning({
   const renderDetails = useCallback(
     () => (
       <View style={styles.details}>
-        <MarkdownRenderer
-          text={text}
-          subdued
-          markdownit={thinkingMarkdownParser}
-          enableHtmlish={false}
-          enableDiagrams={false}
-          horizontalScrollCodeBlocks
-        />
+        <MarkdownRenderer text={text} subdued />
       </View>
     ),
     [text],

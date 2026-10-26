@@ -12,20 +12,25 @@
  * that knows what an item is.
  */
 
-export const SIDEBAR_ROW_ITEMS = ["changeRequest", "services"] as const;
+export const SIDEBAR_ROW_ITEMS = [
+  "branch",
+  "project",
+  "changeRequest",
+  "services",
+  "labels",
+] as const;
 
 export type SidebarRowItem = (typeof SIDEBAR_ROW_ITEMS)[number];
 
 export type SidebarRowItems = Record<SidebarRowItem, boolean>;
 
-/**
- * Everything on by default. A new item ships visible and users turn it off, which is also why
- * the persisted shape is a record of overrides rather than a list of enabled items: an absent
- * key has to mean "default", not "off".
- */
+/** The persisted record is merged over these explicit product defaults. */
 export const DEFAULT_SIDEBAR_ROW_ITEMS: SidebarRowItems = {
+  branch: false,
+  project: false,
   changeRequest: true,
   services: true,
+  labels: true,
 };
 
 /**

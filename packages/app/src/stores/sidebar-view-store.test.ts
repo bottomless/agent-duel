@@ -1,18 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { StateStorage } from "zustand/middleware";
 import {
   createSidebarViewStorage,
+  hasActiveSidebarLabelFilter,
   migrateSidebarViewState,
+  SIDEBAR_UNLABELLED_LABEL_KEY,
   useSidebarViewStore,
 } from "./sidebar-view-store";
-
-vi.mock("@react-native-async-storage/async-storage", () => ({
-  default: {
-    getItem: vi.fn().mockResolvedValue(null),
-    setItem: vi.fn().mockResolvedValue(undefined),
-    removeItem: vi.fn().mockResolvedValue(undefined),
-  },
-}));
 
 interface MemoryStorage extends StateStorage<Promise<void>> {
   reads: string[];
@@ -38,8 +32,12 @@ function createMemoryStorage(entries: Record<string, string | null>): MemoryStor
 describe("sidebar view store", () => {
   beforeEach(() => {
     useSidebarViewStore.setState({
+      workspaceSort: "created",
+      showBackground: false,
       groupMode: "project",
       hostFilters: [],
+      projectFilters: [],
+      labelFilter: { labels: [] },
     });
   });
 
@@ -88,8 +86,12 @@ describe("sidebar view store", () => {
         },
       }),
     ).toEqual({
+      workspaceSort: "created",
+      showBackground: false,
       groupMode: "status",
       hostFilters: [],
+      projectFilters: [],
+      labelFilter: { labels: [] },
     });
   });
 
@@ -100,8 +102,12 @@ describe("sidebar view store", () => {
         hostFilter: "host-a",
       }),
     ).toEqual({
+      workspaceSort: "created",
+      showBackground: false,
       groupMode: "status",
       hostFilters: ["host-a"],
+      projectFilters: [],
+      labelFilter: { labels: [] },
     });
   });
 
@@ -112,8 +118,135 @@ describe("sidebar view store", () => {
         hostFilters: ["host-a", "host-b"],
       }),
     ).toEqual({
+      workspaceSort: "created",
+      showBackground: false,
       groupMode: "status",
       hostFilters: ["host-a", "host-b"],
+      projectFilters: [],
+      labelFilter: { labels: [] },
+    });
+  });
+
+  it("clears only the label facet", () => {
+    useSidebarViewStore.setState({
+      groupMode: "status",
+      hostFilters: ["host-a"],
+      labelFilter: { labels: ["urgent", "blocked"] },
+    });
+
+    useSidebarViewStore.getState().clearLabelFilter();
+
+    expect(useSidebarViewStore.getState()).toMatchObject({
+      groupMode: "status",
+      hostFilters: ["host-a"],
+      labelFilter: { labels: [] },
+    });
+  });
+
+  it("toggles a label on and off under one normalized identity", () => {
+    const { toggleLabelFilter } = useSidebarViewStore.getState();
+    const labels = () => useSidebarViewStore.getState().labelFilter.labels;
+
+    toggleLabelFilter("Urgent");
+    expect(labels()).toEqual(["urgent"]);
+    expect(hasActiveSidebarLabelFilter(useSidebarViewStore.getState().labelFilter)).toBe(true);
+
+    toggleLabelFilter(" URGENT ");
+    expect(labels()).toEqual([]);
+    expect(hasActiveSidebarLabelFilter(useSidebarViewStore.getState().labelFilter)).toBe(false);
+  });
+
+  it("filters Unlabelled alongside real labels without colliding with one", () => {
+    const { toggleLabelFilter } = useSidebarViewStore.getState();
+
+    toggleLabelFilter(SIDEBAR_UNLABELLED_LABEL_KEY);
+    toggleLabelFilter("Urgent");
+    expect(useSidebarViewStore.getState().labelFilter).toEqual({
+      labels: [SIDEBAR_UNLABELLED_LABEL_KEY, "urgent"],
+    });
+  });
+
+  it("drops deleted labels from the active filter but retains Unlabelled", () => {
+    useSidebarViewStore.setState({
+      labelFilter: { labels: [SIDEBAR_UNLABELLED_LABEL_KEY, "urgent", "removed"] },
+    });
+
+    useSidebarViewStore.getState().reconcileLabelFilter(["Urgent"]);
+
+    expect(useSidebarViewStore.getState().labelFilter).toEqual({
+      labels: [SIDEBAR_UNLABELLED_LABEL_KEY, "urgent"],
+    });
+  });
+
+  it("re-keys a persisted label filter through the normalized identity, without duplicates", () => {
+    expect(
+      migrateSidebarViewState({
+        labelFilter: { labels: [" Urgent ", "BLOCKED", "urgent"], match: "all" },
+      }).labelFilter,
+    ).toEqual({ labels: ["urgent", "blocked"] });
+  });
+
+  it("toggles multiple projects into and out of the filter", () => {
+    const store = useSidebarViewStore.getState();
+    store.toggleProjectFilter("project-a");
+    store.toggleProjectFilter("project-b");
+
+    expect(useSidebarViewStore.getState().projectFilters).toEqual(["project-a", "project-b"]);
+
+    store.toggleProjectFilter("project-a");
+
+    expect(useSidebarViewStore.getState().projectFilters).toEqual(["project-b"]);
+
+    store.clearProjectFilters();
+
+    expect(useSidebarViewStore.getState().projectFilters).toEqual([]);
+  });
+
+  it("keeps the other facets when the project filter is cleared", () => {
+    useSidebarViewStore.setState({
+      groupMode: "status",
+      hostFilters: ["host-a"],
+      projectFilters: ["project-a"],
+      labelFilter: { labels: ["urgent"] },
+    });
+
+    useSidebarViewStore.getState().clearProjectFilters();
+
+    expect(useSidebarViewStore.getState()).toMatchObject({
+      groupMode: "status",
+      hostFilters: ["host-a"],
+      projectFilters: [],
+      labelFilter: { labels: ["urgent"] },
+    });
+  });
+
+  // The persisted schema is a `z.strictObject` behind `createValidatedPersistStorage`, so a key
+  // the schema does not list fails the parse and takes every other sidebar setting down with it.
+  it("carries a persisted project filter through the version migration", () => {
+    expect(
+      migrateSidebarViewState({
+        groupMode: "project",
+        hostFilters: ["host-a"],
+        projectFilters: ["project-a", "project-b"],
+      }),
+    ).toEqual({
+      workspaceSort: "created",
+      showBackground: false,
+      groupMode: "project",
+      hostFilters: ["host-a"],
+      projectFilters: ["project-a", "project-b"],
+      labelFilter: { labels: [] },
+    });
+  });
+
+  it("never keeps project filters from state the schema rejects", () => {
+    expect(migrateSidebarViewState({ projectFilters: "project-a" })).toEqual({
+      workspaceSort: "created",
+      showBackground: false,
+      groupMode: "project",
+      hostFilters: [],
+      projectFilters: [],
+      labelFilter: { labels: [] },
     });
   });
 
@@ -159,4 +292,15 @@ describe("sidebar view store", () => {
     );
     expect(storage.reads).toEqual(["sidebar-view"]);
   });
+});
+
+it("defaults to Created and persists the Last prompt choice across migration", () => {
+  expect(migrateSidebarViewState({}).workspaceSort).toBe("created");
+  expect(
+    migrateSidebarViewState({ workspaceSort: "lastPrompt", groupMode: "status" }),
+  ).toMatchObject({ workspaceSort: "lastPrompt", groupMode: "status" });
+});
+
+it("retains the manual sorting preference on reload", () => {
+  expect(migrateSidebarViewState({ workspaceSort: "manual" }).workspaceSort).toBe("manual");
 });

@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { Pressable, View } from "react-native";
+import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { WindowChromeRootRegion } from "@/utils/desktop-window";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 interface DesktopPanelOverlayProps {
   children: ReactNode;
@@ -31,7 +32,7 @@ export function DesktopPanelOverlay({
   return (
     <View pointerEvents="box-none" style={styles.overlay} testID={testID}>
       {open ? (
-        <Pressable
+        <PressHighlight
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           onPress={onDismiss}

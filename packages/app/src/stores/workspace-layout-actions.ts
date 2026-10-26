@@ -1,6 +1,8 @@
 import invariant from "tiny-invariant";
+import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import type { WorkspaceTab, WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { MIN_SPLIT_SIZE } from "@/stores/workspace-layout-constants";
+import { panelResourceKey } from "@/panels/panel-manifest";
 import { defaultWorkspaceLayoutIds } from "@/stores/workspace-layout-ids";
 import type { WorkspaceLayoutNodeIdPrefix } from "@/stores/workspace-layout-ids";
 import {
@@ -74,16 +76,50 @@ interface DetachTabFromTreeResult {
 }
 
 interface InsertTabIntoPaneInput {
+  insertionPosition?: WorkspaceTabInsertionPosition;
   paneId: string;
   tab: WorkspaceTab;
   focusTabId?: string | null;
 }
 
+/**
+ * Where an open wants its tab, and how hard it wants it there.
+ *
+ * A new tab always opens in the pane its kind belongs to (`isSidePanelTabTarget`), so the
+ * placement only matters when the tab already exists somewhere. A user who picks Changes from the
+ * side panel's `+` menu is placing it there and expects it to arrive, even if it was dragged to the
+ * main pane earlier. A file link in an agent's output is a supporting open — it must never yank a
+ * tab out from under the pane the user deliberately moved it to.
+ */
+export type WorkspaceTabPlacement =
+  /** Pane-local affordance: an existing tab moves here. */
+  | { mode: "pane"; paneId: string }
+  /** Implicit open: an existing tab stays where the user left it. */
+  | { mode: "prefer"; paneId: string }
+  /** The user is working in the focused pane, whichever one that is. */
+  | { mode: "focused" }
+  /** Nobody placed this tab — reconciliation and other opens with no user behind them. */
+  | { mode: "ambient" };
+
+export const FOCUSED_PANE_PLACEMENT: WorkspaceTabPlacement = { mode: "focused" };
+export const AMBIENT_PLACEMENT: WorkspaceTabPlacement = { mode: "ambient" };
+
+export interface WorkspaceTabInsertionPosition {
+  afterTabId: string;
+}
+
 interface OpenTabInLayoutInput {
+  insertionPosition?: WorkspaceTabInsertionPosition;
   layout: WorkspaceLayout;
   target: WorkspaceTabTarget;
   now: number;
+  placement: WorkspaceTabPlacement;
   createNodeId?: (prefix: WorkspaceLayoutNodeIdPrefix) => string;
+}
+
+interface CreateTabInLayoutInput extends OpenTabInLayoutInput {
+  createTabId: () => string;
+  state?: JsonValue;
 }
 
 interface OpenTabInLayoutResult {
@@ -95,6 +131,11 @@ interface RetargetTabInLayoutInput {
   layout: WorkspaceLayout;
   tabId: string;
   target: WorkspaceTabTarget;
+}
+
+interface ReplaceTabTargetInLayoutInput extends RetargetTabInLayoutInput {
+  createTabId: () => string;
+  state?: JsonValue;
 }
 
 interface RetargetTabInLayoutResult {
@@ -123,6 +164,11 @@ interface CloseTabInLayoutInput {
   tabId: string;
 }
 
+interface ClosePaneInLayoutInput {
+  layout: WorkspaceLayout;
+  paneId: string;
+}
+
 interface EnsureSidePaneInLayoutInput {
   layout: WorkspaceLayout;
   createNodeId: (prefix: WorkspaceLayoutNodeIdPrefix) => string;
@@ -142,6 +188,10 @@ interface MoveTabToPaneInLayoutInput {
 interface FocusTabInLayoutInput {
   layout: WorkspaceLayout;
   tabId: string;
+}
+
+interface SelectTabInPaneInLayoutInput extends FocusTabInLayoutInput {
+  paneId: string;
 }
 
 interface FocusPaneInLayoutInput {
@@ -164,7 +214,6 @@ interface ReorderPaneTabsInLayoutInput {
 export interface WorkspaceTabReconcileState {
   layout: WorkspaceLayout;
   pinnedAgentIds?: ReadonlySet<string> | null;
-  pendingAgentIds?: ReadonlySet<string> | null;
   hiddenAgentIds?: ReadonlySet<string> | null;
 }
 
@@ -173,13 +222,13 @@ export interface WorkspaceTabSnapshot {
   terminalsHydrated: boolean;
   activeAgentIds: Iterable<string>;
   autoOpenAgentIds: Iterable<string>;
-  knownAgentIds: Iterable<string>;
   knownTerminalIds?: Iterable<string>;
   standaloneTerminalIds: Iterable<string>;
+  hasActivePendingTerminalCreate?: boolean;
   hasActivePendingDraftCreate?: boolean;
 }
 
-const DEFAULT_PANE_ID = "main";
+export const DEFAULT_PANE_ID = "main";
 
 /**
  * Share of the workspace the side panel takes when it first appears. A
@@ -190,6 +239,7 @@ export const SIDE_PANE_DEFAULT_SIZE = 0.42;
 const SIDE_PANEL_TAB_KINDS: ReadonlySet<WorkspaceTabTarget["kind"]> = new Set<
   WorkspaceTabTarget["kind"]
 >([
+  "new_tab",
   "provider_subagent",
   "setup",
   "terminal",
@@ -199,15 +249,17 @@ const SIDE_PANEL_TAB_KINDS: ReadonlySet<WorkspaceTabTarget["kind"]> = new Set<
   "working_diff",
   "commit_diff",
   "changes",
+  "changes_tree",
   "files",
   "pull_request",
+  "plugin",
 ]);
 
 /**
  * Whether a tab opens in the side panel. The chat (a draft or an agent) is the
- * main pane; everything it works alongside, subagent transcripts and workspace
- * setup included, opens to its right. A tab can still be dragged to the other
- * pane afterwards.
+ * main pane; everything it works alongside, subagent transcripts, workspace
+ * setup and plugin panels included, opens beside it. A tab can still be dragged
+ * to the other pane afterwards.
  */
 export function isSidePanelTabTarget(target: WorkspaceTabTarget): boolean {
   return SIDE_PANEL_TAB_KINDS.has(target.kind);
@@ -260,6 +312,10 @@ function createPaneNode(input: {
   };
 }
 
+function isSoleNewTabPane(pane: SplitPaneInternal): boolean {
+  return pane.tabs.length === 1 && pane.tabs[0]?.target.kind === "new_tab";
+}
+
 function createGroupNode(input: {
   id: string;
   direction: "horizontal" | "vertical";
@@ -290,18 +346,19 @@ function normalizeWorkspaceTab(value: unknown): WorkspaceTab | null {
   if (!target) {
     return null;
   }
-  const tabId =
-    target.kind === "working_diff"
-      ? buildDeterministicWorkspaceTabId(target)
-      : (trimNonEmpty(tab.tabId) ?? buildDeterministicWorkspaceTabId(target));
+  const persistedTabId = trimNonEmpty(tab.tabId);
+  if (!persistedTabId && target.kind === "new_tab") {
+    return null;
+  }
+  const tabId = persistedTabId ?? buildDeterministicWorkspaceTabId(target);
   if (!tabId) {
     return null;
   }
-
   return {
     tabId,
     target,
     createdAt: typeof tab.createdAt === "number" ? tab.createdAt : Date.now(),
+    ...(tab.state !== undefined ? { state: tab.state } : {}),
   };
 }
 
@@ -538,7 +595,7 @@ function ensureSidePaneInternal(
 }
 
 /**
- * The layout is a main pane with an optional side pane to its right: a bare
+ * The layout is a main pane with an optional side pane beside it: a bare
  * pane, or a horizontal group of exactly two panes. Anything else (older
  * free-form splits) is flattened into that shape, chats to the main pane and
  * side-panel tabs to the side pane, in tree order.
@@ -815,10 +872,18 @@ function insertTabIntoPane(
   return replaceNodeAtPath(root, panePath, (node) => {
     invariant(node.kind === "pane", "Expected pane while inserting tab");
     const existingIndex = node.pane.tabs.findIndex((tab) => tab.tabId === input.tab.tabId);
-    const nextTabs =
-      existingIndex >= 0
-        ? node.pane.tabs.map((tab, index) => (index === existingIndex ? input.tab : tab))
-        : [...node.pane.tabs, input.tab];
+    let nextTabs: WorkspaceTab[];
+    if (input.tab.target.kind !== "new_tab" && isSoleNewTabPane(node.pane)) {
+      nextTabs = [input.tab];
+    } else if (existingIndex >= 0) {
+      nextTabs = node.pane.tabs.map((tab, index) => (index === existingIndex ? input.tab : tab));
+    } else {
+      nextTabs = [...node.pane.tabs];
+      const afterIndex = nextTabs.findIndex(
+        (tab) => tab.tabId === input.insertionPosition?.afterTabId,
+      );
+      nextTabs.splice(afterIndex >= 0 ? afterIndex + 1 : nextTabs.length, 0, input.tab);
+    }
     return {
       kind: "pane",
       pane: normalizePaneAfterTabChange({
@@ -851,6 +916,7 @@ function replaceTabInTree(
     tabId: string;
     nextTabId: string;
     target: WorkspaceTabTarget;
+    state?: JsonValue;
   },
 ): SplitNodeInternal {
   const panePath = findPanePathContainingTab(root, input.tabId);
@@ -861,15 +927,15 @@ function replaceTabInTree(
       kind: "pane",
       pane: normalizePaneAfterTabChange({
         ...node.pane,
-        tabs: node.pane.tabs.map((tab) =>
-          tab.tabId === input.tabId
-            ? {
-                ...tab,
-                tabId: input.nextTabId,
-                target: input.target,
-              }
-            : tab,
-        ),
+        tabs: node.pane.tabs.map((tab) => {
+          if (tab.tabId !== input.tabId) return tab;
+          return {
+            tabId: input.nextTabId,
+            target: input.target,
+            createdAt: tab.createdAt,
+            ...(input.state !== undefined ? { state: input.state } : {}),
+          };
+        }),
         focusedTabId:
           node.pane.focusedTabId === input.tabId ? input.nextTabId : node.pane.focusedTabId,
       }),
@@ -977,7 +1043,7 @@ export function findPaneContainingTab(root: SplitNode, tabId: string): SplitPane
   return null;
 }
 
-/** The pane chats live in: the root pane, or the left child of the root split. */
+/** The pane chats live in: the root pane, or the first child of the root split. */
 export function getWorkspaceMainPane(root: SplitNode): SplitPane {
   return getMainPaneInternal(asInternalNode(root));
 }
@@ -1005,8 +1071,9 @@ export function collectAllPanes(root: SplitNode): SplitPane[] {
 
 function isEphemeralTab(tab: WorkspaceTab): boolean {
   // Commit diff tabs are ephemeral: their SHA may be rebased away before the next
-  // load, so a restored tab could point at a dead commit.
-  return tab.target.kind === "commit_diff";
+  // load, so a restored tab could point at a dead commit. A New tab holds nothing
+  // worth restoring.
+  return tab.target.kind === "commit_diff" || tab.target.kind === "new_tab";
 }
 
 function stripEphemeralTabsFromNode(node: SplitNodeInternal): SplitNodeInternal {
@@ -1032,12 +1099,10 @@ function stripEphemeralTabsFromNode(node: SplitNodeInternal): SplitNodeInternal 
 }
 
 /**
- * Returns a copy of `layout` with every ephemeral tab (commit diff tabs) removed
- * from each pane. Applied in the layout store's `partialize` so commit diff tabs
- * are never written to storage — they're dropped on the next reload rather than
- * restored pointing at a possibly-rebased SHA. Working diff tabs and all other
- * tab kinds are left intact. Panes (and their ids/structure) are preserved even
- * when emptied; the parent-tab map is renormalized against the surviving tabs.
+ * Returns a copy of `layout` with ephemeral tabs removed from each pane. Panes
+ * (and their ids/structure) are preserved even when emptied: an empty main pane
+ * seeds a draft and an empty side pane shows its launcher. The parent-tab map is
+ * renormalized against the surviving tabs.
  */
 export function stripEphemeralTabsFromLayout(layout: WorkspaceLayout): WorkspaceLayout {
   const internalLayout = asInternalLayout(layout);
@@ -1047,6 +1112,16 @@ export function stripEphemeralTabsFromLayout(layout: WorkspaceLayout): Workspace
     focusedPaneId: internalLayout.focusedPaneId,
     parentTabIdByTabId: layout.parentTabIdByTabId,
   });
+}
+
+/** Restores a persisted layout into the shape the workspace renders. */
+export function restoreWorkspaceLayout(layout: WorkspaceLayout): WorkspaceLayout {
+  const normalized = normalizeLayout(stripEphemeralTabsFromLayout(normalizeLayout(layout)));
+  if (normalized.focusedPaneId !== null) {
+    return normalized;
+  }
+  // Parked focus has an in-memory restoration record that cannot survive reload.
+  return { ...normalized, focusedPaneId: getWorkspaceMainPane(normalized.root).id };
 }
 
 export function getFocusedBrowserId(layout: WorkspaceLayout | null | undefined): string | null {
@@ -1137,9 +1212,13 @@ export function removePaneFromTree(root: SplitNode, paneId: string): SplitNode {
 }
 
 export function removeTabFromTree(root: SplitNode, tabId: string): SplitNode {
-  return detachTabFromTree(asInternalNode(root), { tabId }).root;
+  return detachTabFromTree(asInternalNode(root), {
+    tabId,
+    preserveEmptyPaneId: DEFAULT_PANE_ID,
+  }).root;
 }
 
+/** The pane a new tab opens in: the side pane for side-panel kinds, created on demand. */
 function resolveTargetPaneForNewTab(
   root: SplitNodeInternal,
   target: WorkspaceTabTarget,
@@ -1154,49 +1233,65 @@ function resolveTargetPaneForNewTab(
   return { root: ensured.root, pane };
 }
 
-function insertNewTabIntoRoutedPane(input: {
-  layout: WorkspaceLayout;
-  target: WorkspaceTabTarget;
-  now: number;
-  focus: boolean;
-  createNodeId?: (prefix: WorkspaceLayoutNodeIdPrefix) => string;
-}): OpenTabInLayoutResult {
+function insertNewTabIntoPane(
+  input: CreateTabInLayoutInput & { focus: boolean },
+): OpenTabInLayoutResult {
   const layout = asInternalLayout(input.layout);
-  const { root, pane } = resolveTargetPaneForNewTab(
+  const { root, pane: targetPane } = resolveTargetPaneForNewTab(
     layout.root,
     input.target,
     input.createNodeId ?? defaultWorkspaceLayoutIds.createNodeId,
   );
 
-  const tabId = buildDeterministicWorkspaceTabId(input.target);
+  const tabId = input.createTabId();
   const nextTab: WorkspaceTab = {
     tabId,
     target: input.target,
     createdAt: input.now,
+    ...(input.state !== undefined ? { state: input.state } : {}),
   };
 
-  const preservedFocusTabId = pane.focusedTabId ?? tabId;
+  const currentTab = isSoleNewTabPane(targetPane) ? targetPane.tabs[0] : null;
+  if (currentTab && input.target.kind !== "new_tab") {
+    return {
+      tabId,
+      layout: withNormalizedParentTabMap({
+        root: replaceTabInTree(root, {
+          tabId: currentTab.tabId,
+          nextTabId: tabId,
+          target: input.target,
+          state: input.state,
+        }),
+        focusedPaneId: input.focus ? targetPane.id : layout.focusedPaneId,
+        parentTabIdByTabId: input.layout.parentTabIdByTabId,
+      }),
+    };
+  }
+
+  const preservedFocusTabId = targetPane.focusedTabId ?? tabId;
 
   return {
     tabId,
     layout: withNormalizedParentTabMap({
       root: insertTabIntoPane(root, {
-        paneId: pane.id,
+        paneId: targetPane.id,
         tab: nextTab,
+        insertionPosition: input.insertionPosition,
         focusTabId: input.focus ? tabId : preservedFocusTabId,
       }),
-      focusedPaneId: input.focus ? pane.id : layout.focusedPaneId,
+      focusedPaneId: input.focus ? targetPane.id : layout.focusedPaneId,
       parentTabIdByTabId: input.layout.parentTabIdByTabId,
     }),
   };
 }
 
 function findExistingTabForTarget(root: SplitNodeInternal, target: WorkspaceTabTarget) {
-  const targetTabId = buildDeterministicWorkspaceTabId(target);
+  if (target.kind === "new_tab") {
+    return null;
+  }
+  const targetIdentity = panelResourceKey(target);
   return (
-    collectAllTabs(root).find(
-      (tab) => tab.tabId === targetTabId || workspaceTabTargetsEqual(tab.target, target),
-    ) ?? null
+    collectAllTabs(root).find((tab) => panelResourceKey(tab.target) === targetIdentity) ?? null
   );
 }
 
@@ -1214,29 +1309,85 @@ function updateExistingTabTarget(
       tabId: tab.tabId,
       nextTabId: tab.tabId,
       target,
+      state: tab.state,
     }),
   });
 }
 
-export function openTabInLayoutFocused(input: OpenTabInLayoutInput): OpenTabInLayoutResult {
+export function openTabInLayoutFocused(input: OpenTabInLayoutInput): OpenTabInLayoutResult | null {
   const layout = asInternalLayout(input.layout);
   const existingTab = findExistingTabForTarget(layout.root, input.target);
   if (existingTab) {
     const nextLayout = updateExistingTabTarget(input.layout, existingTab, input.target);
     return {
       tabId: existingTab.tabId,
-      layout:
-        focusTabInLayout({
-          layout: nextLayout,
-          tabId: existingTab.tabId,
-        }) ?? nextLayout,
+      layout: revealExistingTab({
+        layout: nextLayout,
+        tabId: existingTab.tabId,
+        placement: input.placement,
+      }),
     };
   }
 
-  return insertNewTabIntoRoutedPane({ ...input, focus: true });
+  return insertNewTabIntoPane({
+    ...input,
+    createTabId: () => buildDeterministicWorkspaceTabId(input.target),
+    focus: true,
+  });
 }
 
-export function openTabInLayoutBackground(input: OpenTabInLayoutInput): OpenTabInLayoutResult {
+/** Always allocates an independent tab instance. */
+export function createTabInLayout(input: CreateTabInLayoutInput): OpenTabInLayoutResult | null {
+  return insertNewTabIntoPane({ ...input, focus: true });
+}
+
+/** Reveals an equivalent target, or creates it when absent. */
+export function revealTargetInLayout(input: CreateTabInLayoutInput): OpenTabInLayoutResult | null {
+  const existingTab = findExistingTabForTarget(asInternalLayout(input.layout).root, input.target);
+  if (existingTab) {
+    return {
+      tabId: existingTab.tabId,
+      layout: revealExistingTab({
+        layout: updateExistingTabTarget(input.layout, existingTab, input.target),
+        tabId: existingTab.tabId,
+        placement: input.placement,
+      }),
+    };
+  }
+  return createTabInLayout({
+    ...input,
+    createTabId: () => buildDeterministicWorkspaceTabId(input.target),
+  });
+}
+
+/**
+ * Brings an already-open tab to the user. Only an explicit pane-local placement
+ * relocates it; every other open finds it where the user last put it.
+ */
+function revealExistingTab(input: {
+  layout: WorkspaceLayout;
+  tabId: string;
+  placement: WorkspaceTabPlacement;
+}): WorkspaceLayout {
+  if (input.placement.mode === "pane") {
+    const currentPane = findPaneContainingTab(asInternalNode(input.layout.root), input.tabId);
+    if (currentPane?.id !== input.placement.paneId) {
+      const moved = moveTabToPaneInLayout({
+        layout: input.layout,
+        tabId: input.tabId,
+        toPaneId: input.placement.paneId,
+      });
+      if (moved) {
+        return moved;
+      }
+    }
+  }
+  return focusTabInLayout({ layout: input.layout, tabId: input.tabId }) ?? input.layout;
+}
+
+export function openTabInLayoutBackground(
+  input: OpenTabInLayoutInput,
+): OpenTabInLayoutResult | null {
   const layout = asInternalLayout(input.layout);
   const existingTab = findExistingTabForTarget(layout.root, input.target);
   if (existingTab) {
@@ -1246,7 +1397,11 @@ export function openTabInLayoutBackground(input: OpenTabInLayoutInput): OpenTabI
     };
   }
 
-  return insertNewTabIntoRoutedPane({ ...input, focus: false });
+  return insertNewTabIntoPane({
+    ...input,
+    createTabId: () => buildDeterministicWorkspaceTabId(input.target),
+    focus: false,
+  });
 }
 
 export function closeTabInLayout(input: CloseTabInLayoutInput): WorkspaceLayout | null {
@@ -1302,6 +1457,40 @@ export function closeTabInLayout(input: CloseTabInLayoutInput): WorkspaceLayout 
   return nextLayoutWithParentMap;
 }
 
+/**
+ * Whether closing this pane would do anything. Only the side panel closes as a
+ * pane, and only while it holds tabs; the chat's pane never does.
+ *
+ * Ask this *before* tearing down the pane's tabs. `closePaneInLayout` refuses the
+ * same case, but at the end, once the tabs are already gone. This is the same rule
+ * stated early enough to act on, and it is the one both the affordance and the
+ * action read so they cannot drift.
+ */
+export function canDismissPaneInLayout(layout: WorkspaceLayout, paneId: string): boolean {
+  const sidePane = getWorkspaceSidePane(layout.root);
+  return sidePane?.id === paneId && sidePane.tabIds.length > 0;
+}
+
+/**
+ * Empties the side pane, tabs and all, and leaves it on its launcher. Callers own
+ * tab teardown (archiving agents, killing terminals) before calling this; the
+ * layout only forgets them. Returns null for the main pane, which never closes.
+ */
+export function closePaneInLayout(input: ClosePaneInLayoutInput): WorkspaceLayout | null {
+  if (!canDismissPaneInLayout(input.layout, input.paneId)) {
+    return null;
+  }
+  const layout = asInternalLayout(input.layout);
+  return withNormalizedParentTabMap({
+    root: updatePaneInTree(layout.root, {
+      paneId: input.paneId,
+      updater: (pane) => ({ ...pane, tabs: [], focusedTabId: null }),
+    }),
+    focusedPaneId: layout.focusedPaneId,
+    parentTabIdByTabId: input.layout.parentTabIdByTabId,
+  });
+}
+
 export function focusTabInLayout(input: FocusTabInLayoutInput): WorkspaceLayout | null {
   const layout = asInternalLayout(input.layout);
   const pane = findPaneContainingTab(layout.root, input.tabId);
@@ -1316,6 +1505,22 @@ export function focusTabInLayout(input: FocusTabInLayoutInput): WorkspaceLayout 
   return withNormalizedParentTabMap({
     root: focusTabInPane(layout.root, pane.id, input.tabId),
     focusedPaneId: pane.id,
+    parentTabIdByTabId: input.layout.parentTabIdByTabId,
+  });
+}
+
+/** Selects a tab inside a host without making that host the workspace's focused pane. */
+export function selectTabInPaneInLayout(
+  input: SelectTabInPaneInLayoutInput,
+): WorkspaceLayout | null {
+  const layout = asInternalLayout(input.layout);
+  const pane = findPaneById(layout.root, input.paneId);
+  if (!pane?.tabIds.includes(input.tabId) || pane.focusedTabId === input.tabId) {
+    return null;
+  }
+  return withNormalizedParentTabMap({
+    root: focusTabInPane(layout.root, input.paneId, input.tabId),
+    focusedPaneId: layout.focusedPaneId,
     parentTabIdByTabId: input.layout.parentTabIdByTabId,
   });
 }
@@ -1378,6 +1583,113 @@ export function retargetTabInLayout(
       parentTabIdByTabId: input.layout.parentTabIdByTabId,
     }),
   };
+}
+
+/** Replaces one pane-local slot and never claims an equivalent tab elsewhere. */
+export function replaceTabTargetInLayout(
+  input: ReplaceTabTargetInLayoutInput,
+): RetargetTabInLayoutResult | null {
+  const layout = asInternalLayout(input.layout);
+  if (!findPaneContainingTab(layout.root, input.tabId)) return null;
+  const currentTab = collectAllTabs(layout.root).find((tab) => tab.tabId === input.tabId) ?? null;
+  if (currentTab && workspaceTabTargetsEqual(currentTab.target, input.target)) {
+    if (input.state === undefined) {
+      return { layout: input.layout, tabId: input.tabId };
+    }
+    return {
+      tabId: input.tabId,
+      layout: withNormalizedParentTabMap({
+        root: replaceTabInTree(layout.root, {
+          tabId: input.tabId,
+          nextTabId: input.tabId,
+          target: input.target,
+          state: input.state,
+        }),
+        focusedPaneId: layout.focusedPaneId,
+        parentTabIdByTabId: input.layout.parentTabIdByTabId,
+      }),
+    };
+  }
+  let tabId = input.createTabId();
+  // A same-kind replacement delivers new target props to the mounted panel instance.
+  // Cross-kind replacement creates a new instance so local panel state cannot leak.
+  if (
+    currentTab?.target.kind === "new_tab" ||
+    currentTab?.target.kind === "draft" ||
+    currentTab?.target.kind === input.target.kind
+  ) {
+    tabId = input.tabId;
+  } else if (input.target.kind === "draft") {
+    tabId = buildDeterministicWorkspaceTabId(input.target);
+  }
+  const parentTabIdByTabId = transferReplacedTabParent({
+    parentTabIdByTabId: input.layout.parentTabIdByTabId,
+    replacedTabId: input.tabId,
+    replacementTabId: tabId,
+  });
+  let state: JsonValue | undefined;
+  if (input.state !== undefined) {
+    state = input.state;
+  } else if (currentTab?.target.kind === input.target.kind) {
+    state = currentTab.state;
+  }
+  return {
+    tabId,
+    layout: withNormalizedParentTabMap({
+      root: replaceTabInTree(layout.root, {
+        tabId: input.tabId,
+        nextTabId: tabId,
+        target: input.target,
+        state,
+      }),
+      focusedPaneId: layout.focusedPaneId,
+      parentTabIdByTabId,
+    }),
+  };
+}
+
+function transferReplacedTabParent(input: {
+  parentTabIdByTabId?: Record<string, string>;
+  replacedTabId: string;
+  replacementTabId: string;
+}): Record<string, string> | undefined {
+  if (!input.parentTabIdByTabId) {
+    return undefined;
+  }
+  const parentTabId = input.parentTabIdByTabId[input.replacedTabId];
+  const renamed: Record<string, string> = {};
+  for (const [childTabId, currentParentTabId] of Object.entries(input.parentTabIdByTabId)) {
+    if (childTabId === input.replacedTabId) {
+      continue;
+    }
+    renamed[childTabId] =
+      currentParentTabId === input.replacedTabId ? input.replacementTabId : currentParentTabId;
+  }
+  if (parentTabId) {
+    renamed[input.replacementTabId] =
+      parentTabId === input.replacedTabId ? input.replacementTabId : parentTabId;
+  }
+  return Object.keys(renamed).length > 0 ? renamed : undefined;
+}
+
+export function setTabStateInLayout(input: {
+  layout: WorkspaceLayout;
+  tabId: string;
+  state: JsonValue | undefined;
+}): WorkspaceLayout | null {
+  const layout = asInternalLayout(input.layout);
+  const tab = collectAllTabs(layout.root).find((candidate) => candidate.tabId === input.tabId);
+  if (!tab) return null;
+  return withNormalizedParentTabMap({
+    root: replaceTabInTree(layout.root, {
+      tabId: tab.tabId,
+      nextTabId: tab.tabId,
+      target: tab.target,
+      state: input.state,
+    }),
+    focusedPaneId: layout.focusedPaneId,
+    parentTabIdByTabId: input.layout.parentTabIdByTabId,
+  });
 }
 
 export function convertDraftToAgentInLayout(
@@ -1452,6 +1764,8 @@ export function moveTabToPaneInLayout(input: MoveTabToPaneInLayoutInput): Worksp
     return null;
   }
 
+  // The main pane survives losing its last tab; a side pane whose last tab is
+  // dragged to the main pane collapses with it.
   const mainPaneId = getMainPaneInternal(layout.root).id;
   const detached = detachTabFromTree(layout.root, {
     tabId: input.tabId,
@@ -1626,28 +1940,20 @@ function isTerminalTab(
   return tab.target.kind === "terminal";
 }
 
-function openEntityTabWithoutFocusing(
-  layout: WorkspaceLayout,
-  target: WorkspaceTabTarget,
-  createNodeId: (prefix: WorkspaceLayoutNodeIdPrefix) => string,
-): WorkspaceLayout {
-  const internalLayout = asInternalLayout(layout);
-  const { root, pane } = resolveTargetPaneForNewTab(internalLayout.root, target, createNodeId);
-
-  const tabId = buildDeterministicWorkspaceTabId(target);
-  return withNormalizedParentTabMap({
-    root: insertTabIntoPane(root, {
-      paneId: pane.id,
-      tab: {
-        tabId,
-        target,
-        createdAt: Date.now(),
-      },
-      focusTabId: pane.focusedTabId ?? tabId,
-    }),
-    focusedPaneId: internalLayout.focusedPaneId,
-    parentTabIdByTabId: layout.parentTabIdByTabId,
-  });
+function openEntityTabWithoutFocusing(input: {
+  layout: WorkspaceLayout;
+  target: WorkspaceTabTarget;
+  createNodeId: (prefix: WorkspaceLayoutNodeIdPrefix) => string;
+}): WorkspaceLayout {
+  return insertNewTabIntoPane({
+    layout: input.layout,
+    target: input.target,
+    now: Date.now(),
+    placement: AMBIENT_PLACEMENT,
+    createNodeId: input.createNodeId,
+    createTabId: () => buildDeterministicWorkspaceTabId(input.target),
+    focus: false,
+  }).layout;
 }
 
 interface EntityTabGroup {
@@ -1658,17 +1964,10 @@ interface EntityTabGroup {
 function applyPinnedAndHidden(input: {
   baseAgentIds: Set<string>;
   pinnedAgentIds: Set<string>;
-  pendingAgentIds: Set<string>;
   hiddenAgentIds: Set<string>;
-  knownAgentIds: Set<string>;
 }): Set<string> {
-  const { baseAgentIds, pinnedAgentIds, pendingAgentIds, hiddenAgentIds, knownAgentIds } = input;
-  const result = new Set(baseAgentIds);
-  for (const agentId of pinnedAgentIds) {
-    if (knownAgentIds.has(agentId) || pendingAgentIds.has(agentId)) {
-      result.add(agentId);
-    }
-  }
+  const { baseAgentIds, pinnedAgentIds, hiddenAgentIds } = input;
+  const result = new Set([...baseAgentIds, ...pinnedAgentIds]);
   for (const agentId of hiddenAgentIds) {
     result.delete(agentId);
   }
@@ -1735,6 +2034,7 @@ function addMissingEntityTabs(input: {
   autoOpenAgentIds: Set<string>;
   representedAgentIds: Set<string>;
   standaloneTerminalIds: Set<string>;
+  hasActivePendingTerminalCreate: boolean;
   hasActivePendingDraftCreate: boolean;
   createNodeId: (prefix: WorkspaceLayoutNodeIdPrefix) => string;
 }): WorkspaceLayout {
@@ -1742,6 +2042,7 @@ function addMissingEntityTabs(input: {
     autoOpenAgentIds,
     representedAgentIds,
     standaloneTerminalIds,
+    hasActivePendingTerminalCreate,
     hasActivePendingDraftCreate,
     createNodeId,
   } = input;
@@ -1762,31 +2063,27 @@ function addMissingEntityTabs(input: {
     if (hasActivePendingDraftCreate && !representedAgentIds.has(agentId)) {
       continue;
     }
-    nextLayout = openEntityTabWithoutFocusing(
-      nextLayout,
-      {
-        kind: "agent",
-        agentId,
-      },
+    nextLayout = openEntityTabWithoutFocusing({
+      layout: nextLayout,
+      target: { kind: "agent", agentId },
       createNodeId,
-    );
+    });
     currentAgentIds.add(agentId);
   }
 
   const sortedTerminalIds = [...standaloneTerminalIds].sort();
-  for (const terminalId of sortedTerminalIds) {
-    if (currentTerminalIds.has(terminalId)) {
-      continue;
+  if (!hasActivePendingTerminalCreate) {
+    for (const terminalId of sortedTerminalIds) {
+      if (currentTerminalIds.has(terminalId)) {
+        continue;
+      }
+      nextLayout = openEntityTabWithoutFocusing({
+        layout: nextLayout,
+        target: { kind: "terminal", terminalId },
+        createNodeId,
+      });
+      currentTerminalIds.add(terminalId);
     }
-    nextLayout = openEntityTabWithoutFocusing(
-      nextLayout,
-      {
-        kind: "terminal",
-        terminalId,
-      },
-      createNodeId,
-    );
-    currentTerminalIds.add(terminalId);
   }
   return nextLayout;
 }
@@ -1802,12 +2099,17 @@ export function reconcileWorkspaceTabs(
   const originalFocusedTabId =
     findPaneById(nextLayout.root, nextLayout.focusedPaneId)?.focusedTabId ?? null;
   let reconciledFocusedTabId = originalFocusedTabId;
-  const pinnedAgentIds = new Set(state.pinnedAgentIds ?? []);
-  const pendingAgentIds = new Set(state.pendingAgentIds ?? []);
   const hiddenAgentIds = new Set(state.hiddenAgentIds ?? []);
   const activeAgentIds = normalizeStringSet(snapshot.activeAgentIds);
   const autoOpenAgentIds = normalizeStringSet(snapshot.autoOpenAgentIds);
-  const knownAgentIds = normalizeStringSet(snapshot.knownAgentIds);
+  // An explicit open owns the tab until the agent joins the active directory.
+  // From then on it follows the normal server archive lifecycle. Detail/cache
+  // hydration never decides whether the user's target is allowed to stay open.
+  const pinnedAgentIds = new Set(
+    [...(state.pinnedAgentIds ?? [])].filter(
+      (agentId) => !snapshot.agentsHydrated || !activeAgentIds.has(agentId),
+    ),
+  );
   const standaloneTerminalIds = normalizeStringSet(snapshot.standaloneTerminalIds);
   const knownTerminalIds = snapshot.knownTerminalIds
     ? normalizeStringSet(snapshot.knownTerminalIds)
@@ -1815,16 +2117,12 @@ export function reconcileWorkspaceTabs(
   const visibleAgentIds = applyPinnedAndHidden({
     baseAgentIds: activeAgentIds,
     pinnedAgentIds,
-    pendingAgentIds,
     hiddenAgentIds,
-    knownAgentIds,
   });
   const autoOpenSet = applyPinnedAndHidden({
     baseAgentIds: autoOpenAgentIds,
     pinnedAgentIds,
-    pendingAgentIds,
     hiddenAgentIds,
-    knownAgentIds,
   });
 
   const initialTabs = collectAllTabs(nextLayout.root);
@@ -1877,6 +2175,7 @@ export function reconcileWorkspaceTabs(
     autoOpenAgentIds: autoOpenSet,
     representedAgentIds,
     standaloneTerminalIds,
+    hasActivePendingTerminalCreate: snapshot.hasActivePendingTerminalCreate ?? false,
     hasActivePendingDraftCreate: snapshot.hasActivePendingDraftCreate ?? false,
     createNodeId,
   });
@@ -1892,5 +2191,6 @@ export function reconcileWorkspaceTabs(
   return {
     ...state,
     layout: nextLayout,
+    pinnedAgentIds,
   };
 }

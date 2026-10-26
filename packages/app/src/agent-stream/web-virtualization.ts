@@ -1,13 +1,17 @@
 import type { StreamItem } from "@/types/stream";
 import { estimateAssistantMessageHeightFromCache } from "@/utils/assistant-message-height-estimate";
+import {
+  DEFAULT_MOUNTED_RECENT_STREAM_ITEMS,
+  findMountedWindowStart,
+  getMountedRecentStreamItems,
+} from "./history-window";
 
 export const DEFAULT_WEB_PARTIAL_VIRTUALIZATION_THRESHOLD = 100;
-export const DEFAULT_WEB_MOUNTED_RECENT_STREAM_ITEMS = 50;
+export const DEFAULT_WEB_MOUNTED_RECENT_STREAM_ITEMS = DEFAULT_MOUNTED_RECENT_STREAM_ITEMS;
 const COLLAPSED_TOOL_SEQUENCE_ROW_HEIGHT_ESTIMATE = 40;
 
 type BottomAnchorE2ETestGlobals = typeof globalThis & {
   __PASEO_E2E_WEB_PARTIAL_VIRTUALIZATION_THRESHOLD?: unknown;
-  __PASEO_E2E_WEB_MOUNTED_RECENT_STREAM_ITEMS?: unknown;
 };
 
 function readPositiveIntegerOverride(value: unknown): number | null {
@@ -26,10 +30,7 @@ export function getWebPartialVirtualizationThreshold(): number {
 }
 
 export function getWebMountedRecentStreamItems(): number {
-  const override = readPositiveIntegerOverride(
-    (globalThis as BottomAnchorE2ETestGlobals).__PASEO_E2E_WEB_MOUNTED_RECENT_STREAM_ITEMS,
-  );
-  return override ?? DEFAULT_WEB_MOUNTED_RECENT_STREAM_ITEMS;
+  return getMountedRecentStreamItems();
 }
 
 export interface IndexedStreamItem {
@@ -42,19 +43,32 @@ export interface WebVirtualizedHistoryWindow {
   mountedEntries: IndexedStreamItem[];
 }
 
-export function estimateStreamItemHeight(item: StreamItem): number {
+interface StreamItemHeightEstimateInput {
+  item: StreamItem;
+  contentMaxWidth: number;
+}
+
+export function estimateStreamItemHeight({
+  item,
+  contentMaxWidth,
+}: StreamItemHeightEstimateInput): number {
   switch (item.kind) {
     case "user_message":
       return item.images && item.images.length > 0 ? 220 : 96;
     case "assistant_message":
-      return estimateAssistantMessageHeightFromCache(item.text) ?? 220;
+      return (
+        estimateAssistantMessageHeightFromCache({
+          markdown: item.text,
+          contentMaxWidth,
+        }) ?? 220
+      );
     case "tool_call":
       return COLLAPSED_TOOL_SEQUENCE_ROW_HEIGHT_ESTIMATE;
     case "thought":
       return COLLAPSED_TOOL_SEQUENCE_ROW_HEIGHT_ESTIMATE;
     case "todo_list":
       return 144;
-    case "activity_log":
+    case "notification":
       return 88;
     case "compaction":
       return 72;
@@ -63,21 +77,7 @@ export function estimateStreamItemHeight(item: StreamItem): number {
   }
 }
 
-export function findMountedWindowStart(input: {
-  items: StreamItem[];
-  minMountedCount: number;
-}): number {
-  const { items, minMountedCount } = input;
-  if (items.length <= minMountedCount) {
-    return 0;
-  }
-
-  let startIndex = Math.max(items.length - minMountedCount, 0);
-  while (startIndex > 0 && items[startIndex]?.kind !== "user_message") {
-    startIndex -= 1;
-  }
-  return startIndex;
-}
+export { findMountedWindowStart };
 
 export function splitWebVirtualizedHistory(input: {
   entries: IndexedStreamItem[];

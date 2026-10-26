@@ -99,6 +99,7 @@ test.describe("Assistant fork menu", () => {
       "Forked from previous chat",
     );
     expect(await forkContext.waitForText()).toContain(visibleBeforeFork);
+    await expect(page.getByRole("button", { name: "Menu backdrop", exact: true })).toHaveCount(0);
 
     await page.getByRole("button", { name: sourceAgentTitle }).click();
     await expectLiveAssistantText(page, visibleAfterFork);

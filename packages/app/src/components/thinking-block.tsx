@@ -3,7 +3,6 @@ import { View } from "react-native";
 import { Brain } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
-import { thinkingMarkdownParser } from "@/components/markdown/thinking-parser";
 import { ExpandableBadge } from "@/components/message";
 
 interface ThinkingBlockProps {
@@ -28,15 +27,7 @@ export function ThinkingBlock({
   const renderDetails = useCallback(
     () => (
       <View style={styles.content}>
-        <MarkdownRenderer
-          text={text}
-          compact={compact}
-          subdued
-          markdownit={thinkingMarkdownParser}
-          enableHtmlish={false}
-          enableDiagrams={false}
-          horizontalScrollCodeBlocks
-        />
+        <MarkdownRenderer text={text} compact={compact} subdued />
       </View>
     ),
     [compact, text],

@@ -249,8 +249,9 @@ export function pickerItemToCheckoutRequest(
         },
         ...(forge === "github"
           ? {
-              // COMPAT(githubPrNumber): added in v0.1.106, remove after 2026-12-28 once
-              // daemon floor parses checkoutSource.
+              // COMPAT(githubPrNumber): send the legacy GitHub checkout input
+              // to daemons predating checkoutSource. Remove after 2027-01-17
+              // once the supported daemon floor is >= v0.2.0.
               githubPrNumber: item.item.number,
             }
           : {}),
@@ -322,7 +323,10 @@ export function buildPickerOptionData(input: {
     itemById.set(id, { kind: "github-pr", item: pr });
     const updatedAtMs = pr.updatedAt ? Date.parse(pr.updatedAt) : 0;
     const timestamp = Number.isNaN(updatedAtMs) ? 0 : Math.floor(updatedAtMs / 1000);
-    timedOptions.push({ option: { id, label: formatPrLabel(pr) }, timestamp });
+    timedOptions.push({
+      option: { id, label: formatPrLabel(pr), searchText: pr.body ?? undefined },
+      timestamp,
+    });
   }
 
   const baseItem = input.baseItem;
@@ -337,7 +341,13 @@ export function buildPickerOptionData(input: {
     const labeledItem = disambiguate(baseItem, timedOptions);
     itemById.set(selectedOptionId, labeledItem);
     timedOptions.push({
-      option: { id: selectedOptionId, label: pickerItemLabel(labeledItem) },
+      option: {
+        id: selectedOptionId,
+        label: pickerItemLabel(labeledItem),
+        ...(labeledItem.kind === "github-pr"
+          ? { searchText: labeledItem.item.body ?? undefined }
+          : {}),
+      },
       // The base sorts first: it is what a workspace is created from unless you pick something.
       timestamp: Number.POSITIVE_INFINITY,
     });

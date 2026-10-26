@@ -136,11 +136,11 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
     padding: theme.spacing[3],
   },
-  title: { flex: 1, color: theme.colors.foreground, fontSize: theme.fontSize.base },
+  title: { flex: 1, color: theme.colors.foreground, fontSize: theme.fontSize.lg },
   status: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     padding: theme.spacing[3],
   },
-  error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
+  error: { color: theme.colors.destructive, fontSize: theme.fontSize.base },
 }));

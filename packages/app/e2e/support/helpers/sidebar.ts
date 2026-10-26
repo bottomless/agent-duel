@@ -1,6 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 import { confirmIfAsked } from "./confirm-dialog";
 import { getServerId } from "./server-id";
+import { projectEquivalenceViewKey } from "./project-view-key";
 
 interface ContextMenuAnchor {
   x: number;
@@ -54,6 +55,37 @@ export async function showWorkspaceHoverCard(page: Page, workspaceId: string): P
   await expect(page.getByTestId("workspace-hover-card")).toBeVisible();
 }
 
+export async function movePointerAwayFromWorkspaceHoverCard(page: Page): Promise<void> {
+  // Two moves, so the pointer always moves even when it is already parked here.
+  await page.mouse.move(1200, 200, { steps: 5 });
+  await page.mouse.move(1200, 400, { steps: 5 });
+}
+
+export async function focusWorkspaceRowWithKeyboard(
+  page: Page,
+  workspaceId: string,
+): Promise<void> {
+  const row = page.getByTestId(`sidebar-workspace-row-${getServerId()}:${workspaceId}`);
+  await row.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(row).toBeFocused();
+}
+
+export async function expectWorkspaceHoverCardOpen(page: Page): Promise<void> {
+  await expect(page.getByTestId("workspace-hover-card")).toBeVisible();
+}
+
+export async function expectWorkspaceHoverCardStaysOpen(page: Page): Promise<void> {
+  // Longer than the hover card's close grace period.
+  await page.waitForTimeout(300);
+  await expectWorkspaceHoverCardOpen(page);
+}
+
+export async function expectWorkspaceHoverCardClosed(page: Page): Promise<void> {
+  await expect(page.getByTestId("workspace-hover-card")).toHaveCount(0);
+}
+
 export async function closeWorkspaceContextMenu(page: Page, workspaceId: string): Promise<void> {
   const workspaceKey = `${getServerId()}:${workspaceId}`;
   await page.getByTestId(`sidebar-workspace-context-menu-${workspaceKey}-backdrop`).click();
@@ -78,9 +110,9 @@ export async function expectWorkspaceContextMenuActions(
 ): Promise<void> {
   const workspaceKey = `${getServerId()}:${workspaceId}`;
   const menu = page.getByTestId(`sidebar-workspace-context-menu-${workspaceKey}`);
-  await expect(menu.getByRole("button", { name: "Copy path" })).toBeVisible();
-  await expect(menu.getByRole("button", { name: "Rename workspace" })).toBeVisible();
-  await expect(menu.getByRole("button", { name: "Archive" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Copy path" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Rename workspace" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Archive" })).toBeVisible();
 }
 
 export async function openProjectContextMenu(page: Page, projectViewKey: string): Promise<void> {
@@ -102,8 +134,8 @@ export async function expectProjectContextMenuActions(
   projectViewKey: string,
 ): Promise<void> {
   const menu = page.getByTestId(`sidebar-project-context-menu-${projectViewKey}`);
-  await expect(menu.getByRole("button", { name: "Open project settings" })).toBeVisible();
-  await expect(menu.getByRole("button", { name: "Remove project" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Open project settings" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Remove project" })).toBeVisible();
 }
 
 export async function selectWorkspaceInSidebar(page: Page, workspaceId: string): Promise<void> {
@@ -176,6 +208,27 @@ export async function openSidebarDisplayPage(page: Page, branchTestID: string): 
   await page.getByTestId(branchTestID).click();
 }
 
+// Project filters live a page below the display-preferences root, like the host filters.
+export async function openSidebarProjectFilter(page: Page): Promise<void> {
+  await openSidebarDisplayPage(page, "sidebar-display-project-filter");
+}
+
+// The filter rows are keyed by the project's sidebar view key. A project seeded from its own temp
+// repo has a `projectKey` unique on the host, so the view key IS that key — see
+// `buildWorkspaceStructureProjects`.
+export async function toggleProjectFilter(page: Page, projectViewKey: string): Promise<void> {
+  await page.getByTestId(`sidebar-project-filter-${projectViewKey}`).click();
+}
+
+export async function selectAllProjectsFilter(page: Page): Promise<void> {
+  await page.getByTestId("sidebar-project-filter-all").click();
+}
+
+export async function closeSidebarDisplayPreferences(page: Page): Promise<void> {
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("sidebar-display-preferences-content")).toHaveCount(0);
+}
+
 export async function selectSidebarStatusGrouping(page: Page): Promise<void> {
   await openSidebarDisplayPage(page, "sidebar-display-grouping");
   await page.getByTestId("sidebar-grouping-status").click();
@@ -199,4 +252,58 @@ export async function expectMobileAgentSidebarVisible(page: Page): Promise<void>
 
 export async function expectMobileAgentSidebarHidden(page: Page): Promise<void> {
   await expect(page.getByTestId("sidebar-close")).not.toBeInViewport({ timeout: 5_000 });
+}
+
+/** Drag from the left edge: the only way to open the list while fullscreen hides the header. */
+export async function swipeOpenMobileAgentSidebar(page: Page): Promise<void> {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("viewport size is required");
+  const y = Math.round(viewport.height / 2);
+  await page.mouse.move(8, y);
+  await page.mouse.down();
+  await page.mouse.move(40, y, { steps: 4 });
+  await page.mouse.move(Math.round(viewport.width * 0.7), y, { steps: 12 });
+  await page.mouse.up();
+}
+
+/** Drag from the right edge to open the compact Explorer over the agent. */
+export async function swipeOpenMobileExplorer(page: Page): Promise<void> {
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("viewport size is required");
+  const y = Math.round(viewport.height / 2);
+  await page.mouse.move(viewport.width - 8, y);
+  await page.mouse.down();
+  await page.mouse.move(viewport.width - 40, y, { steps: 4 });
+  await page.mouse.move(Math.round(viewport.width * 0.3), y, { steps: 12 });
+  await page.mouse.up();
+}
+
+export async function closeMobileExplorer(page: Page): Promise<void> {
+  const closeButton = page
+    .getByTestId("workspace-explorer-sidebar")
+    .getByRole("button", { name: "Close Explorer sidebar", exact: true });
+  await expect(closeButton).toBeInViewport({ ratio: 1, timeout: 5_000 });
+  await closeButton.click();
+}
+
+export async function expectMobileExplorerVisible(page: Page): Promise<void> {
+  await expect(page.getByTestId("workspace-explorer-sidebar")).toBeInViewport({
+    ratio: 1,
+    timeout: 5_000,
+  });
+}
+
+export async function expectMobileExplorerHidden(page: Page): Promise<void> {
+  await expect(page.getByTestId("workspace-explorer-sidebar")).not.toBeInViewport({
+    timeout: 5_000,
+  });
+}
+
+export async function revealSidebarProjectWorkspaces(
+  page: Page,
+  projectKey: string,
+): Promise<void> {
+  await page
+    .getByTestId(`sidebar-project-show-more-${projectEquivalenceViewKey(projectKey)}`)
+    .click();
 }

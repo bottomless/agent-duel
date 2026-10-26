@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { beforeEach, afterEach, describe, expect, test } from "vitest";
 
 import { createTestLogger } from "../test-utils/test-logger.js";
+import { writeJsonFileAtomic } from "./atomic-file.js";
 import {
   createPersistedProjectRecord,
   createPersistedWorkspaceRecord,
@@ -12,6 +13,7 @@ import {
   FileBackedWorkspaceRegistry,
   resolveWorkspaceDisplayName,
   resolveWorkspaceName,
+  type WorkspaceMutation,
 } from "./workspace-registry.js";
 
 describe("resolveWorkspaceName", () => {
@@ -25,6 +27,21 @@ describe("resolveWorkspaceName", () => {
     expect(resolveWorkspaceName({ title: null, derivedDisplayName: "feature/payments" })).toBe(
       "feature/payments",
     );
+  });
+
+  test("createPersistedWorkspaceRecord defaults background to false and preserves explicit intent", () => {
+    const base = {
+      workspaceId: "ws-1",
+      projectId: "proj-1",
+      cwd: "/tmp/repo",
+      kind: "local_checkout" as const,
+      displayName: "main",
+      createdAt: "2026-03-01T00:00:00.000Z",
+      updatedAt: "2026-03-01T00:00:00.000Z",
+    };
+    expect(createPersistedWorkspaceRecord(base).background).toBe(false);
+    expect(createPersistedWorkspaceRecord({ ...base, background: false }).background).toBe(false);
+    expect(createPersistedWorkspaceRecord({ ...base, background: true }).background).toBe(true);
   });
 
   test("resolveWorkspaceDisplayName applies the same rule over the persisted record", () => {
@@ -123,6 +140,57 @@ describe("workspace registries", () => {
     await projectRegistry.remove("remote:github.com/acme/repo");
     expect(await projectRegistry.get("remote:github.com/acme/repo")).toBeNull();
     expect(await projectRegistry.list()).toEqual([]);
+  });
+
+  test("preserves a concurrent project update when archiving", async () => {
+    let pauseNextWrite = false;
+    let releaseWrite!: () => void;
+    let writeStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      writeStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const concurrentRegistry = new FileBackedProjectRegistry(
+      path.join(tmpDir, "projects", "concurrent-projects.json"),
+      logger,
+      {
+        writeRecords: async (filePath, records) => {
+          if (pauseNextWrite) {
+            pauseNextWrite = false;
+            writeStarted();
+            await release;
+          }
+          await writeJsonFileAtomic(filePath, records);
+        },
+      },
+    );
+    const project = createPersistedProjectRecord({
+      projectId: "project-concurrent",
+      rootPath: "/tmp/project-concurrent",
+      kind: "git",
+      displayName: "project-concurrent",
+      createdAt: "2026-03-01T00:00:00.000Z",
+      updatedAt: "2026-03-01T00:00:00.000Z",
+    });
+    await concurrentRegistry.upsert(project);
+    pauseNextWrite = true;
+
+    const update = concurrentRegistry.update(project.projectId, (current) => ({
+      ...current,
+      customName: "Kept name",
+      updatedAt: "2026-03-02T00:00:00.000Z",
+    }));
+    await started;
+    const archive = concurrentRegistry.archive(project.projectId, "2026-03-03T00:00:00.000Z");
+    releaseWrite();
+    await Promise.all([update, archive]);
+
+    expect(await concurrentRegistry.get(project.projectId)).toMatchObject({
+      customName: "Kept name",
+      archivedAt: "2026-03-03T00:00:00.000Z",
+    });
   });
 
   test("publishes only project mutations that change the persisted lifecycle", async () => {
@@ -389,6 +457,10 @@ describe("workspace registries", () => {
 
   test("creates, updates, archives, deletes, and lists workspace records", async () => {
     await workspaceRegistry.initialize();
+    const mutations: WorkspaceMutation[] = [];
+    workspaceRegistry.subscribeToMutations((mutation) => {
+      mutations.push(mutation);
+    });
     await workspaceRegistry.upsert(
       createPersistedWorkspaceRecord({
         workspaceId: "/tmp/repo",
@@ -419,6 +491,11 @@ describe("workspace registries", () => {
     expect(archived?.archivedAt).toBe("2026-03-03T00:00:00.000Z");
 
     await workspaceRegistry.remove("/tmp/repo");
+    expect(mutations.at(-1)).toEqual({
+      kind: "remove",
+      workspaceId: "/tmp/repo",
+      workspace: archived,
+    });
     expect(await workspaceRegistry.get("/tmp/repo")).toBeNull();
     expect(await workspaceRegistry.list()).toEqual([]);
   });

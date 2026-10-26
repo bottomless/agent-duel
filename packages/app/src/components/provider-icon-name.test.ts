@@ -17,12 +17,21 @@ describe("resolveProviderIconName", () => {
 
   it("returns the catalog identifier for ACP catalog provider ids that ship an icon", () => {
     expect(resolveProviderIconName("amp-acp")).toEqual({ kind: "catalog", id: "amp-acp" });
+    expect(resolveProviderIconName("devin")).toEqual({ kind: "catalog", id: "devin" });
     expect(resolveProviderIconName("gemini")).toEqual({ kind: "catalog", id: "gemini" });
+    expect(resolveProviderIconName("gjc")).toEqual({ kind: "catalog", id: "gjc" });
+    expect(resolveProviderIconName("hermes")).toEqual({ kind: "catalog", id: "hermes" });
     expect(resolveProviderIconName("traecli")).toEqual({ kind: "catalog", id: "traecli" });
   });
 
   it("falls back to the bot icon for unknown custom providers", () => {
     expect(resolveProviderIconName("custom-claude-profile")).toEqual({ kind: "bot" });
+  });
+
+  it("resolves a snapshot SVG for a custom provider", () => {
+    const svg = '<svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z" /></svg>';
+
+    expect(resolveProviderIconName("snapshot-provider", svg)).toEqual({ kind: "svg", svg });
   });
 });
 

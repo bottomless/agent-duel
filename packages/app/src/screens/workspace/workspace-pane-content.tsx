@@ -1,3 +1,4 @@
+import { ComposerEditingScope } from "@/composer/editing-session";
 import React, { useMemo, type ComponentType } from "react";
 import invariant from "tiny-invariant";
 import {
@@ -12,6 +13,8 @@ import { ensurePanelsRegistered } from "@/panels/register-panels";
 import type { WorkspaceTabDescriptor } from "@/screens/workspace/workspace-tabs-types";
 import { RenderProfile } from "@/utils/render-profiler";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
+import type { OpenInSidePaneSource } from "@/workspace-tabs/open-beside";
+import type { PaneHost } from "@/panels/panel-manifest";
 
 export interface WorkspacePaneContentModel {
   key: string;
@@ -23,10 +26,17 @@ export interface BuildWorkspacePaneContentModelInput {
   tab: WorkspaceTabDescriptor;
   normalizedServerId: string;
   normalizedWorkspaceId: string;
-  fileNavigationRevision?: number;
+  host: PaneHost;
+  panelRevision?: number;
   onOpenTab: (target: WorkspaceTabDescriptor["target"]) => void;
+  onOpenPreferredTarget: (
+    target: WorkspaceTabDescriptor["target"],
+    source: OpenInSidePaneSource,
+  ) => void;
+  onOpenTargetToSide?: (target: WorkspaceTabDescriptor["target"]) => void;
   onCloseCurrentTab: () => void;
   onRetargetCurrentTab: (target: WorkspaceTabDescriptor["target"]) => void;
+  onSetCurrentTabState: (state: WorkspaceTabDescriptor["state"]) => void;
   onOpenWorkspaceFile: (request: WorkspaceFileOpenRequest) => void;
 }
 
@@ -34,10 +44,14 @@ export function buildWorkspacePaneContentModel({
   tab,
   normalizedServerId,
   normalizedWorkspaceId,
-  fileNavigationRevision,
+  host,
+  panelRevision,
   onOpenTab,
+  onOpenPreferredTarget,
+  onOpenTargetToSide,
   onCloseCurrentTab,
   onRetargetCurrentTab,
+  onSetCurrentTabState,
   onOpenWorkspaceFile,
 }: BuildWorkspacePaneContentModelInput): WorkspacePaneContentModel {
   ensurePanelsRegistered();
@@ -49,12 +63,17 @@ export function buildWorkspacePaneContentModel({
     paneContextValue: {
       serverId: normalizedServerId,
       workspaceId: normalizedWorkspaceId,
+      host,
       tabId: tab.tabId,
       target: tab.target,
-      fileNavigationRevision,
+      state: tab.state,
+      panelRevision,
       openTab: onOpenTab,
+      openPreferredTarget: onOpenPreferredTarget,
+      openTargetToSide: onOpenTargetToSide,
       closeCurrentTab: onCloseCurrentTab,
       retargetCurrentTab: onRetargetCurrentTab,
+      setCurrentTabState: onSetCurrentTabState,
       openFileInWorkspace: onOpenWorkspaceFile,
     },
   };
@@ -75,31 +94,45 @@ export function WorkspacePaneContent({
 }: WorkspacePaneContentProps) {
   const { Component, key, paneContextValue } = content;
   const openTab = useStableEvent(paneContextValue.openTab);
+  const openPreferredTarget = useStableEvent(paneContextValue.openPreferredTarget);
+  const openTargetToSide = useStableEvent(paneContextValue.openTargetToSide ?? (() => undefined));
   const closeCurrentTab = useStableEvent(paneContextValue.closeCurrentTab);
   const retargetCurrentTab = useStableEvent(paneContextValue.retargetCurrentTab);
+  const setCurrentTabState = useStableEvent(paneContextValue.setCurrentTabState);
   const openFileInWorkspace = useStableEvent(paneContextValue.openFileInWorkspace);
   const stablePaneContextValue = useMemo(
     () => ({
       serverId: paneContextValue.serverId,
       workspaceId: paneContextValue.workspaceId,
+      host: paneContextValue.host,
       tabId: paneContextValue.tabId,
       target: paneContextValue.target,
-      fileNavigationRevision: paneContextValue.fileNavigationRevision,
+      state: paneContextValue.state,
+      panelRevision: paneContextValue.panelRevision,
       openTab,
+      openPreferredTarget,
+      openTargetToSide: paneContextValue.openTargetToSide ? openTargetToSide : undefined,
       closeCurrentTab,
       retargetCurrentTab,
+      setCurrentTabState,
       openFileInWorkspace,
     }),
     [
       closeCurrentTab,
       openFileInWorkspace,
       openTab,
+      openPreferredTarget,
+      openTargetToSide,
       paneContextValue.serverId,
-      paneContextValue.fileNavigationRevision,
+      paneContextValue.panelRevision,
       paneContextValue.tabId,
       paneContextValue.target,
+      paneContextValue.state,
       paneContextValue.workspaceId,
+      paneContextValue.host,
+      paneContextValue.openTargetToSide,
       retargetCurrentTab,
+      setCurrentTabState,
     ],
   );
   const paneFocusValue = useMemo(
@@ -118,7 +151,12 @@ export function WorkspacePaneContent({
     >
       <PaneProvider value={stablePaneContextValue}>
         <PaneFocusProvider value={paneFocusValue}>
-          <Component key={key} />
+          <ComposerEditingScope
+            tabId={paneContextValue.tabId}
+            targetKey={JSON.stringify(paneContextValue.target)}
+          >
+            <Component key={key} />
+          </ComposerEditingScope>
         </PaneFocusProvider>
       </PaneProvider>
     </RenderProfile>

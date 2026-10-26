@@ -1,22 +1,21 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { test, expect, type Page } from "../support/fixtures";
+import { test, expect } from "../support/fixtures";
 import { gotoWorkspace, clickNewTerminal } from "../support/helpers/launcher";
 import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-client";
-import { expectExplorerEntryVisible } from "../support/helpers/file-explorer";
-import { openSidePanelTab } from "../support/helpers/side-panel";
-import { expectNoTerminalTabs, clickFirstTerminalTab } from "../support/helpers/workspace-tabs";
+import { expectExplorerEntryVisible, openFileExplorer } from "../support/helpers/file-explorer";
+import {
+  expectNoTerminalTabs,
+  clickFirstTerminalTab,
+  openChangesPanel,
+} from "../support/helpers/workspace-tabs";
 
 // Model B: two workspaces can back the SAME directory. What follows from that
 // split is the contract these specs pin:
-//   - The side panel's Files and Changes tabs read the directory, so they are
-//     IDENTICAL across same-directory workspaces.
+//   - Files and Changes read the directory, so their content is IDENTICAL
+//     across same-directory workspaces.
 //   - Tabs (agents, terminals) are owned by the workspace, so they are
 //     INDEPENDENT across same-directory workspaces.
-
-async function openExplorerTab(page: Page, tab: "files" | "changes"): Promise<void> {
-  await openSidePanelTab(page, tab);
-}
 
 async function createSecondWorkspaceOnSameDir(
   seeded: SeededWorkspace,
@@ -36,7 +35,7 @@ async function createSecondWorkspaceOnSameDir(
 test.describe("Same-directory workspaces", () => {
   test.describe.configure({ timeout: 180_000 });
 
-  test("the right sidebar is shared: a directory change shows in both same-dir workspaces", async ({
+  test("directory-backed Files and Changes content is shared across same-dir workspaces", async ({
     page,
   }) => {
     const seeded = await seedWorkspace({ repoPrefix: "same-dir-shared-" });
@@ -66,22 +65,22 @@ test.describe("Same-directory workspaces", () => {
       // Workspace A: the new file shows in both the file browser and the git
       // changes view.
       await gotoWorkspace(page, seeded.workspaceId);
-      await openExplorerTab(page, "files");
+      await openFileExplorer(page);
       await expectExplorerEntryVisible(page, "SHARED_CHANGE.md");
-      await openExplorerTab(page, "changes");
+      await openChangesPanel(page);
       await expect(
-        page.getByTestId("git-diff-scroll").getByText("SHARED_CHANGE.md", { exact: true }).first(),
-      ).toBeVisible({ timeout: 30_000 });
+        page.getByTestId("working-diff-panel").filter({ visible: true }).getByTestId("diff-file-0"),
+      ).toHaveAccessibleName("SHARED_CHANGE.md, +1, -0", { timeout: 30_000 });
 
-      // Workspace B (same directory): the SAME change is visible. The right
-      // sidebar content does not differ between the two views.
+      // Workspace B (same directory): the SAME directory-backed content is
+      // visible even though the panel tabs belong to a different workspace.
       await gotoWorkspace(page, secondWorkspaceId);
-      await openExplorerTab(page, "files");
+      await openFileExplorer(page);
       await expectExplorerEntryVisible(page, "SHARED_CHANGE.md");
-      await openExplorerTab(page, "changes");
+      await openChangesPanel(page);
       await expect(
-        page.getByTestId("git-diff-scroll").getByText("SHARED_CHANGE.md", { exact: true }).first(),
-      ).toBeVisible({ timeout: 30_000 });
+        page.getByTestId("working-diff-panel").filter({ visible: true }).getByTestId("diff-file-0"),
+      ).toHaveAccessibleName("SHARED_CHANGE.md, +1, -0", { timeout: 30_000 });
     } finally {
       await seeded.cleanup();
     }

@@ -54,8 +54,10 @@ function openCodeStatus(entries: ProviderSnapshotEntry[]): string {
  */
 function recordOpenCodeStatus(providerSnapshots: ProviderSnapshotManager, cwd: string): string[] {
   const pushed: string[] = [];
-  providerSnapshots.on("change", (entries, snapshotCwd) => {
-    if (snapshotCwd === resolveSnapshotCwd(cwd)) pushed.push(openCodeStatus(entries));
+  providerSnapshots.on("change", ({ current }) => {
+    if (current.cwd === resolveSnapshotCwd(cwd)) {
+      pushed.push(openCodeStatus(current.records.map((record) => record.entry)));
+    }
   });
   return pushed;
 }
@@ -203,9 +205,10 @@ describe("Arena BYOK key", () => {
 
   it("reloads open projects when the key is replaced", async () => {
     installArenaCredentials({ mode: "byok", openRouterApiKey: "sk-or-v1-first" });
+    const catalogLoads: FetchCatalogOptions[] = [];
     const providerSnapshots = new ProviderSnapshotManager({
       logger: createTestLogger(),
-      extraClients: { opencode: createArenaClient() },
+      extraClients: { opencode: createArenaClient(catalogLoads) },
     });
     const byok = createArenaByokService({ restartArena: async () => {}, providerSnapshots });
     const cwd = process.cwd();
@@ -214,11 +217,13 @@ describe("Arena BYOK key", () => {
         await providerSnapshots.getProvider({ cwd, provider: "opencode", wait: true }),
       ).toMatchObject({ status: "ready" });
       const pushed = recordOpenCodeStatus(providerSnapshots, cwd);
+      const loadsBefore = catalogLoads.length;
 
       await byok.setKey("sk-or-v1-second");
 
-      await vi.waitFor(() => expect(pushed.at(-1)).toBe("ready"));
-      expect(pushed).toContain("loading");
+      // The catalogue reloads with the new key while the project keeps its last result.
+      await vi.waitFor(() => expect(catalogLoads.length).toBeGreaterThan(loadsBefore));
+      expect(pushed.filter((status) => status !== "ready")).toEqual([]);
     } finally {
       providerSnapshots.destroy();
     }

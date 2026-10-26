@@ -1,12 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Pressable,
-  Text,
-  type StyleProp,
-  type TextStyle,
-  View,
-  type ViewStyle,
-} from "react-native";
+import { Text, type StyleProp, type TextStyle, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ChevronDown, ChevronRight, ChevronUp, Maximize2, Minimize2 } from "lucide-react-native";
 import type { ArenaThreeWayFile } from "@getpaseo/protocol/arena/rpc-schemas";
@@ -43,6 +36,7 @@ import {
   type ThreeWayRow,
   type ThreeWayRowFrame,
 } from "./three-way-diff";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 // How many rows each chevron reveals, and the point past which a gap is big enough
 // that revealing it wholesale is unhelpful and the stepped chevrons earn their space.
@@ -96,7 +90,7 @@ function FileHeader({
   onToggle: () => void;
 }) {
   return (
-    <Pressable onPress={onToggle} style={styles.fileHeader} accessibilityRole="button">
+    <PressHighlight onPress={onToggle} style={styles.fileHeader} accessibilityRole="button">
       {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
       <Text numberOfLines={1} style={styles.fileName}>
         {file.file}
@@ -113,7 +107,7 @@ function FileHeader({
           <Text style={styles.deletions}>−{file.deletionsB}</Text>
         </>
       ) : null}
-    </Pressable>
+    </PressHighlight>
   );
 }
 
@@ -208,7 +202,7 @@ function ColumnLabel({
     [soloed],
   );
   return (
-    <Pressable
+    <PressHighlight
       onPress={onToggle}
       accessibilityRole="button"
       accessibilityState={accessibilityState}
@@ -224,7 +218,7 @@ function ColumnLabel({
       ) : (
         <ThemedMaximize size={SOLO_ICON_SIZE} uniProps={soloIconMapping} />
       )}
-    </Pressable>
+    </PressHighlight>
   );
 }
 
@@ -467,32 +461,32 @@ export function ExpandBand({
   return (
     <View style={styles.band}>
       {stepped ? (
-        <Pressable
+        <PressHighlight
           onPress={revealFromTop}
           style={styles.bandStep}
           accessibilityRole="button"
           accessibilityLabel={`Show ${EXPAND_STEP} more lines after the change above`}
         >
           <ChevronDown size={13} />
-        </Pressable>
+        </PressHighlight>
       ) : null}
-      <Pressable
+      <PressHighlight
         onPress={revealAll}
         style={styles.bandMain}
         accessibilityRole="button"
         accessibilityLabel={`Show all ${count} unchanged lines`}
       >
         <Text style={styles.bandText}>{`⋯ ${count} unchanged lines — show all`}</Text>
-      </Pressable>
+      </PressHighlight>
       {stepped ? (
-        <Pressable
+        <PressHighlight
           onPress={revealFromBottom}
           style={styles.bandStep}
           accessibilityRole="button"
           accessibilityLabel={`Show ${EXPAND_STEP} more lines before the change below`}
         >
           <ChevronUp size={13} />
-        </Pressable>
+        </PressHighlight>
       ) : null}
     </View>
   );
@@ -818,23 +812,23 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     color: theme.colors.foreground,
     fontFamily: theme.fontFamily.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   additions: {
     color: theme.colors.success,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   deletions: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   muted: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   warning: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   columnLabels: {
     flexDirection: "row",
@@ -869,7 +863,7 @@ const styles = StyleSheet.create((theme) => ({
   columnLabelText: {
     flexShrink: 1,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     lineHeight: COLUMN_LABEL_LINE_HEIGHT,
     fontWeight: theme.fontWeight.semibold,
     textAlign: "center",
@@ -884,7 +878,7 @@ const styles = StyleSheet.create((theme) => ({
     borderLeftWidth: 1,
     borderLeftColor: theme.colors.border,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     lineHeight: COLUMN_LABEL_LINE_HEIGHT,
     fontWeight: theme.fontWeight.semibold,
     textAlign: "center",
@@ -924,7 +918,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   bandText: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   column: {
     flex: 1,
@@ -952,7 +946,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   gutterText: {
     fontFamily: theme.fontFamily.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     lineHeight: diffTextHeight(theme),
     color: theme.colors.foregroundMuted,
     textAlign: "right",
@@ -963,7 +957,7 @@ const styles = StyleSheet.create((theme) => ({
   marker: {
     width: MARKER_WIDTH,
     fontFamily: theme.fontFamily.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     lineHeight: diffTextHeight(theme),
     textAlign: "center",
     color: "transparent",

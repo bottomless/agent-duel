@@ -6,7 +6,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { LigaturesAddon } from "@xterm/addon-ligatures/lib/addon-ligatures.mjs";
-import { Terminal, type ITheme } from "@xterm/xterm";
+import { Terminal, type ITheme, type IMarker } from "@xterm/xterm";
 import type { TerminalState } from "@getpaseo/protocol/messages";
 import {
   type TerminalInputModeState,
@@ -15,11 +15,13 @@ import {
 } from "@getpaseo/protocol/terminal-input-mode";
 import {
   type PendingTerminalModifiers,
+  hasPendingTerminalModifiers,
   isAppleHandheldPlatform,
   isTerminalModifierDomKey,
   mergeTerminalModifiers,
   normalizeDomTerminalKey,
   normalizeTerminalTransportKey,
+  resolveMacTerminalEditingShortcut,
   shouldInterceptDomTerminalKey,
 } from "@/utils/terminal-keys";
 import { renderTerminalSnapshotToAnsi } from "./terminal-snapshot";
@@ -28,9 +30,27 @@ import {
   type TerminalLocalFileLinkSource,
   type TerminalLocalFileLinkTarget,
 } from "../local-links/terminal-local-link-provider";
+import { isFindShortcut, type FindShortcutPlatform } from "@/pane-find/find-shortcut";
+import { isMacUserAgent } from "@/utils/mac-user-agent";
 import { resolveTerminalFontFamily, resolveTerminalFontSize } from "./terminal-font";
+import { imageExtension, readTerminalFile, type TerminalFile } from "../file-paste";
 
 export type TerminalOutputData = Uint8Array;
+
+export interface TerminalFindHandle {
+  setWidgetSize(size: { width: number; height: number }): void;
+  search(query: string, direction?: "next" | "previous"): void;
+  clear(): void;
+}
+
+export interface TerminalFindResult {
+  resultIndex: number;
+  resultCount: number;
+  limited: boolean;
+  placement: "top" | "bottom";
+}
+
+const FIND_HIGHLIGHT_LIMIT = 20_000;
 
 export interface TerminalEmulatorRuntimeMountInput {
   root: HTMLDivElement;
@@ -43,6 +63,8 @@ export interface TerminalEmulatorRuntimeMountInput {
 }
 
 export interface TerminalEmulatorRuntimeCallbacks {
+  onFindRequest?: () => void;
+  onFindResult?: (result: TerminalFindResult) => void;
   onInput?: (data: string) => Promise<void> | void;
   onResize?: (input: TerminalResizeEvent) => Promise<void> | void;
   onTerminalKey?: (input: {
@@ -62,6 +84,8 @@ export interface TerminalEmulatorRuntimeCallbacks {
     disposition: "main" | "side",
   ) => Promise<void> | void;
   onInputModeChange?: (state: TerminalInputModeState) => Promise<void> | void;
+  /** A paste gesture that can carry a file; resolves to null when it carried none. */
+  onFilePaste?: (file: Promise<TerminalFile | null>) => void;
 }
 
 export interface TerminalResizeEvent {
@@ -102,6 +126,7 @@ interface TerminalEmulatorRuntimeDisposables {
   clearFitTimeouts: () => void;
   removeFontListeners: () => void;
   removeTouchListeners: () => void;
+  removeFilePasteListener: () => void;
   restoreDocumentStyles: () => void;
   restoreViewportStyles: () => void;
   disposeFitAddon: () => void;
@@ -123,11 +148,6 @@ declare global {
     __paseoTerminal?: Terminal;
   }
 }
-
-const isMac =
-  typeof navigator !== "undefined" &&
-  (/Macintosh|Mac OS/i.test(navigator.userAgent ?? "") ||
-    /Mac/i.test((navigator as Navigator & { platform?: string }).platform ?? ""));
 
 const isAppleHandheld =
   typeof navigator !== "undefined" &&
@@ -169,7 +189,52 @@ function withOverviewRulerBorderHidden(theme: ITheme): ITheme {
 const HIDE_CURSOR = "\x1b[?25l";
 const SHOW_CURSOR = "\x1b[?25h";
 
+export interface TerminalClipboard {
+  readText(): Promise<string>;
+  read(): Promise<readonly Pick<ClipboardItem, "types" | "getType">[]>;
+  writeText(text: string): Promise<void>;
+}
+
+const browserClipboard: TerminalClipboard = {
+  readText: () => navigator.clipboard.readText(),
+  read: () => navigator.clipboard.read(),
+  writeText: (text) => navigator.clipboard.writeText(text),
+};
+
+async function readClipboardImage(clipboard: TerminalClipboard): Promise<TerminalFile | null> {
+  for (const item of await clipboard.read()) {
+    const mimeType = item.types.find((type) => type.startsWith("image/"));
+    if (mimeType) {
+      const blob = await item.getType(mimeType);
+      return {
+        fileName: `clipboard.${imageExtension(mimeType)}`,
+        mimeType,
+        bytes: new Uint8Array(await blob.arrayBuffer()),
+      };
+    }
+  }
+  return null;
+}
+
+/** The file of a paste that carries no text. xterm would paste it as empty text. */
+function findFileOnlyPaste(transfer: DataTransfer | null): File | null {
+  if (!transfer || transfer.getData("text/plain").length > 0) {
+    return null;
+  }
+  for (const item of Array.from(transfer.items)) {
+    if (item.kind === "file") {
+      return item.getAsFile();
+    }
+  }
+  return null;
+}
+
 export class TerminalEmulatorRuntime {
+  constructor(
+    private readonly options: FindShortcutPlatform = { isMac: isMacUserAgent() },
+    private readonly clipboard: TerminalClipboard = browserClipboard,
+  ) {}
+
   private callbacks: TerminalEmulatorRuntimeCallbacks = {};
   private pendingModifiers: PendingTerminalModifiers = {
     ctrl: false,
@@ -178,6 +243,48 @@ export class TerminalEmulatorRuntime {
   };
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
+  private searchAddon: SearchAddon | null = null;
+  private findResult = { resultIndex: -1, resultCount: 0 };
+  private findQuery = "";
+  private findOutputAnchor: IMarker | undefined;
+  private findWidgetSize = { width: 0, height: 0 };
+
+  readonly find: TerminalFindHandle = {
+    setWidgetSize: (size) => {
+      this.findWidgetSize = size;
+      this.emitFindResult();
+    },
+    search: (query, direction) => {
+      this.releaseFindOutputAnchor();
+      this.findQuery = query;
+      if (this.terminal && !this.searchAddon) this.loadSearchAddon(this.terminal);
+      const theme = this.terminal?.options.theme;
+      const options = {
+        regex: false,
+        caseSensitive: false,
+        incremental: direction === undefined,
+        decorations: {
+          matchBorder: theme?.yellow ?? "#b58900",
+          matchOverviewRuler: theme?.yellow ?? "#b58900",
+          activeMatchBorder: theme?.blue ?? "#268bd2",
+          activeMatchColorOverviewRuler: theme?.blue ?? "#268bd2",
+        },
+      };
+      if (direction === "next") this.searchAddon?.findNext(query, options);
+      else this.searchAddon?.findPrevious(query, options);
+    },
+    clear: () => {
+      this.releaseFindOutputAnchor();
+      this.findQuery = "";
+      // clearDecorations leaves the addon's pending refresh alive. Disposal
+      // cancels its timers and listeners without touching terminal selection.
+      this.searchAddon?.dispose();
+      this.searchAddon = null;
+      this.findResult = { resultIndex: -1, resultCount: 0 };
+      this.emitFindResult();
+    },
+  };
+
   private fitAndEmitResize: ((input?: TerminalResizeRequest) => void) | null = null;
   private lastSize: { rows: number; cols: number } | null = null;
   private cleanup: (() => void) | null = null;
@@ -224,8 +331,181 @@ export class TerminalEmulatorRuntime {
     this.pendingModifiers = input.pendingModifiers;
   }
 
+  private loadSearchAddon(terminal: Terminal): void {
+    const searchAddon = new SearchAddon({ highlightLimit: FIND_HIGHLIGHT_LIMIT });
+    terminal.loadAddon(searchAddon);
+    this.searchAddon = searchAddon;
+    searchAddon.onDidChangeResults((result) => {
+      this.findResult = result;
+      this.emitFindResult();
+    });
+  }
+
+  private releaseFindOutputAnchor(): void {
+    this.findOutputAnchor?.dispose();
+    this.findOutputAnchor = undefined;
+  }
+
+  private preserveFindViewport(terminal: Terminal): void {
+    if (!this.findQuery || this.findResult.resultCount === 0 || this.findOutputAnchor) return;
+    const buffer = terminal.buffer.active;
+    this.findOutputAnchor = terminal.registerMarker(
+      buffer.viewportY - buffer.baseY - buffer.cursorY,
+    );
+  }
+
+  attachKeyEventHandler(
+    terminal: Pick<
+      Terminal,
+      | "attachCustomKeyEventHandler"
+      | "hasSelection"
+      | "getSelection"
+      | "paste"
+      | "input"
+      | "scrollToBottom"
+    >,
+  ): void {
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown" || event.isComposing) {
+        return true;
+      }
+
+      if (this.handleFindShortcut(event)) return false;
+
+      if (
+        !this.options.isMac &&
+        event.ctrlKey &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey
+      ) {
+        const key = event.key.toLowerCase();
+
+        // Ctrl+C: copy selection to clipboard if text is selected, otherwise let xterm send SIGINT
+        if (key === "c" && terminal.hasSelection()) {
+          void this.clipboard.writeText(terminal.getSelection());
+          return false;
+        }
+
+        // Ctrl+V: paste clipboard text, or the clipboard image when there is no text
+        if (key === "v") {
+          event.preventDefault();
+          this.pasteClipboard(terminal);
+          return false;
+        }
+
+        return true;
+      }
+
+      if (this.maybeSendMacEditingShortcut(terminal, event)) {
+        return false;
+      }
+
+      const normalizedKey = normalizeDomTerminalKey(event.key);
+      if (!normalizedKey || isTerminalModifierDomKey(event.key)) {
+        return true;
+      }
+
+      if (
+        !shouldInterceptDomTerminalKey({
+          key: normalizedKey,
+          ctrlKey: event.ctrlKey,
+          shiftKey: event.shiftKey,
+          altKey: event.altKey,
+          metaKey: event.metaKey,
+          pendingModifiers: this.pendingModifiers,
+          enhancedInputActive: this.inputModeTracker.supportsModifiedEnter(),
+          isAppleHandheld,
+        })
+      ) {
+        return true;
+      }
+
+      const modifiers = mergeTerminalModifiers({
+        pendingModifiers: this.pendingModifiers,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+      });
+      this.callbacks.onTerminalKey?.({
+        key: normalizeTerminalTransportKey(normalizedKey),
+        ...modifiers,
+      });
+
+      if (hasPendingTerminalModifiers(this.pendingModifiers)) {
+        this.callbacks.onPendingModifiersConsumed?.();
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      return false;
+    });
+  }
+
+  private handleFindShortcut(event: KeyboardEvent): boolean {
+    if (!isFindShortcut(event, this.options) || !this.callbacks.onFindRequest) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    this.callbacks.onFindRequest();
+    return true;
+  }
+
+  private findWidgetCoversSelection(): boolean {
+    if (!this.findQuery) return false;
+    const terminal = this.terminal;
+    const element = terminal?.element;
+    const screen = element?.querySelector(".xterm-screen");
+    const selection = terminal?.getSelectionPosition();
+    if (!terminal || !element || !screen || !selection) return false;
+    const root = element.getBoundingClientRect();
+    const grid = screen.getBoundingClientRect();
+    const cellWidth = grid.width / terminal.cols;
+    const cellHeight = grid.height / terminal.rows;
+    const firstRow = terminal.buffer.active.viewportY;
+    const top = grid.top + (selection.start.y - firstRow) * cellHeight;
+    const bottom = grid.top + (selection.end.y - firstRow + 1) * cellHeight;
+    // A wrapped selection can occupy the right edge on its intermediate rows.
+    const rightCol = selection.start.y === selection.end.y ? selection.end.x : terminal.cols;
+    const right = grid.left + rightCol * cellWidth;
+    return (
+      top < root.top + this.findWidgetSize.height &&
+      bottom > root.top &&
+      right > root.right - this.findWidgetSize.width
+    );
+  }
+
+  private emitFindResult(): void {
+    const placement = this.findWidgetCoversSelection() ? "bottom" : "top";
+    this.callbacks.onFindResult?.({
+      ...this.findResult,
+      limited: this.findResult.resultCount >= FIND_HIGHLIGHT_LIMIT,
+      placement,
+    });
+  }
+
   getInputModeState(): TerminalInputModeState {
     return this.inputModeTracker.getState();
+  }
+
+  private maybeSendMacEditingShortcut(
+    terminal: Pick<Terminal, "input" | "scrollToBottom">,
+    event: KeyboardEvent,
+  ): boolean {
+    if (!this.options.isMac || hasPendingTerminalModifiers(this.pendingModifiers)) {
+      return false;
+    }
+    const editingShortcutData = resolveMacTerminalEditingShortcut(event);
+    if (editingShortcutData === null) {
+      return false;
+    }
+    // Routed through terminal.input() so the data takes the same path as typed
+    // keys: onData -> callbacks.onInput, selection clearing included.
+    terminal.input(editingShortcutData, true);
+    terminal.scrollToBottom();
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
   }
 
   mount(input: TerminalEmulatorRuntimeMountInput): void {
@@ -236,6 +516,10 @@ export class TerminalEmulatorRuntime {
     this.inputModeTracker.reset();
     this.emitInputModeChange();
 
+    const openExternalLink = (event: MouseEvent, uri: string) => {
+      event.preventDefault();
+      void this.callbacks.onOpenExternalUrl?.(uri);
+    };
     const terminal = new Terminal({
       allowProposedApi: true,
       convertEol: false,
@@ -243,6 +527,8 @@ export class TerminalEmulatorRuntime {
       cursorStyle: "bar",
       fontFamily: resolveTerminalFontFamily(input.fontFamily),
       fontSize: resolveTerminalFontSize(input.fontSize),
+      // OSC 8 hyperlinks; without a handler xterm prompts and calls window.open().
+      linkHandler: { activate: openExternalLink },
       lineHeight: 1.0,
       macOptionIsMeta: true,
       minimumContrastRatio: 1,
@@ -259,12 +545,7 @@ export class TerminalEmulatorRuntime {
     let imageAddon: ImageAddon | null = null;
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(unicode11Addon);
-    terminal.loadAddon(
-      new WebLinksAddon((event, uri) => {
-        event.preventDefault();
-        void this.callbacks.onOpenExternalUrl?.(uri);
-      }),
-    );
+    terminal.loadAddon(new WebLinksAddon(openExternalLink));
     const localFileLinkProvider = terminal.registerLinkProvider(
       createTerminalLocalFileLinkProvider(terminal, {
         resolveLink: async (source) => {
@@ -276,7 +557,19 @@ export class TerminalEmulatorRuntime {
         },
       }),
     );
-    terminal.loadAddon(new SearchAddon({ highlightLimit: 20_000 }));
+    this.loadSearchAddon(terminal);
+    terminal.onWriteParsed(() => {
+      // Even a bottom viewport is an inspected location while searching. A
+      // marker follows buffer trimming; output writes remain batched normally.
+      const anchor = this.findOutputAnchor;
+      if (anchor && !anchor.isDisposed) terminal.scrollToLine(anchor.line);
+      // A parser turn may yield with submitted writes still queued. Commit
+      // callbacks identify completion; plain writes still submit back-to-back.
+      if (this.pendingWriteCommits.size === 0) this.releaseFindOutputAnchor();
+    });
+    terminal.onScroll(() => {
+      if (this.findQuery) this.emitFindResult();
+    });
     terminal.loadAddon(new ClipboardAddon());
     try {
       terminal.loadAddon(new LigaturesAddon());
@@ -423,75 +716,21 @@ export class TerminalEmulatorRuntime {
       this.callbacks.onInput?.(data);
     });
 
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type !== "keydown" || event.isComposing) {
-        return true;
+    this.attachKeyEventHandler(terminal);
+
+    // Cmd+V and context-menu paste arrive as DOM paste events. Take file-only
+    // pastes before xterm's own listener consumes them as empty text.
+    const filePasteHandler = (event: ClipboardEvent): void => {
+      const onFilePaste = this.callbacks.onFilePaste;
+      const file = findFileOnlyPaste(event.clipboardData);
+      if (!onFilePaste || !file) {
+        return;
       }
-
-      if (!isMac && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
-        const key = event.key.toLowerCase();
-
-        // Ctrl+C: copy selection to clipboard if text is selected, otherwise let xterm send SIGINT
-        if (key === "c" && terminal.hasSelection()) {
-          void navigator.clipboard.writeText(terminal.getSelection());
-          return false;
-        }
-
-        // Ctrl+V: paste from clipboard into terminal
-        if (key === "v") {
-          event.preventDefault();
-          void navigator.clipboard.readText().then((text) => {
-            if (text) {
-              terminal.paste(text);
-            }
-            return;
-          });
-          return false;
-        }
-
-        return true;
-      }
-
-      const normalizedKey = normalizeDomTerminalKey(event.key);
-      if (!normalizedKey || isTerminalModifierDomKey(event.key)) {
-        return true;
-      }
-
-      if (
-        !shouldInterceptDomTerminalKey({
-          key: normalizedKey,
-          ctrlKey: event.ctrlKey,
-          shiftKey: event.shiftKey,
-          altKey: event.altKey,
-          metaKey: event.metaKey,
-          pendingModifiers: this.pendingModifiers,
-          enhancedInputActive: this.inputModeTracker.supportsModifiedEnter(),
-          isAppleHandheld,
-        })
-      ) {
-        return true;
-      }
-
-      const modifiers = mergeTerminalModifiers({
-        pendingModifiers: this.pendingModifiers,
-        ctrlKey: event.ctrlKey,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-        metaKey: event.metaKey,
-      });
-      this.callbacks.onTerminalKey?.({
-        key: normalizeTerminalTransportKey(normalizedKey),
-        ...modifiers,
-      });
-
-      if (this.pendingModifiers.ctrl || this.pendingModifiers.shift || this.pendingModifiers.alt) {
-        this.callbacks.onPendingModifiersConsumed?.();
-      }
-
       event.preventDefault();
       event.stopPropagation();
-      return false;
-    });
+      onFilePaste(readTerminalFile(file));
+    };
+    input.host.addEventListener("paste", filePasteHandler, true);
 
     const emitCursorAnchor = () => {
       if (this.cursorAnchorListeners.size === 0) {
@@ -608,6 +847,9 @@ export class TerminalEmulatorRuntime {
         fontSet?.removeEventListener?.("loadingdone", fontReadyHandler);
       },
       removeTouchListeners,
+      removeFilePasteListener: () => {
+        input.host.removeEventListener("paste", filePasteHandler, true);
+      },
       restoreDocumentStyles,
       restoreViewportStyles,
       disposeFitAddon: () => {
@@ -638,6 +880,7 @@ export class TerminalEmulatorRuntime {
       disposables.clearFitTimeouts();
       disposables.removeFontListeners();
       disposables.removeTouchListeners();
+      disposables.removeFilePasteListener();
       disposables.disposeFitAddon();
       disposables.disposeWebglAddon();
       disposables.disposeTerminal();
@@ -676,6 +919,20 @@ export class TerminalEmulatorRuntime {
 
   paste(text: string): void {
     this.terminal?.paste(text);
+  }
+
+  private pasteClipboard(terminal: Pick<Terminal, "paste">): void {
+    const text = this.clipboard.readText().catch(() => "");
+    const onFilePaste = this.callbacks.onFilePaste;
+    // Report the gesture now so it keeps its place among earlier file pastes.
+    const file = text.then((value) => {
+      if (value) {
+        terminal.paste(value);
+        return null;
+      }
+      return onFilePaste ? readClipboardImage(this.clipboard).catch(() => null) : null;
+    });
+    onFilePaste?.(file);
   }
 
   renderSnapshot(input: { state: TerminalState | null; onCommitted?: () => void }): void {
@@ -869,6 +1126,7 @@ export class TerminalEmulatorRuntime {
   }
 
   unmount(): void {
+    this.releaseFindOutputAnchor();
     this.clearInFlightOutputTimeout();
     const inFlightOperation = this.inFlightOutputOperation;
     this.inFlightOutputOperation = null;
@@ -890,6 +1148,9 @@ export class TerminalEmulatorRuntime {
       window.__paseoTerminal = undefined;
     }
     this.terminal = null;
+    this.searchAddon = null;
+    this.findQuery = "";
+    this.findResult = { resultIndex: -1, resultCount: 0 };
     this.fitAddon = null;
     this.fitAndEmitResize = null;
     this.lastSize = null;
@@ -964,6 +1225,7 @@ export class TerminalEmulatorRuntime {
   }
 
   private submitWrite(terminal: Terminal, operation: TerminalOutputOperation): void {
+    this.preserveFindViewport(terminal);
     // Synchronous per-write tracking must run in frame order; doing it here in the drain
     // loop preserves that ordering even though the writes are submitted without waiting.
     const text = this.inputModeDecoder.decode(operation.data, { stream: true });
@@ -973,20 +1235,11 @@ export class TerminalEmulatorRuntime {
     }
     this.hasUngatedWrites = true;
     const onCommitted = operation.onCommitted;
-    if (!onCommitted) {
-      try {
-        terminal.write(operation.data);
-      } catch {
-        // Match existing behavior: a failed write still proceeds with no commit callback.
-      }
-      this.hideCursorWhileInputDisabled(terminal);
-      return;
-    }
     const commit = () => {
       if (!this.pendingWriteCommits.delete(commit)) {
         return;
       }
-      onCommitted();
+      onCommitted?.();
     };
     this.pendingWriteCommits.add(commit);
     try {

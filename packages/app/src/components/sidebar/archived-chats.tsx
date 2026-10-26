@@ -9,7 +9,6 @@ import {
 } from "react";
 import {
   FlatList,
-  Pressable,
   Text,
   View,
   type ListRenderItem,
@@ -50,6 +49,7 @@ import {
   type ArchivedChatListItem,
   type ArchivedChatSection,
 } from "./archived-chats-model";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 /** Long enough that a typed word is one request, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 200;
@@ -184,7 +184,6 @@ export function SidebarArchivedChats({
     isError,
     isSearchSupported,
     isSearchTruncated,
-    searchMatchesByAgentKey,
     hostErrors,
     loadMore,
     refreshAll,
@@ -239,12 +238,11 @@ export function SidebarArchivedChats({
           agent={item.agent}
           selected={selectedKeys.includes(item.key)}
           showHost={showHost}
-          searchMatches={isSearching ? searchMatchesByAgentKey[item.key] : undefined}
           onPress={handleChatPress}
         />
       );
     },
-    [handleChatPress, isSearching, searchMatchesByAgentKey, selectedKeys, showHost, t],
+    [handleChatPress, selectedKeys, showHost, t],
   );
 
   const listHeader = useMemo(
@@ -429,7 +427,7 @@ function ArchivedChatRow({
   const accessibilityLabel = [title, ...details.map((detail) => detail.text)].join(", ");
 
   return (
-    <Pressable
+    <PressHighlight
       style={rowStyle}
       onPress={handlePress}
       accessibilityRole="button"
@@ -455,7 +453,7 @@ function ArchivedChatRow({
         ) : null}
       </View>
       <Text style={styles.time}>{formatCompactTimeAgo(agent.lastActivityAt)}</Text>
-    </Pressable>
+    </PressHighlight>
   );
 }
 
@@ -471,7 +469,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   hostError: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     paddingHorizontal: theme.spacing[4],
     paddingBottom: theme.spacing[1],
   },
@@ -485,7 +483,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   sectionHeading: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     paddingHorizontal: theme.spacing[2],
     paddingTop: theme.spacing[3],
@@ -519,21 +517,21 @@ const styles = StyleSheet.create((theme) => ({
   },
   title: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     opacity: 0.76,
   },
   titleSelected: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   details: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   time: {
     flexShrink: 0,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   footer: {
     alignItems: "center",
@@ -541,7 +539,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   footerHint: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     textAlign: "center",
     paddingVertical: theme.spacing[2],
     paddingHorizontal: theme.spacing[2],
@@ -555,7 +553,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   emptyText: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     textAlign: "center",
   },
 }));

@@ -50,7 +50,7 @@ export function SplitDropZone({ paneId, active, preview }: SplitDropZoneProps) {
 
 const styles = StyleSheet.create((theme) => ({
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 40,
   },
   previewOverlay: {

@@ -65,17 +65,12 @@ export interface ClaudeReplayEntry {
  * Effort is replay-only: the SDK's live assistant message does not carry it, and it can be
  * silently downgraded for the selected model, so any live value would be a guess.
  */
-function readRuntime(entries: readonly ClaudeReplayEntry[]): { model?: string; effort?: string } {
-  const runtime: { model?: string; effort?: string } = {};
-  for (const entry of entries) {
-    if (entry.type !== "assistant") continue;
-    const effort = typeof entry.effort === "string" ? entry.effort.trim() : "";
-    if (effort) runtime.effort = effort;
-    const rawModel = (entry.message as { model?: unknown } | undefined)?.model;
-    const model = resolveObservedClaudeModelId(typeof rawModel === "string" ? rawModel : undefined);
-    if (model) runtime.model = model;
-  }
-  return runtime;
+function readRuntime(entry: ClaudeReplayEntry): { model?: string; effort?: string } {
+  if (entry.type !== "assistant") return {};
+  const effort = typeof entry.effort === "string" ? entry.effort.trim() : "";
+  const rawModel = entry.message?.model;
+  const model = resolveObservedClaudeModelId(typeof rawModel === "string" ? rawModel : undefined);
+  return { ...(effort ? { effort } : {}), ...(model ? { model } : {}) };
 }
 
 /**
@@ -126,22 +121,18 @@ function readTotalTokens(raw: unknown): number | undefined {
  *
  * The last assistant entry's summed usage matches Claude Code's live `total_tokens` definition.
  */
-function readUsage(entries: readonly ClaudeReplayEntry[]): ClaudeSubagentUsage | null {
-  let totalTokens: number | undefined;
-
-  for (const entry of entries) {
-    if (entry.type !== "assistant") continue;
-    const observed = readTotalTokens(entry.message?.usage);
-    if (observed !== undefined) totalTokens = observed;
-  }
-
+function readUsage(entry: ClaudeReplayEntry): ClaudeSubagentUsage | null {
+  if (entry.type !== "assistant") return null;
+  const totalTokens = readTotalTokens(entry.message?.usage);
   return totalTokens === undefined ? null : { totalTokens };
 }
 
 export interface ClaudeReplaySubagentInput {
   agentId: string;
   meta: ClaudeSubagentMeta | null;
-  entries: ClaudeReplayEntry[];
+  entries: Iterable<ClaudeReplayEntry>;
+  /** Task declarations made by this subagent, used to attach its direct children. */
+  parentFacts?: ClaudeReplayParentFacts;
 }
 
 export interface ClaudeReplayParentFacts {
@@ -209,18 +200,6 @@ function resolveParentLink(
   return null;
 }
 
-/** A final `end_turn` is the child's own completion signal when the parent result is absent. */
-function readChildTerminalStatus(
-  entries: readonly ClaudeReplayEntry[],
-): ProviderSubagentStatus | null {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index];
-    if (entry?.type !== "assistant") continue;
-    return entry.message?.stop_reason === "end_turn" ? "completed" : null;
-  }
-  return null;
-}
-
 /**
  * The parent's tool input is the same identity source the live path reads; meta.json contributes
  * provider details only after that declaration has admitted the child.
@@ -229,27 +208,29 @@ function declareSubagent(
   subagent: ClaudeReplaySubagentInput,
   link: ParentLink,
   toolCall: { title?: string; description?: string } | undefined,
+  parentSubagentId: string | undefined,
+  firstTimestamp: string | null,
 ): SubagentObservation {
   const title = toolCall?.title ?? subagent.meta?.agentType;
   const description = toolCall?.description ?? subagent.meta?.description;
-  const firstTimestamp = normalizeProviderReplayTimestamp(subagent.entries[0]?.timestamp);
   return {
     kind: "declared",
     id: link.id,
     ...(title ? { title } : {}),
     ...(description ? { description } : {}),
     ...(link.toolCallId ? { toolCallId: link.toolCallId } : {}),
+    ...(parentSubagentId ? { parentSubagentId } : {}),
     ...(firstTimestamp ? { timestamp: firstTimestamp } : {}),
   };
 }
 
 function observeSubtitle(
-  subagent: ClaudeReplaySubagentInput,
   link: ParentLink,
   title: string | undefined,
+  runtime: { model?: string; effort?: string },
+  usage: ClaudeSubagentUsage | null,
+  timestamp: string | null,
 ): SubagentObservation | null {
-  const runtime = readRuntime(subagent.entries);
-  const usage = readUsage(subagent.entries);
   const hasDetails =
     runtime.model !== undefined ||
     runtime.effort !== undefined ||
@@ -261,7 +242,6 @@ function observeSubtitle(
     ...(usage ? { usage } : {}),
   });
   if (!subtitle) return null;
-  const timestamp = normalizeProviderReplayTimestamp(subagent.entries.at(-1)?.timestamp);
   return {
     kind: "subtitle",
     id: link.id,
@@ -274,32 +254,50 @@ function observeSubagent(
   subagent: ClaudeReplaySubagentInput,
   parent: ClaudeReplayParentFacts,
   convertEntry: (entry: ClaudeReplayEntry) => AgentTimelineItem[],
+  toolOwners: Map<string, string>,
+  parentSubagentId?: string,
 ): SubagentObservation[] {
   const link = resolveParentLink(subagent, parent);
   if (!link) return [];
   const toolCall = parent.toolCalls.get(link.toolCallId);
+  const timeline: SubagentObservation[] = [];
+  const runtime: { model?: string; effort?: string } = {};
+  let usage: ClaudeSubagentUsage | null = null;
+  let firstTimestamp: string | null = null;
+  let lastTimestamp: string | null = null;
+  let seenEntry = false;
+  let childTerminalStatus: ProviderSubagentStatus | null = null;
 
-  const observations: SubagentObservation[] = [declareSubagent(subagent, link, toolCall)];
-  const subtitle = observeSubtitle(subagent, link, toolCall?.title ?? subagent.meta?.agentType);
-  if (subtitle) observations.push(subtitle);
-
+  // Consume each source once for presentation and timeline; keep no raw transcript records.
   for (const entry of subagent.entries) {
     const timestamp = normalizeProviderReplayTimestamp(entry.timestamp);
+    if (!seenEntry) firstTimestamp = timestamp;
+    seenEntry = true;
+    lastTimestamp = timestamp;
+    Object.assign(runtime, readRuntime(entry));
+    usage = readUsage(entry) ?? usage;
+    if (entry.type === "assistant") {
+      childTerminalStatus = entry.message?.stop_reason === "end_turn" ? "completed" : null;
+    }
+    recordReplayToolOwners(toolOwners, entry, link.id);
     for (const item of convertEntry(entry)) {
-      observations.push({
-        kind: "timeline",
-        id: link.id,
-        item,
-        ...(timestamp ? { timestamp } : {}),
-      });
+      timeline.push({ kind: "timeline", id: link.id, item, ...(timestamp ? { timestamp } : {}) });
     }
   }
-
-  // Prefer the parent's result because it carries failure. If that result is missing, the child's
-  // final end_turn still proves completion. Any other shape remains running.
-  const terminalStatus = link.status ?? readChildTerminalStatus(subagent.entries);
+  const observations = [
+    declareSubagent(subagent, link, toolCall, parentSubagentId, firstTimestamp),
+  ];
+  const subtitle = observeSubtitle(
+    link,
+    toolCall?.title ?? subagent.meta?.agentType,
+    runtime,
+    usage,
+    lastTimestamp,
+  );
+  if (subtitle) observations.push(subtitle);
+  for (const observation of timeline) observations.push(observation);
+  const terminalStatus = link.status ?? childTerminalStatus;
   if (terminalStatus) {
-    const lastTimestamp = normalizeProviderReplayTimestamp(subagent.entries.at(-1)?.timestamp);
     observations.push({
       kind: "status",
       id: link.id,
@@ -307,38 +305,79 @@ function observeSubagent(
       ...(lastTimestamp ? { timestamp: lastTimestamp } : {}),
     });
   }
-
   return observations;
 }
 
-/**
- * Whether this transcript belongs to a child of the session being replayed.
- *
- * Claude Code writes every descendant into the same `subagents/` directory, not just the session's
- * own children, and `spawnDepth` is what separates them: 1 is a direct child, 2+ was spawned by
- * another subagent. A grandchild's `toolUseId` names a Task call made inside its parent's session,
- * so nothing in this transcript can resolve it — surveyed across recorded sessions, every depth-1
- * id matched a Task tool_use block in the parent transcript and no deeper id did. Replaying them
- * anyway adds rows the live stream never showed, each with no Task card and no recoverable outcome.
- * One session recorded 10 subagents live and would replay 22.
- *
- * Absent depth means a session recorded before the field existed: keep the subagent rather than
- * lose it, matching how every other missing field here is treated.
- */
-function isDirectChild(subagent: ClaudeReplaySubagentInput): boolean {
-  const depth = subagent.meta?.spawnDepth;
-  return depth === undefined || depth <= 1;
+function recordReplayToolOwners(
+  owners: Map<string, string>,
+  entry: ClaudeReplayEntry,
+  subagentId: string,
+): void {
+  if (entry.type !== "assistant" || !Array.isArray(entry.message?.content)) return;
+  for (const block of entry.message.content) {
+    if (block?.type === "tool_use" && typeof block.id === "string")
+      owners.set(block.id, subagentId);
+  }
 }
 
 export function observeReplaySubagents(input: {
   subagents: readonly ClaudeReplaySubagentInput[];
   parent: ClaudeReplayParentFacts;
   convertEntry: (entry: ClaudeReplayEntry) => AgentTimelineItem[];
-}): SubagentObservation[] {
+}): { observations: SubagentObservation[]; toolOwners: ReadonlyMap<string, string> } {
   const observations: SubagentObservation[] = [];
-  for (const subagent of input.subagents) {
-    if (!isDirectChild(subagent)) continue;
-    observations.push(...observeSubagent(subagent, input.parent, input.convertEntry));
+  const toolOwners = new Map<string, string>();
+  const unresolved = [...input.subagents].sort(
+    (left, right) => (left.meta?.spawnDepth ?? 1) - (right.meta?.spawnDepth ?? 1),
+  );
+  const resolvedParents = new Map<string, ClaudeReplayParentFacts>();
+
+  // Claude stores every descendant beside the root transcript. Resolve one generation at a
+  // time: a child is admitted only when its tool id is declared by a transcript whose own parent
+  // has already been proven. This preserves the old boundary against unrelated ambient sidecars.
+  let madeProgress = true;
+  while (unresolved.length > 0 && madeProgress) {
+    madeProgress = false;
+    for (let index = unresolved.length - 1; index >= 0; index--) {
+      const subagent = unresolved[index];
+      if (!subagent) continue;
+      const resolved = resolveReplayOwner(subagent, input.parent, resolvedParents);
+      if (!resolved) continue;
+      const { ownerId, parent, link } = resolved;
+
+      // Only proven descendants may own notifications; ambient sidecars cannot claim them.
+      for (const observation of observeSubagent(
+        subagent,
+        parent,
+        input.convertEntry,
+        toolOwners,
+        ownerId,
+      )) {
+        observations.push(observation);
+      }
+      if (subagent.parentFacts) resolvedParents.set(link.id, subagent.parentFacts);
+      unresolved.splice(index, 1);
+      madeProgress = true;
+    }
   }
-  return observations;
+  return { observations, toolOwners };
+}
+
+function resolveReplayOwner(
+  subagent: ClaudeReplaySubagentInput,
+  rootParent: ClaudeReplayParentFacts,
+  resolvedParents: ReadonlyMap<string, ClaudeReplayParentFacts>,
+): {
+  ownerId?: string;
+  parent: ClaudeReplayParentFacts;
+  link: NonNullable<ReturnType<typeof resolveParentLink>>;
+} | null {
+  const rootLink = resolveParentLink(subagent, rootParent);
+  if (rootLink) return { parent: rootParent, link: rootLink };
+
+  for (const [ownerId, parent] of resolvedParents) {
+    const link = resolveParentLink(subagent, parent);
+    if (link) return { ownerId, parent, link };
+  }
+  return null;
 }

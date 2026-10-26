@@ -13,7 +13,7 @@ import {
   type CreateWorktreeOptions,
   type WorktreeConfig,
 } from "./worktree";
-import { getPaseoWorktreeMetadataPath } from "./worktree-metadata.js";
+import { getPaseoWorktreeMetadataPath, readPaseoWorktreeMetadata } from "./worktree-metadata.js";
 import {
   getCheckoutDiff,
   getCheckoutStatus,
@@ -32,8 +32,8 @@ import {
   writeFileSync,
   readFileSync,
   lstatSync,
+  readlinkSync,
   symlinkSync,
-  unlinkSync,
 } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
@@ -44,7 +44,7 @@ interface LegacyCreateWorktreeTestOptions {
   cwd: string;
   baseBranch: string;
   worktreeSlug: string;
-  runSetup?: boolean;
+
   paseoHome?: string;
   worktreesRoot?: string;
 }
@@ -64,7 +64,7 @@ function createLegacyWorktreeForTest(
       baseBranch: options.baseBranch,
       branchName: options.branchName,
     },
-    runSetup: options.runSetup ?? true,
+
     paseoHome: options.paseoHome,
     worktreesRoot: options.worktreesRoot,
   });
@@ -120,7 +120,11 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       const metadataPath = getPaseoWorktreeMetadataPath(result.worktreePath);
       expect(existsSync(metadataPath)).toBe(true);
       const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-      expect(metadata).toMatchObject({ version: 1, baseRefName: "main" });
+      expect(metadata).toMatchObject({
+        version: 1,
+        baseRefName: "main",
+        changeRequestLookupTarget: { headRef: "hello-world", localBranchName: "hello-world" },
+      });
     });
 
     it("creates and owns worktrees under a configured root", async () => {
@@ -226,7 +230,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         worktreeSlug: "my-feature",
         source: { kind: "branch-off", baseBranch: "main", branchName: "feature/x" },
-        runSetup: true,
+
         paseoHome,
       });
 
@@ -245,8 +249,44 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
 
       const metadataPath = getPaseoWorktreeMetadataPath(result.worktreePath);
       const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-      expect(metadata).toMatchObject({ version: 1, baseRefName: "main" });
+      expect(metadata).toMatchObject({
+        version: 1,
+        baseRefName: "main",
+        changeRequestLookupTarget: { headRef: "feature/x", localBranchName: "feature/x" },
+      });
     });
+
+    it.each([false, true])(
+      "shows committed changes for an existing branch (already checked out: %s)",
+      async (alreadyCheckedOut) => {
+        execFileSync("git", ["checkout", "-b", "feature/existing"], { cwd: repoDir });
+        writeFileSync(join(repoDir, "file.txt"), "feature change\n");
+        execFileSync("git", ["add", "file.txt"], { cwd: repoDir });
+        execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "feature change"], {
+          cwd: repoDir,
+        });
+        if (!alreadyCheckedOut) {
+          execFileSync("git", ["checkout", "main"], { cwd: repoDir });
+        }
+
+        const result = await createWorktreePrimitive({
+          cwd: repoDir,
+          worktreeSlug: "existing-feature",
+          source: { kind: "checkout-branch", branchName: "feature/existing" },
+
+          paseoHome,
+        });
+        const status = await getCheckoutStatus(result.worktreePath, { paseoHome });
+        const diff = await getCheckoutDiff(result.worktreePath, { mode: "base" }, { paseoHome });
+        expect(diff.diff).toContain("+feature change");
+        expect(status).toMatchObject({
+          isGit: true,
+          baseRef: "main",
+          aheadBehind: { ahead: 1, behind: 0 },
+        });
+        expect(result.comparisonBaseRef).toBe("main");
+      },
+    );
 
     it("checks out an existing local branch that is not checked out elsewhere", async () => {
       execFileSync("git", ["branch", "dev"], { cwd: repoDir });
@@ -255,7 +295,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         worktreeSlug: "dev-worktree",
         source: { kind: "checkout-branch", branchName: "dev" },
-        runSetup: true,
+
         paseoHome,
       });
 
@@ -267,9 +307,63 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         .trim();
       expect(currentBranch).toBe("dev");
 
+      // baseRefName must be the repo's default branch, not the checked-out branch
+      // itself — otherwise the diff panel compares the branch against itself and
+      // always shows no changes.
       const metadataPath = getPaseoWorktreeMetadataPath(result.worktreePath);
       const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-      expect(metadata).toMatchObject({ version: 1, baseRefName: "dev" });
+      expect(metadata).toMatchObject({
+        version: 1,
+        baseRefName: "main",
+        changeRequestLookupTarget: { headRef: "dev", localBranchName: "dev" },
+      });
+    });
+
+    it("shows committed changes when origin HEAD points to a deleted default branch", async () => {
+      execFileSync("git", ["branch", "-m", "main", "master"], { cwd: repoDir });
+      execFileSync(
+        "git",
+        ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+        { cwd: repoDir },
+      );
+      execFileSync("git", ["checkout", "-b", "feature/stale-default"], { cwd: repoDir });
+      writeFileSync(join(repoDir, "file.txt"), "feature change\n");
+      execFileSync("git", ["add", "file.txt"], { cwd: repoDir });
+      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "feature change"], {
+        cwd: repoDir,
+      });
+      execFileSync("git", ["checkout", "master"], { cwd: repoDir });
+      const created = await createWorktreePrimitive({
+        cwd: repoDir,
+        worktreeSlug: "stale-default",
+        source: { kind: "checkout-branch", branchName: "feature/stale-default" },
+
+        paseoHome,
+      });
+      const diff = await getCheckoutDiff(created.worktreePath, { mode: "base" }, { paseoHome });
+      expect(diff.diff).toContain("+feature change");
+      expect(created.comparisonBaseRef).toBe("master");
+    });
+
+    it("falls back to the currently checked out branch when no default branch can be resolved", async () => {
+      // No origin remote and no local main/master — resolveRepositoryDefaultBranch
+      // can't find a default branch, so the fix must fall back to whatever is
+      // currently checked out in the main repo (here: "develop").
+      execFileSync("git", ["branch", "-m", "main", "develop"], { cwd: repoDir });
+      execFileSync("git", ["branch", "feature-x"], { cwd: repoDir });
+
+      const result = await createLegacyWorktreeForTest({
+        cwd: repoDir,
+        worktreeSlug: "feature-x-worktree",
+        source: { kind: "checkout-branch", branchName: "feature-x" },
+
+        paseoHome,
+      });
+
+      expect(existsSync(result.worktreePath)).toBe(true);
+      const metadataPath = getPaseoWorktreeMetadataPath(result.worktreePath);
+      const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+      expect(metadata).toMatchObject({ version: 1, baseRefName: "develop" });
     });
 
     it("checks out an existing local branch whose name contains uppercase letters and dots", async () => {
@@ -279,7 +373,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         worktreeSlug: "release-worktree",
         source: { kind: "checkout-branch", branchName: "release/1.1.15" },
-        runSetup: true,
+
         paseoHome,
       });
 
@@ -297,15 +391,19 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         worktreeSlug: "dev-worktree",
         source: { kind: "checkout-branch", branchName: "main" },
-        runSetup: true,
+
         paseoHome,
       });
 
       expect(result.branchName).toBe("main-1");
       expect(existsSync(result.worktreePath)).toBe(true);
+      expect(readPaseoWorktreeMetadata(result.worktreePath)?.changeRequestLookupTarget).toEqual({
+        headRef: "main-1",
+        localBranchName: "main-1",
+      });
     });
 
-    it("fetches a GitHub PR branch, checks it out, and writes metadata", async () => {
+    it("fetches a GitHub PR branch and writes metadata without executing setup", async () => {
       const remoteDir = join(tempDir, "remote.git");
       const remoteCloneDir = join(tempDir, "remote-clone");
       execFileSync("git", ["clone", "--bare", repoDir, remoteDir]);
@@ -335,11 +433,12 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
           headRef: "user/feature",
           baseRefName: "main",
         },
-        runSetup: true,
+
         paseoHome,
       });
 
       expect(readFileSync(join(result.worktreePath, "file.txt"), "utf8")).toBe("from-pr\n");
+      expect(existsSync(join(result.worktreePath, "setup.log"))).toBe(false);
       const currentBranch = execFileSync("git", ["branch", "--show-current"], {
         cwd: result.worktreePath,
       })
@@ -382,7 +481,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
           headRef: "Feature.X",
           baseRefName: "main",
         },
-        runSetup: true,
+
         paseoHome,
       });
 
@@ -428,7 +527,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         baseBranch: "refs/heads/main",
         worktreeSlug: "prefer-local-feature",
-        runSetup: false,
+
         paseoHome,
       });
       const originResult = await createLegacyWorktreeForTest({
@@ -436,7 +535,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         baseBranch: "refs/remotes/origin/main",
         worktreeSlug: "prefer-origin-feature",
-        runSetup: false,
+
         paseoHome,
       });
 
@@ -486,7 +585,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         baseBranch: "refs/remotes/upstream/main",
         worktreeSlug: "fork-base-feature",
-        runSetup: false,
+
         paseoHome,
       });
 
@@ -577,7 +676,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         baseBranch: "refs/remotes/upstream/release+hotfix",
         worktreeSlug: "release-hotfix-feature",
-        runSetup: false,
+
         paseoHome,
       });
 
@@ -605,7 +704,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         baseBranch: "main",
         worktreeSlug: "prefer-local-fallback-feature",
-        runSetup: false,
+
         paseoHome,
       });
 
@@ -619,21 +718,21 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
           cwd: repoDir,
           baseBranch: "does-not-exist",
           worktreeSlug: "missing-base-feature",
-          runSetup: false,
+
           paseoHome,
         }),
       ).rejects.toThrow("Base branch not found: does-not-exist");
     });
 
-    it("fails with invalid branch name", async () => {
+    it("fails with a Git-invalid branch name", async () => {
       await expect(
         createLegacyWorktreeForTest({
-          branchName: "INVALID_UPPERCASE",
+          branchName: "bad..name",
           cwd: repoDir,
           baseBranch: "main",
           worktreeSlug: "test",
         }),
-      ).rejects.toThrow("Invalid branch name");
+      ).rejects.toThrow("Git rejected ref name 'bad..name'");
     });
 
     it("throws a typed error when checking out an invalid existing branch name", async () => {
@@ -643,7 +742,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
           cwd: repoDir,
           worktreeSlug: "invalid-existing-branch",
           source: { kind: "checkout-branch", branchName: "bad..name" },
-          runSetup: true,
+
           paseoHome,
         });
       } catch (error) {
@@ -661,7 +760,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
           cwd: repoDir,
           worktreeSlug: "invalid-option-like-branch",
           source: { kind: "checkout-branch", branchName: "-bad" },
-          runSetup: true,
+
           paseoHome,
         });
       } catch (error) {
@@ -733,7 +832,6 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         baseBranch: "main",
         worktreeSlug: "inert-config",
-        runSetup: true,
         paseoHome,
       });
 
@@ -752,7 +850,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         baseBranch: "main",
         worktreeSlug: "runtime-env-port-reuse",
-        runSetup: false,
+
         paseoHome,
       });
 
@@ -774,7 +872,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         baseBranch: "main",
         worktreeSlug: "runtime-env-port-conflict",
-        runSetup: false,
+
         paseoHome,
       });
 
@@ -818,7 +916,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         worktreeSlug: "seed-uncommitted",
         source: { kind: "branch-off", baseBranch: "main", branchName: "feature/seed" },
-        runSetup: false,
+
         paseoHome,
       });
 
@@ -829,40 +927,95 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
       });
     });
 
-    it("replaces a selected ref's paseo.json symlink without writing through it", async () => {
-      const sourceConfigPath = join(repoDir, "paseo.json");
-      const externalConfigPath = join(tempDir, "external-paseo.json");
-      const committedConfig = JSON.stringify({
-        worktree: { setup: 'echo "committed" > committed-setup.log' },
-      });
-      const editedConfig = JSON.stringify({
-        worktree: { setup: 'echo "edited" > edited-setup.log' },
-      });
-      writeFileSync(externalConfigPath, committedConfig);
-      symlinkSync(externalConfigPath, sourceConfigPath);
+    it("keeps a new worktree clean when its upstream ref has a newer paseo.json", async () => {
+      const remoteDir = join(tempDir, "remote.git");
+      const updaterDir = join(tempDir, "updater");
+      writeFileSync(
+        join(repoDir, "paseo.json"),
+        JSON.stringify({ worktree: { setup: "echo old" } }),
+      );
       execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
-      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "add config link"], {
+      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "add paseo.json"], {
         cwd: repoDir,
       });
-      unlinkSync(sourceConfigPath);
-      writeFileSync(sourceConfigPath, editedConfig);
+      execFileSync("git", ["clone", "--bare", repoDir, remoteDir]);
+      execFileSync("git", ["remote", "add", "origin", remoteDir], { cwd: repoDir });
+      execFileSync("git", ["clone", remoteDir, updaterDir]);
+      execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: updaterDir });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: updaterDir });
+      writeFileSync(
+        join(updaterDir, "paseo.json"),
+        JSON.stringify({ worktree: { setup: "echo new" } }),
+      );
+      execFileSync("git", ["add", "paseo.json"], { cwd: updaterDir });
+      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-m", "update paseo.json"], {
+        cwd: updaterDir,
+      });
+      execFileSync("git", ["push", "origin", "main"], { cwd: updaterDir });
+      execFileSync("git", ["fetch", "origin"], { cwd: repoDir });
 
       const result = await createLegacyWorktreeForTest({
         cwd: repoDir,
-        worktreeSlug: "replace-config-link",
+        worktreeSlug: "upstream-config",
         source: {
           kind: "branch-off",
-          baseBranch: "main",
-          branchName: "feature/replace-config-link",
+          baseBranch: "origin/main",
+          branchName: "feature/upstream-config",
         },
-        runSetup: true,
+
         paseoHome,
       });
 
       const worktreeConfigPath = join(result.worktreePath, "paseo.json");
-      expect(readFileSync(externalConfigPath, "utf8")).toBe(committedConfig);
-      expect(lstatSync(worktreeConfigPath).isFile()).toBe(true);
-      expect(readFileSync(worktreeConfigPath, "utf8")).toBe(editedConfig);
+      expect(JSON.parse(readFileSync(worktreeConfigPath, "utf8"))).toEqual({
+        worktree: { setup: "echo new" },
+      });
+      expect(
+        execFileSync("git", ["status", "--porcelain"], {
+          cwd: result.worktreePath,
+          encoding: "utf8",
+        }),
+      ).toBe("");
+    });
+
+    it("preserves a dangling paseo.json symlink from the selected ref", async () => {
+      const externalConfigPath = join(tempDir, "outside-paseo.json");
+      execFileSync("git", ["checkout", "-b", "symlink-config"], { cwd: repoDir });
+      symlinkSync(externalConfigPath, join(repoDir, "paseo.json"));
+      execFileSync("git", ["add", "paseo.json"], { cwd: repoDir });
+      execFileSync(
+        "git",
+        ["-c", "commit.gpgsign=false", "commit", "-m", "add paseo.json symlink"],
+        { cwd: repoDir },
+      );
+      execFileSync("git", ["checkout", "main"], { cwd: repoDir });
+      writeFileSync(
+        join(repoDir, "paseo.json"),
+        JSON.stringify({ worktree: { setup: "echo source" } }),
+      );
+
+      const result = await createLegacyWorktreeForTest({
+        cwd: repoDir,
+        worktreeSlug: "symlink-config",
+        source: {
+          kind: "branch-off",
+          baseBranch: "symlink-config",
+          branchName: "feature/symlink-config",
+        },
+
+        paseoHome,
+      });
+
+      const worktreeConfigPath = join(result.worktreePath, "paseo.json");
+      expect(lstatSync(worktreeConfigPath).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(worktreeConfigPath)).toBe(externalConfigPath);
+      expect(existsSync(externalConfigPath)).toBe(false);
+      expect(
+        execFileSync("git", ["status", "--porcelain"], {
+          cwd: result.worktreePath,
+          encoding: "utf8",
+        }),
+      ).toBe("");
     });
 
     it("creates a worktree without error when no paseo.json exists in the main repo", async () => {
@@ -870,7 +1023,7 @@ describe.skipIf(isPlatform("win32"))("worktree POSIX-only", () => {
         cwd: repoDir,
         worktreeSlug: "no-config",
         source: { kind: "branch-off", baseBranch: "main", branchName: "feature/no-config" },
-        runSetup: false,
+
         paseoHome,
       });
 

@@ -6,10 +6,18 @@ import type { AgentStorage } from "./agent-storage.js";
 import {
   buildConfigOverrides,
   buildSessionConfig,
+  extractAttention,
   extractTimestamps,
   isStoredAgentProviderAvailable,
   toAgentPersistenceHandle,
 } from "../persistence-hooks.js";
+
+export class AgentNotFoundError extends Error {
+  constructor(agentId: string) {
+    super(`Agent not found: ${agentId}`);
+    this.name = "AgentNotFoundError";
+  }
+}
 
 interface PendingAgentInitialization {
   promise: Promise<ManagedAgent>;
@@ -93,7 +101,7 @@ export async function ensureAgentLoaded(
   const initPromise = (async () => {
     const record = await deps.agentStorage.get(agentId);
     if (!record) {
-      throw new Error(`Agent not found: ${agentId}`);
+      throw new AgentNotFoundError(agentId);
     }
 
     const validProviders = deps.validProviders ?? deps.agentManager.getRegisteredProviderIds();
@@ -109,11 +117,14 @@ export async function ensureAgentLoaded(
         handle,
         buildConfigOverrides(record),
         agentId,
-        extractTimestamps(record),
+        { ...extractTimestamps(record), attention: extractAttention(record) },
         record.archivedAt ? { purpose: "history" } : undefined,
       );
       deps.logger.info({ agentId, provider: record.provider }, "Agent resumed from persistence");
     } else {
+      // No provider handle to resume: this starts the agent's first session rather than
+      // bringing one back, so it stamps activity and carries no stored attention. Records
+      // without a handle never got far enough to accumulate either.
       const config = buildSessionConfig(record, {
         validProviders,
       });

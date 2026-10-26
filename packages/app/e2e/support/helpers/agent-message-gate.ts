@@ -6,7 +6,11 @@ type WebSocketMessage = string | Buffer;
 interface SendAgentMessageRequest {
   type: "send_agent_message_request";
   requestId: string;
+  text: unknown;
+  attachments: unknown;
   agentId: string;
+  /** Absent when the client sends into an idle agent. */
+  activeTurnBehavior?: string;
 }
 
 function readSendRequest(message: WebSocketMessage): SendAgentMessageRequest | null {
@@ -27,7 +31,11 @@ function readSendRequest(message: WebSocketMessage): SendAgentMessageRequest | n
     return {
       type: "send_agent_message_request",
       requestId: request.requestId,
+      text: request.text,
+      attachments: request.attachments,
       agentId: request.agentId,
+      activeTurnBehavior:
+        typeof request.activeTurnBehavior === "string" ? request.activeTurnBehavior : undefined,
     };
   } catch {
     return null;
@@ -70,6 +78,7 @@ export async function gateNextAgentMessage(page: Page) {
 
   return {
     waitForRequest,
+    requestCount: () => requests.length,
     accept(index = 0) {
       const heldMessage = heldMessages[index];
       if (!serverSocket || !heldMessage) {

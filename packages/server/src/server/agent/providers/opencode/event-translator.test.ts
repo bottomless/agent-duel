@@ -1,3 +1,5 @@
+import type { SessionMessageAssistant, SessionMessageUser } from "@opencode/client";
+import { V2Timeline } from "./v2/timeline.js";
 import { describe, expect, it } from "vitest";
 
 import { translateOpenCodeEvent, type OpenCodeEventTranslationState } from "../opencode-agent.js";
@@ -29,7 +31,7 @@ function createState(sessionId = "session-1"): OpenCodeEventTranslationState {
     sessionId,
     messageRoles: new Map(),
     accumulatedUsage: {},
-    streamedPartKeys: new Set(),
+    materializedParts: new Map(),
     emittedStructuredMessageIds: new Set(),
     compactionSummaryMessageIds: new Set(),
     emittedCompactionPartIds: new Set(),
@@ -38,6 +40,130 @@ function createState(sessionId = "session-1"): OpenCodeEventTranslationState {
 }
 
 describe("translateOpenCodeEvent", () => {
+  it("emits only the missing suffix from a final full text part", () => {
+    const state = createState();
+    translateOpenCodeEvent(
+      {
+        type: "message.updated",
+        properties: {
+          info: { id: "message-1", sessionID: "session-1", role: "assistant" },
+        },
+      },
+      state,
+    );
+    const first = translateOpenCodeEvent(
+      {
+        type: "message.part.delta",
+        properties: {
+          sessionID: "session-1",
+          messageID: "message-1",
+          partID: "part-1",
+          field: "text",
+          delta: "Hello",
+        },
+      },
+      state,
+    );
+    const incomplete = translateOpenCodeEvent(
+      {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-1",
+            sessionID: "session-1",
+            messageID: "message-1",
+            type: "text",
+            text: "",
+            time: { start: 1 },
+          },
+        },
+      },
+      state,
+    );
+    const second = translateOpenCodeEvent(
+      {
+        type: "message.part.delta",
+        properties: {
+          sessionID: "session-1",
+          messageID: "message-1",
+          partID: "part-1",
+          field: "text",
+          delta: " world",
+        },
+      },
+      state,
+    );
+    const final = translateOpenCodeEvent(
+      {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-1",
+            sessionID: "session-1",
+            messageID: "message-1",
+            type: "text",
+            text: "Hello world!",
+            time: { start: 1, end: 2 },
+          },
+        },
+      },
+      state,
+    );
+
+    expect(incomplete).toEqual([]);
+    expect([first, second, final].flatMap((events) => events)).toMatchObject([
+      { item: { text: "Hello" } },
+      { item: { text: " world" } },
+      { item: { text: "!" } },
+    ]);
+    expect(
+      translateOpenCodeEvent(
+        {
+          type: "message.part.delta",
+          properties: {
+            sessionID: "session-1",
+            messageID: "message-1",
+            partID: "part-1",
+            field: "text",
+            delta: " delayed",
+          },
+        },
+        state,
+      ),
+    ).toEqual([]);
+  });
+
+  it("diagnoses a non-prefix final text snapshot", () => {
+    const diagnostics: unknown[] = [];
+    const state = createState();
+    state.onMaterializationMismatch = (diagnostic) => diagnostics.push(diagnostic);
+    state.materializedParts.set("part-1", {
+      messageId: "message-1",
+      emittedText: "streamed text",
+      closed: false,
+    });
+
+    expect(
+      translateOpenCodeEvent(
+        {
+          type: "message.part.updated",
+          properties: {
+            part: {
+              id: "part-1",
+              sessionID: "session-1",
+              messageID: "message-1",
+              type: "text",
+              text: "mutated text",
+              time: { start: 1, end: 2 },
+            },
+          },
+        },
+        state,
+      ),
+    ).toEqual([]);
+    expect(diagnostics).toEqual([{ partId: "part-1", messageId: "message-1", kind: "text" }]);
+  });
+
   it("resolves context window max tokens from assistant message.updated model metadata", () => {
     const resolvedContextWindowMaxTokens: number[] = [];
     const state = createState();
@@ -1171,6 +1297,44 @@ describe("translateOpenCodeEvent", () => {
     expect(result).toEqual([]);
   });
 
+  it("shows OpenCode user text parts unless OpenCode marks them synthetic", () => {
+    const state = createState();
+    const userTextPart = (messageId: string, text: string, synthetic: boolean) => {
+      translateOpenCodeEvent(
+        {
+          type: "message.updated",
+          properties: { info: { id: messageId, sessionID: "session-1", role: "user" } },
+        },
+        state,
+      );
+      return translateOpenCodeEvent(
+        {
+          type: "message.part.updated",
+          properties: {
+            part: {
+              id: `part-${messageId}`,
+              sessionID: "session-1",
+              messageID: messageId,
+              type: "text",
+              text,
+              synthetic,
+            },
+          },
+        },
+        state,
+      );
+    };
+
+    expect(userTextPart("msg-continue", "Continue if you have next steps", true)).toEqual([]);
+    expect(userTextPart("msg-user", "Plugin prompt", false)).toEqual([
+      {
+        type: "timeline",
+        provider: "opencode",
+        item: { type: "user_message", text: "Plugin prompt", messageId: "msg-user" },
+      },
+    ]);
+  });
+
   it("ignores message.part.delta for user messages", () => {
     const state = createState();
 
@@ -1204,7 +1368,11 @@ describe("translateOpenCodeEvent", () => {
 
   it("emits turn_completed from session.status idle", () => {
     const state = createState();
-    state.streamedPartKeys.add("text:part-1");
+    state.materializedParts.set("part-1", {
+      messageId: "message-1",
+      emittedText: "partial",
+      closed: false,
+    });
     state.partTypes.set("part-1", "text");
 
     const result = translateOpenCodeEvent(
@@ -1225,13 +1393,17 @@ describe("translateOpenCodeEvent", () => {
         usage: undefined,
       },
     ]);
-    expect(state.streamedPartKeys.size).toBe(0);
+    expect(state.materializedParts.size).toBe(1);
     expect(state.partTypes.size).toBe(0);
   });
 
   it("forwards session.status retry as a non-terminal timeline error item", () => {
     const state = createState();
-    state.streamedPartKeys.add("text:part-1");
+    state.materializedParts.set("part-1", {
+      messageId: "message-1",
+      emittedText: "partial",
+      closed: false,
+    });
     state.partTypes.set("part-1", "text");
 
     const result = translateOpenCodeEvent(
@@ -1259,7 +1431,7 @@ describe("translateOpenCodeEvent", () => {
     ]);
     // Streaming state must NOT be reset — the turn is still alive, opencode
     // will eventually either succeed or emit session.idle / session.error.
-    expect(state.streamedPartKeys.size).toBe(1);
+    expect(state.materializedParts.size).toBe(1);
     expect(state.partTypes.size).toBe(1);
   });
 
@@ -1403,5 +1575,92 @@ describe("translateOpenCodeEvent", () => {
         error: '{"name":"UnknownError","data":{"message":"something broke"}}',
       },
     ]);
+  });
+});
+
+describe("OpenCode v2 history reconciliation", () => {
+  it("keeps client message identity on live echoes but omits it from history", () => {
+    const user: SessionMessageUser = {
+      id: "native-message",
+      type: "user",
+      text: "hello",
+      time: { created: 1 },
+      metadata: { paseoClientMessageId: "client-message" },
+    };
+    expect(new V2Timeline().messages([user])).toMatchObject([
+      { item: { clientMessageId: "client-message", messageId: "native-message" } },
+    ]);
+    expect(new V2Timeline(false).messages([user])).toMatchObject([
+      { item: { type: "user_message", messageId: "native-message" } },
+    ]);
+    const [event] = new V2Timeline(false).messages([user]);
+    expect(event && "item" in event && event.item).not.toHaveProperty("clientMessageId");
+  });
+  function assistant(text: string): SessionMessageAssistant {
+    return {
+      id: "message",
+      type: "assistant",
+      agent: "build",
+      model: { id: "model", providerID: "provider" },
+      time: { created: 1 },
+      content: [{ type: "text", text }],
+    };
+  }
+  it("emits only the missing suffix after reconnect, even if an intermediate snapshot lags", () => {
+    const timeline = new V2Timeline();
+    const text = (messages: ReturnType<V2Timeline["messages"]>) =>
+      messages.flatMap((event) =>
+        event.type === "timeline" && event.item.type === "assistant_message"
+          ? [event.item.text]
+          : [],
+      );
+    expect(text(timeline.messages([assistant("hello")]))).toEqual(["hello"]);
+    expect(timeline.messages([assistant("hel")])).toEqual([]);
+    expect(text(timeline.messages([assistant("hello world")]))).toEqual([" world"]);
+    expect(timeline.messages([assistant("hello world")])).toEqual([]);
+  });
+  it("keeps reasoning separate from assistant output", () => {
+    const timeline = new V2Timeline();
+    const message = assistant("answer");
+    message.content.unshift({ type: "reasoning", text: "thinking" });
+    expect(
+      timeline.messages([message]).map((event) => (event.type === "timeline" ? event.item : null)),
+    ).toEqual([
+      { type: "reasoning", text: "thinking" },
+      { type: "assistant_message", text: "answer", messageId: "message" },
+    ]);
+  });
+  it("emits tool state transitions once and keeps their call identity", () => {
+    const timeline = new V2Timeline();
+    const message = assistant("");
+    message.content = [
+      {
+        type: "tool",
+        id: "call",
+        name: "bash",
+        time: { created: 1 },
+        state: { status: "running", input: { command: "pwd" }, metadata: {} },
+      },
+    ];
+    expect(timeline.messages([message])).toMatchObject([
+      { item: { type: "tool_call", callId: "call", status: "running" } },
+    ]);
+    message.content = [
+      {
+        type: "tool",
+        id: "call",
+        name: "bash",
+        time: { created: 1, completed: 2 },
+        state: {
+          status: "completed",
+          input: { command: "pwd" },
+          content: [{ type: "text", text: "/workspace" }],
+        },
+      },
+    ];
+    expect(timeline.messages([message])).toMatchObject([
+      { item: { type: "tool_call", callId: "call", status: "completed" } },
+    ]);
+    expect(timeline.messages([message])).toEqual([]);
   });
 });

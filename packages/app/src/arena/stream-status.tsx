@@ -25,5 +25,5 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
     padding: theme.spacing[2],
   },
-  text: { flex: 1, fontSize: theme.fontSize.xs, color: theme.colors.foregroundMuted },
+  text: { flex: 1, fontSize: theme.fontSize.sm, color: theme.colors.foregroundMuted },
 }));

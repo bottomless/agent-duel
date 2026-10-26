@@ -95,7 +95,7 @@ export function useOpenAgentListGesture(enabled: boolean) {
           }
         })
         .onStart(() => {
-          startedRevision.value = beginGesture({ origin: "agent", preview: "agent-list" });
+          startedRevision.value = beginGesture({ origin: "agent" });
         })
         .onUpdate((event) => {
           updateGesture(startedRevision.value, -event.translationX / windowWidth);
@@ -188,7 +188,6 @@ export function useCloseAgentListGesture() {
         .onStart(() => {
           startedRevision.value = beginGesture({
             origin: "agent-list",
-            preview: "agent-list",
           });
         })
         .onUpdate((event) => {

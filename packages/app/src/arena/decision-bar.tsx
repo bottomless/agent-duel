@@ -378,7 +378,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   status: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   sideChoice: {
     minWidth: 96,
@@ -421,7 +421,7 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     flexShrink: 1,
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   command: {
     fontWeight: theme.fontWeight.semibold,

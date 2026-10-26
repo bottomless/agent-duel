@@ -28,12 +28,17 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { View, Text, type ViewStyle } from "react-native";
+import { View, Text, type LayoutChangeEvent, type ViewStyle } from "react-native";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  type SharedValue,
+} from "react-native-reanimated";
 import { useTranslation } from "react-i18next";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet } from "react-native-unistyles";
+import type { TerminalProfile } from "@getpaseo/protocol/messages";
 import { ResizeHandle } from "@/components/resize-handle";
 import { resolveSplitFloors } from "@/components/split-container-floors";
-import { RetainedPanel } from "@/components/retained-panel";
 import { resolveSplitContainerRoot } from "@/components/split-container-focus";
 import { shouldFocusPaneFromEventTarget } from "@/components/split-container-pane-focus";
 import {
@@ -52,12 +57,8 @@ import {
   deriveWorkspacePaneState,
   getWorkspacePaneDescriptors,
 } from "@/screens/workspace/workspace-pane-state";
-import { useMountedTabSet } from "@/screens/workspace/use-mounted-tab-set";
-import { useModifiedPanelTabIds } from "@/panels/panel-instance-attributes";
-import {
-  WorkspacePaneContent,
-  type WorkspacePaneContentModel,
-} from "@/screens/workspace/workspace-pane-content";
+import type { WorkspacePaneContentModel } from "@/screens/workspace/workspace-pane-content";
+import { WorkspacePanelHost } from "@/screens/workspace/workspace-panel-host";
 import {
   WorkspaceDesktopTabsRow,
   type SidePanelLaunchers,
@@ -66,7 +67,6 @@ import {
   WorkspaceExitFocusModeButton,
 } from "@/screens/workspace/workspace-desktop-tabs-row";
 import { WORKSPACE_SECONDARY_HEADER_HEIGHT } from "@/constants/layout";
-import type { TerminalProfileInput } from "@/screens/workspace/terminals/use-workspace-terminals";
 import {
   WorkspaceTabPresentationResolver,
   WorkspaceTabIcon,
@@ -79,8 +79,7 @@ import {
   type WorkspaceLayout,
 } from "@/stores/workspace-layout-store";
 import type { WorkspaceTab, WorkspaceTabTarget } from "@/workspace-tabs/model";
-import { RenderProfile } from "@/utils/render-profiler";
-import { workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
+import { recordRenderProfileReasons, RenderProfile } from "@/utils/render-profiler";
 import { isNative } from "@/constants/platform";
 
 interface SplitContainerProps {
@@ -112,7 +111,7 @@ interface SplitContainerProps {
   onCloseTabsToLeft: (tabId: string, paneTabs: WorkspaceTabDescriptor[]) => Promise<void> | void;
   onCloseTabsToRight: (tabId: string, paneTabs: WorkspaceTabDescriptor[]) => Promise<void> | void;
   onCloseOtherTabs: (tabId: string, paneTabs: WorkspaceTabDescriptor[]) => Promise<void> | void;
-  onCreateTerminalTab: (input: { paneId?: string; profile?: TerminalProfileInput }) => void;
+  onCreateTerminalTab: (input: { paneId?: string; profile?: TerminalProfile }) => void;
   /** The contestant seats a shell can be opened in, while a battle has live worktrees. */
   arenaSeatSides?: readonly ArenaSide[];
   onCreateArenaSeatTerminal?: (side: ArenaSide) => void;
@@ -222,81 +221,6 @@ function MainPaneFocusStrip({
   );
 }
 
-interface MountedTabSlotProps {
-  tabDescriptor: WorkspaceTabDescriptor;
-  isVisible: boolean;
-  isWorkspaceFocused: boolean;
-  isPaneFocused: boolean;
-  paneId: string;
-  onFocusPane: (paneId: string) => void;
-  buildPaneContentModel: (input: {
-    paneId: string;
-    tab: WorkspaceTabDescriptor;
-  }) => WorkspacePaneContentModel;
-}
-
-const MountedTabSlot = memo(function MountedTabSlot({
-  tabDescriptor,
-  isVisible,
-  isWorkspaceFocused,
-  isPaneFocused,
-  paneId,
-  onFocusPane,
-  buildPaneContentModel,
-}: MountedTabSlotProps) {
-  const content = useMemo(
-    () =>
-      buildPaneContentModel({
-        paneId,
-        tab: tabDescriptor,
-      }),
-    [buildPaneContentModel, paneId, tabDescriptor],
-  );
-
-  const handleFocusPane = useCallback(() => {
-    onFocusPane(paneId);
-  }, [onFocusPane, paneId]);
-
-  return (
-    <RenderProfile id={`DesktopMountedTabSlot:${tabDescriptor.kind}:${tabDescriptor.tabId}`}>
-      <RetainedPanel active={isVisible}>
-        <WorkspacePaneContent
-          content={content}
-          isWorkspaceFocused={isWorkspaceFocused}
-          isPaneFocused={isPaneFocused}
-          onFocusPane={handleFocusPane}
-        />
-      </RetainedPanel>
-    </RenderProfile>
-  );
-});
-
-function useStableTabDescriptorMap(tabDescriptors: WorkspaceTabDescriptor[]) {
-  const cacheRef = useRef(new Map<string, WorkspaceTabDescriptor>());
-  const tabDescriptorMap = useMemo(() => {
-    const next = new Map<string, WorkspaceTabDescriptor>();
-    for (const tabDescriptor of tabDescriptors) {
-      const cachedDescriptor = cacheRef.current.get(tabDescriptor.tabId);
-      if (
-        cachedDescriptor &&
-        cachedDescriptor.key === tabDescriptor.key &&
-        cachedDescriptor.kind === tabDescriptor.kind &&
-        workspaceTabTargetsEqual(cachedDescriptor.target, tabDescriptor.target)
-      ) {
-        next.set(tabDescriptor.tabId, cachedDescriptor);
-        continue;
-      }
-      next.set(tabDescriptor.tabId, tabDescriptor);
-    }
-    return next;
-  }, [tabDescriptors]);
-  useEffect(() => {
-    cacheRef.current = tabDescriptorMap;
-  }, [tabDescriptorMap]);
-
-  return tabDescriptorMap;
-}
-
 interface DragMoveRects {
   translatedRect: { left: number; top: number; width: number; height: number };
   overRect: { left: number; top: number; width: number; height: number };
@@ -364,6 +288,9 @@ function computePaneOverDropPreview(input: {
   }
   return { paneId: overData.paneId };
 }
+
+const EMPTY_SPLIT_NODES: SplitNode[] = [];
+const EMPTY_SPLIT_SIZES: number[] = [];
 
 const dropCollisionDetection: CollisionDetection = (args) => {
   const pointerHits = pointerWithin(args);
@@ -706,22 +633,6 @@ function DragOverlayTabChipInner({
   normalizedWorkspaceId: string;
 }) {
   const { t } = useTranslation();
-  const { theme } = useUnistyles();
-
-  const chipStyle = useMemo(
-    () => [
-      styles.dragOverlayChip,
-      {
-        backgroundColor: theme.colors.surface1,
-        borderColor: theme.colors.borderAccent,
-      },
-    ],
-    [theme.colors.surface1, theme.colors.borderAccent],
-  );
-  const chipLabelStyle = useMemo(
-    () => [styles.dragOverlayLabel, { color: theme.colors.foreground }],
-    [theme.colors.foreground],
-  );
 
   return (
     <WorkspaceTabPresentationResolver
@@ -734,9 +645,9 @@ function DragOverlayTabChipInner({
           presentation.titleState === "loading" ? t("common.states.loading") : presentation.label;
 
         return (
-          <View style={chipStyle}>
+          <View style={styles.dragOverlayChip}>
             <WorkspaceTabIcon presentation={presentation} active size={14} backdrop="surface1" />
-            <Text numberOfLines={1} style={chipLabelStyle}>
+            <Text numberOfLines={1} style={styles.dragOverlayLabel}>
               {label}
             </Text>
           </View>
@@ -746,17 +657,28 @@ function DragOverlayTabChipInner({
   );
 }
 
+// Drag previews write the grow factors to a shared value, so resizing never re-renders the panes
+// or adds a style rule per width.
 function SplitGroupChild({
-  flex,
+  resizeFlex,
+  index,
   floorStyle,
   children,
 }: {
-  flex: number;
+  resizeFlex: SharedValue<number[]>;
+  index: number;
   floorStyle: ViewStyle | null | undefined;
   children: ReactNode;
 }) {
-  const childStyle = useMemo(() => [styles.groupChild, { flex }, floorStyle], [flex, floorStyle]);
-  return <View style={childStyle}>{children}</View>;
+  const resizeStyle = useAnimatedStyle(() => ({
+    flexGrow: resizeFlex.value[index] ?? 1,
+  }));
+  const childStyle = useMemo(() => [styles.groupChild, floorStyle], [floorStyle]);
+  return <Animated.View style={[childStyle, resizeStyle]}>{children}</Animated.View>;
+}
+
+function resolveGroupFlex(children: readonly SplitNode[], sizes: readonly number[]): number[] {
+  return children.map((_child, index) => sizes[index] ?? 1);
 }
 
 function SplitNodeView({
@@ -802,11 +724,39 @@ function SplitNodeView({
   focusModeEnabled,
   onExitFocusMode,
 }: SplitNodeViewProps) {
+  const [groupContainerSize, setGroupContainerSize] = useState(0);
   const groupId = node.kind === "group" ? node.group.id : null;
   const groupDirection = node.kind === "group" ? node.group.direction : null;
 
   const storedGroupSizes = useWorkspaceLayoutStore((state) =>
     groupId ? state.splitSizesByWorkspace[workspaceKey]?.[groupId] : undefined,
+  );
+  const groupChildren = node.kind === "group" ? node.group.children : EMPTY_SPLIT_NODES;
+  const groupSizes =
+    storedGroupSizes ?? (node.kind === "group" ? node.group.sizes : EMPTY_SPLIT_SIZES);
+  const groupFlex = useMemo(
+    () => resolveGroupFlex(groupChildren, groupSizes),
+    [groupChildren, groupSizes],
+  );
+  const resizeFlex = useSharedValue(groupFlex);
+  useEffect(() => {
+    resizeFlex.value = groupFlex;
+  }, [resizeFlex, groupFlex]);
+  const previewResizeSplit = useCallback(
+    (_groupId: string, sizes: number[]) => {
+      resizeFlex.value = resolveGroupFlex(groupChildren, sizes);
+    },
+    [groupChildren, resizeFlex],
+  );
+  const handleGroupLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const nextSize =
+        groupDirection === "horizontal"
+          ? event.nativeEvent.layout.width
+          : event.nativeEvent.layout.height;
+      setGroupContainerSize((current) => (current === nextSize ? current : nextSize));
+    },
+    [groupDirection],
   );
 
   const groupStyle = useMemo(
@@ -864,7 +814,6 @@ function SplitNodeView({
     );
   }
 
-  const groupSizes = storedGroupSizes ?? node.group.sizes;
   const floors = resolveSplitFloors({
     direction: node.group.direction,
     childIsSidePane: node.group.children.map(
@@ -873,10 +822,14 @@ function SplitNodeView({
   });
 
   return (
-    <View style={groupStyle}>
+    <View style={groupStyle} onLayout={handleGroupLayout}>
       {node.group.children.map((child, index) => (
         <Fragment key={getNodeKey(child)}>
-          <SplitGroupChild flex={groupSizes[index] ?? 1} floorStyle={floors.childStyles[index]}>
+          <SplitGroupChild
+            resizeFlex={resizeFlex}
+            index={index}
+            floorStyle={floors.childStyles[index]}
+          >
             <SplitNodeView
               node={child}
               sidePaneId={sidePaneId}
@@ -923,13 +876,15 @@ function SplitNodeView({
           </SplitGroupChild>
           {index < node.group.children.length - 1 ? (
             <ResizeHandle
+              testID="workspace-side-panel-resize-handle"
               direction={node.group.direction}
               groupId={node.group.id}
               index={index}
               sizes={groupSizes}
+              containerSize={groupContainerSize}
+              onPreviewResizeSplit={previewResizeSplit}
               onResizeSplit={onResizeSplit}
               floors={floors.handle}
-              testID="workspace-side-panel-resize-handle"
             />
           ) : null}
         </Fragment>
@@ -938,7 +893,7 @@ function SplitNodeView({
   );
 }
 
-function SplitPaneView({
+const SplitPaneView = memo(function SplitPaneView({
   pane,
   paneRole,
   sidePanelLaunchers,
@@ -978,7 +933,7 @@ function SplitPaneView({
   focusModeEnabled,
   onExitFocusMode,
 }: SplitPaneViewProps) {
-  const { theme: _theme } = useUnistyles();
+  recordRenderProfileReasons(`SplitPaneView:${pane.id}`, ["render"]);
   const paneRef = useRef<View | null>(null);
   const stableOnFocusPane = useStableEvent(onFocusPane);
   const paneState = useMemo(
@@ -990,24 +945,7 @@ function SplitPaneView({
     [pane, uiTabs],
   );
   const paneTabs = useMemo(() => paneState.tabs.map((tab) => tab.descriptor), [paneState.tabs]);
-  const paneTabIds = useMemo(() => paneTabs.map((tab) => tab.tabId), [paneTabs]);
-  const modifiedPaneTabIds = useModifiedPanelTabIds({
-    serverId: normalizedServerId,
-    workspaceId: normalizedWorkspaceId,
-    tabIds: paneTabIds,
-  });
-  const tabDescriptorMap = useStableTabDescriptorMap(paneTabs);
   const activeTabDescriptor = paneState.activeTab?.descriptor ?? null;
-  const { mountedTabIds } = useMountedTabSet({
-    activeTabId: activeTabDescriptor?.tabId ?? null,
-    allTabIds: paneTabIds,
-    retainedTabIds: modifiedPaneTabIds,
-    cap: 3,
-  });
-  const mountedPaneTabIds = useMemo(
-    () => paneTabIds.filter((tabId) => mountedTabIds.has(tabId)),
-    [mountedTabIds, paneTabIds],
-  );
   const desktopTabRowItems = useMemo<WorkspaceDesktopTabRowItem[]>(
     () =>
       paneTabs.map((tab) => ({
@@ -1084,13 +1022,18 @@ function SplitPaneView({
 
   return (
     <RenderProfile id={`SplitPaneView:${pane.id}`}>
-      <View ref={paneRef} collapsable={false} style={styles.pane}>
+      <View
+        ref={paneRef}
+        collapsable={false}
+        style={styles.pane}
+        testID={`workspace-pane-${pane.id}`}
+      >
         {showSideTabRow ? (
           <WindowChromeSafeArea placement="inline" style={styles.paneTabs}>
             <TitlebarDragRegion />
             <WorkspaceDesktopTabsRow
               paneId={pane.id}
-              isFocused={isFocused}
+              isFocused={isFocused && isWorkspaceFocused}
               tabs={desktopTabRowItems}
               normalizedServerId={normalizedServerId}
               normalizedWorkspaceId={normalizedWorkspaceId}
@@ -1132,33 +1075,27 @@ function SplitPaneView({
         ) : null}
 
         <View style={styles.paneContent}>
-          {mountedPaneTabIds.length > 0
-            ? mountedPaneTabIds.map((tabId) => {
-                const tabDescriptor = tabDescriptorMap.get(tabId);
-                if (!tabDescriptor) {
-                  return null;
-                }
-
-                return (
-                  <MountedTabSlot
-                    key={tabId}
-                    tabDescriptor={tabDescriptor}
-                    isVisible={tabId === activeTabDescriptor?.tabId}
-                    isWorkspaceFocused={isWorkspaceFocused}
-                    isPaneFocused={isFocused && tabId === activeTabDescriptor?.tabId}
-                    paneId={pane.id}
-                    onFocusPane={stableOnFocusPane}
-                    buildPaneContentModel={buildPaneContentModel}
-                  />
-                );
-              })
-            : (renderPaneEmptyState?.(paneRole) ?? null)}
+          {paneTabs.length > 0 ? (
+            <WorkspacePanelHost
+              paneId={pane.id}
+              tabs={paneTabs}
+              activeTabId={activeTabDescriptor?.tabId ?? null}
+              normalizedServerId={normalizedServerId}
+              normalizedWorkspaceId={normalizedWorkspaceId}
+              isWorkspaceFocused={isWorkspaceFocused}
+              isPaneFocused={isFocused}
+              onFocusPane={stableOnFocusPane}
+              buildPaneContentModel={buildPaneContentModel}
+            />
+          ) : (
+            (renderPaneEmptyState?.(paneRole) ?? null)
+          )}
           <SplitDropZone paneId={pane.id} active={showDropZones} preview={dropPreview} />
         </View>
       </View>
     </RenderProfile>
   );
-}
+});
 
 function collectPanesById(node: SplitNode): Map<string, SplitPane> {
   const next = new Map<string, SplitPane>();
@@ -1211,6 +1148,7 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "column",
   },
   groupChild: {
+    flexShrink: 1,
     flexBasis: 0,
     minWidth: 0,
     minHeight: 0,
@@ -1241,6 +1179,8 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 0,
   },
   dragOverlayChip: {
+    backgroundColor: theme.colors.surface1,
+    borderColor: theme.colors.borderAccent,
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
@@ -1251,7 +1191,8 @@ const styles = StyleSheet.create((theme) => ({
     maxWidth: 200,
   },
   dragOverlayLabel: {
-    fontSize: theme.fontSize.sm,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
     flexShrink: 1,
   },
 }));

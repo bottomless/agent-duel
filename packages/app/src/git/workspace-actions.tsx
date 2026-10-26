@@ -1,7 +1,7 @@
 import { GitActionMenuItems, GitActionsSplitButton } from "@/git/actions-split-button";
 import { getGitActionMenuActions } from "@/git/actions-menu";
-import { useGitActions } from "@/git/use-actions";
 import { GIT_ACTION_ICONS } from "@/git/action-icons";
+import { useGitActions } from "@/git/use-actions";
 
 interface WorkspaceActionsProps {
   serverId: string;

@@ -3,7 +3,7 @@ import { arenaSizeErrorOr } from "./chat-too-large";
 import { ArenaStreamStatus } from "./stream-status";
 import { useArenaStream } from "./use-arena-stream";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Animated, {
   Easing,
@@ -33,14 +33,11 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useToast } from "@/contexts/toast-context";
 import { useSessionStore } from "@/stores/session-store";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
-import { WorkspaceOpenInEditorButton } from "@/screens/workspace/workspace-open-in-editor-button";
+import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
+import { resolveContentMaxWidth, useAppSettings } from "@/hooks/use-settings";
 import { toErrorMessage } from "@/utils/error-messages";
 import { useFetchQuery } from "@/data/query";
-import {
-  ARENA_MAX_CONTENT_WIDTH,
-  ARENA_PANE_BASIS_WIDTH,
-  MAX_CONTENT_WIDTH,
-} from "@/constants/layout";
+import { ARENA_MAX_CONTENT_WIDTH, ARENA_PANE_BASIS_WIDTH } from "@/constants/layout";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import {
   battleFailedToStart,
@@ -65,6 +62,7 @@ import { ArenaRunMeta } from "./run-meta";
 import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
 import { ArenaTransitionRow } from "./transition-row";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedChevronDown = withUnistyles(ChevronDown);
@@ -233,7 +231,7 @@ function BattleSummaryHeader({
   const showOutcome = !winner || item.gitApplication?.state === "discarded";
   const gitNotice = gitApplicationNotice(item);
   return (
-    <Pressable
+    <PressHighlight
       onPress={onToggle}
       style={styles.cardHeader}
       accessibilityRole="button"
@@ -262,7 +260,7 @@ function BattleSummaryHeader({
         <Text style={styles.conflictBadge}>{gitNotice.title}</Text>
       ) : null}
       {item.selectedEarly ? <Text style={styles.earlyBadge}>Early decision</Text> : null}
-    </Pressable>
+    </PressHighlight>
   );
 }
 
@@ -703,17 +701,18 @@ function DecidedBattleSummary({
   item: ArenaHistoryItem;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const cardMaxWidth = useSharedValue(MAX_CONTENT_WIDTH);
+  const contentMaxWidth = resolveContentMaxWidth(useAppSettings().settings);
+  const cardMaxWidth = useSharedValue(contentMaxWidth);
   const handleToggle = useCallback(() => {
     setExpanded((value) => {
       const next = !value;
-      cardMaxWidth.value = withTiming(next ? ARENA_MAX_CONTENT_WIDTH : MAX_CONTENT_WIDTH, {
+      cardMaxWidth.value = withTiming(next ? ARENA_MAX_CONTENT_WIDTH : contentMaxWidth, {
         duration: 260,
         easing: Easing.bezier(0.2, 0.7, 0.3, 1),
       });
       return next;
     });
-  }, [cardMaxWidth]);
+  }, [cardMaxWidth, contentMaxWidth]);
   const cardAnimatedStyle = useAnimatedStyle(() => ({ maxWidth: cardMaxWidth.value }));
 
   return (
@@ -736,7 +735,7 @@ function DecidedBattleSummary({
 const styles = StyleSheet.create((theme) => ({
   card: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
+    maxWidth: theme.contentMaxWidth,
     alignSelf: "center",
     marginVertical: theme.spacing[2],
     borderWidth: 1,
@@ -767,7 +766,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   identities: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   identityRow: {
     flexDirection: "row",
@@ -782,7 +781,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   earlyBadge: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     borderRadius: theme.borderRadius.full,
@@ -790,7 +789,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   conflictBadge: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
@@ -825,11 +824,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   omissionNoticeText: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   gitNoticeTitle: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
   },
   gitNoticeCopy: {
@@ -839,7 +838,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   gitNoticeDetail: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   collapsedNotice: {
     paddingHorizontal: theme.spacing[3],
@@ -879,7 +878,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   threadTitle: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.semibold,
   },
   threadTitleRow: {
@@ -905,7 +904,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   sectionTitle: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.semibold,
   },
   loadingRow: {
@@ -931,10 +930,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   muted: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   warning: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

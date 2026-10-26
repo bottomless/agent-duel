@@ -509,7 +509,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   title: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
   },
   // The ghost button's padding is the hit area; pulling the row back by it puts the first
@@ -545,7 +545,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   status: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   loading: {
     flexDirection: "row",
@@ -558,6 +558,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   error: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

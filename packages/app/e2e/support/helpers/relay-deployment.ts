@@ -60,7 +60,7 @@ export async function connectDaemonWebAppOnlyThroughRelay(
       localStorage.setItem("@paseo:daemon-registry", JSON.stringify([storedHost]));
       localStorage.setItem("@paseo:create-agent-preferences", JSON.stringify(preferences));
     },
-    { storedHost: host, preferences: buildCreateAgentPreferences(offer.serverId) },
+    { storedHost: host, preferences: buildCreateAgentPreferences() },
   );
 
   const relaySocketOpened = new Promise<void>((resolve) => {
@@ -92,7 +92,7 @@ export async function measureRelayRestartDuringStream(input: {
   agentTitle: string;
 }): Promise<RelayDeploymentMeasurements> {
   const { page, relay, agentTitle } = input;
-  const toast = page.getByTestId("agent-reconnecting-toast");
+  const toast = page.getByRole("alert").filter({ hasText: "Reconnecting to host" });
   const beforeOutage = await latestAssistantText(page);
   await waitForAssistantTextToGrow(page, beforeOutage);
 

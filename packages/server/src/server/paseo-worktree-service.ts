@@ -13,10 +13,9 @@ import {
 import {
   mapWorkspaceRelativeCwdToWorktree,
   rollbackCreatedPaseoWorktree,
-  copySourcePaseoConfigFile,
+  seedPaseoConfigFile,
   type WorktreeConfig,
 } from "../utils/worktree.js";
-import { normalizeBaseRefName } from "../utils/worktree-metadata.js";
 import type { WorktreeCreationIntent } from "./resolve-worktree-creation-intent.js";
 import { resolveFirstAgentPromptTitle } from "./agent/create-agent-title.js";
 import { runWithGitCommandPriority } from "../utils/run-git-command.js";
@@ -27,8 +26,11 @@ import {
 
 export interface CreatePaseoWorktreeInput extends CreateWorktreeCoreInput {
   pendingFork?: boolean;
+  workspaceId?: string;
   projectId?: string;
   title?: string;
+  background?: boolean;
+  callerWorkspaceId?: string;
 }
 
 export interface CreatePaseoWorktreeResult {
@@ -103,7 +105,7 @@ async function createPaseoWorktreeWithPriority(
       }
 
       if (createdWorktree.created) {
-        await copySourcePaseoConfigFile({
+        await seedPaseoConfigFile({
           sourceCwd: workspaceCwdPlan.inputCwd,
           targetCwd: workspaceCwd,
         });
@@ -111,14 +113,28 @@ async function createPaseoWorktreeWithPriority(
       const workspace = await deps.workspaceProvisioning.createWorkspaceForWorktree({
         sourceCwd: workspaceCwdPlan.inputCwd,
         projectId: input.projectId,
+        workspaceId: input.workspaceId,
         repoRoot: createdWorktree.repoRoot,
         cwd: workspaceCwd,
         worktreeRoot: createdWorktree.worktree.worktreePath,
         branch: createdWorktree.worktree.branchName || null,
-        baseBranch: resolveIntentBaseBranch(createdWorktree.intent),
+        baseBranch: createdWorktree.worktree.comparisonBaseRef,
         title: input.title?.trim() || resolveFirstAgentPromptTitle(input.firstAgentContext),
         expectsInitialAgent: Boolean(input.firstAgentContext),
         pendingFork: input.pendingFork,
+        background: input.background,
+        callerWorkspaceId: input.callerWorkspaceId,
+        ...(createdWorktree.intent.kind === "checkout-change-request" &&
+        createdWorktree.intent.headRepository
+          ? {
+              untrustedSource: {
+                kind: "change_request" as const,
+                forge: createdWorktree.intent.forge,
+                number: createdWorktree.intent.changeRequestNumber,
+                headRepository: createdWorktree.intent.headRepository,
+              },
+            }
+          : {}),
       });
       workspacePersisted = true;
 
@@ -139,7 +155,7 @@ async function createPaseoWorktreeWithPriority(
         {
           cwd: createdWorktree.repoRoot,
           worktreePath: createdWorktree.worktree.worktreePath,
-          ...(input.runSetup === false ? { teardownCwds: [] } : {}),
+          teardownCwds: [],
           paseoHome: input.paseoHome,
           worktreesBaseRoot: input.worktreesRoot,
         },
@@ -174,21 +190,4 @@ async function planWorkspaceCwdForWorktree(
     throw new Error(`Workspace cwd is outside its source worktree: ${normalizedInputCwd}`);
   }
   return { inputCwd: normalizedInputCwd, relativeWorkspaceCwd };
-}
-
-// The base branch is normalized to match worktree.json's baseRefName (origin/
-// stripped). checkout-branch worktrees have no distinct base, so they stay null.
-function resolveIntentBaseBranch(intent: WorktreeCreationIntent): string | null {
-  switch (intent.kind) {
-    case "branch-off":
-      return normalizeBaseRefName(intent.baseBranch);
-    case "checkout-change-request":
-      return normalizeBaseRefName(intent.baseRefName);
-    case "checkout-github-pr":
-      return normalizeBaseRefName(intent.baseRefName);
-    case "detached":
-      return normalizeBaseRefName(intent.baseRef);
-    case "checkout-branch":
-      return null;
-  }
 }

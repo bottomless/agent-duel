@@ -1,18 +1,17 @@
 import { useUnistyles } from "react-native-unistyles";
 import { getIsElectron, isWeb } from "@/constants/platform";
+import { DEFAULT_CONTENT_MAX_WIDTH } from "@/styles/theme";
 
 export const FOOTER_HEIGHT = 75;
 
 // Shared header inner height (excluding safe area insets and border)
 // Used by both agent header (ScreenHeader) and explorer sidebar header
 // This ensures both headers have the same visual height
-export const HEADER_INNER_HEIGHT = 48;
+export const HEADER_INNER_HEIGHT = 36;
 export const HEADER_INNER_HEIGHT_MOBILE = 56;
 export const WORKSPACE_SECONDARY_HEADER_HEIGHT = 36;
 export const HEADER_TOP_PADDING_MOBILE = 8;
 
-// Max width for chat content (stream view, input area, new agent form)
-export const MAX_CONTENT_WIDTH = 820;
 export const COMPACT_FORM_FACTOR_WIDTH = 500;
 
 // Floors for the workspace chat and its side panel, in the shape of the Codex app's panels. The
@@ -36,7 +35,7 @@ export const WORKSPACE_BOTTOM_PANEL_MAX_SHARE = 0.5;
 // would run longer than the chat ever lets prose run, so the card is centered
 // at this width with its borders instead. A 14" MacBook Pro at full screen
 // (1512 wide) never reaches it.
-export const ARENA_MAX_CONTENT_WIDTH = 2 * MAX_CONTENT_WIDTH;
+export const ARENA_MAX_CONTENT_WIDTH = 2 * DEFAULT_CONTENT_MAX_WIDTH;
 
 // Flex basis for one agent pane in a battle comparison. Panes are laid out as a
 // wrapping row, so two of them share a line only while `2 * basis + gap` fits;
@@ -70,18 +69,18 @@ export const SETTINGS_DESKTOP_SPLIT_MIN_WIDTH =
 export const DESKTOP_TRAFFIC_LIGHT_WIDTH = 78;
 export const DESKTOP_TRAFFIC_LIGHT_HEIGHT = 45;
 
-// Windows/Linux window controls (minimize/maximize/close) — top-right. The width is the
-// fallback until the window controls overlay reports the real one: Windows draws its controls
-// 136px wide, Linux 96px, and a fixed 140 left Linux headers 44px short of the controls.
-export const DESKTOP_WINDOW_CONTROLS_WIDTH = 140;
-export const DESKTOP_WINDOW_CONTROLS_HEIGHT = 48;
-// Space kept between the reported controls and the app's own buttons; 136 + 4 keeps Windows at 140.
-export const DESKTOP_WINDOW_CONTROLS_GAP = 4;
+// Custom desktop window controls (minimize/maximize/close) — top-right
+export const DESKTOP_WINDOW_CONTROLS_HEIGHT = HEADER_INNER_HEIGHT;
 
 export {
   getIsElectron as getIsElectronRuntime,
   getIsElectronMac as getIsElectronRuntimeMac,
 } from "./platform";
+
+/** Below 600 points, sidebars overlay the workspace. Medium and wider layouts dock them. */
+export function isCompactBreakpoint(breakpoint: string | undefined): boolean {
+  return breakpoint === "xs" || breakpoint === "sm";
+}
 
 /**
  * Reactive hook — re-renders the component when the breakpoint changes.
@@ -89,7 +88,7 @@ export {
  */
 export function useIsCompactFormFactor(): boolean {
   const { rt } = useUnistyles();
-  return rt.breakpoint === "xs" || rt.breakpoint === "sm";
+  return isCompactBreakpoint(rt.breakpoint);
 }
 
 export interface HeaderMetrics {

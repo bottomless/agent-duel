@@ -7,6 +7,7 @@ import type {
 } from "@/keyboard/actions";
 import {
   chordStringToShortcutKeys,
+  isModifierKeyCode,
   type KeyCombo,
   parseChordString,
 } from "@/keyboard/shortcut-string";
@@ -171,6 +172,9 @@ export const SHORTCUT_HELP_ROW_ORDER: Record<ShortcutSectionId, readonly string[
   ],
   "tabs-panes": [
     "workspace-terminal-new",
+    "workspace-tab-target-browser",
+    "workspace-tab-target-changes",
+    "workspace-tab-target-files",
     "workspace-tab-close-current",
     "workspace-tab-jump-index",
     "workspace-tab-prev",
@@ -190,6 +194,9 @@ const SHORTCUT_HELP_LABEL_KEYS: Record<string, string> = {
   "new-workspace": "settings.shortcuts.help.newWorkspace",
   "switch-project": "settings.shortcuts.help.switchProject",
   "archive-workspace": "settings.shortcuts.help.archiveWorkspace",
+  "workspace-tab-target-browser": "workspace.tabs.actions.newBrowser",
+  "workspace-tab-target-changes": "workspace.tabs.actions.changes",
+  "workspace-tab-target-files": "workspace.tabs.actions.files",
   "workspace-tab-close-current": "settings.shortcuts.help.closeCurrentTab",
   "workspace-jump-index": "settings.shortcuts.help.jumpToWorkspace",
   "workspace-tab-jump-index": "settings.shortcuts.help.jumpToTab",
@@ -354,6 +361,74 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
   },
 
   // --- Tab management ---
+  {
+    id: "workspace-tab-target-browser-cmd-shift-b-mac",
+    action: "workspace.tab.target.browser",
+    combo: "Cmd+Shift+B",
+    when: { mac: true, commandCenter: false },
+    help: {
+      id: "workspace-tab-target-browser",
+      section: "tabs-panes",
+      label: "New browser",
+    },
+  },
+  {
+    id: "workspace-tab-target-browser-ctrl-shift-b-non-mac",
+    action: "workspace.tab.target.browser",
+    combo: "Ctrl+Shift+B",
+    when: { mac: false, commandCenter: false, terminal: false },
+    help: {
+      id: "workspace-tab-target-browser",
+      section: "tabs-panes",
+      label: "New browser",
+    },
+  },
+  {
+    // Keep the binding id stable so saved overrides from the former Cmd+Shift+C default survive.
+    id: "workspace-tab-target-changes-cmd-shift-c-mac",
+    action: "workspace.tab.target.changes",
+    combo: "Cmd+Shift+G",
+    when: { mac: true, commandCenter: false },
+    help: {
+      id: "workspace-tab-target-changes",
+      section: "tabs-panes",
+      label: "Changes",
+    },
+  },
+  {
+    // Keep the binding id stable so saved overrides from the former Ctrl+Shift+C default survive.
+    id: "workspace-tab-target-changes-ctrl-shift-c-non-mac",
+    action: "workspace.tab.target.changes",
+    combo: "Ctrl+Shift+G",
+    when: { mac: false, commandCenter: false, terminal: false },
+    help: {
+      id: "workspace-tab-target-changes",
+      section: "tabs-panes",
+      label: "Changes",
+    },
+  },
+  {
+    id: "workspace-tab-target-files-cmd-shift-e-mac",
+    action: "workspace.tab.target.files",
+    combo: "Cmd+Shift+E",
+    when: { mac: true, commandCenter: false },
+    help: {
+      id: "workspace-tab-target-files",
+      section: "tabs-panes",
+      label: "Files",
+    },
+  },
+  {
+    id: "workspace-tab-target-files-ctrl-shift-e-non-mac",
+    action: "workspace.tab.target.files",
+    combo: "Ctrl+Shift+E",
+    when: { mac: false, commandCenter: false, terminal: false },
+    help: {
+      id: "workspace-tab-target-files",
+      section: "tabs-panes",
+      label: "Files",
+    },
+  },
   {
     id: "workspace-tab-close-current-cmd-w-mac",
     action: "workspace.tab.close.current",
@@ -626,7 +701,6 @@ const SHORTCUT_BINDINGS: readonly ShortcutBinding[] = [
       label: "Close pane",
     },
   },
-
   // --- New terminal ---
   {
     id: "workspace-terminal-new-cmd-shift-t-mac",
@@ -961,6 +1035,21 @@ export const DEFAULT_BINDINGS: readonly ParsedShortcutBinding[] =
 
 export type ShortcutOverrides = Record<string, string | null>;
 
+/** Keep number-group actions bound to all nine indices when recording a new modifier. */
+export function normalizeCapturedShortcutCombo(bindingId: string, combo: string): string {
+  const binding = DEFAULT_BINDINGS.find((candidate) => candidate.id === bindingId);
+  if (binding?.payload?.type !== "index") return combo;
+  return combo.replace(/(^|\+)[1-9]$/, "$1Digit");
+}
+
+/** Index navigation needs a final number; earlier combos may be any chord prefix. */
+export function isShortcutCaptureComplete(bindingId: string, combos: readonly string[]): boolean {
+  const lastCombo = combos.at(-1);
+  if (!lastCombo) return false;
+  const binding = DEFAULT_BINDINGS.find((candidate) => candidate.id === bindingId);
+  return binding?.payload?.type !== "index" || /(^|\+)(Digit|[1-9])$/.test(lastCombo);
+}
+
 export function buildEffectiveBindings(overrides: ShortcutOverrides): ParsedShortcutBinding[] {
   return DEFAULT_BINDINGS.map(function (binding) {
     const override = overrides[binding.id];
@@ -981,12 +1070,31 @@ export function buildEffectiveBindings(overrides: ShortcutOverrides): ParsedShor
     if (binding.repeat === false && lastCombo) {
       lastCombo.repeat = false;
     }
+    const when = withoutDefaultComboGuard(binding.when);
     if (!binding.help?.defaultDisplayKeys) {
-      return { ...binding, combo: override, parsedChord };
+      return { ...binding, combo: override, parsedChord, when };
     }
     const { defaultDisplayKeys: _defaultDisplayKeys, ...help } = binding.help;
-    return { ...binding, combo: override, parsedChord, help };
+    return { ...binding, combo: override, parsedChord, when, help };
   });
+}
+
+/**
+ * `editable: false` is a statement about a binding's *default* combo, not
+ * about its action: the pane-focus defaults carry it so that Cmd+Shift+Arrow
+ * keeps selecting text in a field instead of moving pane focus. An override
+ * replaces that combo, so the guard no longer describes anything and has to
+ * go, the same way `defaultDisplayKeys` does — otherwise the combo the user
+ * picked in Settings silently refuses to fire wherever they are typing.
+ *
+ * The other guards stay. Platform, command center, terminal and focus scope
+ * are properties of the action and of where it makes sense, and none of them
+ * change because the keys did.
+ */
+function withoutDefaultComboGuard(when: ShortcutWhen | undefined): ShortcutWhen | undefined {
+  if (when?.editable !== false) return when;
+  const { editable: _editable, ...rest } = when;
+  return rest;
 }
 
 // --- Matching engine ---
@@ -1016,6 +1124,12 @@ function matchesKeyOrCode(combo: KeyCombo, event: KeyboardShortcutInput): boolea
   if (eventKey === combo.key) return true;
   if (combo.shift === true && combo.shiftedKey !== undefined && eventKey === combo.shiftedKey) {
     return true;
+  }
+  // Recording an unsupported letter (for example Cyrillic и on KeyB)
+  // stores its physical A-Z key. Dispatch must accept that same key without
+  // giving Latin layouts such as Dvorak a second physical-key binding.
+  if (/^[a-z]$/.test(combo.key) && /^\p{Letter}$/u.test(event.key) && !/^[a-z]$/.test(eventKey)) {
+    return event.code === combo.code;
   }
   // macOS rewrites event.key when Option is held (Option+T -> "†",
   // Option+[ -> "“"), so Alt-bound letter / bracket bindings can only
@@ -1269,6 +1383,13 @@ export function resolveKeyboardShortcut(input: {
   preventDefault: boolean;
 } {
   const { event, context, chordState, onChordReset, bindings = DEFAULT_BINDINGS } = input;
+  // Pressing a modifier emits its own keydown before the combo that holds it,
+  // so a chord waiting on `Ctrl+J` sees a bare `Control` first. That keydown
+  // matches no combo, and resolving it would drop the chord back to its first
+  // step. It decides nothing: leave the chord where it is.
+  if (isModifierKeyCode(event.code)) {
+    return { match: null, nextChordState: chordState, preventDefault: false };
+  }
   if (chordState.step === 0) {
     return resolveInitialChordStep({ event, context, chordState, onChordReset, bindings });
   }

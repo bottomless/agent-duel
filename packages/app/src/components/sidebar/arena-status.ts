@@ -1,6 +1,7 @@
 import { getWorkspaceStateBucketPriority } from "@getpaseo/protocol/agent-state-bucket";
 import { arenaActivityStatus } from "@getpaseo/protocol/arena/activity";
-import { STATUS_BUCKET_LABELS } from "@/hooks/sidebar-status-view-model";
+import { getStatusBucketLabel } from "@/hooks/sidebar-status-view-model";
+import { i18n } from "@/i18n/i18next";
 import type { SidebarWorkspaceEntry } from "@/hooks/sidebar-workspaces-view-model";
 
 const WORKSPACE_STATUS_ICONS = {
@@ -27,5 +28,5 @@ export function workspaceBattleStatus(
     return status;
   const bucket = workspace.statusBucket;
   const icon = WORKSPACE_STATUS_ICONS[bucket];
-  return { bucket, label: STATUS_BUCKET_LABELS[bucket], icon } as const;
+  return { bucket, label: getStatusBucketLabel(bucket, i18n.t), icon } as const;
 }

@@ -1,5 +1,7 @@
+import { warmMetro } from "./metro-warmup.mjs";
+export { warmMetro } from "./metro-warmup.mjs";
 import { spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import { killProcessTree } from "./helpers/spawn-node";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import net from "node:net";
@@ -16,7 +18,8 @@ export interface WaitForServerOptions {
 type ServerProbe = (host: string, port: number) => Promise<void>;
 
 const RESERVED_LOCAL_PORTS = new Set([
-  6767, // Developer daemon.
+  6767, // Installed daemon.
+  6768, // Developer daemon.
   61680, // OpenCode's default local server.
 ]);
 
@@ -122,58 +125,17 @@ export async function waitForMetro(port: number, options: WaitForServerOptions):
   await waitForServer(port, options, probeMetro);
 }
 
-export async function warmMetro(port: number): Promise<void> {
-  const origin = `http://127.0.0.1:${port}`;
-  const documentResponse = await fetch(origin, { signal: AbortSignal.timeout(120_000) });
-  if (!documentResponse.ok) {
-    throw new Error(`Metro document warmup failed with HTTP ${documentResponse.status}`);
-  }
-  const document = await documentResponse.text();
-  const scriptSources = [...document.matchAll(/<script[^>]+src=["']([^"']+)["']/g)].map(
-    (match) => match[1],
-  );
-  if (scriptSources.length === 0) {
-    throw new Error("Metro document warmup found no scripts to compile");
-  }
-  for (const source of scriptSources) {
-    const scriptUrl = new URL(source, origin);
-    if (scriptUrl.origin !== origin) continue;
-    const response = await fetch(scriptUrl, { signal: AbortSignal.timeout(120_000) });
-    if (!response.ok) {
-      throw new Error(
-        `Metro bundle warmup failed for ${scriptUrl.pathname}: HTTP ${response.status}`,
-      );
-    }
-    await response.arrayBuffer();
-  }
-}
-
-async function stopProcess(child: ChildProcess | null): Promise<void> {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      once(child, "exit"),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(() => {
-          if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-          resolve();
-        }, 5_000);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
-
 function startMetro(port: number, buffer: ReturnType<typeof createLineBuffer>): ChildProcess {
   const appDir = path.resolve(__dirname, "../..");
-  const child = spawn("npx", ["expo", "start", "--web", "--port", String(port)], {
+  const expoCli = require.resolve("expo/bin/cli");
+  // Spawns Node directly to bypass Windows .cmd shim execution restrictions without shell: true.
+  const child = spawn(process.execPath, [expoCli, "start", "--web", "--port", String(port)], {
     cwd: appDir,
     env: {
       ...process.env,
       BROWSER: "none",
+      // Automation never opens native DevTools or installs its desktop shell.
+      EXPO_UNSTABLE_HEADLESS: "1",
       ...(process.env.E2E_DESKTOP_RUNTIME === "1" ? { PASEO_WEB_PLATFORM: "electron" } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -196,6 +158,12 @@ async function loadHarnessEnvironment(repoRoot: string): Promise<void> {
 }
 
 export default async function globalSetup() {
+  if (process.env.PASEO_REPLICA_CACHE_MEASUREMENT === "1") {
+    if (!process.env.PASEO_REPLICA_CACHE_MEASUREMENT_URL) {
+      throw new Error("PASEO_REPLICA_CACHE_MEASUREMENT_URL must be set for live measurement");
+    }
+    return;
+  }
   const repoRoot = path.resolve(__dirname, "../../../..");
   await loadHarnessEnvironment(repoRoot);
 
@@ -216,11 +184,11 @@ export default async function globalSetup() {
     console.log(`[e2e] Metro warmed on port ${metroPort}`);
 
     return async () => {
-      await stopProcess(metroProcess);
+      await killProcessTree(metroProcess);
       console.log("[e2e] Metro stopped");
     };
   } catch (error) {
-    await stopProcess(metroProcess);
+    await killProcessTree(metroProcess);
     throw error;
   }
 }

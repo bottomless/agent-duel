@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
-import { normalizeAgentSnapshot } from "./agent-snapshots";
+import { normalizeAgentSnapshot, projectAgentSnapshot } from "./agent-snapshots";
 
 function createSnapshot(
   input: Partial<Omit<AgentSnapshotPayload, "labels">> & {
@@ -36,6 +36,18 @@ function createSnapshot(
 }
 
 describe("normalizeAgentSnapshot", () => {
+  it("round-trips identified active turns through the canonical snapshot boundary", () => {
+    const snapshot = createSnapshot({
+      status: "running",
+      activeTurn: { turnId: "turn-1", startedAt: "2026-07-31T12:00:00.000Z" },
+    });
+
+    expect(projectAgentSnapshot(normalizeAgentSnapshot(snapshot, "server-1"))).toMatchObject({
+      status: "running",
+      activeTurn: snapshot.activeTurn,
+    });
+  });
+
   it("normalizes identified and legacy active turns at the snapshot boundary", () => {
     const startedAt = "2026-07-31T12:00:00.000Z";
     expect(
@@ -45,15 +57,25 @@ describe("normalizeAgentSnapshot", () => {
           activeTurn: { turnId: "turn-1", startedAt },
         }),
         "server-1",
-      ).activeTurn,
-    ).toEqual({ turnId: "turn-1", startedAt: new Date(startedAt) });
+      ).turn,
+    ).toEqual({
+      phase: "open",
+      turnId: "turn-1",
+      startedAt: new Date(startedAt),
+      cancellationRequestId: null,
+    });
 
     expect(
       normalizeAgentSnapshot(
         createSnapshot({ status: "running", lastUserMessageAt: startedAt }),
         "server-1",
-      ).activeTurn,
-    ).toEqual({ turnId: null, startedAt: new Date(startedAt) });
+      ).turn,
+    ).toEqual({
+      phase: "open",
+      turnId: null,
+      startedAt: new Date(startedAt),
+      cancellationRequestId: null,
+    });
   });
 
   it("derives parentAgentId from the parent label while preserving labels", () => {

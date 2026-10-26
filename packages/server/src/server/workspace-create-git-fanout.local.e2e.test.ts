@@ -145,13 +145,25 @@ async function startObservedFixture(siblingCount: number): Promise<ReturnType<ty
     appVersion: "0.3.0-beta.2",
   });
   await client.connect();
-  await client.fetchAgents({ subscribe: { subscriptionId: "agents" } });
+  await client.fetchAgents({ subscribe: {} });
   await client.fetchWorkspaces({
     page: { limit: 200 },
-    subscribe: { subscriptionId: "workspaces" },
+    subscribe: {},
   });
   return fixture;
 }
+
+test("quiet observed workspaces spawn no git commands beyond the old self-heal interval", async () => {
+  await startObservedFixture(2);
+  await settleGitCommands();
+
+  startGitCommandMetrics();
+  await new Promise((resolve) => setTimeout(resolve, 61_000));
+  await waitForGitCommandMetricsIdle({ quietMs: 1_500, timeoutMs: 5_000 });
+  const idle = stopGitCommandMetrics();
+
+  expect(idle.submissions).toEqual([]);
+}, 90_000);
 
 interface GitRuntimeExpectation {
   currentBranch?: string;
@@ -315,11 +327,10 @@ test.each([false, true])(
     stopGitCommandMetrics();
 
     if (hasBaseDiffSubscription) {
-      await client?.subscribeCheckoutDiff(
-        fixture.siblingWorktrees[0] ?? "",
-        { mode: "base", baseRef: "main" },
-        { subscriptionId: "base-diff" },
-      );
+      await client?.observeCheckoutDiff(fixture.siblingWorktrees[0] ?? "", {
+        mode: "base",
+        baseRef: "main",
+      }).ready;
       startGitCommandMetrics();
       await waitForGitCommandMetricsIdle({ quietMs: 1_500, timeoutMs: 30_000 });
       stopGitCommandMetrics();
@@ -377,21 +388,21 @@ test.each([1, 2, 10])(
     const creation = stopGitCommandMetrics();
 
     expect(response?.workspace?.name).toBe("created-during-measurement");
-    expect(creation.submitted).toBe(90);
     expect(countGitOperations(creation.submissions)).toEqual({
       branch: 4,
-      config: 19,
-      diff: 2,
-      "for-each-ref": 6,
-      "ls-files": 3,
-      "merge-base": 2,
-      "rev-list": 2,
-      "rev-parse": 34,
-      "show-ref": 6,
-      status: 6,
+      config: 22,
+      diff: 3,
+      "for-each-ref": 7,
+      "ls-files": 4,
+      "merge-base": 3,
+      "rev-list": 3,
+      "rev-parse": 38,
+      "show-ref": 7,
+      status: 7,
       "symbolic-ref": 4,
-      worktree: 2,
+      worktree: 1,
     });
+    expect(creation.submitted).toBe(103);
     const existingWorktrees = new Set(fixture.siblingWorktrees.map((cwd) => realpathSync(cwd)));
     expect(
       creation.submissions.filter((command) => existingWorktrees.has(realpathSync(command.cwd))),
@@ -415,12 +426,12 @@ test("refreshes every workspace that depends on a changed shared base ref", asyn
   await waitForGitCommandMetricsIdle({ quietMs: 1_500, timeoutMs: 30_000 });
   stopGitCommandMetrics();
 
-  const subscriptionId = "shared-base-ref-diff";
-  const initial = await client?.subscribeCheckoutDiff(
-    changedWorktree,
-    { mode: "base", baseRef: "main" },
-    { subscriptionId },
-  );
+  const subscription = client!.observeCheckoutDiff(changedWorktree, {
+    mode: "base",
+    baseRef: "main",
+  });
+  const initial = await subscription.ready;
+  const subscriptionId = initial.subscriptionId;
   expect(initial?.files.map((file) => file.path)).toEqual(["README.md"]);
   startGitCommandMetrics();
   await waitForGitCommandMetricsIdle({ quietMs: 1_500, timeoutMs: 30_000 });
@@ -448,7 +459,7 @@ test("refreshes every workspace that depends on a changed shared base ref", asyn
     status: 2,
     "symbolic-ref": 3,
   });
-  client?.unsubscribeCheckoutDiff(subscriptionId);
+  await subscription.release();
 }, 120_000);
 
 test("records the Git command ledger for repository metadata business rules", async () => {
@@ -615,7 +626,7 @@ test("workspace archive is admitted while 52 sibling observations hydrate", asyn
     appVersion: "0.3.0-beta.2",
   });
   await client.connect();
-  await client.fetchAgents({ subscribe: { subscriptionId: "agents" } });
+  await client.fetchAgents({ subscribe: {} });
   const created = await client.createWorkspace({
     source: {
       kind: "worktree",
@@ -632,7 +643,7 @@ test("workspace archive is admitted while 52 sibling observations hydrate", asyn
 
   await client.fetchWorkspaces({
     page: { limit: 200 },
-    subscribe: { subscriptionId: "workspaces" },
+    subscribe: {},
   });
   expect(snapshotGitCommandRuntimeMetrics().pending).toBeGreaterThan(0);
   const archiveStartedAt = Date.now();
@@ -658,10 +669,10 @@ test("workspace create is admitted while 100 sibling observations hydrate", asyn
     appVersion: "0.3.0-beta.2",
   });
   await client.connect();
-  await client.fetchAgents({ subscribe: { subscriptionId: "agents" } });
+  await client.fetchAgents({ subscribe: {} });
   const snapshot = await client.fetchWorkspaces({
     page: { limit: 200 },
-    subscribe: { subscriptionId: "workspaces" },
+    subscribe: {},
   });
   expect(snapshot.entries).toHaveLength(SIBLING_COUNT);
   expect(snapshotGitCommandRuntimeMetrics().pending).toBeGreaterThan(0);

@@ -4,6 +4,7 @@ import type {
   AgentFeature,
   AgentProvider,
 } from "@getpaseo/protocol/agent-types";
+import type { ViewedTimelineStatus } from "@/timeline/viewed-timeline-sync";
 
 export interface AgentScreenAgent {
   serverId: string;
@@ -49,7 +50,8 @@ export interface AgentScreenMachineInput {
   isArchivingCurrentAgent: boolean;
   isHistorySyncing: boolean;
   needsAuthoritativeSync: boolean;
-  visibilityCatchUpStatus: "ready" | "pending" | "error";
+  visibilityCatchUpStatus: ViewedTimelineStatus;
+  visibilityCatchUpError: string | null;
   continuity: AgentScreenContinuity;
   hasHydratedHistoryBefore: boolean;
 }
@@ -95,9 +97,9 @@ export type AgentScreenReadySyncState =
   | { status: "reconnecting" }
   | {
       status: "catching_up";
-      ui: "overlay" | "silent";
+      ui: "overlay" | "status" | "silent";
     }
-  | { status: "sync_error" };
+  | { status: "sync_error"; isRetrying: boolean };
 
 export type AgentScreenViewState =
   | {
@@ -129,6 +131,13 @@ function updateInitialSyncFailureMemory(args: {
     args.nextMemory.hadInitialSyncFailure = false;
   }
   if (args.input.missingAgentState.kind === "error" && !args.input.hasHydratedHistoryBefore) {
+    args.nextMemory.hadInitialSyncFailure = true;
+  }
+  if (
+    args.input.visibilityCatchUpStatus === "error" &&
+    args.input.visibilityCatchUpError &&
+    !args.input.hasHydratedHistoryBefore
+  ) {
     args.nextMemory.hadInitialSyncFailure = true;
   }
 }
@@ -168,9 +177,9 @@ function resolveCatchingUpUi(args: {
   isVisibilityCatchUpPending: boolean;
   hasHydratedHistoryBefore: boolean;
   hadInitialSyncFailure: boolean;
-}): "overlay" | "silent" {
+}): "overlay" | "status" | "silent" {
   if (args.hasSeededFirstPaint) return "silent";
-  if (args.hasHydratedHistoryBefore) return "silent";
+  if (args.hasHydratedHistoryBefore) return "status";
   if (args.isVisibilityCatchUpPending) return "overlay";
   if (args.hadInitialSyncFailure) return "silent";
   return "overlay";
@@ -188,10 +197,10 @@ function resolveAgentScreenSync(args: {
     return { status: "reconnecting" };
   }
   if (input.missingAgentState.kind === "error") {
-    return { status: "sync_error" };
+    return { status: "sync_error", isRetrying: input.visibilityCatchUpStatus === "retrying" };
   }
-  if (input.visibilityCatchUpStatus === "error") {
-    return { status: "sync_error" };
+  if (input.visibilityCatchUpStatus === "error" || input.visibilityCatchUpStatus === "retrying") {
+    return { status: "sync_error", isRetrying: input.visibilityCatchUpStatus === "retrying" };
   }
   if (
     input.visibilityCatchUpStatus === "pending" ||
@@ -245,6 +254,21 @@ export function deriveAgentScreenViewState({
       state: {
         tag: "error",
         message: input.missingAgentState.message,
+      },
+      memory: nextMemory,
+    };
+  }
+
+  if (
+    input.visibilityCatchUpStatus === "error" &&
+    input.visibilityCatchUpError &&
+    !input.hasHydratedHistoryBefore &&
+    !nextMemory.hasRenderedReady
+  ) {
+    return {
+      state: {
+        tag: "error",
+        message: input.visibilityCatchUpError,
       },
       memory: nextMemory,
     };

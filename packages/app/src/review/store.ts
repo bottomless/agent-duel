@@ -1,37 +1,30 @@
 import { useMemo } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import type { ComposerAttachment } from "@/attachments/types";
 import type { ParsedDiffFile } from "@/git/use-diff-query";
 import {
   addCommentToState,
   clearReviewInState,
   deleteCommentFromState,
-  type DiffModeOverride,
-  expireStaleDiffModeOverridesInState,
   normalizePersistedState,
-  resolveDiffMode,
   type ReviewDraftComment,
   type ReviewDraftMode,
   type ReviewDraftSide,
   type ReviewDraftStoreState,
   serializeReviewDraftState,
-  setDiffModeOverrideInState,
+  SerializedReviewDraftStateSchema,
   updateCommentInState,
 } from "@/review/state";
 import { generateMessageId } from "@/types/stream";
 import { buildNumberedDiffHunks, type NumberedDiffLine } from "@/utils/diff-layout";
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
+import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 
-export type {
-  DiffModeOverride,
-  ReviewDraftComment,
-  ReviewDraftMode,
-  ReviewDraftSide,
-} from "@/review/state";
+export type { ReviewDraftComment, ReviewDraftMode, ReviewDraftSide } from "@/review/state";
 
-// v2 dropped persisted activeModesByScope (diff mode overrides are in-memory only).
+// v2 dropped the legacy persisted activeModesByScope field.
 const STORE_VERSION = 2;
 const CONTEXT_RADIUS = 3;
 const EMPTY_REVIEW_DRAFT_COMMENTS: ReviewDraftComment[] = [];
@@ -49,7 +42,7 @@ export interface BuildReviewDraftKeyInput {
   ignoreWhitespace: boolean;
 }
 
-export type BuildReviewDraftScopeKeyInput = Omit<BuildReviewDraftKeyInput, "mode">;
+type BuildReviewDraftScopeKeyInput = Omit<BuildReviewDraftKeyInput, "mode">;
 
 export interface BuildReviewAttachmentSnapshotInput {
   reviewDraftKey: string;
@@ -64,7 +57,6 @@ export type ReviewDraftCommentInput = Omit<ReviewDraftComment, "id" | "createdAt
   Partial<Pick<ReviewDraftComment, "id" | "createdAt" | "updatedAt">>;
 
 interface ReviewDraftStoreActions {
-  setDiffModeOverride: (input: { scopeKey: string; override: DiffModeOverride }) => void;
   addComment: (input: { key: string; comment: ReviewDraftCommentInput }) => ReviewDraftComment;
   updateComment: (input: {
     key: string;
@@ -110,10 +102,6 @@ function buildReviewDraftScopeParts(input: BuildReviewDraftScopeKeyInput): strin
   ];
 }
 
-export function buildReviewDraftScopeKey(input: BuildReviewDraftScopeKeyInput): string {
-  return buildReviewDraftScopeParts(input).join(":");
-}
-
 export function buildReviewDraftKey(input: BuildReviewDraftKeyInput): string {
   const [prefix, serverPart, workspacePart, basePart, whitespacePart] =
     buildReviewDraftScopeParts(input);
@@ -139,10 +127,6 @@ export const useReviewDraftStore = create<ReviewDraftStore>()(
   persist(
     (set) => ({
       drafts: {},
-      diffModeOverrides: {},
-      setDiffModeOverride: (input) => {
-        set((state) => setDiffModeOverrideInState(state, input));
-      },
       addComment: ({ key, comment }) => {
         const nextComment = createDraftComment(comment);
         set((state) => addCommentToState(state, { key, comment: nextComment }));
@@ -168,7 +152,7 @@ export const useReviewDraftStore = create<ReviewDraftStore>()(
     {
       name: "@paseo:review-draft-store",
       version: STORE_VERSION,
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createValidatedPersistStorage(AsyncStorage, SerializedReviewDraftStateSchema),
       partialize: (state) => serializeReviewDraftState(state),
       migrate: async (state) => normalizePersistedState(state),
     },
@@ -281,20 +265,6 @@ export function useReviewDraftComments(key: string): ReviewDraftComment[] {
   return useReviewDraftStore((state) => state.drafts[key] ?? EMPTY_REVIEW_DRAFT_COMMENTS);
 }
 
-export function useSetDiffModeOverride(): ReviewDraftStoreActions["setDiffModeOverride"] {
-  return useReviewDraftStore((state) => state.setDiffModeOverride);
-}
-
-// Non-React entry point: called from the checkout-status data boundary, where dirty-state
-// changes enter the app regardless of which screens are mounted.
-export function expireStaleDiffModeOverrides(input: {
-  serverId: string;
-  cwd: string;
-  isDirty: boolean;
-}): void {
-  useReviewDraftStore.setState((state) => expireStaleDiffModeOverridesInState(state, input));
-}
-
 export function useClearReviewDraft(): ReviewDraftStoreActions["clearReview"] {
   return useReviewDraftStore((state) => state.clearReview);
 }
@@ -311,7 +281,7 @@ export function getReviewDraftComments(key: string): ReviewDraftComment[] | unde
 }
 
 export function resetReviewDraftStore(): void {
-  useReviewDraftStore.setState({ drafts: {}, diffModeOverrides: {} });
+  useReviewDraftStore.setState({ drafts: {} });
 }
 
 export function useReviewDraftCommentsForAttachment(input: {
@@ -327,20 +297,6 @@ export function useReviewDraftCommentsForAttachment(input: {
 
 export function useReviewCommentCount(key: string): number {
   return useReviewDraftStore((state) => state.drafts[key]?.length ?? 0);
-}
-
-export function useResolvedDiffMode(input: {
-  scopeKey: string;
-  hasUncommittedChanges: boolean;
-  cleanFallbackMode?: ReviewDraftMode;
-}): ReviewDraftMode {
-  return useReviewDraftStore((state) =>
-    resolveDiffMode({
-      override: state.diffModeOverrides[input.scopeKey],
-      hasUncommittedChanges: input.hasUncommittedChanges,
-      cleanFallbackMode: input.cleanFallbackMode,
-    }),
-  );
 }
 
 export function useReviewAttachmentSnapshot(input: {
@@ -363,4 +319,44 @@ export function useReviewAttachmentSnapshot(input: {
       }),
     [comments, input.key, input.cwd, input.mode, input.baseRef, input.diffFiles],
   );
+}
+
+/** Acknowledgement removes only the versions included in that submission. */
+export function clearSentReviewDraftComments(input: {
+  key: string;
+  comments: readonly ReviewDraftComment[];
+}): void {
+  const sentById = new Map(input.comments.map((comment) => [comment.id, comment]));
+  useReviewDraftStore.setState((state) => {
+    const current = state.drafts[input.key];
+    if (!current) return state;
+    const remaining = current.filter((comment) => {
+      const sent = sentById.get(comment.id);
+      return !sent || sent.updatedAt !== comment.updatedAt || sent.body !== comment.body;
+    });
+    if (remaining.length === current.length) return state;
+    return { drafts: { ...state.drafts, [input.key]: remaining } };
+  });
+}
+
+/** Acknowledgement can remove the original while the user still has an edit open. */
+export function saveReviewDraftComment(input: {
+  key: string;
+  id: string | null;
+  comment: Pick<ReviewDraftComment, "filePath" | "side" | "lineNumber" | "body">;
+}): void {
+  const store = useReviewDraftStore.getState();
+  if (input.id && store.drafts[input.key]?.some((comment) => comment.id === input.id)) {
+    store.updateComment({ key: input.key, id: input.id, updates: { body: input.comment.body } });
+  } else {
+    store.addComment({
+      key: input.key,
+      comment: {
+        filePath: input.comment.filePath,
+        side: input.comment.side,
+        lineNumber: input.comment.lineNumber,
+        body: input.comment.body,
+      },
+    });
+  }
 }

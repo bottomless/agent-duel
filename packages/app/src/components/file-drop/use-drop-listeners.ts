@@ -46,10 +46,11 @@ function fileToPickedImage(file: File): PickedImageAttachmentInput {
 /** Hand the sink every image that attached and every one that did not, from the same drop. */
 async function deliverDroppedImages(
   sink: FileDropSink,
+  onFiles: NonNullable<FileDropSink["onFiles"]>,
   images: PickedImageAttachmentInput[],
 ): Promise<void> {
   const { attachments, errors } = await persistSendableImages(images);
-  if (attachments.length > 0) sink.onFiles(attachments);
+  if (attachments.length > 0) onFiles(attachments);
   if (errors.length > 0) {
     if (sink.onImageErrors) sink.onImageErrors(errors);
     else console.error("[useDropListeners] Failed to process dropped images:", errors);
@@ -158,8 +159,9 @@ export function useDropListeners({
             sink.onGenericFiles(items);
           }
 
-          const imagePaths = payload.paths.filter(isRasterImagePath);
-          if (imagePaths.length === 0) {
+          const onFiles = sink.onFiles;
+          const imagePaths = onFiles ? payload.paths.filter(isRasterImagePath) : [];
+          if (!onFiles || imagePaths.length === 0) {
             return;
           }
 
@@ -167,7 +169,7 @@ export function useDropListeners({
           // composer the user dropped on (matches the web path below). No post-persist busy
           // re-check: a mixed drop's own generic upload flips the busy flag, and re-checking
           // would discard the image from the same drop.
-          void deliverDroppedImages(sink, imagePaths.map(filePathToPickedImage));
+          void deliverDroppedImages(sink, onFiles, imagePaths.map(filePathToPickedImage));
         });
 
         if (disposed) {
@@ -262,14 +264,15 @@ export function useDropListeners({
           sink.onGenericFiles(genericItems);
         }
 
-        const imageFiles = files.filter(isRasterImageFile);
+        const onFiles = sink.onFiles;
+        const imageFiles = onFiles ? files.filter(isRasterImageFile) : [];
 
-        if (imageFiles.length === 0) return;
+        if (!onFiles || imageFiles.length === 0) return;
 
         // No post-persist busy re-check: a mixed drop's own generic upload flips the busy flag,
         // and re-checking would discard the image from the same drop. The guard at drop start
         // already rejects drops that begin while busy.
-        await deliverDroppedImages(sink, imageFiles.map(fileToPickedImage));
+        await deliverDroppedImages(sink, onFiles, imageFiles.map(fileToPickedImage));
       }
 
       element.addEventListener("dragenter", handleDragEnter);

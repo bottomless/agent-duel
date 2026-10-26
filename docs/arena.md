@@ -6,7 +6,7 @@ repository is the Paseo shell it runs inside.
 The engine is `arena-backend/packages/opencode/src/arena/` — a module inside a vendored OpenCode
 fork, isolated from the root npm workspace and installed with Bun. Packaged desktop launches a
 compiled copy; source development launches it from `PASEO_ARENA_BACKEND_ROOT`. The daemon exposes it at `/arena/...`
-(`packages/server/src/server/agent/providers/opencode-agent.ts:3282`), which the protocol wraps as
+(`packages/server/src/server/agent/providers/opencode-agent.ts:4323`), which the protocol wraps as
 `arena.*` RPCs and `packages/app/src/arena/` renders.
 
 Arena state is canonical local data. The runtime stores it in SQLite at

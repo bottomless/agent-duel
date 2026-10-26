@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { canOpenExternalUrl } from "./open-external-url";
+import { canOpenExternalUrl, openExternalUrl } from "./open-external-url";
 
 vi.mock("expo-linking", () => ({ openURL: vi.fn() }));
 vi.mock("@/desktop/host", () => ({ getDesktopHost: vi.fn(() => null) }));
@@ -13,4 +13,13 @@ describe("canOpenExternalUrl", () => {
     expect(canOpenExternalUrl("mailto:test@example.com")).toBe(false);
     expect(canOpenExternalUrl("not a URL")).toBe(false);
   });
+});
+
+describe("external URL refusal", () => {
+  it.each(["mailto:person@example.com", "javascript:alert(1)", "/relative", "invalid"])(
+    "safely ignores %s for fire-and-forget callers",
+    async (url) => {
+      await expect(openExternalUrl(url)).resolves.toBeUndefined();
+    },
+  );
 });

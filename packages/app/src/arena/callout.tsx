@@ -162,7 +162,7 @@ const styles = StyleSheet.create((theme) => ({
   calloutTitle: {
     flexShrink: 1,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
+    fontSize: theme.fontSize.lg,
     fontWeight: theme.fontWeight.medium,
   },
   calloutActionFooter: {
@@ -203,13 +203,13 @@ const styles = StyleSheet.create((theme) => ({
   calloutPendingLabel: {
     flexShrink: 0,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   calloutPendingPrompt: {
     flex: 1,
     minWidth: 0,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   calloutDetail: {
     // Measured from the top row, which the 32px button makes taller than the title — so this is
@@ -217,6 +217,6 @@ const styles = StyleSheet.create((theme) => ({
     marginTop: theme.spacing[3],
     marginLeft: CALLOUT_TITLE_RAIL,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

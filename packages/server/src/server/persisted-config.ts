@@ -1,3 +1,4 @@
+import { PluginRegistriesSchema } from "@getpaseo/protocol/plugin-registry";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -9,7 +10,9 @@ import {
 } from "./agent/provider-launch-config.js";
 import type { AgentProviderRuntimeSettingsMap } from "./agent/provider-launch-config.js";
 import { ensurePrivateFile, writePrivateFileAtomicSync } from "./private-files.js";
-import { AgentProfileSchema, TerminalProfileSchema } from "@getpaseo/protocol/messages";
+import { AgentProfileSchema, AgentSkillSelectionSchema } from "@getpaseo/protocol/agent-profile";
+import { PluginIdSchema, PluginSourceSchema } from "@getpaseo/protocol/plugin-config";
+import { TerminalProfileSchema } from "@getpaseo/protocol/terminal-profile";
 import { PaseoServicePortAllocationSchema } from "@getpaseo/protocol/paseo-config-schema";
 
 export const LogLevelSchema = z.enum(["trace", "debug", "info", "warn", "error", "fatal"]);
@@ -141,7 +144,8 @@ const FeatureVoiceModeSchema = z
       .object({
         provider: SpeechProviderIdSchema.optional(),
         model: z.string().min(1).optional(),
-        voice: z.enum(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]).optional(),
+        // Free-form: self-hosted OpenAI-compatible servers expose their own voice names.
+        voice: z.string().trim().min(1).optional(),
         speakerId: z.number().int().optional(),
         speed: z.number().optional(),
       })
@@ -234,7 +238,12 @@ export const PersistedConfigSchema = z
         listen: z.string().optional(),
         hostnames: z.union([z.literal(true), z.array(z.string())]).optional(),
         allowedHosts: z.union([z.literal(true), z.array(z.string())]).optional(),
-        trustedProxies: z.union([z.literal(true), z.array(z.string())]).optional(),
+        trustedProxies: z
+          .union([z.literal(true), z.array(z.string())])
+          .optional()
+          .describe(
+            'Express trusted proxy setting for X-Forwarded-* headers. Defaults to ["loopback"]. Use true only when the final trusted proxy overwrites client-supplied forwarded headers.',
+          ),
         mcp: z
           .object({
             enabled: z.boolean().optional(),
@@ -271,6 +280,12 @@ export const PersistedConfigSchema = z
         relay: z
           .object({
             enabled: z.boolean().optional(),
+            requireProtectedSecurity: z
+              .boolean()
+              .optional()
+              .describe(
+                "Admit only relay clients that negotiate protected endpoint security (replay protection). Defaults to false; older clients still connect while it is off.",
+              ),
             endpoint: z.string().optional(),
             publicEndpoint: z.string().optional(),
             useTls: z.boolean().optional(),
@@ -283,9 +298,22 @@ export const PersistedConfigSchema = z
             // COMPAT(serviceProxyEnabled): added 2026-06-02, remove after 2026-12-02.
             // Parsed only to suppress optional public/listen layers for old configs;
             // localhost service proxying remains always enabled.
-            enabled: z.boolean().optional(),
-            listen: z.string().optional(),
-            publicBaseUrl: z.url().optional(),
+            enabled: z
+              .boolean()
+              .optional()
+              .describe(
+                "Compatibility shim. false suppresses optional service proxy listen/public layers only; localhost proxying remains enabled.",
+              ),
+            listen: z
+              .string()
+              .optional()
+              .describe(
+                "Optional service-only listener address. Presence enables the standalone service proxy listener.",
+              ),
+            publicBaseUrl: z
+              .url()
+              .optional()
+              .describe("Optional public base URL for service host aliases."),
           })
           .strict()
           .optional(),
@@ -306,11 +334,16 @@ export const PersistedConfigSchema = z
       .optional(),
 
     providers: ProvidersSchema.optional(),
+    pluginRegistries: PluginRegistriesSchema.optional(),
+    pluginsEnabled: z.boolean().optional(),
+    plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
     worktrees: WorktreesConfigSchema.optional(),
     agents: z
       .object({
         providers: z.preprocess(normalizeAgentProviders, ProviderOverridesSchema).optional(),
+        catalogRefreshTimeoutMs: z.number().int().positive().max(2_147_483_647).optional(),
         metadataGeneration: AgentMetadataGenerationSchema.optional(),
+        skills: z.object({ selection: AgentSkillSelectionSchema.optional() }).strict().optional(),
       })
       .strict()
       .optional(),
@@ -432,9 +465,32 @@ export function loadPersistedConfig(paseoHome: string, logger?: LoggerLike): Per
     });
   }
 
+  const config = parseConfigFile(configPath, raw);
+  log?.info(`Loaded from ${configPath}`);
+  return config;
+}
+
+/** Observe the file without initializing a home, identity, or default configuration. */
+export function readPersistedConfig(
+  paseoHome: string,
+  options: { defaultsIfMissing?: boolean } = {},
+): PersistedConfig {
+  const configPath = getConfigPath(paseoHome);
+  let raw: string;
+  try {
+    raw = readFileSync(configPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return options.defaultsIfMissing ? structuredClone(DEFAULT_PERSISTED_CONFIG) : {};
+    throw error;
+  }
+  return parseConfigFile(configPath, raw);
+}
+
+function parseConfigFile(configPath: string, raw: string): PersistedConfig {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = parseConfigText(raw);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`[Config] Invalid JSON in ${configPath}: ${message}`, {
@@ -442,17 +498,81 @@ export function loadPersistedConfig(paseoHome: string, logger?: LoggerLike): Per
     });
   }
 
-  const migrated = stripRemovedConfigFields(parsed);
-  const result = PersistedConfigSchema.safeParse(migrated);
+  const result = PersistedConfigSchema.safeParse(stripRemovedConfigFields(parsed));
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
       .join("\n");
     throw new Error(`[Config] Invalid config in ${configPath}:\n${issues}`);
   }
-
-  log?.info(`Loaded from ${configPath}`);
   return result.data as PersistedConfig;
+}
+
+/** Editors such as Windows Notepad save UTF-8 with a byte order mark, which JSON.parse rejects. */
+function parseConfigText(raw: string): unknown {
+  return JSON.parse(raw.replace(/^\uFEFF/, ""));
+}
+
+function configPathParts(field: string): string[] {
+  const parts = field.split(".");
+  let schema: z.ZodType = PersistedConfigSchema;
+  for (const part of parts) {
+    if (!part || ["__proto__", "prototype", "constructor"].includes(part)) {
+      throw new Error(`Invalid configuration path: ${field}`);
+    }
+    while (
+      schema instanceof z.ZodOptional ||
+      schema instanceof z.ZodDefault ||
+      schema instanceof z.ZodPipe
+    )
+      schema = (schema instanceof z.ZodPipe ? schema.in : schema.unwrap()) as z.ZodType;
+    if (!(schema instanceof z.ZodObject) || !Object.hasOwn(schema.shape, part)) {
+      throw new Error(
+        `Unknown configuration path: ${field}. Replace its containing object with JSON for dynamic keys.`,
+      );
+    }
+    schema = schema.shape[part];
+  }
+  return parts;
+}
+
+export function getPersistedConfigValue(config: PersistedConfig, field: string): unknown {
+  return configPathParts(field).reduce<unknown>(
+    (value, part) =>
+      value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined,
+    config,
+  );
+}
+
+export function editPersistedConfig(
+  paseoHome: string,
+  field: string,
+  edit: { value: unknown } | { unset: true },
+): PersistedConfig {
+  const parts = configPathParts(field);
+  if (field === "daemon.auth" || field.startsWith("daemon.auth.")) {
+    throw new Error("Use daemon set-password to change the daemon password.");
+  }
+  const config = readPersistedConfig(paseoHome, { defaultsIfMissing: true });
+  let object = config as Record<string, unknown>;
+  for (const part of parts.slice(0, -1)) {
+    object[part] ??= {};
+    object = object[part] as Record<string, unknown>;
+  }
+  const key = parts.at(-1)!;
+  if (field === "daemon") {
+    const previousAuth = config.daemon?.auth;
+    const nextAuth =
+      "value" in edit && edit.value && typeof edit.value === "object"
+        ? (edit.value as Record<string, unknown>).auth
+        : undefined;
+    if (JSON.stringify(previousAuth) !== JSON.stringify(nextAuth))
+      throw new Error("Use daemon set-password to change the daemon password.");
+  }
+  if ("unset" in edit) delete object[key];
+  else object[key] = edit.value;
+  savePersistedConfig(paseoHome, config);
+  return config;
 }
 
 export function savePersistedConfig(

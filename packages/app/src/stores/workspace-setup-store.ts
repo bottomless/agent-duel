@@ -1,4 +1,9 @@
-import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
+import { createNameId } from "mnemonic-id";
+import { generateDraftId } from "@/stores/draft-keys";
+import type {
+  WorkspaceSetupSnapshot as SetupDetailSnapshot,
+  SessionOutboundMessage,
+} from "@getpaseo/protocol/messages";
 import { create } from "zustand";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 
@@ -17,38 +22,43 @@ export type WorkspaceSetupProgressPayload = Extract<
   { type: "workspace_setup_progress" }
 >["payload"];
 
-export type WorkspaceSetupStatusResult = Extract<
-  SessionOutboundMessage,
-  { type: "workspace_setup_status_response" }
->["payload"];
-
-export interface WorkspaceSetupStatusClient {
-  fetchWorkspaceSetupStatus: (workspaceId: string) => Promise<WorkspaceSetupStatusResult>;
-}
-
 export interface WorkspaceSetupSnapshot extends WorkspaceSetupProgressPayload {
   updatedAt: number;
 }
 
-export function shouldShowWorkspaceSetup(snapshot: WorkspaceSetupSnapshot | null): boolean {
-  if (!snapshot) {
-    return false;
-  }
-  return snapshot.error !== null || snapshot.detail.commands.length > 0;
+export type WorkspaceSetupStatus = WorkspaceSetupSnapshot["status"] | null;
+
+export function shouldShowWorkspaceSetup(status: WorkspaceSetupStatus, supported = true): boolean {
+  return !supported || status !== null;
+}
+
+export function shouldSeedWorkspaceSetupTab(status: WorkspaceSetupStatus): boolean {
+  return status === "failed" || status === "blocked";
 }
 
 interface WorkspaceSetupStoreState {
-  pendingWorkspaceSetup: PendingWorkspaceSetup | null;
+  pendingWorkspaceSetup:
+    | (PendingWorkspaceSetup & { creationId: string; worktreeSlug: string })
+    | null;
   snapshots: Record<string, WorkspaceSetupSnapshot>;
-  requestedKeys: Set<string>;
+  surfacedFailedSetupKeys: Set<string>;
   beginWorkspaceSetup: (value: PendingWorkspaceSetup) => void;
   clearWorkspaceSetup: () => void;
-  upsertProgress: (input: { serverId: string; payload: WorkspaceSetupProgressPayload }) => void;
-  ensureSetupStatus: (input: {
+  applySnapshot: (input: {
     serverId: string;
     workspaceId: string;
-    client: WorkspaceSetupStatusClient;
+    snapshot: SetupDetailSnapshot | null;
   }) => void;
+  applySetupStatus: (input: {
+    serverId: string;
+    workspaceId: string;
+    status: WorkspaceSetupStatus;
+  }) => void;
+  claimFailedSetupSurface: (input: {
+    serverId: string;
+    workspaceId: string;
+    status: WorkspaceSetupStatus;
+  }) => boolean;
   removeWorkspace: (input: { serverId: string; workspaceId: string }) => void;
   clearServer: (serverId: string) => void;
 }
@@ -57,65 +67,58 @@ function buildWorkspaceSetupKey(input: { serverId: string; workspaceId: string }
   return buildWorkspaceTabPersistenceKey(input);
 }
 
-export const useWorkspaceSetupStore = create<WorkspaceSetupStoreState>()((set, get) => ({
+export const useWorkspaceSetupStore = create<WorkspaceSetupStoreState>()((set) => ({
   pendingWorkspaceSetup: null,
   snapshots: {},
-  requestedKeys: new Set(),
+  surfacedFailedSetupKeys: new Set(),
   beginWorkspaceSetup: (value) => {
-    set({ pendingWorkspaceSetup: value });
+    set({
+      pendingWorkspaceSetup: {
+        ...value,
+        creationId: generateDraftId(),
+        worktreeSlug: createNameId(),
+      },
+    });
   },
   clearWorkspaceSetup: () => {
     set({ pendingWorkspaceSetup: null });
   },
-  upsertProgress: ({ serverId, payload }) => {
-    const key = buildWorkspaceSetupKey({ serverId, workspaceId: payload.workspaceId });
-    if (!key) {
-      return;
-    }
-
-    set((state) => ({
-      snapshots: {
-        ...state.snapshots,
-        [key]: {
-          ...payload,
-          updatedAt: Date.now(),
-        },
-      },
-    }));
+  applySnapshot: ({ serverId, workspaceId, snapshot }) => {
+    const key = buildWorkspaceSetupKey({ serverId, workspaceId });
+    if (!key) return;
+    set((state) => {
+      const snapshots = { ...state.snapshots };
+      if (snapshot) snapshots[key] = { ...snapshot, workspaceId, updatedAt: Date.now() };
+      else delete snapshots[key];
+      return { snapshots };
+    });
   },
-  ensureSetupStatus: async ({ serverId, workspaceId, client }) => {
+  applySetupStatus: ({ serverId, workspaceId, status }) => {
+    if (shouldSeedWorkspaceSetupTab(status)) return;
+    const key = buildWorkspaceSetupKey({ serverId, workspaceId });
+    if (!key) return;
+    set((state) => {
+      if (!state.surfacedFailedSetupKeys.has(key)) return state;
+      const surfacedFailedSetupKeys = new Set(state.surfacedFailedSetupKeys);
+      surfacedFailedSetupKeys.delete(key);
+      return { surfacedFailedSetupKeys };
+    });
+  },
+  claimFailedSetupSurface: ({ serverId, workspaceId, status }) => {
     const key = buildWorkspaceSetupKey({ serverId, workspaceId });
     if (!key) {
-      return;
-    }
-    const state = get();
-    if (state.snapshots[key] || state.requestedKeys.has(key)) {
-      return;
+      return false;
     }
 
-    // requestedKeys is a pure in-flight marker: it dedupes concurrent fetches and is
-    // released once the request settles. A settle that stored no snapshot (null snapshot,
-    // mismatched workspace, or error) leaves no marker, so a later call can retry; once a
-    // snapshot lands, the snapshots[key] guard above prevents redundant refetches.
-    set((current) => ({ requestedKeys: new Set(current.requestedKeys).add(key) }));
-
-    try {
-      const response = await client.fetchWorkspaceSetupStatus(workspaceId);
-      if (response.workspaceId === workspaceId && response.snapshot) {
-        get().upsertProgress({
-          serverId,
-          payload: { workspaceId: response.workspaceId, ...response.snapshot },
-        });
+    let claimed = false;
+    set((state) => {
+      if (!shouldSeedWorkspaceSetupTab(status) || state.surfacedFailedSetupKeys.has(key)) {
+        return state;
       }
-    } catch {
-      // Swallowed: the finally clears the in-flight marker so a later call retries.
-    } finally {
-      set((current) => {
-        const next = new Set(current.requestedKeys);
-        next.delete(key);
-        return { requestedKeys: next };
-      });
-    }
+      claimed = true;
+      return { surfacedFailedSetupKeys: new Set(state.surfacedFailedSetupKeys).add(key) };
+    });
+    return claimed;
   },
   removeWorkspace: ({ serverId, workspaceId }) => {
     const key = buildWorkspaceSetupKey({ serverId, workspaceId });
@@ -124,12 +127,14 @@ export const useWorkspaceSetupStore = create<WorkspaceSetupStoreState>()((set, g
     }
 
     set((state) => {
-      if (!(key in state.snapshots)) {
+      if (!(key in state.snapshots) && !state.surfacedFailedSetupKeys.has(key)) {
         return state;
       }
       const next = { ...state.snapshots };
       delete next[key];
-      return { snapshots: next };
+      const surfacedFailedSetupKeys = new Set(state.surfacedFailedSetupKeys);
+      surfacedFailedSetupKeys.delete(key);
+      return { snapshots: next, surfacedFailedSetupKeys };
     });
   },
   clearServer: (serverId) => {
@@ -137,10 +142,16 @@ export const useWorkspaceSetupStore = create<WorkspaceSetupStoreState>()((set, g
       const nextEntries = Object.entries(state.snapshots).filter(
         ([key]) => !key.startsWith(`${serverId}:`),
       );
-      if (nextEntries.length === Object.keys(state.snapshots).length) {
+      const surfacedFailedSetupKeys = new Set(
+        [...state.surfacedFailedSetupKeys].filter((key) => !key.startsWith(`${serverId}:`)),
+      );
+      if (
+        nextEntries.length === Object.keys(state.snapshots).length &&
+        surfacedFailedSetupKeys.size === state.surfacedFailedSetupKeys.size
+      ) {
         return state;
       }
-      return { snapshots: Object.fromEntries(nextEntries) };
+      return { snapshots: Object.fromEntries(nextEntries), surfacedFailedSetupKeys };
     });
   },
 }));

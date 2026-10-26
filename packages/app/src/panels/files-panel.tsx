@@ -1,17 +1,22 @@
 import { useCallback } from "react";
-import { useTranslation } from "react-i18next";
 import { FolderTree } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
 import invariant from "tiny-invariant";
 import { FileExplorerPane } from "@/components/file-explorer-pane";
-import { useAddFileToChat } from "@/hooks/use-add-file-to-chat";
 import { usePaneContext } from "@/panels/pane-context";
-import type { PanelDescriptor, PanelRegistration } from "@/panels/panel-registry";
+import { definePanel, type PanelPresentation } from "@/panels/panel-registry";
 import { useSidePanelBrowseTarget } from "@/panels/side-panel-browse-target";
 import { SidePanelDirectoryMissing } from "@/panels/side-panel-directory-missing";
+import { useAddFileToChat } from "@/panels/use-add-file-to-chat";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 
 const ThemedFolderTree = withUnistyles(FolderTree);
+const filesPanelPresentation = {
+  label: (t) => t("panels.files.label"),
+  subtitle: (t) => t("panels.files.subtitle"),
+  tooltip: (t) => t("panels.files.tooltip"),
+  icon: ThemedFolderTree,
+} satisfies PanelPresentation;
 
 /**
  * The side panel's Files tab: the workspace file tree. Opening a file adds a
@@ -49,20 +54,7 @@ function FilesPanel() {
   );
 }
 
-function useFilesPanelDescriptor(): PanelDescriptor {
-  const { t } = useTranslation();
-  return {
-    label: t("panels.files.label"),
-    subtitle: t("panels.files.subtitle"),
-    tooltip: t("panels.files.subtitle"),
-    titleState: "ready",
-    icon: ThemedFolderTree,
-    statusBucket: null,
-  };
-}
-
-export const filesPanelRegistration: PanelRegistration<"files"> = {
-  kind: "files",
+export const filesPanelRegistration = definePanel("files", {
   component: FilesPanel,
-  useDescriptor: useFilesPanelDescriptor,
-};
+  presentation: filesPanelPresentation,
+});

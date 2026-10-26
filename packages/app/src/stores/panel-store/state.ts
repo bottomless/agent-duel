@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type MobilePanelView = "agent" | "agent-list";
 
 export interface MobilePanelSelection {
@@ -16,9 +18,9 @@ export const DEFAULT_SIDEBAR_WIDTH = 320;
 export const MIN_SIDEBAR_WIDTH = 200;
 export const MAX_SIDEBAR_WIDTH = 600;
 
-export interface PanelVisibilityState {
-  isAgentListOpen: boolean;
-}
+export const DEFAULT_TREE_RAIL_WIDTH = 260;
+export const MIN_TREE_RAIL_WIDTH = 180;
+export const MAX_TREE_RAIL_WIDTH = 600;
 
 export interface PanelLayoutInput {
   isCompact: boolean;
@@ -40,18 +42,12 @@ export function clampSidebarWidth(width: number): number {
   return clampNumber(width, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
 }
 
-export function selectPanelVisibility(
-  state: PanelCoreState,
-  input: PanelLayoutInput,
-): PanelVisibilityState {
-  if (input.isCompact) {
-    return { isAgentListOpen: state.mobilePanel.target === "agent-list" };
-  }
-  return { isAgentListOpen: state.desktop.agentListOpen };
+export function clampTreeRailWidth(width: number): number {
+  return clampNumber(width, MIN_TREE_RAIL_WIDTH, MAX_TREE_RAIL_WIDTH);
 }
 
 export function selectIsAgentListOpen(state: PanelCoreState, input: PanelLayoutInput): boolean {
-  return selectPanelVisibility(state, input).isAgentListOpen;
+  return input.isCompact ? state.mobilePanel.target === "agent-list" : state.desktop.agentListOpen;
 }
 
 export function setMobilePanelTarget(
@@ -64,10 +60,51 @@ export function setMobilePanelTarget(
   return { target, revision: selection.revision + 1 };
 }
 
-type MigratablePanelState = Record<string, unknown>;
+const ExplorerTabSchema = z.enum(["changes", "files", "pr"]);
+const DesktopSidebarStorageSchema = z.strictObject({
+  agentListOpen: z.boolean().optional(),
+  focusModeEnabled: z.boolean().optional(),
+  zoomed: z.boolean().optional(),
+  focused: z.boolean().optional(),
+  // Accepted only so migration can discard the former docked explorer sidebar.
+  // The schema is strict and a parse failure drops the whole entry, so removing
+  // this key outright would wipe every upgrading user's panel state.
+  fileExplorerOpen: z.boolean().optional(),
+});
+
+export const PanelPersistedStateSchema = z.strictObject({
+  // The compact panel position is never persisted any more, and "file-explorer"
+  // names a compact drawer that became side panel tabs. Both are accepted only so
+  // migration can discard them from older blobs.
+  mobileView: z.enum(["agent", "agent-list", "file-explorer"]).optional(),
+  mobilePanel: z
+    .strictObject({
+      target: z.enum(["agent", "agent-list", "file-explorer"]),
+      revision: z.number().int().nonnegative(),
+    })
+    .optional(),
+  desktop: DesktopSidebarStorageSchema.optional(),
+  explorerTab: ExplorerTabSchema.optional(),
+  explorerTabByCheckout: z.record(z.string(), ExplorerTabSchema).optional(),
+  expandedPathsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
+  // Accepted only so migration can discard the former per-file diff expansion state.
+  diffExpandedPathsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
+  diffCollapsedFoldersByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
+  collapsedFilePathsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
+  sidebarWidth: z.number().optional(),
+  // Accepted only so migration can discard the former docked explorer sidebar width.
+  explorerWidth: z.number().optional(),
+  explorerSortOption: z.enum(["name", "modified", "size"]).optional(),
+  explorerShowHiddenFiles: z.boolean().optional(),
+  explorerFilesSplitRatio: z.number().optional(),
+  treeRailWidth: z.number().optional(),
+  fileTreeVisible: z.boolean().optional(),
+});
+
+type MigratablePanelState = z.infer<typeof PanelPersistedStateSchema>;
 
 function migratePanelDesktopFocusMode(state: MigratablePanelState): void {
-  const desktop = state.desktop as Record<string, unknown> | undefined;
+  const desktop = state.desktop;
   if (!desktop) {
     return;
   }
@@ -84,22 +121,30 @@ function migratePanelDesktopFocusMode(state: MigratablePanelState): void {
   }
 }
 
-// The Explorer sidebar became side panel tabs owned by the workspace layout
-// store, so its open state, active tab, width and inner split no longer exist.
-function migratePanelV13SidePanel(state: MigratablePanelState): void {
-  delete state.explorerTab;
-  delete state.explorerTabByCheckout;
-  delete state.explorerWidth;
-  delete state.explorerFilesSplitRatio;
-  const desktop = state.desktop as Record<string, unknown> | undefined;
-  if (desktop) {
-    delete desktop.fileExplorerOpen;
+// v16 narrowed the rail. Existing installs almost all carry the old 320 default,
+// so the reset is what makes the narrower rail visible to anyone but a new user.
+function migrateTreeRailWidth(state: MigratablePanelState, version: number): void {
+  if (version < 16 || typeof state.treeRailWidth !== "number") {
+    delete state.explorerFilesSplitRatio;
+    state.treeRailWidth = DEFAULT_TREE_RAIL_WIDTH;
+    return;
   }
+  state.treeRailWidth = clampTreeRailWidth(state.treeRailWidth);
 }
 
 export function migratePanelState(persistedState: unknown, version: number): MigratablePanelState {
-  const state = (persistedState ?? {}) as MigratablePanelState;
+  const result = PanelPersistedStateSchema.safeParse(persistedState);
+  const state: MigratablePanelState = result.success ? result.data : {};
 
+  // The Explorer sidebar became side panel tabs owned by the workspace layout
+  // store. Left behind, `fileExplorerOpen` kept drawing a sidebar that nothing
+  // could close.
+  delete state.explorerWidth;
+  if (state.desktop) {
+    delete state.desktop.fileExplorerOpen;
+  }
+  delete state.explorerTab;
+  delete state.explorerTabByCheckout;
   if (version < 8) {
     migratePanelDesktopFocusMode(state);
   }
@@ -113,13 +158,7 @@ export function migratePanelState(persistedState: unknown, version: number): Mig
   ) {
     state.expandedPathsByWorkspace = {};
   }
-  if (
-    version < 10 ||
-    typeof state.diffExpandedPathsByWorkspace !== "object" ||
-    !state.diffExpandedPathsByWorkspace
-  ) {
-    state.diffExpandedPathsByWorkspace = {};
-  }
+  delete state.diffExpandedPathsByWorkspace;
   if (
     version < 12 ||
     typeof state.diffCollapsedFoldersByWorkspace !== "object" ||
@@ -127,17 +166,24 @@ export function migratePanelState(persistedState: unknown, version: number): Mig
   ) {
     state.diffCollapsedFoldersByWorkspace = {};
   }
+  if (
+    typeof state.collapsedFilePathsByWorkspace !== "object" ||
+    !state.collapsedFilePathsByWorkspace
+  ) {
+    state.collapsedFilePathsByWorkspace = {};
+  }
   if (typeof state.explorerShowHiddenFiles !== "boolean") {
     state.explorerShowHiddenFiles = true;
+  }
+  migrateTreeRailWidth(state, version);
+  if (typeof state.fileTreeVisible !== "boolean") {
+    state.fileTreeVisible = true;
   }
   if (version < 12) {
     // Compact panel position is transient UI state. Cold starts always begin
     // at content, regardless of what an older version persisted.
     delete state.mobileView;
     delete state.mobilePanel;
-  }
-  if (version < 13) {
-    migratePanelV13SidePanel(state);
   }
 
   return state;

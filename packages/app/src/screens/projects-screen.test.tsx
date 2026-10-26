@@ -7,27 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectHostEntry, ProjectSummary, WorkspaceSummary } from "@/utils/projects";
 import type { ProjectHostError, UseProjectsResult } from "@/hooks/use-projects";
 
-const { theme, projectsState, navigate } = vi.hoisted(() => ({
-  theme: {
-    spacing: { 0: 0, 1: 4, "1.5": 6, 2: 8, 3: 12, 4: 16, 6: 24, 8: 32 },
-    iconSize: { sm: 14, md: 20 },
-    fontSize: { xs: 11, sm: 13, base: 15 },
-    fontWeight: { normal: "400" as const, medium: "500" as const },
-    borderRadius: { sm: 4, md: 6, lg: 8, full: 999 },
-    opacity: { 50: 0.5 },
-    colors: {
-      surface0: "#000",
-      surface1: "#111",
-      surface2: "#222",
-      surface3: "#333",
-      surfaceSidebarHover: "#1a1a1a",
-      foreground: "#fff",
-      foregroundMuted: "#aaa",
-      border: "#444",
-      accent: "#0a84ff",
-      palette: { red: { 300: "#ff6b6b" } },
-    },
-  },
+const { projectsState, push } = vi.hoisted(() => ({
   projectsState: {
     current: {
       projects: [],
@@ -37,10 +17,11 @@ const { theme, projectsState, navigate } = vi.hoisted(() => ({
       refetch: vi.fn(),
     } as UseProjectsResult,
   },
-  navigate: vi.fn(),
+  push: vi.fn(),
 }));
 
-vi.mock("react-native", () => {
+vi.mock("react-native", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-native")>();
   const passthrough = ({
     children,
     testID,
@@ -87,6 +68,7 @@ vi.mock("react-native", () => {
   };
 
   return {
+    ...actual,
     View: ({ children, testID }: { children?: React.ReactNode; testID?: string }) =>
       React.createElement("div", { "data-testid": testID }, children),
     Text: ({ children }: { children?: React.ReactNode }) =>
@@ -101,21 +83,15 @@ vi.mock("react-native", () => {
   };
 });
 
-vi.mock("react-native-unistyles", () => ({
-  StyleSheet: {
-    create: (factory: unknown) =>
-      typeof factory === "function" ? (factory as (t: typeof theme) => unknown)(theme) : factory,
-  },
-  useUnistyles: () => ({ theme }),
-}));
-
-vi.mock("lucide-react-native", () => {
+vi.mock("lucide-react-native", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("lucide-react-native")>();
   const icon = (name: string) => {
     const Icon = () => React.createElement("span", { "data-icon": name });
     Icon.displayName = name;
     return Icon;
   };
   return {
+    ...actual,
     ChevronRight: icon("ChevronRight"),
     MoreVertical: icon("MoreVertical"),
     ExternalLink: icon("ExternalLink"),
@@ -125,20 +101,7 @@ vi.mock("lucide-react-native", () => {
 });
 
 vi.mock("expo-router", () => ({
-  router: { navigate },
-}));
-
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (key: string, values?: Record<string, string>) => {
-      if (key === "sidebar.project.empty.title") return "No projects yet";
-      if (key === "settings.projectList.hostLoadFailed") {
-        return `Couldn't load projects from host ${values?.hostName}: ${values?.message}`;
-      }
-      if (key === "settings.projectList.editProject") return `Edit ${values?.projectName}`;
-      return key;
-    },
-  }),
+  router: { push },
 }));
 
 vi.mock("@/components/ui/loading-spinner", () => ({
@@ -208,6 +171,7 @@ vi.mock("@/projects/icons", () => ({
   useProjectIcons: () => new Map(),
 }));
 
+import { i18n } from "@/i18n/i18next";
 import ProjectsScreen from "./projects-screen";
 
 function workspaceSummary(overrides: Partial<WorkspaceSummary> = {}): WorkspaceSummary {
@@ -217,6 +181,8 @@ function workspaceSummary(overrides: Partial<WorkspaceSummary> = {}): WorkspaceS
     workspaceKind: "directory",
     status: "done",
     currentBranch: "main",
+    changeRequestNumber: null,
+    statusEnteredAt: null,
     ...overrides,
   };
 }
@@ -274,14 +240,15 @@ describe("ProjectsScreen", () => {
   let container: HTMLElement | null = null;
   let root: Root | null = null;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
     vi.stubGlobal("React", React);
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
     setProjectsState({});
-    navigate.mockReset();
+    push.mockReset();
   });
 
   afterEach(() => {
@@ -334,8 +301,8 @@ describe("ProjectsScreen", () => {
       row.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     });
 
-    expect(navigate).toHaveBeenCalledTimes(1);
-    expect(navigate).toHaveBeenCalledWith("/settings/hosts/host-a/projects/project-a");
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push).toHaveBeenCalledWith("/settings/hosts/host-a/projects/project-a");
   });
 
   it("does not render a kebab menu on the row", () => {

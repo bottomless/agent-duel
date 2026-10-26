@@ -17,6 +17,9 @@ export type MessageInputKeyboardActionKind =
 export type KeyboardActionId =
   | "agent.interrupt"
   | "agent.new"
+  | "workspace.tab.target.browser"
+  | "workspace.tab.target.changes"
+  | "workspace.tab.target.files"
   | "workspace.tab.close.current"
   | "workspace.tab.navigate.index"
   | "workspace.tab.navigate.relative"

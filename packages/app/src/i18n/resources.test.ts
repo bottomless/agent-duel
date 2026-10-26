@@ -20,6 +20,30 @@ function flattenKeys(value: unknown, prefix = ""): string[] {
   return entries.flatMap(([key, child]) => flattenKeys(child, prefix ? `${prefix}.${key}` : key));
 }
 
+const pluralSuffixPattern = /_(zero|one|two|few|many|other)$/;
+const arabicPluralSuffixes = ["zero", "one", "two", "few", "many", "other"] as const;
+const arabicProviderUsagePluralKeys = [
+  "providerUsage.duration.days",
+  "providerUsage.duration.hours",
+  "providerUsage.duration.minutes",
+  "providerUsage.timing.daysAgo",
+  "providerUsage.timing.hoursAgo",
+  "providerUsage.timing.minutesAgo",
+] as const;
+
+function canonicalKeys(value: unknown): string[] {
+  const keys = flattenKeys(value);
+  const keySet = new Set(keys);
+  return [
+    ...new Set(
+      keys.map((key) => {
+        const baseKey = key.replace(pluralSuffixPattern, "");
+        return baseKey !== key && keySet.has(baseKey) ? baseKey : key;
+      }),
+    ),
+  ].sort();
+}
+
 function flattenStrings(value: unknown, prefix = ""): Record<string, string> {
   if (typeof value === "string") {
     return { [prefix]: value };
@@ -74,6 +98,45 @@ const untranslatedLocalFallbacks = [
   "Unable to save desktop settings.",
 ] as const;
 
+const pullRequestPanelSources = [
+  "git/pull-request-panel/pane.tsx",
+  "git/pull-request-panel/data.ts",
+  "git/pull-request-panel/checks-section.tsx",
+  "components/sidebar/sidebar-status-list.tsx",
+] as const;
+const untranslatedPullRequestPanelLabels = [
+  "Activity",
+  "No activity yet",
+  "Add all to chat",
+  "Add to chat",
+  "Adding...",
+  "Comment actions",
+  "Thread actions",
+  "Commented",
+  "Approved",
+  "Requested changes",
+  "Reviewed",
+  "Draft",
+  "Merged",
+  "Closed",
+  "Open",
+  "Resolved",
+  "Outdated",
+] as const;
+
+function findUntranslatedPullRequestPanelLabels(): string[] {
+  return pullRequestPanelSources.flatMap((source) => {
+    const contents = readFileSync(join(appSourceRoot, source), "utf8");
+    const matches: string[] = untranslatedPullRequestPanelLabels.filter(
+      (text) => contents.includes(`"${text}"`) || new RegExp(`>\\s*${text}\\s*<`).test(contents),
+    );
+    if (contents.includes("} group`")) {
+      matches.push("group");
+    }
+    return matches.length === 0 ? [] : [`${source}: ${matches.join(", ")}`];
+  });
+}
+
 function collectSourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -105,15 +168,24 @@ function findUntranslatedConnectionErrors(): string[] {
 
 describe("translation resources", () => {
   it("keeps all supported language keys in sync with English", () => {
-    const englishKeys = flattenKeys(en).sort();
-    expect(flattenKeys(ar).sort()).toEqual(englishKeys);
-    expect(flattenKeys(es).sort()).toEqual(englishKeys);
-    expect(flattenKeys(fr).sort()).toEqual(englishKeys);
-    expect(flattenKeys(ja).sort()).toEqual(englishKeys);
-    expect(flattenKeys(ko).sort()).toEqual(englishKeys);
-    expect(flattenKeys(ptBR).sort()).toEqual(englishKeys);
-    expect(flattenKeys(ru).sort()).toEqual(englishKeys);
-    expect(flattenKeys(zhCN).sort()).toEqual(englishKeys);
+    const englishKeys = canonicalKeys(en);
+    expect(canonicalKeys(ar)).toEqual(englishKeys);
+    expect(canonicalKeys(es)).toEqual(englishKeys);
+    expect(canonicalKeys(fr)).toEqual(englishKeys);
+    expect(canonicalKeys(ja)).toEqual(englishKeys);
+    expect(canonicalKeys(ko)).toEqual(englishKeys);
+    expect(canonicalKeys(ptBR)).toEqual(englishKeys);
+    expect(canonicalKeys(ru)).toEqual(englishKeys);
+    expect(canonicalKeys(zhCN)).toEqual(englishKeys);
+  });
+
+  it("includes every Arabic form for provider-usage durations", () => {
+    const arabicStrings = flattenStrings(ar);
+    for (const key of arabicProviderUsagePluralKeys) {
+      for (const suffix of arabicPluralSuffixes) {
+        expect(arabicStrings[`${key}_${suffix}`]).toBeTypeOf("string");
+      }
+    }
   });
 
   it("keeps non-English supported languages translated beyond fallback labels", () => {
@@ -127,6 +199,15 @@ describe("translation resources", () => {
     expect(countMatchingEnglishStrings(ptBR)).toBeLessThan(maxFallbackStrings);
     expect(countMatchingEnglishStrings(ru)).toBeLessThan(maxFallbackStrings);
     expect(countMatchingEnglishStrings(zhCN)).toBeLessThan(maxFallbackStrings);
+  });
+
+  it("localizes the pull request empty state in every supported language", () => {
+    for (const resource of [ar, es, fr, ja, ko, ptBR, ru, zhCN]) {
+      expect(resource.panels.pullRequest.emptyTitle).not.toBe(en.panels.pullRequest.emptyTitle);
+      expect(resource.panels.pullRequest.emptyDescription).not.toBe(
+        en.panels.pullRequest.emptyDescription,
+      );
+    }
   });
 
   it("preserves interpolation placeholders in every language", () => {
@@ -143,6 +224,11 @@ describe("translation resources", () => {
   it("keeps reported Spanish settings and scripts labels clean", () => {
     expect(es.workspace.scripts.title).toBe("Scripts");
     expect(es.settings.general.terminalScrollback.label).toBe("Historial de terminal");
+  });
+
+  it("uses the Russian term for continuing a session in copied commands", () => {
+    expect(ru.workspace.tabs.menu.copyResumeCommand).toBe("Копировать команду продолжения");
+    expect(ru.workspace.tabs.toasts.resumeCommandCopiedLabel).toBe("команда продолжения");
   });
 
   it("keeps model count labels spaced around the count", () => {
@@ -168,8 +254,51 @@ describe("translation resources", () => {
     expect(ko.desktop.daemon.status.notRunning).toBe("실행 중이 아님");
   });
 
+  it("uses the French navigation and Git meanings for reported labels", () => {
+    expect(fr.common.back).toBe("Retour");
+    expect(fr.common.actions.back).toBe("Retour");
+    expect(fr.common.actions.copy).toBe("Copier");
+    expect(fr.common.states.starting).toBe("Démarrage…");
+    expect(fr.common.connectionStatus.connecting).toBe("Connexion…");
+    expect(fr.workspace.git.pr.sections.checks).toBe("Vérifications");
+    expect(fr.sidebar.display.show.checks).toBe("Vérifications");
+  });
+
+  it("separates French interpolation placeholders from neighboring words", () => {
+    const glued = Object.entries(flattenStrings(fr)).filter(([, value]) =>
+      /\p{L}\{\{|\}\}\p{L}{2,}/u.test(value),
+    );
+    expect(glued).toEqual([]);
+  });
+
   it("labels the immediate add-to-chat action without an ellipsis", () => {
     expect(en.workspace.fileActions.addToChat).toBe("Add to chat");
+  });
+
+  it("keeps pull request panel and sidebar status group labels translated", () => {
+    expect(findUntranslatedPullRequestPanelLabels()).toEqual([]);
+    for (const resource of [ar, es, fr, ja, ko, ptBR, ru, zhCN]) {
+      const pr = resource.workspace.git.pr;
+      const englishPr = en.workspace.git.pr;
+      expect(pr.sections.activity).not.toBe(englishPr.sections.activity);
+      expect(pr.empty.noActivity).not.toBe(englishPr.empty.noActivity);
+      expect(pr.actions.addToChat).not.toBe(englishPr.actions.addToChat);
+      expect(pr.actions.addAllToChat).not.toBe(englishPr.actions.addAllToChat);
+      expect(pr.actions.addingToChat).not.toBe(englishPr.actions.addingToChat);
+      expect(pr.accessibility.commentActions).not.toBe(englishPr.accessibility.commentActions);
+      expect(pr.accessibility.threadActions).not.toBe(englishPr.accessibility.threadActions);
+      for (const verb of Object.keys(englishPr.activity) as (keyof typeof englishPr.activity)[]) {
+        expect(pr.activity[verb]).not.toBe(englishPr.activity[verb]);
+      }
+      for (const state of Object.keys(englishPr.states) as (keyof typeof englishPr.states)[]) {
+        expect(pr.states[state]).not.toBe(englishPr.states[state]);
+      }
+      expect(pr.thread.resolved).not.toBe(englishPr.thread.resolved);
+      expect(pr.thread.outdated).not.toBe(englishPr.thread.outdated);
+      expect(resource.sidebar.statusGroupAccessibility).not.toBe(
+        en.sidebar.statusGroupAccessibility,
+      );
+    }
   });
 
   it("keeps local connection fallback errors translated", () => {
@@ -244,7 +373,6 @@ describe("translation resources", () => {
     expect(en.settings.appearance.fonts.interfaceFont).toBe("Interface font");
     expect(en.settings.shortcuts.actions.rebind).toBe("Rebind");
     expect(en.settings.integrations.commandLine.title).toBe("Command line");
-    expect(en.settings.integrations.skills.updateAvailable).toBe("Update available");
     expect(en.settings.notifications.playSound).toBe("Play sound");
     expect(en.settings.notifications.agentFinished).toBe("Agent finished");
     expect(en.settings.notifications.battleReady).toBe("Battle ready");
@@ -292,6 +420,16 @@ describe("translation resources", () => {
     expect(en.workspace.git.pr.empty.pipelineJobsLoadFailed).toBe("Could not load pipeline jobs");
     expect(en.workspace.git.pr.empty.allowedToFail).toBe("allowed to fail");
     expect(en.workspace.git.pr.approvals).toBe("{{given}} of {{required}} approvals");
+    expect(en.workspace.git.pr.accessibility.checkStatus).toEqual({
+      passed: "Passed",
+      failed: "Failed",
+      warning: "Warning",
+      actionRequired: "Action required",
+      manual: "Manual",
+      pending: "Pending",
+      skipped: "Skipped",
+      cancelled: "Cancelled",
+    });
     expect(en.review.comment.placeholder).toBe("Leave a comment");
   });
 
@@ -366,19 +504,17 @@ describe("translation resources", () => {
     expect(en.message.question.otherPlaceholder).toBe("Other...");
     expect(en.message.todo.title).toBe("Tasks");
     expect(en.message.todo.empty).toBe("No tasks yet.");
-    expect(en.message.todo.tasksProgressCurrent).toBe("{{completed}}/{{total}} tasks · {{task}}");
+    expect(en.message.todo.tasksProgress).toBe("{{completed}}/{{total}} tasks");
     expect(en.message.todo.activity).toEqual({
       created: "Created {{count}} tasks",
       added: "Added",
       started: "Started",
       completed: "Completed",
-      reopened: "Reopened",
       cancelled: "Cancelled",
     });
   });
 
   it("includes workspace tab toast keys for the Batch 4J migration", () => {
-    expect(en.workspace.tabs.emptyPane).toBe("No tabs in this pane.");
     expect(en.workspace.tabs.toasts.copyFailed).toBe("Copy failed");
     expect(en.workspace.tabs.toasts.agentIdCopiedLabel).toBe("Agent ID");
     expect(en.workspace.tabs.toasts.resumeCommandCopiedLabel).toBe("resume command");
@@ -399,6 +535,14 @@ describe("translation resources", () => {
     expect(en.sidebar.sections.chats).toBe("Chats");
     expect(en.sidebar.workspace.actions.newChat).toBe("New chat");
     expect(en.sidebar.workspace.actions.startChatFor).toBe("Start a new chat in {{projectName}}");
+    expect(en.sidebar.workspace.checks).toEqual({
+      passed: "Passed: {{count}}",
+      failed: "Failed: {{count}}",
+      warning: "Warnings: {{count}}",
+      actionRequired: "Action required: {{count}}",
+      manual: "Manual: {{count}}",
+      pending: "Pending: {{count}}",
+    });
     expect(en.sidebar.project.empty.title).toBe("No projects yet");
     expect(en.sidebar.project.empty.description).toBe("Add a project to get started");
     expect(en.settings.projectList.hostLoadFailed).toBe(
@@ -456,6 +600,9 @@ describe("translation resources", () => {
     expect(en.message.attachments.imagePreviewLoadFailed).toBe("Unable to load image preview.");
     expect(en.workspace.tabs.actions.openChanges).toBe("Changes");
     expect(en.workspace.tabs.actions.openFiles).toBe("Files");
+    expect(en.workspace.tabs.actions.maximizePane).toBe("Maximize pane");
+    expect(en.workspace.tabs.actions.restorePane).toBe("Restore pane");
+    expect(en.branchSwitcher.triggerTooltip).toBe("Switch workspace branch");
     expect(en.branchSwitcher.uncommittedTitle).toBe("Uncommitted changes");
     expect(en.branchSwitcher.uncommittedMessage).toBe(
       "You have uncommitted changes. Stash them before switching branches?",
@@ -613,9 +760,6 @@ describe("translation resources", () => {
     );
     expect(en.desktop.daemon.loadFailed).toBe("Unable to load desktop daemon status.");
     expect(en.desktop.integrations.cli.installFailed).toBe("Unable to install the Agent Duel CLI.");
-    expect(en.desktop.integrations.skills.installFailed).toBe(
-      "Unable to install orchestration skills.",
-    );
   });
 
   it("includes remaining utility chrome keys for the Batch 4T migration", () => {

@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import { describe, expect, it } from "vitest";
 import {
   resolveSidebarWorkspaceAccessibilityLabel,
@@ -45,6 +46,7 @@ describe("resolveSidebarWorkspaceAccessibilityLabel", () => {
       leadingProjectName: "Search project",
       pullRequestLabel: "Pull request 42",
       serviceLabel: "Service web running",
+      t: i18n.t,
     });
 
     expect(label).toBe("Search project, fix/search, Pull request 42, Service web running, Working");
@@ -55,6 +57,7 @@ describe("resolveSidebarWorkspaceAccessibilityLabel", () => {
       workspace: { name: "Investigate search", currentBranch: "fix/search", statusBucket: "done" },
       workspaceTitleSource: "title",
       leadingProjectName: "Search project",
+      t: i18n.t,
     });
 
     expect(label).toBe("Search project, Investigate search");
@@ -65,6 +68,7 @@ describe("resolveSidebarWorkspaceAccessibilityLabel", () => {
       workspace: { name: "main", currentBranch: "main", statusBucket: "done" },
       workspaceTitleSource: "title",
       primaryLabel: "A: Add charts, B: Refine charts",
+      t: i18n.t,
     });
 
     expect(label).toBe("A: Add charts, B: Refine charts");

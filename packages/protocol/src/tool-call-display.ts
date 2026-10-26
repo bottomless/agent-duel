@@ -1,12 +1,17 @@
 import type { ToolCallTimelineItem } from "./agent-types.js";
-import { getPaseoToolLeafName, isPaseoToolName } from "./tool-name-normalization.js";
+import {
+  buildAgentMessageDisplay,
+  buildPaseoToolDisplay,
+} from "./paseo-tool-presentation/index.js";
 import { stripCwdPrefix } from "./path-utils.js";
 
 export type ToolCallDisplayInput = Pick<
   ToolCallTimelineItem,
-  "name" | "status" | "error" | "metadata" | "detail"
+  "name" | "status" | "error" | "metadata" | "detail" | "agentMessage"
 > & {
   cwd?: string;
+  /** Title of the agent a Paseo call targets, when the caller knows it. */
+  targetAgentTitle?: string;
 };
 
 export interface ToolCallDisplayModel {
@@ -33,12 +38,6 @@ function humanizeToolName(name: string): string {
   if (!trimmed) {
     return name;
   }
-  if (isPaseoToolName(trimmed)) {
-    const leaf = getPaseoToolLeafName(trimmed);
-    if (leaf) {
-      return humanizeToolName(leaf);
-    }
-  }
   if (/[:./]/.test(trimmed) || trimmed.includes("__")) {
     return trimmed;
   }
@@ -47,8 +46,9 @@ function humanizeToolName(name: string): string {
     .replace(/[._-]+/g, " ")
     .split(" ")
     .filter((segment) => segment.length > 0)
-    .map((segment) => `${segment[0]?.toUpperCase() ?? ""}${segment.slice(1)}`)
-    .join(" ");
+    .join(" ")
+    .toLowerCase()
+    .replace(/^./, (character) => character.toUpperCase());
 }
 
 function formatErrorText(error: unknown): string | undefined {
@@ -104,7 +104,7 @@ function buildCanonicalDetailDisplay(input: ToolCallDisplayInput): DetailDisplay
       };
     case "worktree_setup":
       return {
-        displayName: "Worktree Setup",
+        displayName: "Worktree setup",
         summary: input.detail.branchName,
       };
     case "sub_agent":
@@ -150,6 +150,21 @@ function buildUnknownDetailOverride(input: ToolCallDisplayInput): DetailDisplay 
 }
 
 export function buildToolCallDisplayModel(input: ToolCallDisplayInput): ToolCallDisplayModel {
+  const errorText = input.status === "failed" ? formatErrorText(input.error) : undefined;
+  const paseoDisplay = input.agentMessage
+    ? buildAgentMessageDisplay(input.agentMessage)
+    : buildPaseoToolDisplay({
+        toolName: input.name,
+        detail: input.detail,
+        targetAgentTitle: input.targetAgentTitle,
+      });
+  if (paseoDisplay) {
+    return {
+      displayName: paseoDisplay.displayName,
+      ...(paseoDisplay.summary ? { summary: paseoDisplay.summary } : {}),
+      ...(errorText ? { errorText } : {}),
+    };
+  }
   const canonicalDisplay = buildCanonicalDetailDisplay(input);
   const unknownDetailOverride = buildUnknownDetailOverride(input);
   const displayName =
@@ -157,7 +172,6 @@ export function buildToolCallDisplayModel(input: ToolCallDisplayInput): ToolCall
     canonicalDisplay.displayName ??
     humanizeToolName(input.name);
   const summary = unknownDetailOverride.summary ?? canonicalDisplay.summary;
-  const errorText = input.status === "failed" ? formatErrorText(input.error) : undefined;
 
   return {
     displayName,

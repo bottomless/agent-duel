@@ -9,7 +9,6 @@ import {
 } from "react";
 import {
   FlatList,
-  Keyboard,
   Platform,
   View,
   type LayoutChangeEvent,
@@ -23,6 +22,9 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { StreamItem } from "@/types/stream";
 import type { Theme } from "@/styles/theme";
 import { useStableEvent } from "@/hooks/use-stable-event";
+import { useKeyboardStreamInset } from "@/keyboard/shift";
+import { shouldAnimateNativeScrollToBottom } from "./native-scroll-animation";
+import { useRevisedHistoryRows } from "./history-row-revision";
 import { useBottomAnchorController } from "./bottom-anchor-controller";
 import { useScrollKeyboardDismiss } from "./scroll-keyboard-dismiss/use-scroll-keyboard-dismiss";
 import type { StreamRenderInput, StreamStrategy, StreamViewportHandle } from "./strategy";
@@ -41,6 +43,7 @@ import {
   type HistoryStartPaginationInput,
   type HistoryStartPaginationTransition,
 } from "./history-start-pagination";
+import { useStreamTopOverlayInset } from "./top-overlay";
 import {
   createHistoryStartSettleScheduler,
   type HistoryStartSettleScheduler,
@@ -62,24 +65,7 @@ const historyStartSlotStyle: ViewStyle = {
   flexShrink: 0,
 };
 const HISTORY_START_SETTLE_FRAMES = 2;
-
-interface HistoryRowDisplayVariants {
-  regular?: StreamItem;
-  compact?: StreamItem;
-}
-
-const historyRowDisplayVariants = new WeakMap<StreamItem, HistoryRowDisplayVariants>();
-
-function getHistoryRowDisplayVariant(item: StreamItem, compact: boolean): StreamItem {
-  let variants = historyRowDisplayVariants.get(item);
-  if (!variants) {
-    variants = {};
-    historyRowDisplayVariants.set(item, variants);
-  }
-  const key = compact ? "compact" : "regular";
-  variants[key] ??= { ...item };
-  return variants[key];
-}
+const NATIVE_STREAM_WINDOW_SIZE = 10;
 
 function keyExtractor(item: { id: string }): string {
   return item.id;
@@ -121,9 +107,10 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
   const scrollOffsetYRef = useRef(0);
   const isUserScrollActiveRef = useRef(false);
   const scrollKeyboardDismiss = useScrollKeyboardDismiss();
+  const streamKeyboardInset = useKeyboardStreamInset();
   const userScrollEndFrameIdRef = useRef<number | null>(null);
   const programmaticScrollEventBudgetRef = useRef(0);
-  const [isNativeViewportSettling, setIsNativeViewportSettling] = useState(false);
+  const isNativeViewportSettlingRef = useRef(false);
   const nativeViewportSettlingFrameIdRef = useRef<number | null>(null);
   const historyStartReadyRef = useRef(false);
   const [historyStartPaginationState, setHistoryStartPaginationState] = useState(
@@ -138,27 +125,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     }
     return [...segments.historyVirtualized, ...segments.historyMounted];
   }, [segments.historyMounted, segments.historyVirtualized]);
-  // Keep unchanged item identities intact so live updates only rerender rows
-  // whose projected content or local display state actually changed. A rare
-  // breakpoint change intentionally refreshes the whole history window.
-  const globallyRevisedHistoryRows = useMemo(() => {
-    const globalDisplayState = historyRowRevision?.globalDisplayState ?? false;
-    return historyItems.map((item) => getHistoryRowDisplayVariant(item, globalDisplayState));
-  }, [historyItems, historyRowRevision?.globalDisplayState]);
-  const displayStateHistoryRows = useMemo(
-    () =>
-      globallyRevisedHistoryRows.map((item) =>
-        historyRowRevision?.displayStateById.has(item.id) ? { ...item } : item,
-      ),
-    [globallyRevisedHistoryRows, historyRowRevision?.displayStateById],
-  );
-  const historyRows = useMemo(
-    () =>
-      displayStateHistoryRows.map((item) =>
-        historyRowRevision?.contentById.has(item.id) ? { ...item } : item,
-      ),
-    [displayStateHistoryRows, historyRowRevision?.contentById],
-  );
+  const historyRows = useRevisedHistoryRows(historyItems, historyRowRevision);
   const getHistoryStartPaginationInput = useStableEvent((): HistoryStartPaginationInput => {
     const metrics = streamViewportMetricsRef.current;
     const hasMeasuredViewport =
@@ -245,12 +212,12 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
 
   const markNativeViewportSettling = useCallback(() => {
     clearNativeViewportSettling();
-    setIsNativeViewportSettling(true);
+    isNativeViewportSettlingRef.current = true;
     let remainingFrames = 4;
     const tick = () => {
       if (remainingFrames <= 0) {
         nativeViewportSettlingFrameIdRef.current = null;
-        setIsNativeViewportSettling(false);
+        isNativeViewportSettlingRef.current = false;
         return;
       }
       remainingFrames -= 1;
@@ -259,13 +226,13 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     nativeViewportSettlingFrameIdRef.current = requestAnimationFrame(tick);
   }, [clearNativeViewportSettling]);
 
-  const bottomAnchorTransportBehavior = useMemo(
+  const getBottomAnchorTransportBehavior = useCallback(
     () =>
       resolveBottomAnchorTransportBehavior({
         strategy,
-        isViewportSettling: isNativeViewportSettling,
+        isViewportSettling: isNativeViewportSettlingRef.current,
       }),
-    [isNativeViewportSettling, strategy],
+    [strategy],
   );
 
   const scrollToBottom = useCallback(
@@ -273,7 +240,13 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
       programmaticScrollEventBudgetRef.current = 3;
       flatListRef.current?.scrollToOffset({
         offset: 0,
-        animated,
+        animated:
+          animated &&
+          shouldAnimateNativeScrollToBottom({
+            offsetY: scrollOffsetYRef.current,
+            viewportHeight: streamViewportMetricsRef.current.viewportHeight,
+            windowSize: NATIVE_STREAM_WINDOW_SIZE,
+          }),
       });
       scrollOffsetYRef.current = 0;
       streamViewportMetricsRef.current = {
@@ -290,7 +263,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     routeRequest: routeBottomAnchorRequest,
     isAuthoritativeHistoryReady,
     renderStrategy: "inverted-stream",
-    transportBehavior: bottomAnchorTransportBehavior,
+    getTransportBehavior: getBottomAnchorTransportBehavior,
     getMeasurementState: () => streamViewportMetricsRef.current,
     isNearBottom: () => {
       const metrics = streamViewportMetricsRef.current;
@@ -310,6 +283,34 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     Platform.OS === "android" && bottomAnchorController.mode === "sticky-bottom"
       ? undefined
       : DEFAULT_MAINTAIN_VISIBLE_CONTENT_POSITION;
+  const topOverlayInset = useStreamTopOverlayInset();
+  // The list is inverted, so its content's bottom padding is the visual top.
+  const listContentContainerStyle = useMemo(
+    () => [
+      baseListContentContainerStyle,
+      {
+        paddingBottom: streamKeyboardInset.contentContainerPaddingBottom + topOverlayInset,
+      },
+    ],
+    [
+      baseListContentContainerStyle,
+      streamKeyboardInset.contentContainerPaddingBottom,
+      topOverlayInset,
+    ],
+  );
+  const listInsetProps = useMemo(
+    () =>
+      streamKeyboardInset.contentInset
+        ? {
+            automaticallyAdjustContentInsets: false,
+            automaticallyAdjustsScrollIndicatorInsets: false,
+            contentInsetAdjustmentBehavior: "never" as const,
+            contentInset: streamKeyboardInset.contentInset,
+            scrollIndicatorInsets: streamKeyboardInset.contentInset,
+          }
+        : {},
+    [streamKeyboardInset.contentInset],
+  );
 
   useEffect(() => {
     streamViewportMetricsRef.current = {
@@ -325,7 +326,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     isUserScrollActiveRef.current = false;
     clearPendingUserScrollEnd();
     clearNativeViewportSettling();
-    setIsNativeViewportSettling(false);
+    isNativeViewportSettlingRef.current = false;
     historyStartReadyRef.current = false;
     const initialHistoryStartState = createHistoryStartPaginationState();
     historyStartPaginationStateRef.current = initialHistoryStartState;
@@ -342,27 +343,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
     };
   }, [agentId, clearNativeViewportSettling, clearPendingUserScrollEnd, evaluateHistoryStart]);
 
-  useEffect(() => {
-    const keyboardEvents = [
-      "keyboardWillShow",
-      "keyboardWillHide",
-      "keyboardDidShow",
-      "keyboardDidHide",
-      "keyboardWillChangeFrame",
-      "keyboardDidChangeFrame",
-    ] as const;
-    const subscriptions = keyboardEvents.map((eventName) =>
-      Keyboard.addListener(eventName, () => {
-        markNativeViewportSettling();
-      }),
-    );
-    return () => {
-      for (const subscription of subscriptions) {
-        subscription.remove();
-      }
-      clearNativeViewportSettling();
-    };
-  }, [clearNativeViewportSettling, markNativeViewportSettling]);
+  useEffect(() => () => clearNativeViewportSettling(), [clearNativeViewportSettling]);
 
   useEffect(() => {
     bottomAnchorController.prepareForStickyContentChange();
@@ -597,6 +578,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
   // data or the live header changes, preserving the row identities above.
   return (
     <FlatList
+      {...listInsetProps}
       ref={flatListRef}
       data={historyRows}
       renderItem={renderItem}
@@ -606,7 +588,7 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
       nativeID="agent-chat-scroll-native-virtualized"
       ListHeaderComponent={liveHeaderContent ?? undefined}
       ListFooterComponent={historyFooterContent ?? undefined}
-      contentContainerStyle={baseListContentContainerStyle}
+      contentContainerStyle={listContentContainerStyle}
       style={listStyle}
       onLayout={handleListLayout}
       onScroll={handleScroll}
@@ -617,10 +599,11 @@ function NativeStreamViewport(props: StreamRenderInput & { strategy: StreamStrat
       scrollEventThrottle={16}
       onContentSizeChange={handleContentSizeChange}
       maintainVisibleContentPosition={maintainVisibleContentPosition}
-      initialNumToRender={40}
-      maxToRenderPerBatch={40}
-      updateCellsBatchingPeriod={0}
-      windowSize={21}
+      // Tall Markdown rows exhaust a shallow window during flings. Keep the initial
+      // render small, then refill a deeper window in batches large enough to keep up.
+      initialNumToRender={2}
+      maxToRenderPerBatch={10}
+      windowSize={NATIVE_STREAM_WINDOW_SIZE}
       removeClippedSubviews={false}
       scrollEnabled={scrollEnabled}
       showsVerticalScrollIndicator
