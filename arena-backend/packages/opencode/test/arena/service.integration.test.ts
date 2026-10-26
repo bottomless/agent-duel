@@ -1388,6 +1388,69 @@ describe("Arena service vertical slice", () => {
     }
   }, 90_000)
 
+  test("Auto Accept answers a cold side's ask after staging reloads its worktree", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    // The build agent asks before reading `*.env.*`.
+    await writeFile(`${directory.path}/.env.local`, "LOCAL_ENV_READ=1\n")
+    await $`git add opencode.json .env.local`.cwd(directory.path).quiet()
+    await $`git commit -m "test: add a local env file"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ contestantReads: { 1: [".env.local"], 2: [".env.local"] } })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "Auto Accept" }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      // The chat's first battle has no warm pair, so both sides are cold: each request leaves from
+      // the canonical instance and the side's worktree instance is replaced once it is staged.
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Check the local settings.", autoAccept: true }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not admit the Auto Accept battle")
+      const deadline = Date.now() + 20_000
+      let asked: ReadonlyArray<Readonly<Record<string, unknown>>> = []
+      let settled = await memory.store.turn(turnID)
+      while (settled?.state !== "awaiting_vote" && Date.now() < deadline) {
+        const snapshot = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
+        asked = snapshot.runs.flatMap((run) => run.permissions ?? [])
+        if (asked.length > 0) break
+        await Bun.sleep(20)
+        settled = await memory.store.turn(turnID)
+      }
+      expect(asked).toEqual([])
+      expect(settled?.state).toBe("awaiting_vote")
+
+      for (const run of await memory.store.runsForTurn(turnID)) {
+        const messages = await json<
+          Array<{ parts: Array<{ type: string; tool?: string; state?: { status: string; output?: string } }> }>
+        >(await request(`/session/${run.rootSessionID}/message`, { headers }))
+        const reads = messages
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool" && part.tool === "read")
+        expect(reads.map((part) => part.state?.status)).toEqual(["completed"])
+        expect(reads[0]?.state?.output).toContain("LOCAL_ENV_READ=1")
+      }
+    } finally {
+      router.restore()
+    }
+  }, 60_000)
+
   test("honors an already committed valid decision instead of applying a later choice", async () => {
     await using directory = await tmpdir({
       git: true,

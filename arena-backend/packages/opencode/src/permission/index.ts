@@ -52,13 +52,15 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    // The last Auto Accept value set per directory. A disposed instance loses its state, and Arena
+    // disposes a contestant's worktree instance while staging it, after the run turned Auto Accept on.
+    const autoAcceptByDirectory = new Map<string, boolean>()
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
-        void ctx
         const state = {
           pending: new Map<PermissionV1.ID, PendingEntry>(),
           approved: [],
-          autoAccept: false,
+          autoAccept: autoAcceptByDirectory.get(ctx.directory) ?? false,
         }
 
         yield* Effect.addFinalizer(() =>
@@ -198,6 +200,7 @@ const layer = Layer.effect(
     const setAutoAccept = Effect.fn("Permission.setAutoAccept")(function* (enabled: boolean) {
       const current = yield* InstanceState.get(state)
       current.autoAccept = enabled
+      autoAcceptByDirectory.set(yield* InstanceState.directory, enabled)
       if (!enabled) return
       for (const request of [...current.pending.values()]) {
         yield* reply({ requestID: request.info.id, reply: "once" }).pipe(Effect.ignore)

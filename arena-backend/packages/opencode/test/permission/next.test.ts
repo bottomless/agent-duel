@@ -608,6 +608,39 @@ it.instance(
   { git: true },
 )
 
+// Arena stages a contestant's worktree after the run turned Auto Accept on, and staging disposes
+// the worktree's instance.
+it.instance(
+  "the directory's next instance keeps the last Auto Accept value",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const store = yield* InstanceStore.Service
+      const permission = yield* Permission.Service
+      const envRead = {
+        sessionID: SessionID.make("session_test"),
+        permission: "read",
+        patterns: [".env.local"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "read", pattern: "*.env.*", action: "ask" as const }],
+      }
+
+      yield* permission.setAutoAccept(true)
+      yield* store.disposeDirectory(test.directory)
+      yield* ask(envRead)
+      expect(yield* list()).toEqual([])
+
+      yield* permission.setAutoAccept(false)
+      yield* store.disposeDirectory(test.directory)
+      const pending = yield* ask(envRead).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      expect(Exit.isFailure(yield* Fiber.await(pending))).toBe(true)
+    }),
+  { git: true },
+)
+
 it.instance(
   "ask - resolves immediately when action is allow",
   () =>
