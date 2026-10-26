@@ -34,17 +34,21 @@ The engine reaches the routes through `arena/backend.ts`, which keeps the contro
 both modes, so no caller branches on the mode. The rest of this doc says "control plane" for the
 routes; in a BYOK build read it as the in-process service.
 
-A hosted runtime queues selected research snapshots in the same SQLite transaction as the local
-write. Pending revisions survive restarts and account changes, and remain queued until the
-control plane acknowledges the entire batch. Failed requests retry indefinitely with jittered
-exponential backoff capped at one minute. The queue is partitioned by the verified account and
+A hosted runtime journals local mutations in the same SQLite transaction as the local write.
+Research validation and chunk conversion run after commit, so conversion failures preserve the
+canonical record and retain the failed mutation separately. Pending revisions survive restarts and
+account changes. Temporary upload failures retry with jittered exponential backoff capped at one
+minute. HTTP 400, 413 and 422 batches are split to isolate refused records; retain those records and
+any manifests depending on refused chunks separately, allowing other uploads to continue. Explicit
+recovery can requeue retained records after the cause is repaired. The queue is partitioned by the verified account and
 hosted destination; a different account cannot upload its predecessor's pending records. BYOK
 creates no research queue or uploader.
 
 On the first hosted start after this change, backfill the verified account's existing chats, turns,
 runs, intact transcript/image artifacts and archive manifests. The durable backfill worklist resumes
-across restarts; a work item moves into the upload queue atomically. Unreadable artifacts remain on
-that worklist for later retries, and truncated local artifacts cannot be recovered. Unowned history
+across restarts; a work item moves into the mutation journal atomically. After three unsuccessful
+reads, park unavailable artifacts until the next hosted start or an explicit recovery pass. Other
+history still progresses, and truncated local artifacts cannot be recovered. Unowned history
 is never assigned to whichever account happens to sign in. Backfill reads the current local record
 and allocates its revision transactionally, so concurrent edits cannot be overwritten by a stale
 copy.
@@ -56,7 +60,7 @@ per-call full request, response and tool-output artifacts stay local. Upload req
 by a checksum manifest in the original collection. Research readers resolve that manifest with
 `resolveResearchDocument` from arena-service, looking up chunks under the same account and source.
 Deploy the control plane's updated arena-service dependency before shipping this desktop protocol;
-an older server refuses chunks, and the desktop retains them for retry.
+an older server refuses chunks, and the desktop retains them for explicit recovery after the server upgrade.
 
 `archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
 the previous cloud archive until its replacement arrives. Transcript and image archives are kept

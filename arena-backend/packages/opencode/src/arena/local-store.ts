@@ -19,9 +19,12 @@ import type {
 } from "@agent-duel/arena-service/collection"
 import { Store } from "./mongo"
 import { ResearchQueue } from "./research-queue"
+import { encode, decode } from "./local-value"
 
 const documentRecordSchema = z.object({ _id: z.string() }).passthrough()
-const marker = "__arena_value_type"
+interface ResearchBackfillOptions {
+  retryUnavailable?: boolean
+}
 const blindedTelemetryPrivacyKey = "privacy.blinded-generation-telemetry"
 const blindedTelemetryPendingKey = "privacy.blinded-generation-telemetry-pending"
 const blindedTelemetryPrivacyVersion = "4"
@@ -47,27 +50,6 @@ function identifier(value: string) {
 
 export class ArenaDuplicateError extends Error {
   readonly code = "ARENA_DUPLICATE"
-}
-
-function encode(value: unknown): unknown {
-  if (value instanceof Date) return { [marker]: "date", value: value.toISOString() }
-  if (value instanceof Uint8Array) return { [marker]: "bytes", value: Buffer.from(value).toString("base64") }
-  if (Array.isArray(value)) return value.map(encode)
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, encode(child)]))
-  }
-  return value
-}
-
-function decode(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(decode)
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>
-    if (record[marker] === "date" && typeof record.value === "string") return new Date(record.value)
-    if (record[marker] === "bytes" && typeof record.value === "string") return Buffer.from(record.value, "base64")
-    return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, decode(child)]))
-  }
-  return value
 }
 
 function clone<T>(value: T): T {
@@ -634,13 +616,27 @@ class LocalDatabase implements ArenaDb, ArenaClient {
     return result as T
   }
   /** Copy only this verified account's recoverable archives into the durable upload queue. */
-  async backfillResearch(accountID: string, signal: AbortSignal) {
+  async backfillResearch(accountID: string, signal: AbortSignal, options: ResearchBackfillOptions = {}) {
     if (!this.researchQueue || !this.researchPartition) return true
     const partition = this.researchPartition
     this.database.run(`CREATE TABLE IF NOT EXISTS arena_research_backfill (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT, partition TEXT NOT NULL,
-      collection TEXT NOT NULL, record_id TEXT NOT NULL,
+      collection TEXT NOT NULL, record_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
       UNIQUE(partition, collection, record_id))`)
+    const columns = this.database.query<{ name: string }, []>("PRAGMA table_info(arena_research_backfill)").all()
+    if (!columns.some((column) => column.name === "attempts"))
+      this.database.run("ALTER TABLE arena_research_backfill ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+    this.database.run(`CREATE TABLE IF NOT EXISTS arena_research_backfill_unavailable (
+      partition TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL,
+      PRIMARY KEY(partition, collection, record_id))`)
+    if (options.retryUnavailable)
+      this.database.transaction(() => {
+        this.database
+          .query(`INSERT OR IGNORE INTO arena_research_backfill (partition, collection, record_id)
+        SELECT partition, collection, record_id FROM arena_research_backfill_unavailable WHERE partition = ?`)
+          .run(partition)
+        this.database.query("DELETE FROM arena_research_backfill_unavailable WHERE partition = ?").run(partition)
+      })()
     const marker = `research.backfill.v1.${partition}`
     const chats = "SELECT id FROM arena_documents WHERE collection = 'chats' AND json_extract(document, '$.userId') = ?"
     const turns = `SELECT id FROM arena_documents WHERE collection = 'turns' AND json_extract(document, '$.chatID') IN (${chats})`
@@ -685,18 +681,38 @@ class LocalDatabase implements ArenaDb, ArenaClient {
           `SELECT document FROM arena_documents WHERE collection = ? AND id = ? AND ${scope}`,
         )
         .get(job.collection, job.recordID, accountID)
-      // Missing or no-longer-owned records cannot safely be uploaded. Keep the work item for a
-      // future pass; another unavailable file must not block the rest of the account's history.
-      if (!row) continue
+      // A removed or reassigned record is no longer eligible for this account's backfill.
+      if (!row) {
+        this.database
+          .query("DELETE FROM arena_research_backfill WHERE partition = ? AND sequence = ?")
+          .run(partition, job.sequence)
+        continue
+      }
       const stored = documentRecordSchema.parse(decode(JSON.parse(row.document)))
       let document: Record<string, unknown>
       try {
         document = job.collection === "artifacts" ? await this.hydrate(stored) : stored
       } catch {
-        console.warn("[arena-research] Backfill artifact unavailable; retained for retry", {
-          collection: job.collection,
-          id: job.recordID,
-        })
+        this.database.transaction(() => {
+          this.database
+            .query("UPDATE arena_research_backfill SET attempts = attempts + 1 WHERE partition = ? AND sequence = ?")
+            .run(partition, job.sequence)
+          this.database
+            .query(`INSERT OR IGNORE INTO arena_research_backfill_unavailable (partition, collection, record_id)
+            SELECT partition, collection, record_id FROM arena_research_backfill
+            WHERE partition = ? AND sequence = ? AND attempts >= 3`)
+            .run(partition, job.sequence)
+          this.database
+            .query("DELETE FROM arena_research_backfill WHERE partition = ? AND sequence = ? AND attempts >= 3")
+            .run(partition, job.sequence)
+        })()
+        console.warn(
+          "[arena-research] Backfill artifact unavailable; parked after three attempts until the next start",
+          {
+            collection: job.collection,
+            id: job.recordID,
+          },
+        )
         continue
       }
       this.run(() => {
@@ -904,13 +920,11 @@ export type LocalStoreConfiguration = {
   readonly onClose?: () => void | Promise<void>
 }
 
-export async function connectLocalStore(
-  input: LocalStoreConfiguration,
-): Promise<
+export async function connectLocalStore(input: LocalStoreConfiguration): Promise<
   Store & {
     readonly sourceID: string
     readonly researchQueue: ResearchQueue | undefined
-    backfillResearch: (accountID: string, signal: AbortSignal) => Promise<boolean>
+    backfillResearch: (accountID: string, signal: AbortSignal, options?: ResearchBackfillOptions) => Promise<boolean>
   }
 > {
   await mkdir(input.directory, { recursive: true })
@@ -944,7 +958,8 @@ export async function connectLocalStore(
   const store = Object.assign(new Store(local, local), {
     sourceID: local.sourceID,
     researchQueue: local.researchQueue,
-    backfillResearch: (accountID: string, signal: AbortSignal) => local.backfillResearch(accountID, signal),
+    backfillResearch: (accountID: string, signal: AbortSignal, options?: ResearchBackfillOptions) =>
+      local.backfillResearch(accountID, signal, options),
   })
   try {
     await store.initialize()

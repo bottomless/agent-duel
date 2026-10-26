@@ -135,10 +135,23 @@ describe("historical research backfill", () => {
       expect(records(local).some((record) => record.id === "run-second|transcript")).toBe(true)
       expect(records(local).some((record) => record.id === "run-first|transcript")).toBe(false)
       expect(sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM arena_research_backfill").get()!.n).toBe(1)
-      await rename(`${file}.offline`, file)
+      expect(await local.backfillResearch("owner-a", new AbortController().signal)).toBe(false)
       expect(await local.backfillResearch("owner-a", new AbortController().signal)).toBe(true)
+      expect(sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM arena_research_backfill").get()!.n).toBe(0)
+      expect(
+        sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM arena_research_backfill_unavailable").get()!.n,
+      ).toBe(1)
+      // A completed pass stays completed; only an explicit recovery pass retries parked files.
+      expect(await local.backfillResearch("owner-a", new AbortController().signal)).toBe(true)
+      await rename(`${file}.offline`, file)
+      expect(await local.backfillResearch("owner-a", new AbortController().signal, { retryUnavailable: true })).toBe(
+        true,
+      )
       expect(records(local).filter((record) => record.id === "run-first|transcript")).toHaveLength(1)
       expect(sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM arena_research_backfill").get()!.n).toBe(0)
+      expect(
+        sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM arena_research_backfill_unavailable").get()!.n,
+      ).toBe(0)
     } finally {
       await local.close()
       sqlite.close()

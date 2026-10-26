@@ -93,13 +93,97 @@ describe("durable research uploads", () => {
     expect(f.queue.retry()).toEqual({ failures: 0, nextAttempt: 0 })
   })
 
-  test.each([401, 403, 413, 429, 500, 503])("retains every record on HTTP %s", async (status) => {
+  test.each([400, 413, 422])(
+    "isolates a permanently rejected record on HTTP %s and uploads later records",
+    async (status) => {
+      const uploaded: string[] = []
+      await using f = fixture({
+        fetch: async (_url, init) => {
+          const batch = requestBatch(init)
+          if (batch.records.some((record) => record.id === "bad")) return new Response(null, { status })
+          uploaded.push(...batch.records.map((record) => record.id))
+          return Response.json({ received: batch.records.length, stored: batch.records.length })
+        },
+      })
+      f.queue.enqueue(mutation(1, "bad"))
+      f.queue.enqueue(mutation(2, "good"))
+      await f.uploader.flush()
+      expect(uploaded).toEqual(["good"])
+      expect(f.queue.count).toBe(0)
+      expect(f.queue.rejected().map((record) => ({ id: record.id, reason: record.reason }))).toEqual([
+        { id: "bad", reason: `http_${status}` },
+      ])
+      await f.uploader.flush()
+      expect(uploaded).toEqual(["good"])
+    },
+  )
+
+  test.each([401, 403, 429, 500, 503])("retains every record on HTTP %s", async (status) => {
     await using f = fixture({ fetch: async () => new Response(null, { status }) })
     f.queue.enqueue(mutation(1))
     f.queue.enqueue(mutation(2))
     await f.uploader.flush()
     expect(f.queue.peek(10).map((x) => JSON.parse(x.json).revision)).toEqual([1, 2])
     expect(f.queue.retry().failures).toBe(1)
+  })
+
+  test("splits an oversized batch without rejecting individually acceptable records", async () => {
+    const uploaded: string[] = []
+    await using f = fixture({
+      fetch: async (_url, init) => {
+        const batch = requestBatch(init)
+        if (batch.records.length > 1) return new Response(null, { status: 413 })
+        uploaded.push(batch.records[0].id)
+        return Response.json({ received: 1, stored: 1 })
+      },
+    })
+    f.queue.enqueue(mutation(1, "first"))
+    f.queue.enqueue(mutation(2, "second"))
+    await f.uploader.flush()
+    expect(uploaded).toEqual(["first", "second"])
+    expect(f.queue.rejected()).toEqual([])
+    expect(f.queue.count).toBe(0)
+  })
+
+  test("retains dependent manifests when a chunk is rejected, without blocking other records", async () => {
+    const uploaded: ResearchRecord[] = []
+    await using f = fixture({
+      fetch: async (_url, init) => {
+        const batch = requestBatch(init)
+        if (batch.records.some((record) => record.collection === "chunks")) return new Response(null, { status: 400 })
+        uploaded.push(...batch.records)
+        return Response.json({ received: batch.records.length, stored: batch.records.length })
+      },
+    })
+    f.queue.enqueue({ collection: "runs", id: "large", revision: 1, document: { text: "x".repeat(3 * 1024 * 1024) } })
+    f.queue.enqueue(mutation(2, "good"))
+    while (f.queue.count) await f.uploader.flush()
+    expect(uploaded.map((record) => record.id)).toEqual(["good"])
+    expect(f.queue.rejected().find((record) => record.id === "large")?.reason).toBe("rejected_chunk")
+  })
+
+  test("rejected records survive reopening and can be explicitly retried after repair", async () => {
+    await using dir = await tmpdir()
+    const file = path.join(dir.path, "queue.sqlite")
+    const first = new Database(file)
+    const queue = new ResearchQueue(first, "account-a")
+    queue.enqueue(mutation(1))
+    queue.reject(queue.peek(10), "http_400")
+    first.close()
+    const second = new Database(file)
+    try {
+      const reopened = new ResearchQueue(second, "account-a")
+      expect(reopened.count).toBe(0)
+      expect(reopened.rejected().map((row) => row.id)).toEqual(["run-a"])
+      const other = new ResearchQueue(second, "account-b")
+      expect(other.rejected()).toEqual([])
+      other.retryRejected()
+      reopened.retryRejected()
+      expect(reopened.peek(10).map((row) => JSON.parse(row.json))).toEqual([mutation(1)])
+      expect(reopened.rejected()).toEqual([])
+    } finally {
+      second.close()
+    }
   })
 
   test.each([{}, { received: 0, stored: 0 }, { received: 1, stored: 2 }])(
@@ -200,7 +284,7 @@ describe("durable research uploads", () => {
     }
   })
 
-  test("local writes and the queue commit together; projection failure rolls both back", async () => {
+  test("research projection failures preserve the local write and later uploads", async () => {
     await using dir = await tmpdir()
     const local = await connectLocalStore({ directory: dir.path, researchPartition: "account-a" })
     try {
@@ -208,12 +292,58 @@ describe("durable research uploads", () => {
       expect(local.researchQueue!.peek(10).map((x) => JSON.parse(x.json).document)).toEqual([
         { _id: "run", value: "durable" },
       ])
-      await expect(
-        local.db.collection("artifacts").insertOne({ _id: "bad", kind: "transcript", data: "invalid" }),
-      ).rejects.toThrow()
-      expect(await local.db.collection("artifacts").findOne({ _id: "bad" })).toBeNull()
-      expect(local.researchQueue!.count).toBe(1)
+      await local.db.collection("artifacts").insertOne({ _id: "bad", kind: "transcript", data: "invalid" })
+      expect(await local.db.collection("artifacts").findOne({ _id: "bad" })).toEqual({
+        _id: "bad",
+        kind: "transcript",
+        data: Buffer.from("invalid"),
+      })
+      await local.db.collection("runs").insertOne({ _id: "later", value: "also durable" })
+      expect(local.researchQueue!.peek(10).map((row) => JSON.parse(row.json).id)).toEqual(["run", "later"])
+      expect(local.researchQueue!.rejected().map((row) => ({ id: row.id, reason: row.reason }))).toEqual([
+        { id: "bad", reason: "projection_failed" },
+      ])
     } finally {
+      await local.close()
+    }
+  })
+
+  test("upload queue storage failures leave committed local records and their raw revisions recoverable", async () => {
+    await using dir = await tmpdir()
+    const local = await connectLocalStore({ directory: dir.path, researchPartition: "account-a" })
+    const sqlite = new Database(path.join(dir.path, "arena.sqlite"))
+    const batches: ResearchRecord[][] = []
+    const uploader = new ResearchUploader({
+      url: "https://control.test",
+      token: "test",
+      sourceID: local.sourceID,
+      queue: local.researchQueue!,
+      intervalMs: 60_000,
+      now: () => 10_000,
+      warn: () => {},
+      fetch: async (_url, init) => {
+        const batch = requestBatch(init)
+        batches.push(batch.records)
+        return Response.json({ received: batch.records.length, stored: batch.records.length })
+      },
+    })
+    try {
+      sqlite.run(
+        "CREATE TRIGGER reject_upload BEFORE INSERT ON arena_research_queue BEGIN SELECT RAISE(ABORT, 'upload queue unavailable'); END",
+      )
+      await local.db.collection("runs").insertOne({ _id: "run", state: "complete" })
+      await uploader.flush()
+      expect(await local.db.collection("runs").findOne({ _id: "run" })).toEqual({ _id: "run", state: "complete" })
+      expect(local.researchQueue!.count).toBe(1)
+      expect(batches).toEqual([])
+      sqlite.run("DROP TRIGGER reject_upload")
+      local.researchQueue!.defer({ failures: 0, nextAttempt: 0 })
+      await uploader.flush()
+      expect(batches.flat().map((record) => record.document)).toEqual([{ _id: "run", state: "complete" }])
+      expect(local.researchQueue!.count).toBe(0)
+    } finally {
+      await uploader.close()
+      sqlite.close()
       await local.close()
     }
   })

@@ -63,18 +63,21 @@ async function openLocalStore() {
       token: credentials.token,
       sourceID: local.sourceID,
       queue: local.researchQueue,
-      warn: (warning) => console.warn("[arena-research] Upload pending; will retry", warning),
+      warn: (warning) => console.warn("[arena-research] Upload status", warning),
     })
   }
   if (credentials?.mode === "hosted") {
     const accountID = credentials.researchAccountID
     backfill = (async () => {
       const signal = backfillController.signal
+      let retryUnavailable = true
       while (!signal.aborted) {
         try {
-          if (await local.backfillResearch(accountID, signal)) return
+          if (await local.backfillResearch(accountID, signal, { retryUnavailable })) return
         } catch {
           console.warn("[arena-research] Historical backfill pending; will retry")
+        } finally {
+          retryUnavailable = false
         }
         if (signal.aborted) return
         await new Promise<void>((resolve) => {
