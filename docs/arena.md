@@ -142,8 +142,11 @@ each diff the working side's column is a hatched placeholder the size of the fin
 finished side expands. The engine's diff stands the
 unfinished side in as the frozen base, the shape a stopped battle already uses; a side working
 again after a reply keeps its last result's commit, so its run state decides, not the commit.
-The first result is fetched under its own query key, so the comparison is fetched again when the
-other side lands; until it arrives the review keeps showing the first result. A run reads `complete`
+The comparison and each file's read are keyed by the commits they compare (`arenaDiffQueryKey`,
+`comparisonRevision`), and the first result also by its phase, so they are fetched again when the
+other side lands; until they arrive the review keeps showing what it had. Keying by phase alone
+showed a side's old result after it finished a reply: the engine marks the run complete before it
+records the new commit, so the comparison fetched at that moment compares the old one. A run reads `complete`
 a moment before the engine records its commit, so a side counts as finished only once its commit is
 there; going by run state alone dropped the review out for that moment. A row opens its file's diff
 right under it and closes it again, several can be open at once, and the first diverging file opens

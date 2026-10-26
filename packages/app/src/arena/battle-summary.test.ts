@@ -22,6 +22,7 @@ import {
   settledHistoryRun,
 } from "./battle-result";
 import {
+  arenaDiffQueryKey,
   battleReviewPhase,
   battleSummaryStatus,
   canRequestBattleDiff,
@@ -515,6 +516,23 @@ describe("canReviewBattle", () => {
     expect(
       canReviewBattle(turn({ canVote: false, canDiscardBattle: true, canResumeBattle: true })),
     ).toBe(false);
+  });
+});
+
+describe("arenaDiffQueryKey", () => {
+  type Run = Parameters<typeof arenaDiffQueryKey>[3];
+  const run = (finalCommit?: string) =>
+    ({ runState: "complete", ...(finalCommit ? { finalCommit } : {}) }) as Run;
+  const key = (a: Run, b: Run) => arenaDiffQueryKey("server-1", "agent-1", "turn-1", a, b);
+
+  it("fetches the comparison again when a side's reply lands a new commit", () => {
+    // B reads complete while it still carries its previous result; its new commit lands after.
+    expect(key(run("a1"), run("b2"))).not.toEqual(key(run("a1"), run("b1")));
+  });
+
+  it("keeps one key while the commits stay, so the card and the history share a fetch", () => {
+    expect(key(run("a1"), run("b1"))).toEqual(key(run("a1"), run("b1")));
+    expect(key(run("a1"), run())).not.toEqual(key(run("a1"), run("b1")));
   });
 });
 

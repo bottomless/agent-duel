@@ -75,6 +75,27 @@ function finishing(run: ArenaRun | undefined): boolean {
 }
 
 /**
+ * The turn's comparison, keyed by the commits it compares. A side finishing a reply reads complete
+ * while it still carries its previous result's commit, so the comparison fetched at that moment is
+ * of the old result; the new commit changes the key and fetches it again.
+ */
+export function arenaDiffQueryKey(
+  serverId: string,
+  agentId: string,
+  turnId: string,
+  runA: ArenaRun | undefined,
+  runB: ArenaRun | undefined,
+) {
+  const commits = `${runA?.finalCommit ?? "-"}:${runB?.finalCommit ?? "-"}`;
+  return ["arena", "diff", serverId, agentId, turnId, commits];
+}
+
+/** The commits a comparison compares; a side still working stands in as the base. */
+export function comparisonRevision(diff: ArenaComparisonDiff): string {
+  return `${diff.a.commit}:${diff.b.commit}`;
+}
+
+/**
  * What the card can review: both results once both sides settle, or the first result alone
  * while the other side still works, so the voter can read it before deciding early.
  */

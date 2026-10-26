@@ -1,4 +1,4 @@
-import type { ArenaComparisonFileDiff, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaComparisonFileDiff } from "@getpaseo/protocol/arena/rpc-schemas";
 import { useFetchQuery } from "@/data/query";
 import { useSessionStore } from "@/stores/session-store";
 
@@ -14,12 +14,13 @@ export function useArenaFileDiff(input: {
   /** Null reads nothing. */
   file: string | null;
   /**
-   * The side still working while the other's result is shown. Its file is keyed apart, so an open
-   * diff reads the file again once that side lands.
+   * The commits of the comparison the list shows (`comparisonRevision`). A file is keyed by them,
+   * so an open diff reads the file again whenever the list moves to other results: the other side
+   * landing, or a side finishing a reply.
    */
-  waitingFor?: ArenaSide;
+  revision?: string;
 }) {
-  const { serverId, agentId, turnId, file, waitingFor } = input;
+  const { serverId, agentId, turnId, file, revision } = input;
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   return useFetchQuery<ArenaComparisonFileDiff>({
     queryKey: [
@@ -29,7 +30,7 @@ export function useArenaFileDiff(input: {
       agentId,
       turnId,
       file,
-      ...(waitingFor ? [`waiting:${waitingFor}`] : []),
+      ...(revision ? [revision] : []),
     ],
     dataShape: "value",
     staleTimeMs: 0,

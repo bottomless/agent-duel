@@ -17,6 +17,7 @@ import { ArenaChangesList } from "./changes-list";
 import type { ArenaChangesRow } from "./changes-rows";
 import { useArenaDiffLayout, type ArenaDiffLayout } from "./diff-layout";
 import { DiffLayoutControl } from "./diff-layout-control";
+import { comparisonRevision } from "./comparison-visibility";
 import { useArenaFileDiff } from "./file-diff-query";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { PaneIconAction } from "./pane-icon-action";
@@ -115,6 +116,7 @@ function ChangesTab({
   onRetry: () => void;
   retrying: boolean;
 }) {
+  const revision = diff ? comparisonRevision(diff) : undefined;
   const renderDiff = useCallback(
     (file: string) => (
       <InlineFileDiff
@@ -124,10 +126,11 @@ function ChangesTab({
         file={file}
         layout={layout}
         waitingFor={waitingFor ?? undefined}
+        revision={revision}
         embedded
       />
     ),
-    [agentId, layout, serverId, turnId, waitingFor],
+    [agentId, layout, revision, serverId, turnId, waitingFor],
   );
   if (diff === undefined && !error) {
     return (
@@ -363,7 +366,7 @@ export function BattleReview({
     agentId,
     turnId,
     file: openFiles[0] ?? null,
-    waitingFor: waitingFor ?? undefined,
+    revision: diff ? comparisonRevision(diff) : undefined,
   });
   // Picking a tab on a folded section opens it on that tab.
   const setTab = useCallback(

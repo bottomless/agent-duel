@@ -57,7 +57,7 @@ import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-fi
 import { VerdictBody } from "./verdict-body";
 import { ArenaChangesList } from "./changes-list";
 import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
-import { hasBattleDiff } from "./comparison-visibility";
+import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
 import { ArenaModelVendorIcon } from "./model-vendor-icon";
 import { describeSummaryOmissions } from "./summary-omissions";
@@ -540,7 +540,7 @@ function ExpandedBattleSummary({
   const runB = snapshot?.runs.find((run) => run.side === "b");
   const bothFinal = runsAreFinal(runA, runB);
   const diffQuery = useFetchQuery({
-    queryKey: ["arena", "diff", serverId, agentId, item.id],
+    queryKey: arenaDiffQueryKey(serverId, agentId, item.id, runA, runB),
     dataShape: "value",
     staleTimeMs: 0,
     queryFn: async () => {

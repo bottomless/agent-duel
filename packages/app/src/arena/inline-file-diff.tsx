@@ -61,6 +61,7 @@ export function InlineFileDiff({
   file,
   layout,
   waitingFor,
+  revision,
   embedded = false,
 }: {
   serverId: string;
@@ -70,9 +71,11 @@ export function InlineFileDiff({
   layout: ArenaDiffLayout;
   /** The side still working: its column is a placeholder until its result lands. */
   waitingFor?: ArenaSide;
+  /** The commits of the comparison listing this file; see `useArenaFileDiff`. */
+  revision?: string;
   embedded?: boolean;
 }) {
-  const query = useArenaFileDiff({ serverId, agentId, turnId, file, waitingFor });
+  const query = useArenaFileDiff({ serverId, agentId, turnId, file, revision });
   const { refetch } = query;
   const retry = useCallback(() => void refetch(), [refetch]);
   // When the other side lands, the file is read again under a new key and arrives a moment later.

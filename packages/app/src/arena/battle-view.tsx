@@ -36,6 +36,7 @@ import { BattleReview } from "./battle-review";
 import { useArenaReviewTelemetry } from "./review-telemetry";
 import { isStoppedByEarlyPick } from "./battle-result";
 import {
+  arenaDiffQueryKey,
   battleReviewPhase,
   battleSummaryStatus,
   type BattleReviewPhase,
@@ -383,16 +384,14 @@ function useBattleDiff(
   serverId: string,
   agentId: string,
   turnId: string,
+  runA: ArenaRun | undefined,
+  runB: ArenaRun | undefined,
   phase: BattleReviewPhase,
 ) {
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   return useFetchQuery({
     queryKey: [
-      "arena",
-      "diff",
-      serverId,
-      agentId,
-      turnId,
+      ...arenaDiffQueryKey(serverId, agentId, turnId, runA, runB),
       ...(phase.kind === "partial" ? [`partial:${phase.finished}`] : []),
     ],
     dataShape: "value",
@@ -428,6 +427,8 @@ function BattleJudging({
   turnId,
   comparison,
   comparisonState,
+  runA,
+  runB,
   phase,
   retrying,
   onRetry,
@@ -437,6 +438,8 @@ function BattleJudging({
   turnId: string;
   comparison: ArenaSnapshot["comparison"];
   comparisonState: NonNullable<ArenaSnapshot["turn"]>["comparisonState"];
+  runA: ArenaRun | undefined;
+  runB: ArenaRun | undefined;
   phase: Exclude<BattleReviewPhase, { kind: "none" }>;
   retrying: boolean;
   onRetry: () => void;
@@ -447,7 +450,7 @@ function BattleJudging({
     phase.kind === "partial"
       ? { available: false, pending: false, failed: false }
       : battleSummaryStatus(comparison, comparisonState);
-  const diffQuery = useBattleDiff(serverId, agentId, turnId, phase);
+  const diffQuery = useBattleDiff(serverId, agentId, turnId, runA, runB, phase);
   const refetchDiff = diffQuery.refetch;
   const retryDiff = useCallback(() => {
     void refetchDiff();
@@ -790,6 +793,8 @@ export function ArenaBattleView({
                 turnId={turn.id}
                 comparison={snapshot.comparison}
                 comparisonState={turn.comparisonState}
+                runA={runA}
+                runB={runB}
                 phase={reviewPhase}
                 retrying={pendingAction?.kind === "retry_comparison"}
                 onRetry={actions.retryComparison}
