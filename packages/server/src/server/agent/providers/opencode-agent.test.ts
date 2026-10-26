@@ -409,6 +409,45 @@ describe("OpenCodeAgentClient adapter smoke tests", () => {
     },
   );
 
+  test("Arena size switches skip the catalog the engine hides", async () => {
+    const cwd = tmpCwd();
+    const runtime = new TestOpenCodeHarness();
+    const upstream = new TestOpenCodeClient();
+    upstream.providerListResponse = { data: { connected: [], all: [] } };
+    runtime.enqueueClient(upstream);
+    const client = new OpenCodeAgentClient(logger, undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+    });
+    const session = await client.createSession({
+      provider: "opencode",
+      cwd,
+      model: "arena/contestant",
+      thinkingOptionId: "high",
+    });
+    try {
+      await session.setModel!("arena/medium");
+      await session.setThinkingOption!("xhigh");
+      expect(await session.getRuntimeInfo()).toMatchObject({
+        model: "arena/medium",
+        thinkingOptionId: "xhigh",
+      });
+      upstream.sessionPromptAsyncEvents = [
+        { type: "session.idle", properties: { sessionID: "session-1" } },
+      ];
+      await collectTurnEvents(streamSession(session, "Use the medium model"));
+      expect(upstream.calls.sessionPromptAsync).toEqual([
+        expect.objectContaining({
+          model: { providerID: "arena", modelID: "medium" },
+          variant: "xhigh",
+        }),
+      ]);
+    } finally {
+      await session.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test("creates a session with valid id and provider", async () => {
     const cwd = tmpCwd();
     const runtime = new TestOpenCodeHarness();

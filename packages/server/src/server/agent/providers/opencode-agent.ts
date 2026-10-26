@@ -187,6 +187,13 @@ const OPENCODE_CAPABILITIES: AgentCapabilityFlags = {
 const OPENCODE_BUILD_MODE_ID = "build";
 const OPENCODE_LEGACY_FULL_ACCESS_MODE_ID = "full-access";
 const OPENCODE_DEFAULT_VARIANT_ID = "default";
+
+// The Arena engine lists no providers so contestants stay blind (`arena/privacy.ts`
+// `providerList` in arena-backend), so its models cannot be looked up in that catalog.
+function isArenaModel(modelId: string): boolean {
+  return modelId.startsWith("arena/");
+}
+
 const EMPTY_OPENCODE_EVENT_SOURCE: OpenCodeEventSource = {
   ready: async () => undefined,
   subscribe: () => () => undefined,
@@ -4626,7 +4633,7 @@ class OpenCodeAgentSession implements AgentSession {
     let variant = this.config.thinkingOptionId;
     if (!normalizedModelId) {
       variant = undefined;
-    } else if (variant) {
+    } else if (variant && !isArenaModel(normalizedModelId)) {
       const model = this.parseModel(normalizedModelId);
       const response = await this.client.provider.list({ directory: this.config.cwd });
       if (response.error)
