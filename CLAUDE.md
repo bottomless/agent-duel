@@ -53,6 +53,7 @@ These are the docs this product is built on. Read the relevant one before non-tr
 | [docs/testing.md](docs/testing.md)                   | TDD workflow, determinism, real dependencies over mocks, test organization                                                      |
 | [docs/qa.md](docs/qa.md)                             | QA evidence bar for pull requests — platform matrix, version drift, performance, UI proof                                       |
 | [docs/deployment.md](docs/deployment.md)             | Production boundary, desktop packaging, and release smoke test                                                                  |
+| [docs/upstream-sync.md](docs/upstream-sync.md)       | Weekly Paseo merge — cadence, merge commit, `scripts/upstream-sync.mjs`, policy, what a clean merge still breaks                |
 
 **Inherited Paseo subsystems.** Working code you rarely touch, documented by upstream and not
 maintained here. Open one only when your task lands in that code; do not read them for context.
