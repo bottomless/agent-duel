@@ -1,0 +1,347 @@
+OpenCode 2.0.32 upgrade on PR 117 (5ced1d024d26a2b9045a96f04df66321068ec3ac).
+Branch: codex/opencode-2.0. macOS arm64, 2026-10-26.
+Arena backend: Bun 1.4.2. Root workspace: npm.
+
+Coverage:
+- Real Core V2 execution, tools, sandboxing, subagents, and retry/compaction hooks.
+- Two contestant completions, vote, native winner graft, exclusion of loser history,
+  and replay of the winner into the next battle.
+- On-disk V1 session migration, including tools, reasoning, attachments and Arena IDs.
+- Authenticated native API and its privacy boundary; streamed reasoning, text and tools
+  use the same part IDs as canonical snapshots.
+- A compiled engine with its native assets starts outside the source checkout.
+
+Initial smoke phase: the macOS Electron development stack reached healthy on daemon
+6769 / Metro 8083. The actual window rendered the project screen and Settings. This
+phase used a local model-response stub; the development profile had no key yet.
+
+Subsequent live Weatherfork comparisons use the main repository key through Arena
+credential setup. See comparison.txt and the transcript manifests for their results,
+source identities, browser observations, and Electron limitations.
+Desktop Windows / Linux were not exercised. No full test suite was run.
+
+The following are raw command outputs or raw test-result excerpts.
+
+
+$ Repository root: npm run build:server
+
+
+> paseo@0.4.0-beta.13 build:server
+> npm run build:server-deps && npm run build --workspace=@getpaseo/server && npm run build --workspace=@getpaseo/cli
+
+
+> paseo@0.4.0-beta.13 build:server-deps
+> npm run build:client && concurrently --kill-others-on-fail --names highlight,plugin,relay --prefix-colors yellow,green,blue "npm run build:highlight" "npm run build:plugin" "npm run build:relay"
+
+
+> paseo@0.4.0-beta.13 build:client
+> npm run build --workspace=@getpaseo/client
+
+
+> @getpaseo/client@0.4.0-beta.13 build
+> npm run build --workspace=@getpaseo/protocol && npm run build --workspace=@getpaseo/relay && tsc -p tsconfig.json --incremental false
+
+
+> @getpaseo/protocol@0.4.0-beta.13 prebuild
+> npm run generate:validators
+
+
+> @getpaseo/protocol@0.4.0-beta.13 generate:validators
+> node scripts/generate-validation-aot.mjs
+
+generated src/generated/validation/ws-outbound.aot.ts: envelope + 257 session message validators
+
+> @getpaseo/protocol@0.4.0-beta.13 build
+> tsc -p tsconfig.json --incremental false
+
+
+> @getpaseo/relay@0.4.0-beta.13 build
+> tsc -p tsconfig.json --incremental false
+
+[plugin] 
+[plugin] > paseo@0.4.0-beta.13 build:plugin
+[plugin] > npm run build --workspace=@getpaseo/plugin
+[plugin] 
+[highlight] 
+[highlight] > paseo@0.4.0-beta.13 build:highlight
+[highlight] > npm run build --workspace=@getpaseo/highlight
+[highlight] 
+[relay] 
+[relay] > paseo@0.4.0-beta.13 build:relay
+[relay] > npm run build --workspace=@getpaseo/relay
+[relay] 
+[highlight] 
+[highlight] > @getpaseo/highlight@0.4.0-beta.13 build
+[highlight] > tsc -p tsconfig.json --incremental false
+[highlight] 
+[relay] 
+[relay] > @getpaseo/relay@0.4.0-beta.13 build
+[relay] > tsc -p tsconfig.json --incremental false
+[relay] 
+[plugin] 
+[plugin] > @getpaseo/plugin@0.4.0-beta.13 build
+[plugin] > tsc -p tsconfig.json --incremental false
+[plugin] 
+[highlight] npm run build:highlight exited with code 0
+[relay] npm run build:relay exited with code 0
+[plugin] npm run build:plugin exited with code 0
+
+> @getpaseo/server@0.4.0-beta.13 build
+> npm run build:lib && npm run build:scripts
+
+
+> @getpaseo/server@0.4.0-beta.13 build:lib
+> tsc -p tsconfig.server.json --incremental false && node scripts/build-opencode-bridge-plugin.mjs && node -e "const fs=require('node:fs'); fs.mkdirSync('dist/server/server/speech/providers/local/sherpa/assets',{recursive:true}); fs.copyFileSync('src/server/speech/providers/local/sherpa/assets/silero_vad.onnx','dist/server/server/speech/providers/local/sherpa/assets/silero_vad.onnx'); fs.cpSync('src/terminal/shell-integration','dist/server/terminal/shell-integration',{recursive:true}); fs.cpSync('src/terminal/shell-integration','dist/src/terminal/shell-integration',{recursive:true}); fs.copyFileSync('src/terminal/terminal-ts-loader.mjs','dist/server/terminal/terminal-ts-loader.mjs'); fs.rmSync('dist/server/skills',{recursive:true,force:true}); fs.cpSync('../../skills','dist/server/skills',{recursive:true});"
+
+
+> @getpaseo/server@0.4.0-beta.13 build:scripts
+> tsc -p tsconfig.scripts.json --incremental false && node -e "const fs=require('node:fs'); fs.mkdirSync('dist/scripts',{recursive:true}); fs.copyFileSync('scripts/mcp-stdio-socket-bridge-cli.mjs','dist/scripts/mcp-stdio-socket-bridge-cli.mjs');"
+
+
+> @getpaseo/cli@0.4.0-beta.13 build
+> tsc -p tsconfig.json --incremental false
+
+
+$ Repository root: npm run typecheck
+
+
+> paseo@0.4.0-beta.13 typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> @getpaseo/expo-two-way-audio@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/highlight@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/plugin@0.4.0-beta.13 typecheck
+> tsgo --noEmit && npm run typecheck:examples
+
+
+> @getpaseo/plugin@0.4.0-beta.13 typecheck:examples
+> npm --prefix ../../plugin-examples/markdown-panel install --ignore-scripts --no-audit --no-fund && tsgo -p tsconfig.examples.json --noEmit
+
+
+up to date in 109ms
+
+> @getpaseo/protocol@0.4.0-beta.13 pretypecheck
+> npm run generate:validators
+
+
+> @getpaseo/protocol@0.4.0-beta.13 generate:validators
+> node scripts/generate-validation-aot.mjs
+
+generated src/generated/validation/ws-outbound.aot.ts: envelope + 257 session message validators
+
+> @getpaseo/protocol@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/client@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/server@0.4.0-beta.13 typecheck
+> tsgo -p tsconfig.server.typecheck.json --noEmit
+
+
+> @getpaseo/app@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/relay@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/desktop@0.4.0-beta.13 typecheck
+> tsgo --noEmit -p tsconfig.json
+
+
+> @getpaseo/cli@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+$ Repository root: npm run lint
+
+
+> paseo@0.4.0-beta.13 lint
+> oxlint --disable-nested-config
+
+Found 0 warnings and 0 errors.
+Finished in 782ms on 4777 files with 177 rules using 18 threads.
+
+
+$ Repository root: npm run format:check
+
+
+> paseo@0.4.0-beta.13 format:check
+> oxfmt --check .
+
+Checking formatting...
+
+All matched files use the correct format.
+Finished in 787ms on 5021 files using 18 threads.
+
+
+$ arena-backend: bun install --frozen-lockfile
+
+bun install v1.4.2 (744846f84)
+Resolving dependencies
+Resolved, downloaded and extracted [17]
+
+$ bun run --cwd packages/core fix-node-pty
+$ bun run script/fix-node-pty.ts
+
+Checked 860 installs across 949 packages (no changes) [41.00ms]
+
+
+$ arena-backend/packages/core: bun run typecheck
+
+$ tsgo -b tsconfig.json tsconfig.tests.json
+
+
+$ arena-backend/packages/opencode: bun run typecheck
+
+$ tsgo --noEmit
+
+
+$ arena-backend/packages/arena-service: bun run typecheck
+
+$ tsgo --noEmit
+
+
+$ Repository root: npm run build:arena-runtime --workspace=@getpaseo/desktop
+
+
+> @getpaseo/desktop@0.4.0-beta.13 build:arena-runtime
+> node scripts/build-arena-runtime.mjs
+
+Compiled Arena engine: <checkout>/packages/desktop/dist/arena/agent-duel-arena
+
+
+$ Repository root: npx vitest run packages/desktop/scripts/build-arena-runtime.test.mjs --bail=1
+
+
+ RUN  v4.1.7 <checkout>
+
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  12:57:36
+   Duration  2.63s (transform 13ms, setup 0ms, import 24ms, tests 2.49s, environment 0ms)
+
+
+$ Repository root: npx vitest run packages/server/src/server/agent/providers/opencode/v2/arena.test.ts --bail=1
+
+
+ RUN  v4.1.7 <checkout>
+
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  12:53:22
+   Duration  452ms (transform 196ms, setup 0ms, import 339ms, tests 20ms, environment 0ms)
+
+
+$ Repository root: npx vitest run packages/server/src/server/agent/providers/opencode/v2/agent.test.ts --bail=1
+
+
+ RUN  v4.1.7 <checkout>
+
+
+ Test Files  1 passed (1)
+      Tests  31 passed (31)
+   Start at  12:28:17
+   Duration  6.76s (transform 158ms, setup 0ms, import 260ms, tests 6.42s, environment 0ms)
+
+
+$ Repository root: npx vitest run packages/server/src/server/agent/providers/opencode/runtime-client.test.ts --bail=1
+
+
+ RUN  v4.1.7 <checkout>
+
+
+ Test Files  1 passed (1)
+      Tests  19 passed (19)
+   Start at  12:33:18
+   Duration  5.76s (transform 215ms, setup 0ms, import 238ms, tests 5.44s, environment 0ms)
+
+
+$ arena-backend/packages/opencode: bun test test/arena/v2-server.test.ts --bail=1
+
+bun test v1.4.2 (744846f84)
+(pass) Arena OpenCode v2 native boundary > serves authenticated v2 info, empty catalogs, and normal prompt admission [3636.62ms]
+(pass) Arena OpenCode v2 native boundary > blocks an unresolved contestant mutation while allowing session reads [30.42ms]
+(pass) Arena OpenCode v2 native boundary > retains native sessions across a server restart using a persistent database [31.97ms]
+ 3 pass
+ 0 fail
+ 86 expect() calls
+Ran 3 tests across 1 file. [4.21s]
+
+
+$ arena-backend/packages/opencode: bun test test/arena/v2-server.test.ts test/arena/v2-events.test.ts --bail
+
+bun test v1.4.2 (744846f84)
+(pass) Arena OpenCode v2 native boundary > serves authenticated v2 info, empty catalogs, and normal prompt admission [1365.59ms]
+(pass) Arena OpenCode v2 native boundary > blocks an unresolved contestant mutation while allowing session reads [35.22ms]
+(pass) Arena OpenCode v2 native boundary > retains native sessions across a server restart using a persistent database [34.78ms]
+(pass) Arena V2 event projection > keeps reasoning, text, tool, and trailing text IDs aligned with canonical content order [0.19ms]
+ 4 pass
+ 0 fail
+ 68 expect() calls
+Ran 4 tests across 2 files. [1.96s]
+
+
+$ arena-backend/packages/opencode: bun test test/arena/v2-engine-runtime.test.ts --bail=1
+
+bun test v1.4.2 (744846f84)
+(pass) Arena v2 engine runtime > publishes only opaque contestant models with bounded reasoning variants [0.29ms]
+(pass) Arena v2 engine runtime > adds blinded request identity and stable cache lineage headers [0.09ms]
+(pass) Arena v2 engine runtime > keeps automatic permission approval scoped to a session [0.02ms]
+(pass) Arena v2 engine runtime > propagates an assignment to descendants and scopes their temp environment [0.33ms]
+(pass) Arena v2 engine runtime > routes the current Core AI SDK path through the Arena fetch and keeps the request opaque [13.35ms]
+(pass) Arena v2 engine runtime > executes a real Core Session prompt through the in-memory Arena fetch [4726.59ms]
+ 6 pass
+ 0 fail
+ 66 expect() calls
+Ran 6 tests across 1 file. [5.25s]
+
+
+$ arena-backend/packages/opencode: bun test test/arena/v2-arena-e2e.test.ts --bail=1
+
+bun test v1.4.2 (744846f84)
+(pass) Arena v2 battle integration > runs two contestants, votes, grafts, and admits the next native prompt [7568.85ms]
+ 1 pass
+ 0 fail
+ 20 expect() calls
+Ran 1 test across 1 file. [7.83s]
+
+
+$ arena-backend/packages/opencode: bun test ./test/arena/v2-migration.test.ts --bail=1
+
+Executor's raw completed-run output:
+bun test v1.4.2 (744846f84)
+
+test/arena/v2-migration.test.ts:
+[18:51:44.187] INFO (#2): database schema bootstrap started {
+  migrations: 50,
+}
+[18:51:44.192] INFO (#2): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 5,
+}
+(pass) Arena v2 on-disk migration > boots over V1 rows, preserves canonical and contestant history, and keeps Arena refs [112.22ms]
+
+ 1 pass
+ 0 fail
+ 17 expect() calls
+Ran 1 test across 1 file. [578.00ms]
+
+Additional executor-reported targeted results (not rerun):
+- test/arena/v2-session-runtime.test.ts: 5 pass, 27 assertions.
+- test/arena/v2-privacy.test.ts: 3 pass, 33 assertions.
+- test/arena/service.test.ts test/arena/proxy.test.ts test/arena/contestant.test.ts:
+  60 pass, 0 fail, 268 assertions.

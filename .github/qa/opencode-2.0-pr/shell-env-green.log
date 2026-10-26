@@ -1,0 +1,317 @@
+bun test v1.4.2 (744846f84)
+
+test/arena/v2-shell-environment.test.ts:
+[21:39:59.283] INFO (#2): database schema bootstrap started {
+  migrations: 50,
+}
+[21:39:59.287] INFO (#2): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 4,
+}
+[21:39:59.306] INFO (#145): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[21:39:59.309] INFO (#146): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[21:39:59.321] INFO (#145): spawning process {
+  command: "git",
+  args: [ "remote", "get-url", "origin" ],
+  cwd: "<checkout>",
+}
+[21:39:59.322] INFO (#146): spawning process {
+  command: "git",
+  args: [ "remote", "get-url", "origin" ],
+  cwd: "<checkout>",
+}
+[21:39:59.333] INFO (#146): spawning process {
+  command: "git",
+  args: [ "worktree", "list", "--porcelain" ],
+  cwd: "<checkout>",
+}
+[21:39:59.333] INFO (#145): spawning process {
+  command: "git",
+  args: [ "worktree", "list", "--porcelain" ],
+  cwd: "<checkout>",
+}
+[21:39:59.353] INFO (#220): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[21:39:59.364] INFO (#220): spawning process {
+  command: "git",
+  args: [ "remote", "get-url", "origin" ],
+  cwd: "<checkout>",
+}
+[21:39:59.373] INFO (#220): spawning process {
+  command: "git",
+  args: [ "worktree", "list", "--porcelain" ],
+  cwd: "<checkout>",
+}
+[21:39:59.410] INFO (#220): location services booted {
+  directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+  workspaceID: undefined,
+  durationMs: 58,
+}
+[21:39:59.522] INFO (#356): event {
+  event: {
+    id: "evt_17a27eda2001hPKz8mXkuyZSy0",
+    created: 1793050799522,
+    type: "provider.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:39:59.525] INFO (#360): event {
+  event: {
+    id: "evt_17a27eda5001Whlo50ETs88q5S",
+    created: 1793050799525,
+    type: "model.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:39:59.526] INFO (#746): spawning process {
+  command: "git",
+  args: [
+    "--no-optional-locks", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+    "-c", "core.symlinks=true", "-c", "core.quotepath=false", "symbolic-ref", "--quiet", "--short",
+    "HEAD"
+  ],
+  cwd: "<checkout>/arena-backend/packages/opencode/test/arena",
+}
+[21:39:59.527] INFO (#747): spawning process {
+  command: "git",
+  args: [
+    "--no-optional-locks", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+    "-c", "core.symlinks=true", "-c", "core.quotepath=false", "remote"
+  ],
+  cwd: "<checkout>/arena-backend/packages/opencode/test/arena",
+}
+[21:39:59.539] INFO (#747): spawning process {
+  command: "git",
+  args: [
+    "--no-optional-locks", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+    "-c", "core.symlinks=true", "-c", "core.quotepath=false", "symbolic-ref", "refs/remotes/origin/HEAD"
+  ],
+  cwd: "<checkout>/arena-backend/packages/opencode/test/arena",
+}
+[21:39:59.549] INFO (#602): event {
+  event: {
+    id: "evt_17a27edbd001Wr36L7GS5IrO7E",
+    created: 1793050799549,
+    type: "agent.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:39:59.549] INFO (#602): event {
+  event: {
+    id: "evt_17a27edbd002mrCqBrK1ErIIxK",
+    created: 1793050799549,
+    type: "command.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[21:39:59.560] INFO (#785): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[21:40:00.142] INFO (#870): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[21:40:00.154] INFO (#870): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2.init-20943-ygjyfodkqun",
+    "--work-tree", "<checkout>", "init"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.171] INFO (#901): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.171] INFO (#902): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.186] INFO (#868): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<home>/agent-duel/.git/worktrees/agent-duel1", "--work-tree",
+    "<checkout>", "check-ignore", "--no-index",
+    "--stdin", "-z"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.197] INFO (#868): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "update-index",
+    "--add", "--remove", "--replace", "-z", "--stdin"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.213] INFO (#868): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "write-tree"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.243] INFO (#1007): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.244] INFO (#1008): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.257] INFO (#1031): spawning process {
+  command: "/bin/zsh",
+  args: [ "-c", "printf \"%s\\n\" \"HOST=$HOST\" \"PORT=$PORT\" \"PASEO_PORT=$PASEO_PORT\" \"PASEO_PORT2=$PASEO_PORT2\" \"PASEO_PORT3=$PASEO_PORT3\" \"ARENA_PREVIEW_URL=$ARENA_PREVIEW_URL\" \"TMPDIR=$TMPDIR\" \"TMP=$TMP\" \"TEMP=$TEMP\" \"OPENCODE_SESSION_ID=$OPENCODE_SESSION_ID\"" ],
+  cwd: "<checkout>/arena-backend/packages/opencode/test/arena",
+}
+[21:40:00.268] INFO (#1058): spawning process {
+  command: "/bin/zsh",
+  args: [ "-c", "printf \"%s\\n\" \"HOST=$HOST\" \"PORT=$PORT\" \"PASEO_PORT=$PASEO_PORT\" \"PASEO_PORT2=$PASEO_PORT2\" \"PASEO_PORT3=$PASEO_PORT3\" \"ARENA_PREVIEW_URL=$ARENA_PREVIEW_URL\" \"TMPDIR=$TMPDIR\" \"TMP=$TMP\" \"TEMP=$TEMP\" \"OPENCODE_SESSION_ID=$OPENCODE_SESSION_ID\"" ],
+  cwd: "<checkout>/arena-backend/packages/opencode/test/arena",
+}
+[21:40:00.269] INFO (#1077): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.269] INFO (#1078): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.292] INFO (#1130): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.293] INFO (#1129): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.313] INFO (#1177): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.313] INFO (#1178): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.330] INFO (#1209): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.330] INFO (#1210): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.346] INFO (#1241): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.347] INFO (#1242): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.361] INFO (#1269): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[21:40:00.362] INFO (#1270): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<temp>/opencode-test-data-20943/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/dec2f72eda52873fa08e61222940ddb7b7bb93b2",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+(pass) Arena V2 shell environment > isolates preview and temp variables for concurrent assigned sessions [1113.91ms]
+
+ 1 pass
+ 0 fail
+ 26 expect() calls
+Ran 1 test across 1 file. [1.62s]

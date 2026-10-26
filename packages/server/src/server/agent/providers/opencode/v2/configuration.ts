@@ -1,4 +1,4 @@
-import type { SessionInfo, PermissionRuleset } from "@opencode/client";
+import type { SessionInfo, PermissionRuleset, ModelRef } from "@opencode/client";
 import type { V2Api } from "./api.js";
 
 import type {
@@ -10,6 +10,13 @@ import type {
 import { OpenCodeProviderOptionsSchema, buildOpenCodePermissionRules } from "../options.js";
 
 import { modelRef } from "./mapping.js";
+
+export function arenaModelRef(id?: string | null): ModelRef {
+  const model = modelRef(id ?? "arena/medium");
+  if (model.providerID !== "arena" || !["medium", "contestant"].includes(model.id))
+    throw new Error("Choose an Arena Medium or frontier model");
+  return { ...model, variant: model.id === "medium" ? "xhigh" : "high" };
+}
 
 export function features(config: AgentSessionConfig): AgentFeature[] {
   return [
@@ -50,6 +57,7 @@ export async function applyResumeOverrides(
   client: V2Api,
   info: SessionInfo,
   overrides?: Partial<AgentSessionConfig>,
+  arenaMode = false,
 ) {
   if (overrides?.modeId) {
     await client.session.switchAgent({
@@ -59,9 +67,14 @@ export async function applyResumeOverrides(
     info.agent = overrides.modeId;
   }
   if (overrides?.model || overrides?.thinkingOptionId !== undefined) {
-    const model = overrides.model
-      ? modelRef(overrides.model, overrides.thinkingOptionId ?? info.model?.variant)
-      : info.model && { ...info.model, variant: overrides.thinkingOptionId };
+    let model: ModelRef | undefined = info.model && {
+      ...info.model,
+      variant: overrides.thinkingOptionId,
+    };
+    if (overrides.model)
+      model = arenaMode
+        ? arenaModelRef(overrides.model)
+        : modelRef(overrides.model, overrides.thinkingOptionId ?? info.model?.variant);
     if (!model) throw new Error("Select an OpenCode model before changing its variant");
     await client.session.switchModel({ sessionID: info.id, model });
     info.model = model;

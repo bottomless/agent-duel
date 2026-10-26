@@ -3,7 +3,7 @@
   "extends": "@tsconfig/bun/tsconfig.json",
   "compilerOptions": {
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    "types": [],
+    "types": ["bun", "node"],
     "noUncheckedIndexedAccess": false,
     "customConditions": ["browser"],
     "paths": {
@@ -11,5 +11,5 @@
       "@test/*": ["./test/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src/index.ts", "src/arena/**/*.ts", "src/audio.d.ts"]
 }

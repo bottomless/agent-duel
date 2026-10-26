@@ -22,7 +22,7 @@ import type { OpenCodeV2AgentClient } from "./v2/agent.js";
 import { withOpenCodeRuntimeNotice } from "./runtime-notice.js";
 
 // Keep the minimum aligned with the SDK and binary exercised by CI.
-const MINIMUM_V2: readonly [number, number] = [0, 10];
+const MINIMUM_V2: readonly [number, number] = [0, 32];
 const VERSION_PATTERN = /^(?:opencode\s+)?v?(\d+)\.(\d+)\.(\d+)(?:[-+][\w.-]+)?$/i;
 
 export function openCodeMajorVersion(output: string): 1 | 2 {

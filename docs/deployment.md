@@ -53,9 +53,9 @@ The build:
 1. exports the Electron renderer;
 2. builds the daemon and shared packages;
 3. compiles `arena-backend/packages/opencode/src/index.ts` into a Bun executable and copies the
-   `@parcel/watcher` binding beside it. The hardened runtime refuses to load the copy Bun embeds,
-   because Bun extracts it to an unsigned temp file; the copy beside the executable is signed with
-   the app. Without a watcher the engine re-syncs both contestants at every warm send, and it logs
+   `@parcel/watcher` binding and OpenCode persistent-PTY executable beside it. The hardened runtime refuses to load the copy Bun embeds,
+   because Bun extracts it to an unsigned temp file; native assets beside the executable are signed
+   with the app. Without a watcher the engine re-syncs both contestants at every warm send, and it logs
    `Arena filesystem watcher unavailable` at startup;
 4. writes the public deployment configuration, including the Git commit that produced the Arena
    executable;

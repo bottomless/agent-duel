@@ -115,7 +115,7 @@
     "@isaacs/ttlcache": "^2.1.4",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@opencode-ai/sdk": "1.14.46",
-    "@opencode/client": "2.0.10",
+    "@opencode/client": "2.0.32",
     "@vercel/blob": "^2.8.2",
     "@xterm/headless": "^6.0.0",
     "ai": "5.0.78",

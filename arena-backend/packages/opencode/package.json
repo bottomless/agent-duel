@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.18.13",
+  "version": "2.0.32",
   "name": "opencode",
   "type": "module",
   "license": "MIT",
@@ -26,9 +26,6 @@
   "devDependencies": {
     "@babel/core": "7.28.4",
     "@octokit/webhooks-types": "7.6.1",
-    "@opencode-ai/core": "workspace:*",
-    "@opencode-ai/http-recorder": "workspace:*",
-    "@opencode-ai/script": "workspace:*",
     "@parcel/watcher-darwin-arm64": "2.5.1",
     "@parcel/watcher-darwin-x64": "2.5.1",
     "@parcel/watcher-linux-arm64-glibc": "2.5.1",
@@ -51,7 +48,8 @@
     "prettier": "3.6.2",
     "typescript": "catalog:",
     "vscode-languageserver-types": "3.17.5",
-    "why-is-node-running": "3.2.2"
+    "why-is-node-running": "3.2.2",
+    "@types/node": "catalog:"
   },
   "dependencies": {
     "@agent-duel/arena-service": "workspace:*",
@@ -87,14 +85,6 @@
     "@octokit/graphql": "9.0.2",
     "@octokit/rest": "catalog:",
     "@openauthjs/openauth": "catalog:",
-    "@opencode-ai/codemode": "workspace:*",
-    "@opencode-ai/llm": "workspace:*",
-    "@opencode-ai/plugin": "workspace:*",
-    "@opencode-ai/protocol": "workspace:*",
-    "@opencode-ai/schema": "workspace:*",
-    "@opencode-ai/script": "workspace:*",
-    "@opencode-ai/sdk": "workspace:*",
-    "@opencode-ai/server": "workspace:*",
     "@openrouter/ai-sdk-provider": "2.9.0",
     "@opentelemetry/api": "1.9.0",
     "@opentelemetry/context-async-hooks": "2.6.1",
@@ -146,7 +136,14 @@
     "ws": "8.21.0",
     "xdg-basedir": "5.1.0",
     "yargs": "18.0.0",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "@opencode/core": "workspace:*",
+    "@opencode/server": "workspace:*",
+    "@opencode/schema": "workspace:*",
+    "@opencode/util": "workspace:*",
+    "@opencode/ai": "workspace:*",
+    "@opencode/plugin": "workspace:*",
+    "@opencode/protocol": "workspace:*"
   },
   "overrides": {
     "drizzle-orm": "catalog:"

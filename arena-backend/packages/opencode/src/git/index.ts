@@ -1,7 +1,7 @@
-import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { AppProcess } from "@opencode-ai/core/process"
+import { makeGlobalNode } from "@opencode/util/effect/app-node"
+import { AppProcess } from "@opencode/util/process"
 import { Effect, Layer, Context, Stream } from "effect"
-import { ChildProcess } from "effect/unstable/process"
+import { ChildProcess } from "effect/process"
 
 const cfg = [
   "--no-optional-locks",
@@ -101,7 +101,7 @@ const kind = (code: string): Kind => {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Git") {}
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const appProcess = yield* AppProcess.Service
@@ -349,6 +349,6 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [AppProcess.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [AppProcess.node] })
 
 export * as Git from "."

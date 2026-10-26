@@ -40,11 +40,9 @@ import { CursorACPAgentClient } from "./providers/cursor-acp-agent.js";
 import { GenericACPAgentClient } from "./providers/generic-acp-agent.js";
 import { KimiACPAgentClient } from "./providers/kimi-acp-agent.js";
 import { KiroACPAgentClient } from "./providers/kiro-acp-agent.js";
-import {
-  isOpenCodeArenaBackendConfigured,
-  OpenCodeAgentClient,
-} from "./providers/opencode-agent.js";
+import { isOpenCodeArenaBackendConfigured } from "./providers/opencode-agent.js";
 import { OpenCodeRuntimeClient } from "./providers/opencode/runtime-client.js";
+import { OpenCodeV2AgentClient } from "./providers/opencode/v2/agent.js";
 import type { OpenCodeBridge } from "./providers/opencode/bridge.js";
 import { OmpAgentClient } from "./providers/omp/agent.js";
 import type { OmpRuntime } from "./providers/omp/runtime.js";
@@ -200,10 +198,15 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
       getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
       uploadsRoot: options?.uploadsRoot,
     };
-    // The Arena backend is its own OpenCode build, so a version probe of a stock `opencode`
-    // binary says nothing about it, and only the v1 client carries the battle routes.
+    // The Arena backend is its own OpenCode build, so a stock binary probe does not select it.
     return isOpenCodeArenaBackendConfigured()
-      ? new OpenCodeAgentClient(logger, runtimeSettings, openCodeOptions)
+      ? new OpenCodeV2AgentClient({
+          logger,
+          settings: runtimeSettings,
+          managedProcesses: options?.managedProcesses,
+          getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
+          arenaMode: true,
+        })
       : new OpenCodeRuntimeClient(logger, runtimeSettings, openCodeOptions);
   },
   pi: (logger, runtimeSettings) =>

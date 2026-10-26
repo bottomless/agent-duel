@@ -523,6 +523,24 @@ describe("summarizeArenaWork", () => {
     });
   });
 
+  it("counts current Core v2 path inputs as file work", () => {
+    const summary = summarizeArenaWork([
+      toolPart("read", { path: "src/app.ts" }),
+      toolPart("edit", { path: "src/app.ts", oldString: "old", newString: "new" }),
+      toolPart("write", { path: "README.md", content: "new" }),
+    ]);
+
+    expect(summary).toEqual({
+      editedFileCount: 2,
+      readFileCount: 1,
+      commandCount: 0,
+      searchCount: 0,
+      otherToolCount: 0,
+      reasoningCount: 0,
+    });
+    expect(arenaWorkSummaryLabel(summary, false)).toBe("Read 1 file · Edited 2 files");
+  });
+
   it("falls back to other tools and counts both reasoning part kinds", () => {
     expect(
       summarizeArenaWork([

@@ -1,14 +1,9 @@
-export * as ConfigProviderV1 from "./provider"
+export * as ConfigProviderV1 from "./provider.js"
 
 import { Schema } from "effect"
-import { PositiveInt } from "../../schema"
+import { PositiveInt } from "../../schema.js"
 
 export const ModelStatus = Schema.Literals(["alpha", "beta", "deprecated", "active"])
-
-const InterleavedField = Schema.Union([
-  Schema.Literals(["reasoning", "reasoning_content", "reasoning_text"]),
-  Schema.String,
-])
 
 export const Model = Schema.Struct({
   id: Schema.optional(Schema.String),
@@ -22,9 +17,9 @@ export const Model = Schema.Struct({
   interleaved: Schema.optional(
     Schema.Union([
       Schema.Boolean,
-      InterleavedField,
+      Schema.String,
       Schema.Struct({
-        field: InterleavedField,
+        field: Schema.String,
       }),
     ]),
   ),

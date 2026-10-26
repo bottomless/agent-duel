@@ -107,6 +107,12 @@ function asRecord(value: unknown): UnknownRecord | undefined {
     : undefined;
 }
 
+// Arena's v2 Core tool inputs use `path`; keep the legacy `filePath` fallback
+// because stored Arena runs from the previous engine still use that shape.
+function inputFilePath(inputRecord: UnknownRecord | undefined): string | undefined {
+  return nonEmptyString(inputRecord?.path) ?? nonEmptyString(inputRecord?.filePath);
+}
+
 function deriveShellDetail(
   inputRecord: UnknownRecord | undefined,
   output: unknown,
@@ -125,7 +131,7 @@ function deriveReadDetail(
   inputRecord: UnknownRecord | undefined,
   output: unknown,
 ): ToolCallDetail | undefined {
-  const filePath = nonEmptyString(inputRecord?.filePath);
+  const filePath = inputFilePath(inputRecord);
   if (!filePath) return undefined;
   const raw = nonEmptyString(output);
   const unwrapped = raw ? (extractXmlReadContent(raw) ?? raw) : undefined;
@@ -144,7 +150,7 @@ function deriveReadDetail(
 }
 
 function deriveWriteDetail(inputRecord: UnknownRecord | undefined): ToolCallDetail | undefined {
-  const filePath = nonEmptyString(inputRecord?.filePath);
+  const filePath = inputFilePath(inputRecord);
   if (!filePath) return undefined;
   const content = nonEmptyString(inputRecord?.content);
   return {
@@ -155,7 +161,7 @@ function deriveWriteDetail(inputRecord: UnknownRecord | undefined): ToolCallDeta
 }
 
 function deriveEditDetail(inputRecord: UnknownRecord | undefined): ToolCallDetail | undefined {
-  const filePath = nonEmptyString(inputRecord?.filePath);
+  const filePath = inputFilePath(inputRecord);
   if (!filePath) return undefined;
   const oldString = nonEmptyString(inputRecord?.oldString);
   const newString = nonEmptyString(inputRecord?.newString);

@@ -1,12 +1,27 @@
 import { describe, expect, test } from "bun:test"
 import os from "os"
 import path from "path"
-import { Global } from "@opencode-ai/core/global"
+import { Global } from "@opencode/util/global"
+import { Wildcard } from "@opencode/core/util/wildcard"
+import { PermissionV1 } from "@/arena/session-runtime"
 import { ArenaContestant, contestantPermissions } from "@/arena/contestant"
 import { deriveSubagentSessionPermission } from "@/agent/subagent-permissions"
-import { Permission } from "@/permission"
 import { excludedBelow } from "@/tool/external-directory"
-import { Truncate } from "@/tool/truncate"
+import { TRUNCATION_DIR } from "@/tool/truncation-dir"
+
+const Permission = {
+  merge: (...rulesets: PermissionV1.Ruleset[]) => rulesets.flat(),
+  evaluate: (permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]) =>
+    rulesets
+      .flat()
+      .findLast((rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern)) ?? {
+      action: "ask" as const,
+      permission,
+      pattern: "*",
+    },
+}
+
+const Truncate = { DIR: TRUNCATION_DIR, GLOB: path.join(TRUNCATION_DIR, "*") }
 
 const checkout = path.join(path.sep, "Users", "dev", "project")
 const state = path.join(checkout, ".agent-duel")
@@ -200,9 +215,7 @@ describe("Arena contestant permissions", () => {
     ).toBe(
       `Arena contestants can read the main checkout but change files only in their own worktree. ${path.join(checkout, "src")} is in the main checkout.`,
     )
-    expect(
-      ArenaContestant.denial({ ruleset, permission: "external_directory", pattern: "/tmp/*", write: true }),
-    ).toBe(
+    expect(ArenaContestant.denial({ ruleset, permission: "external_directory", pattern: "/tmp/*", write: true })).toBe(
       `Arena contestants cannot change files in /tmp, which both sides use while they run. Use the same name under $TMPDIR (${sandbox.tmp}) instead.`,
     )
     expect(

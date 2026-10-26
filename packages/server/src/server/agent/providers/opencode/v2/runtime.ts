@@ -13,18 +13,51 @@ import {
   type ProviderRuntimeSettings,
 } from "../../../provider-launch-config.js";
 import type { ManagedProcessRegistry } from "../../../../managed-processes/managed-processes.js";
+import type { OpenCodeServerManagerLike } from "../server-manager.js";
 import { resolveOpenCodeHomeDir } from "../paths.js";
 import { OpenCodeHttpError } from "../http-error.js";
 import { raceProviderRefreshAbort } from "../../../provider-refresh-deadline.js";
+import type { OpenCodeEventSourceInput } from "../event-consumer.js";
+
+// V2 sessions consume the native event feed themselves. The process manager only
+// needs its generation's lifetime; connecting its V1 consumer would poll a removed route.
+export function managedV2ProcessEvents(input: {
+  processExit: Promise<Error>;
+  listening?: Promise<void>;
+}) {
+  const listeners = new Set<(event: OpenCodeEventSourceInput) => void>();
+  let exited: Error | undefined;
+  let closed = false;
+  void input.processExit.then((error) => {
+    exited = error;
+    if (!closed) for (const listener of listeners) listener({ type: "server-exited", error });
+    return undefined;
+  });
+  return {
+    ready: () => input.listening ?? Promise.resolve(),
+    subscribe(listener: (event: OpenCodeEventSourceInput) => void) {
+      if (closed) return () => undefined;
+      listeners.add(listener);
+      if (exited) listener({ type: "server-exited", error: exited });
+      return () => listeners.delete(listener);
+    },
+    async close() {
+      closed = true;
+      listeners.clear();
+    },
+  };
+}
 
 export interface V2Connection {
   client: V2Api;
+  readonly arena?: { serverUrl: string; controlToken: string };
   release(): Promise<void>;
   retain(): V2Connection;
   readonly exited: Promise<Error>;
 }
 interface Generation {
   client: V2Api;
+  arena?: { serverUrl: string; controlToken: string };
   users: number;
   stop(): Promise<void>;
   exited: Promise<Error>;
@@ -34,6 +67,8 @@ export interface V2RuntimeOptions {
   settings?: ProviderRuntimeSettings;
   managedProcesses?: ManagedProcessRegistry;
   decorateEnv?: (env: Record<string, string>) => Promise<Record<string, string>>;
+  /** Use the daemon-owned Arena process and its control-token transport. */
+  serverManager?: OpenCodeServerManagerLike;
 }
 
 export interface V2RuntimeAcquireOptions {
@@ -113,6 +148,7 @@ export class V2Runtime {
     };
     return {
       client: generation.client,
+      ...(generation.arena ? { arena: generation.arena } : {}),
       release,
       retain: () => this.lease(generation, pending),
       exited: generation.exited,
@@ -147,6 +183,7 @@ export class V2Runtime {
 
   private async start(env: Record<string, string> = {}): Promise<Generation> {
     const { settings, managedProcesses, logger } = this.options;
+    if (this.options.serverManager) return this.startManaged(env);
     const launch = await resolveProviderLaunch({
       commandConfig: settings?.command,
       defaultBinary: "opencode",
@@ -261,6 +298,47 @@ export class V2Runtime {
           logger.warn({ error }, "OpenCode process cleanup failed"),
         );
       });
+      return generation;
+    } catch (error) {
+      await stop();
+      throw error;
+    }
+  }
+
+  private async startManaged(env: Record<string, string>): Promise<Generation> {
+    const manager = this.options.serverManager;
+    if (!manager) throw new Error("OpenCode managed runtime is unavailable");
+    const acquisition = Object.keys(env).length
+      ? await manager.acquireDedicated(env)
+      : await manager.acquireCurrent();
+    let resolveExit!: (error: Error) => void;
+    const exited = new Promise<Error>((resolve) => {
+      resolveExit = resolve;
+    });
+    const unsubscribe = acquisition.events.subscribe((input) => {
+      if ("type" in input && input.type === "server-exited") resolveExit(input.error);
+    });
+    const stop = async () => {
+      unsubscribe();
+      await acquisition.release();
+    };
+    try {
+      const client = OpenCode.make({
+        baseUrl: acquisition.server.url,
+        headers: { "x-paseo-control-token": acquisition.server.controlToken },
+      });
+      await client.server.info({ signal: AbortSignal.timeout(30_000) });
+      const generation: Generation = {
+        client,
+        users: 0,
+        stop,
+        exited,
+        arena: {
+          serverUrl: acquisition.server.url,
+          controlToken: acquisition.server.controlToken,
+        },
+      };
+      this.generations.add(generation);
       return generation;
     } catch (error) {
       await stop();

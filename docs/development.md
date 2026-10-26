@@ -6,7 +6,7 @@ These requirements are for contributors running the stack from source. A package
 does not install Bun or provide an OpenRouter key.
 
 - Node.js 22 with npm
-- Bun 1.3.14 for `arena-backend`
+- Bun 1.4.2 for `arena-backend`
 - An OpenRouter API key for battles
 
 Install both package graphs after cloning:
@@ -99,7 +99,7 @@ than downloading a published desktop release.
 `PASEO_HOME` is the directory that holds runtime state (agents, workspace config, sockets, daemon log, and local Arena SQLite/artifacts). Worktrees live inside their project, under `.agent-duel/worktrees`, not here. Resolution rules:
 
 - The **server itself** (e.g. when launched by the desktop app or `npm run start`) defaults to `~/.paseo` (see `packages/server/src/server/paseo-home.ts`).
-- **Repo dev scripts** default to `$ROOT/.dev/paseo-home`, where `$ROOT` is the current checkout or worktree root. This keeps all dev state scoped to the checkout instead of the packaged desktop app.
+- **Repo dev scripts** default to `$ROOT/.dev/paseo-home`, where `$ROOT` is the current checkout or worktree root. This scopes Paseo state to the checkout instead of the packaged desktop app.
 - **`npm run cli -- ...`** runs through the same dev-home wrapper as the dev scripts, so the in-repo CLI automatically targets the current checkout's `.dev/paseo-home` and configured dev daemon endpoint.
 - **Paseo-created worktrees** seed `$PASEO_WORKTREE_PATH/.dev/paseo-home` from `$PASEO_SOURCE_CHECKOUT_PATH/.dev/paseo-home` by copying durable JSON metadata. Runtime files like pid files, sockets, and logs are not copied.
 
@@ -110,6 +110,12 @@ PASEO_HOME=~/.paseo-blue npm run dev          # explicit home
 PASEO_DEV_SEED_HOME=/path/to/home npm run dev # seed from a different source home
 PASEO_DEV_RESET_HOME=1 npm run dev            # clear and reseed the derived worktree home
 ```
+
+When comparing OpenCode versions, also give each stack separate `XDG_DATA_HOME`,
+`XDG_CACHE_HOME`, and `XDG_STATE_HOME` directories. Core's native session database
+lives outside `PASEO_HOME`; a newer engine can migrate it beyond an older engine's
+schema. Verify the running process's open database path before starting battles.
+Keep `XDG_CONFIG_HOME` unchanged when the comparison requires the same user instructions.
 
 ### Daemon endpoints
 

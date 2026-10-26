@@ -1,14 +1,38 @@
-import { LocalContext } from "@/util/local-context"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import type * as Project from "./project"
+import { FSUtil } from "@opencode/util/fs-util"
+import { Location } from "@opencode/core/location"
+import { AbsolutePath } from "@opencode/core/schema"
+import { Context } from "effect"
+import type { Project } from "@opencode/schema/project"
 
-export interface InstanceContext {
-  directory: string
-  worktree: string
-  project: Project.Info
+/** Compatibility projection for callers that still consume the daemon context. */
+export interface InstanceProject {
+  readonly id: Project.ID
+  readonly worktree: string
+  readonly vcs?: string
 }
 
-export const context = LocalContext.create<InstanceContext>("instance")
+export interface InstanceContext {
+  readonly directory: string
+  readonly worktree: string
+  readonly project: InstanceProject
+}
+
+/** Current location used by runtime children that need to rebind Core services. */
+export const CurrentDirectory = Context.Reference<Location.Ref>("@opencode/CurrentDirectory", {
+  defaultValue: () => Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }),
+})
+
+export function fromLocation(location: Location.Interface): InstanceContext {
+  return {
+    directory: location.directory,
+    worktree: location.project.directory,
+    project: {
+      id: location.project.id,
+      worktree: location.project.canonical,
+      vcs: location.vcs?.type,
+    },
+  }
+}
 
 /**
  * Check if a path is within the project boundary.

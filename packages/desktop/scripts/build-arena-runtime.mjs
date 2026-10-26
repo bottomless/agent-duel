@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -33,17 +33,7 @@ function buildArenaRuntime() {
   mkdirSync(outputDir, { recursive: true });
   const result = spawnSync(
     "bun",
-    [
-      "build",
-      "--compile",
-      "--conditions=browser",
-      // A long-lived engine otherwise keeps its peak heap: collect more often and keep it smaller.
-      "--compile-exec-argv=--smol",
-      ...Object.entries(defines).flatMap(([key, value]) => ["--define", `${key}=${value}`]),
-      "packages/opencode/src/index.ts",
-      "--outfile",
-      output,
-    ],
+    ["run", "packages/opencode/script/build-desktop.ts", output, JSON.stringify(defines)],
     { cwd: arenaDir, stdio: "inherit" },
   );
   if (result.error) throw result.error;
@@ -65,6 +55,15 @@ function buildArenaRuntime() {
     engineRequire.resolve(`${binding}/watcher.node`),
     path.join(outputDir, "watcher.node"),
   );
+  if (process.platform !== "win32") {
+    const coreRequire = createRequire(path.join(arenaDir, "packages/core/package.json"));
+    const ptyRequire = createRequire(coreRequire.resolve("@opencode-ai/pty/package.json"));
+    const libc = process.platform === "linux" ? "-gnu" : "";
+    const pty = `@opencode-ai/pty-${process.platform}-${process.arch}${libc}`;
+    const destination = path.join(outputDir, "opencode-pty");
+    copyFileSync(ptyRequire.resolve(`${pty}/bin/opencode-pty`), destination);
+    chmodSync(destination, 0o755);
+  }
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

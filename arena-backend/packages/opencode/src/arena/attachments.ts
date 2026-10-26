@@ -1,7 +1,7 @@
 import path from "node:path"
 import { Effect, Schema } from "effect"
 import type { Image } from "@/image/image"
-import type { SessionPrompt } from "@/session/prompt"
+import type { ArenaPromptPart } from "./session-runtime/schema"
 import type { AttachmentSummary } from "./records"
 
 /**
@@ -29,7 +29,7 @@ export type Summary = AttachmentSummary
  * open the uploaded files it names.
  */
 export type ContestantPrompt = {
-  readonly parts: SessionPrompt.PromptInput["parts"]
+  readonly parts: readonly ArenaPromptPart[]
   readonly readable: readonly string[]
 }
 

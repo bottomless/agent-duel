@@ -1,3 +1,4 @@
+import { Session, SessionPrompt, SessionStatus, Permission, Question, MoveSessionService } from "./session-runtime"
 import { ArenaActivity } from "./activity"
 import { Stream } from "effect"
 import { createArenaStream, type Frame as ArenaStreamFrame } from "./stream"
@@ -15,11 +16,10 @@ import {
 } from "path"
 import { homedir } from "os"
 import { promisify } from "util"
-import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
-import { ModelV2 } from "@opencode-ai/core/model"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { Model as ModelV2 } from "@opencode/schema/model"
+import { Provider as ProviderV2 } from "@opencode/schema/provider"
+import { PermissionV1 } from "@opencode/schema/permission-v1"
+import { SessionV1 } from "./session-shape"
 import {
   Cause,
   Context,
@@ -38,16 +38,12 @@ import { Config } from "@/config/config"
 import { InstanceStore } from "@/project/instance-store"
 import { Git } from "@/git"
 import { Image } from "@/image/image"
-import { SessionPrompt } from "@/session/prompt"
 import { SessionRetry } from "@/session/retry"
-import { Session } from "@/session/session"
-import { SessionStatus } from "@/session/status"
 import { ArenaResponseRecovery } from "./response-recovery"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { clearToolExecutionEnvironment, gateToolExecution, isToolExecutionGated } from "@/session/tool-execution-gate"
-import { Permission } from "@/permission"
-import { Question } from "@/question"
-import { QuestionID } from "@/question/schema"
+import { Form } from "@opencode/schema/form"
+const QuestionID = Form.ID
 import { hostRepoPath, isolatedRoot, Worktree } from "@/worktree"
 import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
@@ -156,8 +152,8 @@ import { ArenaTranscriptArtifact } from "./transcript-artifact"
 import { readRecord, withPartPreviews } from "./live"
 import { ArenaTranscript } from "./transcript"
 import { excludeFromBackup } from "./backup-exclusion"
-import { Global } from "@opencode-ai/core/global"
-import { Hash } from "@opencode-ai/core/util/hash"
+import { Global } from "@opencode/util/global"
+import { Hash } from "@opencode/util/hash"
 import type {
   ApplyBaseChoice,
   ChatDocument,
@@ -1234,28 +1230,28 @@ export const layer: Layer.Layer<
   | Config.Service
   | InstanceStore.Service
   | Git.Service
-  | Session.Service
-  | SessionPrompt.Service
+  | Session
+  | SessionPrompt
   | Image.Service
-  | SessionStatus.Service
-  | Permission.Service
-  | Question.Service
+  | SessionStatus
+  | Permission
+  | Question
   | Worktree.Service
-  | MoveSession.Service
+  | MoveSessionService
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
     const git = yield* Git.Service
     const instances = yield* InstanceStore.Service
-    const sessions = yield* Session.Service
-    const prompts = yield* SessionPrompt.Service
+    const sessions = yield* Session
+    const prompts = yield* SessionPrompt
     const image = yield* Image.Service
-    const statuses = yield* SessionStatus.Service
-    const permissions = yield* Permission.Service
-    const questions = yield* Question.Service
+    const statuses = yield* SessionStatus
+    const permissions = yield* Permission
+    const questions = yield* Question
     const worktrees = yield* Worktree.Service
-    const mover = yield* MoveSession.Service
+    const mover = yield* MoveSessionService
     const scope = yield* Scope.Scope
     const operationTrackers = new WeakMap<Store, ReturnType<typeof createArenaOperationTracker>>()
     const operationTrackerFor = (store: Store) => {
@@ -1393,8 +1389,8 @@ export const layer: Layer.Layer<
     }
     const forkInto = (input: ArenaFork.Input) =>
       forkSessionInto(input).pipe(
-        Effect.provideService(Session.Service, sessions),
-        Effect.provideService(MoveSession.Service, mover),
+        Effect.provideService(Session, sessions),
+        Effect.provideService(MoveSessionService, mover),
         Effect.provideService(InstanceStore.Service, instances),
         Effect.provideService(Git.Service, git),
       )
@@ -1438,6 +1434,7 @@ export const layer: Layer.Layer<
                 startedAt,
                 durationMs: Math.round(performance.now() - started),
                 outcome: Exit.isSuccess(exit) ? "success" : "failure",
+                ...(Exit.isFailure(exit) ? { error: Cause.pretty(exit.cause) } : {}),
               }),
             ),
           )
@@ -2245,7 +2242,7 @@ export const layer: Layer.Layer<
         (run) =>
           Effect.gen(function* () {
             yield* promise(() => store.updateRun(run._id, { autoAccept: enabled }))
-            yield* inDirectory(run.worktree, permissions.setAutoAccept(enabled))
+            yield* inDirectory(run.worktree, permissions.setAutoAccept(run.rootSessionID, enabled))
           }),
         { concurrency: 2, discard: true },
       )
@@ -3503,7 +3500,7 @@ export const layer: Layer.Layer<
 
     const descendants = Effect.fn("Arena.descendants")(function* (root: SessionID) {
       const result: SessionID[] = []
-      const visit = (parent: SessionID): Effect.Effect<void> =>
+      const visit = (parent: SessionID): Effect.Effect<void, unknown> =>
         Effect.gen(function* () {
           for (const child of yield* sessions.children(parent)) {
             result.push(child.id)
@@ -3664,7 +3661,7 @@ export const layer: Layer.Layer<
     const recordCanonicalTranscript = Effect.fn("Arena.recordCanonicalTranscript")(function* (
       store: Store,
       id: string,
-      messages: SessionV1.WithParts[],
+      messages: readonly SessionV1.WithParts[],
     ) {
       const hash = digest(messages)
       const chat = yield* promise(() => store.chat(id))
@@ -4006,10 +4003,10 @@ export const layer: Layer.Layer<
       if (!stopped && sessionStates.some((state) => state.type !== "idle")) {
         unsettled.push("A contestant session was still active after the prompt settled")
       }
-      if (!stopped && pendingPermissions.some((item) => ids.includes(item.sessionID))) {
+      if (!stopped && pendingPermissions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
         unsettled.push("A contestant permission request remained unresolved")
       }
-      if (!stopped && pendingQuestions.some((item) => ids.includes(item.sessionID))) {
+      if (!stopped && pendingQuestions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
         unsettled.push("A contestant question remained unresolved")
       }
       // The panes say why a stopped run stopped, so the abort that ends it is not reported here.
@@ -4269,7 +4266,10 @@ export const layer: Layer.Layer<
       const turn = yield* promise(() => store.turn(run.turnID))
       if (turn?.state === "stopping" || turn?.state === "early_selected") return Exit.void
       const storedRun = yield* promise(() => store.run(run.runID))
-      yield* inDirectory(run.worktree.directory, permissions.setAutoAccept(storedRun?.autoAccept === true))
+      yield* inDirectory(
+        run.worktree.directory,
+        permissions.setAutoAccept(run.sessionID, storedRun?.autoAccept === true),
+      )
       const startedAt = new Date()
       const promptMessageID = MessageID.ascending()
       yield* promise(() =>
@@ -4889,7 +4889,7 @@ export const layer: Layer.Layer<
                   agent,
                   model: {
                     providerID: ProviderV2.ID.make("arena"),
-                    id: ModelV2.ID.make(contestant.id),
+                    modelID: ModelV2.ID.make(contestant.id),
                     variant: "high",
                   },
                   time: Date.now(),
@@ -5084,6 +5084,10 @@ export const layer: Layer.Layer<
           const forked = yield* forkInto({
             sessionID: sourceID,
             destination: info.directory,
+            // A cold slot is still a reservation when the first prompt is admitted. Keep the
+            // session on the canonical host until staging completes; Core execution resolves its
+            // runner from the persisted location and cannot boot an empty reservation.
+            moveSession: reused,
             roots: { canonical: chat.repository.root, worktree: info.directory },
             pathMode: "transcript",
             ...(pruneToolOutputBefore ? { pruneToolOutputBefore } : {}),
@@ -5104,7 +5108,7 @@ export const layer: Layer.Layer<
             agent,
             model: {
               providerID: ProviderV2.ID.make("arena"),
-              id: ModelV2.ID.make(contestant.id),
+              modelID: ModelV2.ID.make(contestant.id),
               variant: "high",
             },
             time: Date.now(),
@@ -5198,10 +5202,12 @@ export const layer: Layer.Layer<
             copiedPaths: copiedRoots(copyManifest),
             // Nothing may load an instance at the path before the staged worktree is there: one
             // opened on the empty reservation would keep treating it as a directory without git.
-            provide: (effect) =>
+            provide: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+              // The gate's provider is an execution boundary: instance setup failures are
+              // surfaced as the caller's failure channel by the surrounding prompt fiber.
               Effect.promise(() => base.promise).pipe(
                 Effect.flatMap((ready) => (ready ? inDirectory(directory, effect) : Effect.interrupt)),
-              ),
+              ) as Effect.Effect<A, E, R>,
           })
           gate.base.then(
             () => base.resolve(true),
@@ -5354,6 +5360,9 @@ export const layer: Layer.Layer<
         }
         const pending = environmentSetups.get(side)
         if (pending) {
+          if (!reused) {
+            yield* mover.moveSession({ sessionID: forkedID, directory: info.directory, moveChanges: false })
+          }
           executionGates.get(side)?.baseReady(pending.removedPaths)
           yield* promise(() => store.updateRun(runID, { readyAt: new Date() }))
         }
@@ -8314,9 +8323,11 @@ export const layer: Layer.Layer<
      * calls end interrupted and the message ends aborted. A resumed loop then replays what the
      * response did without running its unfinished calls again, and the pane stops showing it live.
      */
-    const closeInterruptedResponses = Effect.fn("Arena.closeInterruptedResponses")(function* (run: RunDocument) {
+    const closeInterruptedResponses: (run: RunDocument) => Effect.Effect<void, Error> = Effect.fn(
+      "Arena.closeInterruptedResponses",
+    )(function* (run: RunDocument) {
       const root = SessionID.make(run.rootSessionID)
-      const ids = [root, ...(yield* descendants(root))]
+      const ids = [root, ...(yield* descendants(root).pipe(Effect.mapError(error)))]
       yield* inDirectory(
         run.worktree,
         Effect.forEach(
@@ -8344,7 +8355,9 @@ export const layer: Layer.Layer<
                 }
                 yield* sessions.updateMessage({
                   ...message.info,
-                  error: message.info.error ?? new SessionV1.AbortedError({ message: "Aborted" }).toObject(),
+                  error:
+                    message.info.error ??
+                    SessionV1.AbortedError.Schema.make({ name: "MessageAbortedError", data: { message: "Aborted" } }),
                   time: { ...message.info.time, completed: end },
                 })
               }
@@ -8855,7 +8868,13 @@ export const layer: Layer.Layer<
             // The previous process stopped while ending a battle that never started. Recovery would
             // park it for Keep or Discard, which names the pair; it ends as it would have.
             if (turn.state === "creation_failed") {
-              yield* abortUnresolved(store, turn, "creation_failed", currentChat, "Arena battle failed before resolution")
+              yield* abortUnresolved(
+                store,
+                turn,
+                "creation_failed",
+                currentChat,
+                "Arena battle failed before resolution",
+              )
               return
             }
             if (
@@ -9139,8 +9158,11 @@ export const layer: Layer.Layer<
         return visit(value) as T
       }
 
+      // Copy the canonical V2 rows directly.  The Arena transcript projection is deliberately
+      // lossy (for example it flattens tool content), so rebuilding a message from `messages`
+      // here would drop provider replay state, images, compaction metadata, and tool output.
       const source = yield* sessions
-        .messages({ sessionID: SessionID.make(winner.rootSessionID) })
+        .canonicalMessages(SessionID.make(winner.rootSessionID))
         .pipe(Effect.mapError(error))
       const paths = {
         worktrees: yield* promise(() => store.worktreesForChat(chat._id)),
@@ -9150,58 +9172,50 @@ export const layer: Layer.Layer<
       }
       const canonicalize = <T>(value: T, role?: string, options?: { readonly subagent?: boolean }) =>
         promise(() => canonicalizeTranscriptPaths(retargetSessions(value), paths, role, options))
-      const idMap = new Map<string, MessageID>()
       let last: MessageID | undefined
       for (const message of source) {
-        if (message.info.id < boundary) continue
+        // Contestant-only instruction entries are materialized by Core as native system rows.
+        // They describe the temporary worktree and must never become canonical chat policy; the
+        // canonical runner reads its own current instruction context after the winner is grafted.
+        if (message.type === "system") continue
+        if (String(message.id) < boundary) continue
         const id = MessageID.ascending()
-        idMap.set(message.info.id, id)
         last = id
-        const parentID =
-          message.info.role === "assistant" && message.info.parentID ? idMap.get(message.info.parentID) : undefined
-        const cloned = yield* sessions.updateMessage(
-          yield* canonicalize({ ...message.info, sessionID: canonical, id, ...(parentID ? { parentID } : {}) }),
-        )
+        const cloned = yield* sessions.copyMessage({
+          sourceSessionID: winnerRoot,
+          sourceMessageID: MessageID.make(String(message.id)),
+          targetSessionID: canonical,
+          targetMessageID: id,
+          transform: (native) =>
+            canonicalize(
+              native,
+              native.type === "assistant" ? "assistant" : native.type === "user" ? "user" : undefined,
+            ),
+        })
         // Persisted before the rest of the turn is copied so an interrupted graft is recoverable.
-        if (message.info.id === boundary) {
+        if (String(message.id) === boundary) {
           yield* promise(() => store.updateTurn(turn._id, { canonicalUserMessageID: cloned.id }))
-        }
-        for (const part of message.parts) {
-          const next = yield* canonicalize(
-            {
-              ...part,
-              id: PartID.ascending(),
-              messageID: cloned.id,
-              sessionID: canonical,
-            },
-            message.info.role,
-          )
-          if (next.type === "compaction" && next.tail_start_id) next.tail_start_id = idMap.get(next.tail_start_id)
-          yield* sessions.updatePart(next)
         }
       }
       for (const id of subagents) {
         const copy = sessionMap.get(id)
         if (!copy) continue
-        const messages = yield* sessions.messages({ sessionID: id }).pipe(Effect.mapError(error))
-        const childIds = new Map<string, MessageID>()
+        const messages = yield* sessions.canonicalMessages(id).pipe(Effect.mapError(error))
         for (const message of messages) {
+          if (message.type === "system") continue
           const messageID = MessageID.ascending()
-          childIds.set(message.info.id, messageID)
-          const parentID =
-            message.info.role === "assistant" && message.info.parentID ? childIds.get(message.info.parentID) : undefined
-          const cloned = yield* sessions.updateMessage(
-            yield* canonicalize({ ...message.info, sessionID: copy, id: messageID, ...(parentID ? { parentID } : {}) }),
-          )
-          for (const part of message.parts) {
-            const next = yield* canonicalize(
-              { ...part, id: PartID.ascending(), messageID: cloned.id, sessionID: copy },
-              message.info.role,
-              { subagent: true },
-            )
-            if (next.type === "compaction" && next.tail_start_id) next.tail_start_id = childIds.get(next.tail_start_id)
-            yield* sessions.updatePart(next)
-          }
+          yield* sessions.copyMessage({
+            sourceSessionID: id,
+            sourceMessageID: MessageID.make(String(message.id)),
+            targetSessionID: copy,
+            targetMessageID: messageID,
+            transform: (native) =>
+              canonicalize(
+                native,
+                native.type === "assistant" ? "assistant" : native.type === "user" ? "user" : undefined,
+                { subagent: true },
+              ),
+          })
         }
       }
       yield* promise(() =>
@@ -9541,7 +9555,7 @@ export const layer: Layer.Layer<
         Effect.forkIn(scope),
       )
 
-    const promote: (
+    const promoteImpl = Effect.fn("Arena.promote")(function* (
       store: Store,
       turn: TurnDocument,
       side: Side,
@@ -9551,17 +9565,6 @@ export const layer: Layer.Layer<
         | ReturnType<typeof earlyResolution>,
       vote?: Vote,
       retry?: boolean,
-      rawParticipantID?: string,
-    ) => Effect.Effect<ReturnType<typeof project>, Error> = Effect.fn("Arena.promote")(function* (
-      store: Store,
-      turn: TurnDocument,
-      side: Side,
-      resolution:
-        | ReturnType<typeof voteResolution>
-        | ReturnType<typeof stoppedResolution>
-        | ReturnType<typeof earlyResolution>,
-      vote?: Vote,
-      retry = false,
       rawParticipantID?: string,
     ) {
       const chat = yield* promise(() => store.chat(turn.chatID))
@@ -9701,7 +9704,12 @@ export const layer: Layer.Layer<
       // and the retry already handle. Retaining early does mean a failed apply leaves the
       // loser's services stopped and the winner marked retained; the retry re-runs both.
       const grafting = yield* Effect.forkChild(
-        trackOperation(store, turn._id, "updating_conversation", graft(store, chat, turn, winner)).pipe(
+        trackOperation(
+          store,
+          turn._id,
+          "updating_conversation",
+          graft(store, chat, turn, winner).pipe(Effect.mapError(error)),
+        ).pipe(
           Effect.tapError(() =>
             promise(() => store.transitionTurn(turn._id, "canonicalization_failed")).pipe(Effect.ignore),
           ),
@@ -10028,6 +10036,27 @@ export const layer: Layer.Layer<
       return yield* respond(store, chat._id)
     })
 
+    const promote: (
+      store: Store,
+      turn: TurnDocument,
+      side: Side,
+      resolution:
+        | ReturnType<typeof voteResolution>
+        | ReturnType<typeof stoppedResolution>
+        | ReturnType<typeof earlyResolution>,
+      vote?: Vote,
+      retry?: boolean,
+      rawParticipantID?: string,
+    ) => Effect.Effect<ReturnType<typeof project>, Error> = (
+      store,
+      turn,
+      side,
+      resolution,
+      vote,
+      retry,
+      rawParticipantID,
+    ) => promoteImpl(store, turn, side, resolution, vote, retry, rawParticipantID).pipe(Effect.mapError(error))
+
     const vote = Effect.fn("Arena.vote")(function* (id: string, selected: Vote, rawParticipantID?: string) {
       const store = yield* available()
       const votingParticipantID = yield* Effect.try({
@@ -10133,7 +10162,11 @@ export const layer: Layer.Layer<
       return { accepted, received: events.length }
     })
 
-    const retryResolution: Interface["retryResolution"] = Effect.fn("Arena.retryResolution")(function* (
+    const retryResolutionImpl: (
+      id: string,
+      mode?: ApplyBaseChoice | "restore_workspace",
+      answers?: readonly ReviewAnswer[],
+    ) => Effect.Effect<ReturnType<typeof project>, unknown> = Effect.fn("Arena.retryResolution")(function* (
       id: string,
       mode?: ApplyBaseChoice | "restore_workspace",
       answers?: readonly ReviewAnswer[],
@@ -10181,7 +10214,7 @@ export const layer: Layer.Layer<
           }),
         )
         if (mode === "restore_workspace") return yield* respond(store, turn.chatID)
-        return yield* retryResolution(id, mode, answers)
+        return yield* retryResolutionImpl(id, mode, answers)
       }
       if (mode === "restore_workspace") return yield* respond(store, turn.chatID)
       // Discarding the winner is open while nothing of it is in the checkout. Claim the answer and
@@ -10226,6 +10259,9 @@ export const layer: Layer.Layer<
       )
       return acknowledged
     })
+
+    const retryResolution: Interface["retryResolution"] = (id, mode, answers) =>
+      retryResolutionImpl(id, mode, answers).pipe(Effect.mapError(error))
 
     const retryComparison = Effect.fn("Arena.retryComparison")(function* (id: string) {
       const store = yield* available()
@@ -10653,8 +10689,8 @@ export const layer: Layer.Layer<
     return Service.of({
       activity,
       stream,
-      session: ensureChat,
-      archiveSession,
+      session: (sessionID, userID) => ensureChat(sessionID, userID).pipe(Effect.mapError(error)),
+      archiveSession: (sessionID) => archiveSession(sessionID).pipe(Effect.mapError(error)),
       unarchiveSession,
       inspectCheckout,
       prepareCheckout,
@@ -10677,16 +10713,17 @@ export const layer: Layer.Layer<
       singleAgentVote,
       startTurn,
       reply,
-      interruptSteer,
+      interruptSteer: (runID, expectedMessageID) =>
+        interruptSteer(runID, expectedMessageID).pipe(Effect.mapError(error)),
       discardSteer,
       retryRun,
       resumeBattle,
-      vote,
+      vote: (turnID, selected, participantID) => vote(turnID, selected, participantID).pipe(Effect.mapError(error)),
       recordReview,
       retryResolution,
       retryComparison,
-      stop,
-      resolveStop,
+      stop: (turnID) => stop(turnID).pipe(Effect.mapError(error)),
+      resolveStop: (turnID, resolution) => resolveStop(turnID, resolution).pipe(Effect.mapError(error)),
     })
   }),
 )

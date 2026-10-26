@@ -1,6 +1,5 @@
-import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { Config } from "@/config/config"
-import type { MessageV2 } from "@/session/message-v2"
 import photonWasm from "@silvia-odwyer/photon-node/photon_rs_bg.wasm" with { type: "file" }
 import { Context, Effect, Layer, Schema } from "effect"
 import path from "node:path"
@@ -11,7 +10,7 @@ const MAX_WIDTH = 2000
 const MAX_HEIGHT = 2000
 const AUTO_RESIZE = true
 const JPEG_QUALITIES = [80, 85, 70, 55, 40]
-export class ResizerUnavailableError extends Schema.TaggedErrorClass<ResizerUnavailableError>()(
+export class ResizerUnavailableError extends Schema.TaggedError<ResizerUnavailableError>()(
   "ImageResizerUnavailableError",
   {},
 ) {
@@ -20,7 +19,7 @@ export class ResizerUnavailableError extends Schema.TaggedErrorClass<ResizerUnav
   }
 }
 
-export class InvalidDataUrlError extends Schema.TaggedErrorClass<InvalidDataUrlError>()("ImageInvalidDataUrlError", {
+export class InvalidDataUrlError extends Schema.TaggedError<InvalidDataUrlError>()("ImageInvalidDataUrlError", {
   url: Schema.String,
 }) {
   override get message() {
@@ -28,13 +27,13 @@ export class InvalidDataUrlError extends Schema.TaggedErrorClass<InvalidDataUrlE
   }
 }
 
-export class DecodeError extends Schema.TaggedErrorClass<DecodeError>()("ImageDecodeError", {}) {
+export class DecodeError extends Schema.TaggedError<DecodeError>()("ImageDecodeError", {}) {
   override get message() {
     return "Image could not be decoded"
   }
 }
 
-export class SizeError extends Schema.TaggedErrorClass<SizeError>()("ImageSizeError", {
+export class SizeError extends Schema.TaggedError<SizeError>()("ImageSizeError", {
   bytes: Schema.Number,
   max: Schema.Number,
   width: Schema.Number,
@@ -47,7 +46,11 @@ export class SizeError extends Schema.TaggedErrorClass<SizeError>()("ImageSizeEr
   }
 }
 
-export type Error = ResizerUnavailableError | InvalidDataUrlError | DecodeError | SizeError
+export class ConfigurationError extends Schema.TaggedError<ConfigurationError>()("ImageConfigurationError", {
+  message: Schema.String,
+}) {}
+
+export type Error = ResizerUnavailableError | InvalidDataUrlError | DecodeError | SizeError | ConfigurationError
 
 /** Overrides for the configured `attachment.image` limits, for a caller with a tighter budget. */
 export type Limits = {
@@ -64,7 +67,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Image") {}
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
@@ -81,7 +84,9 @@ const layer = Layer.effect(
     )
 
     const resize = Effect.fn("Image.normalize")(function* (input: ImagePart, limits?: Limits) {
-      const image = (yield* config.get()).attachment?.image
+      const image = (yield* config
+        .get()
+        .pipe(Effect.mapError((cause) => new ConfigurationError({ message: cause.message })))).attachment?.image
       const info = {
         autoResize: image?.auto_resize ?? AUTO_RESIZE,
         maxWidth: limits?.maxWidth ?? image?.max_width ?? MAX_WIDTH,
@@ -179,6 +184,6 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [Config.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [Config.node] })
 
 export * as Image from "./image"

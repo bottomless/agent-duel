@@ -31,11 +31,12 @@ import { type V2Connection } from "./runtime.js";
 import { modelRef, modesFromV2 } from "./mapping.js";
 
 import { V2_CAPABILITIES } from "./capabilities.js";
-import { features } from "./configuration.js";
+import { features, arenaModelRef } from "./configuration.js";
 import { commands } from "./commands.js";
 import { messages } from "./history.js";
 import { SessionPermissions } from "./permissions.js";
 import { SessionUsage } from "./usage.js";
+import { createArenaSessionApi } from "./arena.js";
 
 export class OpenCodeV2Session implements AgentSession {
   readonly provider = "opencode";
@@ -56,6 +57,7 @@ export class OpenCodeV2Session implements AgentSession {
   private dirty = false;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private readonly arenaEnabled: boolean;
   private history: SessionMessageInfo[] = [];
   private modes: AgentMode[] = [];
   constructor(
@@ -65,11 +67,13 @@ export class OpenCodeV2Session implements AgentSession {
     private readonly logger: Logger,
     private readonly persist: boolean,
     private readonly requiresPaseoPlugin: boolean,
+    private readonly arenaMode = false,
     private readonly unbind?: () => void,
     bindChild?: (id: string) => void,
     private readonly acquire?: () => Promise<V2Connection>,
     private readonly moved?: (connection: V2Connection) => void,
   ) {
+    this.arenaEnabled = Boolean(connection.arena);
     this.permissions = new SessionPermissions(
       () => this.client,
       info.id,
@@ -118,6 +122,55 @@ export class OpenCodeV2Session implements AgentSession {
   get id() {
     return this.info.id;
   }
+  get arena(): AgentSession["arena"] {
+    if (!this.arenaEnabled) return undefined;
+    const api = () => {
+      return createArenaSessionApi({
+        connection: () => {
+          const arena = this.connection.arena;
+          if (!arena) throw new Error("OpenCode Arena runtime is unavailable");
+          return arena;
+        },
+        ensureRuntime: () => this.reconnectIfExited(),
+        directory: this.config.cwd,
+        sessionId: this.id,
+      });
+    };
+    return {
+      get streamKey() {
+        return api().streamKey;
+      },
+      stream: (target, signal, userId) => api().stream(target, signal, userId),
+      resolve: (userId) => api().resolve(userId),
+      singleAgentVote: (ratingId, vote, participantId) =>
+        api().singleAgentVote(ratingId, vote, participantId),
+      archive: () => api().archive(),
+      snapshot: (chatId) => api().snapshot(chatId),
+      turn: (turnId) => api().turn(turnId),
+      start: (chatId, prompt, participantId, autoAccept, attachments) =>
+        api().start(chatId, prompt, participantId, autoAccept, attachments),
+      reply: (turnId, prompt, target, attachments) =>
+        api().reply(turnId, prompt, target, attachments),
+      interruptSteer: (runId, messageId) => api().interruptSteer(runId, messageId),
+      discardSteer: (runId, messageIds) => api().discardSteer(runId, messageIds),
+      retryRun: (runId) => api().retryRun(runId),
+      resumeBattle: (turnId) => api().resumeBattle(turnId),
+      vote: (turnId, vote, participantId) => api().vote(turnId, vote, participantId),
+      recordReview: (turnId, events, participantId, ipAddress) =>
+        api().recordReview(turnId, events, participantId, ipAddress),
+      stop: (turnId) => api().stop(turnId),
+      resolveStop: (turnId, resolution) => api().resolveStop(turnId, resolution),
+      retryComparison: (turnId) => api().retryComparison(turnId),
+      retryResolution: (turnId, mode, answers) => api().retryResolution(turnId, mode, answers),
+      diff: (turnId) => api().diff(turnId),
+      fileDiff: (turnId, file) => api().fileDiff(turnId, file),
+      runPart: (runId, partId, location) => api().runPart(runId, partId, location),
+      replyQuestion: (runId, requestId, answers) => api().replyQuestion(runId, requestId, answers),
+      rejectQuestion: (runId, requestId) => api().rejectQuestion(runId, requestId),
+      replyPermission: (runId, requestId, response) =>
+        api().replyPermission(runId, requestId, response),
+    };
+  }
   get features() {
     return features(this.config);
   }
@@ -146,7 +199,8 @@ export class OpenCodeV2Session implements AgentSession {
   }
   private async configureConnection() {
     const location = { directory: this.config.cwd };
-    await waitForLocationReady({ client: this.client, location, signal: this.abort.signal });
+    if (!this.arenaMode)
+      await waitForLocationReady({ client: this.client, location, signal: this.abort.signal });
     if (this.requiresPaseoPlugin)
       await awaitPaseoPlugin({ client: this.client, location, signal: this.abort.signal });
     for (const [server, config] of Object.entries(this.config.mcpServers ?? {})) {
@@ -295,16 +349,21 @@ export class OpenCodeV2Session implements AgentSession {
   async setModel(model: string | null) {
     await this.reconnectIfExited();
     const location = { directory: this.config.cwd };
-    const selected = model ? modelRef(model) : (await this.client.model.default({ location })).data;
+    const arenaSelection = this.arenaMode ? arenaModelRef(model) : undefined;
+    const selected =
+      arenaSelection ??
+      (model ? modelRef(model) : (await this.client.model.default({ location })).data);
     if (!selected) throw new Error("OpenCode has no default model");
-    const catalog = await this.client.model.list({ location });
-    const target = catalog.data.find(
-      (entry) =>
-        entry.enabled && entry.providerID === selected.providerID && entry.id === selected.id,
-    );
+    const catalog = this.arenaMode ? undefined : await this.client.model.list({ location });
+    const target = arenaSelection
+      ? { variants: [{ id: arenaSelection.variant }] }
+      : catalog?.data.find(
+          (entry) =>
+            entry.enabled && entry.providerID === selected.providerID && entry.id === selected.id,
+        );
     if (!target)
       throw new Error(`OpenCode model unavailable: ${selected.providerID}/${selected.id}`);
-    const retainedVariant = this.config.thinkingOptionId;
+    const retainedVariant = arenaSelection ? arenaSelection.variant : this.config.thinkingOptionId;
     const variant =
       retainedVariant !== "default" && target.variants.some((entry) => entry.id === retainedVariant)
         ? retainedVariant
@@ -351,6 +410,26 @@ export class OpenCodeV2Session implements AgentSession {
   async setFeature(id: string, value: unknown) {
     if (id !== "auto_accept" || typeof value !== "boolean")
       throw new Error("Unknown OpenCode feature");
+    await this.reconnectIfExited();
+    if (this.connection.arena) {
+      const response = await fetch(
+        new URL(
+          `/arena/sessions/${encodeURIComponent(this.id)}/auto-accept`,
+          `${this.connection.arena.serverUrl.replace(/\/$/, "")}/`,
+        ),
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-opencode-directory": this.config.cwd,
+            "x-paseo-control-token": this.connection.arena.controlToken,
+          },
+          body: JSON.stringify({ enabled: value }),
+        },
+      );
+      if (!response.ok) throw new Error(`Arena auto-accept update failed: ${response.status}`);
+    }
     this.config.featureValues = { ...this.config.featureValues, [id]: value };
     if (value && !this.config.toolPolicy)
       for (const request of this.permissions.list())

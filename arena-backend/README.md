@@ -1,7 +1,7 @@
 # Agent Duel battle engine
 
 `arena-backend` is a Bun workspace with the local battle engine: a vendored
-OpenCode fork that runs blinding, worktrees, voting, and canonical history. The
+OpenCode 2.0 fork that runs blinding, worktrees, voting, and canonical history. The
 desktop build compiles `packages/opencode/src/index.ts` into a standalone
 executable.
 
@@ -11,7 +11,7 @@ on your own OpenRouter key.
 
 ## Install dependencies
 
-From the enclosing repository:
+Use the Bun version in `package.json`. From the enclosing repository:
 
 ```bash
 npm install

@@ -1,0 +1,38 @@
+bun test v1.4.2 (744846f84)
+
+test/tool-subagent.test.ts:
+[23:24:43.220] INFO (#1349): watcher subscribe {
+  path: "<temp>/oc-YL6E1u/tmp/opencode-core-test-AHa2QL/config/AGENTS.md",
+  type: "file",
+  ignores: 0,
+}
+[23:24:43.220] INFO (#1349): watcher subscribe {
+  path: "<temp>/oc-YL6E1u/tmp/opencode-core-test-oCGLQB/AGENTS.md",
+  type: "file",
+  ignores: 0,
+}
+[23:24:43.220] INFO (#1349): watcher subscribe {
+  path: "<temp>/oc-YL6E1u/tmp/AGENTS.md",
+  type: "file",
+  ignores: 0,
+}
+[23:24:43.220] INFO (#1349): watcher subscribe {
+  path: "<temp>/oc-YL6E1u/AGENTS.md",
+  type: "file",
+  ignores: 0,
+}
+[23:24:43.235] INFO (#1349): watcher subscribe {
+  path: "<temp>/oc-YL6E1u/tmp/opencode-core-test-AHa2QL/config/skill",
+  type: "file",
+  ignores: 0,
+}
+[23:24:43.238] INFO (#1349): watcher subscribe {
+  path: "<temp>/oc-YL6E1u/tmp/opencode-core-test-AHa2QL/config/skills",
+  type: "file",
+  ignores: 0,
+}
+
+ 11 pass
+ 0 fail
+ 55 expect() calls
+Ran 11 tests across 1 file. [1123.00ms]

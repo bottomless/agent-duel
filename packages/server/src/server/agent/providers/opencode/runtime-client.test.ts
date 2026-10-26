@@ -5,8 +5,8 @@ test.each([
   ["1.14.46", 1],
   ["unexpected wrapper output", 1],
   ["", 1],
-  ["opencode v2.0.10\n", 2],
-  ["v2.0.10-beta.1", 2],
+  ["opencode v2.0.32\n", 2],
+  ["v2.0.32-beta.1", 2],
 ])("identifies the OpenCode runtime version %s", (output, major) => {
   expect(openCodeMajorVersion(String(output))).toBe(major);
 });
@@ -70,7 +70,7 @@ test("retries a rejected version probe after the configured binary changes", asy
   try {
     await writeFile(script, 'console.log("opencode v2.0.3")');
     await expect(client.fetchCatalog({ scope: "global", force: true })).rejects.toThrow(
-      "Update OpenCode to 2.0.10 or newer, then refresh the provider in Paseo",
+      "Update OpenCode to 2.0.32 or newer, then refresh the provider in Paseo",
     );
     await writeFile(script, 'console.log("opencode v3.0.0")');
     await expect(client.fetchCatalog({ scope: "global", force: true })).rejects.toThrow(
@@ -101,7 +101,7 @@ test.each([
     expect((await client.listFeatures({ provider: "opencode", cwd: root }))[0]?.label).toBe(
       "Auto Accept",
     );
-    await writeFile(script, 'console.log("opencode v2.0.10")');
+    await writeFile(script, 'console.log("opencode v2.0.32")');
     expect((await client.listFeatures({ provider: "opencode", cwd: root }))[0]?.label).toBe(
       "Auto-accept",
     );

@@ -4,8 +4,8 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { createHash, randomBytes } from "crypto"
 import { imageArtifactID } from "@agent-duel/arena-service/research-protocol"
 import { createServer } from "net"
-import { Global } from "@opencode-ai/core/global"
-import type { SessionV1 } from "@opencode-ai/core/v1/session"
+import { Global } from "@opencode/util/global"
+import type { SessionV1 } from "../../src/arena/session-shape"
 import { rename, rm, stat, writeFile } from "fs/promises"
 import fs from "fs/promises"
 import * as CopySnapshot from "@/arena/copy-snapshot"
@@ -6111,7 +6111,6 @@ describe("Arena service vertical slice", () => {
       )
       expect(read.file.file).toBe(first)
       expect(read.divergence.status).toBe("only_a")
-
       ;(a as Mutable).runState = "pending"
       const neither = await request(`/arena/turns/${turnID}/diff`, { headers })
       expect(neither.ok).toBe(false)

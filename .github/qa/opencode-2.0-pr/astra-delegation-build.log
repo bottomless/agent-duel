@@ -1,0 +1,5 @@
+
+> @getpaseo/desktop@0.4.0-beta.13 build:arena-runtime
+> node scripts/build-arena-runtime.mjs
+
+Compiled Arena engine: <checkout>/packages/desktop/dist/arena/agent-duel-arena

@@ -1,11 +1,11 @@
 import { EventEmitter } from "events"
-import { Identifier } from "@/id/id"
+import { randomUUID } from "node:crypto"
 
 export type GlobalEvent = {
   directory?: string
   project?: string
   workspace?: string
-  payload: any
+  payload: Record<string, unknown>
 }
 
 class GlobalBusEmitter extends EventEmitter<{
@@ -13,7 +13,7 @@ class GlobalBusEmitter extends EventEmitter<{
 }> {
   override emit(eventName: "event", event: GlobalEvent): boolean {
     if (event.payload && typeof event.payload === "object" && !("id" in event.payload)) {
-      event.payload.id = event.payload.syncEvent?.id ?? Identifier.create("evt", "ascending")
+      event.payload.id = randomUUID()
     }
     return super.emit(eventName, event)
   }

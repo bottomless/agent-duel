@@ -81,6 +81,44 @@ describe("deriveArenaToolCallDetail", () => {
     });
   });
 
+  it("maps current Core v2 path inputs for file tools", () => {
+    expect(
+      deriveArenaToolCallDetail(
+        "read",
+        { path: "/worktree/turn-0-a/src/App.tsx", offset: 3, limit: 20 },
+        "3: export function App() {}",
+      ),
+    ).toMatchObject({
+      type: "read",
+      filePath: "/worktree/turn-0-a/src/App.tsx",
+      offset: 3,
+      limit: 20,
+    });
+    expect(
+      deriveArenaToolCallDetail(
+        "edit",
+        { path: "/worktree/turn-0-a/src/App.tsx", oldString: "old", newString: "new" },
+        "edited",
+      ),
+    ).toEqual({
+      type: "edit",
+      filePath: "/worktree/turn-0-a/src/App.tsx",
+      oldString: "old",
+      newString: "new",
+    });
+    expect(
+      deriveArenaToolCallDetail(
+        "write",
+        { path: "/worktree/turn-0-a/src/new.ts", content: "export {};" },
+        "written",
+      ),
+    ).toEqual({
+      type: "write",
+      filePath: "/worktree/turn-0-a/src/new.ts",
+      content: "export {};",
+    });
+  });
+
   it("returns undefined for unrecognized tools so ToolCall falls back to its own rendering", () => {
     expect(
       deriveArenaToolCallDetail("glob", { pattern: "**/*.ts" }, { numFiles: 3 }),

@@ -1,0 +1,98 @@
+{
+  "sourceRequestAt": "2026-10-26T21:19:24.888Z",
+  "sourceCallID": "call_xFY3bLWFtp87qq56YWnhnzwx",
+  "originalCall": {
+    "agent": "general",
+    "description": "Find browser preview setup",
+    "prompt": "Investigate how to run and browser-verify this isolated Weatherfork worktree. Do not edit application files. Worktree: <qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a. Current shell env seems missing PORT/PASEO_PORT and ARENA_PREVIEW_URL; arena instruction supplied current URL http://turn1-a--d7ea4909.localhost:6771, primary must bind HOST=127.0.0.1 on assigned port. Check ONLY relevant port/preview mapping resources/env (do not inspect model identity/config). Need identify current assigned port, not historical literal. Find installed browser automation options e.g. headless Chrome via CDP, existing playwright external to repo; no browser tools offered in catalog. Do not install dependencies into project. Can query preview routing information if locally exposed relevantly. Return concrete findings, don't start services or touch others' services.",
+    "model": "",
+    "sessionID": "ses_invalid",
+    "background": true
+  },
+  "replayedCall": {
+    "agent": "general",
+    "description": "Find browser preview setup",
+    "prompt": "Investigate how to run and browser-verify this isolated Weatherfork worktree. Do not edit application files. Worktree: <qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a. Current shell env seems missing PORT/PASEO_PORT and ARENA_PREVIEW_URL; arena instruction supplied current URL http://turn1-a--d7ea4909.localhost:6771, primary must bind HOST=127.0.0.1 on assigned port. Check ONLY relevant port/preview mapping resources/env (do not inspect model identity/config). Need identify current assigned port, not historical literal. Find installed browser automation options e.g. headless Chrome via CDP, existing playwright external to repo; no browser tools offered in catalog. Do not install dependencies into project. Can query preview routing information if locally exposed relevantly. Return concrete findings, don't start services or touch others' services.",
+    "model": "",
+    "sessionID": "",
+    "background": true
+  },
+  "changedFields": ["sessionID"],
+  "sourceContextMessages": 38,
+  "unconstrainedReplay": "Selected read, grep, shell, glob; no delegation executed.",
+  "constrainedReplay": {
+    "changedRequestFields": ["prompt_cache_key", "session_id", "tool_choice", "tools"],
+    "toolChoice": "subagent",
+    "generatedCalls": [
+      {
+        "id": "call_704P3yg4tJEdCSUnhJbzqp3a",
+        "name": "subagent",
+        "arguments": "{\"agent\":\"explore\",\"description\":\"Audit temperature display coverage\",\"prompt\":\"Quick read-only audit of this Weatherfork repo: identify all temperature UI surfaces that need Fahrenheit/Celsius support and edge cases/tests worth covering. We already found ClimateExtremes, SeasonalRibbonChart, HourlyChart, ClimateChart, HumidityComfortChart and DataDetails exports. Check for anything missing. Also check available local browser testing tools (not user config/model identity) and port/preview setup in repo documentation only if relevant. Do not modify files.\",\"model\":\"\",\"sessionID\":\"\",\"background\":true}",
+        "input": {
+          "agent": "explore",
+          "description": "Audit temperature display coverage",
+          "prompt": "Quick read-only audit of this Weatherfork repo: identify all temperature UI surfaces that need Fahrenheit/Celsius support and edge cases/tests worth covering. We already found ClimateExtremes, SeasonalRibbonChart, HourlyChart, ClimateChart, HumidityComfortChart and DataDetails exports. Check for anything missing. Also check available local browser testing tools (not user config/model identity) and port/preview setup in repo documentation only if relevant. Do not modify files.",
+          "model": "",
+          "sessionID": "",
+          "background": true
+        }
+      }
+    ]
+  },
+  "executions": {
+    "constrained": {
+      "parentID": "ses_e85794370ffepqdKSjCO6W78nF",
+      "rootHasParent": false,
+      "childID": "ses_e85794203ffeDdhA2fZs4QJHPR",
+      "childParentID": "ses_e85794370ffepqdKSjCO6W78nF",
+      "model": {
+        "id": "contestant",
+        "providerID": "arena",
+        "variant": "high"
+      },
+      "childToolCalls": 25,
+      "toolStatuses": {
+        "completed": 25
+      },
+      "lastFinish": "stop",
+      "changedFiles": [],
+      "verifiedLiveChildRequests": 5,
+      "publicText": [
+        "## Findings\n\n**No additional temperature-bearing chart/component found beyond your list.** The current snapshot already passes the unit to all five temperature components from [App.tsx:64\u201378](<qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a/src/App.tsx#L64).\n\nWithin those components, the complete surface checklist is:\n\n| Component | Temperature surfaces |\n|---|---|\n| ClimateExtremes | Hottest-month value **and its accessible label** |\n| SeasonalRibbonChart | Legend endpoints, screen-reader description, SVG month titles, selected-month readout, warmest/coldest summary, table caption/headers/cells |\n| HourlyChart | All 288 cell titles, gradient legend ticks, screen-reader description |\n| ClimateChart | Axis ticks, legends, freezing label/description, high/low point titles, **daily-swing temperature difference**, table headers/cells |\n| HumidityComfortChart | Dew-point threshold description, driest/muggiest summary, dew-point table header/cells |\n| DataDetails | Copied TSV and downloaded CSV; both serialize the current table DOM, so updated headers/cells propagate automatically |\n\n### Other places checked\n\n- **Toggle and app-wide persistence** are the additional non-chart surfaces: retain selection across city/index navigation, reloads, loading/error states, and storage failures.\n- **City-index ribbon thumbnails need no conversion:** they are decorative images without numeric temperature labels ([CityIndex.tsx:39\u201349](<qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a/src/CityIndex.tsx#L39)); searching public SVG/HTML assets found no temperature-unit text. Their colors should stay unchanged.\n- `feelsHigh` / `feelsLow` exist in data generation/types but are **not currently displayed**.\n- One hardcoded formatter remains: `formatHighF()` in [extremes.ts:23](<qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a/src/extremes.ts#L23). Its only located consumers are legacy extremes tests\u2014not production UI. This is cleanup potential, not a missed Celsius surface.\n- Daylight\u2019s degree symbol represents **latitude**, not temperature. Precipitation, wind, daylight, humidity percentages, and AQI should remain unchanged.\n\n## Tests and edge cases\n\n**Already covered in the existing tests, based on inspection\u2014not execution:**\n\n- Freezing/boiling/\u221240 conversion; differences without the freezing-point offset; precision and negative-zero normalization.\n- New York and Mexico City component fixtures; repeated F\u2194C switches; unchanged geometry/colors/category percentages and immutable source records.\n- Tooltips, accessible descriptions, tables, both export formats.\n- Preserving ribbon month selection and an open data panel.\n- Missing hourly data and a warm-only climate range.\n- Default/persisted/invalid preferences and blocked storage reads/writes/getters.\n\nSee [check-temperature-dom.ts](<qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a/scripts/check-temperature-dom.ts) and [check-temperature-preference-dom.ts](<qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a/scripts/check-temperature-preference-dom.ts).\n\n**Highest-value additions:**\n\n1. **Real App navigation/reload test.** Existing preference tests simulate navigation/remounts with a small fixture; they do not exercise the router, city loading, browser history, or actual reload.\n2. **Browser keyboard/mobile checks.** Native radio arrow-key behavior, visible focus, narrow-screen label clipping, SVG tooltip behavior, clipboard permissions, and real download content.\n3. **Exact numeric assertions for remaining summaries/axes.** Current checks reject stale units broadly, but do not independently assert every climate-axis tick, hourly legend tick, ribbon summary/readout value, or humidity summary value.\n4. **Cold-only and boundary datasets.** All-below-freezing climate, freezing exactly at a plot boundary, constant hourly temperatures, and very cold/hot legend endpoints.\n5. **Missing/non-finite data contract.** The formatter can emit `NaN\u00b0C`/`Infinity\u00b0C`; ribbon/humidity components have reductions that fail on empty climate arrays. The hourly guard handles absent data, not malformed/empty grids. These are existing robustness concerns, not necessarily unit-switch regressions.\n6. **Cross-tab preference synchronization only if desired.** The hook currently has no `storage` listener; persistence does not imply live cross-tab synchronization.\n\n## Local testing / preview\n\n- Repository-local **jsdom and rolldown resolve successfully**. Playwright, Playwright Core, Puppeteer, Puppeteer Core, and axe/Playwright do **not** resolve from this worktree.\n- [package.json](<qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a/package.json) exposes `check:temperature`, `dev` (`vite`), and `preview` (`vite preview`).\n- [README.md](<qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a/README.md) documents the temperature checks but **no special preview URL or port**.\n- **Did not run the tests:** [run-dom-check.mjs:14\u201331](<qa>/weatherfork-upgraded-repeat2/.agent-duel/worktrees/d7ea49092a90f0cd/generation-1-a/scripts/run-dom-check.mjs#L14) creates and deletes a temporary bundle, which would violate this audit\u2019s strict no-write constraint. No files were modified."
+      ],
+      "startedAt": "2026-10-26T23:23:33Z",
+      "completedAt": "2026-10-26T23:24:38.116Z"
+    },
+    "original-call": {
+      "parentID": "ses_e8577a895ffevQiasDnGKxo3N0",
+      "rootHasParent": false,
+      "childID": "ses_e8577a5bdffe4MvAl4uUic3iGF",
+      "childParentID": "ses_e8577a895ffevQiasDnGKxo3N0",
+      "model": {
+        "id": "contestant",
+        "providerID": "arena",
+        "variant": "high"
+      },
+      "childToolCalls": 77,
+      "toolStatuses": {
+        "completed": 77
+      },
+      "lastFinish": "stop",
+      "changedFiles": [],
+      "verifiedLiveChildRequests": 23,
+      "publicText": [
+        "The live preview router targets `127.0.0.1:64916`; its log recorded that port for my request to the supplied URL. I also found an external Playwright installation with a cached Chromium binary, so browser checks can run without adding project dependencies.",
+        "## Current assigned port: `64916`\n\nConfirmed from **live routing**, not a historical startup command:\n\n- Request to `http://turn1-a--d7ea4909.localhost:6771/` returned **502**.\n- The router logged that request at **2026-10-26 23:27:55 UTC** with:\n  ```json\n  {\n    \"hostname\": \"turn1-a--d7ea4909.localhost\",\n    \"port\": 64916,\n    \"msg\": \"Service proxy: upstream unreachable\"\n  }\n  ```\n- Read-only routing metadata for this exact worktree agrees:\n  - `PASEO_PORT=64916`\n  - `PASEO_PORT2=64917`\n  - `PASEO_PORT3=64918`\n  - Worktree removal timestamp is null.\n- No listener currently occupies `64916`.\n- `6771` is the existing preview proxy; **do not bind the app there**.\n\nEvidence files:\n- `<qa>/upgraded-repeat2-qa/.dev/paseo-home/daemon.log`\n- `<qa>/upgraded-repeat2-qa/.dev/paseo-home/arena/arena.sqlite` \u2014 queried only worktree/port/lifecycle fields.\n\n## Run command\n\nFrom the supplied worktree:\n\n```sh\nHOST=127.0.0.1 PORT=64916 PASEO_PORT=64916 \\\n  npm run dev -- --host 127.0.0.1 --port 64916 --strictPort\n```\n\n`package.json` uses Vite; `vite.config.ts` has no custom server settings. Explicit CLI options matter because Vite does not automatically use generic `HOST`/`PORT`.\n\n## Browser automation available without installation\n\n**Recommended:** external `playwright-core` **1.59.1**:\n\n```js\nconst { chromium } = require(\n  '<external-browser-tools>/node_modules/.bun/playwright-core@1.59.1/node_modules/playwright-core'\n);\n```\n\nIts expected Chromium and headless-shell binaries both exist in:\n\n```text\n<home>/Library/Caches/ms-playwright/chromium-1217/\n<home>/Library/Caches/ms-playwright/chromium_headless_shell-1217/\n```\n\nExample verification after starting Vite:\n\n```js\nconst browser = await chromium.launch({ headless: true });\ntry {\n  const page = await browser.newPage({\n    viewport: { width: 1440, height: 1000 },\n  });\n  page.on('pageerror', error => console.error(error));\n  const response = await page.goto(\n    'http://turn1-a--d7ea4909.localhost:6771/',\n    { waitUntil: 'networkidle' },\n  );\n  console.log({ status: response.status(), title: await page.title() });\n  // Add interaction assertions and screenshots here.\n} finally {\n  await browser.close();\n}\n```\n\nOther findings:\n- System Chrome exists at `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`; an isolated headless/CDP launch is another option.\n- No Playwright/Puppeteer package resolves from this worktree.\n- A separate external Playwright 1.58.2 exists, but its default Chromium revision is missing; prefer the installation above.\n- MCP resource discovery returned no resources.\n\n**No application files changed, dependencies installed, services started/stopped, or existing browser sessions controlled.**"
+      ],
+      "startedAt": "2026-10-26T23:25:18.099Z",
+      "completedAt": "2026-10-26T23:28:14.806Z"
+    }
+  },
+  "limits": [
+    "The original nonexistent resume ID remains an error.",
+    "The constrained generation selected subagent explicitly; it does not prove spontaneous delegation frequency.",
+    "Execution harness parent acknowledgments were synthetic; children used real Astra requests and native Core/Arena tools.",
+    "Child execution used the historical contestant worktree as it existed after comparison, not a rollback of all files and services to the original request instant.",
+    "All three matched comparisons predate the final shell-environment and schema fixes."
+  ]
+}
