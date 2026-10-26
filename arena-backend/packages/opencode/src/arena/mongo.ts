@@ -1193,7 +1193,8 @@ export class Store {
     readonly appliedSide?: Side
     /** Left out for a discard that names nobody (`identitiesRevealed`). */
     readonly models?: Readonly<Record<Side, string>>
-    readonly expectedState: "awaiting_vote" | "awaiting_stop_resolution"
+    /** A failed state only for a discard the control plane already holds (`discardCommitted`). */
+    readonly expectedState: "awaiting_vote" | "awaiting_stop_resolution" | "finalization_failed" | "interrupted_recovery"
     readonly at: Date
   }) {
     const candidate = await this.turns.findOne({ _id: input.turnID })

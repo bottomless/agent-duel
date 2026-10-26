@@ -3802,6 +3802,13 @@ describe("Arena service vertical slice", () => {
       expect(discarded.turn?.state).toBe("discarded")
       expect(discarded.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
       expect(discarded.turn?.vote).toBeUndefined()
+      // The retried side was stopped before it answered, so the discard still names nobody.
+      expect(discarded.turn?.revealed).toBe(false)
+      expect(discarded.turn?.identities).toBeUndefined()
+      const stored = await memory.store.turn(turnID)
+      expect(stored?.resolution).toEqual({ kind: "stopped", resolution: "discard", revealed: false })
+      expect(stored?.placement.a.model).toBeUndefined()
+      expect(stored?.placement.b.model).toBeUndefined()
       expect((await memory.store.runsForTurn(turnID)).some((run) => run.runState === "pending")).toBe(false)
       await waitForReadyChat(memory.store, attached.chat.id)
       expect(await $`git rev-parse HEAD`.cwd(directory.path).text()).toBe(head)
@@ -3853,8 +3860,8 @@ describe("Arena service vertical slice", () => {
       const settled = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
       const chosen = settled.runs.find((run) => run.selectable)
       if (!chosen) throw new Error("Arena did not finish a selectable result")
-      // Another window discarded the battle on the control plane, and a retry claimed the turn
-      // before that discard was recorded here.
+      // As if another window's discard reached the control plane and a retry then left a side to
+      // choose before that discard was recorded here. The test sets that state directly.
       router.resolveBattle(turnID, "discard")
 
       const voted = await json<PublicSnapshot>(
@@ -4010,6 +4017,73 @@ describe("Arena service vertical slice", () => {
       expect(archived?.chat.status).toBe("archived")
       expect(archived?.turn?.state).toBe("discarded")
       expect(archived?.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
+      expect(archived?.turn?.revealed).toBe(false)
+      const stored = await memory.store.turn(turnID)
+      expect(stored?.resolution).toEqual({ kind: "stopped", resolution: "discard", revealed: false })
+      expect(stored?.placement.a.model).toBeUndefined()
+      const after = await memory.store.runsForTurn(turnID)
+      expect(after.some((run) => run.runState === "pending")).toBe(false)
+      expect(after.every((run) => !!run.worktreeRemovedAt)).toBe(true)
+    } finally {
+      router.restore()
+    }
+  }, 40_000)
+
+  test("archives a battle the control plane discarded after the engine lost its retry", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure lost retry fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ failFirstOrdinals: [1, 2] })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Lost retry",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Fail on both sides." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+
+      await waitForTurn(memory.store, turnID, "awaiting_vote")
+      // A discard reached the control plane, a retry claimed the turn before it was recorded here,
+      // and the engine stopped while the retry ran. The test sets that state directly.
+      router.resolveBattle(turnID, "discard")
+      await memory.store.transitionTurn(turnID, "running")
+      await memory.store.transitionTurn(turnID, "interrupted_recovery")
+
+      const archived = await json<PublicSnapshot | null>(
+        await request(`/arena/sessions/${source.id}/archive`, { method: "POST", headers }),
+      )
+      expect(router.battleDecision(turnID)).toBe("discard")
+      expect(archived?.chat.status).toBe("archived")
+      const stored = await memory.store.turn(turnID)
+      expect(stored?.state).toBe("discarded")
+      // A battle the engine lost reveals, as an aborted one does.
+      expect(stored?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
+      expect(stored?.placement.a.model).toBeDefined()
       const after = await memory.store.runsForTurn(turnID)
       expect(after.some((run) => run.runState === "pending")).toBe(false)
       expect(after.every((run) => !!run.worktreeRemovedAt)).toBe(true)

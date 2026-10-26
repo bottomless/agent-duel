@@ -86,6 +86,7 @@ import {
   stoppedResolution,
   turnID as makeTurnID,
   voteResolution,
+  type BattleState,
   type Resolution,
   type Side,
   type StopResolution,
@@ -638,6 +639,21 @@ function committedResolution(
   if (requested.kind === "early" && side) return earlyResolution(side)
   if (requested.kind === "stopped" && side) return stoppedResolution(side === "a" ? "apply_a" : "apply_b")
   throw new Error(`Arena battle was already resolved as ${decision}`)
+}
+
+/**
+ * States a committed discard is recorded in. The failed ones are a battle the engine lost after a
+ * Retry claimed it back, which no request could otherwise end.
+ */
+type DiscardableState = "awaiting_vote" | "awaiting_stop_resolution" | "finalization_failed" | "interrupted_recovery"
+
+function isDiscardable(state: BattleState): state is DiscardableState {
+  return (
+    state === "awaiting_vote" ||
+    state === "awaiting_stop_resolution" ||
+    state === "finalization_failed" ||
+    state === "interrupted_recovery"
+  )
 }
 
 /** The frozen starting point a contestant worktree is synced to. */
@@ -8131,7 +8147,15 @@ export const layer: Layer.Layer<
       reason: string,
     ) {
       const reveal = expectedState !== "creation_failed"
-      const resolved = reveal ? yield* promise(() => modelsForDecision(turn, "aborted")) : undefined
+      const resolved = reveal ? yield* promise(() => resolvedPlacement(turn, "aborted")) : undefined
+      // A Retry from another window can bring back a battle whose discard the control plane holds.
+      if (resolved?.decision === "discard") {
+        yield* discardCommitted(store, turn._id, resolved)
+        return true
+      }
+      if (resolved && resolved.decision !== "aborted") {
+        return yield* Effect.fail(new Error(`Arena battle was already resolved as ${resolved.decision}`))
+      }
       const aborted = yield* promise(() =>
         store.recordAbort({
           turnID: turn._id,
@@ -10346,12 +10370,11 @@ export const layer: Layer.Layer<
         return yield* promote(store, turn, side, resolved)
       }
 
-      const chat = yield* promise(() => store.chat(turn.chatID))
-      if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
+      // Archived before the control plane commits, so a failure here leaves the battle undecided.
       yield* ensureArchives(store, turn)
       const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
       yield* discardCommitted(store, turn._id, revealed)
-      return yield* respond(store, chat._id)
+      return yield* respond(store, turn.chatID)
     })
 
     /**
@@ -10362,7 +10385,7 @@ export const layer: Layer.Layer<
     const recordDiscard = (
       store: Store,
       turn: TurnDocument,
-      expectedState: "awaiting_vote" | "awaiting_stop_resolution",
+      expectedState: DiscardableState,
       models: Readonly<Record<Side, string>>,
       reveal: boolean,
     ) =>
@@ -10399,6 +10422,26 @@ export const layer: Layer.Layer<
       )
     })
 
+    /**
+     * Discards this process is recording or finishing, counted by turn. Archive finishes a discard
+     * another request recorded only when none is in flight here, so it never repeats one that is
+     * running and still ends one a crash cut off.
+     */
+    const discardsInFlight = new Map<string, number>()
+    const holdingDiscard = <A, E, R>(turnID: string, effect: Effect.Effect<A, E, R>) =>
+      Effect.suspend(() => {
+        discardsInFlight.set(turnID, (discardsInFlight.get(turnID) ?? 0) + 1)
+        return effect
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            const held = (discardsInFlight.get(turnID) ?? 1) - 1
+            if (held > 0) discardsInFlight.set(turnID, held)
+            else discardsInFlight.delete(turnID)
+          }),
+        ),
+      )
+
     /** Remove a battle whose discard is recorded, leaving the checkout as it was. */
     const finishDiscard = Effect.fn("Arena.finishDiscard")(function* (
       store: Store,
@@ -10430,7 +10473,10 @@ export const layer: Layer.Layer<
      * `running` between the reveal and the local compare-and-set; its runs are then stopped and the
      * discard recorded once they settle, so the battle never runs on into a vote nothing can record.
      */
-    const discardCommitted = Effect.fn("Arena.discardCommitted")(function* (
+    const discardCommitted = (store: Store, turnID: string, revealed: Awaited<ReturnType<typeof resolvedPlacement>>) =>
+      holdingDiscard(turnID, discardCommittedLoop(store, turnID, revealed))
+
+    const discardCommittedLoop = Effect.fn("Arena.discardCommitted")(function* (
       store: Store,
       turnID: string,
       revealed: Awaited<ReturnType<typeof resolvedPlacement>>,
@@ -10441,22 +10487,26 @@ export const layer: Layer.Layer<
         if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${turnID}`))
         // Another request recorded it first and finishes it.
         if (turn.resolution) return
-        if (turn.state === "awaiting_vote" || turn.state === "awaiting_stop_resolution") {
-          const expectedState: "awaiting_vote" | "awaiting_stop_resolution" = turn.state
+        if (isDiscardable(turn.state)) {
+          const expectedState = turn.state
           const chat = yield* promise(() => store.chat(turn.chatID))
           if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
-          yield* ensureArchives(store, turn)
-          const reveal = yield* promise(() => anySideShowedOutput(store, turn._id))
+          // A battle the engine lost while it ran reveals, as `abortUnresolved` does, and may have no
+          // archive to read.
+          const lost = expectedState === "finalization_failed" || expectedState === "interrupted_recovery"
+          if (!lost) yield* ensureArchives(store, turn)
+          const reveal = lost || (yield* promise(() => anySideShowedOutput(store, turn._id)))
           const recorded = yield* recordDiscard(store, turn, expectedState, revealed.models, reveal)
-          if (!recorded.recorded) continue
-          if (reveal) yield* revealTelemetry(recorded.turn, revealed.metrics)
-          else yield* releaseTelemetry(recorded.turn)
-          return yield* finishDiscard(store, turn, chat)
-        }
-        if (turn.state === "running") yield* stop(turn._id).pipe(Effect.ignore)
+          if (recorded.recorded) {
+            if (reveal) yield* revealTelemetry(recorded.turn, revealed.metrics)
+            else yield* releaseTelemetry(recorded.turn)
+            if (lost) yield* settleAbandonedRuns(store, turn, "interrupted", "Arena battle was discarded")
+            return yield* finishDiscard(store, turn, chat)
+          }
+        } else if (turn.state === "running") yield* stop(turn._id).pipe(Effect.ignore)
         else if (turn.state === "stopping") yield* cancelWorkingRuns(store, turn._id)
-        else if (turn.state !== "finalizing" && turn.state !== "finalization_failed") {
-          return yield* Effect.fail(new Error("Arena battle was already resolved as discard"))
+        else if (turn.state !== "finalizing") {
+          return yield* Effect.fail(new Error(`Arena battle cannot be discarded in its current state: ${turn.state}`))
         }
         if (Date.now() >= deadline) {
           return yield* Effect.fail(new Error(`Arena turn did not settle before its discard: ${turn.state}`))
@@ -10486,34 +10536,32 @@ export const layer: Layer.Layer<
         if (!turn) return yield* Effect.fail(new Error(`Arena active turn not found: ${chat.activeTurnID}`))
 
         if (turn.state === "running") {
-          yield* promise(() => store.transitionTurn(turn._id, "stopping"))
-          environmentCopyStops.get(turn._id)?.abort(new Error("Arena battle was stopped during environment setup"))
-          const runs = yield* promise(() => store.runsForTurn(turn._id))
-          yield* Effect.forEach(
-            runs,
-            (run) => cancelRun(run.worktree, SessionID.make(run.rootSessionID)).pipe(Effect.ignore),
-            { concurrency: 2, discard: true },
-          )
-          yield* Effect.yieldNow
-          yield* Effect.forEach(
-            runs,
-            (run) => cancelRun(run.worktree, SessionID.make(run.rootSessionID)).pipe(Effect.ignore),
-            { concurrency: 2, discard: true },
-          )
+          yield* stop(turn._id).pipe(Effect.ignore)
         } else if (turn.state === "stopping") {
           yield* cancelWorkingRuns(store, turn._id)
         } else if (turn.state === "awaiting_vote" || turn.state === "awaiting_stop_resolution") {
           const expectedState: "awaiting_vote" | "awaiting_stop_resolution" = turn.state
-          yield* ensureArchives(store, turn)
-          const reveal = yield* promise(() => anySideShowedOutput(store, turn._id))
-          const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
-          // A turn claimed back to `running` meanwhile is stopped on the next pass, then discarded.
-          const recorded = yield* recordDiscard(store, turn, expectedState, revealed.models, reveal)
-          if (recorded.recorded || recorded.turn.resolution?.kind === "stopped") {
-            if (identitiesRevealed(recorded.turn.resolution)) yield* revealTelemetry(recorded.turn, revealed.metrics)
-            else yield* releaseTelemetry(recorded.turn)
-            yield* finishDiscard(store, turn, chat)
-          }
+          yield* holdingDiscard(
+            turn._id,
+            Effect.gen(function* () {
+              yield* ensureArchives(store, turn)
+              const reveal = yield* promise(() => anySideShowedOutput(store, turn._id))
+              const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
+              // A turn claimed back to `running` meanwhile is stopped on the next pass, then discarded.
+              const recorded = yield* recordDiscard(store, turn, expectedState, revealed.models, reveal)
+              // A discard another request recorded is its to finish, unless a crash cut that request off.
+              const orphaned =
+                !recorded.recorded &&
+                recorded.turn.resolution?.kind === "stopped" &&
+                recorded.turn.resolution.resolution === "discard" &&
+                (discardsInFlight.get(turn._id) ?? 0) <= 1
+              if (recorded.recorded || orphaned) {
+                if (identitiesRevealed(recorded.turn.resolution)) yield* revealTelemetry(recorded.turn, revealed.metrics)
+                else yield* releaseTelemetry(recorded.turn)
+                yield* finishDiscard(store, turn, chat)
+              }
+            }),
+          )
         } else if (
           turn.state === "creation_failed" ||
           turn.state === "finalization_failed" ||
