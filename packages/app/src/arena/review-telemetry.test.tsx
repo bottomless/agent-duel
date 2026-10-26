@@ -21,20 +21,35 @@ let sent: ArenaReviewEvent[] = [];
 let container: HTMLDivElement;
 let root: Root;
 
-function Harness() {
+function Harness({ settled }: { settled: boolean }) {
   useArenaReviewTelemetry({
     serverId: SERVER,
     agentId: AGENT,
     turnId: TURN,
     focused: false,
+    settled,
     enabled: true,
   });
   return null;
 }
 
-function mount() {
+function mount({ settled = true }: { settled?: boolean } = {}) {
   act(() => {
-    root.render(<Harness />);
+    root.render(<Harness settled={settled} />);
+  });
+}
+
+/** A control the card renders, so a pointer can reach it. */
+function control(testId: string) {
+  const element = document.createElement("button");
+  element.setAttribute("data-testid", testId);
+  container.appendChild(element);
+  return element;
+}
+
+function hover(element: Element) {
+  act(() => {
+    element.dispatchEvent(new Event("pointerover", { bubbles: true }));
   });
 }
 
@@ -305,6 +320,67 @@ describe("useArenaReviewTelemetry", () => {
     expect(second.length).toBeGreaterThan(0);
     expect(new Set(second).size).toBe(1);
     expect(second[0]).not.toBe(first[0]);
+  });
+
+  it("starts when one side finishes and says so", () => {
+    // The early pick is offered from here. Recording only from the review
+    // missed every early vote and the wait before every late one.
+    mount({ settled: false });
+    act(() => {
+      root.unmount();
+    });
+    expect(types()).toEqual(["battle.opened", "battle.waiting"]);
+  });
+
+  it("keeps one timeline from the first result into the review", () => {
+    // The other side finishing must not restart the card: offsets restart with
+    // a new mount, and the wait would be cut off from the review that follows.
+    mount({ settled: false });
+    mount({ settled: true });
+    act(() => {
+      useArenaReviewStore.getState().setShownTab(TURN, "verdict");
+    });
+    act(() => {
+      root.unmount();
+    });
+    expect(types()).toEqual(["battle.opened", "battle.waiting", "battle.settled", "tab.viewed"]);
+    expect(new Set(sent.map((event) => event.mountId)).size).toBe(1);
+  });
+
+  it("does not report a wait for a card opened after both sides finished", () => {
+    mount();
+    act(() => {
+      root.unmount();
+    });
+    expect(types()).not.toContain("battle.waiting");
+    expect(types()).not.toContain("battle.settled");
+  });
+
+  it("counts the early pick apart from the vote, once per side", () => {
+    // Reaching for the early pick while the other side works is a different act
+    // from deliberating over the vote, and the rollup keeps them apart.
+    mount({ settled: false });
+    const early = control("arena-pick-early-b-now");
+    hover(early);
+    hover(early);
+    act(() => {
+      root.unmount();
+    });
+    const hovered = sent.filter((event) => event.type === "early_pick.hovered");
+    expect(hovered.map((event) => "side" in event && event.side)).toEqual(["b"]);
+    expect(types()).not.toContain("vote.hovered");
+  });
+
+  it("still counts the vote hover once per side", () => {
+    mount();
+    const vote = control("arena-choose-a");
+    hover(vote);
+    hover(vote);
+    act(() => {
+      root.unmount();
+    });
+    const hovered = sent.filter((event) => event.type === "vote.hovered");
+    expect(hovered.map((event) => "side" in event && event.side)).toEqual(["a"]);
   });
 
   it("stamps every event with an id and a monotonic offset", () => {

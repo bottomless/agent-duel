@@ -90,6 +90,13 @@ const ReviewEvent = Schema.Union([
   }),
   Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("activity.expanded"), side: Schema.Literals(["a", "b"]) }),
   Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("vote.hovered"), side: Schema.Literals(["a", "b"]) }),
+  Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("battle.waiting") }),
+  Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("battle.settled") }),
+  Schema.Struct({
+    ...ReviewEventFields,
+    type: Schema.Literal("early_pick.hovered"),
+    side: Schema.Literals(["a", "b"]),
+  }),
   Schema.Struct({ ...ReviewEventFields, type: Schema.Literal("preview.opened"), side: Schema.Literals(["a", "b"]) }),
 ]).annotate({ discriminator: "type", identifier: "ArenaReviewEvent" })
 

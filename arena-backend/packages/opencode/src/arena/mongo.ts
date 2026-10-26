@@ -1229,6 +1229,8 @@ export class Store {
           finalizedSides: input.side,
           ...(input.selectable ? { selectableSides: input.side } : {}),
         },
+        // A side finalizes again after a retry or a resume; the first result is still the first.
+        $min: { firstResultAt: input.at },
         $set: { updatedAt: input.at },
       },
       { returnDocument: "after" },

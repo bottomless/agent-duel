@@ -1351,6 +1351,9 @@ or restart a contestant.
 - A tie always applies A, so it is offered only when both results can be chosen.
 - An early vote cancels the loser, so its transcript stops mid-run and its diff is whatever it had
   reached.
+- Review recording starts when the first side settles, not when both have, so an early vote has a
+  review too. Compare early and late votes on `msFromFirstResultToVote`: `timeToVoteMs` counts from
+  `awaiting_vote`, which an early vote never reaches.
 - Generation-scoped battle refs preserve the contestant results. Nothing prunes them.
 - The winner's hydration sends no turn completion, so the chat's stream keeps the end of that
   turn in its live head until the next canonical event; before a new chat's history loads, the

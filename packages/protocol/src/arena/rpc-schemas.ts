@@ -754,6 +754,8 @@ export const ArenaRunRetryResponseSchema = z.object({
  */
 export const ArenaReviewEventSchema = z.discriminatedUnion("type", [
   z.object({ ...ArenaReviewEventFields, type: z.literal("battle.opened") }),
+  z.object({ ...ArenaReviewEventFields, type: z.literal("battle.waiting") }),
+  z.object({ ...ArenaReviewEventFields, type: z.literal("battle.settled") }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("window.focus") }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("window.blur") }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("focus.toggled"), on: z.boolean() }),
@@ -793,6 +795,11 @@ export const ArenaReviewEventSchema = z.discriminatedUnion("type", [
     side: ArenaSideSchema,
   }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("vote.hovered"), side: ArenaSideSchema }),
+  z.object({
+    ...ArenaReviewEventFields,
+    type: z.literal("early_pick.hovered"),
+    side: ArenaSideSchema,
+  }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("preview.opened"), side: ArenaSideSchema }),
 ]);
 export type ArenaReviewEvent = z.infer<typeof ArenaReviewEventSchema>;

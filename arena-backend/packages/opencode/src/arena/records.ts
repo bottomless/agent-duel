@@ -367,6 +367,11 @@ export type TurnDocument = {
   transitionTimestamps: Partial<Record<BattleState, Date>>
   finalizedSides?: Side[]
   selectableSides?: Side[]
+  /**
+   * When the first side finalized, which is when the early pick can first appear. Kept apart
+   * from `transitionTimestamps` because the battle is still `running` then.
+   */
+  firstResultAt?: Date
   comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
   comparisonID?: Identifier
   failureReason?: string
@@ -381,6 +386,7 @@ export type TurnDocument = {
   revealAt?: Date
   applicationAt?: Date
   canonicalizationAt?: Date
+  /** From `awaiting_vote` to the vote. An early vote never reaches `awaiting_vote`, so it has none. */
   timeToVoteMs?: number
   resultingCanonicalSHA?: string
   promotedSessionID?: string
@@ -725,6 +731,10 @@ export type ReviewLayout = (typeof reviewLayouts)[number]
  */
 export type ReviewEvent =
   | { readonly type: "battle.opened" }
+  /** The card opened while one side had finished and the other still worked. */
+  | { readonly type: "battle.waiting" }
+  /** After `battle.waiting`, the other side finished too. Ends the time the early pick was on offer. */
+  | { readonly type: "battle.settled" }
   | { readonly type: "window.focus" }
   | { readonly type: "window.blur" }
   | { readonly type: "focus.toggled"; readonly on: boolean }
@@ -740,6 +750,8 @@ export type ReviewEvent =
   | { readonly type: "contestant.expanded"; readonly side: Side }
   | { readonly type: "activity.expanded"; readonly side: Side }
   | { readonly type: "vote.hovered"; readonly side: Side }
+  /** The pointer reached a side's early pick while the other side was still working. */
+  | { readonly type: "early_pick.hovered"; readonly side: Side }
   /** The voter opened a contestant's running app through the preview proxy. */
   | { readonly type: "preview.opened"; readonly side: Side }
 
@@ -794,10 +806,13 @@ export type ReviewEventInput = {
 export const reviewFlushLimit = 500
 
 /** Bump when a derived field changes meaning, then recompute the whole table. */
-export const battleMetricsSchemaVersion = 7
+export const battleMetricsSchemaVersion = 8
 
 export type ReviewEffort = {
-  /** From the card opening to the first act of reviewing, ignoring window focus events. */
+  /**
+   * From the review opening to the first act of reviewing, ignoring window focus events. A card
+   * that waited for the other side counts from `battle.settled`, so the field keeps its meaning.
+   */
   readonly msToFirstInteraction?: number
   readonly panesOpened: readonly ReviewTab[]
   readonly dwellMsByPane: Readonly<Record<string, number>>
@@ -812,6 +827,11 @@ export type ReviewEffort = {
   readonly verdictExpanded?: boolean
   /** Time with the review open and the window focused, with idle spans dropped. */
   readonly activeMs: number
+  /**
+   * Time with the window focused between `battle.waiting` and `battle.settled`, idle spans
+   * dropped: one side had finished and the early pick was on offer.
+   */
+  readonly waitingActiveMs: number
   /** Every stored event, passive ones included. A completeness check, not a measure of effort. */
   readonly eventCount: number
   /** Only what the voter did: tabs, files, previews, unfolding. */
@@ -823,6 +843,8 @@ export type ReviewEffort = {
    * a voter who did not.
    */
   readonly votesHovered: number
+  /** Sides whose early pick the pointer visited: 0, 1 or both. */
+  readonly earlyPicksHovered: number
   /**
    * How far into a diff the reader got, as a fraction, taking the deepest of
    * whatever files they opened. Absent when nothing was scrolled: a diff shorter
@@ -912,6 +934,11 @@ export type BattleMetricsDocument = {
   readonly steerCount: number
   readonly voteAtMs?: number
   readonly timeToVoteMs?: number
+  /**
+   * From the first side finalizing to `voteAt`, early vote or not, so early and late votes compare
+   * on one clock. Absent on turns from before `firstResultAt` was recorded rather than estimated.
+   */
+  readonly msFromFirstResultToVote?: number
   readonly review?: ReviewEffort
   /** A side with no run is absent rather than invented. */
   readonly sides: Partial<Record<Side, BattleSideMetrics>>

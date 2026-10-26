@@ -488,6 +488,17 @@ function BattleJudging({
   );
 }
 
+function runsAreFinal(runA: ArenaRun | undefined, runB: ArenaRun | undefined): boolean {
+  return Boolean(runA && runB && runA.runState !== "pending" && runB.runState !== "pending");
+}
+
+function runHasSettled(runA: ArenaRun | undefined, runB: ArenaRun | undefined): boolean {
+  return (
+    (runA !== undefined && runA.runState !== "pending") ||
+    (runB !== undefined && runB.runState !== "pending")
+  );
+}
+
 interface RespondingIds {
   questionId: string | null;
   permissionId: string | null;
@@ -691,14 +702,23 @@ export function ArenaBattleView({
   const reviewPhase = battleReviewPhase(turn, runA, runB);
   const reviewAvailable = reviewPhase.kind !== "none";
   const [paneView, setPaneView] = useArenaPaneView(turn?.index);
+  const bothFinal = runsAreFinal(runA, runB);
   // Observes the review stores and the window; emits nothing into React state,
-  // so the card renders exactly as it did without it.
+  // so the card renders exactly as it did without it. It starts with the first
+  // result, while the early pick is on offer, and stays on until the vote: the
+  // turn passes through `finalizing` between the two, and a gap there would
+  // split one review into two timelines.
   useArenaReviewTelemetry({
     serverId,
     agentId,
     turnId: turn?.id ?? "",
     focused: false,
-    enabled: reviewAvailable && !turn?.resolution,
+    settled: bothFinal,
+    enabled:
+      runHasSettled(runA, runB) &&
+      turn !== undefined &&
+      arenaSetupStatus(turn) === null &&
+      !turn.resolution,
   });
   const { pendingAction } = actions;
   const respondingA = respondingIdsForRun(pendingAction, runA);

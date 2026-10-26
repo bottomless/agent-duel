@@ -253,6 +253,26 @@ describe("local Arena store", () => {
     }
   })
 
+  test("keeps the first result's time when the other side and a stopped loser finalize later", async () => {
+    const directory = await temporaryDirectory()
+    try {
+      const store = await connectLocalStore({ directory })
+      await store.db.collection<ArenaRecord>("turns").insertOne({ _id: "turn", chatID: "chat", state: "running" })
+      const first = new Date(now.getTime() + 60_000)
+      await store.markRunFinalized({ turnID: "turn", side: "a", selectable: true, at: first })
+      await store.markRunFinalized({
+        turnID: "turn",
+        side: "b",
+        selectable: false,
+        at: new Date(first.getTime() + 5000),
+      })
+      expect(await store.turn("turn")).toMatchObject({ finalizedSides: ["a", "b"], firstResultAt: first })
+      await store.close()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("renames persisted fields during store initialization", async () => {
     const directory = await temporaryDirectory()
     try {
