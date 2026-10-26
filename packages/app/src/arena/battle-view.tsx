@@ -700,7 +700,6 @@ export function ArenaBattleView({
     [promptAttachments, promptImages.length],
   );
   const reviewPhase = battleReviewPhase(turn, runA, runB);
-  const reviewAvailable = reviewPhase.kind !== "none";
   const [paneView, setPaneView] = useArenaPaneView(turn?.index);
   const bothFinal = runsAreFinal(runA, runB);
   // Observes the review stores and the window; emits nothing into React state,
