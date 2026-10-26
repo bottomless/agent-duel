@@ -6092,7 +6092,7 @@ describe("Arena service vertical slice", () => {
         baseCommit: string
         a: { commit: string; ref?: string }
         b: { commit: string; ref?: string }
-        divergence?: { conflicted: boolean; files: { file: string; status: string }[] }
+        files: { file: string; status: string }[]
       }
       const partial = await json<Diff>(await request(`/arena/turns/${turnID}/diff`, { headers }))
       expect(partial).toMatchObject({
@@ -6101,9 +6101,16 @@ describe("Arena service vertical slice", () => {
         b: { commit: finished.frozenBaseSHA },
       })
       expect(partial.b.ref).toBeUndefined()
-      expect(partial.divergence?.conflicted).toBe(false)
-      expect(partial.divergence?.files.length).toBeGreaterThan(0)
-      expect(partial.divergence?.files.every((file) => file.status === "only_a")).toBe(true)
+      // B stands in as the base, so every file is A's alone and nothing conflicts.
+      expect(partial.files.length).toBeGreaterThan(0)
+      expect(partial.files.every((file) => file.status === "only_a")).toBe(true)
+      // Each file's contents are read on their own, from the same stand-in.
+      const first = partial.files[0]!.file
+      const read = await json<{ file: { file: string }; divergence: { status: string } }>(
+        await request(`/arena/turns/${turnID}/diff/file?${new URLSearchParams({ path: first })}`, { headers }),
+      )
+      expect(read.file.file).toBe(first)
+      expect(read.divergence.status).toBe("only_a")
 
       ;(a as Mutable).runState = "pending"
       const neither = await request(`/arena/turns/${turnID}/diff`, { headers })
