@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 import type { AccountsConfig } from "./config.js";
 import { AccountsBackend } from "./backend.js";
@@ -76,6 +77,10 @@ export function createAccountsService(options: CreateAccountsServiceOptions): Ac
           mode: "hosted",
           token,
           controlPlaneUrl: options.config.controlPlaneUrl,
+          researchAccountID: user.id,
+          researchPartition: createHash("sha256")
+            .update(JSON.stringify([options.config.controlPlaneUrl, user.id]))
+            .digest("hex"),
         });
         await shutdownArena();
       });

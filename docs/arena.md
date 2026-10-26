@@ -34,23 +34,39 @@ The engine reaches the routes through `arena/backend.ts`, which keeps the contro
 both modes, so no caller branches on the mode. The rest of this doc says "control plane" for the
 routes; in a BYOK build read it as the in-process service.
 
-After local writes, a hosted runtime selects small research snapshots and uploads them in the
-background to the authenticated control plane at `PASEO_CONTROL_PLANE_URL`. Upload failures are
-logged and dropped. There is no persistent upload queue, retry, or backfill, so local history and
-recovery continue when the control plane is unavailable. Account sessions are verified
-locally with the embedded public key, and signing out does not delete local data. A BYOK build
-creates no uploader, so nothing it records leaves the machine.
+A hosted runtime queues selected research snapshots in the same SQLite transaction as the local
+write. Pending revisions survive restarts and account changes, and remain queued until the
+control plane acknowledges the entire batch. Failed requests retry indefinitely with jittered
+exponential backoff capped at one minute. The queue is partitioned by the verified account and
+hosted destination; a different account cannot upload its predecessor's pending records. BYOK
+creates no research queue or uploader.
 
-Research uploads include chats, turns, runs, generation metadata, structured events, comparisons,
-single-agent ratings, session archives, and transcript or patch artifacts. Raw events and per-call
-full request, response, tool-output, and other artifacts stay local. A research request is limited
-to 3 MiB and a record to 2 MiB; oversized records are logged and dropped while the local copy stays
-intact. The control plane still owns authentication, the OpenRouter proxy, and research
-ingestion.
+On the first hosted start after this change, backfill the verified account's existing chats, turns,
+runs, intact transcript/image artifacts and archive manifests. The durable backfill worklist resumes
+across restarts; a work item moves into the upload queue atomically. Unreadable artifacts remain on
+that worklist for later retries, and truncated local artifacts cannot be recovered. Unowned history
+is never assigned to whichever account happens to sign in. Backfill reads the current local record
+and allocates its revision transactionally, so concurrent edits cannot be overwritten by a stale
+copy.
 
-A session holds its images inline: a pasted one and every screenshot a contestant reads. A long
-run's transcript is then mostly images, and over the 10 MB artifact limit it is not kept at all,
-which stops the turn instead of asking for a vote. So the archive keeps each image as its own `image`
+Research includes chats, turns, runs, generation metadata, structured events, comparisons,
+single-agent ratings, session archives, and transcript, patch and image artifacts. Raw events and
+per-call full request, response and tool-output artifacts stay local. Upload requests remain below
+3 MiB and individual records below 2 MiB. Larger documents go as content-addressed `chunks`, followed
+by a checksum manifest in the original collection. Research readers resolve that manifest with
+`resolveResearchDocument` from arena-service, looking up chunks under the same account and source.
+Deploy the control plane's updated arena-service dependency before shipping this desktop protocol;
+an older server refuses chunks, and the desktop retains them for retry.
+
+`archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
+the previous cloud archive until its replacement arrives. Transcript and image archives are kept
+whole without the per-call artifact size budgets; disk errors fail the local write rather than
+turning an archive into an empty success. The queue has no size-based eviction, so an extended
+outage consumes local disk until uploads succeed. The guarantee covers committed local records;
+it cannot protect against disk exhaustion, disk failure, or manual deletion of local state.
+
+A session holds its images inline: a pasted one and every screenshot a contestant reads. To avoid
+duplicating those bytes across transcripts, the archive keeps each image as its own `image`
 artifact, named by the SHA-256 of its bytes, and the transcript refers to it as
 `arena-image:sha256:<hash>`, with `imageIDs` listing them (`arena/transcript-artifact.ts`). A
 tool result's attachments, the screenshots and PDFs a contestant reads, never go to the window: the
@@ -69,10 +85,8 @@ no window reads them. A run's thread past 8 MiB goes without its oldest messages
 `activityOmitted`, and its pane says so, so voting and replying keep working (`withinBudget` in
 `arena/transcript.ts`). An Arena answer still over half the socket limit is refused with
 `chat_too_large`, or `arena_diff_too_large` for a comparison, rather than dropping the socket
-(`server/arena/payload-limit.ts`). Research gets the same transcript, sent first so a full upload buffer drops images
-rather than the transcript, and each image as an `images` record; both sides share a battle's images,
-so each is uploaded once. The control plane refuses a whole batch that names a collection it does not know, so
-deploy it before a desktop build that sends a new one.
+(`server/arena/payload-limit.ts`). Research gets the same transcript and each image as an `images`
+record through the durable queue described above.
 
 ## Live synchronization
 

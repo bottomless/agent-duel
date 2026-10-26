@@ -9,6 +9,8 @@ export interface HostedArenaCredentials {
   readonly mode: "hosted"
   readonly token: string
   readonly controlPlaneUrl: string
+  readonly researchPartition: string
+  readonly researchAccountID: string
   readonly controlTokenHash: string
 }
 
@@ -57,9 +59,23 @@ function hasExactly(value: Record<string, unknown>, keys: readonly string[]) {
 }
 
 function parseHosted(value: Record<string, unknown>): HostedArenaCredentials {
-  if (!hasExactly(value, ["mode", "token", "controlPlaneUrl", "controlTokenHash"])) throw new ArenaCredentialsError()
-  const { token, controlPlaneUrl, controlTokenHash } = value
   if (
+    !hasExactly(value, [
+      "mode",
+      "token",
+      "controlPlaneUrl",
+      "controlTokenHash",
+      "researchPartition",
+      "researchAccountID",
+    ])
+  )
+    throw new ArenaCredentialsError()
+  const { token, controlPlaneUrl, controlTokenHash, researchPartition, researchAccountID } = value
+  if (
+    typeof researchAccountID !== "string" ||
+    !researchAccountID.trim() ||
+    typeof researchPartition !== "string" ||
+    !researchPartition.trim() ||
     typeof token !== "string" ||
     !token.trim() ||
     typeof controlPlaneUrl !== "string" ||
@@ -78,6 +94,8 @@ function parseHosted(value: Record<string, unknown>): HostedArenaCredentials {
   }
   return {
     mode: "hosted",
+    researchPartition,
+    researchAccountID,
     token: token.trim(),
     controlPlaneUrl: url.toString().replace(/\/$/, ""),
     controlTokenHash,

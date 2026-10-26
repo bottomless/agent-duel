@@ -1,214 +1,302 @@
-import { afterEach, describe, expect, test } from "bun:test"
-import { createHash, randomBytes, randomUUID } from "node:crypto"
-import { mkdtemp, rm } from "node:fs/promises"
-import os from "node:os"
+import { describe, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
+import { randomBytes, randomUUID } from "node:crypto"
 import path from "node:path"
-import { gunzipSync } from "node:zlib"
+import { ResearchQueue } from "../../src/arena/research-queue"
+import { ResearchUploader, type ResearchUploadOptions } from "../../src/arena/research"
 import { connectLocalStore } from "../../src/arena/local-store"
-import { ResearchUploader, type ResearchUploadWarning } from "../../src/arena/research"
+import { ArenaTranscriptArtifact } from "../../src/arena/transcript-artifact"
+import { tmpdir } from "../fixture/fixture"
 import {
   decodeResearchBatch,
-  imageArtifactID,
-  MAX_RESEARCH_RECORD_BYTES,
   projectResearchMutation,
   projectResearchRecords,
-  RESEARCH_IMAGE_REFERENCE,
-  type ResearchBatch,
+  resolveResearchDocument,
+  MAX_RESEARCH_RECORD_BYTES,
+  MAX_RESEARCH_BATCH_BYTES,
   type ResearchMutation,
   type ResearchRecord,
 } from "@agent-duel/arena-service/research-protocol"
-import { ArenaTranscriptArtifact } from "../../src/arena/transcript-artifact"
 
-const cleanup: Array<() => void> = []
-afterEach(() => {
-  for (const close of cleanup.splice(0).reverse()) close()
-})
+function requestBatch(init: RequestInit) {
+  if (typeof init.body !== "string") throw new Error("Expected serialized research batch")
+  return decodeResearchBatch(init.body)
+}
 
 function mutation(revision: number, id = "run-a"): ResearchMutation {
-  return { collection: "runs", id, revision, document: { _id: id, terminal: "pending", toolCount: revision } }
+  return { collection: "runs", id, revision, document: { _id: id, toolCount: revision } }
 }
 
-/** Random bytes do not compress, like the photos and screenshots a battle carries. */
-function image(bytes = 450 * 1024) {
-  return `data:image/png;base64,${randomBytes(bytes).toString("base64")}`
-}
-
-function imageID(url: string) {
-  return createHash("sha256")
-    .update(Buffer.from(url.slice(url.indexOf(",") + 1), "base64"))
-    .digest("hex")
-}
-
-/** A run's archived session: a prompt carrying these images, and a read of the first. */
-function archivedSessions(id: string, images: readonly string[]) {
-  return [
-    {
-      sessionID: `ses_${id}`,
-      messages: [
-        {
-          info: { id: "msg_1", role: "user" },
-          parts: [
-            { type: "text", text: "Describe these." },
-            ...images.map((url, index) => ({
-              type: "file",
-              mime: "image/png",
-              filename: `attachment-${index + 1}.png`,
-              url,
-            })),
-          ],
-        },
-        {
-          info: { id: "msg_2", role: "assistant" },
-          parts: [
-            {
-              type: "tool",
-              tool: "read",
-              state: { status: "completed", attachments: [{ type: "file", url: images[0] }] },
-            },
-          ],
-        },
-      ],
+function fixture(options: Partial<ResearchUploadOptions> = {}) {
+  const database = new Database(":memory:")
+  const queue = new ResearchQueue(database, "account-a")
+  const batches: ResearchRecord[][] = []
+  let now = 1000
+  const uploader = new ResearchUploader({
+    url: "https://control.test",
+    token: "test-token",
+    sourceID: randomUUID(),
+    queue,
+    intervalMs: 60_000,
+    now: () => now,
+    random: () => 1,
+    warn: () => {},
+    fetch: async (_url, init) => {
+      const batch = requestBatch(init)
+      batches.push(batch.records)
+      return Response.json({ received: batch.records.length, stored: batch.records.length })
     },
-  ]
+    ...options,
+  })
+  return {
+    queue,
+    uploader,
+    batches,
+    database,
+    advance() {
+      now = queue.retry().nextAttempt
+    },
+    async [Symbol.asyncDispose]() {
+      await uploader.close()
+      database.close()
+    },
+  }
 }
 
-/** The artifact changes archiving these runs makes in the local store, in the order the uploader gets them. */
-async function archiveMutations(runs: ReadonlyArray<readonly [runID: string, images: readonly string[]]>) {
-  const mutations: ResearchMutation[] = []
-  const directory = await mkdtemp(path.join(os.tmpdir(), "arena-research-"))
-  try {
-    const store = await connectLocalStore({
-      directory,
-      onMutation: (mutation) => {
-        if (mutation.collection === "artifacts") mutations.push(mutation)
+describe("durable research uploads", () => {
+  test("keeps failed records and retries with exponential capped backoff until acknowledged", async () => {
+    let attempt = 0
+    await using f = fixture({
+      fetch: async (_url, init) => {
+        attempt++
+        const batch = requestBatch(init)
+        if (attempt <= 10) return new Response(null, { status: 503 })
+        return Response.json({ received: batch.records.length, stored: 0 })
+      },
+    })
+    f.queue.enqueue(mutation(1))
+    const delays: number[] = []
+    let now = 1000
+    for (let i = 0; i < 10; i++) {
+      await f.uploader.flush()
+      expect(f.queue.count).toBe(1)
+      const retry = f.queue.retry()
+      delays.push(retry.nextAttempt - now)
+      await f.uploader.flush()
+      expect(attempt).toBe(i + 1)
+      now = retry.nextAttempt
+      f.advance()
+    }
+    expect(delays).toEqual([1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000, 60000])
+    await f.uploader.flush()
+    expect(f.queue.count).toBe(0)
+    expect(f.queue.retry()).toEqual({ failures: 0, nextAttempt: 0 })
+  })
+
+  test.each([401, 403, 413, 429, 500, 503])("retains every record on HTTP %s", async (status) => {
+    await using f = fixture({ fetch: async () => new Response(null, { status }) })
+    f.queue.enqueue(mutation(1))
+    f.queue.enqueue(mutation(2))
+    await f.uploader.flush()
+    expect(f.queue.peek(10).map((x) => JSON.parse(x.json).revision)).toEqual([1, 2])
+    expect(f.queue.retry().failures).toBe(1)
+  })
+
+  test.each([{}, { received: 0, stored: 0 }, { received: 1, stored: 2 }])(
+    "requires a complete receipt, not merely HTTP 200: %j",
+    async (receipt) => {
+      await using f = fixture({ fetch: async () => Response.json(receipt) })
+      f.queue.enqueue(mutation(1))
+      await f.uploader.flush()
+      expect(f.queue.count).toBe(1)
+    },
+  )
+
+  test("retains a batch when transport fails", async () => {
+    await using f = fixture({
+      fetch: async () => {
+        throw new TypeError("network unavailable")
+      },
+    })
+    f.queue.enqueue(mutation(1))
+    await f.uploader.flush()
+    expect(f.queue.count).toBe(1)
+    expect(f.queue.retry().failures).toBe(1)
+  })
+
+  test("acknowledging an in-flight batch does not remove newer queued revisions", async () => {
+    const received = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<Response>()
+    await using f = fixture({
+      fetch: async () => {
+        received.resolve()
+        return release.promise
+      },
+    })
+    f.queue.enqueue(mutation(1))
+    const inFlight = f.uploader.flush()
+    await received.promise
+    f.queue.enqueue(mutation(2))
+    f.queue.enqueue(mutation(3))
+    expect(f.queue.count).toBe(3)
+    expect(f.uploader.flush()).toBe(inFlight)
+    release.resolve(Response.json({ received: 1, stored: 1 }))
+    await inFlight
+    expect(f.queue.peek(10).map((x) => JSON.parse(x.json).revision)).toEqual([2, 3])
+  })
+
+  test("closing during upload aborts transport and retains the records", async () => {
+    const received = Promise.withResolvers<void>()
+    await using f = fixture({
+      fetch: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal!.addEventListener("abort", () => reject(new Error("aborted")))
+          received.resolve()
+        }),
+    })
+    f.queue.enqueue(mutation(1))
+    void f.uploader.flush()
+    await received.promise
+    await f.uploader.close()
+    expect(f.queue.count).toBe(1)
+  })
+
+  test("timeout retains the batch for retry", async () => {
+    await using f = fixture({
+      timeoutMs: 5,
+      fetch: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal!.addEventListener("abort", () => reject(new Error("timeout")))
+        }),
+    })
+    f.queue.enqueue(mutation(1))
+    await f.uploader.flush()
+    expect(f.queue.count).toBe(1)
+    expect(f.queue.retry().failures).toBe(1)
+  })
+
+  test("process restart retains payloads and retry deadlines, isolated from another account", async () => {
+    await using dir = await tmpdir()
+    const file = path.join(dir.path, "queue.sqlite")
+    const first = new Database(file)
+    const queue = new ResearchQueue(first, "cloud-one/account-a")
+    queue.enqueue(mutation(1))
+    queue.defer({ failures: 3, nextAttempt: 9000 })
+    first.close()
+    const second = new Database(file)
+    try {
+      const same = new ResearchQueue(second, "cloud-one/account-a")
+      const other = new ResearchQueue(second, "cloud-one/account-b")
+      const otherCloud = new ResearchQueue(second, "cloud-two/account-a")
+      expect(same.peek(10).map((x) => JSON.parse(x.json))).toEqual([mutation(1)])
+      expect(same.retry()).toEqual({ failures: 3, nextAttempt: 9000 })
+      expect(other.count).toBe(0)
+      expect(otherCloud.count).toBe(0)
+      other.enqueue(mutation(2))
+      other.acknowledge(other.peek(10))
+      expect(same.count).toBe(1)
+    } finally {
+      second.close()
+    }
+  })
+
+  test("local writes and the queue commit together; projection failure rolls both back", async () => {
+    await using dir = await tmpdir()
+    const local = await connectLocalStore({ directory: dir.path, researchPartition: "account-a" })
+    try {
+      await local.db.collection("runs").insertOne({ _id: "run", value: "durable" })
+      expect(local.researchQueue!.peek(10).map((x) => JSON.parse(x.json).document)).toEqual([
+        { _id: "run", value: "durable" },
+      ])
+      await expect(
+        local.db.collection("artifacts").insertOne({ _id: "bad", kind: "transcript", data: "invalid" }),
+      ).rejects.toThrow()
+      expect(await local.db.collection("artifacts").findOne({ _id: "bad" })).toBeNull()
+      expect(local.researchQueue!.count).toBe(1)
+    } finally {
+      await local.close()
+    }
+  })
+
+  test("more than 8 MiB remains queued and large Unicode documents round-trip through bounded chunks", async () => {
+    await using f = fixture()
+    const document = { _id: "large", text: "你好🌏".repeat(1_200_000) }
+    f.queue.enqueue({ collection: "events", id: "large", revision: 1, document })
+    expect(f.queue.bytes).toBeGreaterThan(8 * 1024 * 1024)
+    const pending = f.queue.peek(100)
+    expect(pending.every((x) => x.bytes <= MAX_RESEARCH_RECORD_BYTES)).toBe(true)
+    while (f.queue.count) await f.uploader.flush()
+    const uploaded = f.batches.flat()
+    const chunks = new Map(uploaded.filter((x) => x.collection === "chunks").map((x) => [x.id, x.document]))
+    const manifest = uploaded.at(-1)!
+    expect(manifest.collection).toBe("events")
+    expect(await resolveResearchDocument(manifest.document, async (id) => chunks.get(id) ?? null)).toEqual(document)
+    await expect(
+      resolveResearchDocument(manifest.document, async () => ({ data: "YQ==", dataEncoding: "base64" })),
+    ).rejects.toThrow("checksum")
+    await expect(resolveResearchDocument(manifest.document, async () => null)).rejects.toThrow()
+    expect(
+      f.batches.every(
+        (records) =>
+          Buffer.byteLength(JSON.stringify({ version: 1, sourceID: randomUUID(), records })) <=
+          MAX_RESEARCH_BATCH_BYTES,
+      ),
+    ).toBe(true)
+  })
+
+  test("a transcript and image larger than the old 10 MiB limit remain complete locally and upload in chunks", async () => {
+    await using dir = await tmpdir()
+    const local = await connectLocalStore({ directory: dir.path, researchPartition: "account-a" })
+    const uploaded = new Map<string, ResearchRecord>()
+    const uploader = new ResearchUploader({
+      queue: local.researchQueue!,
+      url: "https://control.test",
+      token: "test",
+      sourceID: local.sourceID,
+      intervalMs: 60000,
+      warn: () => {},
+      fetch: async (_url, init) => {
+        const batch = requestBatch(init)
+        for (const record of batch.records) uploaded.set(record.id, record)
+        return Response.json({ received: batch.records.length, stored: batch.records.length })
       },
     })
     try {
-      for (const [runID, images] of runs) {
-        await ArenaTranscriptArtifact.write(store, { runID, turnID: "turn", archived: archivedSessions(runID, images) })
+      const archived = {
+        text: randomBytes(11 * 1024 * 1024).toString("base64"),
+        url: `data:image/png;base64,${randomBytes(11 * 1024 * 1024).toString("base64")}`,
       }
+      const result = await ArenaTranscriptArtifact.write(local, { runID: "large", turnID: "turn", archived })
+      expect(result.transcript.storedSize).toBeGreaterThan(10 * 1024 * 1024)
+      expect(result.transcript.truncated).toBe(false)
+      const value = ArenaTranscriptArtifact.decode(result.transcript)
+      expect(await ArenaTranscriptArtifact.withImages(local, "large", value)).toEqual(archived)
+      while (local.researchQueue!.count) await uploader.flush()
+      const body = await resolveResearchDocument(
+        uploaded.get("large|transcript")!.document,
+        async (id) => uploaded.get(id)?.document ?? null,
+      )
+      expect(body?.data).toBe(result.transcript.data.toString("base64"))
+      const image = [...uploaded.values()].find((x) => x.collection === "images")!
+      const imageBody = await resolveResearchDocument(image.document, async (id) => uploaded.get(id)?.document ?? null)
+      expect(imageBody?.data).toBe(archived.url.split(",")[1])
     } finally {
-      await store.close()
+      await uploader.close()
+      await local.close()
     }
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-  return mutations
-}
-
-function decodedTranscript(record: ResearchRecord) {
-  const data = record.document?.data
-  if (typeof data !== "string") throw new Error("expected base64 transcript data")
-  return JSON.parse(gunzipSync(Buffer.from(data, "base64")).toString("utf8")) as unknown
-}
-
-function uploader(
-  server: ReturnType<typeof Bun.serve>,
-  options: Partial<ConstructorParameters<typeof ResearchUploader>[0]> = {},
-) {
-  const warnings: ResearchUploadWarning[] = []
-  const stream = new ResearchUploader({
-    url: server.url.toString(),
-    token: "test-session",
-    sourceID: randomUUID(),
-    intervalMs: 60_000,
-    warn: (warning) => warnings.push(warning),
-    ...options,
-  })
-  cleanup.push(() => stream.close())
-  return { stream, warnings }
-}
-
-describe("continuous research uploads", () => {
-  test("uploads an active run on the timer and accepts more local changes while the server is waiting", async () => {
-    const received = Promise.withResolvers<ResearchBatch>()
-    const release = Promise.withResolvers<void>()
-    const batches: ResearchBatch[] = []
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        expect(request.headers.get("authorization")).toBe("Bearer test-session")
-        const batch = decodeResearchBatch(await request.text())
-        batches.push(batch)
-        received.resolve(batch)
-        await release.promise
-        return Response.json({ accepted: batch.records.length })
-      },
-    })
-    cleanup.push(() => {
-      release.resolve()
-      server.stop(true)
-    })
-    const { stream } = uploader(server, { intervalMs: 5 })
-    expect(stream.enqueue(mutation(1))).toBeUndefined()
-    const first = await received.promise
-    expect(first.records[0]?.document).toEqual({ _id: "run-a", terminal: "pending", toolCount: 1 })
-    const inFlight = stream.flush()
-    stream.enqueue(mutation(2))
-    stream.enqueue(mutation(3))
-    expect(stream.bufferedRecords).toBe(1)
-    expect(stream.flush()).toBe(inFlight)
-    release.resolve()
-    await inFlight
-    await stream.flush()
-    expect(batches.map((batch) => batch.records.map((record) => record.revision))).toEqual([[1], [3]])
-    expect(stream.bufferedBytes).toBe(0)
   })
 
-  test("drops a failed batch and sends subsequent changes without replaying it", async () => {
-    const batches: ResearchBatch[] = []
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        batches.push(decodeResearchBatch(await request.text()))
-        return new Response(null, { status: batches.length === 1 ? 503 : 200 })
-      },
-    })
-    cleanup.push(() => server.stop(true))
-    const { stream, warnings } = uploader(server)
-    stream.enqueue(mutation(1))
-    await stream.flush()
-    expect(stream.bufferedRecords).toBe(0)
-    stream.enqueue(mutation(2))
-    await stream.flush()
-    expect(batches.map((batch) => batch.records[0]?.revision)).toEqual([1, 2])
-    expect(warnings).toEqual([{ reason: "upload_failed", records: 1, bytes: expect.any(Number), status: 503 }])
+  test("reply resets preserve the last cloud archive until a replacement is uploaded", () => {
+    expect(
+      projectResearchRecords({ collection: "artifacts", id: "run|transcript", revision: 2, document: null }),
+    ).toEqual([])
+    expect(
+      projectResearchRecords({ collection: "sessionArchives", id: "run|archive", revision: 3, document: null }),
+    ).toEqual([])
+    expect(projectResearchRecords({ collection: "runs", id: "run", revision: 4, document: null })).toEqual([
+      { collection: "runs", id: "run", revision: 4, document: null },
+    ])
   })
-
-  test("bounds pending memory and times out an unresponsive request", async () => {
-    const received = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch() {
-        received.resolve()
-        await release.promise
-        return new Response(null)
-      },
-    })
-    cleanup.push(() => {
-      release.resolve()
-      server.stop(true)
-    })
-    const recordBytes = Buffer.byteLength(JSON.stringify(projectResearchMutation(mutation(1))))
-    const { stream, warnings } = uploader(server, { timeoutMs: 50, maxBufferBytes: recordBytes })
-    stream.enqueue(mutation(1))
-    const inFlight = stream.flush()
-    await received.promise
-    stream.enqueue(mutation(2))
-    stream.enqueue(mutation(3, "run-b"))
-    expect(stream.bufferedRecords).toBe(1)
-    expect(stream.bufferedBytes).toBe(recordBytes)
-    await inFlight
-    expect(warnings.map((warning) => warning.reason)).toEqual(["buffer_full", "upload_failed"])
-    release.resolve()
-    await stream.flush()
-    expect(stream.bufferedBytes).toBe(0)
-  })
-
   test("keeps event content and generation metadata but excludes raw events and per-call artifacts", () => {
     const excluded = ["generation_request", "generation_response", "tool_output", "other"]
     for (const kind of excluded) {
@@ -252,126 +340,5 @@ describe("continuous research uploads", () => {
         document: { kind: "transcript", data: Buffer.from("hello"), path: "/local/path" },
       })?.document,
     ).toEqual({ kind: "transcript", data: "aGVsbG8=", dataEncoding: "base64" })
-  })
-
-  test("a transcript's images go as their own records, so a transcript with many images is no longer dropped", async () => {
-    const images = Array.from({ length: 6 }, () => image())
-    // Inline, the six images put the transcript's research record over the limit.
-    const inline = projectResearchMutation({
-      collection: "artifacts",
-      id: "run-a|transcript",
-      revision: 1,
-      document: { kind: "transcript", data: ArenaTranscriptArtifact.encode(archivedSessions("run-a", images)).data },
-    })
-    expect(Buffer.byteLength(JSON.stringify(inline))).toBeGreaterThan(MAX_RESEARCH_RECORD_BYTES)
-
-    const records = (await archiveMutations([["run-a", images]])).flatMap(projectResearchRecords)
-    const [transcriptRecord, ...imageRecords] = records
-    expect(transcriptRecord?.collection).toBe("artifacts")
-    // Named by the SHA-256 of their bytes, as the control plane has always received them.
-    expect(imageRecords.map((record) => [record.collection, record.id])).toEqual(
-      images.map((url) => ["images", imageID(url)]),
-    )
-    for (const record of records)
-      expect(Buffer.byteLength(JSON.stringify(record))).toBeLessThan(MAX_RESEARCH_RECORD_BYTES)
-    expect(transcriptRecord?.document?.imageIDs).toEqual(imageRecords.map((record) => record.id))
-    expect(imageRecords[0]?.document).toEqual({
-      _id: imageRecords[0]?.id,
-      mimeType: "image/png",
-      byteSize: 450 * 1024,
-      data: images[0]!.slice(images[0]!.indexOf(",") + 1),
-      dataEncoding: "base64",
-    })
-
-    // Putting each image back where its reference is gives the original transcript.
-    const byID = new Map(imageRecords.map((record) => [record.id, `data:image/png;base64,${record.document?.data}`]))
-    const restored = JSON.parse(
-      JSON.stringify(decodedTranscript(transcriptRecord!)).replace(
-        new RegExp(`${RESEARCH_IMAGE_REFERENCE}([0-9a-f]{64})`, "g"),
-        (_, id: string) => byID.get(id)!,
-      ),
-    )
-    expect(restored).toEqual(archivedSessions("run-a", images))
-  })
-
-  test("both sides' transcripts send a shared image once", async () => {
-    const batches: ResearchBatch[] = []
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        batches.push(decodeResearchBatch(await request.text()))
-        return Response.json({})
-      },
-    })
-    cleanup.push(() => server.stop(true))
-    const { stream, warnings } = uploader(server)
-    const shared = [image(), image()]
-    for (const mutation of await archiveMutations([
-      ["run-a", shared],
-      ["run-b", shared],
-    ]))
-      stream.enqueue(mutation)
-    while (stream.bufferedRecords > 0) await stream.flush()
-    const records = batches.flatMap((batch) => batch.records)
-    expect(records.filter((record) => record.collection === "images")).toHaveLength(2)
-    expect(records.filter((record) => record.collection === "artifacts").map((record) => record.id)).toEqual([
-      "run-a|transcript",
-      "run-b|transcript",
-    ])
-    expect(warnings).toEqual([])
-  })
-
-  test("an image too large to send is dropped on its own and the transcript still goes", async () => {
-    const batches: ResearchBatch[] = []
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        batches.push(decodeResearchBatch(await request.text()))
-        return Response.json({})
-      },
-    })
-    cleanup.push(() => server.stop(true))
-    const { stream, warnings } = uploader(server)
-    for (const mutation of await archiveMutations([["run-a", [image(), image(2 * 1024 * 1024)]]]))
-      stream.enqueue(mutation)
-    while (stream.bufferedRecords > 0) await stream.flush()
-    const records = batches.flatMap((batch) => batch.records)
-    expect(records.map((record) => record.collection)).toEqual(["artifacts", "images"])
-    expect(warnings).toEqual([{ reason: "oversized_record", records: 1, bytes: expect.any(Number) }])
-  })
-
-  test("a transcript still goes when its images overflow the upload buffer", async () => {
-    const batches: ResearchBatch[] = []
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        batches.push(decodeResearchBatch(await request.text()))
-        return Response.json({})
-      },
-    })
-    cleanup.push(() => server.stop(true))
-    // A long run with more screenshots than the buffer holds before its next upload.
-    const { stream, warnings } = uploader(server, { maxBufferBytes: 2 * 1024 * 1024 })
-    for (const mutation of await archiveMutations([["run-a", Array.from({ length: 8 }, () => image())]]))
-      stream.enqueue(mutation)
-    while (stream.bufferedRecords > 0) await stream.flush()
-    const records = batches.flatMap((batch) => batch.records)
-    expect(records[0]?.id).toBe("run-a|transcript")
-    expect(records.filter((record) => record.collection === "images").length).toBeGreaterThan(0)
-    expect(warnings.length).toBeGreaterThan(0)
-    expect(warnings.every((warning) => warning.reason === "buffer_full")).toBe(true)
-  })
-
-  test("removing a run's archive removes its transcript record and none of its images", () => {
-    const removed = { revision: 2, document: null }
-    expect(
-      projectResearchRecords({ collection: "artifacts", id: imageArtifactID("run-a", "a".repeat(64)), ...removed }),
-    ).toEqual([])
-    expect(projectResearchRecords({ collection: "artifacts", id: "run-a|transcript", ...removed })).toEqual([
-      { collection: "artifacts", id: "run-a|transcript", ...removed },
-    ])
   })
 })

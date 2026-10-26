@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Database, type SQLQueryBindings } from "bun:sqlite"
+import { z } from "zod"
 import { compileFilter, fieldExpression } from "./sqlite-query"
 import type { CreateIndexesOptions, IndexSpecification } from "mongodb"
 import type {
@@ -17,7 +18,9 @@ import type {
   ArenaWriteResult,
 } from "@agent-duel/arena-service/collection"
 import { Store } from "./mongo"
+import { ResearchQueue } from "./research-queue"
 
+const documentRecordSchema = z.object({ _id: z.string() }).passthrough()
 const marker = "__arena_value_type"
 const blindedTelemetryPrivacyKey = "privacy.blinded-generation-telemetry"
 const blindedTelemetryPendingKey = "privacy.blinded-generation-telemetry-pending"
@@ -97,9 +100,7 @@ function equal(left: unknown, right: unknown): boolean {
 
 function documents(database: Database, collection: string) {
   return database
-    .query<{ id: string; document: string }, [string]>(
-      "SELECT id, document FROM arena_documents WHERE collection = ?",
-    )
+    .query<{ id: string; document: string }, [string]>("SELECT id, document FROM arena_documents WHERE collection = ?")
     .all(collection)
     .map((row) => ({ id: row.id, document: decode(JSON.parse(row.document)) as Record<string, unknown> }))
 }
@@ -470,6 +471,7 @@ class LocalCursor<T extends ArenaRecord> implements ArenaCursor<T> {
 
 class LocalDatabase implements ArenaDb, ArenaClient {
   readonly sourceID: string
+  readonly researchQueue: ResearchQueue | undefined
   readonly artifactsRoot: string
   private readonly collections = new Map<string, ArenaCollection<ArenaRecord>>()
   private pendingMutations?: ArenaMutation[]
@@ -480,7 +482,9 @@ class LocalDatabase implements ArenaDb, ArenaClient {
     readonly directory: string,
     private readonly onMutation?: (mutation: ArenaMutation) => void | Promise<void>,
     private readonly onClose?: () => void | Promise<void>,
+    private readonly researchPartition?: string,
   ) {
+    this.researchQueue = researchPartition ? new ResearchQueue(database, researchPartition) : undefined
     database.query("INSERT OR IGNORE INTO arena_metadata (key, value) VALUES ('sourceID', ?)").run(randomUUID())
     database.query("INSERT OR IGNORE INTO arena_metadata (key, value) VALUES ('revision', '0')").run()
     const row = database.query<{ value: string }, []>("SELECT value FROM arena_metadata WHERE key = 'sourceID'").get()
@@ -529,20 +533,18 @@ class LocalDatabase implements ArenaDb, ArenaClient {
     const order = ordering.length ? ` ORDER BY ${ordering.join(", ")}` : ""
     const limit = options.limit === undefined ? -1 : options.limit
     const rows = this.database
-      .query<
-        { document: string },
-        SQLQueryBindings[]
-      >(`SELECT document FROM arena_documents WHERE collection = ? AND ${predicate.sql}${order} LIMIT ? OFFSET ?`)
+      .query<{ document: string }, SQLQueryBindings[]>(
+        `SELECT document FROM arena_documents WHERE collection = ? AND ${predicate.sql}${order} LIMIT ? OFFSET ?`,
+      )
       .all(...parameters, limit, options.offset ?? 0)
     return rows.map((row) => decode(JSON.parse(row.document)) as ArenaRecord)
   }
 
   row(name: string, id: string) {
     const result = this.database
-      .query<
-        { document: string },
-        [string, string]
-      >("SELECT document FROM arena_documents WHERE collection = ?1 AND id = ?2")
+      .query<{ document: string }, [string, string]>(
+        "SELECT document FROM arena_documents WHERE collection = ?1 AND id = ?2",
+      )
       .get(name, id)
     return result?.document ? (decode(JSON.parse(result.document)) as ArenaRecord) : undefined
   }
@@ -574,6 +576,7 @@ class LocalDatabase implements ArenaDb, ArenaClient {
       revision: Number(row.value),
       document: document ? (clone(document) as Record<string, unknown>) : null,
     }
+    this.researchQueue?.enqueue(mutation)
     if (this.pendingMutations) {
       this.pendingMutations.push(mutation)
       return
@@ -630,9 +633,98 @@ class LocalDatabase implements ArenaDb, ArenaClient {
     result.data = bytes
     return result as T
   }
+  /** Copy only this verified account's recoverable archives into the durable upload queue. */
+  async backfillResearch(accountID: string, signal: AbortSignal) {
+    if (!this.researchQueue || !this.researchPartition) return true
+    const partition = this.researchPartition
+    this.database.run(`CREATE TABLE IF NOT EXISTS arena_research_backfill (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT, partition TEXT NOT NULL,
+      collection TEXT NOT NULL, record_id TEXT NOT NULL,
+      UNIQUE(partition, collection, record_id))`)
+    const marker = `research.backfill.v1.${partition}`
+    const chats = "SELECT id FROM arena_documents WHERE collection = 'chats' AND json_extract(document, '$.userId') = ?"
+    const turns = `SELECT id FROM arena_documents WHERE collection = 'turns' AND json_extract(document, '$.chatID') IN (${chats})`
+    const runs = `SELECT id FROM arena_documents WHERE collection = 'runs' AND json_extract(document, '$.turnID') IN (${turns})`
+    const scopes = new Map([
+      ["chats", "json_extract(document, '$.userId') = ?"],
+      ["turns", `json_extract(document, '$.chatID') IN (${chats})`],
+      ["runs", `json_extract(document, '$.turnID') IN (${turns})`],
+      [
+        "artifacts",
+        `json_extract(document, '$.runID') IN (${runs}) AND json_extract(document, '$.kind') IN ('transcript', 'image') AND COALESCE(json_extract(document, '$.truncated'), 0) = 0`,
+      ],
+      [
+        "sessionArchives",
+        `json_extract(document, '$.runID') IN (${runs}) AND COALESCE(json_extract(document, '$.truncated'), 0) = 0`,
+      ],
+    ])
+    this.database.transaction(() => {
+      if (this.database.query("SELECT value FROM arena_metadata WHERE key = ?").get(marker)) return
+      for (const [collection, scope] of scopes) {
+        this.database
+          .query(`INSERT OR IGNORE INTO arena_research_backfill (partition, collection, record_id)
+          SELECT ?, collection, id FROM arena_documents WHERE collection = ? AND ${scope} ORDER BY id`)
+          .run(partition, collection, accountID)
+      }
+      this.database.query("INSERT INTO arena_metadata (key, value) VALUES (?, 'seeded')").run(marker)
+    })()
+    let sequence = 0
+    for (;;) {
+      if (signal.aborted) return false
+      const job = this.database
+        .query<{ sequence: number; collection: string; recordID: string }, [string, number]>(
+          "SELECT sequence, collection, record_id AS recordID FROM arena_research_backfill WHERE partition = ? AND sequence > ? ORDER BY sequence LIMIT 1",
+        )
+        .get(partition, sequence)
+      if (!job) break
+      sequence = job.sequence
+      const scope = scopes.get(job.collection)
+      if (!scope) throw new Error("Unknown research backfill collection")
+      const row = this.database
+        .query<{ document: string }, [string, string, string]>(
+          `SELECT document FROM arena_documents WHERE collection = ? AND id = ? AND ${scope}`,
+        )
+        .get(job.collection, job.recordID, accountID)
+      // Missing or no-longer-owned records cannot safely be uploaded. Keep the work item for a
+      // future pass; another unavailable file must not block the rest of the account's history.
+      if (!row) continue
+      const stored = documentRecordSchema.parse(decode(JSON.parse(row.document)))
+      let document: Record<string, unknown>
+      try {
+        document = job.collection === "artifacts" ? await this.hydrate(stored) : stored
+      } catch {
+        console.warn("[arena-research] Backfill artifact unavailable; retained for retry", {
+          collection: job.collection,
+          id: job.recordID,
+        })
+        continue
+      }
+      this.run(() => {
+        const current = this.database
+          .query<{ document: string }, [string, string, string]>(
+            `SELECT document FROM arena_documents WHERE collection = ? AND id = ? AND ${scope}`,
+          )
+          .get(job.collection, job.recordID, accountID)
+        if (current?.document !== row.document) return
+        const pending = this.database
+          .query("SELECT 1 FROM arena_research_backfill WHERE partition = ? AND sequence = ?")
+          .get(partition, job.sequence)
+        if (!pending) return
+        // Allocating a fresh revision and enqueueing it share the local transaction. A crash
+        // leaves either the backfill work item or its fully materialized upload records.
+        this.mutation(job.collection, job.recordID, document)
+        this.database
+          .query("DELETE FROM arena_research_backfill WHERE partition = ? AND sequence = ?")
+          .run(partition, job.sequence)
+      })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    return !this.database.query("SELECT 1 FROM arena_research_backfill WHERE partition = ? LIMIT 1").get(partition)
+  }
+
   async close() {
-    this.database.close()
     await this.onClose?.()
+    this.database.close()
   }
 }
 
@@ -807,13 +899,20 @@ class LocalCollection<T extends ArenaRecord> implements ArenaCollection<T> {
 
 export type LocalStoreConfiguration = {
   readonly directory: string
+  readonly researchPartition?: string
   readonly onMutation?: (mutation: ArenaMutation) => void | Promise<void>
   readonly onClose?: () => void | Promise<void>
 }
 
 export async function connectLocalStore(
   input: LocalStoreConfiguration,
-): Promise<Store & { readonly sourceID: string }> {
+): Promise<
+  Store & {
+    readonly sourceID: string
+    readonly researchQueue: ResearchQueue | undefined
+    backfillResearch: (accountID: string, signal: AbortSignal) => Promise<boolean>
+  }
+> {
   await mkdir(input.directory, { recursive: true })
   const database = new Database(path.join(input.directory, "arena.sqlite"))
   database.run("PRAGMA journal_mode = WAL")
@@ -841,8 +940,12 @@ export async function connectLocalStore(
   }
   await scrubLegacyBlindedTelemetry(database)
   await reclaimArtifactFilesIfPending(database, path.join(input.directory, "artifacts", "sha256"))
-  const local = new LocalDatabase(database, input.directory, input.onMutation, input.onClose)
-  const store = Object.assign(new Store(local, local), { sourceID: local.sourceID })
+  const local = new LocalDatabase(database, input.directory, input.onMutation, input.onClose, input.researchPartition)
+  const store = Object.assign(new Store(local, local), {
+    sourceID: local.sourceID,
+    researchQueue: local.researchQueue,
+    backfillResearch: (accountID: string, signal: AbortSignal) => local.backfillResearch(accountID, signal),
+  })
   try {
     await store.initialize()
   } catch (error) {

@@ -1589,6 +1589,7 @@ export class Store {
     const limited = bound({
       data: input.data,
       runStoredBytes: totals,
+      ...(record ? { artifactLimit: input.data.byteLength, runLimit: input.data.byteLength } : {}),
       // A gzip stream or an image cut short does not decode.
       whole: input.compression === "gzip" || input.kind === "image",
     })

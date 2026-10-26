@@ -76,6 +76,8 @@ describe("ArenaRuntime local persistence", () => {
       })
       setArenaCredentials({
         mode: "hosted",
+        researchPartition: "test-research-partition",
+        researchAccountID: "test-account",
         token: "arena-runtime-test-token",
         controlPlaneUrl: server.url.toString(),
         controlTokenHash: "0".repeat(64),

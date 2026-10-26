@@ -41,21 +41,56 @@ export function recoverOnce(run: () => Promise<void>) {
 async function openLocalStore() {
   const { connectLocalStore } = await import("./local-store")
   let uploader: ResearchUploader | undefined
+  let backfill: Promise<void> | undefined
+  const backfillController = new AbortController()
   const directory = join(process.env.PASEO_HOME?.trim() || join(homedir(), ".paseo"), "arena")
+  const credentials = arenaCredentials()
   const local = await connectLocalStore({
     directory,
-    onMutation: (mutation) => uploader?.enqueue(mutation),
-    onClose: () => uploader?.close(),
+    researchPartition: credentials?.mode === "hosted" ? credentials.researchPartition : undefined,
+    onMutation: () => uploader?.wake(),
+    onClose: async () => {
+      backfillController.abort()
+      await uploader?.close()
+      await backfill
+    },
   })
   // Research is the hosted product's data; a BYOK build keeps everything local.
-  const credentials = arenaCredentials()
   if (credentials?.mode === "hosted") {
+    if (!local.researchQueue) throw new Error("Hosted research queue is unavailable")
     uploader = new ResearchUploader({
       url: credentials.controlPlaneUrl,
       token: credentials.token,
       sourceID: local.sourceID,
-      warn: (warning) => console.warn("[arena-research] Dropped research data", warning),
+      queue: local.researchQueue,
+      warn: (warning) => console.warn("[arena-research] Upload pending; will retry", warning),
     })
+  }
+  if (credentials?.mode === "hosted") {
+    const accountID = credentials.researchAccountID
+    backfill = (async () => {
+      const signal = backfillController.signal
+      while (!signal.aborted) {
+        try {
+          if (await local.backfillResearch(accountID, signal)) return
+        } catch {
+          console.warn("[arena-research] Historical backfill pending; will retry")
+        }
+        if (signal.aborted) return
+        await new Promise<void>((resolve) => {
+          const stop = () => {
+            clearTimeout(timer)
+            resolve()
+          }
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", stop)
+            resolve()
+          }, 60_000)
+          timer.unref()
+          signal.addEventListener("abort", stop, { once: true })
+        })
+      }
+    })()
   }
   return local
 }

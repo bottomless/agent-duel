@@ -118,6 +118,8 @@ describe("OpenCodeServerManager generations", () => {
   test("hands Arena credentials and only a control-token verifier through stdin", async () => {
     installArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "session-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -138,6 +140,8 @@ describe("OpenCodeServerManager generations", () => {
       "controlPlaneUrl",
       "controlTokenHash",
       "mode",
+      "researchAccountID",
+      "researchPartition",
       "token",
     ]);
     expect(payload.mode).toBe("hosted");
@@ -167,6 +171,8 @@ describe("OpenCodeServerManager generations", () => {
   test("refuses to start a signed-in Arena without a TCP daemon for its runtime proxy", async () => {
     installArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "session-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -347,6 +353,8 @@ describe("OpenCodeServerManager generations", () => {
   test("shuts down an Arena launch that becomes stale while starting", async () => {
     installArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "old-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -359,6 +367,8 @@ describe("OpenCodeServerManager generations", () => {
     await runtime.settle();
     installArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "new-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -371,6 +381,8 @@ describe("OpenCodeServerManager generations", () => {
   test("does not leave an unhandled startup rejection when Arena stdin is unavailable", async () => {
     installArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "session-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -386,6 +398,8 @@ describe("OpenCodeServerManager generations", () => {
   test("fails a launch cleanly when its credential pipe reports EPIPE", async () => {
     installArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "session-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -405,6 +419,8 @@ describe("OpenCodeServerManager generations", () => {
   test("rejects a launch whose port allocation completes after shutdown starts", async () => {
     installArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "old-token",
       controlPlaneUrl: "https://control.test",
     });

@@ -78,6 +78,8 @@ describe("ArenaComparison", () => {
   test("names a first-turn chat with identical trees from the prompt alone", async () => {
     setArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "test-key",
       controlPlaneUrl: "https://control.test",
       controlTokenHash: "0".repeat(64),
@@ -150,6 +152,8 @@ describe("ArenaComparison", () => {
   test("records a failed side's turn without a report, and only names a first-turn chat", async () => {
     setArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "test-key",
       controlPlaneUrl: "https://control.test",
       controlTokenHash: "0".repeat(64),
@@ -193,6 +197,8 @@ describe("ArenaComparison", () => {
   test("anchors both agents on base and stores raw artifacts", async () => {
     setArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "test-key",
       controlPlaneUrl: "https://control.test",
       controlTokenHash: "0".repeat(64),
@@ -283,6 +289,8 @@ describe("ArenaComparison", () => {
   test("names the chat from the first turn's report and keeps the name off the card", async () => {
     setArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "test-key",
       controlPlaneUrl: "https://control.test",
       controlTokenHash: "0".repeat(64),
@@ -329,7 +337,7 @@ describe("ArenaComparison", () => {
           choices: [
             {
               message: {
-                content: "## What each agent did\nA darkened it.\n\n**Title:** \"Darker interface theme.\"\n",
+                content: '## What each agent did\nA darkened it.\n\n**Title:** "Darker interface theme."\n',
               },
             },
           ],
@@ -348,6 +356,8 @@ describe("ArenaComparison", () => {
   test("gives a lopsided battle's busy side the budget the quiet side left unused", async () => {
     setArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "test-key",
       controlPlaneUrl: "https://control.test",
       controlTokenHash: "0".repeat(64),
@@ -404,6 +414,8 @@ describe("ArenaComparison", () => {
   test("says which agent left the base alone rather than showing an empty section", async () => {
     setArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "test-key",
       controlPlaneUrl: "https://control.test",
       controlTokenHash: "0".repeat(64),
@@ -461,6 +473,8 @@ test.each([503, 429, 402])(
   async (status) => {
     setArenaCredentials({
       mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
       token: "test-key",
       controlPlaneUrl: "https://control.test",
       controlTokenHash: "0".repeat(64),
@@ -517,6 +531,8 @@ test.each([503, 429, 402])(
 test("caps automatic comparison retries at three attempts", async () => {
   setArenaCredentials({
     mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
     token: "test-key",
     controlPlaneUrl: "https://control.test",
     controlTokenHash: "0".repeat(64),
@@ -561,6 +577,8 @@ test("caps automatic comparison retries at three attempts", async () => {
 test("large file evidence makes exactly one model call and records partial coverage", async () => {
   setArenaCredentials({
     mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
     token: "test-key",
     controlPlaneUrl: "https://control.test",
     controlTokenHash: "0".repeat(64),
@@ -614,6 +632,8 @@ test("large file evidence makes exactly one model call and records partial cover
 test("complete computed JSON evidence makes one call without a missing-evidence notice", async () => {
   setArenaCredentials({
     mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
     token: "test-key",
     controlPlaneUrl: "https://control.test",
     controlTokenHash: "0".repeat(64),

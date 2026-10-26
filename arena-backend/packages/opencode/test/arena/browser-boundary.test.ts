@@ -15,6 +15,8 @@ function enableArena() {
   process.env.OPENCODE_ARENA = "1"
   setArenaCredentials({
     mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
     token: "private-runtime-token",
     controlPlaneUrl: "https://control.test",
     controlTokenHash: hashArenaControlToken(controlToken),

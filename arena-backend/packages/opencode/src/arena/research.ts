@@ -1,109 +1,53 @@
-import {
-  MAX_RESEARCH_BATCH_BYTES,
-  MAX_RESEARCH_BATCH_RECORDS,
-  MAX_RESEARCH_RECORD_BYTES,
-  projectResearchRecords,
-  type ResearchMutation,
-  type ResearchRecord,
-} from "@agent-duel/arena-service/research-protocol"
+import { z } from "zod"
+import { MAX_RESEARCH_BATCH_BYTES, MAX_RESEARCH_BATCH_RECORDS } from "@agent-duel/arena-service/research-protocol"
+import type { ResearchQueue, QueuedResearchRecord } from "./research-queue"
 
-const MAX_BUFFER_BYTES = 8 * 1024 * 1024
+const receiptSchema = z.object({ received: z.number().int().nonnegative(), stored: z.number().int().nonnegative() })
 const FLUSH_INTERVAL_MS = 1000
-const UPLOAD_TIMEOUT_MS = 10_000
+const UPLOAD_TIMEOUT_MS = 60_000
+const MAX_RETRY_MS = 60_000
 
 export interface ResearchUploadWarning {
-  reason: "oversized_record" | "buffer_full" | "upload_failed" | "invalid_record" | "closed"
+  reason: "upload_failed"
   records: number
   bytes: number
   status?: number
+  retryAt: number
 }
-
 export interface ResearchUploadOptions {
   url: string
   token: string
   sourceID: string
+  queue: ResearchQueue
   warn: (warning: ResearchUploadWarning) => void
   intervalMs?: number
   timeoutMs?: number
-  maxBufferBytes?: number
+  retryBaseMs?: number
+  maxRetryMs?: number
+  now?: () => number
+  random?: () => number
+  fetch?: (url: string, init: RequestInit) => Promise<Response>
 }
 
-interface BufferedRecord {
-  json: string
-  bytes: number
-}
-
-/** A lossy, in-memory research copy. No local write awaits this uploader. */
 export class ResearchUploader {
-  private readonly pending = new Map<string, BufferedRecord>()
-  /** Images are named by their content, so one already queued is never sent again by this process. */
-  private readonly queuedImages = new Set<string>()
-  private bytes = 0
   private timer: ReturnType<typeof setTimeout> | undefined
   private inFlight: Promise<void> | undefined
   private controller: AbortController | undefined
   private closed = false
   private readonly prefix: string
+  private readonly now: () => number
 
   constructor(private readonly options: ResearchUploadOptions) {
     this.prefix = `{"version":1,"sourceID":${JSON.stringify(options.sourceID)},"records":[`
+    this.now = options.now ?? Date.now
+    this.wake()
   }
 
-  get bufferedBytes() {
-    return this.bytes
-  }
-
-  get bufferedRecords() {
-    return this.pending.size
-  }
-
-  enqueue(mutation: ResearchMutation) {
-    if (this.closed) return
-    let records: ResearchRecord[]
-    try {
-      records = projectResearchRecords(mutation)
-    } catch {
-      this.options.warn({ reason: "invalid_record", records: 1, bytes: 0 })
-      return
-    }
-    for (const record of records) this.enqueueRecord(record)
-  }
-
-  private enqueueRecord(record: ResearchRecord) {
-    if (record.collection === "images" && this.queuedImages.has(record.id)) return
-    let json: string
-    try {
-      json = JSON.stringify(record)
-    } catch {
-      this.options.warn({ reason: "invalid_record", records: 1, bytes: 0 })
-      return
-    }
-    const bytes = Buffer.byteLength(json)
-    if (bytes > MAX_RESEARCH_RECORD_BYTES) {
-      this.options.warn({ reason: "oversized_record", records: 1, bytes })
-      return
-    }
-    const key = JSON.stringify([record.collection, record.id])
-    const previous = this.pending.get(key)
-    if (previous) {
-      this.bytes -= previous.bytes
-      this.pending.delete(key)
-    }
-    const maxBytes = this.options.maxBufferBytes ?? MAX_BUFFER_BYTES
-    if (this.bytes + bytes > maxBytes) {
-      this.options.warn({ reason: "buffer_full", records: 1, bytes })
-      return
-    }
-    this.pending.set(key, { json, bytes })
-    this.bytes += bytes
-    if (record.collection === "images") this.queuedImages.add(record.id)
-    this.schedule()
-  }
-
-  private schedule() {
-    if (this.closed || this.inFlight || this.timer || this.pending.size === 0) return
-    const fullBatch = this.bytes >= MAX_RESEARCH_BATCH_BYTES || this.pending.size >= MAX_RESEARCH_BATCH_RECORDS
-    const delay = fullBatch ? 0 : (this.options.intervalMs ?? FLUSH_INTERVAL_MS)
+  /** New writes only wake the uploader. They are already durable in the local write transaction. */
+  wake() {
+    if (this.closed || this.inFlight || this.timer || !this.options.queue.count) return
+    const retry = this.options.queue.retry()
+    const delay = Math.max(this.options.intervalMs ?? FLUSH_INTERVAL_MS, retry.nextAttempt - this.now())
     this.timer = setTimeout(() => {
       this.timer = undefined
       void this.flush()
@@ -113,61 +57,79 @@ export class ResearchUploader {
 
   flush(): Promise<void> {
     if (this.inFlight) return this.inFlight
-    if (this.closed || this.pending.size === 0) return Promise.resolve()
+    if (this.closed || !this.options.queue.count) return Promise.resolve()
+    if (this.options.queue.retry().nextAttempt > this.now()) {
+      this.wake()
+      return Promise.resolve()
+    }
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
-    const records: string[] = []
+    const records: QueuedResearchRecord[] = []
     let bytes = Buffer.byteLength(this.prefix) + 2
-    for (const [key, record] of this.pending) {
-      const nextBytes = bytes + record.bytes + (records.length === 0 ? 0 : 1)
-      if (nextBytes > MAX_RESEARCH_BATCH_BYTES || records.length === MAX_RESEARCH_BATCH_RECORDS) break
-      this.pending.delete(key)
-      this.bytes -= record.bytes
-      records.push(record.json)
+    for (const record of this.options.queue.peek(MAX_RESEARCH_BATCH_RECORDS, MAX_RESEARCH_BATCH_BYTES - bytes)) {
+      const nextBytes = bytes + record.bytes + (records.length ? 1 : 0)
+      if (nextBytes > MAX_RESEARCH_BATCH_BYTES) break
+      records.push(record)
       bytes = nextBytes
     }
-    const body = `${this.prefix}${records.join(",")}]}`
+    const body = `${this.prefix}${records.map((record) => record.json).join(",")}]}`
     const controller = new AbortController()
     this.controller = controller
-    this.inFlight = this.upload(body, records.length, controller).finally(() => {
+    this.inFlight = this.upload(body, records, controller).finally(() => {
       this.inFlight = undefined
       this.controller = undefined
-      this.schedule()
+      this.wake()
     })
     return this.inFlight
   }
 
-  private async upload(body: string, records: number, controller: AbortController) {
+  private async upload(body: string, records: QueuedResearchRecord[], controller: AbortController) {
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs ?? UPLOAD_TIMEOUT_MS)
     timeout.unref()
+    let status: number | undefined
     try {
-      const response = await fetch(`${this.options.url.replace(/\/$/, "")}/api/research`, {
+      const response = await (this.options.fetch ?? fetch)(`${this.options.url.replace(/\/$/, "")}/api/research`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.options.token}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${this.options.token}`, "Content-Type": "application/json" },
         body,
         signal: controller.signal,
       })
-      await response.body?.cancel()
+      status = response.status
       if (!response.ok) {
-        this.options.warn({ reason: "upload_failed", records, bytes: Buffer.byteLength(body), status: response.status })
+        await response.body?.cancel()
+        throw new Error("Research upload was refused")
       }
+      const receipt = receiptSchema.parse(await response.json())
+      if (receipt.received !== records.length || receipt.stored > receipt.received)
+        throw new Error("Research upload acknowledgement is incomplete")
+      if (!this.closed) this.options.queue.acknowledge(records)
     } catch {
-      this.options.warn({ reason: "upload_failed", records, bytes: Buffer.byteLength(body) })
+      if (this.closed) return
+      const failures = this.options.queue.retry().failures + 1
+      const cap = this.options.maxRetryMs ?? MAX_RETRY_MS
+      const base = this.options.retryBaseMs ?? 1000
+      const exponential = Math.min(cap, base * 2 ** Math.min(failures - 1, 20))
+      const random = this.options.random ?? Math.random
+      const delay = Math.ceil(exponential * (0.5 + random() * 0.5))
+      const retryAt = this.now() + delay
+      this.options.queue.defer({ failures, nextAttempt: retryAt })
+      this.options.warn({
+        reason: "upload_failed",
+        records: records.length,
+        bytes: Buffer.byteLength(body),
+        status,
+        retryAt,
+      })
     } finally {
       clearTimeout(timeout)
     }
   }
 
-  close() {
+  async close() {
     this.closed = true
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
     this.controller?.abort()
-    if (this.pending.size) this.options.warn({ reason: "closed", records: this.pending.size, bytes: this.bytes })
-    this.pending.clear()
-    this.bytes = 0
+    await this.inFlight
   }
 }
