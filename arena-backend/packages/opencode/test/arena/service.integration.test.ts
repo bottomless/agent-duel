@@ -23,6 +23,7 @@ import type {
   CheckoutEvictionDocument,
   ComparisonDocument,
   GenerationDocument,
+  PortCursorDocument,
   RawEventDocument,
   ReviewEventDocument,
   RunDocument,
@@ -51,7 +52,7 @@ type Mutable = Record<string, unknown>
 type Update = Record<string, Record<string, unknown>>
 const TOOL_OUTPUT_DISPLAY_CAP = 128
 const CONTESTANT_WORKTREE_INSTRUCTION =
-  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Literal ports, preview URLs, log paths, and process IDs in earlier messages or tool output are historical; do not reuse them, connect to them, or stop anything using them. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
+  "Git is prepared at the frozen base in an isolated worktree on $PASEO_CURRENT_BRANCH. Work in $(pwd). Branch changes in this worktree are part of your result. Do not modify $PASEO_TRUNK_DIR. Use $PASEO_TRUNK_BRANCH only to identify the canonical branch. Port aliases belong only to this contestant environment. Earlier turns ran in environments that are now closed. Their ports and preview URLs were updated to this environment's values in earlier answers, reasoning, tool calls, and tool output. Earlier file reads, edits, writes, and grep matches, files on disk, long JSON documents, and user messages keep the original ports. Read a file again before you edit it. Any other port or preview URL may belong to another process: connect only to your own ports and preview URLs, and stop only processes you started in this environment. Do not reuse a log path or process ID from an earlier message. Read the current port aliases and preview URLs from the environment. Run the project the way its developers run it, so the whole project works from the preview URL. For browser-facing services, bind to HOST=127.0.0.1 and use PORT/PASEO_PORT for the primary listener or PASEO_PORT2/PASEO_PORT3 for additional listeners. Start long-running services so they remain alive after the shell tool returns, then verify the assigned port is listening before reporting the matching public URL: ARENA_PREVIEW_URL for PASEO_PORT, ARENA_PREVIEW_URL2 for PASEO_PORT2, or ARENA_PREVIEW_URL3 for PASEO_PORT3."
 
 function record(value: unknown): value is Mutable {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -262,6 +263,7 @@ function memoryStore() {
   const checkoutEvictions = collection<CheckoutEvictionDocument>()
   const reviewEvents = collection<ReviewEventDocument>()
   const battleMetrics = collection<BattleMetricsDocument>()
+  const portCursors = collection<PortCursorDocument>()
   const restart = () =>
     Object.assign(Object.create(Store.prototype), {
       chats,
@@ -277,6 +279,7 @@ function memoryStore() {
       checkoutEvictions,
       reviewEvents,
       battleMetrics,
+      portCursors,
       artifactQueues: new Map<string, Promise<void>>(),
     }) as Store
   return {

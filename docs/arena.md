@@ -648,6 +648,57 @@ patches use native Git with time and output limits; battle review owns its separ
 Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
 `.localhost` hostnames, and never retarget an old URL to a later process.
 
+Banks come from 20000–29999, below every OS ephemeral range, in order from a cursor the store keeps
+(`portCursors`, `sequentialAllocator` in `arena/preview.ts`). A port an earlier turn used is not
+handed out again until the range wraps, so a port in the history never names a later contestant's
+server. The allocator skips ports in use and well-known defaults; a store without a cursor starts at
+a random point.
+
+The canonical chat keeps the winner's literal ports and preview URLs, so the reader sees the URLs
+that worked. A contestant's copy retargets them to its own bank as it forks
+(`retargetArenaTranscriptPart`, `arena/port-retarget.ts`). Answers, reasoning, and every tool's
+input, output and error follow one rule: every number equal to one of the producing run's ports
+changes, unless it is part of a name (glued to a letter or `_`, a dashed name like `req-N-ab12` or
+`web-N.txt`, a version like `1.N.0`, or a path segment). Whole preview URLs and preview hosts change
+too. Tool calls use the same number rule. On production transcripts, a list of port shapes
+(`localhost:N`, `--port N`, ...) missed shapes nobody listed (`lsof -iTCP:"N"`, `printenv
+PASEO_PORT`, a socket tuple, a LAN URL), and skipping the output of any shell command that read a
+file kept real ports whenever a compound command also ran `git diff` or `cat`.
+
+Never changed: user messages; files, attachments, tool metadata, titles and IDs; the file content
+the file tools read or wrote (`read` and `grep` output, `write`, `edit`, `multiedit` and
+`apply_patch` content), so an edit copied from history still matches the file on disk; `data:` URIs,
+base64 runs, hex runs of 12 or more, UUIDs; JSON longer than 2,500 characters (a string or any
+`{"…` span that parses), which is data a program wrote rather than a command's own result; binary
+output; reasoning that carries metadata. Agent Duel saves reasoning without its metadata
+(`arena/privacy.ts`), so a forked copy never carries a signature to break.
+
+File content a shell command prints or writes (`cat f`, `cat > f <<EOF`) changes like any other
+output, while the file on disk keeps its ports. The contestant prompt tells the contestant to read a
+file again before it edits it.
+
+Three rules keep the mapping exact:
+
+- **The run that wrote the message.** Banks are reused across turns, so matching every run's ports
+  maps a reused port to the wrong alias. The graft records the canonical messages a winner wrote
+  (`canonicalUserMessageID` through `canonicalLastMessageID`), and the fork hands each
+  part its source message id. A turn grafted before the end marker existed counts until the next
+  battle; messages outside every range (Battle-off turns, conflict resolution) stay unchanged.
+- **One pass.** Matches are found on the original text and then replaced, so a new port that
+  equals an old port of the same bank is not rewritten again. `$PASEO_PORT` that the agent wrote
+  stays a variable; it already names whichever environment runs it.
+- **The prompt says what changed.** The contestant prompt lists what was updated and what keeps
+  the original ports, and tells the contestant to connect only to its own ports.
+
+The costs: a command and a long JSON it printed, or a file tool call and the content it read, can
+name different ports; shell reads and writes of a file show ports the file on disk does not have; a
+number that equals a port but is not one (a PID, a size, a line number) changes with it; and ports
+a user typed, or a Battle-off turn ran, stay literal, so they can name a port the other side now
+owns.
+
+After a run, `$ARENA_PREVIEW_URL…` in its answer text is expanded so the reader sees the URL. Port
+variables stay as written.
+
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
 

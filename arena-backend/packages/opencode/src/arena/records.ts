@@ -274,6 +274,13 @@ export type CheckoutEvictionDocument = {
   updatedAt: Date
 }
 
+/** Where the next search for contestant ports starts; one document per store. */
+export type PortCursorDocument = {
+  readonly _id: string
+  next: number
+  updatedAt: Date
+}
+
 export type HiddenAssignment = {
   readonly assignmentID: string
   model?: string

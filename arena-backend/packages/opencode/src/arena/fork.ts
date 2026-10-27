@@ -34,9 +34,10 @@ export interface Input {
   readonly pathMode?: "transcript"
   /**
    * Runs on every copied part after its canonical paths point at the destination. Contestant
-   * copies retarget ports and preview URLs here so each part is written once.
+   * copies retarget ports and preview URLs here so each part is written once. `sourceMessageID`
+   * is the message the part was copied from, which says which battle turn wrote it.
    */
-  readonly part?: (part: SessionV1.Part, info: SessionV1.Info) => SessionV1.Part
+  readonly part?: (part: SessionV1.Part, info: SessionV1.Info, sourceMessageID?: string) => SessionV1.Part
   /**
    * Hide the output of tool calls copied from source messages older than this one, when the copy
    * can produce that output again (`recoverable`). Contestant copies set it to the start of the
@@ -58,6 +59,8 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
   const mover = yield* MoveSession.Service
   const instances = yield* InstanceStore.Service
   const source = yield* sessions.get(input.sessionID)
+  // Copy ID to source ID, so `part` can tell where each copied message came from.
+  const sources = new Map<string, string>()
   let pruneBefore: MessageID | undefined
   const forked = yield* instances.provide(
     { directory: source.directory },
@@ -65,6 +68,7 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
       sessionID: input.sessionID,
       ...(input.messageID ? { messageID: input.messageID } : {}),
       onMessageMapping(mapping) {
+        mapping.forEach((target, from) => sources.set(target, from))
         if (input.pruneToolOutputBefore) pruneBefore = mapping.get(input.pruneToolOutputBefore)
         input.onMessageMapping?.(mapping)
       },
@@ -101,7 +105,7 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
               catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
             })
           : localizeEmbeddedPaths(part, roots)
-      const copied = input.part ? input.part(localized, message.info) : localized
+      const copied = input.part ? input.part(localized, message.info, sources.get(message.info.id)) : localized
       // Copies keep their source's order, so an older copied message has a smaller id.
       yield* sessions.updatePart(prune && message.info.id < prune.before ? pruneToolOutput(copied, prune) : copied)
     }

@@ -69,36 +69,69 @@ export function hostnameForAlias(hostname: string, alias: PortAlias) {
 }
 
 /**
- * Pick one free loopback port and retain its reservation until releasePort is called.
- * Closing the probe socket is intentional: the contestant process must be able to bind it.
+ * Arena ports come from their own range, below every OS ephemeral range (macOS 49152+, Linux
+ * 32768+), so the OS never hands one to another program. Inside it the cursor only moves forward,
+ * so a number a chat's history shows is not given to a later contestant until the range wraps.
  */
-export function availablePort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const probe = createServer()
-    const fail = (error: Error) => {
-      probe.close(() => reject(error))
-    }
-    probe.once("error", fail)
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address()
-      if (!address || typeof address === "string") {
-        fail(new Error("Arena preview could not allocate a port"))
-        return
+export const PORT_RANGE = { first: 20_000, last: 29_999 } as const
+/** Well-known defaults inside the range that a project's own tooling binds without asking. */
+const WELL_KNOWN_PORTS = new Set([24_678, 27_017, 27_018, 27_019, 28_017])
+
+/** Where the next search for a free port starts. Arena keeps it in its store across restarts. */
+export type PortCursor = {
+  readonly read: () => Promise<number | undefined>
+  readonly write: (next: number) => Promise<void>
+}
+
+function memoryCursor(): PortCursor {
+  let next: number | undefined
+  return {
+    read: async () => next,
+    write: async (value) => {
+      next = value
+    },
+  }
+}
+
+const defaultCursor = memoryCursor()
+
+function inRange(port: number) {
+  return Number.isInteger(port) && port >= PORT_RANGE.first && port <= PORT_RANGE.last
+}
+
+function following(port: number) {
+  return port >= PORT_RANGE.last ? PORT_RANGE.first : port + 1
+}
+
+/**
+ * Take the next free ports after the cursor, skipping ports this process holds and ports another
+ * program holds now. A store without a cursor starts at a random point, so two Agent Duel installs
+ * on one machine do not walk the same numbers in step. The cursor moves past every port it
+ * returns, whether or not the bank is kept.
+ */
+export function sequentialAllocator(
+  cursor: PortCursor = defaultCursor,
+  taken: (port: number) => Promise<boolean> = portTaken,
+): PortAllocator {
+  return {
+    allocate: async (count) => {
+      const stored = await cursor.read()
+      const size = PORT_RANGE.last - PORT_RANGE.first + 1
+      let candidate =
+        stored !== undefined && inRange(stored) ? stored : PORT_RANGE.first + Math.floor(Math.random() * size)
+      const ports: number[] = []
+      for (let tried = 0; ports.length < count; tried++) {
+        if (tried >= size) throw new Error(`Arena found no free port in ${PORT_RANGE.first}-${PORT_RANGE.last}`)
+        const port = candidate
+        candidate = following(candidate)
+        if (allocatedPorts.has(port) || WELL_KNOWN_PORTS.has(port)) continue
+        if (await taken(port)) continue
+        ports.push(port)
       }
-      probe.close((error) => {
-        if (error) {
-          reject(error)
-          return
-        }
-        if (allocatedPorts.has(address.port)) {
-          void availablePort().then(resolve, reject)
-          return
-        }
-        allocatedPorts.add(address.port)
-        resolve(address.port)
-      })
-    })
-  })
+      await cursor.write(candidate)
+      return ports
+    },
+  }
 }
 
 export function releasePort(port: number) {
@@ -106,21 +139,7 @@ export function releasePort(port: number) {
 }
 
 function allocatorFunction(input: AllocatePortBankOptions["allocator"]): PortAllocator {
-  if (!input) {
-    return {
-      allocate: async (count) => {
-        const ports: number[] = []
-        try {
-          for (let index = 0; index < count; index++) ports.push(await availablePort())
-          return ports
-        } catch (error) {
-          ports.forEach(releasePort)
-          throw error
-        }
-      },
-      release: (ports) => ports.forEach(releasePort),
-    }
-  }
+  if (!input) return sequentialAllocator()
   return typeof input === "function" ? { allocate: input } : input
 }
 
@@ -463,6 +482,7 @@ export function clearForTest() {
   pendingAllocations.clear()
   allocatedPorts.clear()
   releaseCallbacks.clear()
+  void defaultCursor.write(PORT_RANGE.first)
 }
 
 export * as ArenaPreview from "./preview"

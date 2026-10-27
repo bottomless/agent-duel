@@ -1,10 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
-  canonicalizeArenaEnvironment,
   canonicalizeTranscriptPaths,
   localizeTranscriptPaths,
   canonicalizeWorktreePaths,
-  localizeArenaEnvironment,
   localizeCanonicalPaths,
 } from "@/arena/canonical-path"
 
@@ -15,89 +13,6 @@ const BOTH = { worktrees: [WORKTREE_A, WORKTREE_B], canonical: CANONICAL }
 const TEMP = "/var/folders/xy/abc/T/opencode/arena"
 
 describe("Arena canonical path", () => {
-  test("rewrites historical preview URLs and ports to current environment variables", () => {
-    const result = canonicalizeArenaEnvironment(
-      {
-        text: "Server at http://turn1-a--abc.localhost:6768/ on port 51101",
-        tool: {
-          input: { command: "vite --port 51102" },
-          output: "PORT=51101 PASEO_PORT2=51102; unrelated=1511010",
-        },
-      },
-      {
-        portAliases: { PASEO_PORT: 51101, PASEO_PORT2: 51102, PASEO_PORT3: 51103 },
-        previewUrls: {
-          PASEO_PORT: "http://turn1-a--abc.localhost:6768",
-          PASEO_PORT2: "http://port2--turn1-a--abc.localhost:6768",
-        },
-      },
-    )
-
-    expect(result).toEqual({
-      text: "Server at $ARENA_PREVIEW_URL/ on port $PASEO_PORT",
-      tool: {
-        input: { command: "vite --port $PASEO_PORT2" },
-        output: "PORT=$PASEO_PORT PASEO_PORT2=$PASEO_PORT2; unrelated=1511010",
-      },
-    })
-  })
-
-  test("localizes canonical environment variables for a contestant", () => {
-    const result = localizeArenaEnvironment(
-      {
-        text: "Server: $ARENA_PREVIEW_URL ($PASEO_PORT)",
-        tool: { command: "vite --port $PASEO_PORT2; echo $ARENA_PREVIEW_URL2" },
-      },
-      {
-        PASEO_PORT: "53728",
-        PASEO_PORT2: "53729",
-        ARENA_PREVIEW_URL: "http://turn2-a.localhost:6768",
-        ARENA_PREVIEW_URL2: "http://port2--turn2-a.localhost:6768",
-      },
-    )
-
-    expect(result).toEqual({
-      text: "Server: http://turn2-a.localhost:6768 (53728)",
-      tool: { command: "vite --port 53729; echo http://port2--turn2-a.localhost:6768" },
-    })
-  })
-
-  test("retargets ports in a screenshot's tool output but never inside its image bytes", () => {
-    // A screenshot whose base64 text holds the old port's digits between two letters, as the one
-    // that left every later battle of a chat failing with "Invalid PNG image".
-    const image = "data:image/png;base64,iVBORw0KGgoqzp8CLI6cButwH+oUre55556u33/ld5uALUtI8+eD8mN"
-    const part = {
-      type: "tool",
-      tool: "read",
-      state: {
-        output: "Screenshot of http://localhost:55556",
-        attachments: [{ type: "file", mime: "image/png", url: image }],
-      },
-    }
-
-    const canonical = canonicalizeArenaEnvironment(part, { portAliases: { PASEO_PORT: 55556 } })
-    const localized = localizeArenaEnvironment(canonical, { PASEO_PORT: "54507" })
-
-    expect(localized.state.output).toBe("Screenshot of http://localhost:54507")
-    expect(localized.state.attachments[0]?.url).toBe(image)
-  })
-
-  test("retargets a concrete historical URL without changing the displayed canonical value", () => {
-    const displayed = "Server: http://turn1-b.localhost:6768"
-    const canonical = canonicalizeArenaEnvironment(displayed, {
-      portAliases: { PASEO_PORT: 51112 },
-      previewUrls: { PASEO_PORT: "http://turn1-b.localhost:6768" },
-    })
-
-    expect(displayed).toBe("Server: http://turn1-b.localhost:6768")
-    expect(
-      localizeArenaEnvironment(canonical, {
-        PASEO_PORT: "53731",
-        ARENA_PREVIEW_URL: "http://turn2-b.localhost:6768",
-      }),
-    ).toBe("Server: http://turn2-b.localhost:6768")
-  })
-
   test("rewrites declared path values through objects and arrays, never keys", () => {
     const input = { cwd: WORKTREE_A, paths: [`${WORKTREE_A}/src`, WORKTREE_B], [WORKTREE_A]: WORKTREE_B }
     expect(canonicalizeWorktreePaths(input, BOTH)).toEqual({
