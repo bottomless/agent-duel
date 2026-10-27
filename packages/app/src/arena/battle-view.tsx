@@ -29,6 +29,7 @@ import { arenaSizeErrorOr, isArenaSizeError } from "./chat-too-large";
 import { ArenaRunTaskFooter } from "./task-progress-card";
 import { openArenaWorktreeChanges } from "./explorer-selection";
 import { ARENA_RUN_META_HEIGHT, ArenaRunMeta } from "./run-meta";
+import { ArenaMessageAnchorProvider, ArenaRunTurnsMenu } from "./run-turns";
 import type { ArenaTurnAction } from "./use-arena-session";
 import { useArenaBattleActions } from "./use-battle-actions";
 import { arenaChangesRows } from "./changes-rows";
@@ -66,6 +67,8 @@ type ArenaPaneView = ArenaSide | "both";
 // characters of readable content at the default interface size.
 const STACKED_PANES_BREAKPOINT = 520;
 
+// Room above a message the turns menu scrolls to, so it does not sit against the pane header.
+const JUMP_TO_MESSAGE_INSET = 12;
 const ThemedMaximize2 = withUnistyles(Maximize2);
 const ThemedMinimize2 = withUnistyles(Minimize2);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
@@ -180,6 +183,13 @@ function BattlePane({
   const userScrollActiveRef = useRef(false);
   const [awayFromLatest, setAwayFromLatest] = useState(false);
   const contentHeightRef = useRef(0);
+  const scrollOffsetRef = useRef(0);
+  const threadAreaRef = useRef<View>(null);
+  const messageAnchorsRef = useRef(new Map<string, View>());
+  const registerMessageAnchor = useCallback((messageId: string, node: View | null) => {
+    if (node) messageAnchorsRef.current.set(messageId, node);
+    else messageAnchorsRef.current.delete(messageId);
+  }, []);
 
   const scrollToLatest = useCallback(() => {
     if (!autoScrollEnabledRef.current) return;
@@ -208,6 +218,7 @@ function BattlePane({
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      scrollOffsetRef.current = contentOffset.y;
       const contentChangedBeforeCallback = contentSize.height !== contentHeightRef.current;
       if (
         contentChangedBeforeCallback &&
@@ -234,6 +245,28 @@ function BattlePane({
     setAwayFromLatest(false);
     scrollToLatest();
   }, [scrollToLatest]);
+  // Scrolls the thread so the message sits just below its top, and stops following the latest
+  // output. A null message is the turn's prompt, which shows above both panes rather than in the
+  // thread, so the first turn starts at the top of the thread.
+  const jumpToMessage = useCallback((messageId: string | null) => {
+    const scrollTo = (y: number) => {
+      autoScrollEnabledRef.current = false;
+      setAwayFromLatest(true);
+      threadScrollRef.current?.scrollTo({ y: Math.max(0, y), animated: true });
+    };
+    if (messageId === null) {
+      scrollTo(0);
+      return;
+    }
+    const anchor = messageAnchorsRef.current.get(messageId);
+    const threadArea = threadAreaRef.current;
+    if (!anchor || !threadArea) return;
+    threadArea.measureInWindow((_areaX, areaY) => {
+      anchor.measureInWindow((_x, y) => {
+        scrollTo(scrollOffsetRef.current + y - areaY - JUMP_TO_MESSAGE_INSET);
+      });
+    });
+  }, []);
   const handleQuestionResponse = useCallback(
     (question: ArenaPendingQuestion, response: AgentPermissionResponse) => {
       if (run) onQuestionResponse(run, question, response);
@@ -288,7 +321,12 @@ function BattlePane({
     <View style={paneStyle} testID={`arena-pane-${side}`}>
       <View style={styles.paneHeader}>
         <View style={styles.paneHeading}>
-          <Text style={styles.agentName}>Agent {side.toUpperCase()}</Text>
+          <View style={styles.agentNameRow}>
+            <Text style={styles.agentName}>Agent {side.toUpperCase()}</Text>
+            {dispatched ? (
+              <ArenaRunTurnsMenu run={dispatched} side={side} onJumpToMessage={jumpToMessage} />
+            ) : null}
+          </View>
           {dispatched ? (
             <ArenaRunMeta
               run={dispatched}
@@ -329,7 +367,11 @@ function BattlePane({
       <View style={styles.paneBody} testID={`arena-pane-body-${side}`}>
         {/* The jump button anchors to the thread, not the pane body, so it stays clear of the task
             footer and services strip below the thread. */}
-        <View style={[styles.threadArea, run?.runState === "pending" && styles.runningThreadArea]}>
+        <View
+          ref={threadAreaRef}
+          collapsable={false}
+          style={[styles.threadArea, run?.runState === "pending" && styles.runningThreadArea]}
+        >
           <ScrollView
             ref={threadScrollRef}
             style={styles.threadScroll}
@@ -343,16 +385,18 @@ function BattlePane({
             testID={`arena-thread-${side}`}
           >
             {dispatched ? (
-              <ArenaRunThread
-                run={dispatched}
-                stoppedByEarlyPick={stoppedByEarlyPick}
-                queuedSteers={queuedSteers}
-                retry={retry}
-                respondingQuestionId={respondingQuestionId}
-                respondingPermissionId={respondingPermissionId}
-                onQuestionResponse={handleQuestionResponse}
-                onPermissionResponse={handlePermissionResponse}
-              />
+              <ArenaMessageAnchorProvider value={registerMessageAnchor}>
+                <ArenaRunThread
+                  run={dispatched}
+                  stoppedByEarlyPick={stoppedByEarlyPick}
+                  queuedSteers={queuedSteers}
+                  retry={retry}
+                  respondingQuestionId={respondingQuestionId}
+                  respondingPermissionId={respondingPermissionId}
+                  onQuestionResponse={handleQuestionResponse}
+                  onPermissionResponse={handlePermissionResponse}
+                />
+              </ArenaMessageAnchorProvider>
             ) : null}
           </ScrollView>
           {awayFromLatest ? (
@@ -700,7 +744,6 @@ export function ArenaBattleView({
     [promptAttachments, promptImages.length],
   );
   const reviewPhase = battleReviewPhase(turn, runA, runB);
-  const reviewAvailable = reviewPhase.kind !== "none";
   const [paneView, setPaneView] = useArenaPaneView(turn?.index);
   const bothFinal = runsAreFinal(runA, runB);
   // Observes the review stores and the window; emits nothing into React state,
@@ -932,6 +975,11 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[1],
     flexShrink: 0,
+  },
+  agentNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
   },
   // The contestants are the headline of the card, so their names are the largest type on it.
   agentName: {

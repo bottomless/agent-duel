@@ -8,6 +8,19 @@ function messageField(message: unknown, key: string): string | null {
 
 export function arenaThreadMessages(run: ArenaRun): unknown[] {
   const messages = run.messages ?? [];
+  const promptIndex = arenaThreadPromptIndex(run);
+  if (promptIndex < 0) return [];
+  return messages.slice(promptIndex + 1).filter((message) => {
+    const role = messageField(message, "role");
+    return role === "user" || role === "assistant";
+  });
+}
+
+/** Where this turn's prompt sits in the run's messages; the thread starts after it. */
+export function arenaThreadPromptIndex(
+  run: Pick<ArenaRun, "messages" | "startedAt" | "promptMessageID" | "sessionID">,
+): number {
+  const messages = run.messages ?? [];
 
   // A contestant session is a fork of the shared conversation, so from the moment it exists it
   // already holds every earlier turn and nothing of this one. The run becomes visible then —
@@ -15,7 +28,7 @@ export function arenaThreadMessages(run: ArenaRun): unknown[] {
   // and the fallback below would spend that gap showing the newest user message and everything
   // after it: the previous turn's winning reply, presented as this turn's work, until the real
   // boundary lands and it all vanishes. A run that has not started has nothing to show.
-  if (!run.startedAt) return [];
+  if (!run.startedAt) return -1;
 
   let promptIndex = -1;
 
@@ -34,11 +47,7 @@ export function arenaThreadMessages(run: ArenaRun): unknown[] {
     }
   }
 
-  if (promptIndex < 0) return [];
-  return messages.slice(promptIndex + 1).filter((message) => {
-    const role = messageField(message, "role");
-    return role === "user" || role === "assistant";
-  });
+  return promptIndex;
 }
 
 export function arenaReasoningPartIsActive(

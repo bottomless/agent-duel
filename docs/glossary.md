@@ -57,3 +57,4 @@ Authoritative terminology. UI label wins. Don't invent synonyms; use what's here
 
 - CLI `--host <host>` description `"Daemon host target"` (`packages/cli/src/utils/command-options.ts:5`) blurs daemon/host; the app keeps them distinct.
 - `WorkspaceDescriptorPayloadSchema.workspaceKind` accepts legacy `"checkout"` on the wire (`packages/protocol/src/messages.ts:2187`) while `PersistedWorkspaceKind` does not (`packages/server/src/server/workspace-registry-model.ts:8`).
+- "Turn" means two things. In the engine and these docs a turn is one prompt's battle, from the prompt to the vote (`turnId`). The pane header's "N turns" menu instead counts one contestant's requests inside that battle: the prompt and each follow-up sent after it finished. The UI label came from product, so the code calls them requests (`arenaRunRequestTimes`, `packages/app/src/arena/run-segments.ts`) and only `ArenaRunTurnsMenu` (`packages/app/src/arena/run-turns.tsx`) says turns.

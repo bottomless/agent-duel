@@ -1,4 +1,4 @@
-import { useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -27,6 +27,7 @@ import { arenaRunErrorToShow, STOPPED_BY_EARLY_PICK_NOTE } from "./battle-result
 import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
+import { ArenaMessageAnchor } from "./run-turns";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
 import { arenaQueuedSteering, arenaToolOutput } from "./steering";
 import { ArenaPartSourceContext, arenaToolPartPreviewed, useFullToolPart } from "./full-tool-part";
@@ -639,9 +640,8 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
       const fallbackTimestamp = new Date(
         run.firstEventAt ?? run.startedAt ?? run.completedAt ?? 0,
       ).getTime();
-      return (
+      const userMessage = (
         <UserMessage
-          key={id}
           messageId={id}
           message={content.text}
           images={content.images}
@@ -650,6 +650,12 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
           disableOuterSpacing
           withoutTrailingRow
         />
+      );
+      if (isSubagent) return <Fragment key={id}>{userMessage}</Fragment>;
+      return (
+        <ArenaMessageAnchor key={id} messageId={id}>
+          {userMessage}
+        </ArenaMessageAnchor>
       );
     }
     return (
