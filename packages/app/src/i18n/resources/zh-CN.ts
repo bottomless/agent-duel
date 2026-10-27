@@ -1,4 +1,4 @@
-import type { TranslationResources } from "./en";
+import { en, type TranslationResources } from "./en";
 
 export const zhCN: TranslationResources = {
   common: {
@@ -1582,6 +1582,7 @@ export const zhCN: TranslationResources = {
   sidebarCallout: {
     dismiss: "关闭",
   },
+  leaderboard: en.leaderboard,
   feedback: {
     sidebarAction: "发送反馈",
     sendError: "无法发送反馈，请重试。",

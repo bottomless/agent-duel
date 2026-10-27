@@ -1,4 +1,4 @@
-import type { TranslationResources } from "./en";
+import { en, type TranslationResources } from "./en";
 
 export const ja: TranslationResources = {
   common: {
@@ -1619,6 +1619,7 @@ export const ja: TranslationResources = {
   sidebarCallout: {
     dismiss: "閉じる",
   },
+  leaderboard: en.leaderboard,
   feedback: {
     sidebarAction: "フィードバックを送信",
     sendError: "フィードバックを送信できませんでした。もう一度お試しください。",

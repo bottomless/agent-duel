@@ -270,7 +270,7 @@ export function parseServerIdFromPathname(pathname: string): string | null {
  */
 export function routeShowsAppChrome(pathname: string, knownServerIds: readonly string[]): boolean {
   const pathOnly = stripSearchAndHash(pathname);
-  if (pathOnly === "/open-project" || pathOnly === "/new") {
+  if (pathOnly === "/open-project" || pathOnly === "/new" || pathOnly === "/leaderboard") {
     return true;
   }
   const serverId = parseServerIdFromPathname(pathOnly);

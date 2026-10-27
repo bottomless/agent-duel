@@ -1,4 +1,4 @@
-import type { TranslationResources } from "./en";
+import { en, type TranslationResources } from "./en";
 
 export const ko: TranslationResources = {
   common: {
@@ -1615,6 +1615,7 @@ export const ko: TranslationResources = {
   sidebarCallout: {
     dismiss: "닫기",
   },
+  leaderboard: en.leaderboard,
   feedback: {
     sidebarAction: "피드백 보내기",
     sendError: "피드백을 보내지 못했습니다. 다시 시도해 주세요.",

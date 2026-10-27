@@ -1,4 +1,4 @@
-import type { TranslationResources } from "./en";
+import { en, type TranslationResources } from "./en";
 
 export const ar: TranslationResources = {
   common: {
@@ -1600,6 +1600,7 @@ export const ar: TranslationResources = {
   sidebarCallout: {
     dismiss: "رفض",
   },
+  leaderboard: en.leaderboard,
   feedback: {
     sidebarAction: "إرسال ملاحظات",
     sendError: "تعذر إرسال الملاحظات. حاول مرة أخرى.",

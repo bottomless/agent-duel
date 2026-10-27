@@ -212,6 +212,7 @@ import { createArenaRuntimeRouter } from "./accounts/arena-runtime-router.js";
 import { FeedbackBackend } from "./feedback/backend.js";
 import { createFeedbackContextCapture, type FeedbackContextCapture } from "./feedback/context.js";
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
+import { createLeaderboardRouter } from "./leaderboard/routes.js";
 import { createFeedbackRouter } from "./feedback/routes.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { createGitMetadataGenerator } from "./session/checkout/git-metadata-generator.js";
@@ -753,6 +754,14 @@ export async function createPaseoDaemon(
     });
     app.use("/api/auth", createAccountsRouter(accounts));
     app.use(createRequireSessionMiddleware(accounts));
+    app.use(
+      "/api/leaderboard",
+      createLeaderboardRouter({
+        controlPlaneUrl: accountsConfig.controlPlaneUrl,
+        sessions: accounts.sessions,
+        appVersion: daemonVersion,
+      }),
+    );
     app.use(
       "/api/feedback",
       createFeedbackRouter({

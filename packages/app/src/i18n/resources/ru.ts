@@ -1,4 +1,4 @@
-import type { TranslationResources } from "./en";
+import { en, type TranslationResources } from "./en";
 
 export const ru: TranslationResources = {
   common: {
@@ -1637,6 +1637,7 @@ export const ru: TranslationResources = {
   sidebarCallout: {
     dismiss: "Увольнять",
   },
+  leaderboard: en.leaderboard,
   feedback: {
     sidebarAction: "Отправить отзыв",
     sendError: "Не удалось отправить отзыв. Повторите попытку.",
