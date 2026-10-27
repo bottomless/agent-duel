@@ -1403,6 +1403,28 @@ const layer = Layer.effect(
 
     const state = yield* InstanceState.make<State>(() =>
       Effect.gen(function* () {
+        if (ArenaRuntime.enabled()) {
+          // Hosted and BYOK battles use the Arena proxy, never the user's OpenCode
+          // providers. Discovery here would gate chat creation on unrelated locks,
+          // credentials, and network requests before its result is blinded anyway.
+          const contestant = arenaProvider()
+          const bootstrap = fromModelsDevProvider({
+            id: "openrouter",
+            name: "OpenRouter",
+            env: [],
+            api: "https://openrouter.ai/api/v1",
+            npm: "@openrouter/ai-sdk-provider",
+            models: { [ArenaModelProfile.bootstrapModel.modelID]: ArenaModelProfile.bootstrapMetadata },
+          })
+          return {
+            models: new Map<string, LanguageModelV3>(),
+            providers: { [contestant.id]: contestant },
+            catalog: { [bootstrap.id]: bootstrap },
+            sdk: new Map<string, BundledSDK>(),
+            modelLoaders: {},
+            varsLoaders: {},
+          }
+        }
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
         const modelsDev = yield* modelsDevSvc.get()
@@ -1418,11 +1440,6 @@ const layer = Layer.effect(
           [providerID: string]: CustomVarsLoader
         } = {}
         const sdk = new Map<string, BundledSDK>()
-        if (ArenaRuntime.enabled()) {
-          const contestant = arenaProvider()
-          database[contestant.id] = contestant
-          providers[contestant.id] = contestant
-        }
         const discoveryLoaders: {
           [providerID: string]: CustomDiscoverModels
         } = {}

@@ -26,6 +26,23 @@ export const bootstrapModel = {
   },
 } as const
 
+// Local metadata for the session placeholder; resolving it must work before any
+// catalog download. Contestant inference uses the capability envelopes above.
+export const bootstrapMetadata = {
+  id: bootstrapModel.modelID,
+  name: bootstrapModel.displayName,
+  family: "deepseek-flash",
+  release_date: "2026-04-24",
+  attachment: false,
+  reasoning: true,
+  temperature: true,
+  tool_call: true,
+  interleaved: { field: "reasoning_content" },
+  modalities: { input: ["text"], output: ["text"] },
+  limit: { context: 1_048_576, output: 384_000 },
+  cost: { input: 0.077, output: 0.154, cache_read: 0.0154 },
+} as const
+
 export const highReasoning = {
   variant: "high",
   reasoning: {

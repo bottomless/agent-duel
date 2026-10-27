@@ -800,6 +800,11 @@ receives model slugs or stable aliases before reveal. A BYOK build always draws 
 and keeps `arenaAssignmentSets` in its own SQLite store, so the mapping is on the user's machine
 from the first draw.
 
+Resolve local startup and contestant metadata without OpenCode provider discovery. Its catalog
+cache and locks are shared with other OpenCode processes; waiting on them can prevent a new chat
+from opening even though Arena owns model selection. Keep the session placeholder metadata in
+`arena/model-profile.ts` and leave catalog refresh disabled in the Arena executable.
+
 **Attachments** (`arena/attachments.ts`, daemon `server/arena/prompt-attachments.ts`). A prompt or
 reply takes the same attachments as a chat message, and both contestants get identical parts:
 
