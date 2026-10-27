@@ -653,6 +653,21 @@ export const ko: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "{{host}}에 로그인",
+        title: "로그인 필요",
+        description: "Agent Duel은 로그인 없이 {{host}}에서 업데이트를 가져올 수 없습니다.",
+        sshDescription:
+          "{{host}}이(가) SSH 키를 받아들이지 않아 Agent Duel이 업데이트를 가져올 수 없습니다. ssh-add로 키를 불러오거나 {{host}} 계정에 키를 추가하세요.",
+        username: "사용자 이름",
+        password: "비밀번호 또는 토큰",
+        signIn: "로그인",
+        signingIn: "로그인 중...",
+        signedIn: "{{host}}에 로그인했습니다",
+        loginNotKept:
+          "로그인했지만 Git이 로그인 정보를 저장하지 않아 다음 가져오기 때 다시 필요합니다. 저장하려면 Git 자격 증명 도우미를 설정하거나 origin을 SSH로 바꾸세요.",
+        failed: "로그인 실패: {{reason}}",
+      },
       actions: {
         moreOptions: "옵션 더 보기",
         moreActions: "작업 더 보기",
@@ -794,6 +809,7 @@ export const ko: TranslationResources = {
           title: '"{{workspaceName}}"를 보관하시겠습니까?',
           confirm: "보관",
           cancel: "취소",
+          message: "채팅이 보관됨으로 이동하며, 그곳에서 보관 해제할 수 있습니다.",
           uncommittedChanges: "커밋되지 않은 변경 사항",
           uncommittedChangesWithDiff: "커밋되지 않은 변경 사항 ({{diffStat}})",
           addedLine: "추가된 줄 {{count}}개",

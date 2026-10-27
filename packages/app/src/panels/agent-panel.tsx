@@ -140,6 +140,7 @@ import {
   resolveBattlePause,
 } from "@/arena/conflict-guard";
 import { clearArenaBattleHandoff, useArenaBattleHandoff } from "@/arena/battle-handoff";
+import { useReviewAnswer } from "@/arena/use-review-answer";
 import { retainArenaPromptImages } from "@/arena/prompt-attachments";
 import {
   clearPendingBattlePrompt,
@@ -168,6 +169,7 @@ import {
 } from "@/arena/reply-state";
 import { useArenaReplyComposerControls } from "@/arena/reply-target-control";
 import {
+  arenaChatCanStartBattle,
   arenaSummaryAnchors,
   arenaTurnFollowedUp,
   isArenaBattleOnScreen,
@@ -1691,6 +1693,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
     );
   }, [agent.id, arenaBattleOnScreen, arenaSession.data, serverId, startingBattle, workspaceId]);
 
+  const canStartAgain = arenaChatCanStartBattle(arenaSession.data, arenaBattleOnScreen);
   const latestBattleSummary = useMemo(
     () =>
       summaryPlacement.live ? (
@@ -1699,9 +1702,10 @@ const AgentStreamSection = memo(function AgentStreamSection({
           workspaceId={workspaceId}
           agentId={agent.id}
           item={summaryPlacement.live}
+          canStartAgain={canStartAgain}
         />
       ) : null,
-    [agent.id, serverId, summaryPlacement.live, workspaceId],
+    [agent.id, canStartAgain, serverId, summaryPlacement.live, workspaceId],
   );
 
   /**
@@ -1774,9 +1778,14 @@ const AgentStreamSection = memo(function AgentStreamSection({
   if (calloutPendingAction?.kind === "retry_resolution") {
     reviewPending = calloutPendingAction.mode === "discard_winner" ? "discard" : "apply";
   }
+  const answerCalloutReview = useReviewAnswer({
+    snapshot: arenaSession.data,
+    answerReview: calloutAnswerReview,
+    askAgent: askCalloutAgent,
+  });
   const calloutReview = useMemo(
     () => ({
-      onApply: calloutAnswerReview,
+      onApply: answerCalloutReview,
       onRetry: calloutRetryResolution,
       onDiscard: () => void calloutDiscardWinner(),
       onRestore: calloutRestoreWorkspace,
@@ -1784,8 +1793,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
       pending: reviewPending,
     }),
     [
+      answerCalloutReview,
       askCalloutAgent,
-      calloutAnswerReview,
       calloutDiscardWinner,
       calloutRestoreWorkspace,
       calloutRetryResolution,
@@ -1935,6 +1944,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
         forkBoundaryAfterItemId={forkBoundaryAfterItemId}
         liveContent={liveContentWithConnection}
         bottomOverlayHeight={bottomOverlayHeight}
+        arenaChat={arenaSession.data !== undefined}
       />
     </ArenaPartSourceContext.Provider>
   );

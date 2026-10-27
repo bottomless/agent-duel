@@ -39,6 +39,11 @@ export type ArenaDecisionPhase =
       canDiscard: boolean;
       /** A failed side can still be retried, which the hint beside Discard offers. */
       canRetry: boolean;
+      /**
+       * The engine's restart cut off a side. Resume continues every such side together, and until
+       * then Discard is the only other choice.
+       */
+      canResume: boolean;
     }
   | { kind: "awaiting_stop_resolution"; canKeepA: boolean; canKeepB: boolean }
   | { kind: "retry_resolution"; detail: string }
@@ -59,6 +64,13 @@ export function showsArenaDecisionBar(snapshot: ArenaSnapshot | undefined): bool
 /** Running and completed battle choices live in the floating pill. */
 export function decisionBarShowsPhase(phase: ArenaDecisionPhase): boolean {
   return phase.kind === "retry_resolution" || phase.kind === "transitional";
+}
+
+/** Names the side still working once the other can be picked early, so the pick is not a guess. */
+export function arenaRunningDecisionHint(phase: ArenaDecisionPhase): string | null {
+  if (phase.kind !== "running" || phase.waitingFor === null) return null;
+  if (!phase.canPickA && !phase.canPickB) return null;
+  return `Agent ${phase.waitingFor.toUpperCase()} is still working`;
 }
 
 export function arenaRunningDecisionOrder({
@@ -92,6 +104,23 @@ function waitingFor(runA: ArenaRun | undefined, runB: ArenaRun | undefined): Are
   return null;
 }
 
+// A battle the engine's restart cut off is resumed or discarded, never voted on.
+function awaitingVotePhase(
+  turn: NonNullable<ArenaSnapshot["turn"]>,
+  runA: ArenaRun | undefined,
+  runB: ArenaRun | undefined,
+): Extract<ArenaDecisionPhase, { kind: "awaiting_vote" }> {
+  return {
+    kind: "awaiting_vote",
+    canChooseA: !turn.canResumeBattle && canChooseArenaRun(turn.state, runA),
+    canChooseB: !turn.canResumeBattle && canChooseArenaRun(turn.state, runB),
+    canTie: turn.canTie,
+    canDiscard: turn.canDiscardBattle,
+    canRetry: runA?.canRetry === true || runB?.canRetry === true,
+    canResume: turn.canResumeBattle,
+  };
+}
+
 export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase {
   const turn = snapshot.turn;
   const runA = snapshot.runs.find((run) => run.side === "a");
@@ -123,14 +152,7 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
     case "finalizing":
       return transitional("Finishing up", true);
     case "awaiting_vote":
-      return {
-        kind: "awaiting_vote",
-        canChooseA: canChooseArenaRun(turn.state, runA),
-        canChooseB: canChooseArenaRun(turn.state, runB),
-        canTie: turn.canTie,
-        canDiscard: turn.canDiscardBattle,
-        canRetry: runA?.canRetry === true || runB?.canRetry === true,
-      };
+      return awaitingVotePhase(turn, runA, runB);
     case "stopping":
       return transitional("Stopping the battle", true);
     case "awaiting_stop_resolution":

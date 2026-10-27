@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { ArenaLive } from "../../src/arena/live"
+import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 
 const originalArena = process.env.OPENCODE_ARENA
 beforeEach(() => {
@@ -11,6 +12,33 @@ afterEach(() => {
 })
 
 describe("Arena live transcript", () => {
+  test("redacts legacy thinking in live updates and token progress", () => {
+    const live = new ArenaLive()
+    const values: unknown[] = []
+    live.subscribe((event) => values.push(event.change))
+    const binding = { runID: "run", turnID: "turn", rootSessionID: "root" }
+    const part = {
+      id: "p",
+      messageID: "m",
+      sessionID: "root",
+      type: "reasoning",
+      text: "Private model identity",
+      time: { start: 1 },
+    }
+    const payload = { type: "message.part.updated", properties: { part } }
+    live.capture(binding, payload)
+    live.capture(binding, {
+      type: "message.part.delta",
+      properties: { partID: "p", field: "text", delta: " secret continuation" },
+    })
+    expect(values).toHaveLength(2)
+    expect(values[0]).toMatchObject({ kind: "part", part: { type: "reasoning", text: REDACTED_THINKING } })
+    expect(values[1]).toMatchObject({ kind: "part", part: { type: "reasoning", text: REDACTED_THINKING } })
+    expect(live.partsFor("run")[0]).toMatchObject({ text: REDACTED_THINKING })
+    expect(JSON.stringify(values)).not.toContain("Private")
+    expect(JSON.stringify(values)).not.toContain("secret")
+    expect(part.text).toBe("Private model identity")
+  })
   test.each(["session", "child"])(
     "captures %s token-only output for a late baseline without persisting token events",
     (sessionID) => {
@@ -176,7 +204,13 @@ describe("Arena live transcript", () => {
           type: "tool",
           tool: "bash",
           callID: "call-1",
-          state: { status: "completed", input: { command: "cat log" }, output, metadata: {}, time: { start: 1, end: 2 } },
+          state: {
+            status: "completed",
+            input: { command: "cat log" },
+            output,
+            metadata: {},
+            time: { start: 1, end: 2 },
+          },
         },
       },
     })

@@ -2056,6 +2056,20 @@ export type ArenaReviewEvent =
       mountId: string
       offsetMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       clientAtMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      type: "battle.waiting"
+    }
+  | {
+      id: string
+      mountId: string
+      offsetMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      clientAtMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      type: "battle.settled"
+    }
+  | {
+      id: string
+      mountId: string
+      offsetMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      clientAtMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       type: "window.focus"
     }
   | {
@@ -2151,6 +2165,14 @@ export type ArenaReviewEvent =
       offsetMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       clientAtMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       type: "vote.hovered"
+      side: "a" | "b"
+    }
+  | {
+      id: string
+      mountId: string
+      offsetMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      clientAtMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      type: "early_pick.hovered"
       side: "a" | "b"
     }
   | {

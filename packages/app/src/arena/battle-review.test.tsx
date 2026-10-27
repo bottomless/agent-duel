@@ -32,8 +32,14 @@ vi.mock("@/components/ui/tooltip", async () => {
   };
 });
 
+// The list carries no contents; each diff reads its file from what the fixtures served.
+vi.mock("./file-diff-query", async () =>
+  (await import("./review-fixtures.test-helpers")).fileDiffQueryStandIn(),
+);
+
 import { BattleReview } from "./battle-review";
 import { useArenaReviewStore } from "./review-state";
+import { useArenaDiffLayoutStore } from "./diff-layout";
 import { verdictFolds } from "./verdict-body";
 import { arenaChangesRows } from "./changes-rows";
 import { comparisonDiff, shortConflict, threeWayFile } from "./review-fixtures.test-helpers";
@@ -51,6 +57,8 @@ beforeEach(() => {
   // The tab and the verdict fold live in a shared store now, so a case that
   // switches tabs would otherwise decide where the next one opens.
   useArenaReviewStore.setState({ byTurn: {} });
+  // The layout choice is per chat, so a case that picks one would set the next case's.
+  useArenaDiffLayoutStore.setState({ layoutByChat: {} });
 });
 
 afterEach(() => {
@@ -93,6 +101,7 @@ function manyFiles(count: number, firstDiverging?: number) {
 
 function render(input: {
   summaryAvailable: boolean;
+  waitingFor?: "a" | "b";
   onOpenInPanel?: (file: string | null) => void;
   diff?: ReturnType<typeof shortConflict>;
 }) {
@@ -100,11 +109,13 @@ function render(input: {
   act(() => {
     root.render(
       <BattleReview
+        serverId="server-1"
         agentId="agent-1"
         turnId="turn-1"
         summaryAvailable={input.summaryAvailable}
         summaryPending={false}
         summaryFailed={false}
+        waitingFor={input.waitingFor ?? null}
         comparison={COMPARISON}
         retrying={false}
         onRetry={NOOP}
@@ -119,15 +130,83 @@ function render(input: {
 }
 
 describe("BattleReview", () => {
-  it("keeps Changes open when the verdict arrives, until the reader switches", () => {
-    render({ summaryAvailable: false });
+  it("opens the summary when it is on its way, unless the reader chose Changes", () => {
+    render({ summaryAvailable: false, waitingFor: "b" });
+    expect(byTestId("arena-summary-waiting")).not.toBeNull();
+    render({ summaryAvailable: true });
+    expect(container.textContent).toContain("The judge's report");
+    expect(byTestId("arena-inline-diff")).toBeNull();
+
+    useArenaReviewStore.setState({ byTurn: {} });
+    render({ summaryAvailable: false, waitingFor: "b" });
+    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
     expect(byTestId("arena-inline-diff")).not.toBeNull();
     render({ summaryAvailable: true });
     expect(byTestId("arena-inline-diff")).not.toBeNull();
     expect(container.textContent).not.toContain("The judge's report");
-    act(() => fireEvent.click(byTestId("arena-review-tab-verdict") as HTMLElement));
-    expect(container.textContent).toContain("The judge's report");
-    expect(byTestId("arena-inline-diff")).toBeNull();
+  });
+
+  it("reviews the first result while the other side still works", () => {
+    render({ summaryAvailable: false, waitingFor: "b" });
+    expect(byTestId("arena-review-tabs")).not.toBeNull();
+    // The summary tab opens first and says who is still at it.
+    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.shownTab).toBe("verdict");
+    expect(byTestId("arena-summary-waiting")?.textContent).toBe(
+      "Agent B is still working. The difference summary compares both results once it finishes.",
+    );
+
+    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
+    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.shownTab).toBe("changes");
+    // A's counts beside B's "working"; no verdict on a pair that is not in yet.
+    const row = byTestId("arena-changes-row-main.py");
+    expect(row?.textContent).toContain("working");
+    expect(row?.textContent).not.toContain("unchanged");
+    expect(container.textContent).not.toContain("diverging");
+    expect(byTestId("arena-diff-layout")).not.toBeNull();
+    // jsdom measures no width, so the card opens in one column: B's slot is one line per region.
+    expect(byTestId("arena-diff-pending-b")?.textContent).toBe(
+      "Agent Bis still working · its version of this region appears here",
+    );
+    // Side by side, B's column is one placeholder beside A's diff; only A expands.
+    act(() => fireEvent.click(byTestId("arena-diff-layout-split") as HTMLElement));
+    expect(byTestId("arena-diff-pending-b")?.textContent).toBe(
+      "Agent B is still workingIts version of this file appears here when it finishes.",
+    );
+    expect(container.textContent).toContain("y = 20");
+    expect(container.textContent).not.toContain("y = 200");
+    expect(container.querySelector('[aria-label="Expand Agent A"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Expand Agent B"]')).toBeNull();
+  });
+
+  it("keeps the file it opened on the first result open once both are in", () => {
+    const files = ["src/f0.py", "src/f1.py"];
+    const firstResult = comparisonDiff({
+      files: files.map((file) =>
+        threeWayFile({ file, base: "x = 1\n", a: "x = 2\n", b: "x = 1\n" }),
+      ),
+      divergence: files.map((file) => ({ file, status: "only_a" as const })),
+    });
+    render({ summaryAvailable: false, waitingFor: "b", diff: firstResult });
+    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
+    expect(byTestId("arena-changes-diff-src/f0.py")).not.toBeNull();
+
+    // Both results make src/f1.py the first diverging file, which would be the default.
+    render({ summaryAvailable: true, diff: manyFiles(2, 1) });
+    expect(byTestId("arena-changes-diff-src/f0.py")).not.toBeNull();
+    expect(byTestId("arena-changes-diff-src/f1.py")).toBeNull();
+  });
+
+  it("says so when the finished side changed nothing", () => {
+    render({
+      summaryAvailable: false,
+      waitingFor: "a",
+      diff: comparisonDiff({ treesEqual: true, files: [], divergence: [] }),
+    });
+    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
+    expect(byTestId("arena-changes-none")?.textContent).toBe(
+      "Agent B made no changes · Agent A is still working",
+    );
+    expect(container.textContent).not.toContain("Results are identical");
   });
 
   it("shows a short verdict whole, with nothing to unfold", () => {
@@ -263,6 +342,14 @@ describe("BattleReview", () => {
     expect(rows()).toHaveLength(9);
     expect(byTestId("arena-changes-diff-src/f11.py")).not.toBeNull();
     expect(more().textContent).toContain("Show 3 more files");
+  });
+
+  it("counts every file the battle changed, past the rows it shows", () => {
+    render({ summaryAvailable: false, diff: manyFiles(30) });
+    expect(container.textContent).toContain("Changes (30)");
+    expect((byTestId("arena-changes-more") as HTMLElement).textContent).toContain(
+      "Show 22 more files",
+    );
   });
 
   it("opens on a diverging file deep in the list without showing every row above it", () => {

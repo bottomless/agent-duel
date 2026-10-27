@@ -264,6 +264,122 @@ describe("Arena fork", () => {
     }),
   )
 
+
+  it.live("hides older tool output the copy can produce again, keeping it stored and in the source", () =>
+    Effect.gen(function* () {
+      const { root, worktree } = yield* prepareRepository()
+      const sessions = yield* Session.Service
+      const source = yield* provideInstance(root)(sessions.create({ title: "source" }))
+      yield* seedHistory(source.id, root).pipe(provideInstance(root))
+      const seeded = yield* sessions.messages({ sessionID: source.id })
+      const user = seeded.find((message) => message.info.role === "user")
+      const assistant = seeded.find((message) => message.info.role === "assistant")
+      if (!user || !assistant) return yield* Effect.fail(new Error("Seeded messages missing"))
+      const upload = path.join(path.dirname(root), "uploads", "upload-1", "server.log")
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: user.info.id,
+        sessionID: source.id,
+        type: "text",
+        text: ["Uploaded file: server.log", `Path: ${upload}`, "MIME: text/plain", "Size: 12 bytes"].join("\n"),
+      })
+      const calls: ReadonlyArray<
+        readonly [
+          callID: string,
+          tool: string,
+          input: Record<string, unknown>,
+          state: "completed" | "error" | "interrupted",
+        ]
+      > = [
+        ["call-skill", "skill", { name: "review" }, "completed"],
+        ["call-question", "question", { questions: [{ question: "Postgres or SQLite?" }] }, "completed"],
+        ["call-task", "task", { description: "survey", prompt: "survey the API" }, "completed"],
+        ["call-mcp", "github_get_issue", { number: 7 }, "completed"],
+        ["call-upload", "read", { filePath: upload }, "completed"],
+        ["call-upload-shell", "bash", { command: `tail -n 50 ${upload}` }, "completed"],
+        ["call-outside", "grep", { pattern: "TODO", path: path.dirname(root) }, "completed"],
+        ["call-read", "read", { filePath: path.join(root, "src", "index.ts") }, "completed"],
+        ["call-bash", "bash", { command: "bun test" }, "completed"],
+        ["call-failed", "bash", { command: "false" }, "error"],
+        ["call-interrupted", "bash", { command: "bun run dev" }, "interrupted"],
+        ["call-interrupted-question", "question", { questions: [] }, "interrupted"],
+      ]
+      for (const [callID, tool, input, state] of calls) {
+        const time = { start: Date.now(), end: Date.now() }
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.info.id,
+          sessionID: source.id,
+          type: "tool",
+          callID,
+          tool,
+          state:
+            state === "completed"
+              ? { status: state, input, output: `${callID} output`, title: tool, metadata: {}, time }
+              : {
+                  status: "error",
+                  input,
+                  error: "Tool execution aborted",
+                  ...(state === "interrupted"
+                    ? { metadata: { interrupted: true, output: `${callID} partial output` } }
+                    : {}),
+                  time,
+                },
+        })
+      }
+      // The second turn, whose output stays.
+      yield* seedHistory(source.id, root).pipe(provideInstance(root))
+      const before = yield* sessions.messages({ sessionID: source.id })
+      const boundary = before.findLast((message) => message.info.role === "user")!.info.id
+
+      const forked = yield* forkSessionInto({
+        sessionID: source.id,
+        destination: worktree,
+        pathMode: "transcript",
+        pruneToolOutputBefore: MessageID.make(boundary),
+      })
+
+      const tools = (yield* sessions.messages({ sessionID: forked.id })).flatMap((message) =>
+        message.parts.flatMap((part) => (part.type === "tool" ? [part] : [])),
+      )
+      expect(
+        tools.map((part) => [
+          part.callID,
+          part.state.status === "completed"
+            ? part.state.time.compacted === undefined
+              ? part.state.output
+              : "cleared"
+            : part.state.status === "error"
+              ? (part.state.metadata?.output ?? part.state.error)
+              : part.state.status,
+        ]),
+      ).toEqual([
+        ["call-write", "cleared"],
+        // Only these hold what the copy cannot get again.
+        ["call-skill", "call-skill output"],
+        ["call-question", "call-question output"],
+        ["call-task", "call-task output"],
+        ["call-mcp", "call-mcp output"],
+        ["call-upload", "call-upload output"],
+        ["call-upload-shell", "call-upload-shell output"],
+        ["call-outside", "call-outside output"],
+        ["call-read", "cleared"],
+        ["call-bash", "cleared"],
+        ["call-failed", "Tool execution aborted"],
+        ["call-interrupted", "[Old tool result content cleared]"],
+        ["call-interrupted-question", "call-interrupted-question partial output"],
+        ["call-write", `Wrote ${path.join(root, "src", "index.ts")}`],
+      ])
+      // A cleared output stays stored.
+      expect(tools.flatMap((part) => (part.state.status === "completed" ? [part.state.output] : []))).toEqual([
+        `Wrote ${path.join(root, "src", "index.ts")}`,
+        ...calls.flatMap(([callID, , , state]) => (state === "completed" ? [`${callID} output`] : [])),
+        `Wrote ${path.join(root, "src", "index.ts")}`,
+      ])
+      expect(yield* sessions.messages({ sessionID: source.id })).toEqual(before)
+    }),
+  )
+
   it.live("maps a session opened in a subdirectory onto the destination's top level", () =>
     Effect.gen(function* () {
       const { root, worktree } = yield* prepareRepository()

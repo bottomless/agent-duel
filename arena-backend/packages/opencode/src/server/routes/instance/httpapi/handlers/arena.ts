@@ -92,6 +92,7 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
         ),
       )
       .handle("diff", (ctx) => map(arena.diff(ctx.params.turnID)))
+      .handle("fileDiff", (ctx) => map(arena.fileDiff(ctx.params.turnID, ctx.query.path)))
       .handle("inspect", (ctx) => map(arena.inspect(ctx.params.chatID, ctx.params.turnID, ctx.params.side)))
       .handle("inspectTree", (ctx) => map(arena.inspectTree(ctx.params.chatID, ctx.params.turnID, ctx.params.side)))
       .handle("inspectFile", (ctx) =>
@@ -121,6 +122,7 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
       .handle("interruptSteer", (ctx) => map(arena.interruptSteer(ctx.params.runID, ctx.params.messageID)))
       .handle("discardSteer", (ctx) => map(arena.discardSteer(ctx.params.runID, ctx.payload.messageIDs)))
       .handle("retryRun", (ctx) => map(arena.retryRun(ctx.params.runID)))
+      .handle("resumeBattle", (ctx) => map(arena.resumeBattle(ctx.params.turnID)))
       .handle("reply", (ctx) =>
         map(arena.reply(ctx.params.turnID, ctx.payload.prompt, ctx.payload.target, ctx.payload.attachments)),
       )

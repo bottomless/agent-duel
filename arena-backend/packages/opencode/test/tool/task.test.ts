@@ -212,6 +212,116 @@ describe("tool.task", () => {
     }),
   )
 
+  it.instance("Arena background results keep the parent's system text", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const jobs = yield* BackgroundJob.Service
+      const { chat, assistant } = yield* seed()
+      // The request takes its system text from the last user message; the result becomes that message.
+      yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: { providerID: ProviderV2.ID.make("arena"), modelID: ModelV2.ID.make("contestant") },
+        system: "Arena contestant instruction",
+        time: { created: Date.now() },
+      })
+      const arenaAssistant = yield* sessions.updateMessage({
+        ...assistant,
+        id: MessageID.ascending(),
+        providerID: ProviderV2.ID.make("arena"),
+        modelID: ModelV2.ID.make("contestant"),
+      })
+      const notifications: SessionPrompt.PromptInput[] = []
+      const promptOps: TaskPromptOps = {
+        ...stubOps(),
+        prompt: (input) =>
+          Effect.sync(() => {
+            if (input.sessionID === chat.id) notifications.push(input)
+            return reply(input, "child finished")
+          }),
+      }
+      const def = yield* (yield* TaskTool).init()
+      const result = yield* def.execute(
+        { description: "child", prompt: "child", subagent_type: "general" },
+        {
+          sessionID: chat.id,
+          messageID: arenaAssistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      yield* jobs.wait({ id: result.metadata.sessionId })
+      expect(notifications).toHaveLength(1)
+      expect(notifications[0]?.system).toBe("Arena contestant instruction")
+    }),
+  )
+
+  it.instance("Arena background results carry no system after a single-agent prompt without one", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const jobs = yield* BackgroundJob.Service
+      const { chat, assistant } = yield* seed()
+      const arena = { providerID: ProviderV2.ID.make("arena"), modelID: ModelV2.ID.make("contestant") }
+      // A vote grafts the winner's prompt, its contestant system included, into the canonical session.
+      yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: arena,
+        system: "Arena contestant instruction",
+        time: { created: Date.now() },
+      })
+      // A later single-agent prompt in that session carries no system.
+      yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: arena,
+        time: { created: Date.now() },
+      })
+      const arenaAssistant = yield* sessions.updateMessage({
+        ...assistant,
+        id: MessageID.ascending(),
+        providerID: arena.providerID,
+        modelID: arena.modelID,
+      })
+      const notifications: SessionPrompt.PromptInput[] = []
+      const promptOps: TaskPromptOps = {
+        ...stubOps(),
+        prompt: (input) =>
+          Effect.sync(() => {
+            if (input.sessionID === chat.id) notifications.push(input)
+            return reply(input, "child finished")
+          }),
+      }
+      const def = yield* (yield* TaskTool).init()
+      const result = yield* def.execute(
+        { description: "child", prompt: "child", subagent_type: "general" },
+        {
+          sessionID: chat.id,
+          messageID: arenaAssistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      yield* jobs.wait({ id: result.metadata.sessionId })
+      expect(notifications).toHaveLength(1)
+      expect(notifications[0]?.system).toBeUndefined()
+    }),
+  )
+
   it.instance(
     "description sorts subagents by name and is stable across calls",
     () =>

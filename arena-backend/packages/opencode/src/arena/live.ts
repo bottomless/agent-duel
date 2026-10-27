@@ -1,5 +1,6 @@
 import { RESEARCH_IMAGE_REFERENCE } from "@agent-duel/arena-service/research-protocol"
 import { ArenaPrivacy } from "./privacy"
+import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 
 export interface LiveBinding {
   readonly runID: string
@@ -35,12 +36,14 @@ export function readRecord(value: unknown): Record<string, unknown> | undefined 
 }
 
 /**
- * A tool result's attachments, the screenshots and PDFs a contestant reads, go to the model, but the
- * app shows none of them. Sent along, a run that read many put one snapshot past the daemon's 64 MiB
- * socket limit, and the window lost its connection after a vote or a reply. The rest is kept.
+ * Keep legacy reasoning private too: the cloud shield protects new requests, while old archives
+ * still contain plaintext. Tool attachment data is omitted to stay below the daemon socket limit.
  */
-export function withoutAttachmentData<T>(part: T): T {
+export function publicPart<T>(part: T): T {
   const record = readRecord(part)
+  if (record?.type === "reasoning" || record?.type === "thought") {
+    return { ...record, text: REDACTED_THINKING, metadata: undefined } as T
+  }
   const state = readRecord(record?.state)
   if (record?.type !== "tool" || !state || !Array.isArray(state.attachments)) return part
   const attachments = state.attachments.map((attachment) => {
@@ -162,7 +165,7 @@ export class ArenaLive {
       const message = readMessage(properties.info)
       if (message) change = { kind: "message", runId, message }
     } else if (type === "message.part.updated") {
-      const part = readPart(properties.part)
+      const part = readPart(publicPart(properties.part))
       if (!part) return
       const time = readRecord(part.time)
       if ((part.type === "text" || part.type === "reasoning") && typeof time?.end !== "number") {
@@ -170,7 +173,7 @@ export class ArenaLive {
         current.set(part.id, part)
         this.pending.set(runId, current)
       } else this.pending.get(runId)?.delete(part.id)
-      change = { kind: "part", runId, part: withPartPreviews(withoutAttachmentData(part)) }
+      change = { kind: "part", runId, part: withPartPreviews(part) }
     } else if (type === "message.part.delta") {
       if (properties.field !== "text" || typeof properties.delta !== "string" || typeof properties.partID !== "string")
         return
@@ -178,6 +181,16 @@ export class ArenaLive {
       const previous = current?.get(properties.partID)
       if (!current || !previous || typeof previous.text !== "string") {
         this.dirty()
+        return
+      }
+      if (previous.type === "reasoning" || previous.type === "thought") {
+        const redacted: LiveChange = { kind: "part", runId, part: previous }
+        this.emit({
+          turnID: binding.turnID,
+          rootSessionID: binding.rootSessionID,
+          change: redacted,
+          replacement: redacted,
+        })
         return
       }
       const part = { ...previous, text: previous.text + properties.delta }

@@ -389,7 +389,7 @@ describe("Arena producing run", () => {
       _id: "turn_2",
       appliedSide: "b",
       canonicalUserMessageID: "msg_020",
-      canonicalGraftedThroughMessageID: "msg_025",
+      canonicalLastMessageID: "msg_025",
     },
     { _id: "turn_3", canonicalUserMessageID: "msg_030" },
     { _id: "turn_4", appliedSide: "a" },
@@ -397,7 +397,7 @@ describe("Arena producing run", () => {
       _id: "turn_5",
       appliedSide: "b",
       canonicalUserMessageID: "msg_040",
-      canonicalGraftedThroughMessageID: "msg_045",
+      canonicalLastMessageID: "msg_045",
     },
   ]
   const route = (alias: "PASEO_PORT" | "PASEO_PORT2", url: string) => ({ hostname: "h", alias, url, active: false })

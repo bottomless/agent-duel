@@ -988,6 +988,30 @@ describe("session.message-v2.toModelMessage", () => {
     expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([])
   })
 
+  test("leaves Arena-redacted reasoning out of another model's history", async () => {
+    const assistantID = "m-assistant-redacted"
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "m-parent", undefined, { providerID: "arena", modelID: "contestant" }),
+        parts: [
+          { ...basePart(assistantID, "r1"), type: "reasoning", text: "[Thinking redacted]", time: { start: 0 } },
+          { ...basePart(assistantID, "r2"), type: "reasoning", text: "Legacy plan", time: { start: 0 } },
+          { ...basePart(assistantID, "r3"), type: "text", text: "Done" },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Legacy plan" },
+          { type: "text", text: "Done" },
+        ],
+      },
+    ])
+  })
+
   test("includes aborted assistant messages only when they have non-step-start/reasoning content", async () => {
     const assistantID1 = "m-assistant-1"
     const assistantID2 = "m-assistant-2"

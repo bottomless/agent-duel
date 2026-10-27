@@ -37,7 +37,9 @@ To build against another control plane, set both `PASEO_CONTROL_PLANE_URL` and
 with, so change them only together with a release.
 
 Builds leave `PASEO_DESKTOP_UPDATES_ENABLED` unset, which disables update checks. Set it to `1` only
-for an artifact you publish to the update feed configured in `packages/desktop/electron-builder.yml`.
+for an artifact you publish to the update feed configured in `packages/desktop/electron-builder.yml`;
+the Desktop Release workflow sets it. How the updates reach users is in
+[desktop-releases.md](desktop-releases.md#in-app-updates).
 
 A build without a control plane sets `PASEO_BYOK_BUILD=1` instead of the two control-plane
 values. The build writes neither into the deployment configuration and the packaged daemon starts

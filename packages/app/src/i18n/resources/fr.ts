@@ -660,6 +660,22 @@ export const fr: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "Se connecter à {{host}}",
+        title: "Connexion requise",
+        description:
+          "Agent Duel ne peut pas récupérer les mises à jour de {{host}} sans identifiants.",
+        sshDescription:
+          "{{host}} n'a pas accepté votre clé SSH : Agent Duel ne peut pas récupérer les mises à jour. Chargez la clé avec ssh-add ou ajoutez-la à votre compte sur {{host}}.",
+        username: "Nom d'utilisateur",
+        password: "Mot de passe ou jeton",
+        signIn: "Se connecter",
+        signingIn: "Connexion...",
+        signedIn: "Connecté à {{host}}",
+        loginNotKept:
+          "Connecté, mais Git n'a pas conservé les identifiants : la prochaine récupération les redemandera. Pour les conserver, configurez un assistant d'identifiants Git ou passez origin en SSH.",
+        failed: "Échec de la connexion : {{reason}}",
+      },
       actions: {
         moreOptions: "Plus d'options",
         moreActions: "Plus de propositions",
@@ -818,6 +834,7 @@ export const fr: TranslationResources = {
           title: "Archiver «{{workspaceName}}»?",
           confirm: "Archive",
           cancel: "Annuler",
+          message: "La conversation passe dans Archivées, où vous pourrez la désarchiver.",
           uncommittedChanges: "Modifications non validées",
           uncommittedChangesWithDiff: "Modifications non validées ({{diffStat}})",
           addedLine: "Ligne ajoutée{{count}}",

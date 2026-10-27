@@ -109,6 +109,16 @@ export const feedbackContextStreamTimelineSchema = z
   .strict();
 export type FeedbackContextStreamTimeline = z.infer<typeof feedbackContextStreamTimelineSchema>;
 
+export const feedbackContextCompletionSchema = z
+  .object({
+    feedbackId: z.uuid(),
+    attempt: z.number().int().positive().max(feedbackContextMaximumAttempts),
+    pathname: z.string().min(1).max(512),
+    transfer: feedbackContextTransferSchema,
+  })
+  .strict();
+export type FeedbackContextCompletion = z.infer<typeof feedbackContextCompletionSchema>;
+
 export const feedbackContextFailureSchema = z
   .object({
     feedbackId: z.uuid(),

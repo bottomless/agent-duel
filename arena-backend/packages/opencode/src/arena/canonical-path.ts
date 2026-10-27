@@ -1,7 +1,16 @@
 import { rewritePathCommand } from "./path-command"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { isolatedRoot, LOCAL_STATE_DIRNAME } from "@/worktree/layout"
+import { SLOT_PATH_PATTERN } from "./domain"
 
 type CanonicalPaths = { readonly worktrees: readonly string[]; readonly canonical: string }
+
+/**
+ * What a winner's transcript can name that will be gone, or someone else's, by the next turn: the
+ * contestant temp directories under `temp`, and every Arena worktree inside the checkout. `home`
+ * adds the `~` and `$HOME` spellings of the checkout.
+ */
+type ArenaRoots = CanonicalPaths & { readonly temp: string; readonly home?: string }
 type LocalPaths = { readonly canonical: string; readonly worktree: string }
 
 // These helpers accept declared path values, not commands or serialized transcript text.
@@ -44,13 +53,40 @@ export function localizeCanonicalCommand(command: string, input: LocalPaths) {
   return rewritePathCommand(command, (path) => localizeCanonicalPaths(path, input))
 }
 
-export async function canonicalizeTranscriptPaths<T>(value: T, input: CanonicalPaths, role?: string): Promise<T> {
-  return transcript(
+/**
+ * The winner's transcript as the chat keeps it. Declared paths are retargeted field by field, then
+ * every other string the model will read again, tool output and reasoning included, has its Arena
+ * references replaced (`retargetArenaReferences`), so no later turn is handed a path into a worktree
+ * that is gone, recycled into another side's, or the other side's own. Text the user typed stays as
+ * written. A subagent's user messages are the prompts its parent model wrote with `task`, not text
+ * the user typed, so `subagent` rewrites them like the rest of the transcript.
+ */
+export async function canonicalizeTranscriptPaths<T>(
+  value: T,
+  input: ArenaRoots,
+  role?: string,
+  options?: { readonly subagent?: boolean },
+): Promise<T> {
+  const declared = await transcript(
     value,
     (path) => canonicalizeWorktreePaths(path, input),
     (text) => rewritePathReferences(text, input.worktrees, input.canonical),
     role,
   )
+  if (
+    !options?.subagent &&
+    plainObject(declared) &&
+    declared.type === "text" &&
+    role === "user" &&
+    declared.synthetic !== true
+  ) {
+    return declared
+  }
+  const references = arenaReferences(input)
+  return deepRewrite(declared, (text) => {
+    if (encodedBytes(text)) return text
+    return references(rewritePathReferences(text, input.worktrees, input.canonical))
+  }) as T
 }
 
 export async function localizeTranscriptPaths<T>(value: T, input: LocalPaths, role?: string): Promise<T> {
@@ -152,6 +188,55 @@ async function transcript<T>(
   }
 }
 
+/**
+ * Replaces what a transcript string names of Arena's own: a worktree slot of the checkout's pool
+ * (`<checkout>/.agent-duel/worktrees/<chat>/<slot>`, any turn, either side, spare) becomes the
+ * checkout, its host repository (`<slot>.git`) the checkout's `.git`, and a contestant temp
+ * directory `$TMPDIR`, since the next side has its own and the old one is deleted with its run.
+ * Matched wherever they appear: after `file://`, under `/private`, behind `../`, or spelled from
+ * `~` or `$HOME`. The pool's own directory, which names no slot, is left as it is.
+ */
+function arenaReferences(input: ArenaRoots): (text: string) => string {
+  const pool = isolatedRoot(input.canonical).slice(input.canonical.length)
+  const spellings = [
+    privateOptional(input.canonical),
+    ...(input.home && input.canonical.startsWith(input.home + "/")
+      ? ["~", "\\$HOME", "\\$\\{HOME\\}"].map((home) => home + escapeRegExp(input.canonical.slice(input.home!.length)))
+      : []),
+    ...(encodeURI(input.canonical) === input.canonical ? [] : [escapeRegExp(encodeURI(input.canonical))]),
+  ]
+  // The name ends the match, not the next separator: a sentence's `.` or a JSON string's `\n`
+  // right after a slot stays in the text.
+  const slot = new RegExp(
+    `(?:${spellings.join("|")})${escapeRegExp(pool)}/${SLOT_PATH_PATTERN}(\\.git)?(?![\\w-])`,
+    "g",
+  )
+  const temp = new RegExp(`${privateOptional(input.temp)}/ses_[0-9A-Za-z]+(?![0-9A-Za-z])`, "g")
+  return (text) =>
+    text
+      .replace(slot, (_match, git: string | undefined) => (git ? `${input.canonical}/.git` : input.canonical))
+      .replace(temp, () => "$TMPDIR")
+}
+
+// macOS reports `/tmp` and `/var` paths under `/private` as well; match a path in either spelling.
+function privateOptional(directory: string) {
+  const bare = directory.replace(/^\/private(?=\/(?:tmp|var)\/)/, "")
+  return /^\/(?:tmp|var)\//.test(bare) ? `(?:/private)?${escapeRegExp(bare)}` : escapeRegExp(bare)
+}
+
+// Returns `value` itself when nothing in it changed.
+function deepRewrite(value: unknown, text: (value: string) => string): unknown {
+  if (typeof value === "string") return text(value)
+  if (Array.isArray(value)) {
+    const next = value.map((entry) => deepRewrite(entry, text))
+    return next.some((entry, index) => entry !== value[index]) ? next : value
+  }
+  if (!plainObject(value)) return value
+  const entries = Object.entries(value).map(([key, entry]) => [key, entry, deepRewrite(entry, text)] as const)
+  if (entries.every(([, before, after]) => before === after)) return value
+  return Object.fromEntries(entries.map(([key, , after]) => [key, after]))
+}
+
 function pathRoots(worktrees: readonly string[]) {
   const roots = worktrees.filter(Boolean).toSorted((left, right) => right.length - left.length)
   return roots.length ? roots : undefined
@@ -164,6 +249,9 @@ function mapPath(value: string, roots: readonly string[], destination: string): 
     const suffix = value.slice(root.length)
     // Resolving .. across a relocated root (or a symlink) can change which directory it names.
     if (suffix.split("/").includes("..")) return value
+    // Arena's own state is not part of the tree a root maps to: a checkout path into its worktree
+    // pool would become a path inside the contestant's own worktree that does not exist.
+    if (suffix === `/${LOCAL_STATE_DIRNAME}` || suffix.startsWith(`/${LOCAL_STATE_DIRNAME}/`)) return value
     return root === "/" ? `${destination.replace(/\/$/, "")}/${suffix}` : destination + suffix
   }
   return value
@@ -211,6 +299,16 @@ function rewrite(value: unknown, roots: readonly string[], canonical: string): u
   if (Array.isArray(value)) return value.map((entry) => rewrite(entry, roots, canonical))
   if (!plainObject(value)) return value
   return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, rewrite(entry, roots, canonical)]))
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+// A data URL carries encoded bytes, a screenshot a contestant read for one. Rewriting text inside it
+// corrupts the image, so every later battle of the chat would send an image no provider decodes.
+function encodedBytes(value: string) {
+  return value.startsWith("data:")
 }
 
 // Anything with a non-trivial prototype (Date, Uint8Array, BSON values) is passed through untouched

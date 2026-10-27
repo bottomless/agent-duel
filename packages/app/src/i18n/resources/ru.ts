@@ -658,6 +658,21 @@ export const ru: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "Войти в {{host}}",
+        title: "Требуется вход",
+        description: "Agent Duel не может получать обновления с {{host}} без входа.",
+        sshDescription:
+          "{{host}} не принял ваш SSH-ключ, поэтому Agent Duel не может получать обновления. Загрузите ключ через ssh-add или добавьте его в свой аккаунт на {{host}}.",
+        username: "Имя пользователя",
+        password: "Пароль или токен",
+        signIn: "Войти",
+        signingIn: "Вход...",
+        signedIn: "Выполнен вход в {{host}}",
+        loginNotKept:
+          "Вход выполнен, но Git не сохранил учётные данные, поэтому при следующем получении они понадобятся снова. Чтобы сохранить их, настройте помощник учётных данных Git или переключите origin на SSH.",
+        failed: "Не удалось войти: {{reason}}",
+      },
       actions: {
         moreOptions: "Больше возможностей",
         moreActions: "Дополнительные действия",
@@ -809,6 +824,7 @@ export const ru: TranslationResources = {
           title: 'Архив "{{workspaceName}}"?',
           confirm: "Архив",
           cancel: "Отмена",
+          message: "Чат переместится в Архив, где его можно разархивировать.",
           uncommittedChanges: "Незафиксированные изменения",
           uncommittedChangesWithDiff: "Незафиксированные изменения ({{diffStat}})",
           addedLine: "{{count}}добавлена ​​строка",

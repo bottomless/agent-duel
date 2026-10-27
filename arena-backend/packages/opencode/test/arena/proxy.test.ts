@@ -208,7 +208,7 @@ describe("ArenaProxy", () => {
 
       const body = await response.text()
       expect(body).toContain(JSON.stringify(payload.choices))
-      expect(body).toEndWith("data: [DONE]")
+      expect(body).toEndWith("data: [DONE]\n\n")
       expect(body).not.toContain("private-")
       expect(recorded.join("")).toBe(body)
       expect(completed).toBe(1)
@@ -729,7 +729,18 @@ describe("ArenaProxy", () => {
   })
 
   test("restarts a request after a mid-answer connection break, transient OpenRouter error, or cut-off", async () => {
-    for (const failure of ["transport", "openrouter", "cut-off"] as const) {
+    const partial = 'data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n'
+    // A slow connection ends wherever the bytes ran out, not on an event boundary.
+    const cases = [
+      { failure: "transport", sent: partial },
+      { failure: "openrouter", sent: partial },
+      { failure: "cut-off", sent: partial },
+      { failure: "cut-off", sent: `${partial}data: {"choi` },
+      { failure: "cut-off", sent: partial.slice(0, -1) },
+      { failure: "transport", sent: `${partial}data: {"choi` },
+      { failure: "transport", sent: partial.slice(0, -1) },
+    ] as const
+    for (const { failure, sent } of cases) {
       const registry = new AssignmentRegistry()
       registry.assign("session-root", assignment)
       let calls = 0
@@ -788,11 +799,7 @@ describe("ArenaProxy", () => {
                           return (controller: ReadableStreamDefaultController<Uint8Array>) => {
                             if (first) {
                               first = false
-                              controller.enqueue(
-                                new TextEncoder().encode(
-                                  'data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n',
-                                ),
-                              )
+                              controller.enqueue(new TextEncoder().encode(sent))
                               return
                             }
                             if (failure === "transport") controller.error(new Error("private network failure"))
@@ -839,11 +846,10 @@ describe("ArenaProxy", () => {
           ),
         ),
       )
-      expect(answer).toBe("complete")
-      expect(calls).toBe(2)
+      expect({ failure, sent, answer, calls }).toEqual({ failure, sent, answer: "complete", calls: 2 })
     }
     // Each case waits out the real first retry backoff.
-  }, 15_000)
+  }, 30_000)
 
   test("waits out an offline machine and resumes the same request once the network is back", async () => {
     const registry = new AssignmentRegistry()

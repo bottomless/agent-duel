@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { describe, expect, test } from "bun:test"
 import { createArenaService, type Fetch, type ModelPool } from "@agent-duel/arena-service"
-import { comparisonModel } from "@agent-duel/arena-service/utility-model"
+import { utilityModels } from "@agent-duel/arena-service/utility-model"
 import { connectLocalStore } from "@/arena/local-store"
 
 // Same three profiles as the control plane's development pool, so the
@@ -93,6 +93,7 @@ async function localService(input: { readonly ids: string[]; readonly random: nu
     return response
   }
   return {
+    db: store.db,
     upstream,
     validatedKeys,
     assignments: (body: unknown) =>
@@ -168,10 +169,17 @@ describe("Arena service on the desktop SQLite local store", () => {
         stream: false,
         reasoning: { effort: "high" },
         provider: glm.routing,
+        session_id: "assignment-a",
+        prompt_cache_key: "assignment-a",
         stream_options: { include_usage: true },
       },
     })
-    expect(arena.upstream[1]?.body).toMatchObject({ model: grok.slug, provider: grok.routing })
+    expect(arena.upstream[1]?.body).toMatchObject({
+      model: grok.slug,
+      provider: grok.routing,
+      session_id: "assignment-b",
+      prompt_cache_key: "assignment-b",
+    })
 
     const unknown = await arena.contestant("turn-1", "assignment-unknown")
     expect(unknown.status).toBe(403)
@@ -180,7 +188,7 @@ describe("Arena service on the desktop SQLite local store", () => {
     const comparison = await arena.comparison("turn-1")
     expect(comparison.status).toBe(200)
     expect(arena.upstream).toHaveLength(3)
-    expect(arena.upstream[2]?.body).toMatchObject({ model: comparisonModel.id, provider: comparisonModel.routing })
+    expect(arena.upstream[2]?.body).toMatchObject({ model: utilityModels[0].id, provider: utilityModels[0].routing })
 
     const resolved = await arena.assignments({
       action: "resolve",
@@ -189,7 +197,12 @@ describe("Arena service on the desktop SQLite local store", () => {
       decision: "select:b",
     })
     expect(resolved.status).toBe(200)
-    expect(await resolved.json()).toMatchObject({
+    // The control plane keeps the provider that served each call; the reveal returns usage only.
+    const stored = await arena.db.collection("arenaAssignmentGenerationMetrics").find({ scopeID: "turn-1" }).toArray()
+    expect(stored.map((item) => item.provider)).toEqual(["hidden-provider", "hidden-provider"])
+    const revealed = await resolved.json()
+    expect(JSON.stringify(revealed)).not.toContain("hidden-provider")
+    expect(revealed).toMatchObject({
       decision: "select:b",
       assignments: [
         {

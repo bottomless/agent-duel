@@ -656,6 +656,21 @@ export const ja: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "{{host}} にサインイン",
+        title: "サインインが必要です",
+        description: "Agent Duel はログインなしでは {{host}} から更新を取得できません。",
+        sshDescription:
+          "{{host}} が SSH キーを受け付けなかったため、Agent Duel は更新を取得できません。ssh-add でキーを読み込むか、{{host}} のアカウントにキーを追加してください。",
+        username: "ユーザー名",
+        password: "パスワードまたはトークン",
+        signIn: "サインイン",
+        signingIn: "サインイン中...",
+        signedIn: "{{host}} にサインインしました",
+        loginNotKept:
+          "サインインしましたが、Git がログインを保存しなかったため、次回の取得で再度必要になります。保存するには Git の認証情報ヘルパーを設定するか、origin を SSH に切り替えてください。",
+        failed: "サインインに失敗しました: {{reason}}",
+      },
       actions: {
         moreOptions: "その他のオプション",
         moreActions: "その他のアクション",
@@ -799,6 +814,7 @@ export const ja: TranslationResources = {
           title: '"{{workspaceName}}"をアーカイブしますか？',
           confirm: "アーカイブ",
           cancel: "キャンセル",
+          message: "チャットはアーカイブ済みに移動し、そこでアーカイブ解除できます。",
           uncommittedChanges: "未コミットの変更",
           uncommittedChangesWithDiff: "未コミットの変更（{{diffStat}}）",
           addedLine: "{{count}}行追加",

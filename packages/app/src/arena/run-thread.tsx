@@ -12,7 +12,6 @@ import {
 } from "@/components/message";
 import { QuestionFormCard } from "@/components/question-form-card";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
-import { thinkingMarkdownParser } from "@/components/markdown/thinking-parser";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { arenaThreadMessages } from "./run-thread-selection";
 import { arenaPendingQuestions, arenaQuestionResult, type ArenaPendingQuestion } from "./question";
@@ -148,20 +147,6 @@ function ArenaPart({
   const text = typeof part.text === "string" ? part.text : "";
   if (type === "text" && text) {
     return <MarkdownRenderer text={text} compact />;
-  }
-  if ((type === "reasoning" || type === "thought") && text) {
-    // Subdued like a Thinking block, so reasoning never reads as the contestant's reply.
-    return (
-      <MarkdownRenderer
-        text={text}
-        compact
-        subdued
-        markdownit={thinkingMarkdownParser}
-        enableHtmlish={false}
-        enableDiagrams={false}
-        horizontalScrollCodeBlocks
-      />
-    );
   }
   if (type === "tool" && question && onQuestionResponse) {
     return (
@@ -412,21 +397,23 @@ function ArenaActivitySegmentView({
     awaitingResponse,
     cwd: context.run.worktree,
   });
-  const hasDetails = workEntries.length > 0;
+  const detailEntries = workEntries.filter((entry) => stringField(entry.part, "type") === "tool");
+  const hasWork = workEntries.length > 0;
+  const hasDetails = detailEntries.length > 0;
   const renderDetails = useCallback(
     () => (
       <View style={styles.workDetails}>
-        {workEntries.map((entry) => (
+        {detailEntries.map((entry) => (
           <ArenaActivityPartView key={activityPartKey(entry)} entry={entry} context={context} />
         ))}
       </View>
     ),
-    [context, workEntries],
+    [context, detailEntries],
   );
   return (
     <View style={styles.activitySegment}>
       {segment.content ? <ArenaActivityPartView entry={segment.content} context={context} /> : null}
-      {hasDetails || awaitingResponse ? (
+      {hasWork || awaitingResponse ? (
         <ExpandableBadge
           testID="arena-activity-group"
           label={presentation.label}
@@ -438,7 +425,7 @@ function ArenaActivitySegmentView({
           }
           isLoading={presentation.active}
           isError={presentation.kind === "tool" && presentation.failed}
-          isExpanded={expanded}
+          isExpanded={hasDetails && expanded}
           onToggle={hasDetails ? toggle : undefined}
           renderDetails={hasDetails ? renderDetails : undefined}
           disableOuterSpacing

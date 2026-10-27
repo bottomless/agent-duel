@@ -95,6 +95,8 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
           PASEO_WEB_PLATFORM: electron
+          # The published release is the update feed, so release builds check it.
+          PASEO_DESKTOP_UPDATES_ENABLED: "1"
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -169,8 +171,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          # Not a prerelease, even for betas: the app's default channel updates only to GitHub's
+          # latest release, which skips prereleases.
           args=(--draft --target "$GITHUB_SHA" --title "Agent Duel $RELEASE_VERSION" --generate-notes)
-          if [[ "$RELEASE_VERSION" == *-* ]]; then args+=(--prerelease); fi
           files=(packages/desktop/release/*.dmg packages/desktop/release/*.zip)
           for file in packages/desktop/release/*.blockmap packages/desktop/release/*-mac.yml; do
             if [[ -f "$file" ]]; then files+=("$file"); fi

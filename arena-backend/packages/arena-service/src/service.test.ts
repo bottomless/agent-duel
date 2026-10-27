@@ -4,7 +4,7 @@ import type { Caller } from "./context"
 import { connectMongoDb, type MongoDb } from "./mongo"
 import type { ModelPool } from "./pool"
 import { createArenaService, type ArenaService, type ArenaServiceOptions } from "./service"
-import { comparisonModel } from "./utility-model"
+import { utilityModels } from "./utility-model"
 
 const uri = process.env.OPENCODE_ARENA_MONGODB_URI
 const database = `agent_duel_service_test_${crypto.randomUUID().replaceAll("-", "")}`
@@ -99,7 +99,7 @@ function createService(overrides: Partial<ArenaServiceOptions> = {}) {
       const text = typeof raw === "string" ? raw : new TextDecoder().decode(raw as ArrayBuffer)
       const body = JSON.parse(text) as Record<string, unknown>
       upstream.push({ url: String(input), headers: new Headers(init?.headers), body })
-      if (body.model === comparisonModel.id) return Response.json({ choices: [{ message: { content: "A" } }] })
+      if (body.model === utilityModels[0].id) return Response.json({ choices: [{ message: { content: "A" } }] })
       return Response.json(
         {
           id: "provider-generation",
@@ -260,11 +260,11 @@ describe("Arena service", () => {
     expect(upstream).toHaveLength(2)
     expect(upstream[1]!.url).toBe("https://openrouter.ai/api/v1/chat/completions")
     expect(upstream[1]!.body).toEqual({
-      model: comparisonModel.id,
+      model: utilityModels[0].id,
       messages: [{ role: "user", content: "compare" }],
       temperature: 0,
-      reasoning: comparisonModel.reasoning,
-      provider: comparisonModel.routing,
+      reasoning: utilityModels[0].reasoning,
+      provider: utilityModels[0].routing,
     })
 
     const resolved = await send(

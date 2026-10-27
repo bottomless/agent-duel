@@ -38,14 +38,32 @@ separate setup steps; this workflow does not provision them.
 5. Download the DMG from the run's `signed-macos-arm64` artifact and test it on a
    Mac as a fresh download. Check launch, sign-in, and a normal battle.
 6. Open Releases, review the draft's assets and notes, and click Publish release
-   only after testing. Versions containing a hyphen are marked as prereleases.
+   only after testing. Leave "Set as a pre-release" off, including for betas.
+
+## In-app updates
+
+Release builds check the published GitHub release when they start and every 30
+minutes, download a newer version in the background and offer Install in the
+sidebar; an update the user does not install is applied when the app quits. The
+app reads `latest-mac.yml` and the ZIP from the release.
+
+- Publish is the rollout. A draft is invisible to the app, so test the draft's
+  DMG first. A published release reaches every running copy within about half an
+  hour, and there is no downgrade: fix a bad release with a newer version.
+- The default channel only follows GitHub's latest release, which excludes
+  prereleases. A release marked as a pre-release reaches nobody.
+- Builds before 0.4.0-beta.10 have updates off. Their users install a newer
+  build by hand once; later versions arrive by themselves.
+- The update's code signature must match the installed app's, so only the
+  signed Developer ID builds from this workflow can update each other. A local
+  build can check and download an update, and macOS rejects the install.
 
 The workflow fetches the complete tag history and refuses a version that is not
 newer than the highest canonical `vX.Y.Z` or `vX.Y.Z-beta.N` tag. Stable versions
 sort after beta versions for the same base version, and beta numbers use numeric
 ordering. It also refuses an existing GitHub release version. The workflow never
 publishes a release automatically. It does not deploy the hosted backend, publish
-npm packages, create Windows/Linux/Intel installers, or enable in-app automatic updates.
+npm packages, or create Windows/Linux/Intel installers.
 A failed build creates no draft release; retained artifacts may help diagnose
 failures after installer verification. Retry before a draft exists, or use a new
 version after a draft has been created.

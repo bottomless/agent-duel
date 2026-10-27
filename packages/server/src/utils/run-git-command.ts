@@ -52,6 +52,8 @@ export interface GitCommandOptions {
   timeout?: number;
   maxOutputBytes?: number;
   acceptExitCodes?: number[];
+  /** Written to the command's stdin, for commands that read their input there (`git credential`). */
+  stdin?: string;
 }
 
 export interface GitCommandResult {
@@ -371,9 +373,12 @@ export function runGitCommand(
           cwd: options.cwd,
           envOverlay,
           shell: false,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         });
         spawnGitCommandTrace(commandTrace, child.pid);
+        // Git that exits before reading its input fails on its exit code; the broken pipe is noise.
+        child.stdin?.on("error", () => undefined);
+        child.stdin?.end(options.stdin);
       } catch (error) {
         rejectSpawnFailure(error);
         return;

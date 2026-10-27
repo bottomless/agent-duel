@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { fromPrompt, project, wholePart, withinBudget } from "../../src/arena/transcript"
+import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 
 const original = process.env.OPENCODE_ARENA
 beforeEach(() => {
@@ -8,6 +9,32 @@ beforeEach(() => {
 afterEach(() => {
   if (original === undefined) delete process.env.OPENCODE_ARENA
   else process.env.OPENCODE_ARENA = original
+})
+
+test("redacts parent and descendant thinking from current and archived snapshots", () => {
+  const transcript = ["root", "child"].map((sessionID) => ({
+    info: { id: sessionID, sessionID, role: "assistant", time: { created: 1 } },
+    parts: [
+      {
+        id: `r-${sessionID}`,
+        messageID: sessionID,
+        sessionID,
+        type: "reasoning",
+        text: `Private ${sessionID} reasoning`,
+        time: { start: 1, end: 2 },
+      },
+    ],
+  }))
+  const result = project(transcript)
+  expect(result.parts.root?.[0]).toMatchObject({
+    type: "reasoning",
+    text: REDACTED_THINKING,
+    time: { start: 1, end: 2 },
+  })
+  expect(result.parts.child?.[0]).toMatchObject({ type: "reasoning", text: REDACTED_THINKING })
+  expect(JSON.stringify(result)).not.toContain("Private")
+  expect(wholePart(transcript, "r-root")).toMatchObject({ text: REDACTED_THINKING })
+  expect(transcript[0]?.parts[0]?.text).toBe("Private root reasoning")
 })
 
 test("interleaves parent and descendant transcripts and preserves blinded tool details", () => {
@@ -169,15 +196,17 @@ test("sends a pasted image without its data, and the whole part on request", () 
   })
   const message = {
     info: { id: "steer", sessionID: "root", role: "user", time: { created: 1 } },
-    parts: [
-      filePart("photo", photo),
-      filePart("icon", icon),
-      filePart("archived", "arena-image:sha256:0123"),
-    ],
+    parts: [filePart("photo", photo), filePart("icon", icon), filePart("archived", "arena-image:sha256:0123")],
   }
   const [shownPhoto, shownIcon, shownArchived] = project([message]).parts.steer as Record<string, unknown>[]
 
-  expect(shownPhoto).toMatchObject({ type: "file", mime: "image/png", filename: "photo.png", url: "", previewed: ["url"] })
+  expect(shownPhoto).toMatchObject({
+    type: "file",
+    mime: "image/png",
+    filename: "photo.png",
+    url: "",
+    previewed: ["url"],
+  })
   expect(shownIcon).toMatchObject({ url: icon })
   expect(shownIcon?.previewed).toBeUndefined()
   expect(shownArchived).toMatchObject({ url: "", previewed: ["url"] })
@@ -203,10 +232,7 @@ test("leaves out a thread's oldest messages past its limit, keeping the prompt",
   expect(Object.keys(kept.parts)).toEqual(["prompt", "second"])
   expect(kept.activityOmitted).toBe(2)
   // A run without a recorded boundary keeps its first user message, where `fromPrompt` started it.
-  expect(withinBudget(thread, "root", undefined, 3_000).messages.map((item) => item.id)).toEqual([
-    "prompt",
-    "second",
-  ])
+  expect(withinBudget(thread, "root", undefined, 3_000).messages.map((item) => item.id)).toEqual(["prompt", "second"])
 })
 
 test("keeps the messages a trimmed pane still acts on: a waiting tool call and the latest task list", () => {
@@ -243,7 +269,12 @@ test("keeps what a trimmed pane's subagent cards read: the task call and each se
   const thread = project([
     message("prompt", "root", "user", 1, [{ type: "text", text: "Do it" }]),
     message("delegate", "root", "assistant", 2, [
-      { type: "tool", tool: "task", callID: "task-1", state: { status: "completed", input: {}, metadata: { sessionId: "child" } } },
+      {
+        type: "tool",
+        tool: "task",
+        callID: "task-1",
+        state: { status: "completed", input: {}, metadata: { sessionId: "child" } },
+      },
       { type: "text", text: filler },
     ]),
     message("child-early", "child", "assistant", 3, [{ type: "text", text: filler }]),

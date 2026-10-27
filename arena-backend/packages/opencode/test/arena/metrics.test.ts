@@ -7,6 +7,7 @@ import {
   textMessageCount,
   wordCount,
 } from "@/arena/metrics"
+import { earlyResolution } from "@/arena/domain"
 import type { ChatDocument, ReviewEventDocument, RunDocument, TurnDocument } from "@/arena/records"
 
 function event(offsetMs: number, rest: Partial<ReviewEventDocument>): ReviewEventDocument {
@@ -264,6 +265,63 @@ describe("ArenaMetrics review effort", () => {
     expect(unscrollable?.deepestDiffDepth).toBeUndefined()
   })
 
+  test("counts the wait for the other side apart from the review", () => {
+    // One side finished at 0 and the other at 5s; the voter read the review for 3s.
+    const effort = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(0, { type: "battle.waiting" }),
+      event(2000, { type: "early_pick.hovered", side: "a" }),
+      event(5000, { type: "battle.settled" }),
+      event(5000, { type: "tab.viewed", tab: "changes" }),
+      event(8000, { type: "file.selected", file: "a.ts", index: 0 }),
+    ])
+    expect(effort?.waitingActiveMs).toBe(5000)
+    expect(effort?.activeMs).toBe(3000)
+    expect(effort?.earlyPicksHovered).toBe(1)
+    // The phase events are the card reporting, and a hover is the pointer.
+    expect(effort?.interactionCount).toBe(2)
+    // Counted from the review opening, as it was before the wait was recorded.
+    expect(effort?.msToFirstInteraction).toBe(0)
+  })
+
+  test("gives an early vote a review of its own", () => {
+    // Nothing settles: the voter took the early pick while the other side worked.
+    const effort = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(0, { type: "battle.waiting" }),
+      event(1500, { type: "window.blur" }),
+      event(2500, { type: "window.focus" }),
+      event(4000, { type: "early_pick.hovered", side: "b" }),
+    ])
+    expect(effort?.waitingActiveMs).toBe(3000)
+    expect(effort?.activeMs).toBe(0)
+    expect(effort?.earlyPicksHovered).toBe(1)
+    expect(effort?.votesHovered).toBe(0)
+    expect(effort?.msToFirstInteraction).toBeUndefined()
+  })
+
+  test("does not time the first interaction from an act during the wait", () => {
+    const effort = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(0, { type: "battle.waiting" }),
+      event(2000, { type: "contestant.expanded", side: "a" }),
+      event(10_000, { type: "battle.settled" }),
+      event(10_000, { type: "tab.viewed", tab: "verdict" }),
+    ])
+    expect(effort?.interactionCount).toBe(2)
+    expect(effort?.msToFirstInteraction).toBe(0)
+  })
+
+  test("does not read a card that never said it was waiting as waiting", () => {
+    // Events from before the phase was reported have a gap before the first tab
+    // too, and that gap is the comparison loading, not the early pick on offer.
+    const legacy = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(40_000, { type: "tab.viewed", tab: "verdict" }),
+    ])
+    expect(legacy?.waitingActiveMs).toBe(0)
+  })
+
   test("has nothing to say about a review that never happened", () => {
     expect(reviewEffort([])).toBeUndefined()
     const opened = reviewEffort([event(0, { type: "battle.opened" })])
@@ -458,6 +516,28 @@ describe("ArenaMetrics outcome", () => {
     expect(battle.sides.a?.won).toBe(false)
     expect(battle.sides.b?.won).toBe(false)
     expect(battle.vote).toBe("tie")
+  })
+
+  test("times every vote from the first result, early or not", () => {
+    const early = turnFor("a")
+    early.resolution = earlyResolution("a")
+    early.firstResultAt = new Date(60_000)
+    early.voteAt = new Date(64_000)
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn: early,
+      runs: [runFor("a"), runFor("b")],
+      generations: [],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.msFromFirstResultToVote).toBe(4000)
+    // Measured from `awaiting_vote`, which an early vote never reaches.
+    expect(battle).not.toHaveProperty("timeToVoteMs")
+
+    // A battle from before the stamp existed is left unknown rather than estimated.
+    expect(battleFor("a")).not.toHaveProperty("msFromFirstResultToVote")
   })
 
   test("the voted side wins", () => {

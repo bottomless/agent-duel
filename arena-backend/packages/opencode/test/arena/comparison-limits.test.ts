@@ -29,9 +29,17 @@ it.live("battle comparison handles a large rewrite with native Git", () =>
     const evidence = yield* compare({ canonical: tmp.path, baseCommit, aCommit, bCommit: baseCommit }).pipe(
       Effect.provide(LayerNode.compile(Git.node)),
     )
-    expect(evidence.stats).toEqual([{ file: "rewrite.txt", additions: 25000, deletions: 25000, binary: false }])
-    expect(evidence.divergence.files).toEqual([{ file: "rewrite.txt", status: "only_a" }])
-    expect(evidence.files).toHaveLength(1)
+    expect(evidence.files).toEqual([
+      {
+        file: "rewrite.txt",
+        binary: false,
+        additionsA: 25000,
+        deletionsA: 25000,
+        additionsB: 0,
+        deletionsB: 0,
+        status: "only_a",
+      },
+    ])
     expect(evidence.baseToA).toContain("+after-24999")
   }),
 )

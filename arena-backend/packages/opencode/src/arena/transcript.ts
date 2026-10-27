@@ -1,9 +1,9 @@
-import { readRecord, withPartPreviews, withoutAttachmentData } from "./live"
+import { readRecord, withPartPreviews, publicPart } from "./live"
 import { ArenaPrivacy } from "./privacy"
 
 /**
- * Shared by live snapshots and archives so reconnecting preserves descendant activity. Tool results
- * leave out their attachments' data, which the app does not show, and large fields go as a preview.
+ * Shared by live snapshots and archives so reconnecting preserves descendant activity and applies
+ * the same public-content boundary to current and historical transcripts.
  */
 export function project(transcript: readonly unknown[]) {
   const messages = transcript
@@ -28,7 +28,7 @@ export function project(transcript: readonly unknown[]) {
             }),
           )?.properties,
         )
-        return properties?.part ? [withPartPreviews(withoutAttachmentData(properties.part))] : []
+        return properties?.part ? [withPartPreviews(publicPart(properties.part))] : []
       })
       const created = readRecord(record.time)?.created
       return [{ info: { ...record, id: record.id }, parts, created: typeof created === "number" ? created : 0 }]
@@ -124,8 +124,7 @@ export function withinBudget(
   // `fromPrompt` kept a boundary-less run from its first root user message on.
   const boundary =
     promptMessageID ??
-    transcript.messages.find((message) => inRoot(message, rootSessionID) && readRecord(message)?.role === "user")
-      ?.id
+    transcript.messages.find((message) => inRoot(message, rootSessionID) && readRecord(message)?.role === "user")?.id
   if (boundary) kept.add(boundary)
   let tasks: string | undefined
   for (const message of transcript.messages) {
@@ -164,7 +163,7 @@ export function windowPart(part: unknown): unknown {
   const properties = readRecord(
     readRecord(ArenaPrivacy.event({ type: "message.part.updated", properties: { part } }))?.properties,
   )
-  return properties?.part ? withoutAttachmentData(properties.part) : null
+  return properties?.part ? publicPart(properties.part) : null
 }
 
 /** `windowPart` for the part of `transcript`, a run's messages, with this ID. */

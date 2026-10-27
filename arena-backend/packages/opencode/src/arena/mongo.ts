@@ -81,6 +81,7 @@ const historyProjection = {
   selectedEarly: 1,
   appliedSide: 1,
   canonicalUserMessageID: 1,
+  canonicalLastMessageID: 1,
   gitApplication: 1,
   transitionEvent: 1,
   transitionTimestamps: 1,
@@ -845,12 +846,17 @@ export class Store {
       if (manifest?.artifactIDs.length) await this.artifacts.deleteMany({ _id: { $in: [...manifest.artifactIDs] } })
       await this.sessionArchives.deleteOne({ _id: run.transcriptArchiveID, runID })
     }
+    // The request that ended counts toward the run's time whether it completed or failed. The
+    // new request's `startedAt` replaces its own, so this is the last moment it can be measured.
+    const ended =
+      run.startedAt && run.completedAt ? Math.max(0, run.completedAt.getTime() - run.startedAt.getTime()) : 0
     const updated = await this.runs.findOneAndUpdate(
       { _id: runID },
       {
         $set: {
           runState: "pending",
           durationMs: null,
+          priorDurationMs: (run.priorDurationMs ?? 0) + ended,
           selectable: false,
           startedAt: at,
           updatedAt: at,
@@ -989,6 +995,23 @@ export class Store {
 
   saveSessionArchive(archive: SessionArchiveDocument) {
     return insertIdempotent(this.sessionArchives, archive)
+  }
+
+  /**
+   * Saves a skipped comparison only while its turn is still skipped. A reply, retry or resume that
+   * claimed the turn while the title request was out resets its comparison, and this late record
+   * must not land on the turn's next comparison.
+   */
+  async saveSkippedComparison(comparison: ComparisonDocument) {
+    const updated = await this.turns.findOneAndUpdate(
+      { _id: comparison.turnID, comparisonState: "skipped" },
+      { $set: { comparisonID: comparison._id, updatedAt: new Date() } },
+      { returnDocument: "after" },
+    )
+    if (!updated) return undefined
+    const saved = await insertIdempotent(this.comparisons, comparison)
+    this.changed({ chatID: updated.chatID, turnID: comparison.turnID })
+    return saved
   }
 
   async saveComparison(comparison: ComparisonDocument) {
@@ -1168,7 +1191,8 @@ export class Store {
     readonly vote?: Vote
     readonly participantID?: string
     readonly appliedSide?: Side
-    readonly models: Readonly<Record<Side, string>>
+    /** Left out for a discard that names nobody (`identitiesRevealed`). */
+    readonly models?: Readonly<Record<Side, string>>
     readonly expectedState: "awaiting_vote" | "awaiting_stop_resolution"
     readonly at: Date
   }) {
@@ -1191,13 +1215,13 @@ export class Store {
             : {}),
           ...(input.resolution.kind === "stopped" ? { comparisonState: "skipped" as const } : {}),
           ...(input.appliedSide ? { appliedSide: input.appliedSide } : {}),
-          "placement.a.model": input.models.a,
-          "placement.b.model": input.models.b,
+          ...(input.models
+            ? { "placement.a.model": input.models.a, "placement.b.model": input.models.b, revealAt: input.at }
+            : {}),
           ...(input.resolution.kind === "vote" && awaitingVoteAt
             ? { timeToVoteMs: Math.max(0, input.at.getTime() - awaitingVoteAt.getTime()) }
             : {}),
           voteAt: input.at,
-          revealAt: input.at,
           updatedAt: input.at,
         },
       },
@@ -1225,6 +1249,8 @@ export class Store {
           finalizedSides: input.side,
           ...(input.selectable ? { selectableSides: input.side } : {}),
         },
+        // A side finalizes again after a retry or a resume; the first result is still the first.
+        $min: { firstResultAt: input.at },
         $set: { updatedAt: input.at },
       },
       { returnDocument: "after" },
@@ -1282,19 +1308,24 @@ export class Store {
     readonly turnID: string
     readonly expectedState: "creation_failed" | "finalization_failed" | "interrupted_recovery"
     readonly reason: string
-    readonly models: Readonly<Record<Side, string>>
+    /** Left out for a battle that never started, which ends without naming either side. */
+    readonly models?: Readonly<Record<Side, string>>
     readonly at: Date
   }) {
-    const resolution = abortedResolution(input.reason)
+    const resolution = abortedResolution(input.reason, input.models ? undefined : { revealed: false })
     const updated = await this.turns.findOneAndUpdate(
       { _id: input.turnID, state: input.expectedState, resolution: { $exists: false } },
       {
         $set: {
           resolution,
-          "placement.a.model": input.models.a,
-          "placement.b.model": input.models.b,
+          ...(input.models
+            ? {
+                "placement.a.model": input.models.a,
+                "placement.b.model": input.models.b,
+                revealAt: input.at,
+              }
+            : {}),
           comparisonState: "skipped",
-          revealAt: input.at,
           updatedAt: input.at,
         },
       },

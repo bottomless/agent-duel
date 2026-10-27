@@ -23,6 +23,8 @@ export type ArenaContext = {
   readonly validateModels: (apiKey: string) => Promise<void>
   readonly networkUnavailable?: (error: unknown) => Promise<boolean>
   readonly metadataRateLimit?: MetadataRateLimit
+  /** Heartbeats and replayable responses on contestant streams (`stream-recovery.ts`). */
+  readonly streamRecovery: boolean
 }
 
 type Failure = (message: string, status: number) => Response

@@ -6,9 +6,10 @@ import { Cause, Effect, Exit } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import {
   applySnapshot,
-  compare,
+  comparisonFiles,
   finalize,
   promoteWinnerState,
+  readComparisonFile,
   requireBattleGit,
   snapshotBase,
 } from "../../src/arena/git"
@@ -111,18 +112,16 @@ describe("ArenaGit on git 2.39", () => {
       const a = yield* finalize({ worktree: candidateA.path, baseSHA: base, permanentRef: "refs/battles/old-git/a" })
       const b = yield* finalize({ worktree: candidateB.path, baseSHA: base, permanentRef: "refs/battles/old-git/b" })
 
-      const evidence = yield* compare({
-        canonical: canonical.path,
-        baseCommit: base,
-        aCommit: a.finalCommit,
-        bCommit: b.finalCommit,
-      })
-      const status = Object.fromEntries((evidence.divergence?.files ?? []).map((file) => [file.file, file.status]))
+      const input = { canonical: canonical.path, baseCommit: base, aCommit: a.finalCommit, bCommit: b.finalCommit }
+      const listed = yield* comparisonFiles(input)
+      const status = Object.fromEntries(listed.files.map((file) => [file.file, file.status]))
       expect(status).toEqual({ "greet.py": "diverging", "notes.txt": "compatible" })
-      const merged = evidence.divergence?.files.find((file) => file.file === "greet.py")?.merged?.content ?? ""
+      const greet = yield* readComparisonFile({ ...input, file: "greet.py" })
+      const merged = greet.divergence.merged?.content ?? ""
       expect(merged).toContain("|||||||")
       expect(merged).toContain('return "hello from A"')
       expect(merged).toContain('print("hello from B")')
+      // Reading the file reuses the list's merge.
       expect(yield* mergeTreeCalls(log)).toHaveLength(1)
     }),
   )

@@ -1,7 +1,26 @@
-import type { ArenaHistoryItem, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaHistoryItem, ArenaRun, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 
 export function battleWinnerSide(item: ArenaHistoryItem): ArenaSide | undefined {
   return item.vote === "a" || item.vote === "b" ? item.vote : undefined;
+}
+
+/**
+ * Whether the battle failed while it was being created. Neither side ran, so the engine ends it
+ * without naming them: an abort with no identities.
+ */
+export function battleFailedToStart(
+  item: Pick<ArenaHistoryItem, "resolution" | "identities">,
+): boolean {
+  return item.resolution?.kind === "aborted" && item.identities === undefined;
+}
+
+/**
+ * A run as a decided battle's history shows it. Ending a battle settles its runs, but a battle an
+ * older build aborted could leave them `pending`, which reads as working forever. The battle is
+ * over, so such a run shows as interrupted.
+ */
+export function settledHistoryRun(run: ArenaRun | undefined): ArenaRun | undefined {
+  return run?.runState === "pending" ? { ...run, runState: "interrupted" } : run;
 }
 
 /** What a stopped contestant pane says in place of the provider's abort. */

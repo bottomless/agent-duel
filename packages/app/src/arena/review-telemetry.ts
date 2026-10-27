@@ -32,6 +32,8 @@ export type ArenaReviewSignal = Distribute<ArenaReviewEvent>;
 
 interface ArenaReviewSink {
   push: (signal: ArenaReviewSignal) => void;
+  /** Whether both sides have finished. Call it at once and on every change. */
+  settled: (settled: boolean) => void;
   flush: () => void;
   dispose: () => void;
 }
@@ -50,6 +52,9 @@ function createSink(send: (events: ArenaReviewEvent[]) => Promise<unknown>): Are
   const mountId = eventId();
   let buffer: ArenaReviewEvent[] = [];
   let inFlight = false;
+  // The first report decides: a card that opened on one finished side says so,
+  // and says again when the other finishes. One opened after both says neither.
+  let phase: "unknown" | "waiting" | "settled" = "unknown";
 
   const flush = () => {
     if (inFlight || buffer.length === 0) return;
@@ -68,11 +73,22 @@ function createSink(send: (events: ArenaReviewEvent[]) => Promise<unknown>): Are
       });
   };
 
+  const push = (signal: ArenaReviewSignal) => {
+    const at = Date.now();
+    buffer.push({ ...signal, id: eventId(), mountId, offsetMs: at - startedAt, clientAtMs: at });
+    if (buffer.length > BUFFER_LIMIT) buffer = buffer.slice(-BUFFER_LIMIT);
+  };
+
   return {
-    push: (signal) => {
-      const at = Date.now();
-      buffer.push({ ...signal, id: eventId(), mountId, offsetMs: at - startedAt, clientAtMs: at });
-      if (buffer.length > BUFFER_LIMIT) buffer = buffer.slice(-BUFFER_LIMIT);
+    push,
+    settled: (settled) => {
+      if (phase === "unknown") {
+        phase = settled ? "settled" : "waiting";
+        if (!settled) push({ type: "battle.waiting" });
+      } else if (phase === "waiting" && settled) {
+        phase = "settled";
+        push({ type: "battle.settled" });
+      }
     },
     flush,
     dispose: () => {
@@ -87,14 +103,16 @@ function reviewState(byTurn: Record<string, ArenaReviewState>, turnId: string): 
 }
 
 /**
- * Mount once per battle card being reviewed. Pushes nothing into React state,
- * so it re-renders nothing.
+ * Mount once per battle card, from its first result to its resolution, so the
+ * time the early pick is on offer is recorded with the review that follows.
+ * Pushes nothing into React state, so it re-renders nothing.
  */
 export function useArenaReviewTelemetry({
   serverId,
   agentId,
   turnId,
   focused,
+  settled,
   enabled,
 }: {
   serverId: string;
@@ -102,6 +120,8 @@ export function useArenaReviewTelemetry({
   turnId: string;
   /** The card's Focus control, which is a hook rather than store state. */
   focused: boolean;
+  /** Both sides have finished. Until then the early pick is what is on offer. */
+  settled: boolean;
   enabled: boolean;
 }) {
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
@@ -180,14 +200,27 @@ export function useArenaReviewTelemetry({
     // `previewsOpened`: a reader sweeping back and forth is deliberating, not
     // doing it twice. Only a pointer can cause this, so unlike `tab.viewed` it
     // can never be the card acting on its own.
+    // The early pick is counted apart, so a voter who reached for it while the
+    // other side still worked is not taken for one deliberating over the vote.
     const hoveredVotes = new Set<string>();
+    const hoveredEarlyPicks = new Set<string>();
     const onPointerOver = (event: Event) => {
       const target = event.target as Element | null;
       const control = target?.closest?.("[data-testid^='arena-choose-']");
       const side = control?.getAttribute("data-testid")?.slice("arena-choose-".length);
-      if ((side !== "a" && side !== "b") || hoveredVotes.has(side)) return;
-      hoveredVotes.add(side);
-      current.push({ type: "vote.hovered", side });
+      if (side === "a" || side === "b") {
+        if (hoveredVotes.has(side)) return;
+        hoveredVotes.add(side);
+        current.push({ type: "vote.hovered", side });
+        return;
+      }
+      const early = target?.closest?.("[data-testid^='arena-pick-early-']");
+      const earlySide = early
+        ?.getAttribute("data-testid")
+        ?.match(/^arena-pick-early-([ab])-now$/)?.[1];
+      if ((earlySide !== "a" && earlySide !== "b") || hoveredEarlyPicks.has(earlySide)) return;
+      hoveredEarlyPicks.add(earlySide);
+      current.push({ type: "early_pick.hovered", side: earlySide });
     };
 
     // How far down a diff the reader actually got. Reported as new ground only, in
@@ -237,6 +270,12 @@ export function useArenaReviewTelemetry({
       sink.current = null;
     };
   }, [agentId, client, enabled, serverId, turnId]);
+
+  // Declared after the sink's effect so it reports into the sink that effect just
+  // made, and keyed on the same inputs so a new sink hears where the battle stands.
+  useEffect(() => {
+    sink.current?.settled(settled);
+  }, [agentId, client, enabled, serverId, settled, turnId]);
 
   // Focus is a hook rather than store state, so it is observed on its own and
   // must not re-create the sink when it changes.

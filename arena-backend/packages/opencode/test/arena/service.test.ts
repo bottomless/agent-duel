@@ -1,15 +1,20 @@
+import { ModelV2 } from "@opencode-ai/core/model"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { afterEach, describe, expect, test } from "bun:test"
 import { OperationError, TRUNK_CONFLICT_OPERATION } from "@/arena/git"
 import { clearForTest, hostname, register } from "@/arena/preview"
 import {
   contestantSystemInstruction,
   isGitLockContention,
+  lastTurnStart,
   normalTurnReservations,
   trunkConflictList,
   trunkConflictPaths,
   trunkConflictReason,
   unappliedWinnerNote,
 } from "@/arena/service"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 
 test("keeps Battle blocked until every admitted normal prompt settles", () => {
   const reservations = normalTurnReservations()
@@ -31,9 +36,7 @@ test("caps the conflict list in the refusal without hiding how many there are", 
 
   const many = Array.from({ length: 300 }, (_, index) => `src/file-${index}.ts`)
   const listed = trunkConflictList(many)
-  expect(listed).toBe(
-    "src/file-0.ts, src/file-1.ts, src/file-2.ts, src/file-3.ts, src/file-4.ts, and 295 more",
-  )
+  expect(listed).toBe("src/file-0.ts, src/file-1.ts, src/file-2.ts, src/file-3.ts, src/file-4.ts, and 295 more")
   expect(trunkConflictReason(many)).toBe(
     `Unresolved merge conflicts: ${listed}. Resolve them, or turn Battle off and ask one agent to resolve them.`,
   )
@@ -111,5 +114,92 @@ describe("contestantSystemInstruction", () => {
 
     expect(instruction).not.toContain("Current public preview URLs")
     expect(instruction).not.toContain("http://")
+  })
+})
+
+describe("lastTurnStart", () => {
+  const sessionID = SessionID.make("ses_canonical")
+  const model = { providerID: ProviderV2.ID.make("arena"), modelID: ModelV2.ID.make("contestant") }
+  const prompt = (created: number, synthetic = false): SessionV1.WithParts => {
+    const id = MessageID.ascending()
+    return {
+      info: { id, sessionID, role: "user", time: { created }, agent: "build", model },
+      parts: [{ id: PartID.ascending(), sessionID, messageID: id, type: "text", text: "go", synthetic }],
+    }
+  }
+  const reply = (
+    time: { created: number; completed?: number },
+    finish: string | undefined,
+    aborted = false,
+  ): SessionV1.WithParts => ({
+    info: {
+      id: MessageID.ascending(),
+      sessionID,
+      parentID: MessageID.ascending(),
+      role: "assistant",
+      mode: "build",
+      agent: "build",
+      path: { cwd: "/repo", root: "/repo" },
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      ...model,
+      time,
+      ...(finish ? { finish } : {}),
+      ...(aborted ? { error: new SessionV1.AbortedError({ message: "Aborted" }).toObject() } : {}),
+    },
+    parts: [],
+  })
+  // The last battle's grafted prompt and reply, both written before the graft is recorded.
+  const grafted = [prompt(1), reply({ created: 2, completed: 3 }, "stop")]
+  const battle = { canonicalGraftedAt: new Date(10), canonicalUserMessageID: grafted[0]!.info.id }
+
+  test("starts a battle turn at its grafted prompt", () => {
+    expect(lastTurnStart([battle], grafted)).toBe(grafted[0]!.info.id)
+  })
+
+  test("starts a single-agent turn at a prompt sent after its last reply finished", () => {
+    const first = prompt(20)
+    const queued = prompt(40)
+    expect(
+      lastTurnStart(
+        [battle],
+        [...grafted, first, reply({ created: 21, completed: 30 }, "stop"), queued, reply({ created: 41 }, undefined)],
+      ),
+    ).toBe(queued.info.id)
+    const afterAbort = prompt(40)
+    expect(
+      lastTurnStart(
+        [battle],
+        [...grafted, first, reply({ created: 21, completed: 30 }, "tool-calls", true), afterAbort],
+      ),
+    ).toBe(afterAbort.info.id)
+  })
+
+  test("keeps a steer in the turn it steered", () => {
+    const start = prompt(20)
+    // Between steps: the reply stopped to call tools.
+    const betweenSteps = [...grafted, start, reply({ created: 21, completed: 30 }, "tool-calls"), prompt(31)]
+    expect(lastTurnStart([battle], betweenSteps)).toBe(start.info.id)
+    // While the last reply was still being written.
+    const whileWriting = [...grafted, start, reply({ created: 21, completed: 30 }, "stop"), prompt(25)]
+    expect(lastTurnStart([battle], whileWriting)).toBe(start.info.id)
+    // While a cut-off reply was being recovered.
+    const recovering = [...grafted, start, reply({ created: 21, completed: 30 }, "length"), prompt(31)]
+    expect(lastTurnStart([battle], recovering)).toBe(start.info.id)
+    // Steering the grafted battle leaves its prompt as the start.
+    const steeredGraft = [prompt(1), reply({ created: 2, completed: 3 }, "tool-calls"), prompt(20)]
+    expect(lastTurnStart([{ ...battle, canonicalUserMessageID: steeredGraft[0]!.info.id }], steeredGraft)).toBe(
+      steeredGraft[0]!.info.id,
+    )
+  })
+
+  test("ignores messages the engine wrote for the user", () => {
+    const start = prompt(20)
+    const transcript = [...grafted, start, reply({ created: 21, completed: 30 }, "stop"), prompt(40, true)]
+    expect(lastTurnStart([battle], transcript)).toBe(start.info.id)
+  })
+
+  test("finds no start in a chat without a finished turn", () => {
+    expect(lastTurnStart([], [])).toBeUndefined()
   })
 })

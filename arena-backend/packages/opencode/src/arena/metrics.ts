@@ -124,6 +124,8 @@ function arrival(group: readonly ReviewEventDocument[]) {
 function isInteraction(event: ReviewEventDocument) {
   return (
     event.type !== "battle.opened" &&
+    event.type !== "battle.waiting" &&
+    event.type !== "battle.settled" &&
     event.type !== "window.focus" &&
     event.type !== "window.blur" &&
     event.type !== "verdict.folded" &&
@@ -131,6 +133,7 @@ function isInteraction(event: ReviewEventDocument) {
     // the reader descends. They are counted on their own fields instead of
     // swamping a count that means "things the voter chose to open".
     event.type !== "vote.hovered" &&
+    event.type !== "early_pick.hovered" &&
     event.type !== "diff.scrolled"
   )
 }
@@ -147,10 +150,12 @@ export function reviewEffort(events: readonly ReviewEventDocument[]): ReviewEffo
   const files = new Set<string>()
   const previews = new Set<Side>()
   const hoveredVotes = new Set<Side>()
+  const hoveredEarlyPicks = new Set<Side>()
   let deepestDiffDepth: number | undefined
   let expanded = false
   let foldOffered = false
   let activeMs = 0
+  let waitingActiveMs = 0
   let interactionCount = 0
   let msToFirstInteraction: number | undefined
 
@@ -162,17 +167,25 @@ export function reviewEffort(events: readonly ReviewEventDocument[]): ReviewEffo
     // Folding hides the pane without changing it, and opening the review again
     // brings back the same tab without a new `tab.viewed`.
     let collapsed = false
+    // Only a card that says so was waiting; a mount from before these events reads as never.
+    let waiting = false
+    // Where the review opened on this mount's clock: at once, or when the wait ended.
+    let reviewOpenedAt: number | undefined = 0
 
     for (const [index, event] of ordered.entries()) {
       if (isInteraction(event)) {
         interactionCount += 1
         // Taken from the first mount that recorded one, which is the first time
-        // the voter acted after the card first opened.
-        if (msToFirstInteraction === undefined) msToFirstInteraction = event.offsetMs
+        // the voter acted after the review first opened. Acts during the wait count
+        // as interactions but not here, so the field means what it meant before.
+        if (msToFirstInteraction === undefined && reviewOpenedAt !== undefined) {
+          msToFirstInteraction = event.offsetMs - reviewOpenedAt
+        }
       }
       if (event.type === "file.selected") files.add(event.file)
       if (event.type === "preview.opened") previews.add(event.side)
       if (event.type === "vote.hovered") hoveredVotes.add(event.side)
+      if (event.type === "early_pick.hovered") hoveredEarlyPicks.add(event.side)
       if (event.type === "diff.scrolled") {
         deepestDiffDepth = Math.max(deepestDiffDepth ?? 0, event.depth)
       }
@@ -183,12 +196,26 @@ export function reviewEffort(events: readonly ReviewEventDocument[]): ReviewEffo
       // the gap first would credit every tab's reading time to the tab before it.
       if (event.type === "tab.viewed") pane = event.tab
       if (event.type === "review.collapsed") collapsed = event.on
+      if (event.type === "battle.waiting") {
+        waiting = true
+        reviewOpenedAt = undefined
+      }
+      if (event.type === "battle.settled") {
+        waiting = false
+        reviewOpenedAt = event.offsetMs
+      }
 
       const next = ordered[index + 1]
       if (!next) continue
       const focused = Math.max(0, next.offsetMs - event.offsetMs - blurredWithin(spans, event.offsetMs, next.offsetMs))
       // A gap this long is someone who left, not someone reading.
       if (focused > IDLE_CUTOFF_MS) continue
+      // One side has finished and the voter is reading it while the other works: the time the
+      // early pick is on offer, kept out of `activeMs` so it cannot pass for reviewing a diff.
+      if (waiting) {
+        waitingActiveMs += focused
+        continue
+      }
       // Only time with a pane on screen is time spent reading. The gap before the
       // card has shown anything is the battle running, not the voter working, and
       // counting it made a vote cast without a glance score higher than a studied one.
@@ -209,9 +236,11 @@ export function reviewEffort(events: readonly ReviewEventDocument[]): ReviewEffo
     // folded" rather than "there was nothing to open".
     ...(expanded ? { verdictExpanded: true } : foldOffered ? { verdictExpanded: false } : {}),
     activeMs,
+    waitingActiveMs,
     eventCount: events.length,
     interactionCount,
     votesHovered: hoveredVotes.size,
+    earlyPicksHovered: hoveredEarlyPicks.size,
     ...(deepestDiffDepth === undefined ? {} : { deepestDiffDepth }),
   }
 }
@@ -382,6 +411,10 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
   // one: the daemon stamps it per flush, and a reconnect can change it.
   const ipAddress = [...reviewEvents].reverse().find((event) => event.ipAddress)?.ipAddress
   const voteAtMs = offsetFrom(base, turn.voteAt)
+  const msFromFirstResultToVote =
+    turn.voteAt && turn.firstResultAt
+      ? Math.max(0, turn.voteAt.getTime() - turn.firstResultAt.getTime())
+      : undefined
 
   return {
     _id: turn._id,
@@ -400,6 +433,7 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
     steerCount: turn.steerCount ?? 0,
     ...(voteAtMs === undefined ? {} : { voteAtMs }),
     ...(turn.timeToVoteMs === undefined ? {} : { timeToVoteMs: turn.timeToVoteMs }),
+    ...(msFromFirstResultToVote === undefined ? {} : { msFromFirstResultToVote }),
     ...(review ? { review } : {}),
     sides,
   }

@@ -68,12 +68,18 @@ test("keeps a failed recovery retryable and completes after its safety ref is re
     })
     await store.transitionTurn(turnID, "application_failed")
 
-    const failed = await arenaRequest(`/arena/turns/${turnID}/retry-resolution`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({}),
-    })
-    expect(failed.ok).toBe(false)
+    // The retry answers once it has claimed the turn; the recovery runs, and fails, after that.
+    const claimed = await json<Snapshot>(
+      await arenaRequest(`/arena/turns/${turnID}/retry-resolution`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({}),
+      }),
+    )
+    expect(claimed.turn?.state).toBe("applying")
+    await waitForTurn(store, turnID, "application_failed", (turn) =>
+      (turn.gitApplication?.reason ?? "").includes(`${safetyRef}-index`),
+    )
     const retryable = await json<Snapshot>(await arenaRequest(`/arena/chats/${attached.chat.id}`, { headers }))
     expect(retryable.turn?.state).toBe("application_failed")
     expect(retryable.turn?.canRetryResolution).toBe(true)

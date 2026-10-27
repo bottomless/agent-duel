@@ -409,6 +409,7 @@ export function installOpenRouterStub(options?: {
     }
   }> = []
   let utilityCalls = 0
+  const utilityPrompts: string[] = []
   const testProfiles = [
     { slug: "test/model-a", displayName: "Test Model A" },
     { slug: "test/model-b", displayName: "Test Model B" },
@@ -477,6 +478,16 @@ export function installOpenRouterStub(options?: {
         assignments: set.assignments.map(({ assignmentID, model }) => ({ assignmentID, model: model.displayName })),
       })
     }
+    if (url.pathname === "/api/arena/comparison") {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }
+      utilityCalls++
+      utilityPrompts.push(body.messages[0]?.content ?? "")
+      return Response.json({
+        provider: "groq",
+        choices: [{ message: { content: "The two retained Git results and transcripts were compared." } }],
+        usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
+      })
+    }
     if (url.pathname !== "/api/openrouter/api/v1/chat/completions") {
       throw new Error(`Unexpected external request: ${url}`)
     }
@@ -486,14 +497,6 @@ export function installOpenRouterStub(options?: {
         readonly role?: string
         readonly content?: string | Array<{ readonly text?: string }>
       }>
-    }
-    if (body.model === "minimax/minimax-m2.7") {
-      utilityCalls++
-      return Response.json({
-        provider: "groq",
-        choices: [{ message: { content: "The two retained Git results and transcripts were compared." } }],
-        usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
-      })
     }
     const headers = new Headers(init?.headers)
     if (headers.has("x-arena-assignment")) throw new Error("Contestant request carried a legacy routing token")
@@ -551,6 +554,8 @@ export function installOpenRouterStub(options?: {
     contestantRequests,
     modelForAssignment: (assignmentID: string) => assignmentsByID.get(assignmentID)?.model.slug,
     utilityCalls: () => utilityCalls,
+    /** Utility requests other than the chat's title alone; anything unrecognized counts as a report. */
+    reportCalls: () => utilityPrompts.filter((prompt) => !prompt.startsWith("Name the task in the user prompt")).length,
     restore: () => {
       setArenaCredentials(undefined)
       globalThis.fetch = original
@@ -613,6 +618,7 @@ export type PublicSnapshot = {
     readonly canVote: boolean
     readonly canTie: boolean
     readonly canDiscardBattle: boolean
+    readonly canResumeBattle?: boolean
     readonly revealed: boolean
     readonly identities?: {
       readonly a: { readonly name: string }
@@ -622,7 +628,10 @@ export type PublicSnapshot = {
   readonly runs: ReadonlyArray<{
     readonly id: string
     readonly side: "a" | "b"
+    readonly runState?: string
     readonly selectable: boolean
+    readonly canRetry?: boolean
+    readonly error?: string
     readonly diff?: { readonly files: number; readonly additions: number; readonly deletions: number }
     readonly identity?: { readonly name: string }
     readonly messages?: ReadonlyArray<Readonly<Record<string, unknown>>>

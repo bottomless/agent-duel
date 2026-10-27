@@ -35,6 +35,12 @@ export type ArenaServiceOptions = {
    * `defaultMetadataRateLimit`; null turns the limit off, as a BYOK engine does for its own key.
    */
   readonly metadataRateLimit?: MetadataRateLimit | null
+  /**
+   * Heartbeats on contestant streams and a replay route for a response whose connection died
+   * (`stream-recovery.ts`). On by default for the control plane; a service on the user's machine has
+   * no network between it and the engine and turns it off.
+   */
+  readonly streamRecovery?: boolean
 }
 
 export type ArenaService = {
@@ -68,6 +74,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     networkUnavailable: options.networkUnavailable,
     metadataRateLimit:
       options.metadataRateLimit === null ? undefined : (options.metadataRateLimit ?? defaultMetadataRateLimit),
+    streamRecovery: options.streamRecovery ?? true,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)

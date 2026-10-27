@@ -1,8 +1,17 @@
 import { describe, expect, test } from "bun:test"
-import { markInitialDispatch, waitForInitialDispatch } from "@/arena/dispatch"
+import { markInitialDispatch, markInitialRequestDeferred, waitForInitialDispatch } from "@/arena/dispatch"
 import { SessionID } from "@/session/schema"
 
 describe("Arena initial dispatch", () => {
+  test("allows setup to continue when preflight compaction defers the first request", async () => {
+    const sessionID = SessionID.make("session-budget-compaction")
+    const waiting = waitForInitialDispatch(sessionID)
+    markInitialRequestDeferred(sessionID)
+    await waiting.promise
+    const next = waitForInitialDispatch(sessionID)
+    markInitialDispatch(sessionID)
+    await next.promise
+  })
   test("resolves only the matching root generation waiter", async () => {
     const sessionID = SessionID.make("session-dispatch")
     const waiting = waitForInitialDispatch(sessionID)

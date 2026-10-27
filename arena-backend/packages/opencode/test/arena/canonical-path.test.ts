@@ -10,6 +10,7 @@ const CANONICAL = "/Users/dev/project"
 const WORKTREE_A = "/Users/dev/.local/share/opencode/worktree/5f90df7c/turn-1-a-gentle-meadow"
 const WORKTREE_B = "/Users/dev/.local/share/opencode/worktree/5f90df7c/turn-1-b-calm-knight"
 const BOTH = { worktrees: [WORKTREE_A, WORKTREE_B], canonical: CANONICAL }
+const TEMP = "/var/folders/xy/abc/T/opencode/arena"
 
 describe("Arena canonical path", () => {
   test("rewrites declared path values through objects and arrays, never keys", () => {
@@ -77,26 +78,157 @@ describe("Arena canonical path", () => {
     const second = `${CANONICAL}/.agent-duel/generation-2-b`
     const text = `Edited ${first}/src/data/tiers.ts.\n${first}/src/data/tiers.ts\ncd ${first} && pwd`
     const part = { type: "text", text }
-    const canonical = await canonicalizeTranscriptPaths(part, { worktrees: [first], canonical: CANONICAL }, "assistant")
+    const canonical = await canonicalizeTranscriptPaths(
+      part,
+      { worktrees: [first], canonical: CANONICAL, temp: TEMP },
+      "assistant",
+    )
     expect(canonical.text).toBe(
       `Edited ${CANONICAL}/src/data/tiers.ts.\n${CANONICAL}/src/data/tiers.ts\ncd ${CANONICAL} && pwd`,
     )
     const continued = await localizeTranscriptPaths(canonical, { canonical: CANONICAL, worktree: second }, "assistant")
-    expect(continued.text).toBe(
-      `Edited ${second}/src/data/tiers.ts.\n${second}/src/data/tiers.ts\ncd ${second} && pwd`,
-    )
-    expect(await canonicalizeTranscriptPaths(part, { worktrees: [first], canonical: CANONICAL }, "user")).toBe(part)
+    expect(continued.text).toBe(`Edited ${second}/src/data/tiers.ts.\n${second}/src/data/tiers.ts\ncd ${second} && pwd`)
+    expect(
+      await canonicalizeTranscriptPaths(part, { worktrees: [first], canonical: CANONICAL, temp: TEMP }, "user"),
+    ).toBe(part)
   })
 
-  test("does not rewrite sibling paths, embedded prefixes, parent traversal, or tool output", async () => {
+  test("does not rewrite sibling paths, embedded prefixes or parent traversal, in text or tool output", async () => {
     const first = `${CANONICAL}/.agent-duel/generation-1-a`
-    const paths = { worktrees: [first], canonical: CANONICAL }
+    const paths = { worktrees: [first], canonical: CANONICAL, temp: TEMP }
     const text = `${first}-backup\n/prefix${first}/file\n${first}/../sibling\n${first}/file`
-    expect((await canonicalizeTranscriptPaths({ type: "text", text }, paths, "assistant")).text).toBe(
-      `${first}-backup\n/prefix${first}/file\n${first}/../sibling\n${CANONICAL}/file`,
-    )
+    const expected = `${first}-backup\n/prefix${first}/file\n${first}/../sibling\n${CANONICAL}/file`
+    expect((await canonicalizeTranscriptPaths({ type: "text", text }, paths, "assistant")).text).toBe(expected)
     const tool = { type: "tool", tool: "custom", state: { input: {}, output: text } }
-    expect(await canonicalizeTranscriptPaths(tool, paths, "assistant")).toBe(tool)
+    expect((await canonicalizeTranscriptPaths(tool, paths, "assistant")).state.output).toBe(expected)
+    const unrelated = { type: "tool", tool: "custom", state: { input: {}, output: `${CANONICAL}/file` } }
+    expect(await canonicalizeTranscriptPaths(unrelated, paths, "assistant")).toBe(unrelated)
+  })
+
+  describe("Arena references the winner's transcript carries", () => {
+    const pool = `${CANONICAL}/.agent-duel/worktrees/1e5a93c70dbcca48`
+    const old = `${pool}/generation-5-b`
+    const paths = { worktrees: [], canonical: CANONICAL, temp: TEMP, home: "/Users/dev" }
+    const tool = (name: string, state: Record<string, unknown>) => ({ type: "tool", tool: name, state })
+
+    test("retargets an earlier turn's worktree in every tool output, whichever turn it was", async () => {
+      const read = tool("read", {
+        input: { filePath: `${old}/src/scene/Camera.tsx` },
+        output: `<path>${old}/src/scene/Camera.tsx</path>\n<type>file</type>`,
+      })
+      const grep = tool("grep", {
+        input: { pattern: "x" },
+        output: `Found 1 matches\n${pool}/spare-0a1b2c3d/TODO.md:\n  Line 2: x`,
+      })
+      const bash = tool("bash", {
+        input: { command: "npx vitest" },
+        output: `at ${old}/tests/e2e/playback.spec.ts:507:68\nfile://${old}/src/main.ts`,
+      })
+      const task = tool("task", {
+        input: { prompt: `Read ${old}/README.md` },
+        output: `[styles](${old}/src/styles.css#L134)`,
+      })
+      expect((await canonicalizeTranscriptPaths(read, paths, "assistant")).state).toEqual({
+        input: { filePath: `${CANONICAL}/src/scene/Camera.tsx` },
+        output: `<path>${CANONICAL}/src/scene/Camera.tsx</path>\n<type>file</type>`,
+      })
+      expect((await canonicalizeTranscriptPaths(grep, paths, "assistant")).state.output).toBe(
+        `Found 1 matches\n${CANONICAL}/TODO.md:\n  Line 2: x`,
+      )
+      expect((await canonicalizeTranscriptPaths(bash, paths, "assistant")).state.output).toBe(
+        `at ${CANONICAL}/tests/e2e/playback.spec.ts:507:68\nfile://${CANONICAL}/src/main.ts`,
+      )
+      expect((await canonicalizeTranscriptPaths(task, paths, "assistant")).state).toEqual({
+        input: { prompt: `Read ${CANONICAL}/README.md` },
+        output: `[styles](${CANONICAL}/src/styles.css#L134)`,
+      })
+    })
+
+    test("retargets reasoning, errors and every other spelling of a worktree path", async () => {
+      const reasoning = { type: "reasoning", text: `Earlier I edited ${old}/src/a.ts.` }
+      expect((await canonicalizeTranscriptPaths(reasoning, paths, "assistant")).text).toBe(
+        `Earlier I edited ${CANONICAL}/src/a.ts.`,
+      )
+      const failed = tool("read", { input: { filePath: "a.ts" }, error: `File not found: ${old}/a.ts` })
+      expect((await canonicalizeTranscriptPaths(failed, paths, "assistant")).state.error).toBe(
+        `File not found: ${CANONICAL}/a.ts`,
+      )
+      const spellings = [
+        [`~/project/.agent-duel/worktrees/1e5a93c70dbcca48/generation-5-b/x`, `${CANONICAL}/x`],
+        [`$HOME/project/.agent-duel/worktrees/1e5a93c70dbcca48/generation-5-b/x`, `${CANONICAL}/x`],
+        [
+          `import a from '../../Users/dev/project/.agent-duel/worktrees/1e5a93c70dbcca48/generation-5-b/x'`,
+          `import a from '../..${CANONICAL}/x'`,
+        ],
+        [`gitdir: ${old}.git/worktrees/generation-5-b`, `gitdir: ${CANONICAL}/.git/worktrees/generation-5-b`],
+      ] as const
+      for (const [before, after] of spellings) {
+        expect(
+          (
+            await canonicalizeTranscriptPaths(
+              tool("bash", { input: { command: "x" }, output: before }),
+              paths,
+              "assistant",
+            )
+          ).state.output,
+        ).toBe(after)
+      }
+    })
+
+    test("ends a worktree path where the slot name ends", async () => {
+      const cases = [
+        [`My working directory is ${old}.`, `My working directory is ${CANONICAL}.`],
+        [JSON.stringify({ msg: `${old}\nnext line` }), JSON.stringify({ msg: `${CANONICAL}\nnext line` })],
+        [`${old}.git.`, `${CANONICAL}/.git.`],
+        [`${pool}/generation-5-bx`, `${pool}/generation-5-bx`],
+      ] as const
+      for (const [before, after] of cases) {
+        const part = tool("bash", { input: { command: "x" }, output: before })
+        expect((await canonicalizeTranscriptPaths(part, paths, "assistant")).state.output).toBe(after)
+      }
+      const text = { type: "text", text: `My working directory is ${old}.` }
+      expect((await canonicalizeTranscriptPaths(text, paths, "assistant")).text).toBe(
+        `My working directory is ${CANONICAL}.`,
+      )
+    })
+
+    test("turns a contestant temp directory into $TMPDIR, in either spelling", async () => {
+      const output = `${TEMP}/ses_ecc459383ffesdiw7QdDMWaRmj/shots/a.png\n/private${TEMP}/ses_ecc1bcedfffeBxHZzZdTIaJjCK/log`
+      const part = tool("bash", { input: { command: "ls" }, output })
+      expect((await canonicalizeTranscriptPaths(part, paths, "assistant")).state.output).toBe(
+        "$TMPDIR/shots/a.png\n$TMPDIR/log",
+      )
+    })
+
+    test("leaves the pool's own directory, the user's typed text and image bytes as they are", async () => {
+      const listing = tool("bash", { input: { command: "ls" }, output: `${pool}/` })
+      expect(await canonicalizeTranscriptPaths(listing, paths, "assistant")).toEqual(listing)
+      const typed = { type: "text", text: `Compare with ${old}/src` }
+      expect(await canonicalizeTranscriptPaths(typed, paths, "user")).toBe(typed)
+      const synthetic = { type: "text", synthetic: true, text: `<path>${old}/src/a.ts</path>` }
+      expect((await canonicalizeTranscriptPaths(synthetic, paths, "user")).text).toBe(
+        `<path>${CANONICAL}/src/a.ts</path>`,
+      )
+      const image = { type: "file", url: `data:image/png;base64,${old}` }
+      expect(await canonicalizeTranscriptPaths(image, paths, "assistant")).toEqual(image)
+    })
+
+    test("retargets a subagent's prompt, which its parent wrote, and only that user text", async () => {
+      const prompt = { type: "text", text: `List the files in ${old} with the read tool.` }
+      expect((await canonicalizeTranscriptPaths(prompt, paths, "user", { subagent: true })).text).toBe(
+        `List the files in ${CANONICAL} with the read tool.`,
+      )
+      expect(await canonicalizeTranscriptPaths(prompt, paths, "user")).toBe(prompt)
+    })
+
+    test("never localizes a checkout path into the worktree pool", async () => {
+      const surviving = tool("read", { input: { filePath: `${old}/a.ts` } })
+      const localized = await localizeTranscriptPaths(surviving, {
+        canonical: CANONICAL,
+        worktree: `${pool}/generation-7-a`,
+      })
+      expect(localized.state.input.filePath).toBe(`${old}/a.ts`)
+    })
   })
 
   test("rewrites declared file-tool inputs but preserves content, output and unknown tools", async () => {
@@ -196,10 +328,18 @@ describe("Arena canonical path", () => {
         output: `cd "${first}" && pwd\n`,
       },
     }
-    const canonical = await canonicalizeTranscriptPaths(original, { worktrees: [first], canonical: CANONICAL })
+    const canonical = await canonicalizeTranscriptPaths(original, {
+      worktrees: [first],
+      canonical: CANONICAL,
+      temp: TEMP,
+    })
     const continued = await localizeTranscriptPaths(canonical, { canonical: CANONICAL, worktree: second })
     expect(continued.state.output).toBe(`cd "${second}" && pwd\n`)
-    const selected = await canonicalizeTranscriptPaths(continued, { worktrees: [first, second], canonical: CANONICAL })
+    const selected = await canonicalizeTranscriptPaths(continued, {
+      worktrees: [first, second],
+      canonical: CANONICAL,
+      temp: TEMP,
+    })
     expect((await localizeTranscriptPaths(selected, { canonical: CANONICAL, worktree: third })).state.output).toBe(
       `cd "${third}" && pwd\n`,
     )

@@ -3,6 +3,8 @@
  * Git, and OpenCode. Adapters persist these values and use this module to make
  * their compare-and-set transitions deterministic.
  */
+import { createHash } from "crypto"
+
 export const Side = ["a", "b"] as const
 export type Side = (typeof Side)[number]
 
@@ -45,6 +47,8 @@ export type StoppedResolution = {
   readonly kind: "stopped"
   readonly resolution: StopResolution
   readonly appliedSide?: Side
+  /** False for a discard of a battle neither side showed anything in; see `identitiesRevealed`. */
+  readonly revealed?: false
 }
 
 export type EarlyResolution = {
@@ -56,6 +60,8 @@ export type EarlyResolution = {
 export type AbortedResolution = {
   readonly kind: "aborted"
   readonly reason: string
+  /** False when the battle ended before either side could show anything; see `identitiesRevealed`. */
+  readonly revealed?: false
 }
 
 export type Resolution = VoteResolution | StoppedResolution | EarlyResolution | AbortedResolution
@@ -72,7 +78,8 @@ const transitions: Readonly<Record<BattleState, ReadonlyArray<BattleState>>> = {
   cleanup_pending: ["complete"],
   complete: [],
   stopping: ["awaiting_stop_resolution", "finalization_failed", "interrupted_recovery"],
-  awaiting_stop_resolution: ["discarding", "applying"],
+  // `awaiting_vote` only reopens a battle an earlier engine parked here after a restart.
+  awaiting_stop_resolution: ["discarding", "applying", "awaiting_vote"],
   discarding: ["discarded"],
   discarded: [],
   creation_failed: ["creating", "discarding", "interrupted_recovery"],
@@ -100,12 +107,16 @@ export function voteResolution(vote: Vote): VoteResolution {
   }
 }
 
-export function stoppedResolution(resolution: StopResolution): StoppedResolution {
+export function stoppedResolution(
+  resolution: StopResolution,
+  options?: { readonly revealed: false },
+): StoppedResolution {
   return {
     kind: "stopped",
     resolution,
     ...(resolution === "apply_a" ? { appliedSide: "a" as const } : {}),
     ...(resolution === "apply_b" ? { appliedSide: "b" as const } : {}),
+    ...(options ? { revealed: false as const } : {}),
   }
 }
 
@@ -113,8 +124,19 @@ export function earlyResolution(side: Side): EarlyResolution {
   return { kind: "early", vote: side, appliedSide: side }
 }
 
-export function abortedResolution(reason: string): AbortedResolution {
-  return { kind: "aborted", reason }
+export function abortedResolution(reason: string, options?: { readonly revealed: false }): AbortedResolution {
+  return { kind: "aborted", reason, ...(options ? { revealed: false as const } : {}) }
+}
+
+/**
+ * Whether a resolved turn shows who the contestants were.
+ *
+ * A decision reveals once the voter has seen the sides' work. A battle that failed while it was
+ * being created, or was discarded before either side showed anything, ends as blind as it began.
+ */
+export function identitiesRevealed(resolution: Resolution | undefined): boolean {
+  if (resolution === undefined) return false
+  return !((resolution.kind === "aborted" || resolution.kind === "stopped") && resolution.revealed === false)
 }
 
 export function isVoteReady(state: BattleState): boolean {
@@ -154,6 +176,26 @@ export function operationID(input: {
 export function generationName(generation: number, side: Side): string {
   return `generation-${generation + 1}-${side}`
 }
+
+/** The directory every slot of a chat's worktree pool sits in, under `.agent-duel/worktrees`. */
+export function chatSlug(chatID: string): string {
+  return createHash("sha256").update(chatID).digest("hex").slice(0, 16)
+}
+
+/**
+ * The worktree directory of a spare slot, which a later turn renames to a generation's. `suffix` is
+ * 8 random hex characters.
+ */
+export function spareName(suffix: string): string {
+  return `spare-${suffix}`
+}
+
+/**
+ * Every slot path under `.agent-duel/worktrees`, `<chatSlug>/<generationName or spareName>`, as a
+ * regular expression source. The transcript rewrite matches slot names by it, so a slot path ends
+ * where the name does and the `.` or `\n` written right after it survives.
+ */
+export const SLOT_PATH_PATTERN = String.raw`[0-9a-f]{16}/(?:generation-[1-9][0-9]*-[ab]|spare-[0-9a-f]{8})`
 
 function identifier(kind: string, ...parts: ReadonlyArray<string>): string {
   return [kind, ...parts.map((part) => `${part.length}:${part}`)].join("|")
@@ -206,12 +248,16 @@ export function isStopAbort(input: {
  */
 export const MAX_MANUAL_RUN_RETRIES = 2
 
+/** What the pane says under a contestant the engine's restart cut off. */
+export const INTERRUPTED_RUN_MESSAGE = "Interrupted when Agent Duel closed"
+
 /**
  * May the voter retry this failed run?
  *
  * Only while the battle is undecided, only for a model request that failed the way the engine
  * retries on its own (`errorRetryable`), and only once the failure is committed and the run still
- * has its worktree. The service refuses what this refuses, and the app shows Retry from it.
+ * has its worktree. The service refuses what this refuses, and the app shows Retry from it. A run
+ * the engine's restart cut off is not retried on its own; the battle resumes (`canResumeBattle`).
  */
 export function canRetryRun(
   turn: { readonly state: BattleState; readonly resolution?: unknown },
@@ -234,7 +280,60 @@ export function canRetryRun(
   )
 }
 
-type DecidedRun = { readonly side: Side; readonly selectable?: boolean }
+type ResumableRun = {
+  readonly runState?: string
+  readonly finalizedAt?: Date
+  readonly worktreeRemovedAt?: Date
+}
+
+/**
+ * May the voter resume a battle the engine's restart cut off?
+ *
+ * Every interrupted side resumes at once, under one claim, so neither gets a head start and the
+ * voter cannot continue one side alone. It costs no retry: the models did nothing wrong. Until it
+ * resumes, the battle can only be discarded: no vote, not even for a side that had finished, since
+ * the voter never saw the other side finish. The service refuses what this refuses, and the app
+ * shows Resume and Discard alone from it.
+ */
+export function canResumeBattle(
+  turn: { readonly state: BattleState; readonly resolution?: unknown },
+  runs: ReadonlyArray<ResumableRun>,
+): boolean {
+  const interrupted = runs.filter((run) => run.runState === "interrupted")
+  return (
+    turn.state === "awaiting_vote" &&
+    turn.resolution === undefined &&
+    interrupted.length > 0 &&
+    interrupted.every((run) => run.finalizedAt !== undefined && run.worktreeRemovedAt === undefined)
+  )
+}
+
+/**
+ * Can a battle the engine's restart cut off go on where it stopped?
+ *
+ * The voter had not stopped it, and every side either settled before the restart or had its
+ * environment ready, so a resumed contestant works in the same files it left. A battle that fails
+ * this is recovered as a stopped one.
+ */
+export function canReopenInterruptedBattle(
+  turn: { readonly state: BattleState; readonly transitionTimestamps?: Partial<Record<BattleState, Date>> },
+  runs: ReadonlyArray<{
+    readonly finalizedAt?: Date
+    readonly environmentReadyAt?: Date
+    readonly worktreeRemovedAt?: Date
+  }>,
+): boolean {
+  return (
+    (turn.state === "running" || turn.state === "finalizing" || turn.state === "interrupted_recovery") &&
+    turn.transitionTimestamps?.stopping === undefined &&
+    runs.length === 2 &&
+    runs.every(
+      (run) => run.finalizedAt !== undefined || (run.environmentReadyAt !== undefined && !run.worktreeRemovedAt),
+    )
+  )
+}
+
+type DecidedRun = { readonly side: Side; readonly selectable?: boolean } & ResumableRun
 
 /**
  * May the voter call this battle a tie?
@@ -259,8 +358,9 @@ export function canTie(
  * May the voter discard this battle instead of applying either result?
  *
  * After a stop, always. A finished battle is decided by the vote, unless neither result can be
- * chosen, which means both runs failed; Retry stays open beside it. The service refuses what this
- * refuses, and the app shows Discard from it.
+ * chosen, which means both runs failed, Retry staying open beside it, or the engine's restart cut
+ * it off (`canResumeBattle`). The service refuses what this refuses, and the app shows Discard
+ * from it.
  */
 export function canDiscardBattle(
   turn: { readonly state: BattleState; readonly resolution?: unknown },
@@ -268,6 +368,7 @@ export function canDiscardBattle(
 ): boolean {
   if (turn.resolution !== undefined) return false
   if (turn.state === "awaiting_stop_resolution") return true
+  if (canResumeBattle(turn, runs)) return true
   return (
     turn.state === "awaiting_vote" &&
     Side.every((side) => runs.some((run) => run.side === side && run.selectable !== true))

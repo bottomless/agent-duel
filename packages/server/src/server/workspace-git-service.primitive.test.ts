@@ -260,6 +260,7 @@ function createSnapshot(cwd: string, overrides?: SnapshotOverrides): WorkspaceGi
       pullRequest: resolveSnapshotPullRequest(base, overrides),
       error: resolveSnapshotError(base, overrides),
     },
+    remote: { signInRequired: false },
   };
 }
 
@@ -360,7 +361,7 @@ function buildDefaultServiceDeps() {
     hasOriginRemote: vi.fn(async () => false),
     runGitFetch: vi.fn(async () => {
       await createDeferred<void>().promise;
-      return { changes: [], error: null };
+      return { changes: [], error: null, signInRequired: false };
     }),
     runGitCommand: vi.fn(async () => ({
       stdout: `${REPO_CWD}\n`,

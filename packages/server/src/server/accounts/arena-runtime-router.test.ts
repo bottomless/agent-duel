@@ -228,6 +228,45 @@ describe("Arena runtime proxy", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer account-session-token");
   });
 
+  it("forwards a contestant replay and the heartbeat period the engine times out on", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    upstream.mockResolvedValue(
+      new Response('data: {"ok":true}\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream", "X-Arena-Heartbeat-Ms": "10000" },
+      }),
+    );
+
+    const response = await fetch(
+      `${baseUrl}/api/arena-runtime/api/openrouter/api/v1/arena/replay`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${runtime.token}`,
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "assignment-1",
+          "X-Arena-Scope-ID": "battle-1",
+          "X-Arena-Generation-ID": "gen_00000000000000000000000000000001",
+        },
+        body: "{}",
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-arena-heartbeat-ms")).toBe("10000");
+    expect(await response.text()).toBe('data: {"ok":true}\n\n');
+    const [url, init] = upstream.mock.calls[0]!;
+    expect(url).toBe("https://control.agentduel.test/api/openrouter/api/v1/arena/replay");
+    expect(new Headers(init?.headers).get("x-arena-generation-id")).toBe(
+      "gen_00000000000000000000000000000001",
+    );
+  });
+
   it("rejects routes outside the Arena allowlist", async () => {
     installArenaCredentials({
       mode: "hosted",

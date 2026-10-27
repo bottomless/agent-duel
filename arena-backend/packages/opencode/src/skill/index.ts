@@ -1,5 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import path from "path"
+import { realpath } from "fs/promises"
 import { Effect, Layer, Context, Schema } from "effect"
 import { NamedError } from "@opencode-ai/core/util/error"
 import type { Agent } from "@/agent/agent"
@@ -102,7 +103,15 @@ export interface Interface {
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
 }
 
-const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
+type Parsed = {
+  match: string
+  real: string
+  name: string
+  description?: string
+  content: string
+}
+
+const parse = Effect.fnUntraced(function* (match: string, events: EventV2Bridge.Service["Service"]) {
   const md = yield* Effect.tryPromise({
     try: () => ConfigMarkdown.parse(match),
     catch: (err) => err,
@@ -118,24 +127,39 @@ const add = Effect.fnUntraced(function* (state: State, match: string, events: Ev
     ),
   )
 
-  if (!md) return
+  if (!md) return undefined
 
-  if (!isSkillFrontmatter(md.data)) return
+  if (!isSkillFrontmatter(md.data)) return undefined
 
-  if (state.skills[md.data.name]) {
+  const real = yield* Effect.promise(() => realpath(match).catch(() => match))
+  return {
+    match,
+    real,
+    name: md.data.name,
+    description: md.data.description,
+    content: md.content,
+  } satisfies Parsed
+})
+
+const add = Effect.fnUntraced(function* (state: State, real: Map<string, string>, skill: Parsed) {
+  const existing = state.skills[skill.name]
+  // A skill linked into a second root (the `skills` installer links ~/.agents/skills into
+  // ~/.claude/skills) is one skill, so skip the warning. The later path still wins either way.
+  if (existing && real.get(skill.name) !== skill.real) {
     yield* Effect.logWarning("duplicate skill name", {
-      name: md.data.name,
-      existing: state.skills[md.data.name].location,
-      duplicate: match,
+      name: skill.name,
+      existing: existing.location,
+      duplicate: skill.match,
     })
   }
 
-  state.dirs.add(path.dirname(match))
-  state.skills[md.data.name] = {
-    name: md.data.name,
-    description: md.data.description,
-    location: match,
-    content: md.content,
+  state.dirs.add(path.dirname(skill.match))
+  real.set(skill.name, skill.real)
+  state.skills[skill.name] = {
+    name: skill.name,
+    description: skill.description,
+    location: skill.match,
+    content: skill.content,
   }
 })
 
@@ -164,7 +188,11 @@ const scan = Effect.fnUntraced(function* (
     }),
   )
 
-  for (const match of matches) {
+  // Glob returns matches in walk order, which varies between scans.
+  for (const match of matches.toSorted()) {
+    // A Set keeps a value at its first position, so drop it first: a path that a later root
+    // matches again (an explicit `skills.paths` entry for a global dir) takes the later position.
+    state.matches.delete(match)
     state.matches.add(match)
     state.dirs.add(path.dirname(match))
   }
@@ -197,7 +225,10 @@ const discoverSkills = Effect.fnUntraced(function* (
       .up({ targets: externalDirs, start: directory, stop: worktree })
       .pipe(Effect.catch(() => Effect.succeed([] as string[])))
 
-    for (const root of upDirs) {
+    // `up` lists the nearest directory first. Scan the outermost first, so a nearer (more specific)
+    // root wins in a monorepo. The sort is stable, so `.agents` still beats `.claude` at one level.
+    const nearestLast = upDirs.toSorted((a, b) => path.dirname(a).length - path.dirname(b).length)
+    for (const root of nearestLast) {
       yield* scan(state, root, EXTERNAL_SKILL_PATTERN, { dot: true, scope: "project" })
     }
   }
@@ -237,10 +268,16 @@ const loadSkills = Effect.fnUntraced(function* (
   discovered: DiscoveryState,
   events: EventV2Bridge.Service["Service"],
 ) {
-  yield* Effect.forEach(discovered.matches, (match) => add(state, match, events), {
+  const parsed = yield* Effect.forEach(discovered.matches, (match) => parse(match, events), {
     concurrency: "unbounded",
-    discard: true,
   })
+  // Apply in scan order, so a later root overrides an earlier one for the same name. Applying as
+  // parses finish let the pick change between directory instances; the system prompt lists the
+  // location, so the prompt changed with it and the provider's prompt cache missed.
+  const real = new Map<string, string>()
+  for (const skill of parsed) {
+    if (skill) yield* add(state, real, skill)
+  }
 
   yield* Effect.logInfo("init", { count: Object.keys(state.skills).length })
 })

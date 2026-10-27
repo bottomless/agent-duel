@@ -648,6 +648,21 @@ export const en = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "Sign in to {{host}}",
+        title: "Sign-in needed",
+        description: "Agent Duel can't fetch updates from {{host}} without a login.",
+        sshDescription:
+          "{{host}} didn't accept your SSH key, so Agent Duel can't fetch updates. Load the key with ssh-add, or add it to your account on {{host}}.",
+        username: "Username",
+        password: "Password or token",
+        signIn: "Sign in",
+        signingIn: "Signing in...",
+        signedIn: "Signed in to {{host}}",
+        loginNotKept:
+          "Signed in, but Git didn't keep the login, so the next fetch needs it again. To keep it, set up a Git credential helper or switch origin to SSH.",
+        failed: "Sign-in failed: {{reason}}",
+      },
       actions: {
         moreOptions: "More options",
         moreActions: "More actions",
@@ -795,6 +810,7 @@ export const en = {
           title: 'Archive "{{workspaceName}}"?',
           confirm: "Archive",
           cancel: "Cancel",
+          message: "The chat moves to Archived, where you can unarchive it.",
           uncommittedChanges: "Uncommitted changes",
           uncommittedChangesWithDiff: "Uncommitted changes ({{diffStat}})",
           addedLine: "{{count}} added line",

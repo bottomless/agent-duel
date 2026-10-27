@@ -23,6 +23,7 @@ import { PaneIconAction } from "./pane-icon-action";
 import {
   buildThreeWayBlocks,
   limitThreeWayBlocks,
+  type ThreeWayBlock,
   type ThreeWayRow,
   type ThreeWayWindowedDiff,
 } from "./three-way-diff";
@@ -75,6 +76,7 @@ function sideTokens(
 const ThemedMaximize2 = withUnistyles(Maximize2);
 const ThemedMinimize2 = withUnistyles(Minimize2);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
+const disabledColorMapping = (theme: Theme) => ({ color: theme.colors.surface4 });
 const sideColorMappings: Record<Side, (theme: Theme) => { color: string }> = {
   a: (theme) => ({ color: theme.colors.statusDotRunning }),
   b: (theme) => ({ color: theme.colors.statusDotWarning }),
@@ -107,6 +109,15 @@ function Action({
         <ThemedMaximize2 size={ICON_SIZE.xs} uniProps={mapping} />
       )}
     </PaneIconAction>
+  );
+}
+
+/** Expand's place for a side that has no result yet: the glyph, dimmed, and no action. */
+function WaitingAction({ side }: { side: Side }) {
+  return (
+    <View style={styles.actionDisabled} testID={`arena-diff-expand-${side}-waiting`}>
+      <ThemedMaximize2 size={ICON_SIZE.xs} uniProps={disabledColorMapping} />
+    </View>
   );
 }
 
@@ -213,12 +224,15 @@ function ReadyDiff({
   diff,
   truncated,
   layout,
+  waitingFor,
   embedded,
 }: {
   file: ArenaThreeWayFile;
   diff: ThreeWayWindowedDiff;
   truncated: boolean;
   layout: ArenaDiffLayout;
+  /** The side still working. Its column is a placeholder and only the other side expands. */
+  waitingFor: Side | undefined;
   embedded: boolean;
 }) {
   const viewportRef = useRef<View>(null);
@@ -330,6 +344,65 @@ function ReadyDiff({
   }, [diff]);
   const stacked = layout === "single" || mode !== null;
   const sides = mode ? [mode] : SIDES;
+  const renderBlock = (
+    block: ThreeWayBlock,
+    shown: readonly Side[],
+    options: { stackedRows: boolean; labels?: boolean },
+  ) => {
+    if (block.kind === "gap") return <ExpandBand key={block.key} gap={block} onReveal={reveal} />;
+    if (block.kind === "omitted")
+      return (
+        <Text key={block.key} style={styles.notice}>
+          {truncated
+            ? "Lines not sent. This comparison is incomplete; later changes may be missing."
+            : `${block.lines.toLocaleString()} unchanged lines not sent with this file.`}
+        </Text>
+      );
+    const showStatus = shown.some(
+      (side) =>
+        side !== waitingFor &&
+        !block.rows.some((row) => row[side] && row[side]?.type !== "context"),
+    );
+    return (
+      <View
+        key={block.key}
+        style={options.stackedRows ? styles.stackedRegion : styles.pair}
+        testID={`arena-diff-region-${block.key}`}
+      >
+        {shown.map((side) =>
+          side === waitingFor ? (
+            // Stacked, the working side's slot is one line per region.
+            <View key={side} style={styles.pendingLine} testID={`arena-diff-pending-${side}`}>
+              <Text style={[styles.pendingWho, side === "a" ? styles.agentA : styles.agentB]}>
+                {labelFor(side)}
+              </Text>
+              <Text style={styles.pendingText} numberOfLines={1}>
+                is still working · its version of this region appears here
+              </Text>
+            </View>
+          ) : (
+            <View key={side} style={styles.column}>
+              {options.labels ? (
+                <Text style={[styles.regionLabel, side === "a" ? styles.agentA : styles.agentB]}>
+                  {labelFor(side)}
+                </Text>
+              ) : null}
+              <Column
+                rows={block.rows}
+                side={side}
+                tokens={tokens}
+                aligned={diff.aligned}
+                hasBoth={hasBoth}
+                numberWidth={numberWidth}
+                stacked={options.stackedRows}
+                showStatus={showStatus}
+              />
+            </View>
+          ),
+        )}
+      </View>
+    );
+  };
   // Several diffs can be open at once, so each viewer names its file for review telemetry to
   // credit a scroll to the diff that scrolled.
   const viewportData = useMemo(
@@ -354,18 +427,19 @@ function ReadyDiff({
           ) : null}
           {!mode && layout === "single" ? (
             <View style={styles.actions}>
-              <Action
-                label="Expand Agent A"
-                onPress={expandA}
-                side="a"
-                testID="arena-diff-expand-a"
-              />
-              <Action
-                label="Expand Agent B"
-                onPress={expandB}
-                side="b"
-                testID="arena-diff-expand-b"
-              />
+              {SIDES.map((side) =>
+                side === waitingFor ? (
+                  <WaitingAction key={side} side={side} />
+                ) : (
+                  <Action
+                    key={side}
+                    label={`Expand ${labelFor(side)}`}
+                    onPress={side === "a" ? expandA : expandB}
+                    side={side}
+                    testID={`arena-diff-expand-${side}`}
+                  />
+                ),
+              )}
             </View>
           ) : null}
         </View>
@@ -376,11 +450,15 @@ function ReadyDiff({
                 <Text style={[styles.agentLabel, side === "a" ? styles.agentA : styles.agentB]}>
                   {labelFor(side)}
                 </Text>
-                <Action
-                  label={`Expand ${labelFor(side)}`}
-                  onPress={side === "a" ? expandA : expandB}
-                  testID={`arena-diff-expand-${side}`}
-                />
+                {side === waitingFor ? (
+                  <WaitingAction side={side} />
+                ) : (
+                  <Action
+                    label={`Expand ${labelFor(side)}`}
+                    onPress={side === "a" ? expandA : expandB}
+                    testID={`arena-diff-expand-${side}`}
+                  />
+                )}
               </View>
             ))}
           </View>
@@ -397,48 +475,36 @@ function ReadyDiff({
           This file was not sent in full. Later changes may be missing.
         </Text>
       ) : null}
-      {blocks.map((block) => {
-        if (block.kind === "gap")
-          return <ExpandBand key={block.key} gap={block} onReveal={reveal} />;
-        if (block.kind === "omitted")
-          return (
-            <Text key={block.key} style={styles.notice}>
-              {truncated
-                ? "Lines not sent. This comparison is incomplete; later changes may be missing."
-                : `${block.lines.toLocaleString()} unchanged lines not sent with this file.`}
-            </Text>
-          );
-        const showStatus = SIDES.some(
-          (side) => !block.rows.some((row) => row[side] && row[side]?.type !== "context"),
-        );
-        return (
-          <View
-            key={block.key}
-            style={stacked ? styles.stackedRegion : styles.pair}
-            testID={`arena-diff-region-${block.key}`}
-          >
-            {sides.map((side) => (
-              <View key={side} style={styles.column}>
-                {stacked && !mode ? (
-                  <Text style={[styles.regionLabel, side === "a" ? styles.agentA : styles.agentB]}>
-                    {labelFor(side)}
+      {waitingFor && !stacked ? (
+        // The working side's column is one placeholder for the whole file, the slot its diff
+        // will fill, beside the finished side's regions.
+        <View style={styles.pair}>
+          {SIDES.map((side) =>
+            side === waitingFor ? (
+              <View
+                key={side}
+                style={[styles.column, styles.pendingColumn]}
+                testID={`arena-diff-pending-${side}`}
+              >
+                <View style={styles.pendingMessage}>
+                  <Text style={styles.pendingTitle}>{labelFor(side)} is still working</Text>
+                  <Text style={styles.pendingHint}>
+                    Its version of this file appears here when it finishes.
                   </Text>
-                ) : null}
-                <Column
-                  rows={block.rows}
-                  side={side}
-                  tokens={tokens}
-                  aligned={diff.aligned}
-                  hasBoth={hasBoth}
-                  numberWidth={numberWidth}
-                  stacked={stacked}
-                  showStatus={showStatus}
-                />
+                </View>
               </View>
-            ))}
-          </View>
-        );
-      })}
+            ) : (
+              <View key={side} style={styles.column}>
+                {blocks.map((block) => renderBlock(block, [side], { stackedRows: true }))}
+              </View>
+            ),
+          )}
+        </View>
+      ) : (
+        blocks.map((block) =>
+          renderBlock(block, sides, { stackedRows: stacked, labels: stacked && !mode }),
+        )
+      )}
       {diff.rows.length === 0 ? (
         <Text style={styles.notice}>No textual changes from the original.</Text>
       ) : null}
@@ -456,10 +522,13 @@ function ReadyDiff({
 export function BaseRelativeFileView({
   file,
   layout,
+  waitingFor,
   embedded = false,
 }: {
   file: ArenaThreeWayFile;
   layout: ArenaDiffLayout;
+  /** The side still working: its column is a placeholder until its result lands. */
+  waitingFor?: Side;
   /** Drawn under its row in the Changes list, which supplies the edges around it. */
   embedded?: boolean;
 }) {
@@ -476,6 +545,7 @@ export function BaseRelativeFileView({
       diff={comparison.diff}
       truncated={comparison.truncated}
       layout={layout}
+      waitingFor={waitingFor}
       embedded={embedded}
     />
   );
@@ -614,4 +684,57 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.xs,
   },
   pad: { padding: theme.spacing[2] },
+  // Expand's box without its action, so the header keeps its height and the pair its rhythm.
+  actionDisabled: {
+    height: 28,
+    paddingHorizontal: theme.spacing[2],
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // The working side's slot: hatched, the size of the finished side's diff beside it.
+  pendingColumn: {
+    justifyContent: "center",
+    borderLeftWidth: 1,
+    borderLeftColor: theme.colors.border,
+    _web: {
+      backgroundImage: `repeating-linear-gradient(135deg, ${theme.colors.surface0} 0 10px, ${tint(theme.colors.surface2, 55)} 10px 11px)`,
+    },
+  },
+  pendingMessage: {
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing[1],
+    padding: theme.spacing[4],
+  },
+  pendingTitle: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foreground,
+    textAlign: "center",
+  },
+  pendingHint: {
+    fontSize: theme.fontSize.xs,
+    color: theme.colors.foregroundMuted,
+    textAlign: "center",
+    maxWidth: 280,
+  },
+  pendingLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    height: 30,
+    paddingHorizontal: theme.spacing[2],
+    overflow: "hidden",
+    _web: {
+      backgroundImage: `repeating-linear-gradient(135deg, ${theme.colors.surface0} 0 10px, ${tint(theme.colors.surface2, 55)} 10px 11px)`,
+    },
+  },
+  pendingWho: {
+    fontSize: theme.fontSize.xs,
+    fontWeight: theme.fontWeight.medium,
+  },
+  pendingText: {
+    flexShrink: 1,
+    fontSize: theme.fontSize.xs,
+    color: theme.colors.foregroundMuted,
+  },
 }));

@@ -218,6 +218,59 @@ describe("ArenaTelemetry", () => {
     expect(generation?.usage).toMatchObject({ promptTokens: 1000, cacheReadTokens: 900, cacheWriteTokens: 80 })
   })
 
+  test("lets go of a released run's usage, including a request that reports after the release", async () => {
+    const generations = new Map<string, GenerationDocument>()
+    const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
+      saveGeneration: async (input: GenerationDocument) => {
+        generations.set(input._id, input)
+        return input
+      },
+      updateGeneration: async (id: string, patch: Partial<GenerationDocument>) => {
+        const next = { ...generations.get(id)!, ...patch }
+        generations.set(id, next)
+        return next
+      },
+      generationsForRuns: async () => [...generations.values()],
+      updateRun: async (_id: string, patch: object) => patch,
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const request = (n: number): RequestMetadata => ({
+      assignment: {
+        runID: "run-a",
+        rootSessionID: "session-a",
+        scopeID: "turn-a",
+        assignmentID: "assignment-a",
+        telemetry: true,
+      },
+      generationID: `gen_0000000000000000000000000000001${n}`,
+      requestID: `00000000-0000-4000-8000-00000000001${n}`,
+      sessionID: "session-a",
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      startedAt: new Date(Date.now() - 10),
+    })
+    const answer = async (metadata: RequestMetadata) => {
+      await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+      await telemetry.response?.({ metadata, status: 200, headers: {}, receivedAt: new Date() })
+      telemetry.rawChunk?.(
+        metadata,
+        'data: {"choices":[{"finish_reason":"stop","delta":{"content":"done"}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}\n',
+      )
+      await telemetry.complete?.(metadata, new Date())
+    }
+
+    await answer(request(1))
+    await telemetry.release?.({ runIDs: ["run-a"] })
+    await answer(request(2))
+    // Nothing is held for a reveal any more, so even one would persist no usage.
+    await telemetry.reveal?.({ runIDs: ["run-a"], metrics: [] })
+
+    expect([...generations.values()].map((generation) => generation.usage)).toEqual([undefined, undefined])
+  })
+
   test("persists partial upstream output when a generation is interrupted", async () => {
     let generation: GenerationDocument | undefined
     const artifacts: Array<{ id: string; data: string }> = []

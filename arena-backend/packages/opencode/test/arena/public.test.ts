@@ -73,6 +73,7 @@ function snapshot(revealed: boolean): BattleSnapshot {
             },
             selectedEarly: false,
             canonicalUserMessageID: "message-a",
+            canonicalLastMessageID: "message-z",
           }
         : {}),
       createdAt: now,
@@ -154,6 +155,27 @@ describe("ArenaPublic", () => {
 
     input.turn!.state = "complete"
     expect(project({ ...input, history: [input.turn!] }).history[0]?.activeOperations).toBeUndefined()
+  })
+
+  test("names nobody for a battle that failed while it was being created", () => {
+    const input = snapshot(false)
+    const turn = input.turn!
+    turn.state = "discarded"
+    turn.resolution = { kind: "aborted", reason: "Arena battle failed before resolution", revealed: false }
+    // The placement still holds no names; projecting identities would throw.
+    turn.placement = {
+      a: { ...turn.placement.a, model: undefined },
+      b: { ...turn.placement.b, model: undefined },
+    }
+    input.runs[0]!.runState = "error"
+    input.runs[0]!.error = "Arena battle could not start"
+    const projected = project({ ...input, history: [turn] })
+    expect(projected.turn?.revealed).toBe(false)
+    expect(projected.turn?.identities).toBeUndefined()
+    expect(projected.runs[0]?.identity).toBeUndefined()
+    expect(projected.runs[0]?.error).toBe("Contestant run failed")
+    expect(projected.history[0]?.identities).toBeUndefined()
+    expect(projected.history[0]?.resolution).toMatchObject({ kind: "aborted" })
   })
 
   test("drops transition operations this build does not know", () => {
@@ -551,6 +573,7 @@ describe("ArenaPublic", () => {
     expect(value.turn?.canonicalUserMessageID).toBe("message-a")
     expect(value.turn?.selectedEarly).toBe(false)
     expect(value.history[0]?.canonicalUserMessageID).toBe("message-a")
+    expect(value.history[0]?.canonicalLastMessageID).toBe("message-z")
     expect(value.history[0]?.selectedEarly).toBe(false)
     expect(json).not.toContain("anthropic/")
     expect(json).not.toContain("private-assignment")
@@ -707,7 +730,10 @@ test("keeps a trimmed run's count of left-out messages through the public snapsh
   // `hydrateRuns` merges the thread, with `activityOmitted`, into each run before this parse.
   const projected = project(snapshot(false))
   const parsed = parseSnapshot(
-    jsonValue({ ...projected, runs: projected.runs.map((run) => ({ ...run, messages: [], parts: {}, activityOmitted: 7 })) }),
+    jsonValue({
+      ...projected,
+      runs: projected.runs.map((run) => ({ ...run, messages: [], parts: {}, activityOmitted: 7 })),
+    }),
   )
   expect(projected.runs.length).toBeGreaterThan(0)
   expect(parsed.runs.map((run) => run.activityOmitted)).toEqual(projected.runs.map(() => 7))

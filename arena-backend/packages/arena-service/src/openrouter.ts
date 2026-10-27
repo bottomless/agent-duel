@@ -1,8 +1,21 @@
-import { randomUUID } from "crypto"
-import { recordAssignmentGenerationMetrics, reserveRoutingAssignment } from "./assignments"
-import { authorize, type ArenaContext } from "./context"
-import type { GenerationMetrics, UsageTotals } from "./metrics"
+import { createHash, createHmac, randomUUID } from "crypto"
+import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
+import { authorize, type ArenaContext, type Fetch } from "./context"
+import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
 import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
+import type { ModelPool, ModelProfile } from "./pool"
+import { createReasoningRedactor } from "./reasoning"
+import {
+  HEARTBEAT_HEADER,
+  HEARTBEAT_LINE,
+  HEARTBEAT_MS,
+  REPLAY_PATH,
+  replayRecorder,
+  replayResponse,
+  type ReplayRecorder,
+} from "./stream-recovery"
+
+type ReasoningRedactor = ReturnType<typeof createReasoningRedactor>
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -64,23 +77,32 @@ function finishReason(value: unknown) {
   return undefined
 }
 
+// A `/responses` stream nests the response, with its usage, status and provider, in each event.
+function generation(value: unknown) {
+  return record(value) && record(value.response) ? value.response : value
+}
+
 function metricsCollector(generationID: string, startedAt: number) {
   let usagePayload: unknown
   let finished: string | undefined
+  let provider: string | undefined
   return {
-    observe(value: unknown) {
+    observe(event: unknown) {
+      const value = generation(event)
       if (record(value) && (value.usage !== undefined || (record(value.data) && value.data.usage !== undefined))) {
         usagePayload = value
       }
       finished = finishReason(value) ?? finished
+      if (record(value) && typeof value.provider === "string" && value.provider) provider = value.provider
     },
-    value(): GenerationMetrics | undefined {
+    value(): StoredGenerationMetrics | undefined {
       const measured = usage(usagePayload, Math.max(0, Date.now() - startedAt))
       if (!measured && !finished) return undefined
       return {
         generationID,
         ...(measured ? { usage: measured } : {}),
         ...(finished ? { finishReason: finished } : {}),
+        ...(provider ? { provider } : {}),
       }
     },
   }
@@ -112,18 +134,30 @@ function sanitizePayload(value: unknown, generationID: string, stream = false): 
   }
   if ("usage" in sanitized) sanitized.usage = sanitizeUsage(sanitized.usage)
   if (record(sanitized.data)) sanitized.data = sanitizePayload(sanitized.data, generationID)
+  if (record(sanitized.response)) sanitized.response = sanitizePayload(sanitized.response, generationID)
   return sanitized
 }
 
-function sanitizeLine(line: string, generationID: string, observe?: (value: unknown) => void) {
+function sanitizeLine(
+  line: string,
+  generationID: string,
+  reasoning: ReasoningRedactor,
+  observe?: (value: unknown) => void,
+) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
-  if (!raw || raw === "[DONE]") return line
+  if (!raw) return line
   try {
+    if (raw === "[DONE]") {
+      const tail = reasoning.flush()
+      reasoning.clear()
+      return tail ? `data: ${JSON.stringify({ id: generationID, ...tail })}\n\n${line}` : line
+    }
     const value = JSON.parse(raw) as unknown
     observe?.(value)
-    return `data: ${JSON.stringify(sanitizePayload(value, generationID, true))}`
+    return `data: ${JSON.stringify(reasoning.redact(sanitizePayload(value, generationID, true), true))}`
   } catch {
+    reasoning.clear()
     return `data: ${JSON.stringify({
       error: { message: "Arena contestant stream failed", type: "arena_stream_error" },
     })}`
@@ -133,16 +167,52 @@ function sanitizeLine(line: string, generationID: string, observe?: (value: unkn
 function sanitizeStream(
   stream: ReadableStream<Uint8Array>,
   generationID: string,
+  reasoning: ReasoningRedactor,
   startedAt: number,
-  complete: (metrics: GenerationMetrics | undefined) => Promise<void>,
+  complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
+  recovery?: ReplayRecorder,
 ) {
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
   let pending = ""
   let cancelled = false
+  let heartbeat: ReturnType<typeof setInterval> | undefined
+  let lastWrite = Date.now()
   const metrics = metricsCollector(generationID, startedAt)
+  const stopHeartbeat = () => {
+    if (heartbeat) clearInterval(heartbeat)
+    heartbeat = undefined
+  }
+  // Whether the client has data lines of an event whose closing blank line it has not received. An
+  // error written into that event becomes one more data line, the client cannot parse the joined
+  // data, and a retryable failure turns into a final one.
+  let open = false
+  const write = (controller: ReadableStreamDefaultController<Uint8Array>, text: string) => {
+    controller.enqueue(encoder.encode(text))
+    recovery?.record(text)
+    lastWrite = Date.now()
+  }
+  const writeLine = (controller: ReadableStreamDefaultController<Uint8Array>, line: string) => {
+    if (open && line.startsWith('data: {"error":')) write(controller, "\n")
+    write(controller, `${line}\n`)
+    if (line.startsWith("data:")) open = true
+    else if (line === "") open = false
+  }
   return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (!recovery) return
+      // A model that thinks without output still sends comments, so a quiet connection is a dead one.
+      heartbeat = setInterval(() => {
+        if (Date.now() - lastWrite < HEARTBEAT_MS) return
+        try {
+          controller.enqueue(encoder.encode(`${HEARTBEAT_LINE}\n`))
+          lastWrite = Date.now()
+        } catch {
+          stopHeartbeat()
+        }
+      }, HEARTBEAT_MS / 4)
+    },
     async pull(controller) {
       try {
         // A pull that emits nothing may never be called again. Keep reading a fragmented SSE line.
@@ -151,8 +221,14 @@ function sanitizeStream(
           if (cancelled) return
           if (next.done) {
             pending += decoder.decode()
-            if (pending) controller.enqueue(encoder.encode(sanitizeLine(pending, generationID, metrics.observe)))
-            await complete(metrics.value())
+            if (pending) writeLine(controller, sanitizeLine(pending, generationID, reasoning, metrics.observe))
+            if (open) writeLine(controller, "")
+            const tail = reasoning.flush()
+            if (tail) write(controller, `\n\ndata: ${JSON.stringify({ id: generationID, ...tail })}\n\n`)
+            reasoning.clear()
+            stopHeartbeat()
+            // Recorded before the close: a hosted function may stop once its response ends.
+            await Promise.all([complete(metrics.value()), recovery?.complete()])
             controller.close()
             return
           }
@@ -160,15 +236,17 @@ function sanitizeStream(
           const lines = pending.split("\n")
           pending = lines.pop() ?? ""
           if (!lines.length) continue
-          for (const line of lines)
-            controller.enqueue(encoder.encode(`${sanitizeLine(line, generationID, metrics.observe)}\n`))
+          for (const line of lines) writeLine(controller, sanitizeLine(line, generationID, reasoning, metrics.observe))
           return
         }
       } catch {
+        reasoning.clear()
+        stopHeartbeat()
         if (cancelled) return
+        await recovery?.fail()
         controller.enqueue(
           encoder.encode(
-            `data: ${JSON.stringify({
+            `${open ? "\n" : ""}data: ${JSON.stringify({
               error: { message: "Arena contestant request failed", type: "arena_retryable_stream_error" },
             })}\n\n`,
           ),
@@ -178,6 +256,9 @@ function sanitizeStream(
     },
     cancel(reason) {
       cancelled = true
+      stopHeartbeat()
+      reasoning.clear()
+      void recovery?.fail()
       return reader.cancel(reason)
     },
   })
@@ -243,6 +324,44 @@ function invalidRequestBody(input: unknown) {
   return undefined
 }
 
+// A battle side lives for one turn, so its assignment id keys its cache and its provider. A
+// single-agent chat draws a new assignment for every message over one growing conversation, and a
+// key per message would send each message's first call away from the cache the last one wrote. The
+// engine names that scope after the session and the message (`ensureSingleAgentRating` in
+// `opencode/src/arena/service.ts`), so the key is a keyed hash of the account and the session: the
+// same for the whole chat, whatever model each message draws, and naming neither.
+const singleAgentScope = /^single-agent\|(\d+):/
+
+function cacheKey(
+  apiKey: string,
+  userId: string,
+  scopeID: string,
+  assignment: { readonly assignmentID: string; readonly modelSize?: SingleAgentModelSize },
+) {
+  const match = assignment.modelSize === undefined ? null : singleAgentScope.exec(scopeID)
+  if (!match) return assignment.assignmentID
+  const sessionID = scopeID.slice(match[0].length, match[0].length + Number(match[1]))
+  if (!sessionID || sessionID.length !== Number(match[1])) return assignment.assignmentID
+  const key = createHash("sha256").update("arena-cache-key-v1\0").update(apiKey).digest()
+  return createHmac("sha256", key).update(`${userId.length}:${userId}|${sessionID}`).digest("hex").slice(0, 32)
+}
+
+/** The fields the proxy decides for every contestant call, replacing any the engine sent. */
+function assignedRouting(model: ModelProfile, modelSize: SingleAgentModelSize | undefined, key: string) {
+  return {
+    model: model.slug,
+    reasoning:
+      model.reasoningEffort === null
+        ? { enabled: true }
+        : { effort: model.reasoningEffort ?? (modelSize === "medium" ? "xhigh" : "high") },
+    provider: model.routing,
+    // Without these OpenRouter's throughput sort can move a conversation to another provider whose
+    // cache is empty, and some providers miss their own cache without a key.
+    session_id: key,
+    prompt_cache_key: key,
+  }
+}
+
 function assignmentHeaders(request: Request) {
   const assignmentHeader = request.headers.get("x-arena-assignment-id")
   const scopeHeader = request.headers.get("x-arena-scope-id")
@@ -277,8 +396,10 @@ function logRefusal(context: RefusalContext, status: number, upstream: string) {
 async function sanitizeAssignedResponse(
   response: Response,
   refusal: RefusalContext,
+  reasoning: ReasoningRedactor,
   startedAt: number,
-  complete: (metrics: GenerationMetrics | undefined) => Promise<void>,
+  complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
+  recovery?: () => ReplayRecorder | undefined,
 ) {
   const { generationID } = refusal
   const headers = assignedHeaders(response.headers)
@@ -300,7 +421,9 @@ async function sanitizeAssignedResponse(
     )
   }
   if ((response.headers.get("content-type") ?? "").includes("text/event-stream") && response.body) {
-    return new Response(sanitizeStream(response.body, generationID, startedAt, complete), {
+    const recorder = recovery?.()
+    if (recorder) headers.set(HEARTBEAT_HEADER, String(HEARTBEAT_MS))
+    return new Response(sanitizeStream(response.body, generationID, reasoning, startedAt, complete, recorder), {
       status: response.status,
       headers,
     })
@@ -309,7 +432,7 @@ async function sanitizeAssignedResponse(
   const metrics = metricsCollector(generationID, startedAt)
   metrics.observe(raw)
   await complete(metrics.value())
-  const payload = sanitizePayload(raw, generationID)
+  const payload = reasoning.redact(sanitizePayload(raw, generationID))
   headers.set("content-type", "application/json")
   return Response.json(payload, { status: response.status, headers })
 }
@@ -345,6 +468,24 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         { status: 400 },
       )
     }
+    const requestedGenerationID = request.headers.get("x-arena-generation-id")?.trim()
+    if (requestedGenerationID && !/^gen_[0-9a-f]{32}$/i.test(requestedGenerationID)) {
+      return Response.json({ error: { message: "Arena generation ID is invalid" } }, { status: 400 })
+    }
+    if (context.streamRecovery && request.method === "POST" && suffix === REPLAY_PATH) {
+      if (!requestedGenerationID) {
+        return Response.json({ error: { message: "Arena generation ID is required" } }, { status: 400 })
+      }
+      const db = await context.db()
+      const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
+      if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
+      return await replayResponse(
+        db,
+        { userId: caller.id, ...assignment, generationID: requestedGenerationID },
+        context.now,
+        request.signal,
+      )
+    }
     if (request.method !== "POST" || !["/api/v1/chat/completions", "/api/v1/responses"].includes(suffix)) {
       return Response.json({ error: { message: "Arena assignment cannot access this route" } }, { status: 400 })
     }
@@ -372,23 +513,22 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     if (input.model !== expectedModel) {
       return Response.json({ error: { message: "Arena contestant model is invalid" } }, { status: 400 })
     }
-    const requestedGenerationID = request.headers.get("x-arena-generation-id")?.trim()
-    if (requestedGenerationID && !/^gen_[0-9a-f]{32}$/i.test(requestedGenerationID)) {
-      return Response.json({ error: { message: "Arena generation ID is invalid" } }, { status: 400 })
-    }
+    const reasoning = createReasoningRedactor(apiKey, {
+      userId: caller.id,
+      scopeID: assignment.scopeID,
+      assignmentID: assignment.assignmentID,
+    })
+    const restored = reasoning.restore(input)
     const generationID = requestedGenerationID || `gen_${randomUUID().replaceAll("-", "")}`
     const startedAt = Date.now()
     body = new TextEncoder().encode(
       JSON.stringify({
-        ...withoutSampling(input),
-        model: routeAssignment.model.slug,
-        reasoning:
-          routeAssignment.model.reasoningEffort === null
-            ? { enabled: true }
-            : {
-                effort: routeAssignment.model.reasoningEffort ?? (routeAssignment.modelSize === "medium" ? "xhigh" : "high"),
-              },
-        provider: routeAssignment.model.routing,
+        ...withoutSampling(restored),
+        ...assignedRouting(
+          routeAssignment.model,
+          routeAssignment.modelSize,
+          cacheKey(apiKey, caller.id, assignment.scopeID, routeAssignment),
+        ),
         ...promptCache(routeAssignment.model.slug, input),
         stream_options: record(input.stream_options)
           ? { ...input.stream_options, include_usage: true }
@@ -409,7 +549,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       generationID,
       model: routeAssignment.model.slug,
     }
-    return await sanitizeAssignedResponse(response, refusal, startedAt, async (metrics) => {
+    const recordMetrics = async (metrics: StoredGenerationMetrics | undefined) => {
       if (!metrics || !requestedGenerationID) return
       try {
         await recordAssignmentGenerationMetrics(db, {
@@ -421,10 +561,42 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       } catch {
         console.error("[arena-service] Arena generation metrics could not be recorded")
       }
-    })
+    }
+    const recovery = () =>
+      context.streamRecovery && requestedGenerationID
+        ? replayRecorder(db, { userId: caller.id, ...assignment, generationID: requestedGenerationID }, context.now)
+        : undefined
+    return await sanitizeAssignedResponse(response, refusal, reasoning, startedAt, recordMetrics, recovery)
   } catch (error) {
     if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")
     return Response.json({ error: { message: "OpenRouter request failed" } }, { status: 502 })
+  }
+}
+
+/**
+ * Sends one small tool-carrying request per profile with the fields `assignedRouting` adds. Under
+ * `require_parameters` OpenRouter refuses a field a model's providers lack for that model's draws
+ * only, and the refusal tells the voter which model it is. The catalog check cannot show that, so
+ * run this before a pool change ships. It pays for one call per profile.
+ */
+export async function probeRouting(pool: ModelPool, apiKey: string, execute: Fetch = fetch) {
+  for (const profile of pool) {
+    const response = await execute("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...assignedRouting(profile, undefined, randomUUID()),
+        messages: [{ role: "user", content: "Reply with OK." }],
+        tools: [{ type: "function", function: { name: "noop", parameters: { type: "object", properties: {} } } }],
+        stream: false,
+      }),
+    })
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "")
+      throw new Error(
+        `Arena contestant refused the proxy's routing fields: ${profile.displayName} (${response.status}) ${detail.slice(0, MAX_LOGGED_REFUSAL)}`,
+      )
+    }
   }
 }

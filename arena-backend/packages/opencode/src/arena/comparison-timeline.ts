@@ -43,6 +43,24 @@ type ComparisonTimelineEvent =
   | { readonly type: "narrative"; readonly text: string }
   | { readonly type: "tool"; readonly name: string; readonly status: string }
 
+/**
+ * Whether a side showed the voter anything after its prompt: text, reasoning, or a tool call. The
+ * panes show reasoning, so it counts here although the judge never sees it.
+ */
+export function showedOutput(messages: readonly unknown[], promptMessageID: string) {
+  return messages.some((value) => {
+    if (!record(value) || !record(value.info) || !Array.isArray(value.parts)) return false
+    if (value.info.role !== "assistant" || typeof value.info.id !== "string" || value.info.id <= promptMessageID) {
+      return false
+    }
+    return value.parts.some((part) => {
+      if (!record(part)) return false
+      if (part.type === "tool") return true
+      return (part.type === "text" || part.type === "reasoning") && typeof part.text === "string" && part.text.trim() !== ""
+    })
+  })
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }

@@ -1,11 +1,13 @@
 import type { Store } from "./mongo"
 import type { ComparisonDocument, UsageTotals } from "./records"
 import { backend } from "./runtime"
-import { comparisonModel } from "@agent-duel/arena-service/utility-model"
+import { utilityModels } from "@agent-duel/arena-service/utility-model"
 import { prepareEvidence, type ComparisonFileFact } from "./comparison-evidence"
 
-export const model = comparisonModel.id
-export const provider = comparisonModel.provider
+// The service falls back to the next utility model when the first fails, so the record names the
+// first choice here and the model that answered in `resolvedModel`.
+export const model = utilityModels[0].id
+export const provider = utilityModels[0].provider
 export const promptVersion = "arena-comparison-v12"
 
 // Timelines carry only visible text and tool calls, so a real one runs a few thousand characters.
@@ -109,10 +111,10 @@ function splitTitle(content: string) {
 }
 
 /**
- * Identical trees leave no report to write, so the first turn asks the same model for the title
- * alone. Best effort: without one the chat keeps its prompt's first line.
+ * Identical trees or a failed side leave no report to write, so the first turn asks the same model
+ * for the title alone. Best effort: without one the chat keeps its prompt's first line.
  */
-async function nameChat(input: Input) {
+async function nameChat(input: Pick<Input, "turnID" | "userPrompt" | "userAttachments" | "execute">) {
   const target = backend()
   if (!target) return {}
   const prompt = [
@@ -154,14 +156,67 @@ async function nameChat(input: Input) {
   }
 }
 
-function resolvedProvider(value: unknown) {
+function responseField(value: unknown, key: "model" | "provider") {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
-  const provider = (value as Record<string, unknown>).provider
-  return typeof provider === "string" && provider.trim() ? provider : undefined
+  const field = (value as Record<string, unknown>)[key]
+  return typeof field === "string" && field.trim() ? field : undefined
+}
+
+function documentID(turnID: string) {
+  return `comparison|${turnID.length}:${turnID}`
+}
+
+/**
+ * The record of a turn where a side failed: there is nothing to weigh the other side against, so no
+ * report is paid for and no evidence is computed. The first turn is still named. The caller saves it
+ * (`Store.saveSkippedComparison`) only while the turn still waits on it.
+ */
+export async function skip(
+  input: Pick<
+    Input,
+    | "turnID"
+    | "turnIndex"
+    | "userPrompt"
+    | "userAttachments"
+    | "baseCommit"
+    | "aCommit"
+    | "bCommit"
+    | "baseTree"
+    | "aTree"
+    | "bTree"
+    | "artifactIDs"
+    | "execute"
+  >,
+): Promise<ComparisonDocument> {
+  const named = input.turnIndex === 0 ? await nameChat(input) : {}
+  const now = new Date()
+  return {
+    _id: documentID(input.turnID),
+    turnID: input.turnID,
+    baseCommit: input.baseCommit,
+    aCommit: input.aCommit,
+    bCommit: input.bCommit,
+    baseTree: input.baseTree,
+    aTree: input.aTree,
+    bTree: input.bTree,
+    artifactIDs: [...input.artifactIDs],
+    utilityInputManifest: [],
+    truncated: false,
+    omittedArtifacts: [],
+    promptVersion,
+    model,
+    provider,
+    state: "complete",
+    skipReason: "failed_side",
+    latencyMs: 0,
+    ...named,
+    createdAt: now,
+    updatedAt: now,
+  }
 }
 
 export async function generate(input: Input) {
-  const comparisonID = `comparison|${input.turnID.length}:${input.turnID}`
+  const comparisonID = documentID(input.turnID)
   const evidence = prepareEvidence(input)
   const transcriptA = bounded(input.transcriptA, MAX_TRANSCRIPT_CHARS)
   const transcriptB = bounded(input.transcriptB, MAX_TRANSCRIPT_CHARS)
@@ -354,7 +409,8 @@ export async function generate(input: Input) {
     return await input.store.updateComparison(comparisonID, {
       state: "complete",
       ...report,
-      resolvedProvider: resolvedProvider(parsed) ?? provider,
+      resolvedModel: responseField(parsed, "model") ?? model,
+      resolvedProvider: responseField(parsed, "provider") ?? provider,
       responseArtifactID,
       artifactIDs,
       usage: (() => {

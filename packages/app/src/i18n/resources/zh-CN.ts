@@ -645,6 +645,21 @@ export const zhCN: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "登录 {{host}}",
+        title: "需要登录",
+        description: "Agent Duel 无法在未登录的情况下从 {{host}} 获取更新。",
+        sshDescription:
+          "{{host}} 没有接受你的 SSH 密钥，因此 Agent Duel 无法获取更新。请用 ssh-add 加载密钥，或将其添加到你在 {{host}} 的账户。",
+        username: "用户名",
+        password: "密码或令牌",
+        signIn: "登录",
+        signingIn: "正在登录...",
+        signedIn: "已登录 {{host}}",
+        loginNotKept:
+          "已登录，但 Git 没有保存登录信息，下次获取时还需要登录。要保存它，请设置 Git 凭据助手，或将 origin 改为 SSH。",
+        failed: "登录失败：{{reason}}",
+      },
       actions: {
         moreOptions: "更多选项",
         moreActions: "更多操作",
@@ -775,6 +790,7 @@ export const zhCN: TranslationResources = {
           title: "归档「{{workspaceName}}」？",
           confirm: "归档",
           cancel: "取消",
+          message: "聊天将移至已归档，你可以在那里取消归档。",
           uncommittedChanges: "未 commit 的变更",
           uncommittedChangesWithDiff: "未 commit 的变更（{{diffStat}}）",
           addedLine: "新增 {{count}} 行",

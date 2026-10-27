@@ -380,6 +380,9 @@ const layer = Layer.effect(
               })
               .pipe(Effect.orDie),
           tmpDirectory: ArenaContestant.sandboxTmp(Permission.merge(taskAgent.permission, session.permission ?? [])),
+          blockedDirectories: ArenaContestant.blockedDirectories(
+            Permission.merge(taskAgent.permission, session.permission ?? []),
+          ),
         })
         .pipe(
           Effect.catchCause((cause) => {
@@ -1434,7 +1437,21 @@ const layer = Layer.effect(
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
+              // The savings threshold must not block a first request or loop on a request that
+              // remains large after compaction. Let those calls proceed at the provider's rates.
+              arenaRequestCompaction: !!lastFinished && !lastFinished.summary,
             })
+
+            if (result === "compact-request") {
+              yield* sessions.removeMessage({ sessionID, messageID: handle.message.id })
+              yield* compaction.create({
+                sessionID,
+                agent: lastUser.agent,
+                model: lastUser.model,
+                auto: true,
+              })
+              return "continue" as const
+            }
 
             if (structured !== undefined) {
               handle.message.structured = structured

@@ -25,6 +25,7 @@ export function createNoGitWorkspaceRuntimeSnapshot(cwd: string): WorkspaceGitRu
       pullRequest: null,
       error: null,
     },
+    remote: { signInRequired: false },
   };
 }
 
@@ -64,6 +65,7 @@ export function createNoopWorkspaceGitService(
     resolveDefaultBranch: async () => "main",
     resolveRepoRemoteUrl: async () => null,
     refresh: async () => {},
+    signInToRemote: async () => ({ ok: true, loginKept: true }),
     requestWorkingTreeWatch: async () => ({
       repoRoot: null,
       unsubscribe: () => {},

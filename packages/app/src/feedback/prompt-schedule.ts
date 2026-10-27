@@ -1,5 +1,4 @@
-export const FIRST_PROMPT_MESSAGE_RANGE = { minimum: 5, maximum: 10 } as const;
-export const NEXT_PROMPT_MESSAGE_RANGE = { minimum: 10, maximum: 25 } as const;
+const FIRST_PROMPT_MESSAGE_COUNT = 10;
 
 export interface FeedbackPromptSchedule {
   totalMessagesSent: number;
@@ -12,19 +11,10 @@ interface PromptTransition {
   show: boolean;
 }
 
-interface IntegerRange {
-  minimum: number;
-  maximum: number;
-}
-
-function randomInteger(range: IntegerRange, random: () => number): number {
-  return range.minimum + Math.floor(random() * (range.maximum - range.minimum + 1));
-}
-
-export function createFeedbackPromptSchedule(random: () => number): FeedbackPromptSchedule {
+export function createFeedbackPromptSchedule(): FeedbackPromptSchedule {
   return {
     totalMessagesSent: 0,
-    nextPromptMessageCount: randomInteger(FIRST_PROMPT_MESSAGE_RANGE, random),
+    nextPromptMessageCount: FIRST_PROMPT_MESSAGE_COUNT,
     activeBattleId: null,
   };
 }
@@ -38,7 +28,6 @@ export function recordFeedbackMessageSent(
 export function considerFeedbackPrompt(
   schedule: FeedbackPromptSchedule,
   battleId: string,
-  random: () => number,
 ): PromptTransition {
   if (schedule.activeBattleId === battleId) {
     return { schedule, show: true };
@@ -54,8 +43,7 @@ export function considerFeedbackPrompt(
   return {
     schedule: {
       ...availableSchedule,
-      nextPromptMessageCount:
-        availableSchedule.totalMessagesSent + randomInteger(NEXT_PROMPT_MESSAGE_RANGE, random),
+      nextPromptMessageCount: availableSchedule.totalMessagesSent * 2 + FIRST_PROMPT_MESSAGE_COUNT,
       activeBattleId: battleId,
     },
     show: true,

@@ -8,17 +8,27 @@ import {
 import type {
   ArenaComparisonDiff,
   ArenaHistoryItem,
+  ArenaRun,
   ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
+  battleFailedToStart,
   battleWinnerSide,
   divergenceFilesLabel,
   gitApplicationNotice,
   isResolvingBattleState,
   resolutionRetryDetail,
   RESOLVING_BATTLE_STATES,
+  settledHistoryRun,
 } from "./battle-result";
-import { canRequestBattleDiff, hasBattleDiff } from "./comparison-visibility";
+import {
+  arenaDiffQueryKey,
+  battleReviewPhase,
+  battleSummaryStatus,
+  canRequestBattleDiff,
+  canReviewBattle,
+  hasBattleDiff,
+} from "./comparison-visibility";
 import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
 import {
   arenaSummaryAnchor,
@@ -109,6 +119,44 @@ describe("arenaSummaryAnchors", () => {
   });
 });
 
+describe("arenaSummaryAnchors in chat order", () => {
+  it("follows the work the turn's answer moved above, not the answer", () => {
+    // The chat shows the answer first and the work that led to it beneath (`orderArenaChat`);
+    // anchoring to the answer put the summary between them once a later prompt followed.
+    const prompt = createUserMessage({
+      messageId: "user-1",
+      text: "Battle prompt",
+      timestamp: new Date(historyItem.createdAt),
+    });
+    const work = {
+      id: "call-1",
+      kind: "tool_call",
+      timestamp: new Date(historyItem.createdAt),
+      payload: {
+        source: "agent",
+        data: {
+          provider: "opencode",
+          callId: "call-1",
+          name: "shell",
+          status: "completed",
+          error: null,
+          detail: { type: "shell", command: "ls" },
+        },
+      },
+    } as StreamItem;
+    const answer = { id: "answer-1", kind: "assistant_message", text: "Done" } as StreamItem;
+    const reply = createUserMessage({
+      clientMessageId: "reply",
+      text: "Battle-off follow-up",
+      timestamp: new Date("2026-08-12T00:05:00Z"),
+    });
+
+    expect(
+      arenaSummaryAnchors([historyItem], { tail: [prompt, work, answer, reply], head: [] }),
+    ).toEqual(["call-1"]);
+  });
+});
+
 describe("arenaTurnFollowedUp", () => {
   const prompt = createUserMessage({
     messageId: "user-1",
@@ -136,6 +184,93 @@ describe("arenaTurnFollowedUp", () => {
 
   it("is false until the battle's own prompt is in the chat", () => {
     expect(arenaTurnFollowedUp(historyItem, { tail: [answer], head: [] })).toBe(false);
+  });
+});
+
+describe("a battle with replies sent inside it", () => {
+  // Canonical message IDs ascend; the graft records the last one it copied.
+  const battle = {
+    ...historyItem,
+    canonicalUserMessageID: "msg_0100",
+    canonicalLastMessageID: "msg_0199",
+  } as ArenaHistoryItem;
+  const shellCall = (id: string) =>
+    ({
+      id,
+      kind: "tool_call",
+      timestamp: new Date(historyItem.createdAt),
+      payload: {
+        source: "agent",
+        data: {
+          provider: "opencode",
+          callId: id,
+          name: "shell",
+          status: "completed",
+          error: null,
+          detail: { type: "shell", command: "ls" },
+        },
+      },
+    }) as StreamItem;
+  const battleRows = [
+    { id: "msg_0100", kind: "user_message", messageId: "msg_0100" },
+    { id: "answer-1", kind: "assistant_message" },
+    { id: "msg_0120", kind: "user_message", messageId: "msg_0120" },
+    { id: "answer-2", kind: "assistant_message" },
+    shellCall("tool-2"),
+    { id: "msg_0150", kind: "user_message", messageId: "msg_0150" },
+    { id: "answer-3", kind: "assistant_message" },
+  ] as StreamItem[];
+  const later = [
+    { id: "msg_0300", kind: "user_message", messageId: "msg_0300" },
+    { id: "answer-later", kind: "assistant_message" },
+  ] as StreamItem[];
+
+  it("anchors after the battle's last answer, not its first", () => {
+    expect(arenaSummaryAnchor(battle, battleRows)).toBe("answer-3");
+    expect(arenaTurnFollowedUp(battle, { tail: battleRows, head: [] })).toBe(false);
+  });
+
+  it("stays under the battle once a single-agent reply follows it", () => {
+    const stream = { tail: [...battleRows, ...later], head: [] };
+    expect(arenaSummaryAnchors([battle], stream)).toEqual(["answer-3"]);
+    expect(arenaTurnFollowedUp(battle, stream)).toBe(true);
+    const sending = createUserMessage({
+      clientMessageId: "reply",
+      text: "Battle-off follow-up",
+      timestamp: new Date("2026-08-12T00:05:00Z"),
+    });
+    expect(arenaSummaryAnchor(battle, [...battleRows, sending])).toBe("answer-3");
+    expect(arenaTurnFollowedUp(battle, { tail: battleRows, head: [sending] })).toBe(true);
+  });
+
+  it("finds the battle's end when the loaded page starts after its prompt", () => {
+    const page = [...battleRows.slice(2), ...later];
+    expect(arenaSummaryAnchor(battle, page)).toBe("answer-3");
+    expect(arenaTurnFollowedUp(battle, { tail: page, head: [] })).toBe(true);
+  });
+
+  it("waits for older history when the page holds none of the battle's prompts", () => {
+    const page = [...battleRows.slice(6), ...later];
+    expect(arenaSummaryAnchor(battle, page)).toBeNull();
+    // A canonical prompt past the graft still means the chat moved on.
+    expect(arenaTurnFollowedUp(battle, { tail: page, head: [] })).toBe(true);
+    expect(arenaTurnFollowedUp(battle, { tail: battleRows.slice(6), head: [] })).toBe(false);
+  });
+
+  it("follows the work the last reply's answer moved above, in chat order", () => {
+    const work = shellCall("call-3");
+    const lastReply = [
+      { id: "msg_0150", kind: "user_message", messageId: "msg_0150" },
+      work,
+      { id: "answer-3", kind: "assistant_message", text: "Done" },
+    ] as StreamItem[];
+    const stream = { tail: [...battleRows.slice(0, 5), ...lastReply, ...later], head: [] };
+    expect(arenaSummaryAnchors([battle], stream)).toEqual(["call-3"]);
+  });
+
+  it("falls back to the battle's own prompt for a turn grafted without the bound", () => {
+    const { canonicalLastMessageID: _omitted, ...older } = battle;
+    expect(arenaSummaryAnchor(older, battleRows)).toBe("answer-1");
   });
 });
 
@@ -189,6 +324,65 @@ describe("partitionArenaSummaries", () => {
       });
     },
   );
+
+  it("shows a battle discarded before either side answered, though it names nobody", () => {
+    const unseen = {
+      ...historyItem,
+      id: "turn-unseen",
+      index: 2,
+      state: "discarded",
+      canonicalUserMessageID: undefined,
+      resolution: { kind: "stopped", resolution: "discard" },
+    } as ArenaHistoryItem;
+    expect(partitionArenaSummaries([older, unseen], false)).toEqual({
+      inline: [older],
+      live: unseen,
+    });
+  });
+
+  it("shows a battle that failed to start, though it names nobody", () => {
+    const unstarted = {
+      ...historyItem,
+      id: "turn-unstarted",
+      index: 2,
+      state: "discarded",
+      canonicalUserMessageID: undefined,
+      resolution: { kind: "aborted", reason: "Arena battle failed before resolution" },
+    } as ArenaHistoryItem;
+    expect(partitionArenaSummaries([older, unstarted], false)).toEqual({
+      inline: [older],
+      live: unstarted,
+    });
+  });
+});
+
+describe("settledHistoryRun", () => {
+  it("shows a run an older build left pending in a decided battle as interrupted", () => {
+    const pending = { side: "a", runState: "pending" } as ArenaRun;
+    expect(settledHistoryRun(pending)?.runState).toBe("interrupted");
+    const complete = { side: "b", runState: "complete" } as ArenaRun;
+    expect(settledHistoryRun(complete)).toBe(complete);
+    expect(settledHistoryRun(undefined)).toBeUndefined();
+  });
+});
+
+describe("battleFailedToStart", () => {
+  it("is an abort that names neither side", () => {
+    const aborted = { resolution: { kind: "aborted", reason: "failed" } } as ArenaHistoryItem;
+    expect(battleFailedToStart(aborted)).toBe(true);
+    expect(
+      battleFailedToStart({
+        ...aborted,
+        identities: { a: { name: "Model A" }, b: { name: "Model B" } },
+      }),
+    ).toBe(false);
+    expect(
+      battleFailedToStart({
+        resolution: { kind: "stopped", resolution: "discard" },
+      } as ArenaHistoryItem),
+    ).toBe(false);
+    expect(battleFailedToStart({} as ArenaHistoryItem)).toBe(false);
+  });
 });
 
 describe("isArenaBattleUnresolved", () => {
@@ -292,6 +486,178 @@ describe("canRequestBattleDiff", () => {
     expect(canRequestBattleDiff("applying")).toBe(true);
     expect(canRequestBattleDiff("complete")).toBe(true);
     expect(canRequestBattleDiff("discarded")).toBe(true);
+  });
+});
+
+describe("canReviewBattle", () => {
+  const turn = (input: Partial<NonNullable<ArenaSnapshot["turn"]>>): ArenaSnapshot["turn"] => ({
+    id: "turn-1",
+    index: 0,
+    state: "awaiting_vote",
+    prompt: "make it faster",
+    baseSHA: "abc",
+    comparisonState: "complete",
+    canVote: true,
+    canTie: true,
+    canDiscardBattle: false,
+    canResumeBattle: false,
+    canRetryResolution: false,
+    revealed: false,
+    createdAt: "2026-10-14T10:00:00.000Z",
+    updatedAt: "2026-10-14T10:00:00.000Z",
+    ...input,
+  });
+
+  it("shows the summary and changes once the vote opens", () => {
+    expect(canReviewBattle(turn({}))).toBe(true);
+  });
+
+  it("hides them while a battle the restart cut off waits to resume", () => {
+    expect(
+      canReviewBattle(turn({ canVote: false, canDiscardBattle: true, canResumeBattle: true })),
+    ).toBe(false);
+  });
+});
+
+describe("arenaDiffQueryKey", () => {
+  type Run = Parameters<typeof arenaDiffQueryKey>[3];
+  const run = (finalCommit?: string) =>
+    ({ runState: "complete", ...(finalCommit ? { finalCommit } : {}) }) as Run;
+  const key = (a: Run, b: Run) => arenaDiffQueryKey("server-1", "agent-1", "turn-1", a, b);
+
+  it("fetches the comparison again when a side's reply lands a new commit", () => {
+    // B reads complete while it still carries its previous result; its new commit lands after.
+    expect(key(run("a1"), run("b2"))).not.toEqual(key(run("a1"), run("b1")));
+  });
+
+  it("keeps one key while the commits stay, so the card and the history share a fetch", () => {
+    expect(key(run("a1"), run("b1"))).toEqual(key(run("a1"), run("b1")));
+    expect(key(run("a1"), run())).not.toEqual(key(run("a1"), run("b1")));
+  });
+});
+
+describe("battleReviewPhase", () => {
+  type Run = Parameters<typeof battleReviewPhase>[1];
+  type Turn = NonNullable<Parameters<typeof battleReviewPhase>[0]>;
+  const turn = (state: Turn["state"]) => ({ state }) as Turn;
+  const run = (runState: NonNullable<Run>["runState"], finalCommit?: string) =>
+    ({ runState, ...(finalCommit ? { finalCommit } : {}) }) as Run;
+
+  it("reviews the first result alone while the other side still works", () => {
+    expect(battleReviewPhase(turn("running"), run("complete", "a1"), run("pending"))).toEqual({
+      kind: "partial",
+      finished: "a",
+      waitingFor: "b",
+    });
+    expect(battleReviewPhase(turn("running"), run("pending"), run("complete", "b1"))).toEqual({
+      kind: "partial",
+      finished: "b",
+      waitingFor: "a",
+    });
+  });
+
+  it("has nothing to review while both work, or when the finished side has no result", () => {
+    expect(battleReviewPhase(turn("running"), run("pending"), run("pending")).kind).toBe("none");
+    expect(battleReviewPhase(turn("running"), run("error"), run("pending")).kind).toBe("none");
+    expect(battleReviewPhase(undefined, run("complete", "a1"), run("pending")).kind).toBe("none");
+  });
+
+  it("drops a side's last result while it works again after a reply", () => {
+    expect(battleReviewPhase(turn("running"), run("pending", "a1"), run("complete", "b1"))).toEqual(
+      {
+        kind: "partial",
+        finished: "b",
+        waitingFor: "a",
+      },
+    );
+  });
+
+  it("stays on the first result while the other side's run is complete but its commit is not", () => {
+    expect(battleReviewPhase(turn("running"), run("complete", "a1"), run("complete"))).toEqual({
+      kind: "partial",
+      finished: "a",
+      waitingFor: "b",
+    });
+    expect(battleReviewPhase(turn("running"), run("complete"), run("complete", "b1"))).toEqual({
+      kind: "partial",
+      finished: "b",
+      waitingFor: "a",
+    });
+  });
+
+  it("reviews both results as soon as both are in, and otherwise once the turn can be diffed", () => {
+    expect(battleReviewPhase(turn("awaiting_vote"), run("complete", "a1"), run("error")).kind).toBe(
+      "full",
+    );
+    expect(
+      battleReviewPhase(turn("running"), run("complete", "a1"), run("complete", "b1")).kind,
+    ).toBe("full");
+    expect(battleReviewPhase(turn("running"), run("complete", "a1"), run("error")).kind).toBe(
+      "none",
+    );
+    expect(battleReviewPhase(turn("stopping"), run("stopped"), run("stopped")).kind).toBe("none");
+    // A battle the engine's restart cut off waits to resume before anything is compared.
+    expect(
+      battleReviewPhase(
+        { state: "awaiting_vote", canResumeBattle: true } as Turn,
+        run("interrupted"),
+        run("complete", "b1"),
+      ).kind,
+    ).toBe("none");
+  });
+});
+
+describe("battleSummaryStatus", () => {
+  const record = (state: "running" | "complete" | "failed", output?: string) => ({
+    state,
+    ...(output ? { output } : {}),
+    truncated: false,
+    omittedArtifacts: [],
+  });
+
+  it("counts a summary as coming before the engine writes its record", () => {
+    expect(battleSummaryStatus(undefined, "pending")).toEqual({
+      available: true,
+      pending: true,
+      failed: false,
+    });
+    expect(battleSummaryStatus(undefined, "running")).toEqual({
+      available: true,
+      pending: true,
+      failed: false,
+    });
+  });
+
+  it("offers a retry for a summary that failed before its record was written", () => {
+    expect(battleSummaryStatus(undefined, "failed")).toEqual({
+      available: true,
+      pending: false,
+      failed: true,
+    });
+  });
+
+  it("follows the record once it exists", () => {
+    expect(battleSummaryStatus(record("running"), "running")).toEqual({
+      available: true,
+      pending: true,
+      failed: false,
+    });
+    expect(battleSummaryStatus(record("complete", "report"), "complete")).toEqual({
+      available: true,
+      pending: false,
+      failed: false,
+    });
+    expect(battleSummaryStatus(record("failed"), "failed")).toEqual({
+      available: true,
+      pending: false,
+      failed: true,
+    });
+  });
+
+  it("has nothing to show for identical results or a stopped battle", () => {
+    expect(battleSummaryStatus(record("complete"), "complete").available).toBe(false);
+    expect(battleSummaryStatus(undefined, "skipped").available).toBe(false);
+    expect(battleSummaryStatus(record("running"), "skipped").available).toBe(false);
   });
 });
 

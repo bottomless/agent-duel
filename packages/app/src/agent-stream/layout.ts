@@ -1,6 +1,10 @@
 import type { TurnTiming } from "@/timeline/turn-time";
 import type { StreamItem } from "@/types/stream";
-import { getAssistantBlockSpacing, getGapBetweenStreamItems } from "./spacing";
+import {
+  getAssistantBlockSpacing,
+  getArenaGapBetweenStreamItems,
+  getGapBetweenStreamItems,
+} from "./spacing";
 import type { StreamFrameChildOrder, StreamStrategy } from "./strategy";
 
 export type StreamToolSequence = "single" | "first" | "middle" | "last" | "none";
@@ -41,6 +45,8 @@ export interface StreamLayoutInput {
   history: StreamItem[];
   liveHead: StreamItem[];
   timingByAssistantId: Map<string, TurnTiming>;
+  /** A battle chat, spaced the way its battle panes are (`getArenaGapBetweenStreamItems`). */
+  arena?: boolean;
 }
 
 interface LayoutSegmentInput {
@@ -55,6 +61,7 @@ interface LayoutSegmentInput {
   boundaryAboveItems: StreamItem[] | null;
   boundaryAboveIndex: number | null;
   phase: "streaming" | "complete";
+  arena: boolean;
 }
 
 interface AssistantFooterSource {
@@ -227,6 +234,7 @@ function getSegmentNeighbor(input: {
 }
 
 function layoutSegment(input: LayoutSegmentInput): StreamLayoutItem[] {
+  const gapBetween = input.arena ? getArenaGapBetweenStreamItems : getGapBetweenStreamItems;
   return input.items.map((item, index) => {
     const aboveItem = getSegmentNeighbor({
       strategy: input.strategy,
@@ -244,11 +252,13 @@ function layoutSegment(input: LayoutSegmentInput): StreamLayoutItem[] {
       boundaryIndex: input.boundaryIndex,
       boundaryItem: input.boundaryBelowItem,
     });
-    const assistantSpacing = getAssistantBlockSpacing({
-      item,
-      aboveItem,
-      belowItem,
-    });
+    const assistantSpacing = input.arena
+      ? "compactBoth"
+      : getAssistantBlockSpacing({
+          item,
+          aboveItem,
+          belowItem,
+        });
     const completedFooter = resolveCompletedFooter({
       strategy: input.strategy,
       items: input.items,
@@ -267,7 +277,7 @@ function layoutSegment(input: LayoutSegmentInput): StreamLayoutItem[] {
       items: input.items,
       aboveItem,
       belowItem,
-      gapBelow: completedFooter ? 0 : getGapBetweenStreamItems(item, belowItem),
+      gapBelow: completedFooter ? 0 : gapBetween(item, belowItem),
       assistantSpacing,
       completedFooter,
       toolSequence: getToolSequence({ item, aboveItem, belowItem }),
@@ -306,6 +316,7 @@ export function layoutStream(input: StreamLayoutInput): StreamLayout {
       liveHeadBoundaryItem?.id ?? "null",
       liveHeadBoundaryItem?.kind ?? "null",
       auxiliaryTurnFooter?.itemId ?? "null",
+      input.arena ? "arena" : "chat",
     ].join(":");
     let byKey = historyLayoutCache.get(input.history);
     if (!byKey) {
@@ -328,6 +339,7 @@ export function layoutStream(input: StreamLayoutInput): StreamLayout {
         boundaryAboveItems: null,
         boundaryAboveIndex: null,
         phase: "complete",
+        arena: input.arena === true,
       });
       byKey.set(historyCacheKey, history);
     }
@@ -347,6 +359,7 @@ export function layoutStream(input: StreamLayoutInput): StreamLayout {
     boundaryAboveItems: input.history,
     boundaryAboveIndex: historyBoundaryIndex,
     phase: input.isTurnActive ? "streaming" : "complete",
+    arena: input.arena === true,
   });
 
   return {

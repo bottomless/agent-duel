@@ -87,7 +87,7 @@ export function useArenaBattleActions(
       const label = sideLabel(side);
       const other = sideLabel(side === "a" ? "b" : "a");
       const confirmed = await confirmDialog({
-        title: `Choose ${label} now?`,
+        title: `Choose ${label} early?`,
         message: `Agent ${other} stops immediately and its work is discarded. Agent ${label}'s work so far becomes this turn's result.`,
         confirmLabel: `Choose ${label}`,
         cancelLabel: "Cancel",
@@ -140,22 +140,31 @@ export function useArenaBattleActions(
     [mutateTurn, showError, turnId],
   );
 
+  const resume = useCallback(async () => {
+    if (!turnId) return;
+    try {
+      await mutateTurn({ kind: "resume_battle", turnId });
+    } catch (error) {
+      showError(error);
+    }
+  }, [mutateTurn, showError, turnId]);
+
   const retryResolution = useCallback(() => {
     if (!turnId) return;
     void mutateTurn({ kind: "retry_resolution", turnId }).catch(showError);
   }, [mutateTurn, showError, turnId]);
 
   // The review's answers go back through the same retry; the daemon plans again with them.
-  // Resolves true once the daemon applied what it could, so a prompt that depends on it can follow.
+  // Resolves with the turn as the daemon claimed it for the apply, which then runs on its own.
   const answerReview = useCallback(
-    async (answers: readonly ArenaReviewAnswer[]) => {
-      if (!turnId) return false;
+    async (answers: readonly ArenaReviewAnswer[]): Promise<ArenaSnapshot["turn"] | null> => {
+      if (!turnId) return null;
       try {
-        await mutateTurn({ kind: "retry_resolution", turnId, answers });
-        return true;
+        const snapshot = await mutateTurn({ kind: "retry_resolution", turnId, answers });
+        return snapshot.turn;
       } catch (error) {
         showError(error);
-        return false;
+        return null;
       }
     },
     [mutateTurn, showError, turnId],
@@ -217,6 +226,7 @@ export function useArenaBattleActions(
       tie,
       stop,
       resolveStop,
+      resume,
       retryResolution,
       answerReview,
       discardWinner,
@@ -237,6 +247,7 @@ export function useArenaBattleActions(
       discardWinner,
       restoreWorkspace,
       resolveStop,
+      resume,
       retryComparison,
       retryResolution,
       stop,

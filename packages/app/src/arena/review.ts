@@ -2,6 +2,7 @@ import type {
   ArenaBranchAction,
   ArenaReviewAnswer,
   ArenaReviewItem,
+  ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ConfirmDialogInput } from "@/utils/confirm-dialog";
 
@@ -409,3 +410,46 @@ export const DISCARD_WINNER_CONFIRMATION: ConfirmDialogInput = {
   cancelLabel: "Cancel",
   destructive: true,
 };
+
+/**
+ * "Let an agent resolve" sends its prompt once the apply its answers started has settled. The
+ * answer comes back as soon as Arena claims the apply, which then runs for as long as the checkout
+ * takes, so the prompt waits for the turn to say how it ended.
+ */
+export interface HeldResolvePrompt {
+  turnId: string;
+  /** The turn's `updatedAt` in the answer; only a later state is the outcome of this apply. */
+  claimedAt: string;
+  prompt: string;
+}
+
+type SettlingTurn = Pick<
+  NonNullable<ArenaSnapshot["turn"]>,
+  "id" | "state" | "updatedAt" | "gitApplication"
+>;
+
+const APPLY_IN_PROGRESS: ReadonlySet<SettlingTurn["state"]> = new Set([
+  "applying",
+  "canonicalizing",
+  "cleanup_pending",
+]);
+
+/**
+ * Whether a held prompt keeps waiting, goes to the agent, or is dropped. It goes wherever the
+ * winner reached the checkout, parked with markers included. A failed apply keeps its error on the
+ * callout, and the prompt goes nowhere.
+ */
+export function heldResolveStep(
+  held: HeldResolvePrompt,
+  turn: SettlingTurn | undefined,
+): "wait" | "send" | "drop" {
+  if (!turn) return "wait";
+  if (turn.id !== held.turnId) return "drop";
+  if (Date.parse(turn.updatedAt) <= Date.parse(held.claimedAt)) return "wait";
+  if (APPLY_IN_PROGRESS.has(turn.state)) return "wait";
+  if (turn.state === "complete") return "send";
+  const applyFailed =
+    turn.gitApplication?.state === "failed" || turn.gitApplication?.state === "manual";
+  if (turn.state === "application_failed" && !applyFailed) return "send";
+  return "drop";
+}

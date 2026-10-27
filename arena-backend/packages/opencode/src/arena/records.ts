@@ -116,13 +116,14 @@ export type WarmWorktreeRecord = {
   readonly refsMirrored?: boolean
   /**
    * The canonical session forked into this worktree at warm-up, with the transcript hash and
-   * source it was copied from and the port bank its paths were localized against. A send uses
-   * it only when all three still match and the pair is trusted in this process; otherwise it
-   * forks again and disposes of this one.
+   * source it was copied from, the message before which it cleared tool output, and the port bank
+   * its paths were localized against. A send uses it only when all four still match and the pair
+   * is trusted in this process; otherwise it forks again and disposes of this one.
    */
   readonly forkedSessionID?: string
   readonly forkSourceSessionID?: string
   readonly forkTranscriptHash?: string
+  readonly forkPruneToolOutputBefore?: string
   readonly forkMessageMap?: Readonly<Record<string, string>>
   readonly portAliases?: Readonly<Record<ArenaPortAlias, number>>
   /** How this worktree was last brought to its base, and where that time went. */
@@ -373,6 +374,11 @@ export type TurnDocument = {
   transitionTimestamps: Partial<Record<BattleState, Date>>
   finalizedSides?: Side[]
   selectableSides?: Side[]
+  /**
+   * When the first side finalized, which is when the early pick can first appear. Kept apart
+   * from `transitionTimestamps` because the battle is still `running` then.
+   */
+  firstResultAt?: Date
   comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
   comparisonID?: Identifier
   failureReason?: string
@@ -387,6 +393,7 @@ export type TurnDocument = {
   revealAt?: Date
   applicationAt?: Date
   canonicalizationAt?: Date
+  /** From `awaiting_vote` to the vote. An early vote never reaches `awaiting_vote`, so it has none. */
   timeToVoteMs?: number
   resultingCanonicalSHA?: string
   promotedSessionID?: string
@@ -401,11 +408,16 @@ export type TurnDocument = {
    */
   canonicalGraftedAt?: Date
   /**
-   * The last canonical message the graft copied. With `canonicalUserMessageID` it bounds the
-   * messages this turn's winner wrote, so a later contestant's copy retargets only that run's
-   * ports. Absent on turns grafted before it was recorded; those run until the next battle.
+   * The copies of the winner's subagent sessions made under the chat's session, recorded before
+   * their messages are copied so a retried graft can remove a partial copy.
    */
-  canonicalGraftedThroughMessageID?: string
+  canonicalSubagentSessionIDs?: string[]
+  /**
+   * The last message the graft copied into the canonical session. With `canonicalUserMessageID` it
+   * bounds the battle's rows in the chat: replies sent inside the battle are user messages too, so
+   * the next user message is not where the battle ends.
+   */
+  canonicalLastMessageID?: string
   gitApplication?: {
     readonly state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
     readonly reason?: string
@@ -471,6 +483,11 @@ export type RunDocument = {
   retention?: "none" | "retained_until_next_send" | "cleanup_failed"
   readonly worktreeCreatedAt: Date
   readyAt?: Date
+  /**
+   * The side's environment setup (the copy of ignored content) finished. Only an environment
+   * that finished can be resumed after an engine restart; see `canReopenInterruptedBattle`.
+   */
+  environmentReadyAt?: Date
   startedAt?: Date
   firstEventAt?: Date
   lastEventAt?: Date
@@ -478,7 +495,17 @@ export type RunDocument = {
   firstToolAt?: Date
   completedAt?: Date
   archivedAt?: Date
+  /**
+   * Time worked across every request of the run: the first, each follow-up to it once it had
+   * finished, and each retry, failed attempts included. The wait before a follow-up is not
+   * counted. Null until the run completes.
+   */
   durationMs: number | null
+  /**
+   * Time worked in the requests before the current one. A follow-up or a retry moves `startedAt`
+   * to its own request, so the time before it is kept here.
+   */
+  priorDurationMs?: number
   runState: "pending" | "complete" | "stopped" | "error" | "interrupted"
   error?: string
   /** The error is a failed model request the engine itself would retry, so the voter may retry it. */
@@ -678,12 +705,15 @@ export type ComparisonDocument = {
   readonly truncated: boolean
   readonly omittedArtifacts: ReadonlyArray<string>
   readonly promptVersion: string
-  readonly model: "minimax/minimax-m2.7"
-  readonly provider: "groq"
+  readonly model: string
+  readonly provider: string
+  resolvedModel?: string
   resolvedProvider?: string
   requestArtifactID?: Identifier
   responseArtifactID?: Identifier
   state: "pending" | "running" | "complete" | "failed"
+  /** Set when no report was written because a side failed; the record then only names the chat. */
+  readonly skipReason?: "failed_side"
   output?: string
   /** The chat's name, which only the first turn's comparison writes. */
   title?: string
@@ -708,6 +738,10 @@ export type ReviewLayout = (typeof reviewLayouts)[number]
  */
 export type ReviewEvent =
   | { readonly type: "battle.opened" }
+  /** The card opened while one side had finished and the other still worked. */
+  | { readonly type: "battle.waiting" }
+  /** After `battle.waiting`, the other side finished too. Ends the time the early pick was on offer. */
+  | { readonly type: "battle.settled" }
   | { readonly type: "window.focus" }
   | { readonly type: "window.blur" }
   | { readonly type: "focus.toggled"; readonly on: boolean }
@@ -723,6 +757,8 @@ export type ReviewEvent =
   | { readonly type: "contestant.expanded"; readonly side: Side }
   | { readonly type: "activity.expanded"; readonly side: Side }
   | { readonly type: "vote.hovered"; readonly side: Side }
+  /** The pointer reached a side's early pick while the other side was still working. */
+  | { readonly type: "early_pick.hovered"; readonly side: Side }
   /** The voter opened a contestant's running app through the preview proxy. */
   | { readonly type: "preview.opened"; readonly side: Side }
 
@@ -777,10 +813,13 @@ export type ReviewEventInput = {
 export const reviewFlushLimit = 500
 
 /** Bump when a derived field changes meaning, then recompute the whole table. */
-export const battleMetricsSchemaVersion = 6
+export const battleMetricsSchemaVersion = 8
 
 export type ReviewEffort = {
-  /** From the card opening to the first act of reviewing, ignoring window focus events. */
+  /**
+   * From the review opening to the first act of reviewing, ignoring window focus events. A card
+   * that waited for the other side counts from `battle.settled`, so the field keeps its meaning.
+   */
   readonly msToFirstInteraction?: number
   readonly panesOpened: readonly ReviewTab[]
   readonly dwellMsByPane: Readonly<Record<string, number>>
@@ -795,6 +834,11 @@ export type ReviewEffort = {
   readonly verdictExpanded?: boolean
   /** Time with the review open and the window focused, with idle spans dropped. */
   readonly activeMs: number
+  /**
+   * Time with the window focused between `battle.waiting` and `battle.settled`, idle spans
+   * dropped: one side had finished and the early pick was on offer.
+   */
+  readonly waitingActiveMs: number
   /** Every stored event, passive ones included. A completeness check, not a measure of effort. */
   readonly eventCount: number
   /** Only what the voter did: tabs, files, previews, unfolding. */
@@ -806,6 +850,8 @@ export type ReviewEffort = {
    * a voter who did not.
    */
   readonly votesHovered: number
+  /** Sides whose early pick the pointer visited: 0, 1 or both. */
+  readonly earlyPicksHovered: number
   /**
    * How far into a diff the reader got, as a fraction, taking the deepest of
    * whatever files they opened. Absent when nothing was scrolled: a diff shorter
@@ -842,6 +888,7 @@ export type BattleSideMetrics = {
   readonly finishReason?: string
   readonly runState: RunDocument["runState"]
   readonly runErrored: boolean
+  /** Time worked across the run's requests, follow-ups and retries included; see `RunDocument`. */
   readonly durationMs?: number
   /** Offset from the turn's start, so the sequence the voter saw can be rebuilt. */
   readonly completedAtMs?: number
@@ -894,6 +941,11 @@ export type BattleMetricsDocument = {
   readonly steerCount: number
   readonly voteAtMs?: number
   readonly timeToVoteMs?: number
+  /**
+   * From the first side finalizing to `voteAt`, early vote or not, so early and late votes compare
+   * on one clock. Absent on turns from before `firstResultAt` was recorded rather than estimated.
+   */
+  readonly msFromFirstResultToVote?: number
   readonly review?: ReviewEffort
   /** A side with no run is absent rather than invented. */
   readonly sides: Partial<Record<Side, BattleSideMetrics>>
@@ -909,6 +961,7 @@ export type BattleHistoryTurn = Pick<
   | "selectedEarly"
   | "appliedSide"
   | "canonicalUserMessageID"
+  | "canonicalLastMessageID"
   | "gitApplication"
   | "transitionEvent"
   | "transitionTimestamps"

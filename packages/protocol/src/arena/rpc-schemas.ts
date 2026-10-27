@@ -320,6 +320,7 @@ export const ArenaHistoryItemSchema = z
     selectedEarly: z.boolean().optional(),
     appliedSide: ArenaSideSchema.optional(),
     canonicalUserMessageID: z.string().optional(),
+    canonicalLastMessageID: z.string().optional(),
     endedAt: z.string().optional(),
     identities: ArenaIdentitiesSchema.optional(),
     gitApplication: ArenaGitApplicationSchema.optional(),
@@ -350,6 +351,8 @@ export const ArenaRunSchema = z
     lastEventAt: z.string().optional(),
     completedAt: z.string().optional(),
     durationMs: z.number().nullable(),
+    // Time worked before the current request; see the engine's `RunDocument`.
+    priorDurationMs: z.number().optional(),
     promptMessageID: z.string().optional(),
     diff: z
       .object({
@@ -454,6 +457,8 @@ export const ArenaSnapshotSchema = z
       canTie: z.boolean(),
       // Discard instead of applying a result: after a stop, or when neither result can be chosen.
       canDiscardBattle: z.boolean(),
+      // Every side an engine restart cut off resumes together (`canResumeBattle`).
+      canResumeBattle: z.boolean(),
       canRetryResolution: z.boolean(),
       canDiscardWinner: z.boolean().optional(),
       revealed: z.boolean(),
@@ -473,15 +478,6 @@ export const ArenaSnapshotSchema = z
       })
       .passthrough()
       .optional(),
-  })
-  .passthrough();
-
-const ArenaDiffStatSchema = z
-  .object({
-    file: z.string(),
-    additions: z.number(),
-    deletions: z.number(),
-    binary: z.boolean(),
   })
   .passthrough();
 
@@ -548,12 +544,16 @@ const ArenaDivergenceFileSchema = z
   })
   .passthrough();
 
-export const ArenaDivergenceSchema = z
+// One file either contestant changed, without contents: the Changes row.
+const ArenaComparisonFileSchema = z
   .object({
-    mergeTree: z.string(),
-    conflicted: z.boolean(),
-    // Same set and order as `files`.
-    files: z.array(ArenaDivergenceFileSchema),
+    file: z.string(),
+    binary: z.boolean(),
+    additionsA: z.number(),
+    deletionsA: z.number(),
+    additionsB: z.number(),
+    deletionsB: z.number(),
+    status: ArenaDivergenceStatusSchema,
   })
   .passthrough();
 
@@ -576,15 +576,16 @@ export const ArenaComparisonDiffSchema = z
       })
       .passthrough(),
     treesEqual: z.boolean(),
-    // Optional: an older daemon won't send per-file three-way content yet.
-    files: z.array(ArenaThreeWayFileSchema),
-    filesTruncated: z.boolean(),
-    patch: z.string(),
-    truncated: z.boolean(),
-    stats: z.array(ArenaDiffStatSchema),
-    // Absent from an older daemon, or when merge-tree could not run; the viewer then
-    // shows the three columns without file statuses or the combined view.
-    divergence: ArenaDivergenceSchema,
+    // Every file either side changed, in path order. Contents come per file, on request.
+    files: z.array(ArenaComparisonFileSchema),
+  })
+  .passthrough();
+
+export const ArenaComparisonFileDiffSchema = z
+  .object({
+    turnID: z.string(),
+    file: ArenaThreeWayFileSchema,
+    divergence: ArenaDivergenceFileSchema,
   })
   .passthrough();
 
@@ -753,6 +754,8 @@ export const ArenaRunRetryResponseSchema = z.object({
  */
 export const ArenaReviewEventSchema = z.discriminatedUnion("type", [
   z.object({ ...ArenaReviewEventFields, type: z.literal("battle.opened") }),
+  z.object({ ...ArenaReviewEventFields, type: z.literal("battle.waiting") }),
+  z.object({ ...ArenaReviewEventFields, type: z.literal("battle.settled") }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("window.focus") }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("window.blur") }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("focus.toggled"), on: z.boolean() }),
@@ -792,6 +795,11 @@ export const ArenaReviewEventSchema = z.discriminatedUnion("type", [
     side: ArenaSideSchema,
   }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("vote.hovered"), side: ArenaSideSchema }),
+  z.object({
+    ...ArenaReviewEventFields,
+    type: z.literal("early_pick.hovered"),
+    side: ArenaSideSchema,
+  }),
   z.object({ ...ArenaReviewEventFields, type: z.literal("preview.opened"), side: ArenaSideSchema }),
 ]);
 export type ArenaReviewEvent = z.infer<typeof ArenaReviewEventSchema>;
@@ -835,6 +843,15 @@ export const ArenaTurnStopResponseSchema = z.object({
   type: z.literal("arena.turn.stop.response"),
   payload: ArenaSnapshotResponsePayloadSchema,
 });
+export const ArenaTurnResumeRequestSchema = z.object({
+  type: z.literal("arena.turn.resume.request"),
+  ...ArenaAgentRequestFields,
+  turnId: z.string(),
+});
+export const ArenaTurnResumeResponseSchema = z.object({
+  type: z.literal("arena.turn.resume.response"),
+  payload: ArenaSnapshotResponsePayloadSchema,
+});
 export const ArenaTurnResolveStopRequestSchema = z.object({
   type: z.literal("arena.turn.resolve_stop.request"),
   ...ArenaAgentRequestFields,
@@ -875,6 +892,16 @@ export const ArenaTurnDiffRequestSchema = z.object({
 export const ArenaTurnDiffResponseSchema = z.object({
   type: z.literal("arena.turn.diff.response"),
   payload: z.object({ requestId: z.string(), diff: ArenaComparisonDiffSchema }),
+});
+export const ArenaTurnGetFileDiffRequestSchema = z.object({
+  type: z.literal("arena.turn.get_file_diff.request"),
+  ...ArenaAgentRequestFields,
+  turnId: z.string(),
+  file: z.string(),
+});
+export const ArenaTurnGetFileDiffResponseSchema = z.object({
+  type: z.literal("arena.turn.get_file_diff.response"),
+  payload: z.object({ requestId: z.string(), fileDiff: ArenaComparisonFileDiffSchema }),
 });
 /** A run part whole: a snapshot sends its large tool fields shortened and lists them in `state.previewed`. */
 export const ArenaRunGetPartRequestSchema = z.object({
@@ -973,7 +1000,8 @@ export type ArenaEnvironmentTrim = z.infer<typeof ArenaEnvironmentTrimSchema>;
 export type ArenaRun = z.infer<typeof ArenaRunSchema>;
 export type ArenaHistoryItem = z.infer<typeof ArenaHistoryItemSchema>;
 export type ArenaComparisonDiff = z.infer<typeof ArenaComparisonDiffSchema>;
-export type ArenaDivergence = z.infer<typeof ArenaDivergenceSchema>;
+export type ArenaComparisonFile = z.infer<typeof ArenaComparisonFileSchema>;
+export type ArenaComparisonFileDiff = z.infer<typeof ArenaComparisonFileDiffSchema>;
 export type ArenaDivergenceFile = z.infer<typeof ArenaDivergenceFileSchema>;
 export type ArenaDivergenceStatus = z.infer<typeof ArenaDivergenceStatusSchema>;
 export type ArenaThreeWayFile = z.infer<typeof ArenaThreeWayFileSchema>;

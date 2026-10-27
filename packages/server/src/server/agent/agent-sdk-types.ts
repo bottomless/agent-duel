@@ -12,6 +12,7 @@ import type {
   ArenaRetryMode,
   ArenaReviewAnswer,
   ArenaComparisonDiff,
+  ArenaComparisonFileDiff,
   ArenaReviewEvent,
   ArenaReviewIngestResult,
   ArenaSnapshot,
@@ -700,6 +701,11 @@ export interface AgentSession {
   interrupt(): Promise<void>;
   /** Release live runtime resources without archiving or deleting the durable native session. */
   close(): Promise<void>;
+  /**
+   * Load the session's provider subagents again. The daemon calls it after rebuilding a timeline
+   * from history, which drops the subagents it knew of when history carries none of its own.
+   */
+  reloadProviderSubagents?(): Promise<void>;
   listCommands?(): Promise<AgentSlashCommand[]>;
   setModel?(modelId: string | null): Promise<void>;
   setThinkingOption?(thinkingOptionId: string | null): Promise<void | AgentProviderNotice>;
@@ -745,6 +751,7 @@ export interface AgentSession {
     interruptSteer(runId: string, messageId: string): Promise<ArenaSnapshot>;
     discardSteer(runId: string, messageIds: string[]): Promise<ArenaSnapshot>;
     retryRun(runId: string): Promise<ArenaSnapshot>;
+    resumeBattle(turnId: string): Promise<ArenaSnapshot>;
     vote(turnId: string, vote: ArenaVote, participantId: string): Promise<ArenaSnapshot>;
     /**
      * Append what a voter did while reviewing. Idempotent on event id, so the
@@ -769,6 +776,7 @@ export interface AgentSession {
       answers?: readonly ArenaReviewAnswer[],
     ): Promise<ArenaSnapshot>;
     diff(turnId: string): Promise<ArenaComparisonDiff>;
+    fileDiff(turnId: string, file: string): Promise<ArenaComparisonFileDiff>;
     runPart(
       runId: string,
       partId: string,

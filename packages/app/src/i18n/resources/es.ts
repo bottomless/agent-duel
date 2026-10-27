@@ -660,6 +660,21 @@ export const es: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "Iniciar sesión en {{host}}",
+        title: "Inicio de sesión necesario",
+        description: "Agent Duel no puede obtener cambios de {{host}} sin iniciar sesión.",
+        sshDescription:
+          "{{host}} no aceptó tu clave SSH, así que Agent Duel no puede obtener cambios. Carga la clave con ssh-add o añádela a tu cuenta en {{host}}.",
+        username: "Usuario",
+        password: "Contraseña o token",
+        signIn: "Iniciar sesión",
+        signingIn: "Iniciando sesión...",
+        signedIn: "Sesión iniciada en {{host}}",
+        loginNotKept:
+          "Sesión iniciada, pero Git no guardó el inicio de sesión, así que la próxima obtención lo pedirá de nuevo. Para conservarlo, configura un asistente de credenciales de Git o cambia origin a SSH.",
+        failed: "Error al iniciar sesión: {{reason}}",
+      },
       actions: {
         moreOptions: "Más opciones",
         moreActions: "Más acciones",
@@ -819,6 +834,7 @@ export const es: TranslationResources = {
           title: '¿Archivo "{{workspaceName}}"?',
           confirm: "Archivo",
           cancel: "Cancelar",
+          message: "El chat pasa a Archivados, donde puedes desarchivarlo.",
           uncommittedChanges: "Cambios no confirmados",
           uncommittedChangesWithDiff: "Cambios no confirmados ({{diffStat}})",
           addedLine: "Línea añadida{{count}}",

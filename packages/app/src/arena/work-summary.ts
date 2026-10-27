@@ -218,7 +218,7 @@ export function presentArenaWork({
   };
 }
 
-function isSearchTool(tool: string): boolean {
+export function isSearchTool(tool: string): boolean {
   const normalized = tool.trim().toLowerCase();
   return (
     normalized === "grep" ||

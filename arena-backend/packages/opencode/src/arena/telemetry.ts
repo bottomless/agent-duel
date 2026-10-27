@@ -216,6 +216,7 @@ export function create(store: Store): Telemetry {
   const attempts = new Map<string, Map<string, Attempt>>()
   const pending = new Map<string, PendingMetrics>()
   const revealed = new Set<string>()
+  const released = new Set<string>()
   const revealedMetrics = new Map<string, GenerationMetrics>()
   const queues = new Map<string, Promise<void>>()
   const counterSeeds = new Map<string, Promise<void>>()
@@ -267,6 +268,8 @@ export function create(store: Store): Telemetry {
   }
 
   const retain = async (metrics: PendingMetrics) => {
+    // A request cancelled with its battle can still report after the release.
+    if (released.has(metrics.runID)) return
     const server = revealedMetrics.get(metrics.generationID)
     const combined = {
       ...metrics,
@@ -410,6 +413,13 @@ export function create(store: Store): Telemetry {
           ...(measured ? { usage: measured } : {}),
           ...(finished ? { finishReason: finished } : {}),
         })
+      }
+    },
+    release(input) {
+      const runIDs = new Set(input.runIDs)
+      runIDs.forEach((runID) => released.add(runID))
+      for (const [generationID, metrics] of pending) {
+        if (runIDs.has(metrics.runID)) pending.delete(generationID)
       }
     },
     async reveal(input) {

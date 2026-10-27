@@ -1,5 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import type { ArenaDb } from "./collection"
+import { defaultPool, mediumModel } from "./default-pool"
+import { probeRouting } from "./openrouter"
 import type { ModelPool } from "./pool"
 import { createArenaService, type ArenaServiceOptions } from "./service"
 
@@ -87,6 +89,117 @@ function fakeDb(input: {
 }
 
 describe("OpenRouter proxy", () => {
+  test.each(["done", "eof", "unterminated-eof"])(
+    "flushes buffered reasoning at %s without a finish event",
+    async (ending) => {
+      const db = fakeDb({
+        assignmentSets: () => [
+          { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+        ],
+      })
+      const delta = {
+        reasoning_details: [{ type: "reasoning.text", text: "Private thought", signature: "signature", index: 0 }],
+      }
+      const chunk = `data: ${JSON.stringify({ choices: [{ index: 0, delta }] })}`
+      let body: Record<string, unknown> | undefined
+      const proxy = openrouter({
+        db: async () => db,
+        fetch: async (_input, init) => {
+          body = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+          return new Response(chunk + (ending === "done" ? "\n\ndata: [DONE]" : ending === "eof" ? "\n\n" : ""), {
+            headers: { "content-type": "text/event-stream" },
+          })
+        },
+      })
+      const invoke = (messages: unknown[]) =>
+        proxy(
+          new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Arena-Assignment-ID": "opaque-id",
+              "X-Arena-Scope-ID": "turn-1",
+            },
+            body: JSON.stringify({ model: "contestant", messages, stream: true }),
+          }),
+        )
+      const text = await (await invoke([])).text()
+      expect(text).not.toContain("Private thought")
+      expect(text).not.toContain("signature")
+      const events = text
+        .split("\n\n")
+        .map((event) => event.trim())
+        .filter(Boolean)
+      const details = events
+        .filter((event) => event !== "data: [DONE]")
+        .flatMap((event) => {
+          const value = JSON.parse(event.slice(6)) as { choices: { delta: { reasoning_details: unknown[] } }[] }
+          return value.choices.flatMap((choice) => choice.delta.reasoning_details)
+        })
+      expect(details.filter((detail) => (detail as { type: string }).type === "reasoning.encrypted")).toHaveLength(1)
+      if (ending === "done") expect(events.at(-1)).toBe("data: [DONE]")
+      await (await invoke([{ role: "assistant", reasoning_details: details }])).text()
+      expect(body?.messages).toEqual([{ role: "assistant", reasoning: "Private thought", ...delta }])
+    },
+  )
+
+  test.each([false, true])(
+    "redacts nested Responses reasoning and restores it for continuation (stream=%s)",
+    async (stream) => {
+      const db = fakeDb({
+        assignmentSets: () => [
+          {
+            userId: "user-1",
+            scopeID: "turn-1",
+            assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+          },
+        ],
+      })
+      const item = {
+        type: "reasoning",
+        id: "rs_private",
+        summary: [{ type: "summary_text", text: "private deliberation" }],
+        encrypted_content: "private signature",
+      }
+      const upstream = { id: "private-response", model: "private-model", output: [item] }
+      let body: Record<string, unknown> | undefined
+      const proxy = openrouter({
+        db: async () => db,
+        fetch: async (_input, init) => {
+          body = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+          return stream
+            ? new Response(
+                `data: ${JSON.stringify({ type: "response.completed", response: upstream })}\n\ndata: [DONE]\n\n`,
+                { headers: { "content-type": "text/event-stream" } },
+              )
+            : Response.json(upstream)
+        },
+      })
+      const invoke = (input: unknown[]) =>
+        proxy(
+          new Request("https://control.test/api/openrouter/api/v1/responses", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Arena-Assignment-ID": "opaque-id",
+              "X-Arena-Scope-ID": "turn-1",
+            },
+            body: JSON.stringify({ model: "contestant", input, stream }),
+          }),
+        )
+      const response = await invoke([])
+      const text = await response.text()
+      expect(text).not.toContain("private")
+      expect(text).toContain("Thinking redacted")
+      const payload = JSON.parse(stream ? text.split("\n")[0]!.slice(6) : text) as {
+        output: unknown[]
+        response: { output: unknown[] }
+      }
+      await (await invoke(stream ? payload.response.output : payload.output)).text()
+      expect(body?.input).toEqual([item])
+    },
+  )
+
   test.each([1, 4096])(
     "reads SSE lines split across %i-byte chunks",
     async (chunkSize) => {
@@ -142,7 +255,7 @@ describe("OpenRouter proxy", () => {
 
       const body = await response.text()
       expect(body).toContain(JSON.stringify(payload.choices))
-      expect(body).toEndWith("data: [DONE]")
+      expect(body).toEndWith("data: [DONE]\n\n")
       expect(body).not.toContain("private-")
       expect(body).not.toContain("cost")
       expect(metrics).toHaveLength(1)
@@ -215,7 +328,7 @@ describe("OpenRouter proxy", () => {
       )
 
     expect((await invoke({ model: "provider/other", messages: [] })).status).toBe(400)
-    expect((await invoke({ model: "minimax/minimax-m2.7", messages: [] })).status).toBe(400)
+    expect((await invoke({ model: "qwen/qwen3.8-27b", messages: [] })).status).toBe(400)
     expect(contacted).toBe(false)
   })
 
@@ -233,7 +346,7 @@ describe("OpenRouter proxy", () => {
           "Content-Type": "application/json",
           "X-Arena-Assignment-ID": "",
         },
-        body: JSON.stringify({ model: "minimax/minimax-m2.7", messages: [] }),
+        body: JSON.stringify({ model: "qwen/qwen3.8-27b", messages: [] }),
       }),
     )
 
@@ -340,6 +453,8 @@ describe("OpenRouter proxy", () => {
       max_tokens: 999_999,
       reasoning: { effort: "high" },
       provider: { sort: "throughput", max_price: { prompt: 2, completion: 6 } },
+      session_id: "opaque-id",
+      prompt_cache_key: "opaque-id",
       stream_options: { include_usage: true },
     })
     expect(response.headers.get("x-openrouter-provider")).toBeNull()
@@ -354,6 +469,7 @@ describe("OpenRouter proxy", () => {
       assignmentID: "opaque-id",
       generationID: "gen_00000000000000000000000000000001",
       usage: { promptTokens: 10, completionTokens: 5, cost: 0, upstreamInferenceCost: 0.456 },
+      provider: "hidden-provider",
     })
     for (const [source, code] of [
       ["openrouter_in_flight_budget", "arena_temporary_budget"],
@@ -580,6 +696,196 @@ describe("OpenRouter proxy", () => {
     }
   })
 
+  test("keeps each side of a turn on one provider and its cache, and records that provider privately", async () => {
+    const upstreamBodies: Record<string, unknown>[] = []
+    const recorded: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => recorded.push(document),
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async (_input, init) => {
+        upstreamBodies.push(JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>)
+        return new Response(
+          `data: ${JSON.stringify({
+            id: "private-id",
+            provider: "Private Provider",
+            choices: [{ delta: { content: "done" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+          })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+          "X-Arena-Generation-ID": "gen_00000000000000000000000000000001",
+        },
+        // A client's own keys would let it steer the routing of a hidden model.
+        body: JSON.stringify({
+          model: "contestant",
+          messages: [],
+          stream: true,
+          session_id: "client",
+          prompt_cache_key: "client",
+        }),
+      }),
+    )
+
+    expect(await response.text()).not.toContain("Private Provider")
+    expect(upstreamBodies[0]).toMatchObject({ session_id: "opaque-id", prompt_cache_key: "opaque-id" })
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]).toMatchObject({ provider: "Private Provider", finishReason: "stop" })
+  })
+
+  test("keeps a single-agent chat on one opaque key across its messages", async () => {
+    const sessionID = "ses_private-session"
+    const scope = (session: string, message: string) =>
+      `single-agent|${session.length}:${session}|${message.length}:${message}`
+    const sets = [
+      { userId: "user-1", scopeID: scope(sessionID, "msg_1"), assignmentID: "first-id", modelSize: "medium" },
+      { userId: "user-1", scopeID: scope(sessionID, "msg_2"), assignmentID: "second-id", modelSize: "frontier" },
+      { userId: "user-1", scopeID: scope("ses_other", "msg_1"), assignmentID: "other-chat-id", modelSize: "medium" },
+      { userId: "user-2", scopeID: scope(sessionID, "msg_3"), assignmentID: "other-user-id", modelSize: "medium" },
+      // A battle scope that copies the single-agent shape still keys on its assignment.
+      { userId: "user-1", scopeID: scope(sessionID, "msg_4"), assignmentID: "battle-id" },
+    ]
+    const db = fakeDb({
+      assignmentSets: (filter) =>
+        sets
+          .filter((set) => set.userId === filter.userId && set.scopeID === filter.scopeID)
+          .map(({ userId, scopeID, assignmentID, modelSize }) => ({
+            userId,
+            scopeID,
+            assignments: [{ assignmentID, ...(modelSize ? { modelSize } : {}), model: pool[1] }],
+          })),
+    })
+    const upstreamBodies: { session_id?: unknown; prompt_cache_key?: unknown }[] = []
+    const keyFor = async ({ userId, scopeID, assignmentID, modelSize }: (typeof sets)[number]) => {
+      const response = await openrouter({
+        resolveCaller: async () => ({ id: userId }),
+        db: async () => db,
+        fetch: async (_input, init) => {
+          upstreamBodies.push(await new Response(init?.body).json())
+          return Response.json({ choices: [] })
+        },
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": assignmentID,
+            "X-Arena-Scope-ID": scopeID,
+          },
+          body: JSON.stringify({ model: modelSize === "medium" ? "medium" : "contestant", messages: [] }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      const body = upstreamBodies.at(-1)
+      expect(body?.session_id).toBe(body?.prompt_cache_key)
+      return body?.prompt_cache_key
+    }
+    const keys: unknown[] = []
+    for (const set of sets) keys.push(await keyFor(set))
+    const [first, second, otherChat, otherUser, battle] = keys
+
+    expect(first).toBe(second)
+    expect(first).toMatch(/^[0-9a-f]{32}$/)
+    expect(String(first)).not.toContain("private-session")
+    expect(otherChat).not.toBe(first)
+    expect(otherUser).not.toBe(first)
+    expect(battle).toBe("battle-id")
+  })
+
+  test("records the metrics a responses stream nests in its event", async () => {
+    let recordedMetrics: Record<string, unknown> | undefined
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => {
+        recordedMetrics = document
+      },
+    })
+    const response = await openrouter({
+      db: async () => db,
+      fetch: async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            type: "response.completed",
+            response: {
+              id: "private-id",
+              provider: "Private Provider",
+              status: "completed",
+              usage: { input_tokens: 10, output_tokens: 5 },
+            },
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    })(
+      new Request("https://control.test/api/openrouter/api/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+          "X-Arena-Generation-ID": "gen_00000000000000000000000000000003",
+        },
+        body: JSON.stringify({ model: "contestant", input: [], stream: true }),
+      }),
+    )
+
+    expect(await response.text()).not.toContain("Private Provider")
+    expect(recordedMetrics).toMatchObject({
+      usage: { promptTokens: 10, completionTokens: 5 },
+      finishReason: "completed",
+      provider: "Private Provider",
+    })
+  })
+
+  test("probes every pool profile with the routing fields the proxy adds", async () => {
+    const bodies: string[] = []
+    const execute = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? init.body : ""
+      bodies.push(body)
+      return body.includes(pool[1]!.slug)
+        ? Response.json(
+            { error: { message: "No endpoints found that can handle the requested parameters." } },
+            { status: 404 },
+          )
+        : Response.json({ choices: [] })
+    }
+
+    const failure = await probeRouting(pool, "key", execute).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(failure instanceof Error && failure.message).toMatch(/Qwen 3\.8 Max \(404\) .*No endpoints found/)
+    expect(bodies).toHaveLength(2)
+    const first = JSON.parse(bodies[0]!)
+    expect(first).toMatchObject({ model: pool[0]!.slug, provider: pool[0]!.routing, reasoning: { effort: "high" } })
+    expect(first.session_id).toEqual(expect.any(String))
+    expect(first.prompt_cache_key).toBe(first.session_id)
+  })
+
+  // Spends one OpenRouter call per profile, so it runs only when asked:
+  // ARENA_PROBE_OPENROUTER_KEY=... bun test src/openrouter.test.ts -t "accepts the routing fields"
+  test.skipIf(!process.env.ARENA_PROBE_OPENROUTER_KEY)(
+    "the default pool and Medium accept the routing fields on OpenRouter",
+    async () => {
+      await probeRouting([...defaultPool, mediumModel], process.env.ARENA_PROBE_OPENROUTER_KEY!)
+    },
+    120_000,
+  )
+
   test("leaves sampling to each provider, because the engine cannot choose it for a hidden model", async () => {
     let upstreamBody: Record<string, unknown> | undefined
     const db = fakeDb({
@@ -640,8 +946,12 @@ describe("OpenRouter proxy", () => {
     { name: "xhigh effort", reasoningEffort: "xhigh", expected: { effort: "xhigh" } },
   ])("uses the assigned profile's reasoning setting ($name)", async ({ reasoningEffort, expected }) => {
     let upstreamBody: Record<string, unknown> | undefined
-    const messages = [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/ui.png" } }] }]
-    const tools = [{ type: "function", function: { name: "inspect_ui", parameters: { type: "object", properties: {} } } }]
+    const messages = [
+      { role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/ui.png" } }] },
+    ]
+    const tools = [
+      { type: "function", function: { name: "inspect_ui", parameters: { type: "object", properties: {} } } },
+    ]
     const proxy = openrouter({
       db: async () =>
         fakeDb({
@@ -939,6 +1249,76 @@ describe("OpenRouter proxy", () => {
     expect(body).toContain('"content":"partial"')
     expect(body).toContain('"type":"arena_retryable_stream_error"')
     expect(body).not.toContain("private")
+  })
+
+  test("ends every stream that stops early on an event boundary, so the client can read its error", async () => {
+    const assignmentSet = {
+      userId: "user-1",
+      scopeID: "turn-1",
+      assignments: [
+        {
+          assignmentID: "opaque-id",
+          model: { displayName: "Hidden Model", slug: "provider/hidden-model", canonicalSlug: "x", routing: {} },
+        },
+      ],
+    }
+    const partial = 'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+    // A slow connection stops wherever the bytes ran out, not on an event boundary.
+    for (const [sent, end] of [
+      [`${partial}data: {"choi`, "close"],
+      [partial.slice(0, -1), "close"],
+      [`${partial}data: {"choi`, "error"],
+      [partial.slice(0, -1), "error"],
+    ] as const) {
+      let first = true
+      const response = await openrouter({
+        db: async () => fakeDb({ assignmentSets: () => [assignmentSet] }),
+        fetch: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (first) {
+                  first = false
+                  controller.enqueue(new TextEncoder().encode(sent))
+                  return
+                }
+                if (end === "close") controller.close()
+                else controller.error(new Error("private transport failure"))
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+
+      const body = await response.text()
+      // An SSE client joins the data lines of one event; each event must still be one JSON value.
+      const events = body
+        .split("\n\n")
+        .map((event) =>
+          event
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice("data:".length).trim())
+            .join("\n"),
+        )
+        .filter(Boolean)
+        .map((data) => JSON.parse(data) as Record<string, unknown>)
+      expect({ sent, end, endsEvent: body.endsWith("\n\n") }).toEqual({ sent, end, endsEvent: true })
+      expect(events[0]).toMatchObject({ choices: [{ delta: { content: "partial" } }] })
+      // A clean close after a whole line is not an error here: the engine finds no finish and retries.
+      if (end === "error" || sent.endsWith('{"choi')) expect(events.at(-1)).toHaveProperty("error")
+      else expect(events).toHaveLength(1)
+    }
   })
 
   test("answers an unreadable upstream body with a 502", async () => {

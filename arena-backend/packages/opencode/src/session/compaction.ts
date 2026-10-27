@@ -12,7 +12,7 @@ import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Option } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { isOverflow as overflow, usable } from "./overflow"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
@@ -25,6 +25,8 @@ import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-e
 import { ArenaRuntime } from "@/arena/runtime"
 import { contestant as arenaContestant, medium as arenaMedium } from "@/arena/model-profile"
 import type { Assignment } from "@/arena/proxy"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { ArenaRequestBudget } from "@/arena/request-budget"
 import type { ModelMessage } from "ai"
 
 export const Event = SessionCompactionEvent
@@ -39,6 +41,18 @@ const MAX_PRESERVE_RECENT_TOKENS = 8_000
 // Arena cannot use a provider tokenizer without exposing the contestant model. Reserve a bounded
 // allowance for each media item and omit its encoded bytes from the text estimate instead.
 const ARENA_MEDIA_TOKEN_ALLOWANCE = 4_000
+// Keep the same early-compaction policy for every blinded Arena model, including medium
+// sessions. This is an estimate of history, not a provider-specific billed-token limit.
+const ARENA_COMPACTION_TOKEN_LIMIT = ArenaRequestBudget.LIMIT
+// Compaction is an internal checkpoint, not a new user task or permission to stop after one step.
+const ARENA_COMPACTION_CONTINUE =
+  "Resume the original user task from the summary and retained context. " +
+  "Carry out the remaining steps, including verification, until the task is complete. " +
+  'Do not end with a plan or "next step" while actionable work remains. ' +
+  "Ask the user only when a concrete blocker requires information or authorization you do not have. " +
+  "If the task is already complete, report the result."
+const COMPACTION_EXHAUSTED =
+  "The conversation could not be summarized after three recovery attempts. Completed work has been preserved. Retry to continue."
 type Turn = {
   start: number
   end: number
@@ -233,8 +247,11 @@ const layer = Layer.effect(
         ArenaRuntime.enabled() && input.messages
           ? yield* estimate({ messages: input.messages, model: input.model })
           : undefined
+      const cfg = yield* config.get()
+      const arenaLimitReached = estimated !== undefined && estimated >= ARENA_COMPACTION_TOKEN_LIMIT
+      if (cfg.compaction?.auto !== false && arenaLimitReached) return true
       return overflow({
-        cfg: yield* config.get(),
+        cfg,
         tokens:
           estimated === undefined
             ? input.tokens
@@ -412,14 +429,29 @@ const layer = Layer.effect(
       const compactionUser = assignment ? { ...userMessage, model: compactionModel } : userMessage
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
-      const prior = completedCompactions(history)
+      // A new Arena request has not been acted on yet. Summarize only its earlier history;
+      // retain the original message IDs and parts so pasted text and attachments stay exact.
+      const finished = MessageV2.latest(history).finished
+      const pendingIndex =
+        input.auto && !input.overflow && userMessage.model.providerID === ArenaRuntime.providerID && finished
+          ? history.findIndex(
+              (message) =>
+                message.info.role === "user" &&
+                message.info.id > finished.id &&
+                message.parts.some((part) => part.type !== "compaction" && (part.type !== "text" || !part.synthetic)),
+            )
+          : -1
+      const pendingUser = pendingIndex >= 0 ? MessageV2.latest(history.slice(pendingIndex)).user : undefined
+      const compactable = pendingIndex >= 0 ? history.slice(0, pendingIndex) : history
+      const prior = completedCompactions(compactable)
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
       const previousSummary = prior.at(-1)?.summary
       const selected = yield* select({
-        messages: history.filter((_, index) => !hidden.has(index)),
+        messages: compactable.filter((_, index) => !hidden.has(index)),
         cfg,
         model,
       })
+      if (pendingIndex >= 0) selected.tail_start_id ??= history[pendingIndex].info.id
       // Allow plugins to inject context or replace compaction prompt.
       const compacting = yield* plugin.trigger(
         "experimental.session.compacting",
@@ -434,55 +466,101 @@ const layer = Layer.effect(
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
       })
       const ctx = yield* InstanceState.context
-      const msg: SessionV1.Assistant = {
-        id: MessageID.ascending(),
-        role: "assistant",
-        parentID: input.parentID,
-        sessionID: input.sessionID,
-        mode: "compaction",
-        agent: "compaction",
-        variant: compactionUser.model.variant,
-        summary: true,
-        path: {
-          cwd: ctx.directory,
-          root: ctx.worktree,
-        },
-        cost: 0,
-        tokens: {
-          output: 0,
-          input: 0,
-          reasoning: 0,
-          cache: { read: 0, write: 0 },
-        },
-        modelID: model.id,
-        providerID: model.providerID,
-        time: {
-          created: Date.now(),
-        },
-      }
-      yield* session.updateMessage(msg)
-      const processor = yield* processors.create({
-        assistantMessage: msg,
-        sessionID: input.sessionID,
-        model,
-      })
-      const result = yield* processor.process({
-        user: compactionUser,
-        agent,
-        sessionID: input.sessionID,
-        tools: {},
-        system: [],
-        messages: [
-          ...modelMessages,
-          {
-            role: "user",
-            content: [{ type: "text", text: nextPrompt }],
+      const summarize = Effect.fnUntraced(function* (responseRecovery?: {
+        attempt: number
+        reason: ArenaResponseRecovery.Reason
+      }) {
+        const msg: SessionV1.Assistant = {
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: input.parentID,
+          sessionID: input.sessionID,
+          mode: "compaction",
+          agent: "compaction",
+          variant: compactionUser.model.variant,
+          summary: true,
+          path: {
+            cwd: ctx.directory,
+            root: ctx.worktree,
           },
-        ],
-        model,
+          cost: 0,
+          tokens: {
+            output: 0,
+            input: 0,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+          },
+          modelID: model.id,
+          providerID: model.providerID,
+          time: {
+            created: Date.now(),
+          },
+        }
+        yield* session.updateMessage(msg)
+        const processor = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: input.sessionID,
+          model,
+          ...(responseRecovery ? { responseRecovery } : {}),
+        })
+        const result = yield* processor.process({
+          user: compactionUser,
+          agent,
+          sessionID: input.sessionID,
+          tools: {},
+          system: [],
+          // A large paste can put the summary itself above the savings threshold. Allow it so
+          // the user can continue; only the provider's actual context window limits this call.
+          messages: [
+            ...modelMessages,
+            {
+              role: "user",
+              content: [{ type: "text", text: nextPrompt }],
+            },
+          ],
+          model,
+        })
+        return { processor, result }
       })
+      // A finished summary replaces the history before it, so one that timed out, hit its output cap
+      // or came back empty would leave the contestant with no memory of its task. Retry an Arena
+      // summary within the recovery budget, then fail it visibly with the history intact.
+      const unusable = Effect.fnUntraced(function* (message: SessionV1.Assistant) {
+        const reason = ArenaResponseRecovery.reason(message.finish)
+        if (reason) return reason
+        const stored = yield* session
+          .findMessage(input.sessionID, (item) => item.info.id === message.id)
+          .pipe(Effect.orElseSucceed(() => Option.none<SessionV1.WithParts>()))
+        return Option.isSome(stored) && summaryText(stored.value) ? undefined : ("empty" as const)
+      })
+      let { processor, result } = yield* summarize()
+      for (
+        let attempt = 1;
+        model.providerID === ArenaRuntime.providerID && result === "continue" && !processor.message.error;
+        attempt++
+      ) {
+        const failure = yield* unusable(processor.message)
+        if (!failure) break
+        yield* Effect.logWarning("arena compaction summary unusable", {
+          "session.id": input.sessionID,
+          messageID: processor.message.id,
+          failure,
+          attempt,
+        })
+        if (attempt > ArenaResponseRecovery.MAX_RECOVERIES) {
+          processor.message.error = new SessionV1.APIError({
+            message: COMPACTION_EXHAUSTED,
+            isRetryable: true,
+          }).toObject()
+          yield* session.updateMessage(processor.message)
+          yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: processor.message.error })
+          return "stop"
+        }
+        yield* session.removeMessage({ sessionID: input.sessionID, messageID: processor.message.id })
+        ;({ processor, result } = yield* summarize(failure === "empty" ? undefined : { attempt, reason: failure }))
+      }
 
-      if (result === "compact") {
+      if (result === "compact" || result === "compact-request") {
         processor.message.error = new SessionV1.ContextOverflowError({
           message: replay
             ? "Conversation history too large to compact - exceeds model context limit"
@@ -535,7 +613,7 @@ const layer = Layer.effect(
               type: "text",
               synthetic: true,
               metadata: { arena_compaction_replay: true },
-              text: "Continue the request above after compaction.",
+              text: ARENA_COMPACTION_CONTINUE,
             })
           }
         }
@@ -562,19 +640,38 @@ const layer = Layer.effect(
               { enabled: true },
             )).enabled
           ) {
+            // The request that hit the limit took its system text from the user message before the
+            // compaction one. Carry it on, as a replay does, or the turn continues without it.
+            const answered = input.messages.findLast(
+              (message) => message.info.role === "user" && message.info.id < input.parentID,
+            )
+            // A retained new message brings its own system text; otherwise keep the turn's.
+            const system =
+              pendingUser?.system ?? (answered?.info.role === "user" ? answered.info.system : undefined)
             const continueMsg = yield* session.updateMessage({
               id: MessageID.ascending(),
               role: "user",
               sessionID: input.sessionID,
               time: { created: Date.now() },
-              agent: userMessage.agent,
-              model: userMessage.model,
+              agent: pendingUser?.agent ?? userMessage.agent,
+              model: pendingUser?.model ?? userMessage.model,
+              ...(system ? { system } : {}),
+              tools: pendingUser?.tools,
+              format: pendingUser?.format
+                ? pendingUser.format.type === "json_schema"
+                  ? new SessionV1.OutputFormatJsonSchema(pendingUser.format)
+                  : new SessionV1.OutputFormatText(pendingUser.format)
+                : undefined,
             })
+            const continuation = assignment
+              ? ARENA_COMPACTION_CONTINUE
+              : "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
             const text =
+              (pendingUser ? "Process the new user message and attachments retained above. " : "") +
               (input.overflow
                 ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
                 : "") +
-              "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
+              continuation
             yield* session.updatePart({
               id: PartID.ascending(),
               messageID: continueMsg.id,

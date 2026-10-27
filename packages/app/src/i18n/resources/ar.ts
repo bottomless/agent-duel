@@ -651,6 +651,21 @@ export const ar: TranslationResources = {
       },
     },
     git: {
+      remoteSignIn: {
+        trigger: "تسجيل الدخول إلى {{host}}",
+        title: "يلزم تسجيل الدخول",
+        description: "لا يستطيع Agent Duel جلب التحديثات من {{host}} دون تسجيل الدخول.",
+        sshDescription:
+          "لم يقبل {{host}} مفتاح SSH الخاص بك، لذا لا يستطيع Agent Duel جلب التحديثات. حمّل المفتاح باستخدام ssh-add، أو أضفه إلى حسابك على {{host}}.",
+        username: "اسم المستخدم",
+        password: "كلمة المرور أو الرمز المميز",
+        signIn: "تسجيل الدخول",
+        signingIn: "جارٍ تسجيل الدخول...",
+        signedIn: "تم تسجيل الدخول إلى {{host}}",
+        loginNotKept:
+          "تم تسجيل الدخول، لكن Git لم يحفظ بيانات الدخول، لذا سيطلبها الجلب التالي مرة أخرى. لحفظها، اضبط مساعد بيانات اعتماد Git أو حوّل origin إلى SSH.",
+        failed: "فشل تسجيل الدخول: {{reason}}",
+      },
       actions: {
         moreOptions: "المزيد من الخيارات",
         moreActions: "المزيد من الإجراءات",
@@ -785,6 +800,7 @@ export const ar: TranslationResources = {
           title: 'الأرشيف "{{workspaceName}}"؟',
           confirm: "أرشيف",
           cancel: "يلغي",
+          message: "تنتقل المحادثة إلى المؤرشفة، حيث يمكنك إلغاء أرشفتها.",
           uncommittedChanges: "تغييرات غير ملتزم بها",
           uncommittedChangesWithDiff: "التغييرات غير الملتزم بها ({{diffStat}})",
           addedLine: "تمت إضافة خط{{count}}",

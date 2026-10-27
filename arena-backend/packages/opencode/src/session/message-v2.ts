@@ -1,4 +1,5 @@
 import { SessionID, MessageID } from "./schema"
+import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import {
@@ -361,7 +362,8 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
         }
         if (part.type === "reasoning") {
           if (differentModel) {
-            if (part.text.trim().length > 0)
+            // An Arena-redacted block has no reasoning left; sent as text, it reads as the reply.
+            if (part.text.replaceAll(REDACTED_THINKING, "").trim().length > 0)
               assistantMessage.parts.push({
                 type: "text",
                 text: part.text,

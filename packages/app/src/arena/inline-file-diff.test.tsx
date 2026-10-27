@@ -19,12 +19,19 @@ vi.mock("@/components/ui/tooltip", async () => {
   };
 });
 
+vi.mock("./file-diff-query", async () =>
+  (await import("./review-fixtures.test-helpers")).fileDiffQueryStandIn(),
+);
+
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { arenaChangesRows } from "./changes-rows";
+import type { ArenaComparisonDiff, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaDiffLayout } from "./diff-layout";
 import {
   rewrite,
   sameResult,
   sameResultPastBudget,
+  servedFileDiffs,
   shortConflict,
 } from "./review-fixtures.test-helpers";
 
@@ -46,10 +53,29 @@ function byTestId(testId: string): HTMLElement | null {
   return container.querySelector(`[data-testid="${testId}"]`);
 }
 
+/** `main.py`'s diff as `fixture` served it; building a fixture is what serves its files. */
+function mainDiff(
+  _fixture: ArenaComparisonDiff,
+  layout: ArenaDiffLayout,
+  turnId = "turn-1",
+  waitingFor?: ArenaSide,
+) {
+  return (
+    <InlineFileDiff
+      serverId="server-1"
+      agentId="agent-1"
+      turnId={turnId}
+      file="main.py"
+      layout={layout}
+      waitingFor={waitingFor}
+    />
+  );
+}
+
 describe("InlineFileDiff", () => {
   it("shows the original line alongside both independently changed results", () => {
     act(() => {
-      root.render(<InlineFileDiff diff={shortConflict()} file="main.py" layout="split" />);
+      root.render(mainDiff(shortConflict(), "split"));
     });
     expect(
       Array.from(container.querySelectorAll("[data-change=remove]")).some(
@@ -62,7 +88,7 @@ describe("InlineFileDiff", () => {
 
   it("stacks each region's A and B diffs in one column", () => {
     act(() => {
-      root.render(<InlineFileDiff diff={shortConflict()} file="main.py" layout="single" />);
+      root.render(mainDiff(shortConflict(), "single"));
     });
     expect(byTestId("arena-inline-diff")).not.toBeNull();
     expect(
@@ -78,7 +104,7 @@ describe("InlineFileDiff", () => {
 
   it("faces the two versions of a conflict side by side", () => {
     act(() => {
-      root.render(<InlineFileDiff diff={shortConflict()} file="main.py" layout="split" />);
+      root.render(mainDiff(shortConflict(), "split"));
     });
     expect(byTestId("arena-inline-diff")).not.toBeNull();
     expect(byTestId("arena-combined-conflict")).toBeNull();
@@ -89,7 +115,7 @@ describe("InlineFileDiff", () => {
 
   it("keeps the original visible for a rewrite in either layout", () => {
     act(() => {
-      root.render(<InlineFileDiff diff={rewrite()} file="main.py" layout="single" />);
+      root.render(mainDiff(rewrite(), "single"));
     });
     expect(byTestId("arena-combined-direct-note")).toBeNull();
     expect(container.textContent).toContain("x = 0");
@@ -97,7 +123,7 @@ describe("InlineFileDiff", () => {
     expect(container.textContent).toContain("a_0 = 0");
     expect(container.textContent).toContain("b_0 = 0");
     act(() => {
-      root.render(<InlineFileDiff diff={rewrite()} file="main.py" layout="split" />);
+      root.render(mainDiff(rewrite(), "split"));
     });
     expect(byTestId("arena-combined-direct-note")).toBeNull();
     expect(container.textContent).toContain("x = 0");
@@ -107,14 +133,14 @@ describe("InlineFileDiff", () => {
 
   it("reads a file both changed the same way as the change both made", () => {
     act(() => {
-      root.render(<InlineFileDiff diff={sameResult()} file="main.py" layout="single" />);
+      root.render(mainDiff(sameResult(), "single"));
     });
     expect(byTestId("arena-inline-diff-note")).toBeNull();
     expect(byTestId("arena-inline-diff")).not.toBeNull();
     expect(container.textContent).toContain("y = 2");
     expect(container.textContent).toContain("Both");
     act(() => {
-      root.render(<InlineFileDiff diff={sameResult()} file="main.py" layout="split" />);
+      root.render(mainDiff(sameResult(), "split"));
     });
     expect(byTestId("arena-inline-diff")).not.toBeNull();
     expect(container.textContent).toContain("y = 2");
@@ -122,7 +148,7 @@ describe("InlineFileDiff", () => {
 
   it("shows shared removals without a limitation note past the matrix budget", () => {
     act(() => {
-      root.render(<InlineFileDiff diff={sameResultPastBudget()} file="main.py" layout="single" />);
+      root.render(mainDiff(sameResultPastBudget(), "single"));
     });
     expect(byTestId("arena-inline-diff-note")).toBeNull();
     expect(byTestId("arena-inline-diff")).not.toBeNull();
@@ -133,9 +159,9 @@ describe("InlineFileDiff", () => {
 
   it("says so when both produced the same file and there is no base to read it against", () => {
     const diff = sameResult();
-    delete diff.files[0]!.base;
+    delete servedFileDiffs.get("main.py")!.file.base;
     act(() => {
-      root.render(<InlineFileDiff diff={diff} file="main.py" layout="single" />);
+      root.render(mainDiff(diff, "single"));
     });
     expect(byTestId("arena-inline-diff")).toBeNull();
     expect(byTestId("arena-inline-diff-note")?.textContent).toContain("The original was not sent");
@@ -143,7 +169,7 @@ describe("InlineFileDiff", () => {
 
   it("expands one agent into the full viewer and restores comparison scroll and keyboard focus", () => {
     const diff = shortConflict();
-    act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" />));
+    act(() => root.render(mainDiff(diff, "split")));
     const viewer = byTestId("arena-inline-diff")!;
     viewer.scrollTop = 120;
     const expand = container.querySelector<HTMLElement>('[aria-label="Expand Agent A"]')!;
@@ -162,20 +188,81 @@ describe("InlineFileDiff", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Expand Agent B");
   });
 
+  it("says it is reading a file whose contents have not arrived", () => {
+    servedFileDiffs.delete("other.py");
+    act(() =>
+      root.render(
+        <InlineFileDiff
+          serverId="server-1"
+          agentId="agent-1"
+          turnId="turn-1"
+          file="other.py"
+          layout="split"
+        />,
+      ),
+    );
+    expect(byTestId("arena-inline-diff")).toBeNull();
+    expect(byTestId("arena-inline-diff-loading")?.textContent).toContain("Loading diff");
+  });
+
+  it("keeps the working side's column as a placeholder beside the finished side", () => {
+    act(() => {
+      root.render(mainDiff(shortConflict(), "split", "turn-1", "a"));
+    });
+    expect(byTestId("arena-diff-pending-a")?.textContent).toContain("Agent A is still working");
+    expect(container.textContent).toContain("y = 200");
+    expect(container.textContent).not.toContain("y = 20\n");
+    expect(byTestId("arena-diff-back")).toBeNull();
+    expect(container.querySelector('[aria-label="Expand Agent A"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Expand Agent B"]')).not.toBeNull();
+  });
+
+  it("stacks the working side as one line per region in one column", () => {
+    act(() => {
+      root.render(mainDiff(shortConflict(), "single", "turn-1", "b"));
+    });
+    const pending = byTestId("arena-diff-pending-b");
+    expect(pending?.textContent).toBe(
+      "Agent Bis still working · its version of this region appears here",
+    );
+    expect(container.textContent).toContain("y = 20");
+    expect(container.textContent).not.toContain("y = 200");
+    expect(container.querySelector('[aria-label="Expand Agent B"]')).toBeNull();
+  });
+
+  it("keeps the first result's diff while the full one is read", () => {
+    act(() => root.render(mainDiff(shortConflict(), "split", "turn-1", "b")));
+    expect(byTestId("arena-diff-pending-b")).not.toBeNull();
+    // The other side landed, so the file is read again, and nothing has arrived yet.
+    servedFileDiffs.delete("main.py");
+    act(() =>
+      root.render(
+        <InlineFileDiff
+          serverId="server-1"
+          agentId="agent-1"
+          turnId="turn-1"
+          file="main.py"
+          layout="split"
+        />,
+      ),
+    );
+    expect(byTestId("arena-inline-diff-loading")).toBeNull();
+    expect(byTestId("arena-diff-pending-b")).not.toBeNull();
+  });
+
   it("names its file on the viewer, so a scroll is credited to the right diff", () => {
-    act(() => root.render(<InlineFileDiff diff={shortConflict()} file="main.py" layout="split" />));
+    act(() => root.render(mainDiff(shortConflict(), "split")));
     expect(byTestId("arena-inline-diff")?.getAttribute("data-diff-file")).toBe("main.py");
   });
 
   it("resets detail mode when the layout or turn changes", () => {
     const diff = shortConflict();
-    act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="split" />));
+    act(() => root.render(mainDiff(diff, "split")));
     act(() => container.querySelector<HTMLElement>('[aria-label="Expand Agent A"]')!.click());
-    act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="single" />));
+    act(() => root.render(mainDiff(diff, "single")));
     expect(byTestId("arena-inline-diff")?.getAttribute("data-detail-side")).toBe("both");
     act(() => container.querySelector<HTMLElement>('[aria-label="Expand Agent A"]')!.click());
-    diff.turnID = "next-turn";
-    act(() => root.render(<InlineFileDiff diff={diff} file="main.py" layout="single" />));
+    act(() => root.render(mainDiff(diff, "single", "next-turn")));
     expect(byTestId("arena-inline-diff")?.getAttribute("data-detail-side")).toBe("both");
   });
 });

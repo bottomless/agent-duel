@@ -33,7 +33,7 @@ type TurnRecord = {
   readonly _id: string
   readonly appliedSide?: string
   readonly canonicalUserMessageID?: string
-  readonly canonicalGraftedThroughMessageID?: string
+  readonly canonicalLastMessageID?: string
 }
 type RunRecord = {
   readonly turnID: string
@@ -61,7 +61,7 @@ export function arenaTurnEnvironments(
       return [
         {
           from: turn.canonicalUserMessageID,
-          ...(turn.canonicalGraftedThroughMessageID ? { through: turn.canonicalGraftedThroughMessageID } : {}),
+          ...(turn.canonicalLastMessageID ? { through: turn.canonicalLastMessageID } : {}),
           environment: { ...(winner.portAliases ? { portAliases: winner.portAliases } : {}), previewUrls },
         },
       ]

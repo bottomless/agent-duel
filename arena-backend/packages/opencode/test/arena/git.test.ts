@@ -13,12 +13,14 @@ import {
   attachSideBranch,
   battleRefs,
   compare,
+  comparisonFiles,
   containsCommit,
   diffHostRefs,
   finalize,
   OperationError,
   preparePromotion,
   prepareSideBranch,
+  readComparisonFile,
   recoverFailedPromotion,
   refLabel,
   refreshAttachedSide,
@@ -105,6 +107,41 @@ const newlyIgnoredBattle = Effect.gen(function* () {
   yield* Effect.promise(() => fs.writeFile(`${candidate.path}/winner.txt`, "winner\n"))
   yield* Effect.promise(() => fs.rm(`${candidate.path}/old.log`))
   return { canonical, candidate, base }
+})
+
+/** A repository with one commit of `files`, created inside `parent` at `name` and not added to it. */
+const embeddedRepository = (parent: string, name: string, files: Record<string, string>) =>
+  Effect.promise(async () => {
+    const directory = `${parent}/${name}`
+    await fs.mkdir(directory)
+    await $`git init -q`.cwd(directory).quiet()
+    for (const [file, content] of Object.entries(files)) await fs.writeFile(`${directory}/${file}`, content, "utf8")
+    await $`git add -A && git commit -q -m ${name}`.cwd(directory).quiet()
+    return directory
+  })
+
+/** A battle whose checkout holds the untracked embedded repository `nested`, set up in a contestant. */
+const embeddedRepositoryBattle = Effect.gen(function* () {
+  const canonical = yield* scopedTmpdir({ git: true })
+  const candidate = yield* scopedTmpdir()
+  const nested = yield* embeddedRepository(canonical.path, "nested", { "nested.txt": "nested\n" })
+  const base = yield* snapshotBase({ canonical: canonical.path })
+  expect(base.clean).toBe(false)
+  yield* Effect.promise(() =>
+    $`git worktree add --detach ${candidate.path} ${base.frozenHead}`.cwd(canonical.path).quiet(),
+  )
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(() => $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow()).pipe(
+      Effect.ignore,
+    ),
+  )
+  yield* prepareContestantState({
+    worktree: candidate.path,
+    frozenHead: base.frozenHead,
+    indexTree: base.indexTree,
+    workingTree: base.baseTree,
+  })
+  return { canonical, candidate, base, nested }
 })
 
 const expectNewlyIgnoredFilesKept = (root: string) =>
@@ -1464,26 +1501,23 @@ describe("ArenaGit", () => {
         { concurrency: 2 },
       )
 
-      const evidence = yield* compare({
-        canonical: canonical.path,
-        baseCommit: base,
-        aCommit: a.finalCommit,
-        bCommit: b.finalCommit,
-      })
-      const divergence = evidence.divergence
-      expect(divergence).toBeDefined()
-      expect(divergence!.conflicted).toBe(false)
-      expect(divergence!.files.map((entry) => entry.file)).toEqual(evidence.files.map((entry) => entry.file))
-      const byFile = new Map(divergence!.files.map((entry) => [entry.file, entry]))
-      expect(byFile.get("shared.txt")?.status).toBe("compatible")
-      expect(byFile.get("shared.txt")?.merged?.content).toContain("line 2 by A")
-      expect(byFile.get("shared.txt")?.merged?.content).toContain("line 9 by B")
-      expect(byFile.get("shared.txt")?.merged?.content).not.toContain("<<<<<<<")
-      expect(byFile.get("only-a.txt")?.status).toBe("only_a")
-      expect(byFile.get("only-a.txt")?.merged).toBeUndefined()
-      expect(byFile.get("only-b.txt")?.status).toBe("only_b")
-      expect(byFile.get("same.txt")?.status).toBe("identical")
-      expect(byFile.get("same.txt")?.merged).toBeUndefined()
+      const input = { canonical: canonical.path, baseCommit: base, aCommit: a.finalCommit, bCommit: b.finalCommit }
+      const listed = yield* comparisonFiles(input)
+      expect(listed.files.map((entry) => [entry.file, entry.status])).toEqual([
+        ["only-a.txt", "only_a"],
+        ["only-b.txt", "only_b"],
+        ["same.txt", "identical"],
+        ["shared.txt", "compatible"],
+      ])
+      const read = (file: string) => readComparisonFile({ ...input, file })
+      const sharedFile = (yield* read("shared.txt")).divergence
+      expect(sharedFile.status).toBe("compatible")
+      expect(sharedFile.merged?.content).toContain("line 2 by A")
+      expect(sharedFile.merged?.content).toContain("line 9 by B")
+      expect(sharedFile.merged?.content).not.toContain("<<<<<<<")
+      expect((yield* read("only-a.txt")).divergence).toEqual({ file: "only-a.txt", status: "only_a" })
+      expect((yield* read("only-b.txt")).divergence.status).toBe("only_b")
+      expect((yield* read("same.txt")).divergence).toEqual({ file: "same.txt", status: "identical" })
     }),
   )
 
@@ -1531,16 +1565,11 @@ describe("ArenaGit", () => {
         { concurrency: 2 },
       )
 
-      const evidence = yield* compare({
-        canonical: canonical.path,
-        baseCommit: base,
-        aCommit: a.finalCommit,
-        bCommit: b.finalCommit,
-      })
-      expect(evidence.divergence?.conflicted).toBe(true)
-      const entry = evidence.divergence?.files.find((file) => file.file === "greet.py")
-      expect(entry?.status).toBe("diverging")
-      const merged = entry?.merged?.content ?? ""
+      const input = { canonical: canonical.path, baseCommit: base, aCommit: a.finalCommit, bCommit: b.finalCommit }
+      expect((yield* comparisonFiles(input)).files.map((file) => file.status)).toEqual(["diverging"])
+      const entry = (yield* readComparisonFile({ ...input, file: "greet.py" })).divergence
+      expect(entry.status).toBe("diverging")
+      const merged = entry.merged?.content ?? ""
       expect(merged).toContain("<<<<<<<")
       // The base section proves the zdiff3 style reached merge-ort; plain "merge" has none.
       expect(merged).toContain("|||||||")
@@ -1550,14 +1579,8 @@ describe("ArenaGit", () => {
       expect(merged).toContain('print("hello from B")')
 
       // A stopped side is represented by the base itself: nothing is A's, so nothing conflicts.
-      const stopped = yield* compare({
-        canonical: canonical.path,
-        baseCommit: base,
-        aCommit: base,
-        bCommit: b.finalCommit,
-      })
-      expect(stopped.divergence?.conflicted).toBe(false)
-      expect(stopped.divergence?.files.map((file) => file.status)).toEqual(["only_b"])
+      const stopped = yield* comparisonFiles({ ...input, aCommit: base })
+      expect(stopped.files.map((file) => file.status)).toEqual(["only_b"])
     }),
   )
 
@@ -1609,14 +1632,13 @@ describe("ArenaGit", () => {
         { concurrency: 2 },
       )
 
-      const evidence = yield* compare({
+      const { file: lock } = yield* readComparisonFile({
         canonical: canonical.path,
         baseCommit: base,
         aCommit: a.finalCommit,
         bCommit: b.finalCommit,
+        file: "lock.json",
       })
-      const lock = evidence.files.find((entry) => entry.file === "lock.json")
-      expect(lock).toBeDefined()
       // Both agents' edits reach the viewer, from opposite ends of a file far too big to send.
       expect(lock?.a?.content).toContain('"entry-26480": "9.9.9"')
       expect(lock?.b?.content).toContain('"entry-17": "2.5.1"')
@@ -1654,18 +1676,21 @@ describe("ArenaGit", () => {
       })
       expect(evidence.baseToATruncated).toBe(true)
       expect(evidence.truncated).toBe(true)
-      expect(evidence.stats.map((file) => file.file)).toEqual(["data.json", "z-small.txt"])
-      const large = evidence.files.find((file) => file.file === "data.json")!
+      expect(evidence.files.map((file) => [file.file, file.status])).toEqual([
+        ["data.json", "only_a"],
+        ["z-small.txt", "only_a"],
+      ])
+      const input = { canonical: canonical.path, baseCommit: base, aCommit: result, bCommit: base }
+      const large = (yield* readComparisonFile({ ...input, file: "data.json" })).file
       for (const side of [large.base!, large.a!, large.b!]) {
         expect(side.truncated).toBe(true)
         expect(side.missing).toBe(false)
         expect(side.content.length).toBeLessThanOrEqual(256 * 1024)
       }
-      const small = evidence.files.find((file) => file.file === "z-small.txt")!
+      const small = (yield* readComparisonFile({ ...input, file: "z-small.txt" })).file
       expect(small.base).toEqual({ content: "before\n", missing: false, truncated: false })
       expect(small.a).toEqual({ content: "after\n", missing: false, truncated: false })
       expect(small.b).toEqual(small.base)
-      expect(evidence.divergence?.files.map((file) => file.status)).toEqual(["only_a", "only_a"])
 
       const prepared = prepareEvidence({
         baseToA: evidence.baseToA,
@@ -1688,7 +1713,8 @@ describe("ArenaGit", () => {
         bCommit: result,
       })
       expect(reversed.baseToBTruncated).toBe(true)
-      expect(reversed.files.find((file) => file.file === "data.json")).toEqual({
+      const flipped = { ...input, aCommit: base, bCommit: result }
+      expect((yield* readComparisonFile({ ...flipped, file: "data.json" })).file).toEqual({
         ...large,
         additionsA: large.additionsB,
         deletionsA: large.deletionsB,
@@ -1697,8 +1723,72 @@ describe("ArenaGit", () => {
         a: large.b,
         b: large.a,
       })
-      expect(reversed.files.find((file) => file.file === "z-small.txt")?.b).toEqual(small.a)
-      expect(reversed.divergence?.files.map((file) => file.status)).toEqual(["only_b", "only_b"])
+      expect((yield* readComparisonFile({ ...flipped, file: "z-small.txt" })).file.b).toEqual(small.a)
+      expect(reversed.files.map((file) => file.status)).toEqual(["only_b", "only_b"])
+    }),
+  )
+
+  it.live("lists every file either side changed, in path order, however many A changed", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const commit = (message: string) =>
+        Effect.promise(async () => {
+          await $`git add -A && git commit -m ${message}`.cwd(canonical.path).quiet()
+          return (await $`git rev-parse HEAD`.cwd(canonical.path).quiet().text()).trim()
+        })
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/sqlite_rs.rs`, "fn base() {}\n"))
+      const base = yield* commit("base")
+      // A changes thirty files ahead of everything B touches, which a cap on A's first files hid.
+      for (let index = 0; index < 30; index++) {
+        yield* Effect.promise(() => fs.writeFile(`${canonical.path}/a-${String(index).padStart(2, "0")}.ts`, "a\n"))
+      }
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/sqlite_rs.rs`, "fn by_a() {}\n"))
+      const aCommit = yield* commit("a")
+      yield* Effect.promise(() => $`git checkout --detach ${base}`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/b-only.ts`, "b\n"))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/sqlite_rs.rs`, "fn by_b() {}\n"))
+      const bCommit = yield* commit("b")
+      const input = { canonical: canonical.path, baseCommit: base, aCommit, bCommit }
+
+      const listed = yield* comparisonFiles(input)
+      expect(listed.files).toHaveLength(32)
+      const paths = listed.files.map((file) => file.file)
+      expect(paths).toEqual([...paths].sort())
+      expect(listed.files.find((file) => file.file === "b-only.ts")).toEqual({
+        file: "b-only.ts",
+        binary: false,
+        additionsA: 0,
+        deletionsA: 0,
+        additionsB: 1,
+        deletionsB: 0,
+        status: "only_b",
+      })
+      expect(listed.files.at(-1)).toMatchObject({ file: "sqlite_rs.rs", status: "diverging" })
+      const sqlite = yield* readComparisonFile({ ...input, file: "sqlite_rs.rs" })
+      expect(sqlite.file.a?.content).toBe("fn by_a() {}\n")
+      expect(sqlite.file.b?.content).toBe("fn by_b() {}\n")
+      expect(sqlite.divergence.merged?.content).toContain("<<<<<<<")
+    }),
+  )
+
+  it.live("refuses to read a file neither side changed", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/secret.txt`, "kept\n"))
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/changed.txt`, "before\n"))
+      yield* Effect.promise(() => $`git add -A && git commit -m base`.cwd(canonical.path).quiet())
+      const base = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/changed.txt`, "after\n"))
+      yield* Effect.promise(() => $`git commit -am result`.cwd(canonical.path).quiet())
+      const result = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      const input = { canonical: canonical.path, baseCommit: base, aCommit: result, bCommit: base }
+
+      for (const file of ["secret.txt", "*.txt", "missing.txt"]) {
+        const exit = yield* readComparisonFile({ ...input, file }).pipe(Effect.exit)
+        if (!Exit.isFailure(exit)) throw new Error(`Expected ${file} to be refused`)
+        expect(Cause.squash(exit.cause)).toBeInstanceOf(OperationError)
+      }
+      expect((yield* readComparisonFile({ ...input, file: "changed.txt" })).file.a?.content).toBe("after\n")
     }),
   )
 
@@ -1857,30 +1947,124 @@ describe("ArenaGit", () => {
     }),
   )
 
-  it.live("excludes untracked embedded repositories from dirty snapshots", () =>
+  it.live("snapshots an untracked embedded repository's files as plain files, without its .git", () =>
     Effect.gen(function* () {
       const canonical = yield* scopedTmpdir({ git: true })
-      const nested = `${canonical.path}/nested`
-      yield* Effect.promise(() => fs.mkdir(nested))
-      yield* Effect.promise(() => $`git init`.cwd(nested).quiet())
-      yield* Effect.promise(() => fs.writeFile(`${nested}/nested.txt`, "nested\n", "utf8"))
-      yield* Effect.promise(() => $`git add nested.txt`.cwd(nested).quiet())
-      yield* Effect.promise(() => $`git commit -m nested`.cwd(nested).quiet())
+      yield* Effect.promise(() => fs.writeFile(`${canonical.path}/.gitignore`, "*.tmp\n", "utf8"))
+      yield* Effect.promise(() => $`git add .gitignore && git commit -m ignore`.cwd(canonical.path).quiet())
+      const nested = yield* embeddedRepository(canonical.path, "nested", { "nested.txt": "nested\n" })
+      yield* Effect.promise(async () => {
+        await fs.writeFile(`${nested}/.gitignore`, "build/\n", "utf8")
+        await fs.writeFile(`${nested}/untracked.txt`, "untracked\n", "utf8")
+        await fs.mkdir(`${nested}/build`)
+        await fs.writeFile(`${nested}/build/out.js`, "built\n", "utf8")
+        await fs.writeFile(`${nested}/scratch.tmp`, "scratch\n", "utf8")
+        await fs.symlink("nested.txt", `${nested}/link.txt`)
+      })
+      yield* embeddedRepository(nested, "inner", { "inner.txt": "inner\n" })
+      // `git add -A` refuses a repository without a commit, which used to fail the whole snapshot.
+      yield* Effect.promise(async () => {
+        await fs.mkdir(`${canonical.path}/fresh`)
+        await $`git init -q`.cwd(`${canonical.path}/fresh`).quiet()
+        await fs.writeFile(`${canonical.path}/fresh/main.rs`, "fn main() {}\n", "utf8")
+      })
       yield* Effect.promise(() => fs.writeFile(`${canonical.path}/normal.txt`, "normal\n", "utf8"))
 
       const base = yield* snapshotBase({
         canonical: canonical.path,
         permanentRef: "refs/battles/turn-6/base",
       })
-      const nestedEntry = yield* Effect.promise(() =>
-        $`git cat-file -e ${base.baseCommit}:nested`.cwd(canonical.path).quiet().nothrow(),
+      const listed = yield* Effect.promise(() =>
+        $`git ls-tree -r --full-tree ${base.baseCommit}`.cwd(canonical.path).quiet().text(),
       )
-      const normalEntry = yield* Effect.promise(() =>
-        $`git cat-file -e ${base.baseCommit}:normal.txt`.cwd(canonical.path).quiet().nothrow(),
+      const entries = Object.fromEntries(
+        listed
+          .trim()
+          .split("\n")
+          .map((line) => [line.slice(line.indexOf("\t") + 1), line.split(" ")[0]]),
       )
-      expect(nestedEntry.exitCode).not.toBe(0)
-      expect(normalEntry.exitCode).toBe(0)
+      expect(entries).toEqual({
+        ".gitignore": "100644",
+        "fresh/main.rs": "100644",
+        "nested/.gitignore": "100644",
+        "nested/inner/inner.txt": "100644",
+        "nested/link.txt": "120000",
+        "nested/nested.txt": "100644",
+        "nested/untracked.txt": "100644",
+        "normal.txt": "100644",
+      })
       expect(yield* Effect.promise(() => fs.readFile(`${nested}/nested.txt`, "utf8"))).toBe("nested\n")
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        "?? fresh/\n?? nested/\n?? normal.txt",
+      )
+    }),
+  )
+
+  it.live("hands a contestant an embedded repository's files and votes its edits back into that repository", () =>
+    Effect.gen(function* () {
+      const { canonical, candidate, base, nested } = yield* embeddedRepositoryBattle
+      yield* Effect.promise(async () => {
+        expect(await fs.readFile(`${candidate.path}/nested/nested.txt`, "utf8")).toBe("nested\n")
+        expect(await fs.lstat(`${candidate.path}/nested/.git`).catch(() => undefined)).toBeUndefined()
+        await fs.writeFile(`${candidate.path}/nested/nested.txt`, "winner\n", "utf8")
+        await fs.writeFile(`${candidate.path}/nested/added.txt`, "added\n", "utf8")
+      })
+      const result = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: base.baseCommit,
+        frozenHead: base.frozenHead,
+        permanentRef: "refs/battles/embedded/a",
+      })
+      const promoted = yield* promoteWinnerState({
+        canonical: canonical.path,
+        frozenHead: base.frozenHead,
+        baseWorkingTree: base.baseTree,
+        baseIndexTree: base.indexTree,
+        resultCommit: result.finalCommit,
+        finalIndexTree: result.finalIndexTree,
+        safetyRef: "refs/battles/embedded/a-safety",
+      })
+      expect(promoted.conflicts).toEqual([])
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(canonical.path).quiet().text())).trim()).toBe(
+        "?? nested/",
+      )
+      expect((yield* Effect.promise(() => $`git status --short`.cwd(nested).quiet().text())).trim()).toBe(
+        "M nested.txt\n?? added.txt",
+      )
+    }),
+  )
+
+  it.live("refuses a winner that replaces an embedded repository's directory with a file", () =>
+    Effect.gen(function* () {
+      const { canonical, candidate, base, nested } = yield* embeddedRepositoryBattle
+      yield* Effect.promise(async () => {
+        await fs.rm(`${candidate.path}/nested`, { recursive: true })
+        await fs.writeFile(`${candidate.path}/nested`, "a file now\n", "utf8")
+      })
+      const result = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: base.baseCommit,
+        frozenHead: base.frozenHead,
+        permanentRef: "refs/battles/embedded/b",
+      })
+      const refused = yield* Effect.exit(
+        promoteWinnerState({
+          canonical: canonical.path,
+          frozenHead: base.frozenHead,
+          baseWorkingTree: base.baseTree,
+          baseIndexTree: base.indexTree,
+          resultCommit: result.finalCommit,
+          finalIndexTree: result.finalIndexTree,
+          safetyRef: "refs/battles/embedded/b-safety",
+        }),
+      )
+      expect(Exit.isFailure(refused)).toBe(true)
+      if (Exit.isFailure(refused)) {
+        const error = Cause.squash(refused.cause)
+        expect(error).toBeInstanceOf(OperationError)
+        expect((error as OperationError).operation).toBe("write_over_embedded_repository")
+      }
+      expect((yield* Effect.promise(() => $`git log --format=%s`.cwd(nested).quiet().text())).trim()).toBe("nested")
     }),
   )
 
@@ -4414,6 +4598,11 @@ describe("ArenaGit contestant worktree sync", () => {
     readonly developer?: (canonical: string) => Effect.Effect<void>
     /** Where the worktree and its host go; a fresh temporary directory by default. */
     readonly parent?: (canonical: string) => Effect.Effect<string>
+    /**
+     * Whether the worktree's `git status` reads as the canonical checkout's. It does not when the
+     * checkout holds an embedded repository: the contestant has its files and no `.git`.
+     */
+    readonly sameStatus?: boolean
   }
   type Fixture = {
     readonly canonical: string
@@ -4507,7 +4696,7 @@ describe("ArenaGit contestant worktree sync", () => {
       yield* syncContestantState(state)
       yield* verifyContestantState(state)
       const expected = yield* status(canonical)
-      expect(yield* status(slot)).toBe(expected)
+      if (options.sameStatus !== false) expect(yield* status(slot)).toBe(expected)
       return { canonical, host, slot, ...(branch ? { branch } : {}), state, expected } satisfies Fixture
     })
 
@@ -4810,6 +4999,31 @@ describe("ArenaGit contestant worktree sync", () => {
         }),
     },
   ]
+
+  it.live("syncs an embedded repository's files into a worktree as plain files and verifies them", () =>
+    Effect.gen(function* () {
+      const fixture = yield* arrange({
+        sameStatus: false,
+        developer: (canonical) =>
+          Effect.gen(function* () {
+            yield* write(`${canonical}/vendor/lib/lib.txt`, "library\n")
+            yield* git(`${canonical}/vendor/lib`, "init", "-q")
+            yield* git(`${canonical}/vendor/lib`, "add", "-A")
+            yield* git(`${canonical}/vendor/lib`, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "lib")
+          }),
+      })
+      expect(yield* read(`${fixture.slot}/vendor/lib/lib.txt`)).toBe("library\n")
+      expect(yield* exists(`${fixture.slot}/vendor/lib/.git`)).toBe(false)
+      expect(yield* status(fixture.slot)).toBe("?? vendor/lib/lib.txt")
+
+      // A kept worktree whose contestant edited the files is brought back to the frozen base.
+      yield* write(`${fixture.slot}/vendor/lib/lib.txt`, "edited\n")
+      expect(yield* failure(verifyContestantState(fixture.state))).toBe("verify_contestant_worktree")
+      yield* syncContestantState(fixture.state)
+      yield* verifyContestantState(fixture.state)
+      expect(yield* read(`${fixture.slot}/vendor/lib/lib.txt`)).toBe("library\n")
+    }),
+  )
 
   for (const scenario of scenarios) {
     it.live(`syncs a kept worktree after ${scenario.name}`, () =>

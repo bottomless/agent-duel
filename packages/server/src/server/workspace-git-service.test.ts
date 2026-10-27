@@ -84,6 +84,7 @@ function createSnapshot(
       pullRequest: resolveSnapshotPullRequest(base, overrides),
       error: resolveSnapshotError(base, overrides),
     },
+    remote: { signInRequired: false },
   };
 }
 
@@ -284,7 +285,7 @@ function buildDefaultTestServiceDeps() {
     forgeOverrides: { github: createGitHubServiceStub() },
     resolveAbsoluteGitDir: vi.fn(async () => join(REPO_CWD, ".git")),
     hasOriginRemote: vi.fn(async () => false),
-    runGitFetch: vi.fn(async () => ({ changes: [], error: null })),
+    runGitFetch: vi.fn(async () => ({ changes: [], error: null, signInRequired: false })),
     runGitCommand: vi.fn(async () => ({
       stdout: `${REPO_CWD}\n`,
       stderr: "",
@@ -881,6 +882,7 @@ describe("WorkspaceGitServiceImpl", () => {
       return {
         changes: [{ kind: "moved" as const, ref: "origin/main", beforeOid: "a", afterOid: "b" }],
         error: null,
+        signInRequired: false,
       };
     });
     const hasOriginRemote = vi.fn(async () => true);
@@ -944,12 +946,14 @@ describe("WorkspaceGitServiceImpl", () => {
         nonRemoteRefsChanged: false,
         remoteRefs: new Set(["origin/main"]),
         error: null,
+        signInRequired: false,
       })
       .mockResolvedValueOnce({
         changes: [],
         nonRemoteRefsChanged: false,
         remoteRefs: new Set(["origin/main", "origin/new"]),
         error: null,
+        signInRequired: false,
       });
     const getCheckoutSnapshotFacts = vi.fn(async (cwd: string) => ({
       ...createCheckoutSnapshotFacts(cwd),
@@ -994,6 +998,7 @@ describe("WorkspaceGitServiceImpl", () => {
       result: {
         changes: [{ kind: "added" as const, ref: "origin/new", afterOid: "b" }],
         error: null,
+        signInRequired: false,
       },
     },
     {
@@ -1001,11 +1006,12 @@ describe("WorkspaceGitServiceImpl", () => {
       result: {
         changes: [{ kind: "deleted" as const, ref: "origin/main", beforeOid: "a" }],
         error: null,
+        signInRequired: false,
       },
     },
     {
       name: "a concurrent local ref change",
-      result: { changes: [], nonRemoteRefsChanged: true, error: null },
+      result: { changes: [], nonRemoteRefsChanged: true, error: null, signInRequired: false },
     },
   ])("$name takes the repository-wide structural fallback", async ({ result }) => {
     const releaseFetch = createDeferred<void>();
@@ -1072,6 +1078,7 @@ describe("WorkspaceGitServiceImpl", () => {
         return {
           changes: [{ kind: "moved" as const, ref: "origin/main", beforeOid: "a", afterOid: "b" }],
           error: null,
+          signInRequired: false,
         };
       }),
     });
@@ -1395,7 +1402,7 @@ describe("WorkspaceGitServiceImpl", () => {
       getCheckoutWorktreeState,
       runGitFetch: vi.fn(async () => {
         await backgroundFetch.promise;
-        return { changes: [], error: null };
+        return { changes: [], error: null, signInRequired: false };
       }),
       subscribe,
     });
@@ -1453,6 +1460,129 @@ describe("WorkspaceGitServiceImpl", () => {
 
     await service.getCheckoutDiff("/tmp/repo-0", { mode: "uncommitted" });
     expect(getCheckoutDiff).toHaveBeenCalledTimes(CACHE_MAX + OVERFLOW + 1);
+
+    service.dispose();
+  });
+});
+
+describe("WorkspaceGitServiceImpl remote sign-in", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const refused = {
+    changes: [],
+    error: new Error("could not read Username"),
+    signInRequired: true,
+  };
+  const fetched = { changes: [], error: null, signInRequired: false };
+  const login = { username: "qa", password: "token" };
+
+  function createRepoService(options: CreateServiceTestOptions) {
+    return createService({
+      hasOriginRemote: vi.fn(async () => true),
+      getCheckoutSnapshotFacts: vi.fn(async (cwd: string) => ({
+        ...createCheckoutSnapshotFacts(cwd),
+        gitCommonDir: join(REPO_CWD, ".git"),
+        absoluteGitDir: join(REPO_CWD, ".git"),
+      })),
+      ...options,
+    });
+  }
+
+  test("tells the workspace that origin wants a sign-in until a fetch gets in", async () => {
+    const runGitFetch = vi.fn().mockResolvedValueOnce(refused).mockResolvedValue(fetched);
+    const service = createRepoService({ runGitFetch });
+    const listener = vi.fn();
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, listener);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => {
+      expect(service.peekSnapshot(REPO_CWD)?.remote).toEqual({ signInRequired: true });
+    });
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ remote: { signInRequired: true } }),
+    );
+
+    await vi.advanceTimersByTimeAsync(180_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => {
+      expect(service.peekSnapshot(REPO_CWD)?.remote).toEqual({ signInRequired: false });
+    });
+
+    subscription.unsubscribe();
+    service.dispose();
+  });
+
+  test("signs in with the typed login and reports whether Git kept it", async () => {
+    const runGitFetch = vi.fn().mockResolvedValue(refused);
+    const runGitCommand = vi.fn(async () => ({
+      stdout: `${REPO_CWD}\n`,
+      stderr: "",
+      truncated: false,
+      exitCode: 0,
+      signal: null,
+    }));
+    const service = createRepoService({ runGitFetch, runGitCommand });
+    const subscription = service.registerWorkspace({ cwd: REPO_CWD }, vi.fn());
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => {
+      expect(service.peekSnapshot(REPO_CWD)?.remote).toEqual({ signInRequired: true });
+    });
+
+    // No credential helper: the login worked once, and the background fetch is refused again.
+    await expect(service.signInToRemote(REPO_CWD, login)).resolves.toEqual({
+      ok: true,
+      loginKept: false,
+    });
+    expect(runGitCommand).toHaveBeenCalledWith(
+      expect.arrayContaining(["fetch", "origin", "--prune"]),
+      expect.objectContaining({
+        cwd: REPO_CWD,
+        envOverlay: expect.objectContaining({
+          GIT_TERMINAL_PROMPT: "0",
+          AGENT_DUEL_GIT_USERNAME: "qa",
+          AGENT_DUEL_GIT_PASSWORD: "token",
+        }),
+      }),
+    );
+
+    // A credential helper stored it: the background fetch gets in on its own.
+    runGitFetch.mockResolvedValue(fetched);
+    await expect(service.signInToRemote(REPO_CWD, login)).resolves.toEqual({
+      ok: true,
+      loginKept: true,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => {
+      expect(service.peekSnapshot(REPO_CWD)?.remote).toEqual({ signInRequired: false });
+    });
+
+    subscription.unsubscribe();
+    service.dispose();
+  });
+
+  test("returns Git's failure when the sign-in itself is refused", async () => {
+    const failure = new Error(
+      "fatal: Authentication failed for 'https://example.com/private.git/'",
+    );
+    const runGitCommand = vi.fn(async (args: string[]) => {
+      if (args.includes("fetch")) throw failure;
+      return { stdout: `${REPO_CWD}\n`, stderr: "", truncated: false, exitCode: 0, signal: null };
+    });
+    const service = createRepoService({
+      runGitFetch: vi.fn().mockResolvedValue(refused),
+      runGitCommand,
+    });
+
+    await expect(service.signInToRemote(REPO_CWD, login)).resolves.toEqual({
+      ok: false,
+      error: failure,
+    });
 
     service.dispose();
   });

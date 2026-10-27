@@ -9578,6 +9578,70 @@ test("onWorkspaceStateMayHaveChanged is not called for running shell tool calls"
   expect(onWorkspaceStateMayHaveChanged).not.toHaveBeenCalled();
 });
 
+test("arena winner hydration reloads the subagents that rebuilding the timeline drops", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "arena-winner-subagents-"));
+  let reloads = 0;
+  class WinnerSession extends TestAgentSession {
+    override async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+      yield {
+        type: "timeline",
+        provider: "codex",
+        item: { type: "assistant_message", messageId: "winner", text: "winner answer" },
+      };
+    }
+    async reloadProviderSubagents(): Promise<void> {
+      reloads += 1;
+      this.pushEvent({
+        type: "provider_subagent",
+        provider: "codex",
+        event: { type: "upsert", id: "winner-child", status: "completed" },
+      });
+    }
+  }
+  class WinnerClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new WinnerSession(config);
+    }
+  }
+  const manager = new AgentManager({ clients: { codex: new WinnerClient() }, logger });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  try {
+    const snapshot = ArenaSnapshotSchema.parse({
+      chat: {
+        id: "chat",
+        status: "ready",
+        canonicalSessionID: "canonical",
+        canonicalSHA: "sha",
+        trunk: { worktreeName: "trunk" },
+      },
+      environment: {},
+      runs: [],
+      events: [],
+      history: [
+        {
+          id: "turn",
+          index: 1,
+          state: "complete",
+          appliedSide: "a",
+          createdAt: "date",
+          updatedAt: "date",
+        },
+      ],
+    });
+    await manager.hydrateArenaWinner(agent.id, snapshot);
+
+    expect(reloads).toBe(1);
+    expect(manager.listProviderSubagents(agent.id).map((child) => child.id)).toEqual([
+      "winner-child",
+    ]);
+  } finally {
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
 test.each([
   "append",
   "same",

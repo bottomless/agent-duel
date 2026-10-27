@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type {
-  ArenaComparisonDiff,
-  ArenaDivergenceFile,
-  ArenaThreeWayFile,
-} from "@getpaseo/protocol/arena/rpc-schemas";
-import { divergenceByFile, divergenceStatusLabel, mergedContent } from "./divergence";
+import type { ArenaDivergenceFile, ArenaThreeWayFile } from "@getpaseo/protocol/arena/rpc-schemas";
+import { divergenceStatusLabel, mergedContent } from "./divergence";
 
 function content(text: string, extra: Partial<ArenaThreeWayFile["a"]> = {}) {
   return { content: text, truncated: false, missing: false, ...extra };
@@ -28,16 +24,6 @@ function file(input: Partial<ArenaThreeWayFile> = {}): ArenaThreeWayFile {
 function entry(input: Partial<ArenaDivergenceFile> = {}): ArenaDivergenceFile {
   return { file: "main.py", status: "diverging", ...input };
 }
-
-describe("divergenceByFile", () => {
-  it("indexes entries by path", () => {
-    const diff = {
-      divergence: { mergeTree: "t", conflicted: true, files: [entry(), entry({ file: "x" })] },
-    } as ArenaComparisonDiff;
-    expect(divergenceByFile(diff).get("x")?.file).toBe("x");
-    expect(divergenceByFile(undefined).size).toBe(0);
-  });
-});
 
 describe("mergedContent", () => {
   it("reads git's merge for files both sides touched", () => {

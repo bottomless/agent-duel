@@ -3,9 +3,18 @@ import type { AgentTimelinePromptIndexPayload } from "@getpaseo/client/internal/
 import type { AgentTimelineCursorState } from "@/stores/session-store";
 import { createUserMessage, type StreamItem } from "@/types/stream";
 import { isResolvingBattleState } from "./battle-result";
+import { orderArenaChat } from "./chat-order";
 
 export function isArenaBattleUnresolved(snapshot: ArenaSnapshot | undefined): boolean {
   return snapshot?.chat.status === "battle_active" && snapshot.turn?.resolution === undefined;
+}
+
+/** Whether the chat can take a new battle now: none is on screen and the chat is ready. */
+export function arenaChatCanStartBattle(
+  snapshot: ArenaSnapshot | undefined,
+  battleOnScreen: boolean,
+): boolean {
+  return !battleOnScreen && snapshot?.chat.status === "ready";
 }
 
 /**
@@ -106,16 +115,36 @@ interface ArenaAnchorItem {
   messageId?: string;
 }
 
-function canonicalPromptIndex(
+function isCanonicalPrompt(item: ArenaHistoryItem, streamItem: ArenaAnchorItem): boolean {
+  return (
+    streamItem.kind === "user_message" &&
+    (streamItem.messageId === item.canonicalUserMessageID ||
+      streamItem.id === item.canonicalUserMessageID)
+  );
+}
+
+/**
+ * The battle's last prompt in the chat: its own, or the last reply sent inside the battle. Those
+ * replies are grafted with the winner as user messages, so the next user message is not where the
+ * battle ends. Canonical message IDs ascend, so the battle's prompts are the user messages from its
+ * own prompt through the last message the graft copied. A turn grafted before that bound was
+ * recorded falls back to its own prompt.
+ */
+function lastBattlePromptIndex(
   item: ArenaHistoryItem,
   streamItems: ReadonlyArray<ArenaAnchorItem>,
 ): number {
-  if (!item.canonicalUserMessageID) return -1;
-  return streamItems.findIndex(
+  const first = item.canonicalUserMessageID;
+  if (!first) return -1;
+  const last = item.canonicalLastMessageID;
+  if (!last) return streamItems.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
+  return streamItems.findLastIndex(
     (streamItem) =>
-      streamItem.kind === "user_message" &&
-      (streamItem.messageId === item.canonicalUserMessageID ||
-        streamItem.id === item.canonicalUserMessageID),
+      isCanonicalPrompt(item, streamItem) ||
+      (streamItem.kind === "user_message" &&
+        streamItem.messageId !== undefined &&
+        streamItem.messageId >= first &&
+        streamItem.messageId <= last),
   );
 }
 
@@ -123,38 +152,51 @@ export function arenaSummaryAnchor(
   item: ArenaHistoryItem,
   streamItems: ReadonlyArray<ArenaAnchorItem>,
 ): string | null {
-  const userIndex = canonicalPromptIndex(item, streamItems);
-  if (userIndex < 0) return null;
+  const promptIndex = lastBattlePromptIndex(item, streamItems);
+  if (promptIndex < 0) return null;
   const nextUserOffset = streamItems
-    .slice(userIndex + 1)
+    .slice(promptIndex + 1)
     .findIndex((streamItem) => streamItem.kind === "user_message");
-  const endIndex = nextUserOffset < 0 ? streamItems.length - 1 : userIndex + nextUserOffset;
+  const endIndex = nextUserOffset < 0 ? streamItems.length - 1 : promptIndex + nextUserOffset;
   return streamItems[endIndex]?.id ?? null;
 }
 
 /**
  * Each summary's anchor, searched over tail and head. A grafted winner sends no turn completion,
  * so its turn can stay in the head until the next canonical event; in a chat whose history has
- * not loaded yet, the whole turn is there.
+ * not loaded yet, the whole turn is there. The search runs in the order the chat shows
+ * (`orderArenaChat`), so a summary follows the work its turn's answer moved above.
  */
 export function arenaSummaryAnchors(
   history: readonly ArenaHistoryItem[],
   stream: ArenaPresentedStream,
 ): (string | null)[] {
-  const items = [...stream.tail, ...stream.head];
+  const items = orderArenaChat([...stream.tail, ...stream.head]);
   return history.map((item) => arenaSummaryAnchor(item, items));
 }
 
 /**
  * Whether the chat has moved past this battle's turn: a later prompt, such as a Battle-off reply,
  * follows it. Its summary then belongs under its turn rather than below everything after it.
+ * Replies sent inside the battle are part of its turn, not a later prompt.
  */
 export function arenaTurnFollowedUp(item: ArenaHistoryItem, stream: ArenaPresentedStream): boolean {
   const items = [...stream.tail, ...stream.head];
-  const userIndex = canonicalPromptIndex(item, items);
+  const promptIndex = lastBattlePromptIndex(item, items);
+  if (promptIndex >= 0) {
+    return items.slice(promptIndex + 1).some((streamItem) => streamItem.kind === "user_message");
+  }
+  // The loaded page can start after the battle's prompts. A canonical prompt past the graft still
+  // means the chat moved on.
+  const last = item.canonicalLastMessageID;
   return (
-    userIndex >= 0 &&
-    items.slice(userIndex + 1).some((streamItem) => streamItem.kind === "user_message")
+    last !== undefined &&
+    items.some(
+      (streamItem) =>
+        streamItem.kind === "user_message" &&
+        streamItem.messageId !== undefined &&
+        streamItem.messageId > last,
+    )
   );
 }
 
@@ -166,10 +208,10 @@ export function partitionArenaSummaries(
   live: ArenaHistoryItem | null;
 } {
   // Recording the vote reveals identities before application and transcript grafting finish.
-  // That turn still belongs to the live battle, even if its history anchor already exists.
-  const resolved = history.filter(
-    (item) => item.resolution && item.identities && !isResolvingBattleState(item.state),
-  );
+  // That turn still belongs to the live battle, even if its history anchor already exists. A
+  // battle nobody saw (it failed to start, or was discarded before either side answered) is
+  // decided without identities.
+  const resolved = history.filter((item) => item.resolution && !isResolvingBattleState(item.state));
   if (battleIsActive || resolved.length === 0) {
     return { inline: resolved, live: null };
   }

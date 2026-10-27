@@ -10,6 +10,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  readlink,
   realpath,
   rename,
   rm,
@@ -327,30 +328,44 @@ export type VerifiedContestantState = {
   readonly head: string
 }
 
-export type ComparisonEvidence = {
-  readonly fileFacts: readonly ComparisonFileFact[]
-  readonly baseTree: string
-  readonly aTree: string
-  readonly bTree: string
-  readonly baseToA: string
-  readonly baseToATruncated: boolean
-  readonly baseToB: string
-  readonly baseToBTruncated: boolean
-  readonly patch: string
-  readonly truncated: boolean
-  readonly stats: readonly DiffStat[]
-  readonly files: readonly ThreeWayFile[]
-  readonly filesTruncated: boolean
-  // Absent when merge-tree could not run; the viewer then falls back to the three columns.
-  readonly divergence: Divergence
-}
-
 // How the two contestants' work on one file relates, decided by git's three-way merge of
 // A and B over the frozen base rather than by any line heuristic on the client:
 // `diverging` is a merge conflict (same region, different content), `compatible` merged
 // cleanly (both touched it, different regions), `identical` is the same result on both
 // sides, and `only_a`/`only_b` means the other side left the file alone.
 export type DivergenceStatus = "identical" | "only_a" | "only_b" | "compatible" | "diverging" | "binary"
+
+/** One file either contestant changed: what each did to it and git's status for the pair. */
+export type ComparisonFile = {
+  readonly file: string
+  readonly binary: boolean
+  readonly additionsA: number
+  readonly deletionsA: number
+  readonly additionsB: number
+  readonly deletionsB: number
+  readonly status: DivergenceStatus
+}
+
+/**
+ * Every file either contestant changed, in path order, without contents. The Changes list names
+ * them all; `readComparisonFile` reads one file's contents when its diff opens.
+ */
+export type ComparisonFiles = {
+  readonly baseTree: string
+  readonly aTree: string
+  readonly bTree: string
+  readonly files: readonly ComparisonFile[]
+}
+
+export type ComparisonEvidence = ComparisonFiles & {
+  readonly fileFacts: readonly ComparisonFileFact[]
+  readonly baseToA: string
+  readonly baseToATruncated: boolean
+  readonly baseToB: string
+  readonly baseToBTruncated: boolean
+  readonly patch: string
+  readonly truncated: boolean
+}
 
 export type DivergenceFile = {
   readonly file: string
@@ -360,11 +375,10 @@ export type DivergenceFile = {
   readonly merged?: FileContent
 }
 
-export type Divergence = {
-  readonly mergeTree: string
-  readonly conflicted: boolean
-  // Same set and order as `ComparisonEvidence.files`.
-  readonly files: readonly DivergenceFile[]
+/** One file's contents at the base and on each side, for the diff under its Changes row. */
+export type ComparisonFileDiff = {
+  readonly file: ThreeWayFile
+  readonly divergence: DivergenceFile
 }
 
 /**
@@ -450,10 +464,6 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
 // finalization after the ref was written but before Mongo was updated.
 const wrapperDate = "2000-01-01T00:00:00.000Z"
 
-// Bounds on the three-way file content fetched per comparison. Battles are scoped
-// coding tasks, not bulk migrations, so a modest cap keeps the response bounded
-// without needing a follow-up "load more" round trip for the common case.
-const MAX_THREE_WAY_FILES = 25
 // Review RPCs and end-of-battle utilities share the same local CPU budget.
 const comparisonSlot = Semaphore.makeUnsafe(1)
 // What one side of one file may put on the wire. Sending whole files is what the viewer
@@ -2460,13 +2470,9 @@ export const verifyContestantState = Effect.fn("ArenaGit.verifyContestantState")
   }
   const actualIndexTree = yield* indexTree
   const working = yield* workingTree
-  const mismatch = snapshotTreesMismatch(
-    { indexTree: probe.indexTree, workingTree: probe.workingTree },
-    { indexTree: actualIndexTree, workingTree: working.tree },
-  )
-  if (mismatch) return yield* Effect.fail(mismatch)
-  // The working-tree snapshot leaves untracked nested repositories out, so the tree check above
-  // passes over one; `clean -ff` removes them in sync.
+  // A contestant worktree never holds one: an embedded repository reaches it as plain files. The
+  // snapshot reads a nested repository's files too, so this goes before the tree check, which
+  // would report the same leftover less precisely. `clean -ff` removes them in sync.
   if (working.nestedRepositories.length > 0) {
     return yield* Effect.fail(
       new OperationError(
@@ -2476,6 +2482,11 @@ export const verifyContestantState = Effect.fn("ArenaGit.verifyContestantState")
       ),
     )
   }
+  const mismatch = snapshotTreesMismatch(
+    { indexTree: probe.indexTree, workingTree: probe.workingTree },
+    { indexTree: actualIndexTree, workingTree: working.tree },
+  )
+  if (mismatch) return yield* Effect.fail(mismatch)
 
   const layout = snapshotLayout(yield* succeeded(snapshot, "read_snapshot_working_tree"))
   const findings = yield* reconcileLayout(root, layout, false)
@@ -2716,8 +2727,151 @@ const stageNewlyIgnoredFiles = Effect.fnUntraced(function* (
 })
 
 /**
- * The working tree as a tree object, and the untracked nested repositories it leaves out: `add -A`
- * stages one as a gitlink, which a snapshot must not carry.
+ * The untracked nested repositories in the working tree, which `ls-files` lists as their directory
+ * with a trailing slash instead of walking into them. Found before `add -A`, which records one as a
+ * gitlink to a commit only that repository holds, and fails outright on one without a commit.
+ */
+const untrackedRepositories = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  env: Record<string, string>,
+) {
+  const listed = yield* run(
+    git,
+    root,
+    "list_embedded_repositories",
+    ["ls-files", "-z", "--others", "--exclude-standard"],
+    { env },
+  )
+  return listed
+    .text()
+    .split("\0")
+    .flatMap((entry) => (entry.endsWith("/") ? [entry.slice(0, -1)] : []))
+})
+
+/**
+ * The files of an embedded repository as the repository itself lists them, tracked and untracked
+ * but not ignored, with the repositories nested in it walked the same way. A gitlink it records is
+ * a directory, and like any gitlink it is left empty.
+ */
+const embeddedRepositoryFiles = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  repository: string,
+): Effect.fn.Return<string[], OperationError> {
+  const listed = yield* run(git, join(root, repository), "list_embedded_repository_files", [
+    "ls-files",
+    "-z",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+  ])
+  const files: string[] = []
+  for (const entry of new Set(listed.text().split("\0"))) {
+    if (!entry) continue
+    const path = `${repository}/${entry}`
+    if (entry.endsWith("/")) files.push(...(yield* embeddedRepositoryFiles(git, root, path.slice(0, -1))))
+    else if (!entry.split("/").includes(".git")) files.push(path)
+  }
+  return files
+})
+
+/**
+ * Stage the files of the untracked embedded repositories as plain files, so a contestant gets them
+ * the way it gets any other untracked file. In a contestant worktree they have no `.git`, so its own
+ * snapshot reads them through this repository's ignore rules: they apply here too, or the two
+ * snapshots of the same files would differ. `add` will not stage a path inside another repository,
+ * so the blobs go into the index directly. A linked worktree of this repository is skipped: it is a
+ * second checkout of the same project.
+ */
+const stageEmbeddedRepositories = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  repositories: readonly string[],
+  env: Record<string, string>,
+) {
+  const commonGitDir = yield* read(git, root, "read_common_git_dir", [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ])
+  const listed: string[] = []
+  for (const repository of repositories) {
+    const common = yield* git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: join(root, repository),
+    })
+    if (common.exitCode === 0 && output(common) === commonGitDir) continue
+    listed.push(...(yield* embeddedRepositoryFiles(git, root, repository)))
+  }
+  if (listed.length === 0) return
+  const checkable = listed.filter((path) => !path.startsWith(":"))
+  const ignored = new Set<string>()
+  if (checkable.length > 0) {
+    const checked = yield* git.run(["check-ignore", "--no-index", "--stdin", "-z"], {
+      cwd: root,
+      stdin: Stream.make(new TextEncoder().encode(`${checkable.join("\0")}\0`)),
+    })
+    if (checked.exitCode !== 0 && checked.exitCode !== 1) {
+      return yield* Effect.fail(
+        new OperationError("check_embedded_ignored_files", checked.stderr.toString("utf8").trim()),
+      )
+    }
+    for (const path of checked.text().split("\0")) if (path) ignored.add(path)
+  }
+  const fileMode = yield* git.run(["config", "--type=bool", "core.fileMode"], { cwd: root })
+  const trustExecutableBit = fileMode.exitCode !== 0 || output(fileMode) !== "false"
+  const kinds = yield* Effect.promise(() =>
+    Promise.all(
+      listed.map((path) =>
+        ignored.has(path)
+          ? undefined
+          : lstat(join(root, path)).then(
+              (entry) => ({ path, entry }),
+              () => undefined,
+            ),
+      ),
+    ),
+  )
+  const files: { path: string; mode: string }[] = []
+  const links: string[] = []
+  for (const kind of kinds) {
+    if (!kind) continue
+    if (kind.entry.isSymbolicLink()) links.push(kind.path)
+    else if (kind.entry.isFile()) {
+      files.push({ path: kind.path, mode: trustExecutableBit && kind.entry.mode & 0o100 ? "100755" : "100644" })
+    }
+  }
+  const entries: string[] = []
+  // `--stdin-paths` reads one path per line, so a name with a newline is hashed on its own.
+  const batched = files.filter((file) => !file.path.includes("\n"))
+  if (batched.length > 0) {
+    const hashed = (yield* read(git, root, "hash_embedded_files", ["hash-object", "-w", "--stdin-paths"], {
+      stdin: Stream.make(new TextEncoder().encode(`${batched.map((file) => file.path).join("\n")}\n`)),
+    })).split("\n")
+    batched.forEach((file, index) => entries.push(`${file.mode} ${hashed[index]}\t${file.path}`))
+  }
+  for (const file of files.filter((file) => file.path.includes("\n"))) {
+    const oid = yield* read(git, root, "hash_embedded_file", ["hash-object", "-w", "--", file.path])
+    entries.push(`${file.mode} ${oid}\t${file.path}`)
+  }
+  for (const path of links) {
+    const target = yield* Effect.promise(() => readlink(join(root, path)))
+    const oid = yield* read(git, root, "hash_embedded_link", ["hash-object", "-w", "--stdin"], {
+      stdin: Stream.make(new TextEncoder().encode(target)),
+    })
+    entries.push(`120000 ${oid}\t${path}`)
+  }
+  if (entries.length === 0) return
+  yield* run(git, root, "stage_embedded_files", ["update-index", "-z", "--add", "--index-info"], {
+    env,
+    stdin: Stream.make(new TextEncoder().encode(`${entries.join("\0")}\0`)),
+  })
+})
+
+/**
+ * The working tree as a tree object, and the untracked nested repositories in it. An embedded
+ * repository's files are snapshotted as plain files; its `.git` never is. Whatever `add -A` still
+ * stages as a gitlink is left out, which a snapshot must not carry.
  */
 const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function* (
   git: Git.Interface,
@@ -2728,12 +2882,21 @@ const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function
   return yield* Effect.gen(function* () {
     const env = { GIT_INDEX_FILE: index }
     const seeded = yield* seedSnapshotIndex({ git, root, index, ...options })
-    yield* run(git, root, "stage_snapshot", ["add", "-A", "--", "."], { env })
+    const embedded = yield* untrackedRepositories(git, root, env)
+    yield* run(
+      git,
+      root,
+      "stage_snapshot",
+      ["add", "-A", "--", ".", ...embedded.map((repository) => `:(exclude,literal)${repository}`)],
+      { env },
+    )
+    yield* stageEmbeddedRepositories(git, root, embedded, env)
     if (options?.keepFilesOf) yield* stageNewlyIgnoredFiles(git, root, options.keepFilesOf, env)
     const snapshot = indexListing(
       (yield* run(git, root, "read_snapshot_gitlinks", ["ls-files", "--stage", "-z"], { env })).text(),
     )
-    const nestedRepositories = Array.from(snapshot.gitlinks).filter((path) => !seeded.gitlinks.has(path))
+    const gitlinks = Array.from(snapshot.gitlinks).filter((path) => !seeded.gitlinks.has(path))
+    const nestedRepositories = [...embedded, ...gitlinks]
     yield* excludeSyncConflictCopies(
       git,
       root,
@@ -2741,7 +2904,7 @@ const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function
       env,
     )
     yield* Effect.forEach(
-      nestedRepositories,
+      gitlinks,
       (path) =>
         run(git, root, "exclude_untracked_gitlink", ["rm", "--cached", "--force", "--ignore-unmatch", "--", path], {
           env,
@@ -3816,10 +3979,14 @@ export const promoteWinnerState = Effect.fn("ArenaGit.promoteWinnerState")(funct
   let publicWorktreeSide = publicWorkingTree
   let publicIndexSide = publicIndexTree
   if (choice?.action === "agent") {
-    for (const path of chosen) {
-      publicWorktreeSide = yield* replaceTreeEntry(git, root, publicWorktreeSide, path, yield* treeEntry(git, root, publicBase, path))
-      publicIndexSide = yield* replaceTreeEntry(git, root, publicIndexSide, path, yield* treeEntry(git, root, publicIndexBase, path))
-    }
+    const baseAt = yield* treeEntries(
+      git,
+      root,
+      [...chosen].flatMap((path) => [publicBase, publicIndexBase].map((tree) => ({ tree, path }))),
+    )
+    const setAside = (base: string) => new Map([...chosen].map((path) => [path, baseAt(base, path)]))
+    publicWorktreeSide = yield* editTree(git, root, publicWorkingTree, setAside(publicBase))
+    publicIndexSide = yield* editTree(git, root, publicIndexTree, setAside(publicIndexBase))
   }
 
   // 1. The winner's real commits land on the branch they belong to.
@@ -3890,18 +4057,30 @@ export const promoteWinnerState = Effect.fn("ArenaGit.promoteWinnerState")(funct
   // A file the winner already conflicted on cannot take the developer's edit on top of its
   // markers. Merge it once more with the developer's own copy as the "ours" side instead, so
   // it ends with one set of markers that includes their edit.
-  let worktreeTree = mergedWorktree.tree
-  for (const path of winnerWorktree.conflicts) {
-    const publicBlob = yield* treeEntry(git, root, publicWorktreeSide, path)
-    const baseBlob = yield* treeEntry(git, root, publicBase, path)
-    if (publicBlob === baseBlob) continue
-    const remerged = yield* mergeBlobs(git, root, {
-      base: yield* treeEntry(git, root, residualBase, path),
-      ours: publicBlob,
-      theirs: yield* treeEntry(git, root, resultTree, path),
-    })
-    worktreeTree = yield* replaceTreeEntry(git, root, worktreeTree, path, remerged)
-  }
+  // The edits to the merged trees are collected first and written in one pass per tree; a later
+  // edit to a path replaces an earlier one, as it would when written one by one.
+  const worktreeEdits = new Map<string, string | undefined>()
+  const indexEdits = new Map<string, string | undefined>()
+  const remergeAt = yield* treeEntries(
+    git,
+    root,
+    winnerWorktree.conflicts.flatMap((path) =>
+      [publicWorktreeSide, publicBase, residualBase, resultTree].map((tree) => ({ tree, path })),
+    ),
+  )
+  const remerges = winnerWorktree.conflicts.filter(
+    (path) => remergeAt(publicWorktreeSide, path) !== remergeAt(publicBase, path),
+  )
+  const remerged = yield* mergeBlobs(
+    git,
+    root,
+    remerges.map((path) => ({
+      base: remergeAt(residualBase, path),
+      ours: remergeAt(publicWorktreeSide, path),
+      theirs: remergeAt(resultTree, path),
+    })),
+  )
+  for (const [index, path] of remerges.entries()) worktreeEdits.set(path, remerged[index])
   const conflicts = [
     ...new Set([...winnerWorktree.conflicts, ...mergedWorktree.conflicts, ...winnerIndex.conflicts, ...mergedIndex.conflicts]),
   ].filter((path) => !chosen.has(path))
@@ -3909,46 +4088,63 @@ export const promoteWinnerState = Effect.fn("ArenaGit.promoteWinnerState")(funct
   // Conflicted index entries go back to HEAD; their markers live in the working tree. The one
   // exception is a staged copy the developer had not written to the working tree as well: that
   // copy exists nowhere else, so it stays in the index with its own markers against the winner.
-  let indexTree = mergedIndex.tree
-  const stagedCopiesKept = new Set<string>()
-  for (const path of conflicts) {
-    const staged = yield* treeEntry(git, root, publicIndexSide, path)
-    const unique =
-      staged !== undefined &&
-      staged !== (yield* treeEntry(git, root, publicIndexBase, path)) &&
-      staged !== (yield* treeEntry(git, root, publicWorktreeSide, path))
-    let entry: string | undefined
-    if (unique) {
+  const conflictAt = yield* treeEntries(
+    git,
+    root,
+    conflicts.flatMap((path) =>
+      [publicIndexSide, publicIndexBase, publicWorktreeSide, headTree, residualIndexBase, finalIndexTree, winnerIndex.tree].map(
+        (tree) => ({ tree, path }),
+      ),
+    ),
+  )
+  const stagedCopiesKept = new Set(
+    conflicts.filter((path) => {
+      const staged = conflictAt(publicIndexSide, path)
+      return (
+        staged !== undefined && staged !== conflictAt(publicIndexBase, path) && staged !== conflictAt(publicWorktreeSide, path)
+      )
+    }),
+  )
+  const kept = [...stagedCopiesKept]
+  const keptMerged = yield* mergeBlobs(
+    git,
+    root,
+    kept.map((path) => {
       const winnerConflicted = winnerIndex.conflicts.includes(path)
-      entry = yield* mergeBlobs(git, root, {
-        base: yield* treeEntry(git, root, winnerConflicted ? residualIndexBase : publicIndexBase, path),
-        ours: staged,
-        theirs: yield* treeEntry(git, root, winnerConflicted ? finalIndexTree : winnerIndex.tree, path),
-      })
-      stagedCopiesKept.add(path)
-    } else {
-      entry = yield* treeEntry(git, root, headTree, path)
-    }
-    indexTree = yield* replaceTreeEntry(git, root, indexTree, path, entry)
-  }
+      return {
+        base: conflictAt(winnerConflicted ? residualIndexBase : publicIndexBase, path),
+        ours: conflictAt(publicIndexSide, path),
+        theirs: conflictAt(winnerConflicted ? finalIndexTree : winnerIndex.tree, path),
+      }
+    }),
+  )
+  for (const path of conflicts) indexEdits.set(path, conflictAt(headTree, path))
+  for (const [index, path] of kept.entries()) indexEdits.set(path, keptMerged[index])
 
   // The files the developer answered for. `agent`: their edits are already out of the public
   // side, so what is left to settle is the winner against their commits, and the winner's copy
   // wins. `yours`: the file stays as it is on disk; its index entry follows the new HEAD unless
   // the developer had staged something of their own.
+  const chosenAt = yield* treeEntries(
+    git,
+    root,
+    [...chosen].flatMap((path) =>
+      [resultTree, headTree, publicWorkingTree, publicIndexTree, currentHeadTree].map((tree) => ({ tree, path })),
+    ),
+  )
   for (const path of chosen) {
     if (choice?.action === "agent") {
-      worktreeTree = yield* replaceTreeEntry(git, root, worktreeTree, path, yield* treeEntry(git, root, resultTree, path))
-      if (winnerIndex.conflicts.includes(path)) {
-        indexTree = yield* replaceTreeEntry(git, root, indexTree, path, yield* treeEntry(git, root, headTree, path))
-      }
+      worktreeEdits.set(path, chosenAt(resultTree, path))
+      if (winnerIndex.conflicts.includes(path)) indexEdits.set(path, chosenAt(headTree, path))
       continue
     }
-    worktreeTree = yield* replaceTreeEntry(git, root, worktreeTree, path, yield* treeEntry(git, root, publicWorkingTree, path))
-    const staged = yield* treeEntry(git, root, publicIndexTree, path)
-    const unstaged = staged === (yield* treeEntry(git, root, currentHeadTree, path))
-    indexTree = yield* replaceTreeEntry(git, root, indexTree, path, unstaged ? yield* treeEntry(git, root, headTree, path) : staged)
+    worktreeEdits.set(path, chosenAt(publicWorkingTree, path))
+    const staged = chosenAt(publicIndexTree, path)
+    const unstaged = staged === chosenAt(currentHeadTree, path)
+    indexEdits.set(path, unstaged ? chosenAt(headTree, path) : staged)
   }
+  const worktreeTree = yield* editTree(git, root, mergedWorktree.tree, worktreeEdits)
+  const indexTree = yield* editTree(git, root, mergedIndex.tree, indexEdits)
 
   // Safety net: every developer edit must be reachable in the state about to be written. A
   // case this design does not handle yet stops here, with the checkout untouched, instead of
@@ -4118,29 +4314,26 @@ const mergeTrees = Effect.fn("ArenaGit.mergeTrees")(function* (
     const label = line.startsWith("||||||| ") ? line.slice("||||||| ".length) : ""
     return label.length >= 4 && baseCommit.startsWith(label)
   }
-  let labelled = tree
-  for (const path of conflicts) {
-    const blob = yield* treeEntry(git, root, tree, path)
-    if (!blob) continue
-    const content = (yield* run(git, root, "read_conflicted_blob", ["cat-file", "blob", blob], { maxOutputBytes: 100 * 1024 * 1024 })).stdout.toString("utf8")
-    const relabelled = content
-      .split("\n")
-      .map((line) =>
-        line === `<<<<<<< ${oursCommit}`
-          ? "<<<<<<< ours"
-          : line === `>>>>>>> ${theirsCommit}`
-            ? ">>>>>>> theirs"
-            : isBaseLabel(line)
-              ? "||||||| base"
-              : line,
-      )
-      .join("\n")
-    if (relabelled === content) continue
-    const written = yield* read(git, root, "write_relabelled_blob", ["hash-object", "-w", "--stdin"], {
-      stdin: Stream.make(new TextEncoder().encode(relabelled)),
-    })
-    labelled = yield* replaceTreeEntry(git, root, labelled, path, written)
+  const relabel = (line: string) => {
+    if (line === `<<<<<<< ${oursCommit}`) return "<<<<<<< ours"
+    if (line === `>>>>>>> ${theirsCommit}`) return ">>>>>>> theirs"
+    if (isBaseLabel(line)) return "||||||| base"
+    return line
   }
+  const entryAt = yield* treeEntries(git, root, conflicts.map((path) => ({ tree, path })))
+  const present = conflicts.flatMap((path) => {
+    const blob = entryAt(tree, path)
+    return blob ? [{ path, blob }] : []
+  })
+  const contents = yield* readBlobs(git, root, present.map((item) => item.blob))
+  const relabelled = present.flatMap(({ path, blob }) => {
+    const content = contents.get(blob)!.toString("utf8")
+    const next = content.split("\n").map(relabel).join("\n")
+    return next === content ? [] : [{ path, content: next }]
+  })
+  const encoder = new TextEncoder()
+  const written = yield* writeBlobs(git, root, relabelled.map((item) => encoder.encode(item.content)))
+  const labelled = yield* editTree(git, root, tree, new Map(relabelled.map((item, index) => [item.path, written[index]])))
   return { tree: labelled, conflicts }
 })
 
@@ -4252,100 +4445,227 @@ export const unrecoverablePublicEdits = Effect.fn("ArenaGit.unrecoverablePublicE
 ) {
   const conflicted = new Set(input.conflicts)
   const surviving = yield* treeBlobs(git, root, input.worktreeTree)
-  const at = (tree: string, path: string) => treeEntry(git, root, tree, path)
+  const worktreePaths = yield* changedPaths(git, root, input.publicBase, input.publicWorkingTree)
+  const indexPaths = yield* changedPaths(git, root, input.publicIndexBase, input.publicIndexTree)
+  const at = yield* treeEntries(git, root, [
+    ...worktreePaths.flatMap((path) =>
+      [input.publicWorkingTree, input.worktreeTree, input.winnerWorktree].map((tree) => ({ tree, path })),
+    ),
+    ...indexPaths.flatMap((path) =>
+      [input.publicIndexTree, input.indexTree, input.publicWorkingTree, input.winnerIndex].map((tree) => ({ tree, path })),
+    ),
+  ])
   const flagged = new Map<string, Set<PublicEditLayer>>()
   const flag = (path: string, layer: PublicEditLayer) => {
     const layers = flagged.get(path) ?? new Set<PublicEditLayer>()
     layers.add(layer)
     flagged.set(path, layers)
   }
-  for (const path of yield* changedPaths(git, root, input.publicBase, input.publicWorkingTree)) {
-    const developer = yield* at(input.publicWorkingTree, path)
+  for (const path of worktreePaths) {
+    const developer = at(input.publicWorkingTree, path)
     if (developer === undefined) continue
-    if ((yield* at(input.worktreeTree, path)) === developer) continue
+    const written = at(input.worktreeTree, path)
+    if (written === developer) continue
     if (conflicted.has(path) || surviving.has(developer)) continue
-    const winner = yield* at(input.winnerWorktree, path)
-    if ((yield* at(input.worktreeTree, path)) !== winner || winner === developer) continue
+    const winner = at(input.winnerWorktree, path)
+    if (written !== winner || winner === developer) continue
     flag(path, "working")
   }
-  for (const path of yield* changedPaths(git, root, input.publicIndexBase, input.publicIndexTree)) {
-    const developer = yield* at(input.publicIndexTree, path)
+  for (const path of indexPaths) {
+    const developer = at(input.publicIndexTree, path)
     if (developer === undefined) continue
-    const written = yield* at(input.indexTree, path)
+    const written = at(input.indexTree, path)
     if (written === developer || surviving.has(developer)) continue
     if (conflicted.has(path)) {
-      if (!input.stagedCopiesKept.has(path) && (yield* at(input.publicWorkingTree, path)) !== developer) flag(path, "staged")
+      if (!input.stagedCopiesKept.has(path) && at(input.publicWorkingTree, path) !== developer) flag(path, "staged")
       continue
     }
-    const winner = yield* at(input.winnerIndex, path)
+    const winner = at(input.winnerIndex, path)
     if (written !== winner || winner === developer) continue
     flag(path, "staged")
   }
   return [...flagged].map(([path, layers]) => ({ path, layers: [...layers] })) satisfies PublicEditAtRisk[]
 })
 
-const treeEntry = Effect.fn("ArenaGit.treeEntry")(function* (git: Git.Interface, root: string, tree: string, path: string) {
-  const result = yield* git.run(["rev-parse", "--verify", "--quiet", `${tree}:${path}`], { cwd: root })
-  return result.exitCode === 0 ? output(result) : undefined
-})
+interface TreePath {
+  readonly tree: string
+  readonly path: string
+}
 
-/** Three-way merge of blobs with `git merge-file`; returns the merged blob OID. */
-const mergeBlobs = Effect.fn("ArenaGit.mergeBlobs")(function* (
+/** The OID at `path` in `tree`, undefined where the path is absent. */
+type TreeEntryLookup = (tree: string, path: string) => string | undefined
+
+/**
+ * Looks up every `tree:path` in one `cat-file --batch-check`. A `rev-parse` per lookup started
+ * thousands of git processes for a promotion over a few hundred conflicted files: minutes of
+ * process startup on Windows.
+ */
+const treeEntries = Effect.fn("ArenaGit.treeEntries")(function* (
   git: Git.Interface,
   root: string,
-  blobs: { readonly base?: string; readonly ours?: string; readonly theirs?: string },
+  lookups: readonly TreePath[],
 ) {
-  const scratch = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "opencode-arena-merge-")))
-  return yield* Effect.gen(function* () {
-    const content = Effect.fn(function* (oid: string | undefined) {
-      if (!oid) return Buffer.alloc(0)
-      return (yield* run(git, root, "read_merge_blob", ["cat-file", "blob", oid], { maxOutputBytes: 100 * 1024 * 1024 })).stdout
+  const entries = new Map<string, string | undefined>()
+  const names = [...new Set(lookups.map(({ tree, path }) => `${tree}:${path}`))]
+  // The batch reads one name per line and drops a trailing CR, so such a path is asked alone.
+  const alone = names.filter((name) => name.includes("\n") || name.includes("\r"))
+  const batched = names.filter((name) => !alone.includes(name))
+  for (const name of alone) {
+    const result = yield* git.run(["rev-parse", "--verify", "--quiet", name], { cwd: root })
+    entries.set(name, result.exitCode === 0 ? output(result) : undefined)
+  }
+  if (batched.length > 0) {
+    const listing = yield* read(git, root, "read_tree_entries", ["cat-file", "--batch-check=%(objectname)"], {
+      stdin: Stream.make(new TextEncoder().encode(`${batched.join("\n")}\n`)),
+      maxOutputBytes: 64 * 1024 * 1024,
     })
-    const files = { ours: join(scratch, "ours"), base: join(scratch, "base"), theirs: join(scratch, "theirs") }
-    const [ours, base, theirs] = [yield* content(blobs.ours), yield* content(blobs.base), yield* content(blobs.theirs)]
-    yield* Effect.promise(() =>
-      Promise.all([writeFile(files.ours, ours), writeFile(files.base, base), writeFile(files.theirs, theirs)]),
-    )
-    const merged = yield* git.run(
-      ["merge-file", "-p", "-L", "ours", "-L", "base", "-L", "theirs", files.ours, files.base, files.theirs],
-      { cwd: root, maxOutputBytes: 100 * 1024 * 1024 },
-    )
-    // merge-file exits with the conflict count, capped at 127; anything else is an error.
-    if (merged.exitCode < 0 || merged.exitCode > 127) {
-      const detail = merged.stderr.toString("utf8").trim() || "git merge-file failed"
-      return yield* Effect.fail(new OperationError("merge_blobs", detail))
+    const lines = listing.split("\n")
+    if (lines.length !== batched.length) {
+      return yield* Effect.fail(
+        new OperationError("read_tree_entries", `Git answered ${lines.length} of ${batched.length} tree lookups`),
+      )
     }
-    return yield* read(git, root, "write_merged_blob", ["hash-object", "-w", "--stdin"], {
-      stdin: Stream.make(new Uint8Array(merged.stdout)),
+    for (const [index, name] of batched.entries()) {
+      const line = lines[index]!
+      if (line === `${name} missing`) entries.set(name, undefined)
+      else if (/^[0-9a-f]+$/.test(line)) entries.set(name, line)
+      else return yield* Effect.fail(new OperationError("read_tree_entries", `Git could not look up ${name}: ${line}`))
+    }
+  }
+  return ((tree, path) => {
+    const name = `${tree}:${path}`
+    if (!entries.has(name)) throw new Error(`Tree entry ${name} was not looked up`)
+    return entries.get(name)
+  }) satisfies TreeEntryLookup
+})
+
+/** Blob contents by OID, from batched `cat-file --batch` reads. */
+const readBlobs = Effect.fn("ArenaGit.readBlobs")(function* (git: Git.Interface, root: string, oids: readonly string[]) {
+  const unique = [...new Set(oids)]
+  const sizes = yield* readBlobSizes(git, root, unique)
+  const pending = unique.map((oid) => ({ oid }))
+  const blobs = new Map<string, Buffer>()
+  for (let start = 0; start < pending.length; ) {
+    const batch = nextBlobBatch(pending, start, sizes)
+    for (const [oid, blob] of yield* readBlobBatch(git, root, batch, sizes)) blobs.set(oid, blob)
+    start += batch.length
+  }
+  return blobs
+})
+
+/** Writes each content as a blob with one `hash-object`; the OIDs come back in the same order. */
+const writeBlobs = Effect.fn("ArenaGit.writeBlobs")(function* (
+  git: Git.Interface,
+  root: string,
+  contents: readonly Uint8Array[],
+) {
+  if (contents.length === 0) return [] as string[]
+  const scratch = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "opencode-arena-blobs-")))
+  return yield* Effect.gen(function* () {
+    const files = contents.map((_, index) => join(scratch, String(index)))
+    yield* Effect.promise(() => Promise.all(files.map((file, index) => writeFile(file, contents[index]!))))
+    // The bytes are already what the tree holds; the scratch paths must not pick up any filter.
+    const listing = yield* read(git, root, "write_blobs", ["hash-object", "-w", "--no-filters", "--stdin-paths"], {
+      stdin: Stream.make(new TextEncoder().encode(`${files.join("\n")}\n`)),
     })
+    const oids = listing.split("\n")
+    if (oids.length !== contents.length) {
+      return yield* Effect.fail(new OperationError("write_blobs", `Git wrote ${oids.length} of ${contents.length} blobs`))
+    }
+    return oids
   }).pipe(Effect.ensuring(Effect.promise(() => rm(scratch, { recursive: true, force: true }).catch(() => undefined))))
 })
 
-/** Replace a path's blob while preserving its mode; new paths default to 100644. */
-const replaceTreeEntry = Effect.fn("ArenaGit.replaceTreeEntry")(function* (
+interface BlobMerge {
+  readonly base: string | undefined
+  readonly ours: string | undefined
+  readonly theirs: string | undefined
+}
+
+/**
+ * Three-way merges of blobs; returns the merged blob OIDs in order. `git merge-file` takes one
+ * file, so each merge is a process of its own; the blobs are read and written in batches.
+ */
+const mergeBlobs = Effect.fn("ArenaGit.mergeBlobs")(function* (
+  git: Git.Interface,
+  root: string,
+  merges: readonly BlobMerge[],
+) {
+  if (merges.length === 0) return [] as string[]
+  const blobs = yield* readBlobs(
+    git,
+    root,
+    merges.flatMap((merge) => [merge.base, merge.ours, merge.theirs].filter((oid) => oid !== undefined)),
+  )
+  const content = (oid: string | undefined) => (oid ? blobs.get(oid)! : Buffer.alloc(0))
+  const scratch = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "opencode-arena-merge-")))
+  const merged = yield* Effect.gen(function* () {
+    const files = { ours: join(scratch, "ours"), base: join(scratch, "base"), theirs: join(scratch, "theirs") }
+    const results: Buffer[] = []
+    for (const merge of merges) {
+      yield* Effect.promise(() =>
+        Promise.all([
+          writeFile(files.ours, content(merge.ours)),
+          writeFile(files.base, content(merge.base)),
+          writeFile(files.theirs, content(merge.theirs)),
+        ]),
+      )
+      const result = yield* git.run(
+        ["merge-file", "-p", "-L", "ours", "-L", "base", "-L", "theirs", files.ours, files.base, files.theirs],
+        { cwd: root, maxOutputBytes: 100 * 1024 * 1024 },
+      )
+      // merge-file exits with the conflict count, capped at 127; anything else is an error.
+      if (result.exitCode < 0 || result.exitCode > 127) {
+        const detail = result.stderr.toString("utf8").trim() || "git merge-file failed"
+        return yield* Effect.fail(new OperationError("merge_blobs", detail))
+      }
+      results.push(result.stdout)
+    }
+    return results
+  }).pipe(Effect.ensuring(Effect.promise(() => rm(scratch, { recursive: true, force: true }).catch(() => undefined))))
+  return yield* writeBlobs(git, root, merged)
+})
+
+/**
+ * Sets several paths of a tree in one scratch index, so the tree is read and written once however
+ * many paths change. A path keeps its mode, a new path is 100644, and undefined removes the path.
+ */
+const editTree = Effect.fn("ArenaGit.editTree")(function* (
   git: Git.Interface,
   root: string,
   tree: string,
-  path: string,
-  blob: string | undefined,
+  edits: ReadonlyMap<string, string | undefined>,
 ) {
+  if (edits.size === 0) return tree
   const index = join(tmpdir(), `opencode-arena-index-${randomUUID()}`)
   return yield* Effect.gen(function* () {
     const env = { GIT_INDEX_FILE: index }
+    const encoder = new TextEncoder()
     yield* run(git, root, "load_tree_for_edit", ["read-tree", tree], { env })
-    if (blob === undefined) {
-      yield* run(git, root, "remove_tree_entry", ["update-index", "--force-remove", "--", path], { env })
-    } else {
-      const entry = yield* read(
-        git,
-        root,
-        "read_tree_entry_mode",
-        ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", path],
-        { env },
-      )
-      const mode = entry ? entry.slice(0, 6) : "100644"
-      yield* run(git, root, "replace_tree_entry", ["update-index", "--add", "--cacheinfo", `${mode},${blob},${path}`], {
+    const listing = yield* run(git, root, "read_tree_entry_modes", ["ls-files", "--stage", "-z"], {
+      env,
+      maxOutputBytes: 64 * 1024 * 1024,
+    })
+    const modes = new Map<string, string>()
+    for (const entry of listing.stdout.toString("utf8").split("\0")) {
+      const tab = entry.indexOf("\t")
+      const path = entry.slice(tab + 1)
+      if (tab >= 0 && edits.has(path)) modes.set(path, entry.slice(0, 6))
+    }
+    const removed = [...edits].filter(([, blob]) => blob === undefined).map(([path]) => `${path}\0`)
+    const replaced = [...edits].flatMap(([path, blob]) =>
+      blob === undefined ? [] : [`${modes.get(path) ?? "100644"} ${blob} 0\t${path}\0`],
+    )
+    if (removed.length > 0) {
+      yield* run(git, root, "remove_tree_entries", ["update-index", "-z", "--force-remove", "--stdin"], {
         env,
+        stdin: Stream.make(encoder.encode(removed.join(""))),
+      })
+    }
+    if (replaced.length > 0) {
+      yield* run(git, root, "replace_tree_entries", ["update-index", "-z", "--index-info"], {
+        env,
+        stdin: Stream.make(encoder.encode(replaced.join(""))),
       })
     }
     return yield* read(git, root, "write_edited_tree", ["write-tree"], { env })
@@ -4363,6 +4683,17 @@ const replaceTreeEntry = Effect.fn("ArenaGit.replaceTreeEntry")(function* (
  * Untracked files in the snapshots are ordinary entries; ignored files are in neither and are
  * never touched.
  */
+/** Whether `path` is a directory with a `.git` entry somewhere inside it. */
+async function holdsRepository(path: string): Promise<boolean> {
+  const entries = await readdir(path, { withFileTypes: true }).catch(() => undefined)
+  if (!entries) return false
+  if (entries.some((entry) => entry.name === ".git")) return true
+  for (const entry of entries) {
+    if (entry.isDirectory() && (await holdsRepository(join(path, entry.name)))) return true
+  }
+  return false
+}
+
 const writeTreeToWorktree = Effect.fn("ArenaGit.writeTreeToWorktree")(function* (
   git: Git.Interface,
   root: string,
@@ -4380,6 +4711,27 @@ const writeTreeToWorktree = Effect.fn("ArenaGit.writeTreeToWorktree")(function* 
     const [, dstMode, , dstOid, status] = meta.slice(1).split(" ")
     if (status === "D" || !dstMode || !dstOid) changes.push({ path })
     else if (dstMode !== "160000") changes.push({ path, mode: dstMode, oid: dstOid })
+  }
+  // A file written where a directory stands replaces the whole directory. An embedded repository's
+  // files are plain files in a snapshot, but its `.git` is not, so nothing would bring it back.
+  const repositories = yield* Effect.promise(() =>
+    Promise.all(
+      changes.map((change) =>
+        change.oid
+          ? holdsRepository(join(root, change.path)).then((held) => (held ? change.path : undefined))
+          : undefined,
+      ),
+    ),
+  )
+  const overwritten = repositories.filter((path): path is string => path !== undefined)
+  if (overwritten.length > 0) {
+    return yield* Effect.fail(
+      new OperationError(
+        "write_over_embedded_repository",
+        `A file would replace a directory holding a Git repository: ${overwritten.join(", ")}`,
+        overwritten,
+      ),
+    )
   }
   const sizes = yield* readBlobSizes(
     git,
@@ -4974,247 +5326,306 @@ export function divergenceStatus(input: {
 
 // merge-tree exits 0 for a clean merge and 1 for a conflicted one, both with a tree on
 // the first line; anything else is a failure the comparison survives without a merge.
-function parseMergeTree(result: Git.Result): { tree: string; conflicted: boolean; conflicts: Set<string> } | null {
+function parseMergeTree(result: Git.Result): MergeCandidates | null {
   if (result.exitCode !== 0 && result.exitCode !== 1) return null
   const [tree, ...rest] = output(result).split(/\r?\n/)
   if (!tree) return null
-  return {
-    tree,
-    conflicted: result.exitCode === 1,
-    conflicts: new Set(result.exitCode === 0 ? [] : conflictedPaths(rest)),
-  }
+  return { tree, conflicts: new Set(result.exitCode === 0 ? [] : conflictedPaths(rest)) }
 }
 
-export const compare = Effect.fn("ArenaGit.compare")(
-  function* (input: {
-    readonly canonical: string
-    readonly baseCommit: string
-    readonly aCommit: string
-    readonly bCommit: string
-    readonly maxOutputBytes?: number
-  }) {
+type ComparisonInput = {
+  readonly canonical: string
+  readonly baseCommit: string
+  readonly aCommit: string
+  readonly bCommit: string
+}
+
+type MergeCandidates = { readonly tree: string; readonly conflicts: ReadonlySet<string> }
+
+// The merge is the costly part of reading one file's diff, and a battle's commits never change,
+// so the reads after the file list reuse the list's merge. A miss, after a restart or once the
+// oldest entries fall out, merges again.
+const mergeCache = new Map<string, MergeCandidates>()
+const MERGE_CACHE_SIZE = 32
+
+/**
+ * git's own verdict on where the two sides disagree. zdiff3 keeps the conflict blocks as small as
+ * diff3 can make them and carries the base in the middle. A and B are merged as wrappers on the
+ * frozen base so that base is the merge base. Equal trees need no merge: the merge is either side.
+ */
+const mergeCandidates = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  input: ComparisonInput,
+  trees: { readonly a: string; readonly b: string },
+) {
+  if (trees.a === trees.b) return { tree: trees.a, conflicts: new Set<string>() } satisfies MergeCandidates
+  const key = [root, input.baseCommit, input.aCommit, input.bCommit].join("\0")
+  const cached = mergeCache.get(key)
+  if (cached) return cached
+  const a = yield* treeCommit(git, root, trees.a, input.baseCommit)
+  const b = yield* treeCommit(git, root, trees.b, input.baseCommit)
+  const result = yield* git.run(["-c", "merge.conflictStyle=zdiff3", "merge-tree", "--write-tree", a, b], {
+    cwd: root,
+    maxOutputBytes: 16 * 1024 * 1024,
+  })
+  if (result.truncated) {
+    return yield* Effect.fail(
+      new OperationError("merge_candidates", "Comparison merge metadata exceeds the output limit"),
+    )
+  }
+  const merged = parseMergeTree(result)
+  if (!merged) {
+    const detail = result.stderr.toString("utf8").trim() || output(result) || "git merge-tree failed"
+    return yield* Effect.fail(new OperationError("merge_candidates", detail))
+  }
+  mergeCache.set(key, merged)
+  const oldest = mergeCache.keys().next().value
+  if (mergeCache.size > MERGE_CACHE_SIZE && oldest !== undefined) mergeCache.delete(oldest)
+  return merged
+})
+
+const readComparisonTrees = Effect.fnUntraced(function* (git: Git.Interface, root: string, input: ComparisonInput) {
+  const [base, a, b] = yield* Effect.all([
+    read(git, root, "read_base_tree", ["rev-parse", `${input.baseCommit}^{tree}`]),
+    read(git, root, "read_a_tree", ["rev-parse", `${input.aCommit}^{tree}`]),
+    read(git, root, "read_b_tree", ["rev-parse", `${input.bCommit}^{tree}`]),
+  ])
+  return { base, a, b }
+})
+
+/** The base and result trees a comparison names, without its file lists or patches. */
+export const comparisonTrees = Effect.fn("ArenaGit.comparisonTrees")(function* (input: ComparisonInput) {
+  const git = yield* Git.Service
+  const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+  return yield* readComparisonTrees(git, root, input)
+})
+
+const readDiffMetadata = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  operation: string,
+  args: string[],
+) {
+  const result = yield* run(git, root, operation, args, { maxOutputBytes: 16 * 1024 * 1024 })
+  if (result.truncated) {
+    return yield* Effect.fail(new OperationError(operation, "Comparison metadata exceeds the 16 MiB output limit"))
+  }
+  return output(result)
+})
+
+const numstat = (from: string, to: string, pathspec: string) => [
+  "diff",
+  "--no-ext-diff",
+  "--no-renames",
+  "--numstat",
+  from,
+  to,
+  "--",
+  pathspec,
+]
+
+/** Each side's numstat against the base and against each other, over `pathspec`. */
+const readComparisonStats = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  input: ComparisonInput,
+  pathspec: string,
+) {
+  const [aToB, baseToA, baseToB] = yield* Effect.all([
+    readDiffMetadata(git, root, "read_comparison_stats", numstat(input.aCommit, input.bCommit, pathspec)),
+    readDiffMetadata(git, root, "read_base_to_a_stats", numstat(input.baseCommit, input.aCommit, pathspec)),
+    readDiffMetadata(git, root, "read_base_to_b_stats", numstat(input.baseCommit, input.bCommit, pathspec)),
+  ])
+  const statsA = parseStats(baseToA)
+  const statsB = parseStats(baseToB)
+  return {
+    entries: mergeFileStats(statsA, statsB),
+    inA: new Set(statsA.map((stat) => stat.file)),
+    inB: new Set(statsB.map((stat) => stat.file)),
+    differs: new Set(parseStats(aToB).map((stat) => stat.file)),
+  } satisfies ComparisonStats
+})
+
+type ComparisonStats = {
+  readonly entries: ReadonlyMap<string, FileStatsEntry>
+  readonly inA: ReadonlySet<string>
+  readonly inB: ReadonlySet<string>
+  readonly differs: ReadonlySet<string>
+}
+
+function statusOf(stats: ComparisonStats, merge: MergeCandidates, file: string, entry: FileStatsEntry) {
+  return divergenceStatus({
+    binary: entry.binaryA || entry.binaryB,
+    inA: stats.inA.has(file),
+    inB: stats.inB.has(file),
+    differs: stats.differs.has(file),
+    conflicted: merge.conflicts.has(file),
+  })
+}
+
+const listComparisonFiles = Effect.fnUntraced(function* (git: Git.Interface, root: string, input: ComparisonInput) {
+  const [trees, stats] = yield* Effect.all([
+    readComparisonTrees(git, root, input),
+    readComparisonStats(git, root, input, "."),
+  ])
+  const merge = yield* mergeCandidates(git, root, input, trees)
+  // Path order across both sides, so a file only B changed sits among A's rather than after them.
+  const entries = Array.from(stats.entries.entries()).sort(([left], [right]) => byPath(left, right))
+  const files = entries.map(
+    ([file, entry]): ComparisonFile => ({
+      file,
+      binary: entry.binaryA || entry.binaryB,
+      additionsA: entry.additionsA,
+      deletionsA: entry.deletionsA,
+      additionsB: entry.additionsB,
+      deletionsB: entry.deletionsB,
+      status: statusOf(stats, merge, file, entry),
+    }),
+  )
+  return { trees, stats, entries, files }
+})
+
+function byPath(left: string, right: string) {
+  if (left === right) return 0
+  return left < right ? -1 : 1
+}
+
+const comparisonDeadline = Effect.timeoutOrElse({
+  duration: "15 seconds",
+  orElse: () => Effect.fail(new OperationError("compare", "Battle comparison exceeded the 15 second time limit")),
+})
+
+/** The files the Changes list names, with git's status for each pair and no contents. */
+export const comparisonFiles = Effect.fn("ArenaGit.comparisonFiles")(
+  function* (input: ComparisonInput) {
     const git = yield* Git.Service
     const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
-    const readDiffMetadata = Effect.fnUntraced(function* (operation: string, args: string[]) {
-      const result = yield* run(git, root, operation, args, { maxOutputBytes: 16 * 1024 * 1024 })
-      if (result.truncated) {
-        return yield* Effect.fail(new OperationError(operation, "Comparison metadata exceeds the 16 MiB output limit"))
-      }
-      return output(result)
-    })
-    const [baseTree, aTree, bTree, stats, baseToAStats, baseToBStats, baseToA, baseToB, aToB, mergeResult] =
-      yield* Effect.all([
-        read(git, root, "read_base_tree", ["rev-parse", `${input.baseCommit}^{tree}`]),
-        read(git, root, "read_a_tree", ["rev-parse", `${input.aCommit}^{tree}`]),
-        read(git, root, "read_b_tree", ["rev-parse", `${input.bCommit}^{tree}`]),
-        readDiffMetadata("read_comparison_stats", [
-          "diff",
-          "--no-ext-diff",
-          "--no-renames",
-          "--numstat",
-          input.aCommit,
-          input.bCommit,
-          "--",
-          ".",
-        ]),
-        readDiffMetadata("read_base_to_a_stats", [
-          "diff",
-          "--no-ext-diff",
-          "--no-renames",
-          "--numstat",
-          input.baseCommit,
-          input.aCommit,
-          "--",
-          ".",
-        ]),
-        readDiffMetadata("read_base_to_b_stats", [
-          "diff",
-          "--no-ext-diff",
-          "--no-renames",
-          "--numstat",
-          input.baseCommit,
-          input.bCommit,
-          "--",
-          ".",
-        ]),
-        run(
-          git,
-          root,
-          "read_base_to_a_patch",
-          ["diff", "--no-ext-diff", "--no-renames", "--binary", input.baseCommit, input.aCommit, "--", "."],
-          { maxOutputBytes: input.maxOutputBytes ?? 10 * 1024 * 1024 },
-        ),
-        run(
-          git,
-          root,
-          "read_base_to_b_patch",
-          ["diff", "--no-ext-diff", "--no-renames", "--binary", input.baseCommit, input.bCommit, "--", "."],
-          { maxOutputBytes: input.maxOutputBytes ?? 10 * 1024 * 1024 },
-        ),
-        run(
-          git,
-          root,
-          "read_comparison_patch",
-          ["diff", "--no-ext-diff", "--no-renames", "--binary", input.aCommit, input.bCommit, "--", "."],
-          { maxOutputBytes: input.maxOutputBytes ?? 10 * 1024 * 1024 },
-        ),
-        // git's own verdict on where the two sides disagree. zdiff3 keeps the conflict blocks
-        // as small as diff3 can make them and carries the base in the middle. Exit 1 is a
-        // conflicted merge, not a failure; both leave the tree on the first line. A and B are
-        // merged as wrappers on the frozen base so that base is the merge base.
-        Effect.gen(function* () {
-          const a = yield* treeCommit(git, root, `${input.aCommit}^{tree}`, input.baseCommit)
-          const b = yield* treeCommit(git, root, `${input.bCommit}^{tree}`, input.baseCommit)
-          return yield* git.run(["-c", "merge.conflictStyle=zdiff3", "merge-tree", "--write-tree", a, b], {
-            cwd: root,
-            maxOutputBytes: 16 * 1024 * 1024,
-          })
-        }),
-      ])
+    const { trees, files } = yield* listComparisonFiles(git, root, input)
+    return { baseTree: trees.base, aTree: trees.a, bTree: trees.b, files } satisfies ComparisonFiles
+  },
+  comparisonSlot.withPermits(1),
+  comparisonDeadline,
+)
 
-    if (mergeResult.truncated) {
-      return yield* Effect.fail(
-        new OperationError("merge_candidates", "Comparison merge metadata exceeds the output limit"),
-      )
-    }
-    const statsA = parseStats(baseToAStats)
-    const statsB = parseStats(baseToBStats)
-    const merged = mergeFileStats(statsA, statsB)
-    const allFiles = Array.from(merged.entries())
-    const filesToFetch = allFiles.slice(0, MAX_THREE_WAY_FILES)
-    const filesTruncated = allFiles.length > filesToFetch.length
-
-    // Equal trees need no merge: the merge is either side. Anything past exit 1 is a
-    // failure like any other git failure here.
-    const mergeTree =
-      aTree === bTree ? { tree: aTree, conflicted: false, conflicts: new Set<string>() } : parseMergeTree(mergeResult)
-    if (!mergeTree) {
-      const detail = mergeResult.stderr.toString("utf8").trim() || output(mergeResult) || "git merge-tree failed"
-      return yield* Effect.fail(new OperationError("merge_candidates", detail))
-    }
-    const inA = new Set(statsA.map((stat) => stat.file))
-    const inB = new Set(statsB.map((stat) => stat.file))
-    const differs = new Set(parseStats(stats).map((stat) => stat.file))
-    const statusOf = (file: string, binary: boolean) =>
-      divergenceStatus({
-        binary,
-        inA: inA.has(file),
-        inB: inB.has(file),
-        differs: differs.has(file),
-        conflicted: mergeTree.conflicts.has(file),
+/** The file list plus the three patches the difference summary reads. */
+export const compare = Effect.fn("ArenaGit.compare")(
+  function* (input: ComparisonInput & { readonly maxOutputBytes?: number }) {
+    const git = yield* Git.Service
+    const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+    const patch = (operation: string, from: string, to: string) =>
+      run(git, root, operation, ["diff", "--no-ext-diff", "--no-renames", "--binary", from, to, "--", "."], {
+        maxOutputBytes: input.maxOutputBytes ?? 10 * 1024 * 1024,
       })
-
-    const pairs = yield* Effect.forEach(
-      filesToFetch,
-      ([file, entry]) =>
-        Effect.gen(function* () {
-          const binary = entry.binaryA || entry.binaryB
-          if (binary) {
-            return {
-              file: { file, binary: true, ...entry } satisfies ThreeWayFile,
-              divergence: { file, status: "binary" } satisfies DivergenceFile,
-            }
-          }
-          const [base, a, b] = yield* Effect.all([
-            readBlob(git, root, baseTree, file, MAX_BLOB_READ_BYTES),
-            readBlob(git, root, aTree, file, MAX_BLOB_READ_BYTES),
-            readBlob(git, root, bTree, file, MAX_BLOB_READ_BYTES),
-          ])
-          const status = statusOf(file, false)
-          if (
-            base.content.length <= MAX_WHOLE_FILE_BYTES &&
-            a.content.length <= MAX_WHOLE_FILE_BYTES &&
-            b.content.length <= MAX_WHOLE_FILE_BYTES
-          ) {
-            // The merged text is only worth sending where the two sides both touched the
-            // file: elsewhere it equals one side's content, which the viewer already has.
-            const wantsMerged = status === "compatible" || status === "diverging"
-            const mergedBlob = wantsMerged
-              ? yield* readBlob(git, root, mergeTree.tree, file, MAX_MERGED_FILE_BYTES + 1)
-              : null
-            const mergedFits =
-              mergedBlob &&
-              !mergedBlob.missing &&
-              !mergedBlob.truncated &&
-              mergedBlob.content.length <= MAX_MERGED_FILE_BYTES
-            return {
-              file: { file, binary: false, ...entry, base, a, b } satisfies ThreeWayFile,
-              divergence: {
-                file,
-                status,
-                ...(mergedFits ? { merged: mergedBlob } : {}),
-              } satisfies DivergenceFile,
-            }
-          }
-          const [patchA, patchB] = yield* Effect.all([
-            run(
-              git,
-              root,
-              "read_file_hunks_a",
-              ["diff", "--no-ext-diff", "--no-renames", "--unified=0", input.baseCommit, input.aCommit, "--", file],
-              { maxOutputBytes: 16 * 1024 * 1024 },
-            ),
-            run(
-              git,
-              root,
-              "read_file_hunks_b",
-              ["diff", "--no-ext-diff", "--no-renames", "--unified=0", input.baseCommit, input.bCommit, "--", file],
-              { maxOutputBytes: 16 * 1024 * 1024 },
-            ),
-          ])
-          // These reads include changed lines, so a generated file can exhaust the cap.
-          // Incomplete hunk positions cannot align windows safely. Reuse the bounded-head
-          // fallback and mark every present side partial instead of failing the comparison.
-          const incomplete = patchA.truncated || patchB.truncated
-          const windowed = windowFile({
-            base: { ...base, truncated: base.truncated || (incomplete && !base.missing) },
-            a: { ...a, truncated: a.truncated || (incomplete && !a.missing) },
-            b: { ...b, truncated: b.truncated || (incomplete && !b.missing) },
-            hunksA: incomplete ? [] : parseHunks(patchA.text()),
-            hunksB: incomplete ? [] : parseHunks(patchB.text()),
-          })
-          return {
-            file: { file, binary: false, ...entry, ...windowed } satisfies ThreeWayFile,
-            divergence: { file, status } satisfies DivergenceFile,
-          }
-        }),
-      { concurrency: 6 },
-    )
-    const files = pairs.map((pair) => pair.file)
-    const divergence: Divergence = {
-      mergeTree: mergeTree.tree,
-      conflicted: mergeTree.conflicted,
-      files: pairs.map((pair) => pair.divergence),
-    }
-
+    const [list, baseToA, baseToB, aToB] = yield* Effect.all([
+      listComparisonFiles(git, root, input),
+      patch("read_base_to_a_patch", input.baseCommit, input.aCommit),
+      patch("read_base_to_b_patch", input.baseCommit, input.bCommit),
+      patch("read_comparison_patch", input.aCommit, input.bCommit),
+    ])
+    const { trees, stats, entries, files } = list
     return {
-      baseTree,
-      aTree,
-      bTree,
+      baseTree: trees.base,
+      aTree: trees.a,
+      bTree: trees.b,
+      files,
       baseToA: baseToA.text(),
       baseToATruncated: baseToA.truncated,
       baseToB: baseToB.text(),
       baseToBTruncated: baseToB.truncated,
       patch: aToB.text(),
       truncated: aToB.truncated,
-      stats: parseStats(stats),
-      fileFacts: allFiles.map(([file, entry]) => ({
+      fileFacts: entries.map(([file, entry]) => ({
         file,
         ...entry,
-        changedA: inA.has(file),
-        changedB: inB.has(file),
-        sameResult: !differs.has(file),
+        changedA: stats.inA.has(file),
+        changedB: stats.inB.has(file),
+        sameResult: !stats.differs.has(file),
       })),
-      files,
-      filesTruncated,
-      divergence,
     } satisfies ComparisonEvidence
   },
   comparisonSlot.withPermits(1),
-  Effect.timeoutOrElse({
-    duration: "15 seconds",
-    orElse: () => Effect.fail(new OperationError("compare", "Battle comparison exceeded the 15 second time limit")),
-  }),
+  comparisonDeadline,
+)
+
+/**
+ * One changed file's contents at the base and on each side, and git's merge of the two where both
+ * touched it. Refuses a path neither side changed, so the read stays inside the battle's diff.
+ */
+export const readComparisonFile = Effect.fn("ArenaGit.readComparisonFile")(
+  function* (input: ComparisonInput & { readonly file: string }) {
+    const git = yield* Git.Service
+    const root = yield* read(git, input.canonical, "find_canonical_root", ["rev-parse", "--show-toplevel"])
+    const [trees, stats] = yield* Effect.all([
+      readComparisonTrees(git, root, input),
+      readComparisonStats(git, root, input, `:(literal)${input.file}`),
+    ])
+    const entry = stats.entries.get(input.file)
+    if (!entry) {
+      return yield* Effect.fail(
+        new OperationError("read_comparison_file", `Neither contestant changed ${input.file}`, [input.file]),
+      )
+    }
+    const merge = yield* mergeCandidates(git, root, input, trees)
+    const file = input.file
+    const status = statusOf(stats, merge, file, entry)
+    if (entry.binaryA || entry.binaryB) {
+      return {
+        file: { file, binary: true, ...entry },
+        divergence: { file, status },
+      } satisfies ComparisonFileDiff
+    }
+    const [base, a, b] = yield* Effect.all([
+      readBlob(git, root, trees.base, file, MAX_BLOB_READ_BYTES),
+      readBlob(git, root, trees.a, file, MAX_BLOB_READ_BYTES),
+      readBlob(git, root, trees.b, file, MAX_BLOB_READ_BYTES),
+    ])
+    if (
+      base.content.length <= MAX_WHOLE_FILE_BYTES &&
+      a.content.length <= MAX_WHOLE_FILE_BYTES &&
+      b.content.length <= MAX_WHOLE_FILE_BYTES
+    ) {
+      // The merged text is only worth sending where the two sides both touched the
+      // file: elsewhere it equals one side's content, which the viewer already has.
+      const wantsMerged = status === "compatible" || status === "diverging"
+      const mergedBlob = wantsMerged ? yield* readBlob(git, root, merge.tree, file, MAX_MERGED_FILE_BYTES + 1) : null
+      const mergedFits =
+        mergedBlob && !mergedBlob.missing && !mergedBlob.truncated && mergedBlob.content.length <= MAX_MERGED_FILE_BYTES
+      return {
+        file: { file, binary: false, ...entry, base, a, b },
+        divergence: { file, status, ...(mergedFits ? { merged: mergedBlob } : {}) },
+      } satisfies ComparisonFileDiff
+    }
+    const hunks = (operation: string, to: string) =>
+      run(
+        git,
+        root,
+        operation,
+        ["diff", "--no-ext-diff", "--no-renames", "--unified=0", input.baseCommit, to, "--", `:(literal)${file}`],
+        { maxOutputBytes: 16 * 1024 * 1024 },
+      )
+    const [patchA, patchB] = yield* Effect.all([
+      hunks("read_file_hunks_a", input.aCommit),
+      hunks("read_file_hunks_b", input.bCommit),
+    ])
+    // These reads include changed lines, so a generated file can exhaust the cap.
+    // Incomplete hunk positions cannot align windows safely. Reuse the bounded-head
+    // fallback and mark every present side partial instead of failing the comparison.
+    const incomplete = patchA.truncated || patchB.truncated
+    const windowed = windowFile({
+      base: { ...base, truncated: base.truncated || (incomplete && !base.missing) },
+      a: { ...a, truncated: a.truncated || (incomplete && !a.missing) },
+      b: { ...b, truncated: b.truncated || (incomplete && !b.missing) },
+      hunksA: incomplete ? [] : parseHunks(patchA.text()),
+      hunksB: incomplete ? [] : parseHunks(patchB.text()),
+    })
+    return {
+      file: { file, binary: false, ...entry, ...windowed },
+      divergence: { file, status },
+    } satisfies ComparisonFileDiff
+  },
+  comparisonSlot.withPermits(1),
+  comparisonDeadline,
 )
 
 export * as ArenaGit from "./git"

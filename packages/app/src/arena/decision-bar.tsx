@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet } from "react-native-unistyles";
@@ -21,7 +21,8 @@ import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-act
  *
  * Two choices of equal weight, so neither can be the accent. The tint is the side's colour,
  * the blue and amber the diff's column headings use, so the button reads as picking that
- * column. Both sides share a width so the pair reads as one decision.
+ * column. Both sides share a width so the pair reads as one decision. The early pick, offered
+ * while the other side still works, shows the tint only on hover (`ArenaRunningPillButton`).
  */
 export function ArenaSideChoiceButton({
   side,
@@ -41,10 +42,19 @@ export function ArenaSideChoiceButton({
   testID: string;
 }) {
   const sideLabel = side.toUpperCase();
-  const isEarly = kind === "early";
-  let buttonLabel = `Choose ${sideLabel}`;
-  if (isEarly) buttonLabel = `Choose ${sideLabel} now`;
-  if (kind === "keep") buttonLabel = `Keep ${sideLabel}`;
+  if (kind === "early") {
+    return (
+      <ArenaRunningPillButton
+        hoverSide={side}
+        label={label ?? `Choose ${sideLabel} early`}
+        loading={loading}
+        disabled={disabled}
+        onPress={onPress}
+        testID={testID}
+      />
+    );
+  }
+  const buttonLabel = kind === "keep" ? `Keep ${sideLabel}` : `Choose ${sideLabel}`;
   return (
     <Button
       variant="secondary"
@@ -57,6 +67,65 @@ export function ArenaSideChoiceButton({
     >
       {label ?? buttonLabel}
     </Button>
+  );
+}
+
+function runningHoverStyle(side: ArenaSide | null) {
+  if (side === "a") return styles.sideA;
+  if (side === "b") return styles.sideB;
+  return styles.runningHovered;
+}
+
+/**
+ * A button in the pill while the battle runs: `Stop` and the early pick share one neutral outline.
+ * An uneven pair, one filled or brighter, read as a switch already set to that side (the reply
+ * target fills its selected segment with the side's tint), and voters felt pushed to take it
+ * before the other side finished. The early pick takes its side's tint only on hover, once the
+ * voter reaches for it. Hover is tracked on a plain View (docs/hover.md) and changes colours only.
+ */
+export function ArenaRunningPillButton({
+  hoverSide,
+  label,
+  loading,
+  disabled,
+  onPress,
+  testID,
+  accessibilityLabel,
+}: {
+  hoverSide: ArenaSide | null;
+  label: string;
+  loading?: boolean;
+  disabled?: boolean;
+  onPress: () => void;
+  testID: string;
+  accessibilityLabel?: string;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const handlePointerEnter = useCallback(() => setHovered(true), []);
+  const handlePointerLeave = useCallback(() => setHovered(false), []);
+  return (
+    <View
+      style={styles.hoverTarget}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        style={[
+          styles.sideChoice,
+          styles.runningChoice,
+          hovered && !disabled ? runningHoverStyle(hoverSide) : null,
+        ]}
+        loading={loading}
+        disabled={disabled}
+        onPress={onPress}
+        accessibilityLabel={accessibilityLabel}
+        testID={testID}
+      >
+        {label}
+      </Button>
+    </View>
   );
 }
 
@@ -88,7 +157,35 @@ export function VoteDecision({
   );
 }
 
-/** The third choice after a stop, or in Tie's place when neither result can be chosen. */
+/**
+ * The battle's way on after the engine's restart cut it off; continues both agents together. The
+ * one filled choice in the pill, so it reads apart from Discard beside it.
+ */
+export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
+  const { pending, pendingAction } = actions;
+  const resume = useCallback(() => {
+    void actions.resume();
+  }, [actions]);
+  return (
+    <Button
+      variant="default"
+      size="sm"
+      style={styles.pillChoice}
+      loading={pendingAction?.kind === "resume_battle"}
+      disabled={pending}
+      onPress={resume}
+      accessibilityLabel="Resume battle"
+      testID="arena-resume-interrupted"
+    >
+      Resume
+    </Button>
+  );
+}
+
+/**
+ * The third choice after a stop, in Tie's place when neither result can be chosen, or beside Resume
+ * after the engine's restart cut the battle off.
+ */
 export function DiscardDecision({ actions }: { actions: ArenaBattleActions }) {
   const { pending, pendingAction } = actions;
   const discard = useCallback(() => {
@@ -297,6 +394,16 @@ const styles = StyleSheet.create((theme) => ({
   sideB: {
     backgroundColor: tint(theme.colors.statusDotWarning, 24),
     borderColor: tint(theme.colors.statusDotWarning, 50),
+  },
+  hoverTarget: {
+    position: "relative",
+  },
+  runningChoice: {
+    borderColor: tint(theme.colors.foregroundMuted, 35),
+  },
+  runningHovered: {
+    backgroundColor: theme.colors.surface3,
+    borderColor: tint(theme.colors.foregroundMuted, 55),
   },
   retry: {
     flexDirection: "row",

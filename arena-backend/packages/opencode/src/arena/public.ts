@@ -1,6 +1,15 @@
 import { Schema } from "effect"
 import { basename } from "path"
-import { canDiscardBattle, canRetryRun, canTie, type Resolution, type Side } from "./domain"
+import {
+  canDiscardBattle,
+  canResumeBattle,
+  canRetryRun,
+  canTie,
+  identitiesRevealed,
+  INTERRUPTED_RUN_MESSAGE,
+  type Resolution,
+  type Side,
+} from "./domain"
 import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument, SingleAgentRatingDocument } from "./records"
 import { ArenaSchema } from "./schema"
@@ -70,6 +79,7 @@ export type PublicRun = {
   readonly lastEventAt?: Date
   readonly completedAt?: Date
   readonly durationMs: number | null
+  readonly priorDurationMs?: number
   readonly promptMessageID?: string
   readonly diff?: RunDocument["diff"]
   readonly finalCommit?: string
@@ -229,7 +239,7 @@ const ACTIVE_TURN_STATES = new Set([
 
 export function project(snapshot: BattleSnapshot) {
   const turn = snapshot.turn
-  const revealed = turn?.resolution !== undefined
+  const revealed = identitiesRevealed(turn?.resolution)
   // Progress is stored on the turn, so it can hold a step name from an older or newer build. The
   // snapshot schema accepts only this build's names, and one unknown name would fail the snapshot.
   const operationProgress = turn?.operationProgress?.filter(
@@ -325,9 +335,10 @@ export function project(snapshot: BattleSnapshot) {
             ...(turn.gitApplication ? { gitApplication: turn.gitApplication } : {}),
             ...(turn.transitionEvent ? { transition: transition(turn.transitionEvent) } : {}),
             ...(revealed ? { identities: { a: identity(turn.placement.a), b: identity(turn.placement.b) } } : {}),
-            canVote: turn.state === "awaiting_vote",
+            canVote: turn.state === "awaiting_vote" && !canResumeBattle(turn, snapshot.runs),
             canTie: canTie(turn, snapshot.runs),
             canDiscardBattle: canDiscardBattle(turn, snapshot.runs),
+            canResumeBattle: canResumeBattle(turn, snapshot.runs),
             canRetryResolution:
               turn.state === "canonicalization_failed" ||
               (turn.state === "application_failed" &&
@@ -354,10 +365,13 @@ export function project(snapshot: BattleSnapshot) {
       ...(item.selectedEarly === undefined ? {} : { selectedEarly: item.selectedEarly }),
       ...(item.appliedSide ? { appliedSide: item.appliedSide } : {}),
       ...(item.canonicalUserMessageID ? { canonicalUserMessageID: item.canonicalUserMessageID } : {}),
+      ...(item.canonicalLastMessageID ? { canonicalLastMessageID: item.canonicalLastMessageID } : {}),
       ...(item.gitApplication ? { gitApplication: item.gitApplication } : {}),
       ...(item.transitionEvent ? { transition: transition(item.transitionEvent) } : {}),
       endedAt: item.transitionTimestamps.complete ?? item.transitionTimestamps.discarded,
-      ...(item.resolution ? { identities: { a: identity(item.placement.a), b: identity(item.placement.b) } } : {}),
+      ...(identitiesRevealed(item.resolution)
+        ? { identities: { a: identity(item.placement.a), b: identity(item.placement.b) } }
+        : {}),
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
     })),
@@ -397,7 +411,9 @@ export function project(snapshot: BattleSnapshot) {
           : {}),
         ...(run.retention ? { retention: run.retention } : {}),
         runState: run.runState,
-        ...(run.error
+        ...(run.runState === "interrupted"
+          ? { error: INTERRUPTED_RUN_MESSAGE }
+          : run.error
           ? {
               error: run.error.includes(ArenaResponseRecovery.EXHAUSTED)
                 ? ArenaResponseRecovery.EXHAUSTED
@@ -411,6 +427,7 @@ export function project(snapshot: BattleSnapshot) {
         ...(run.lastEventAt ? { lastEventAt: run.lastEventAt } : {}),
         ...(run.completedAt ? { completedAt: run.completedAt } : {}),
         durationMs: run.durationMs ?? null,
+        ...(run.priorDurationMs ? { priorDurationMs: run.priorDurationMs } : {}),
         ...(run.promptMessageID ? { promptMessageID: run.promptMessageID } : {}),
         ...(run.diff ? { diff: run.diff } : {}),
         ...(run.finalCommit ? { finalCommit: run.finalCommit } : {}),
