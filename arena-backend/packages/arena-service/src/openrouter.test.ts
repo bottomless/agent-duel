@@ -746,6 +746,98 @@ describe("OpenRouter proxy", () => {
     expect(recorded[0]).toMatchObject({ provider: "Private Provider", finishReason: "stop" })
   })
 
+  test("forwards a keep-alive ping only for Claude, and answers every model the same way", async () => {
+    const claude = {
+      displayName: "Hidden Model",
+      slug: "anthropic/hidden-model",
+      canonicalSlug: "anthropic/hidden-model",
+      routing: { sort: "throughput" },
+    }
+    const upstreamBodies: Record<string, unknown>[] = []
+    const recorded: Record<string, unknown>[] = []
+    const info = spyOn(console, "info").mockImplementation(() => {})
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn-1",
+          assignments: [
+            { assignmentID: "claude-side", model: claude },
+            { assignmentID: "other-side", model: pool[0] },
+          ],
+        },
+      ],
+      recordMetrics: (document) => recorded.push(document),
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async (_input, init) => {
+        upstreamBodies.push(JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>)
+        return new Response(
+          `data: ${JSON.stringify({
+            provider: "Private Provider",
+            choices: [{ delta: { content: "o" }, finish_reason: "length" }],
+            usage: { prompt_tokens: 20_000, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 19_990 } },
+          })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      },
+    })
+    const tools = [{ type: "function", function: { name: "read", parameters: { type: "object" } } }]
+    const ping = (assignmentID: string, route = "chat/completions") =>
+      proxy(
+        new Request(`https://control.test/api/openrouter/api/v1/${route}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": assignmentID,
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Keep-Alive": "1",
+          },
+          body: JSON.stringify({
+            model: "contestant",
+            messages: [{ role: "user", content: "hi" }],
+            tools,
+            stream: true,
+            max_tokens: 1,
+            max_completion_tokens: 32_000,
+          }),
+        }),
+      )
+
+    try {
+      const answers = [await ping("claude-side"), await ping("other-side"), await ping("claude-side", "responses")]
+      for (const answer of answers) {
+        expect(answer.status).toBe(204)
+        expect(answer.headers.get("X-Arena-Keep-Alive")).toBe("1")
+        expect(await answer.text()).toBe("")
+      }
+      // Only the Claude ping on the route Claude sides use reaches OpenRouter, with the fields of a real call.
+      expect(upstreamBodies).toHaveLength(1)
+      expect(upstreamBodies[0]).toMatchObject({
+        model: claude.slug,
+        max_tokens: 1,
+        cache_control: { type: "ephemeral" },
+        session_id: "claude-side",
+        prompt_cache_key: "claude-side",
+        reasoning: { effort: "high" },
+        messages: [{ role: "user", content: "hi" }],
+      })
+      expect(upstreamBodies[0]).not.toHaveProperty("max_completion_tokens")
+      expect(recorded).toEqual([])
+      expect(info.mock.calls.at(-1)?.[1]).toBe(
+        JSON.stringify({
+          provider: "Private Provider",
+          promptTokens: 20_000,
+          cacheReadTokens: 19_990,
+          cacheWriteTokens: 0,
+        }),
+      )
+    } finally {
+      info.mockRestore()
+    }
+  })
+
   test("keeps a single-agent chat on one opaque key across its messages", async () => {
     const sessionID = "ses_private-session"
     const scope = (session: string, message: string) =>

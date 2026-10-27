@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
 import { authorize, type ArenaContext, type Fetch } from "./context"
+import { KEEP_ALIVE_HEADER, keepAliveAnswer, keepsCacheWarm } from "./keep-alive"
 import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
 import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
 import type { ModelPool, ModelProfile } from "./pool"
@@ -393,6 +394,40 @@ function logRefusal(context: RefusalContext, status: number, upstream: string) {
   )
 }
 
+// Nobody reads a ping's one token. Whether it read the cache is what tells a ping that kept the
+// entry from one that landed on another provider and wrote a new one, so that much is logged.
+async function logKeepAlive(response: Response, startedAt: number) {
+  const text = await response.text().catch(() => undefined)
+  if (!response.ok || text === undefined) {
+    console.warn("[arena-service] Keep-alive ping failed", JSON.stringify({ status: response.status }))
+    return
+  }
+  const metrics = metricsCollector("keep-alive", startedAt)
+  const values = (response.headers.get("content-type") ?? "").includes("text/event-stream")
+    ? text.split("\n").flatMap((line) => {
+        const raw = line.startsWith("data:") ? line.slice("data:".length).trim() : ""
+        return raw && raw !== "[DONE]" ? [raw] : []
+      })
+    : [text]
+  for (const raw of values) {
+    try {
+      metrics.observe(JSON.parse(raw))
+    } catch {
+      // A line that is not JSON carries no usage.
+    }
+  }
+  const measured = metrics.value()
+  console.info(
+    "[arena-service] Keep-alive ping",
+    JSON.stringify({
+      provider: measured?.provider,
+      promptTokens: measured?.usage?.promptTokens,
+      cacheReadTokens: measured?.usage?.cacheReadTokens,
+      cacheWriteTokens: measured?.usage?.cacheWriteTokens,
+    }),
+  )
+}
+
 async function sanitizeAssignedResponse(
   response: Response,
   refusal: RefusalContext,
@@ -513,6 +548,10 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     if (input.model !== expectedModel) {
       return Response.json({ error: { message: "Arena contestant model is invalid" } }, { status: 400 })
     }
+    const keepAlive = request.headers.get(KEEP_ALIVE_HEADER) === "1"
+    if (keepAlive && (suffix !== "/api/v1/chat/completions" || !keepsCacheWarm(routeAssignment.model.slug))) {
+      return keepAliveAnswer()
+    }
     const reasoning = createReasoningRedactor(apiKey, {
       userId: caller.id,
       scopeID: assignment.scopeID,
@@ -533,6 +572,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         stream_options: record(input.stream_options)
           ? { ...input.stream_options, include_usage: true }
           : { include_usage: true },
+        // The output cap is not part of the cached prompt, so the ping reads what the call wrote.
+        ...(keepAlive ? { max_tokens: 1, max_completion_tokens: undefined } : {}),
       }),
     ).buffer
     const response = await context.fetch(upstream, {
@@ -541,6 +582,10 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       body,
       signal: request.signal,
     })
+    if (keepAlive) {
+      await logKeepAlive(response, startedAt)
+      return keepAliveAnswer()
+    }
     // Awaited so a body that fails to read or parse still gets the 502 below.
     const refusal = {
       userId: caller.id,
