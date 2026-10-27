@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta
+      name="description"
+      content="Two coding agents. One prompt. You choose the better result. Download Agent Duel for macOS and help advance coding AI."
+    />
+    <meta property="og:title" content="Agent Duel — Code. Vote. Advance AI." />
+    <meta
+      property="og:description"
+      content="Put two coding agents to the test on your own projects. Compare their work, choose the better result, and keep building."
+    />
+    <link rel="canonical" href="https://agentduel.com/" />
+    <link rel="icon" href="/logo.png" type="image/png" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/landing.js" defer></script>
+    <title>Agent Duel — Code. Vote. Advance AI.</title>
+  </head>
+  <body>
+    <main>
+      <section class="hero" aria-labelledby="headline">
+        <a class="brand" href="/" aria-label="Agent Duel home">
+          <img src="/logo.png" width="44" height="44" alt="" />
+          <span>Agent Duel</span>
+        </a>
+        <h1 id="headline">Code. Vote. Advance AI.</h1>
+        <p class="intro">
+          Put two coding agents to the test on your own projects. Compare their work, choose the
+          better result, and keep building.
+        </p>
+        <nav class="actions" aria-label="Get started">
+          <a class="button" href="https://github.com/bottomless/agent-duel/releases/latest">
+            <img src="/icons/download.svg" width="26" height="26" alt="" />
+            Download for macOS
+          </a>
+          <button class="button" id="how-it-works" type="button" aria-haspopup="dialog">
+            <img src="/icons/flask-conical.svg" width="26" height="26" alt="" />
+            How it works
+          </button>
+          <button class="button leaderboard" type="button" aria-disabled="true">
+            <img src="/icons/trophy.svg" width="26" height="26" alt="" />
+            Leaderboard
+          </button>
+        </nav>
+      </section>
+    </main>
+    <footer><a href="/remote">Remote connection</a></footer>
+    <dialog id="how-dialog" aria-labelledby="how-title">
+      <form method="dialog">
+        <button class="close" aria-label="Close explanation">Close</button>
+      </form>
+      <h2 id="how-title">One prompt. Two perspectives.</h2>
+      <ol>
+        <li>
+          <h3>Start with your project</h3>
+          <p>
+            Download Agent Duel for macOS, open a Git repository, and describe what you want to
+            build.
+          </p>
+        </li>
+        <li>
+          <h3>Compare the work</h3>
+          <p>
+            Two coding agents tackle the same prompt in separate worktrees. Their model names stay
+            hidden while you review the results.
+          </p>
+        </li>
+        <li>
+          <h3>Choose and keep building</h3>
+          <p>
+            Vote for A, B, or a tie. The models are revealed, and you continue from the selected
+            result.
+          </p>
+        </li>
+      </ol>
+      <a
+        class="button dialog-download"
+        href="https://github.com/bottomless/agent-duel/releases/latest"
+        >Download for macOS</a
+      >
+    </dialog>
+  </body>
+</html>

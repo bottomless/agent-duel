@@ -27,6 +27,7 @@ export default {
       ],
     ],
     experiments: {
+      ...(process.env.PASEO_WEBSITE_BUILD === "1" ? { baseUrl: "/remote" } : {}),
       typedRoutes: true,
       reactCompiler: true,
       autolinkingModuleResolution: true,

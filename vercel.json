@@ -1,0 +1,60 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "cleanUrls": true,
+  "redirects": [
+    {
+      "source": "/welcome",
+      "destination": "/remote/welcome",
+      "permanent": false
+    },
+    {
+      "source": "/pair",
+      "destination": "/remote/pair",
+      "permanent": false
+    },
+    {
+      "source": "/settings/:path*",
+      "destination": "/remote/settings/:path*",
+      "permanent": false
+    },
+    {
+      "source": "/h/:path*",
+      "destination": "/remote/h/:path*",
+      "permanent": false
+    },
+    {
+      "source": "/open-project",
+      "destination": "/remote/open-project",
+      "permanent": false
+    },
+    {
+      "source": "/new",
+      "destination": "/remote/new",
+      "permanent": false
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/remote",
+      "destination": "/remote/index.html"
+    },
+    {
+      "source": "/remote/:path*",
+      "destination": "/remote/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/remote/:path*",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    }
+  ],
+  "buildCommand": "npm run build:website",
+  "outputDirectory": "packages/website/dist",
+  "framework": null
+}

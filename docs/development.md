@@ -562,9 +562,9 @@ Do NOT use browser history (back/forward). Always navigate by clicking UI elemen
 ## Browser development surface
 
 `packages/app` can export and run as a browser application for local development,
-Playwright, and Chrome-based QA. It is not a product deployment target. There is
-no browser deployment command; do not publish `packages/app/dist` for Agent Duel
-releases.
+Playwright, and Chrome-based QA. The public website build is covered in
+[deployment](deployment.md#public-website); do not publish the standalone
+`packages/app/dist` export.
 
 ## Expo troubleshooting
 
