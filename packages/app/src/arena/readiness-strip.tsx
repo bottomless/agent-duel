@@ -17,11 +17,11 @@ import type { MenuTriggerState } from "@/components/ui/menu";
 import { createControlGeometry } from "@/components/ui/control-geometry";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { MAX_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { useIsCompactFormFactor } from "@/constants/layout";
 import type { Theme } from "@/styles/theme";
 import { ArenaCallout, type ArenaCalloutAction } from "./callout";
 import { useOpenArenaServiceUrl } from "./open-service-url";
-import { WorkspaceOpenInEditorButton } from "@/screens/workspace/workspace-open-in-editor-button";
+import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
 import {
   activeTrunkConflicts,
   arenaParkedPromotion,
@@ -584,7 +584,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   callouts: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
+    maxWidth: theme.contentMaxWidth,
     alignSelf: "center",
     gap: theme.spacing[2],
   },
@@ -599,12 +599,12 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     color: theme.colors.foreground,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   text: {
     flexShrink: 1,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   inspect: {
     gap: theme.spacing[3],
@@ -620,7 +620,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   inspectTitle: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     textTransform: "uppercase",
     letterSpacing: 0.4,
@@ -635,7 +635,7 @@ const styles = StyleSheet.create((theme) => ({
   inspectLabel: {
     width: { xs: 80, md: 120 },
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   inspectValue: {
     flex: 1,
@@ -651,21 +651,21 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     color: theme.colors.foreground,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   inspectMonoMuted: {
     flexShrink: 1,
     color: theme.colors.foregroundMuted,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   inspectMuted: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   openText: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
 }));

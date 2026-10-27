@@ -1,13 +1,22 @@
+import type { ConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import {
   normalizeHostPort,
   normalizeLoopbackToLocalhost,
+  shouldUseTlsForDefaultHostedRelay,
 } from "@getpaseo/protocol/daemon-endpoints";
 import {
   DirectTcpHostConnectionSchema,
-  type DirectTcpHostConnection,
+  type DirectTcpHostConnection as WireDirectTcpHostConnection,
 } from "@getpaseo/protocol/host-connection-schema";
+import {
+  DEFAULT_SSH_DAEMON_PORT,
+  validatePort,
+  validateSshHost,
+} from "@getpaseo/protocol/ssh-transport";
+import { z } from "zod";
 
-export { DirectTcpHostConnectionSchema, type DirectTcpHostConnection };
+export { DirectTcpHostConnectionSchema };
+export type DirectTcpHostConnection = Omit<WireDirectTcpHostConnection, "password">;
 
 export interface DirectSocketHostConnection {
   id: string;
@@ -21,24 +30,47 @@ export interface DirectPipeHostConnection {
   path: string;
 }
 
+export interface RemoteSshHostConnection {
+  id: string;
+  type: "remoteSsh";
+  host: string;
+  sshPort?: number;
+  daemonPort?: number;
+}
+
 export interface RelayHostConnection {
   id: string;
   type: "relay";
   relayEndpoint: string;
   useTls?: boolean;
   daemonPublicKeyB64: string;
+  /**
+   * Pinned once this daemon identity has negotiated protected endpoint
+   * security, or when its pairing offer required it. Never cleared by a
+   * connection failure; a new daemon identity is a different connection.
+   */
+  minimumSecurityMode?: "protected";
+}
+
+export interface RoutedHostConnection {
+  id: string;
+  type: "routed";
+  originServerId: string;
 }
 
 export type HostConnection =
+  | RoutedHostConnection
   | DirectTcpHostConnection
   | DirectSocketHostConnection
   | DirectPipeHostConnection
+  | RemoteSshHostConnection
   | RelayHostConnection;
 
 export type HostLifecycle = Record<string, never>;
 
 export interface HostProfile {
   serverId: string;
+  password?: string;
   label: string;
   lifecycle: HostLifecycle;
   connections: HostConnection[];
@@ -103,18 +135,19 @@ function hostConnectionEquals(left: HostConnection, right: HostConnection): bool
     return false;
   }
 
+  if (left.type === "routed" && right.type === "routed")
+    return left.originServerId === right.originServerId;
   if (left.type === "directTcp" && right.type === "directTcp") {
-    return (
-      left.endpoint === right.endpoint &&
-      (left.useTls ?? false) === (right.useTls ?? false) &&
-      left.password === right.password
-    );
+    return left.endpoint === right.endpoint && (left.useTls ?? false) === (right.useTls ?? false);
   }
   if (left.type === "directSocket" && right.type === "directSocket") {
     return left.path === right.path;
   }
   if (left.type === "directPipe" && right.type === "directPipe") {
     return left.path === right.path;
+  }
+  if (left.type === "remoteSsh" && right.type === "remoteSsh") {
+    return remoteSshConnectionEquals(left, right);
   }
   if (left.type === "relay" && right.type === "relay") {
     return (
@@ -125,6 +158,17 @@ function hostConnectionEquals(left: HostConnection, right: HostConnection): bool
   }
 
   return false;
+}
+
+function remoteSshConnectionEquals(
+  left: RemoteSshHostConnection,
+  right: RemoteSshHostConnection,
+): boolean {
+  return (
+    left.host === right.host &&
+    left.sshPort === right.sshPort &&
+    left.daemonPort === right.daemonPort
+  );
 }
 
 function hostLifecycleEquals(left: HostLifecycle, right: HostLifecycle): boolean {
@@ -148,7 +192,100 @@ function upsertHostConnectionById(
     replaced = true;
   }
   if (!replaced) next.push(connection);
-  return next;
+  // A pin is never lost: the replaced record counts as much as the incoming one.
+  return shareRelaySecurityPin(next, [...connections, connection]);
+}
+
+/**
+ * The security pin belongs to the daemon identity, not to one relay address.
+ * Once any relay route to a key is pinned, by a strict offer or a learned
+ * handshake, every route to that key is pinned.
+ */
+function shareRelaySecurityPin(
+  connections: HostConnection[],
+  pinSources: HostConnection[],
+): HostConnection[] {
+  const pinnedKeys = new Set<string>();
+  for (const connection of pinSources) {
+    if (connection.type === "relay" && connection.minimumSecurityMode === "protected") {
+      pinnedKeys.add(connection.daemonPublicKeyB64);
+    }
+  }
+  return connections.map((connection) =>
+    connection.type === "relay" &&
+    connection.minimumSecurityMode !== "protected" &&
+    pinnedKeys.has(connection.daemonPublicKeyB64)
+      ? { ...connection, minimumSecurityMode: "protected" as const }
+      : connection,
+  );
+}
+
+function relaySecurityPinEquals(left: HostConnection, right: HostConnection): boolean {
+  const pinOf = (connection: HostConnection) =>
+    connection.type === "relay" ? connection.minimumSecurityMode : undefined;
+  return pinOf(left) === pinOf(right);
+}
+
+/**
+ * Records that the relay daemon identity `daemonPublicKeyB64` negotiated
+ * protected endpoint security. Every relay route to that identity is pinned.
+ * Returns the same array when nothing changes.
+ */
+export function pinRelayProtectedSecurityInProfiles(input: {
+  profiles: HostProfile[];
+  serverId: string;
+  daemonPublicKeyB64: string;
+  now?: string;
+}): HostProfile[] {
+  const now = input.now ?? new Date().toISOString();
+  let changed = false;
+  const next = input.profiles.map((host) => {
+    if (host.serverId !== input.serverId) return host;
+    const connections = host.connections.map((connection) => {
+      if (
+        connection.type !== "relay" ||
+        connection.daemonPublicKeyB64 !== input.daemonPublicKeyB64 ||
+        connection.minimumSecurityMode === "protected"
+      ) {
+        return connection;
+      }
+      changed = true;
+      return { ...connection, minimumSecurityMode: "protected" as const };
+    });
+    return changed ? { ...host, connections, updatedAt: now } : host;
+  });
+  return changed ? next : input.profiles;
+}
+
+function hasProfileChanged(input: {
+  matchingCount: number;
+  previous: HostProfile;
+  serverId: string;
+  password?: string;
+  createdAt: string;
+  label: string;
+  preferredConnectionId: string;
+  lifecycle: HostLifecycle;
+  connections: HostConnection[];
+}): boolean {
+  const { previous, connections } = input;
+  return (
+    input.matchingCount > 1 ||
+    previous.serverId !== input.serverId ||
+    (input.password !== undefined && input.password !== previous.password) ||
+    input.createdAt !== previous.createdAt ||
+    input.label !== previous.label ||
+    input.preferredConnectionId !== previous.preferredConnectionId ||
+    !hostLifecycleEquals(previous.lifecycle, input.lifecycle) ||
+    connections.length !== previous.connections.length ||
+    connections.some((candidate, index) => {
+      const old = previous.connections[index];
+      // Identity equality decides profile matching; the pin is policy on top of it.
+      return (
+        !old || !hostConnectionEquals(candidate, old) || !relaySecurityPinEquals(candidate, old)
+      );
+    })
+  );
 }
 
 export function upsertHostConnectionInProfiles(input: {
@@ -156,6 +293,7 @@ export function upsertHostConnectionInProfiles(input: {
   serverId: string;
   label?: string;
   connection: HostConnection;
+  password?: string;
   now?: string;
 }): HostProfile[] {
   const serverId = input.serverId.trim();
@@ -164,13 +302,19 @@ export function upsertHostConnectionInProfiles(input: {
   }
 
   const now = input.now ?? new Date().toISOString();
+  const password = input.password;
+  const normalizedConnection = input.connection;
   const labelTrimmed = input.label?.trim() ?? "";
   const derivedLabel = labelTrimmed || serverId;
   const existing = input.profiles;
   const matchingIndexes = existing.reduce<number[]>((matches, daemon, index) => {
     if (
       daemon.serverId === serverId ||
-      daemon.connections.some((connection) => hostConnectionEquals(connection, input.connection))
+      // A routed candidate names its origin; its destination belongs to the host profile.
+      (normalizedConnection.type !== "routed" &&
+        daemon.connections.some((existingConnection) =>
+          hostConnectionEquals(existingConnection, normalizedConnection),
+        ))
     ) {
       matches.push(index);
     }
@@ -180,10 +324,11 @@ export function upsertHostConnectionInProfiles(input: {
   if (matchingIndexes.length === 0) {
     const profile: HostProfile = {
       serverId,
+      ...(password ? { password } : {}),
       label: derivedLabel,
       lifecycle: defaultLifecycle(),
-      connections: [input.connection],
-      preferredConnectionId: input.connection.id,
+      connections: [normalizedConnection],
+      preferredConnectionId: normalizedConnection.id,
       createdAt: now,
       updatedAt: now,
     };
@@ -194,7 +339,7 @@ export function upsertHostConnectionInProfiles(input: {
   const prev = matchedProfiles.find((daemon) => daemon.serverId === serverId) ?? matchedProfiles[0];
   const nextConnections = upsertHostConnectionById(
     matchedProfiles.flatMap((daemon) => daemon.connections),
-    input.connection,
+    normalizedConnection,
   );
   const nextLifecycle = prev.lifecycle;
   const nextLabel = prev.label === prev.serverId ? derivedLabel : prev.label;
@@ -202,23 +347,22 @@ export function upsertHostConnectionInProfiles(input: {
     prev.preferredConnectionId &&
     nextConnections.some((connection) => connection.id === prev.preferredConnectionId)
       ? prev.preferredConnectionId
-      : input.connection.id;
+      : normalizedConnection.id;
   const nextCreatedAt = matchedProfiles.reduce(
     (earliest, daemon) => (daemon.createdAt < earliest ? daemon.createdAt : earliest),
     prev.createdAt,
   );
-  const changed =
-    matchingIndexes.length > 1 ||
-    prev.serverId !== serverId ||
-    nextCreatedAt !== prev.createdAt ||
-    nextLabel !== prev.label ||
-    nextPreferredConnectionId !== prev.preferredConnectionId ||
-    !hostLifecycleEquals(prev.lifecycle, nextLifecycle) ||
-    nextConnections.length !== prev.connections.length ||
-    nextConnections.some((connection, index) => {
-      const previousConnection = prev.connections[index];
-      return !previousConnection || !hostConnectionEquals(connection, previousConnection);
-    });
+  const changed = hasProfileChanged({
+    matchingCount: matchingIndexes.length,
+    previous: prev,
+    serverId,
+    password,
+    createdAt: nextCreatedAt,
+    label: nextLabel,
+    preferredConnectionId: nextPreferredConnectionId,
+    lifecycle: nextLifecycle,
+    connections: nextConnections,
+  });
 
   if (!changed) {
     return existing;
@@ -226,6 +370,7 @@ export function upsertHostConnectionInProfiles(input: {
 
   const nextProfile: HostProfile = {
     ...prev,
+    ...(password ? { password } : {}),
     serverId,
     label: nextLabel,
     lifecycle: nextLifecycle,
@@ -286,60 +431,149 @@ export function connectionFromListen(listen: string): HostConnection | null {
   }
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+export function relayConnectionFromOffer(offer: ConnectionOffer): RelayHostConnection {
+  // COMPAT(oldRelayOfferTls): added in v0.1.73, remove after 2026-11-10.
+  const useTls = offer.relay.useTls ?? shouldUseTlsForDefaultHostedRelay(offer.relay.endpoint);
+  const relayEndpoint = normalizeHostPort(offer.relay.endpoint);
+  return {
+    id: useTls ? `relay:wss:${relayEndpoint}` : `relay:${relayEndpoint}`,
+    type: "relay",
+    relayEndpoint,
+    useTls,
+    daemonPublicKeyB64: offer.daemonPublicKeyB64.trim(),
+    ...(offer.minimumSecurityMode ? { minimumSecurityMode: offer.minimumSecurityMode } : {}),
+  };
 }
 
-function toObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return isPlainRecord(value) ? value : undefined;
+export function createRemoteSshHostConnection(input: {
+  host: string;
+  sshPort?: number;
+  daemonPort?: number;
+}): RemoteSshHostConnection {
+  const host = validateSshHost(input.host);
+  const sshPort = input.sshPort === undefined ? undefined : validatePort(input.sshPort, "SSH port");
+
+  const daemonPort =
+    input.daemonPort === undefined || input.daemonPort === DEFAULT_SSH_DAEMON_PORT
+      ? undefined
+      : validatePort(input.daemonPort, "Daemon port");
+
+  const id = [
+    "ssh",
+    encodeURIComponent(host),
+    sshPort === undefined ? "" : String(sshPort),
+    daemonPort === undefined ? "" : String(daemonPort),
+  ].join(":");
+
+  return {
+    id,
+    type: "remoteSsh",
+    host,
+    ...(sshPort !== undefined ? { sshPort } : {}),
+    ...(daemonPort !== undefined ? { daemonPort } : {}),
+  };
 }
 
-function normalizeStoredConnection(connection: unknown): HostConnection | null {
-  const record = toObjectRecord(connection);
-  if (!record) {
-    return null;
-  }
-  const type = record.type;
-  if (type === "directTcp") {
+const StoredHostConnectionSchema = z.discriminatedUnion("type", [
+  z.strictObject({ id: z.string(), type: z.literal("routed"), originServerId: z.string().min(1) }),
+  z.strictObject({
+    id: z.string().optional(),
+    type: z.literal("directTcp"),
+    endpoint: z.string(),
+    useTls: z.boolean().optional(),
+    password: z.string().optional(),
+  }),
+  z.strictObject({
+    id: z.string().optional(),
+    type: z.literal("directSocket"),
+    path: z.string(),
+  }),
+  z.strictObject({
+    id: z.string().optional(),
+    type: z.literal("directPipe"),
+    path: z.string(),
+  }),
+  z.strictObject({
+    id: z.string().optional(),
+    type: z.literal("remoteSsh"),
+    host: z.string(),
+    sshPort: z.number().optional(),
+    daemonPort: z.number().optional(),
+  }),
+  z.strictObject({
+    id: z.string().optional(),
+    type: z.literal("relay"),
+    relayEndpoint: z.string(),
+    useTls: z.boolean().optional(),
+    daemonPublicKeyB64: z.string(),
+    minimumSecurityMode: z.literal("protected").optional(),
+  }),
+]);
+const StoredHostProfileSchema = z.strictObject({
+  serverId: z.string().trim().min(1),
+  password: z.string().optional(),
+  label: z.string().optional(),
+  // Older builds stored a per-host color and badge here; read and dropped.
+  appearance: z.unknown().optional(),
+  lifecycle: z.strictObject({}).optional(),
+  connections: z.array(StoredHostConnectionSchema).min(1),
+  preferredConnectionId: z.string().nullable().optional(),
+  createdAt: z.string().datetime({ offset: true }).optional(),
+  updatedAt: z.string().datetime({ offset: true }).optional(),
+});
+export const StoredHostRegistrySchema = z.array(StoredHostProfileSchema);
+type StoredHostConnection = z.infer<typeof StoredHostConnectionSchema>;
+
+function normalizeStoredConnection(connection: StoredHostConnection): HostConnection | null {
+  if (connection.type === "routed") return connection;
+  if (connection.type === "directTcp") {
     try {
-      const endpoint = normalizeLoopbackToLocalhost(
-        normalizeHostPort(typeof record.endpoint === "string" ? record.endpoint : ""),
-      );
-      return DirectTcpHostConnectionSchema.parse({
+      const endpoint = normalizeLoopbackToLocalhost(normalizeHostPort(connection.endpoint));
+      const parsed = DirectTcpHostConnectionSchema.parse({
         id: `direct:${endpoint}`,
         type: "directTcp",
         endpoint,
-        useTls: record.useTls,
-        ...(typeof record.password === "string" ? { password: record.password } : {}),
+        useTls: connection.useTls,
+      });
+      return { id: parsed.id, type: parsed.type, endpoint: parsed.endpoint, useTls: parsed.useTls };
+    } catch {
+      return null;
+    }
+  }
+  if (connection.type === "directSocket") {
+    const path = connection.path.trim();
+    return path ? { id: `socket:${path}`, type: "directSocket", path } : null;
+  }
+  if (connection.type === "directPipe") {
+    const path = connection.path.trim();
+    return path ? { id: `pipe:${path}`, type: "directPipe", path } : null;
+  }
+  if (connection.type === "remoteSsh") {
+    try {
+      return createRemoteSshHostConnection({
+        host: connection.host,
+        ...(connection.sshPort !== undefined ? { sshPort: connection.sshPort } : {}),
+        ...(connection.daemonPort !== undefined ? { daemonPort: connection.daemonPort } : {}),
       });
     } catch {
       return null;
     }
   }
-  if (type === "directSocket") {
-    const path = (typeof record.path === "string" ? record.path : "").trim();
-    return path ? { id: `socket:${path}`, type: "directSocket", path } : null;
-  }
-  if (type === "directPipe") {
-    const path = (typeof record.path === "string" ? record.path : "").trim();
-    return path ? { id: `pipe:${path}`, type: "directPipe", path } : null;
-  }
-  if (type === "relay") {
+  if (connection.type === "relay") {
     try {
-      const relayEndpoint = normalizeHostPort(
-        typeof record.relayEndpoint === "string" ? record.relayEndpoint : "",
-      );
-      const daemonPublicKeyB64 = (
-        typeof record.daemonPublicKeyB64 === "string" ? record.daemonPublicKeyB64 : ""
-      ).trim();
+      const relayEndpoint = normalizeHostPort(connection.relayEndpoint);
+      const daemonPublicKeyB64 = connection.daemonPublicKeyB64.trim();
       if (!daemonPublicKeyB64) return null;
-      const useTls = typeof record.useTls === "boolean" ? record.useTls : undefined;
+      const useTls = connection.useTls;
       return {
         id: useTls === true ? `relay:wss:${relayEndpoint}` : `relay:${relayEndpoint}`,
         type: "relay",
         relayEndpoint,
         ...(useTls !== undefined ? { useTls } : {}),
         daemonPublicKeyB64,
+        ...(connection.minimumSecurityMode
+          ? { minimumSecurityMode: connection.minimumSecurityMode }
+          : {}),
       };
     } catch {
       return null;
@@ -350,17 +584,20 @@ function normalizeStoredConnection(connection: unknown): HostConnection | null {
 }
 
 export function normalizeStoredHostProfile(entry: unknown): HostProfile | null {
-  const record = toObjectRecord(entry);
-  if (!record) {
+  const result = StoredHostProfileSchema.safeParse(entry);
+  if (!result.success) {
     return null;
   }
-  const serverId = typeof record.serverId === "string" ? record.serverId.trim() : "";
-  if (!serverId) {
-    return null;
-  }
+  const record = result.data;
+  const serverId = record.serverId;
+  // COMPAT(connectionPassword): added in v0.9.1, remove after 2027-03-24 once stored direct passwords have migrated.
+  const legacyPassword = record.connections.find(
+    (connection) => connection.type === "directTcp" && connection.password,
+  );
+  const password =
+    record.password ?? (legacyPassword?.type === "directTcp" ? legacyPassword.password : undefined);
 
-  const rawConnections = Array.isArray(record.connections) ? record.connections : [];
-  const connections = rawConnections
+  const connections = record.connections
     .map((connection) => normalizeStoredConnection(connection))
     .filter((connection): connection is HostConnection => connection !== null);
   if (connections.length === 0) {
@@ -368,24 +605,23 @@ export function normalizeStoredHostProfile(entry: unknown): HostProfile | null {
   }
 
   const now = new Date().toISOString();
-  const label = normalizeHostLabel(
-    typeof record.label === "string" ? record.label : null,
-    serverId,
-  );
+  const label = normalizeHostLabel(record.label, serverId);
   const preferredConnectionId =
-    typeof record.preferredConnectionId === "string" &&
+    record.preferredConnectionId !== null &&
+    record.preferredConnectionId !== undefined &&
     connections.some((connection) => connection.id === record.preferredConnectionId)
       ? record.preferredConnectionId
       : (connections[0]?.id ?? null);
 
   return {
     serverId,
+    ...(password ? { password } : {}),
     label,
     lifecycle: defaultLifecycle(),
     connections,
     preferredConnectionId,
-    createdAt: typeof record.createdAt === "string" ? record.createdAt : now,
-    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : now,
+    createdAt: record.createdAt ?? now,
+    updatedAt: record.updatedAt ?? now,
   };
 }
 

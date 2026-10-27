@@ -17,16 +17,57 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, onTestFinished, test } from "vitest";
 
 import type { AgentSession, AgentSessionConfig, AgentStreamEvent } from "../../agent-sdk-types.js";
-import { PiRpcAgentClient, PiRpcAgentSession, transformPiModels } from "./agent.js";
+import {
+  PiProviderOptionsSchema,
+  PiRpcAgentClient,
+  PiRpcAgentSession,
+  transformPiModels,
+} from "./agent.js";
 import { FakePi } from "./test-utils/fake-pi.js";
+import { createPiExtensionHost } from "./extensions/index.js";
+import { PiExtensionHost } from "./extensions/host.js";
+import type { PiModel, PiThinkingLevel } from "./rpc-types.js";
+import type { PiUsagePollScheduler } from "./usage-poller.js";
 
 const ONE_BY_ONE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
-function createClient(pi = new FakePi()): PiRpcAgentClient {
+const RESTRICTED_THINKING_MODEL: PiModel = {
+  provider: "kimi-coding",
+  id: "kimi-k3",
+  name: "Kimi K3",
+  reasoning: true,
+  thinkingLevelMap: {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: null,
+    high: "high",
+    xhigh: null,
+    max: "max",
+  },
+};
+
+interface PiThinkingCatalogCase {
+  name: string;
+  model: PiModel;
+  optionIds: PiThinkingLevel[] | undefined;
+  defaultThinkingOptionId: PiThinkingLevel | undefined;
+}
+
+test("Pi RPC timeout defaults to 60 seconds and accepts an override", () => {
+  expect(PiProviderOptionsSchema.parse({}).rpcTimeoutMs).toBe(60_000);
+  expect(PiProviderOptionsSchema.parse({ rpcTimeoutMs: 90_000 }).rpcTimeoutMs).toBe(90_000);
+});
+
+function createClient(
+  pi = new FakePi(),
+  usagePollScheduler?: PiUsagePollScheduler,
+): PiRpcAgentClient {
   return new PiRpcAgentClient({
     logger: pino({ level: "silent" }),
     runtime: pi,
+    ...(usagePollScheduler ? { usagePollScheduler } : {}),
   });
 }
 
@@ -46,6 +87,28 @@ function createConfig(overrides: Partial<AgentSessionConfig> = {}): AgentSession
   };
 }
 
+class ManualUsagePollScheduler implements PiUsagePollScheduler {
+  private readonly polls: Array<{ active: boolean; callback: () => void }> = [];
+
+  schedulePoll(callback: () => void): () => void {
+    const poll = { active: true, callback };
+    this.polls.push(poll);
+    return () => {
+      poll.active = false;
+    };
+  }
+
+  poll(): void {
+    const poll = this.polls.shift();
+    if (!poll) throw new Error("Pi has not scheduled a context usage poll");
+    if (poll.active) poll.callback();
+  }
+
+  activePollCount(): number {
+    return this.polls.filter((poll) => poll.active).length;
+  }
+}
+
 function readUtf8File(pathname: string): string {
   const fd = openSync(pathname, "r");
   try {
@@ -59,21 +122,70 @@ function readUtf8File(pathname: string): string {
 
 type PaseoExtensionListener = (event: unknown, context?: unknown) => unknown;
 
+interface PiSessionEntry {
+  type: "message";
+  id: string;
+  parentId: string | null;
+  message: { role: string; content: unknown };
+}
+
+function piUserEntry(input: { id: string; parentId: string | null; text: string }): PiSessionEntry {
+  return {
+    type: "message",
+    id: input.id,
+    parentId: input.parentId,
+    message: { role: "user", content: input.text },
+  };
+}
+
+function piAssistantEntry(id: string, parentId: string): PiSessionEntry {
+  return { type: "message", id, parentId, message: { role: "assistant", content: [] } };
+}
+
+// Pi's context path: the entries from the root to the leaf.
+function piBranchTo(entries: PiSessionEntry[], leafId: string): PiSessionEntry[] {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const branch: PiSessionEntry[] = [];
+  for (let entry = byId.get(leafId); entry; entry = byId.get(entry.parentId ?? "")) {
+    branch.unshift(entry);
+  }
+  return branch;
+}
+
+function parseEntryCapture(notification: string): unknown {
+  const prefix = "PASEO_ENTRY_CAPTURE ";
+  expect(notification.startsWith(prefix)).toBe(true);
+  return JSON.parse(notification.slice(prefix.length));
+}
+
 async function loadPaseoExtensionListeners(
   extensionPath: string,
+  registerMcpServer: (name: string, config: unknown) => void = () => undefined,
 ): Promise<Map<string, PaseoExtensionListener>> {
   const listeners = new Map<string, PaseoExtensionListener>();
   const extension = (await import(pathToFileURL(extensionPath).href)) as {
     default: (piApi: {
       on: (event: string, listener: PaseoExtensionListener) => void;
+      events: { on: () => void };
       registerCommand: () => void;
+      registerMcpServer: (name: string, config: unknown) => void;
     }) => void;
   };
   extension.default({
     on: (event, listener) => listeners.set(event, listener),
+    events: { on: () => undefined },
     registerCommand: () => undefined,
+    registerMcpServer,
   });
   return listeners;
+}
+
+async function readRegisteredMcpServers(extensionPath: string): Promise<Record<string, unknown>> {
+  const servers: Record<string, unknown> = {};
+  await loadPaseoExtensionListeners(extensionPath, (name, config) => {
+    servers[name] = config;
+  });
+  return servers;
 }
 
 async function applyPaseoExtensionSystemPrompt(
@@ -89,12 +201,15 @@ async function flushTurnScheduling(): Promise<void> {
   await waitForImmediate();
 }
 
-async function createSession(pi = new FakePi()): Promise<{
+async function createSession(
+  pi = new FakePi(),
+  usagePollScheduler?: PiUsagePollScheduler,
+): Promise<{
   pi: FakePi;
   session: PiRpcAgentSession;
   events: SessionEvents;
 }> {
-  const client = createClient(pi);
+  const client = createClient(pi, usagePollScheduler);
   const session = (await client.createSession(createConfig())) as PiRpcAgentSession;
   const events = new SessionEvents(session);
   return { pi, session, events };
@@ -138,6 +253,51 @@ test("keeps normal Pi agent sessions persisted", async () => {
 
   await session.close();
 });
+
+test("lets Pi choose the thinking level when none is requested", async () => {
+  const pi = new FakePi();
+  pi.queueSessionSetup((session) => {
+    session.state = {
+      ...session.state,
+      model: RESTRICTED_THINKING_MODEL,
+      thinkingLevel: "max",
+    };
+  });
+  const session = await createClient(pi).createSession(
+    createConfig({ model: "kimi-coding/kimi-k3" }),
+  );
+  onTestFinished(() => session.close());
+
+  expect(pi.recordedLaunches[0]?.thinkingOptionId).toBeUndefined();
+  expect(pi.recordedLaunches[0]?.argv).not.toContain("--thinking");
+  expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("max");
+  await expect(session.getRuntimeInfo()).resolves.toMatchObject({ thinkingOptionId: "max" });
+});
+
+test.each([
+  { requested: "medium", effective: "high" },
+  { requested: "xhigh", effective: "max" },
+] as const)(
+  "adopts Pi's $effective level when creating with $requested",
+  async ({ requested, effective }) => {
+    const pi = new FakePi();
+    pi.queueSessionSetup((session) => {
+      session.state = {
+        ...session.state,
+        model: RESTRICTED_THINKING_MODEL,
+        thinkingLevel: effective,
+      };
+    });
+    const session = await createClient(pi).createSession(
+      createConfig({ model: "kimi-coding/kimi-k3", thinkingOptionId: requested }),
+    );
+    onTestFinished(() => session.close());
+
+    expect(pi.recordedLaunches[0]?.thinkingOptionId).toBe(requested);
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe(effective);
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({ thinkingOptionId: effective });
+  },
+);
 
 class SessionEvents {
   private readonly events: AgentStreamEvent[] = [];
@@ -185,10 +345,31 @@ class SessionEvents {
     return this.events.map((event) => event.type);
   }
 
+  turnLifecycleEvents() {
+    return this.events.flatMap((event) => {
+      if (
+        event.type === "turn_started" ||
+        event.type === "turn_completed" ||
+        event.type === "turn_failed" ||
+        event.type === "turn_canceled"
+      ) {
+        return [{ type: event.type, turnId: event.turnId }];
+      }
+      return [];
+    });
+  }
+
   turnCompletedEvents() {
     return this.events.filter(
       (event): event is Extract<AgentStreamEvent, { type: "turn_completed" }> =>
         event.type === "turn_completed",
+    );
+  }
+
+  usageUpdatedEvents() {
+    return this.events.filter(
+      (event): event is Extract<AgentStreamEvent, { type: "usage_updated" }> =>
+        event.type === "usage_updated",
     );
   }
 
@@ -251,6 +432,103 @@ class SessionEvents {
 }
 
 describe("PiRpcAgentSession", () => {
+  test("completes a turn and answers a dialog when an adapter throws", async () => {
+    const { pi, session, events } = await createSession();
+    Object.assign(session, {
+      extensionHost: createPiExtensionHost(undefined, [
+        {
+          id: "throwing-test-adapter",
+          createSession: () => ({
+            mapToolCall: () => {
+              throw new Error("tool failed");
+            },
+            onToolStart: () => {
+              throw new Error("start failed");
+            },
+            onToolEnd: () => {
+              throw new Error("end failed");
+            },
+            mapDialog: () => {
+              throw new Error("dialog failed");
+            },
+            respondToPermission: () => {
+              throw new Error("response failed");
+            },
+          }),
+        },
+      ]),
+    });
+    const fakeSession = pi.latestSession();
+    await session.startTurn("run");
+    fakeSession.emit({
+      type: "tool_execution_start",
+      toolCallId: "x",
+      toolName: "other",
+      args: {},
+    });
+    fakeSession.emit({
+      type: "tool_execution_end",
+      toolCallId: "x",
+      toolName: "other",
+      result: { content: [{ type: "text", text: "ok" }] },
+      isError: false,
+    });
+    fakeSession.emit({
+      type: "extension_ui_request",
+      id: "ui-1",
+      method: "select",
+      title: "Pick",
+      options: ["A", "B"],
+    });
+    const permission = await events.nextPermissionRequest();
+    expect(permission.request.kind).toBe("question");
+    await session.respondToPermission("ui-1", {
+      behavior: "allow",
+      updatedInput: { answers: { Response: "B" } },
+    });
+    expect(fakeSession.extensionUiResponses).toEqual([{ id: "ui-1", response: { value: "B" } }]);
+    fakeSession.finishTurn();
+    await events.nextTurnCompletion();
+    expect(events.timelineItems()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          name: "other",
+          status: "completed",
+          detail: expect.objectContaining({ type: "unknown" }),
+        }),
+      ]),
+    );
+  });
+
+  test("close resolves after rejected child hydration", async () => {
+    const { pi, session } = await createSession();
+    Object.assign(session, {
+      extensionHost: new PiExtensionHost(
+        [
+          {
+            id: "child-test",
+            createSession: () => ({
+              mapToolCall: () => ({ childSessions: [{ id: "child-1", file: "unused" }] }),
+            }),
+          },
+        ],
+        undefined,
+        2 * 1024 * 1024,
+        async () => {
+          throw new Error("read failed");
+        },
+      ),
+    });
+    await session.startTurn("run");
+    pi.latestSession().emit({
+      type: "tool_execution_start",
+      toolCallId: "x",
+      toolName: "other",
+      args: {},
+    });
+    await expect(session.close()).resolves.toBeUndefined();
+  });
   test("bridges Pi RPC select extension UI requests through question permissions", async () => {
     const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
@@ -474,19 +752,60 @@ describe("PiRpcAgentSession", () => {
     ]);
   });
 
-  test("ignores Pi RPC fire-and-forget extension UI requests", async () => {
-    const { pi } = await createSession();
+  test("surfaces Pi fire-and-forget notify requests as timeline notifications", async () => {
+    const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
 
     fakeSession.emit({
       type: "extension_ui_request",
       id: "notify-1",
       method: "notify",
-      message: "hello",
+      message: "Search finished",
+      notifyType: "info",
+    });
+    fakeSession.emit({
+      type: "extension_ui_request",
+      id: "notify-2",
+      method: "notify",
+      message: "Command blocked by user",
+      notifyType: "warning",
+    });
+    fakeSession.emit({
+      type: "extension_ui_request",
+      id: "notify-3",
+      method: "notify",
+      message: "no type",
     });
 
     expect(fakeSession.extensionUiResponses).toEqual([]);
     expect(fakeSession.canceledExtensionUiRequests).toEqual([]);
+    expect(events.timelineItems()).toEqual([
+      { type: "notification", level: "info", message: "Search finished" },
+      { type: "notification", level: "warning", message: "Command blocked by user" },
+      { type: "notification", level: "info", message: "no type" },
+    ]);
+
+    await session.close();
+  });
+
+  test("surfaces Pi notify requests emitted during an active turn", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+
+    await session.startTurn("hello");
+    fakeSession.emit({
+      type: "extension_ui_request",
+      id: "notify-live",
+      method: "notify",
+      message: "Turn running notice",
+      notifyType: "error",
+    });
+
+    expect(events.timelineItems()).toEqual([
+      { type: "notification", level: "error", message: "Turn running notice" },
+    ]);
+
+    await session.close();
   });
 
   test("streams assistant text, reasoning, and tool calls from Pi events", async () => {
@@ -548,61 +867,6 @@ describe("PiRpcAgentSession", () => {
         name: "bash",
         status: "completed",
         detail: { type: "shell", command: "echo hi", output: "hi\n", exitCode: 0 },
-        error: null,
-      },
-    ]);
-  });
-
-  test("streams Pi task calls as sub-agent cards with lifecycle status", async () => {
-    const { pi, session, events } = await createSession();
-    const fakeSession = pi.latestSession();
-
-    await session.startTurn("delegate this");
-    fakeSession.emit({
-      type: "tool_execution_start",
-      toolCallId: "task-1",
-      toolName: "task",
-      args: {
-        agent: "explore",
-        task: "Trace the Pi provider tool mapper",
-      },
-    });
-    fakeSession.emit({
-      type: "tool_execution_end",
-      toolCallId: "task-1",
-      toolName: "task",
-      result: { content: [{ type: "text", text: "Found the mapper." }] },
-      isError: false,
-    });
-    fakeSession.finishTurn();
-
-    await events.nextTurnCompletion();
-
-    expect(events.timelineItems()).toEqual([
-      {
-        type: "tool_call",
-        callId: "task-1",
-        name: "task",
-        status: "running",
-        detail: {
-          type: "sub_agent",
-          subAgentType: "explore",
-          description: "Trace the Pi provider tool mapper",
-          log: "",
-        },
-        error: null,
-      },
-      {
-        type: "tool_call",
-        callId: "task-1",
-        name: "task",
-        status: "completed",
-        detail: {
-          type: "sub_agent",
-          subAgentType: "explore",
-          description: "Trace the Pi provider tool mapper",
-          log: "Found the mapper.",
-        },
         error: null,
       },
     ]);
@@ -750,7 +1014,8 @@ describe("PiRpcAgentSession", () => {
     })) as PiRpcAgentSession;
     const events = new SessionEvents(session);
     const fakeSession = pi.latestSession();
-    fakeSession.capturedUserEntries = [{ id: "entry-old", parentId: null, text: "old prompt" }];
+    fakeSession.treeUserEntries = [{ id: "entry-old", parentId: null, text: "old prompt" }];
+    fakeSession.contextUserEntries = fakeSession.treeUserEntries;
 
     await session.startTurn("new prompt", { clientMessageId: "client-new" });
     fakeSession.finishSubmittedUserMessage({
@@ -771,6 +1036,47 @@ describe("PiRpcAgentSession", () => {
     ]);
   });
 
+  test("keeps custom context in separate tools while a turn continues", async () => {
+    const { pi, session, events } = await createSession();
+    const runtime = pi.latestSession();
+    await session.startTurn("Explain the project");
+    runtime.emit({ type: "agent_start" });
+    runtime.emit({ type: "turn_start" });
+    for (const display of [true, false, true]) {
+      runtime.emit({
+        type: "message_end",
+        message: {
+          role: "custom",
+          customType: "project-context",
+          content: [{ type: "text", text: "Project instructions" }],
+          details: { project: "example" },
+          display,
+        },
+      });
+    }
+    const items = events.timelineItems();
+    expect(items).toEqual(
+      [1, 2].map(() => ({
+        type: "tool_call",
+        callId: expect.stringMatching(/^pi-custom-/),
+        name: "project-context",
+        status: "completed",
+        detail: { type: "plain_text", text: "Project instructions" },
+        metadata: {
+          synthetic: true,
+          customType: "project-context",
+          details: { project: "example" },
+        },
+        error: null,
+      })),
+    );
+    expect(new Set(items.map((item) => item.type === "tool_call" && item.callId)).size).toBe(2);
+    expect(events.turnCompletedEvents()).toHaveLength(0);
+    runtime.finishTurn();
+    await events.nextTurnCompletion();
+    await session.close();
+  });
+
   test("surfaces Pi extension command messages and completes when no agent turn starts", async () => {
     const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
@@ -787,9 +1093,63 @@ describe("PiRpcAgentSession", () => {
     expect(events.timelineAndCompletionEvents()).toEqual([
       {
         type: "timeline",
-        item: { type: "assistant_message", text: "Extension command output" },
+        item: {
+          type: "tool_call",
+          callId: expect.stringMatching(/^pi-custom-/),
+          name: "custom-message",
+          status: "completed",
+          detail: { type: "plain_text", text: "Extension command output" },
+          metadata: { synthetic: true, customType: "custom-message" },
+          error: null,
+        },
       },
       { type: "turn_completed" },
+    ]);
+  });
+
+  test("settles an autonomous turn triggered by a Pi extension custom message", async () => {
+    const { pi, events } = await createSession();
+    const fakeSession = pi.latestSession();
+
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.emit({
+      type: "message_end",
+      message: {
+        role: "custom",
+        content: [{ type: "text", text: "Background process completed" }],
+      },
+    });
+    fakeSession.finishAgentRun({
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Continuation finished" }],
+      },
+      willRetry: false,
+    });
+
+    expect(events.timelineItems()).toEqual([
+      {
+        type: "tool_call",
+        callId: expect.stringMatching(/^pi-custom-/),
+        name: "custom-message",
+        status: "completed",
+        detail: {
+          type: "plain_text",
+          text: "Background process completed",
+        },
+        metadata: { synthetic: true, customType: "custom-message" },
+        error: null,
+      },
+    ]);
+    expect(events.turnLifecycleEvents()).toEqual([{ type: "turn_started", turnId: undefined }]);
+
+    fakeSession.settleTurn();
+
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId: undefined },
+      { type: "turn_completed", turnId: undefined },
     ]);
   });
 
@@ -851,6 +1211,143 @@ describe("PiRpcAgentSession", () => {
     });
   });
 
+  test.each(["aborted", "error"])(
+    "canceling autonomous work with Pi stopReason=%s waits for abort and allows a follow-up",
+    async (stopReason) => {
+      const { pi, session, events } = await createSession();
+      const fakeSession = pi.latestSession();
+      const abortFinished = Promise.withResolvers<void>();
+      const turnFinished = Promise.withResolvers<void>();
+      fakeSession.abort = async () => {
+        fakeSession.finishTurn({
+          role: "assistant",
+          stopReason,
+          errorMessage: "This operation was aborted",
+          content: [],
+        });
+        turnFinished.resolve();
+        await abortFinished.promise;
+      };
+      fakeSession.emit({ type: "agent_start" });
+      fakeSession.emit({ type: "turn_start" });
+
+      const stopping = session.interrupt();
+      await turnFinished.promise;
+      expect(events.turnLifecycleEvents()).toEqual([{ type: "turn_started", turnId: undefined }]);
+      abortFinished.resolve();
+      await stopping;
+      expect(events.turnLifecycleEvents()).toEqual([
+        { type: "turn_started", turnId: undefined },
+        { type: "turn_canceled", turnId: undefined },
+      ]);
+
+      const { turnId } = await session.startTurn("follow-up");
+      fakeSession.finishTurn({ role: "assistant", stopReason: "stop", content: [] });
+      expect(events.turnLifecycleEvents().at(-1)).toEqual({ type: "turn_completed", turnId });
+    },
+  );
+
+  test("a natural completion during Stop does not cancel the next autonomous run", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const abortFinished = Promise.withResolvers<void>();
+    const turnFinished = Promise.withResolvers<void>();
+    fakeSession.abort = async () => {
+      fakeSession.finishTurn({ role: "assistant", stopReason: "stop", content: [] });
+      turnFinished.resolve();
+      await abortFinished.promise;
+    };
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({ type: "turn_start" });
+    const stopping = session.interrupt();
+    await turnFinished.promise;
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({ type: "turn_start" });
+    abortFinished.resolve();
+    await stopping;
+    fakeSession.finishTurn({ role: "assistant", stopReason: "stop", content: [] });
+
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId: undefined },
+      { type: "turn_completed", turnId: undefined },
+      { type: "turn_started", turnId: undefined },
+      { type: "turn_completed", turnId: undefined },
+    ]);
+  });
+
+  test("a completed foreground Stop does not suppress a later autonomous abort", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    fakeSession.abort = async () => {
+      fakeSession.finishTurn({ role: "assistant", stopReason: "stop", content: [] });
+    };
+    const { turnId } = await session.startTurn("finish while stopping");
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({ type: "turn_start" });
+    await session.interrupt();
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.finishTurn({
+      role: "assistant",
+      stopReason: "aborted",
+      errorMessage: "Autonomous run aborted",
+      content: [],
+    });
+
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId },
+      { type: "turn_completed", turnId },
+      { type: "turn_started", turnId: undefined },
+      { type: "turn_failed", turnId: undefined },
+    ]);
+  });
+
+  test("Pi process exit during Stop emits one autonomous failure", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    fakeSession.abort = async () => {
+      fakeSession.finishTurn({
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "This operation was aborted",
+        content: [],
+      });
+      fakeSession.emit({ type: "process_exit", error: "Pi process exited" });
+      throw new Error("Pi process exited");
+    };
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({ type: "turn_start" });
+
+    await expect(session.interrupt()).rejects.toThrow("Pi process exited");
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId: undefined },
+      { type: "turn_failed", turnId: undefined },
+    ]);
+    await expect(events.nextTurnFailure()).resolves.toMatchObject({ error: "Pi process exited" });
+  });
+
+  test("preserves the autonomous terminal error when abort rejects", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    fakeSession.abort = async () => {
+      fakeSession.finishTurn({
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "Provider disconnected",
+        content: [],
+      });
+      throw new Error("Abort failed");
+    };
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({ type: "turn_start" });
+
+    await expect(session.interrupt()).rejects.toThrow("Abort failed");
+    await expect(events.nextTurnFailure()).resolves.toMatchObject({
+      turnId: undefined,
+      error: expect.stringContaining("Provider disconnected"),
+    });
+  });
+
   test("suppresses late aborted terminal response arriving after interrupt resolves", async () => {
     const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
@@ -881,6 +1378,27 @@ describe("PiRpcAgentSession", () => {
     ).not.toContain("turn_failed");
   });
 
+  test("clears queued Pi messages before interrupting", async () => {
+    const { pi, session } = await createSession();
+    const fakeSession = pi.latestSession();
+
+    await session.startTurn("work");
+    await session.interrupt();
+
+    expect(fakeSession.controlRequests).toEqual(["clear_queue", "abort"]);
+  });
+
+  test("still interrupts when an older Pi binary lacks clear_queue", async () => {
+    const { pi, session } = await createSession();
+    const fakeSession = pi.latestSession();
+    fakeSession.clearQueueError = new Error("Unknown command: clear_queue");
+
+    await session.startTurn("work");
+    await session.interrupt();
+
+    expect(fakeSession.controlRequests).toEqual(["clear_queue", "abort"]);
+  });
+
   test("adds Pi assistant context to generic provider finish errors", async () => {
     const { pi, session, events } = await createSession();
 
@@ -907,11 +1425,137 @@ describe("PiRpcAgentSession", () => {
     });
   });
 
+  test("shows retry activity while keeping the original Pi turn active through recovery", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("hello");
+
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.finishAgentRun({
+      message: {
+        role: "assistant",
+        provider: "test-provider",
+        model: "test-model",
+        stopReason: "error",
+        errorMessage: "Request timed out.",
+        content: [],
+      },
+      willRetry: true,
+    });
+    fakeSession.emit({
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2000,
+      errorMessage: "Request timed out.",
+    });
+
+    expect(events.timelineItems()).toContainEqual({
+      type: "error",
+      message: "Provider retry (attempt 1): Request timed out.",
+    });
+    expect(events.turnLifecycleEvents()).toEqual([{ type: "turn_started", turnId }]);
+
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.finishAgentRun({
+      message: {
+        role: "assistant",
+        provider: "test-provider",
+        model: "test-model",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Recovered response" }],
+      },
+      willRetry: false,
+    });
+    fakeSession.emit({ type: "auto_retry_end", success: true, attempt: 1 });
+    fakeSession.settleTurn();
+
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId },
+      { type: "turn_completed", turnId },
+    ]);
+  });
+
+  test("fails an exhausted Pi recovery only after settlement", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("hello");
+
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.finishAgentRun({
+      message: {
+        role: "assistant",
+        provider: "test-provider",
+        model: "test-model",
+        stopReason: "error",
+        errorMessage: "Request timed out.",
+        content: [],
+      },
+      willRetry: true,
+    });
+    fakeSession.emit({
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 1,
+      delayMs: 2000,
+      errorMessage: "Request timed out.",
+    });
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.finishAgentRun({
+      message: {
+        role: "assistant",
+        provider: "test-provider",
+        model: "test-model",
+        stopReason: "error",
+        errorMessage: "Insufficient quota.",
+        content: [],
+      },
+      willRetry: false,
+    });
+    fakeSession.emit({
+      type: "auto_retry_end",
+      success: false,
+      attempt: 1,
+      finalError: "Insufficient quota.",
+    });
+
+    expect(events.turnLifecycleEvents()).toEqual([{ type: "turn_started", turnId }]);
+    expect(events.timelineItems()).toContainEqual({
+      type: "error",
+      message: "Provider retry (attempt 1): Request timed out.",
+    });
+
+    fakeSession.settleTurn();
+
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId },
+      { type: "turn_failed", turnId },
+    ]);
+  });
+
+  test("completes legacy Pi turns that have no settlement metadata", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("hello");
+
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.finishLegacyTurn({
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "Legacy response" }],
+    });
+
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId },
+      { type: "turn_completed", turnId },
+    ]);
+  });
+
   test("resumes by launching Pi with the persisted session file and cwd metadata", async () => {
     const pi = new FakePi();
     const client = createClient(pi);
 
-    await client.resumeSession(
+    const session = await client.resumeSession(
       {
         provider: "pi",
         sessionId: "pi-session-1",
@@ -926,6 +1570,12 @@ describe("PiRpcAgentSession", () => {
       { env: { RESUME_PROBE: "expected" } },
     );
 
+    expect(session.usageSession?.()).toMatchObject({
+      provider: "pi",
+      sessionKey: expect.any(String),
+    });
+    await session.close();
+    expect(session.usageSession?.()).toBeNull();
     expect(pi.recordedLaunches).toHaveLength(1);
     const actualLaunch = pi.recordedLaunches[0]!;
     expect(actualLaunch).toMatchObject({
@@ -938,8 +1588,6 @@ describe("PiRpcAgentSession", () => {
       "pi",
       "--mode",
       "rpc",
-      "--model",
-      "openrouter/model-a",
       "--thinking",
       "high",
       "--session",
@@ -947,6 +1595,113 @@ describe("PiRpcAgentSession", () => {
       "--extension",
       actualLaunch.extensionPaths[0],
     ]);
+  });
+
+  test("resumes a session whose model was removed on the model Pi falls back to", async () => {
+    const pi = new FakePi();
+    pi.removeModel("9router/deepseek-v4-flash");
+    pi.queueSessionSetup((session) => {
+      session.state = { ...session.state, model: RESTRICTED_THINKING_MODEL };
+    });
+
+    const session = await createClient(pi).resumeSession({
+      provider: "pi",
+      sessionId: "pi-session-1",
+      nativeHandle: "/tmp/native-pi-session",
+      metadata: { cwd: "/workspace/project", model: "9router/deepseek-v4-flash" },
+    });
+    onTestFinished(() => session.close());
+
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({
+      model: "kimi-coding/kimi-k3",
+    });
+    expect(session.describePersistence()?.metadata?.model).toBe("kimi-coding/kimi-k3");
+  });
+
+  test("resumes a session on the requested model when it differs from the session's", async () => {
+    const pi = new FakePi();
+    const requestedModel = { ...RESTRICTED_THINKING_MODEL, provider: "openrouter", id: "a" };
+    pi.queueSessionSetup((session) => {
+      session.state = { ...session.state, model: RESTRICTED_THINKING_MODEL };
+      session.models = [RESTRICTED_THINKING_MODEL, requestedModel];
+      session.setModelResult = requestedModel;
+    });
+
+    const session = await createClient(pi).resumeSession({
+      provider: "pi",
+      sessionId: "pi-session-1",
+      nativeHandle: "/tmp/native-pi-session",
+      metadata: { cwd: "/workspace/project", model: "openrouter/a" },
+    });
+    onTestFinished(() => session.close());
+
+    expect(pi.latestSession().setModelRequests).toEqual([{ provider: "openrouter", modelId: "a" }]);
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({ model: "openrouter/a" });
+    expect(session.describePersistence()?.metadata?.model).toBe("openrouter/a");
+  });
+
+  test("resumes on a requested model written as provider:id", async () => {
+    const pi = new FakePi();
+    const requestedModel = { ...RESTRICTED_THINKING_MODEL, provider: "openrouter", id: "a" };
+    pi.queueSessionSetup((session) => {
+      session.state = { ...session.state, model: RESTRICTED_THINKING_MODEL };
+      session.models = [RESTRICTED_THINKING_MODEL, requestedModel];
+      session.setModelResult = requestedModel;
+    });
+
+    const session = await createClient(pi).resumeSession({
+      provider: "pi",
+      sessionId: "pi-session-1",
+      nativeHandle: "/tmp/native-pi-session",
+      metadata: { cwd: "/workspace/project", model: "openrouter:a" },
+    });
+    onTestFinished(() => session.close());
+
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({ model: "openrouter/a" });
+  });
+
+  test("fails the resume when switching to an available model fails", async () => {
+    const pi = new FakePi();
+    const requestedModel = { ...RESTRICTED_THINKING_MODEL, provider: "openrouter", id: "a" };
+    pi.queueSessionSetup((session) => {
+      session.state = { ...session.state, model: RESTRICTED_THINKING_MODEL };
+      session.models = [RESTRICTED_THINKING_MODEL, requestedModel];
+    });
+
+    await expect(
+      createClient(pi).resumeSession({
+        provider: "pi",
+        sessionId: "pi-session-1",
+        nativeHandle: "/tmp/native-pi-session",
+        metadata: { cwd: "/workspace/project", model: "openrouter/a" },
+      }),
+    ).rejects.toThrow("FakePi setModel requires setModelResult to be scripted");
+  });
+
+  test("adopts Pi's clamped thinking level when resuming a session", async () => {
+    const pi = new FakePi();
+    pi.queueSessionSetup((session) => {
+      session.state = {
+        ...session.state,
+        model: RESTRICTED_THINKING_MODEL,
+        thinkingLevel: "high",
+      };
+    });
+    const session = await createClient(pi).resumeSession({
+      provider: "pi",
+      sessionId: "pi-session-1",
+      nativeHandle: "/tmp/native-pi-session",
+      metadata: {
+        cwd: "/workspace/project",
+        model: "kimi-coding/kimi-k3",
+        thinkingOptionId: "medium",
+      },
+    });
+    onTestFinished(() => session.close());
+
+    expect(pi.recordedLaunches[0]?.thinkingOptionId).toBe("medium");
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("high");
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({ thinkingOptionId: "high" });
   });
 
   test("reports the persisted Pi entry attached to the submitted message", async () => {
@@ -995,6 +1750,47 @@ describe("PiRpcAgentSession", () => {
     await session.close();
   });
 
+  test("captures the session's user entries apart from the ones on the current branch", async () => {
+    const pi = new FakePi();
+    const session = await createClient(pi).createSession(createConfig());
+    onTestFinished(() => session.close());
+    const listeners = await loadPaseoExtensionListeners(pi.recordedLaunches[0]!.extensionPaths[0]!);
+    // "abandoned" was rewound; "two" was sent from the same parent afterwards.
+    const entries = [
+      piUserEntry({ id: "one", parentId: null, text: "first" }),
+      piAssistantEntry("one-reply", "one"),
+      piUserEntry({ id: "abandoned", parentId: "one-reply", text: "rewound away" }),
+      piAssistantEntry("abandoned-reply", "abandoned"),
+      piUserEntry({ id: "two", parentId: "one-reply", text: "second" }),
+      piAssistantEntry("two-reply", "two"),
+    ];
+    const notifications: string[] = [];
+    const context = {
+      sessionManager: {
+        getEntries: () => entries,
+        buildContextEntries: () => piBranchTo(entries, "two-reply"),
+      },
+      ui: { notify: (message: string) => notifications.push(message) },
+    };
+
+    await listeners.get("session_start")?.({}, context);
+
+    expect(notifications.map(parseEntryCapture)).toEqual([
+      {
+        reason: "session_start",
+        treeEntries: [
+          { id: "one", parentId: null, text: "first" },
+          { id: "abandoned", parentId: "one-reply", text: "rewound away" },
+          { id: "two", parentId: "one-reply", text: "second" },
+        ],
+        contextEntries: [
+          { id: "one", parentId: null, text: "first" },
+          { id: "two", parentId: "one-reply", text: "second" },
+        ],
+      },
+    ]);
+  });
+
   test("appends agent and daemon prompts after Pi's discovered system prompt", async () => {
     const pi = new FakePi();
     const client = createClient(pi);
@@ -1015,8 +1811,6 @@ describe("PiRpcAgentSession", () => {
       "pi",
       "--mode",
       "rpc",
-      "--thinking",
-      "medium",
       "--extension",
       actualLaunch.extensionPaths[0],
     ]);
@@ -1060,8 +1854,6 @@ describe("PiRpcAgentSession", () => {
       "pi",
       "--mode",
       "rpc",
-      "--model",
-      "openrouter/model-a",
       "--thinking",
       "high",
       "--session",
@@ -1084,6 +1876,133 @@ describe("PiRpcAgentSession", () => {
 
     expect(fakeSession.setModelRequests).toEqual([{ provider: "openrouter", modelId: "model-a" }]);
     expect(fakeSession.setThinkingLevelRequests).toEqual(["high"]);
+  });
+
+  test.each([
+    { requested: "medium", effective: "high", rpcRequest: "medium" },
+    { requested: "xhigh", effective: "max", rpcRequest: "xhigh" },
+    { requested: null, effective: "high", rpcRequest: "medium" },
+  ] as const)(
+    "stores Pi's $effective thinking level after requesting $requested",
+    async ({ requested, effective, rpcRequest }) => {
+      const pi = new FakePi();
+      pi.queueSessionSetup((session) => {
+        session.state = {
+          ...session.state,
+          model: RESTRICTED_THINKING_MODEL,
+          thinkingLevel: "low",
+        };
+      });
+      const { session } = await createSession(pi);
+      onTestFinished(() => session.close());
+      const fakeSession = pi.latestSession();
+      fakeSession.state = { ...fakeSession.state, thinkingLevel: effective };
+
+      await session.setThinkingOption(requested);
+
+      expect(fakeSession.setThinkingLevelRequests).toEqual([rpcRequest]);
+      expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe(effective);
+      await expect(session.getRuntimeInfo()).resolves.toEqual({
+        provider: "pi",
+        sessionId: "pi-session-1",
+        model: "kimi-coding/kimi-k3",
+        thinkingOptionId: effective,
+        modeId: null,
+      });
+    },
+  );
+
+  test("refreshes Pi's thinking level after changing models", async () => {
+    const { pi, session } = await createSession();
+    onTestFinished(() => session.close());
+    const fakeSession = pi.latestSession();
+    fakeSession.setModelResult = RESTRICTED_THINKING_MODEL;
+    fakeSession.state = { ...fakeSession.state, thinkingLevel: "high" };
+
+    await session.setModel("kimi-coding/kimi-k3");
+
+    expect(fakeSession.setModelRequests).toEqual([{ provider: "kimi-coding", modelId: "kimi-k3" }]);
+    expect(session.describePersistence()?.metadata).toEqual({
+      cwd: "/tmp/paseo-pi-rpc-test",
+      model: "kimi-coding/kimi-k3",
+      thinkingOptionId: "high",
+    });
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({
+      model: "kimi-coding/kimi-k3",
+      thinkingOptionId: "high",
+    });
+  });
+
+  test("reports updated Pi thinking state instead of a cached selection", async () => {
+    const { pi, session } = await createSession();
+    onTestFinished(() => session.close());
+    const fakeSession = pi.latestSession();
+    fakeSession.state = { ...fakeSession.state, thinkingLevel: "off" };
+
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({ thinkingOptionId: "off" });
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("off");
+  });
+
+  test.each(["high", "off", "max"] as const)(
+    "publishes an extension's thinking change to %s before refreshing state",
+    async (level) => {
+      const { pi, session } = await createSession();
+      onTestFinished(() => session.close());
+      const changes: AgentStreamEvent[] = [];
+      session.subscribe((event) => {
+        if (event.type === "thinking_option_changed") {
+          expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe(level);
+          changes.push(event);
+        }
+      });
+      const runtime = pi.latestSession();
+      runtime.state = { ...runtime.state, thinkingLevel: level };
+      runtime.emit({ type: "thinking_level_changed", level });
+
+      expect(changes).toEqual([
+        { type: "thinking_option_changed", provider: "pi", thinkingOptionId: level },
+      ]);
+      expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe(level);
+      await expect(session.getRuntimeInfo()).resolves.toMatchObject({ thinkingOptionId: level });
+    },
+  );
+
+  test.each([undefined, null, "invalid", 123])(
+    "ignores a thinking change with invalid level %s",
+    async (level) => {
+      const { pi, session } = await createSession();
+      onTestFinished(() => session.close());
+      const initialThinking = session.describePersistence()?.metadata?.thinkingOptionId;
+      const changes: AgentStreamEvent[] = [];
+      session.subscribe((event) => {
+        if (event.type === "thinking_option_changed") changes.push(event);
+      });
+
+      pi.latestSession().emit({ type: "thinking_level_changed", level });
+
+      expect(changes).toEqual([]);
+      expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe(initialThinking);
+    },
+  );
+
+  test("surfaces state refresh failures after a Pi thinking update", async () => {
+    const { pi, session } = await createSession();
+    onTestFinished(() => session.close());
+    pi.latestSession().getStateError = new Error("Pi state unavailable");
+
+    await expect(session.setThinkingOption("high")).rejects.toThrow("Pi state unavailable");
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("medium");
+  });
+
+  test("surfaces state refresh failures after a Pi model update", async () => {
+    const { pi, session } = await createSession();
+    onTestFinished(() => session.close());
+    const fakeSession = pi.latestSession();
+    fakeSession.setModelResult = RESTRICTED_THINKING_MODEL;
+    fakeSession.getStateError = new Error("Pi state unavailable");
+
+    await expect(session.setModel("kimi-coding/kimi-k3")).rejects.toThrow("Pi state unavailable");
+    expect(session.describePersistence()?.metadata?.thinkingOptionId).toBe("medium");
   });
 
   test("materializes image prompts as text hints for text-only Pi models", async () => {
@@ -1182,6 +2101,24 @@ describe("PiRpcAgentSession", () => {
     });
   });
 
+  test("fails an autonomous turn when the Pi process exits before settlement", async () => {
+    const { pi, events } = await createSession();
+    const fakeSession = pi.latestSession();
+
+    fakeSession.emit({ type: "agent_start" });
+    fakeSession.emit({ type: "turn_start" });
+    fakeSession.emit({ type: "process_exit", error: "Pi exited" });
+
+    await expect(events.nextTurnFailure()).resolves.toMatchObject({
+      error: "Pi exited",
+      turnId: undefined,
+    });
+    expect(events.turnLifecycleEvents()).toEqual([
+      { type: "turn_started", turnId: undefined },
+      { type: "turn_failed", turnId: undefined },
+    ]);
+  });
+
   test("completes locally handled slash commands when agentInvoked is false", async () => {
     const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
@@ -1230,7 +2167,7 @@ describe("PiRpcAgentSession", () => {
     expect(events.turnCompletedEvents()).toHaveLength(1);
   });
 
-  test("probes slash prompts without agentInvoked and surfaces buffered notify output", async () => {
+  test("probes slash prompts without agentInvoked and surfaces notify output immediately", async () => {
     const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
 
@@ -1246,13 +2183,16 @@ describe("PiRpcAgentSession", () => {
     const completion = await events.nextTurnCompletion();
     expect(completion).toMatchObject({ type: "turn_completed", turnId });
     expect(events.timelineAndCompletionEvents()).toEqual([
+      {
+        type: "timeline",
+        item: { type: "notification", level: "info", message: "Plan mode enabled" },
+      },
       { type: "timeline", item: { type: "user_message", text: "/plan on" } },
-      { type: "timeline", item: { type: "assistant_message", text: "Plan mode enabled" } },
       { type: "turn_completed" },
     ]);
   });
 
-  test("does not synthesize completion when lifecycle starts before the no-turn probe", async () => {
+  test("surfaces notify requests immediately even when the turn has started", async () => {
     const { pi, session, events } = await createSession();
     const fakeSession = pi.latestSession();
 
@@ -1261,13 +2201,15 @@ describe("PiRpcAgentSession", () => {
       type: "extension_ui_request",
       id: "notify-buffered",
       method: "notify",
-      message: "Should not appear after turn starts",
+      message: "Shown despite turn start",
     });
     fakeSession.emit({ type: "agent_start" });
 
     await flushTurnScheduling();
     expect(events.turnCompletedEvents()).toHaveLength(0);
-    expect(events.timelineItems()).toEqual([]);
+    expect(events.timelineItems()).toEqual([
+      { type: "notification", level: "info", message: "Shown despite turn start" },
+    ]);
 
     fakeSession.finishTurn();
     await flushTurnScheduling();
@@ -1312,6 +2254,352 @@ describe("PiRpcAgentSession", () => {
     const completion = await events.nextTurnCompletion();
     expect(completion).toMatchObject({ type: "turn_completed", turnId });
     expect(events.turnCompletedEvents()).toHaveLength(1);
+  });
+
+  test("emits usage_updated during an active turn and with the turn id at completion", async () => {
+    const scheduler = new ManualUsagePollScheduler();
+    const { pi, session, events } = await createSession(new FakePi(), scheduler);
+    const fakeSession = pi.latestSession();
+    fakeSession.stats = {
+      tokens: { input: 100, cacheRead: 10, output: 20 },
+      cost: 0.01,
+      contextUsage: { contextWindow: 200_000, tokens: 130 },
+    };
+
+    const { turnId } = await session.startTurn("hello");
+    scheduler.poll();
+    await flushTurnScheduling();
+
+    expect(events.usageUpdatedEvents()).toHaveLength(1);
+    expect(events.usageUpdatedEvents()[0]).not.toHaveProperty("turnId");
+    expect(events.usageUpdatedEvents()[0]).toMatchObject({
+      type: "usage_updated",
+      provider: "pi",
+      usage: {
+        inputTokens: 100,
+        cachedInputTokens: 10,
+        outputTokens: 20,
+        totalCostUsd: 0.01,
+        contextWindowMaxTokens: 200_000,
+        contextWindowUsedTokens: 130,
+      },
+    });
+
+    fakeSession.stats = {
+      ...fakeSession.stats,
+      contextUsage: { contextWindow: 200_000, tokens: 150 },
+    };
+    fakeSession.finishTurn();
+    await flushTurnScheduling();
+
+    expect(events.usageUpdatedEvents()).toHaveLength(2);
+    expect(events.usageUpdatedEvents()[1]).toMatchObject({
+      type: "usage_updated",
+      provider: "pi",
+      turnId,
+      usage: expect.objectContaining({ contextWindowUsedTokens: 150 }),
+    });
+    expect(events.turnCompletedEvents()).toHaveLength(1);
+  });
+
+  test("does not re-emit unchanged usage during a turn or at completion", async () => {
+    const scheduler = new ManualUsagePollScheduler();
+    const { pi, session, events } = await createSession(new FakePi(), scheduler);
+    const fakeSession = pi.latestSession();
+    fakeSession.stats = { contextUsage: { contextWindow: 200_000, tokens: 130 } };
+
+    await session.startTurn("hello");
+    scheduler.poll();
+    await flushTurnScheduling();
+    scheduler.poll();
+    await flushTurnScheduling();
+    expect(events.usageUpdatedEvents()).toHaveLength(1);
+
+    fakeSession.finishTurn();
+    await flushTurnScheduling();
+    expect(events.usageUpdatedEvents()).toHaveLength(1);
+    expect(events.turnCompletedEvents()).toHaveLength(1);
+  });
+
+  test("poll errors do not fail the turn and final usage still emits", async () => {
+    const scheduler = new ManualUsagePollScheduler();
+    const { pi, session, events } = await createSession(new FakePi(), scheduler);
+    const fakeSession = pi.latestSession();
+    fakeSession.stats = { contextUsage: { contextWindow: 200_000, tokens: 130 } };
+    fakeSession.getSessionStatsError = new Error("stats unavailable");
+
+    const { turnId } = await session.startTurn("hello");
+    scheduler.poll();
+    await flushTurnScheduling();
+    expect(events.turnCompletedEvents()).toHaveLength(0);
+    expect(events.usageUpdatedEvents()).toHaveLength(0);
+
+    fakeSession.getSessionStatsError = null;
+    fakeSession.finishTurn();
+    await flushTurnScheduling();
+    expect(events.turnCompletedEvents()).toHaveLength(1);
+    expect(events.usageUpdatedEvents()).toHaveLength(1);
+    expect(events.usageUpdatedEvents()[0]).toMatchObject({
+      turnId,
+      usage: { contextWindowUsedTokens: 130 },
+    });
+  });
+
+  test("stops scheduling polls after turn completion and close", async () => {
+    const scheduler = new ManualUsagePollScheduler();
+    const { pi, session } = await createSession(new FakePi(), scheduler);
+    const fakeSession = pi.latestSession();
+    fakeSession.stats = { contextUsage: { contextWindow: 200_000, tokens: 130 } };
+
+    await session.startTurn("hello");
+    expect(scheduler.activePollCount()).toBe(1);
+    fakeSession.finishTurn();
+    await flushTurnScheduling();
+    expect(scheduler.activePollCount()).toBe(0);
+
+    await session.startTurn("second");
+    expect(scheduler.activePollCount()).toBe(1);
+    await session.close();
+    expect(scheduler.activePollCount()).toBe(0);
+  });
+
+  test("dedupes unchanged usage across turns and emits when it changes", async () => {
+    const scheduler = new ManualUsagePollScheduler();
+    const { pi, session, events } = await createSession(new FakePi(), scheduler);
+    const fakeSession = pi.latestSession();
+    fakeSession.stats = { contextUsage: { contextWindow: 200_000, tokens: 130 } };
+
+    const first = await session.startTurn("first");
+    fakeSession.finishTurn();
+    await flushTurnScheduling();
+    expect(events.usageUpdatedEvents()).toHaveLength(1);
+    expect(events.usageUpdatedEvents()[0]).toMatchObject({
+      turnId: first.turnId,
+      usage: { contextWindowUsedTokens: 130 },
+    });
+
+    await session.startTurn("second");
+    fakeSession.finishTurn();
+    await flushTurnScheduling();
+    expect(events.usageUpdatedEvents()).toHaveLength(1);
+    expect(events.turnCompletedEvents()).toHaveLength(2);
+
+    fakeSession.stats = { contextUsage: { contextWindow: 200_000, tokens: 160 } };
+    const third = await session.startTurn("third");
+    fakeSession.finishTurn();
+    await flushTurnScheduling();
+    expect(events.usageUpdatedEvents()).toHaveLength(2);
+    expect(events.usageUpdatedEvents()[1]).toMatchObject({
+      turnId: third.turnId,
+      usage: { contextWindowUsedTokens: 160 },
+    });
+  });
+});
+
+describe("PiRpcAgentSession steering", () => {
+  test("steers the active Pi turn and correlates the echoed user message", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+
+    const { turnId } = await session.startTurn("fix the tests", {
+      clientMessageId: "client-prompt-1",
+    });
+    const result = await session.steerActiveTurn("steer this turn", {
+      expectedTurnId: turnId,
+      clientMessageId: "client-steer-1",
+    });
+
+    expect(result).toEqual({ status: "accepted" });
+    expect(fakeSession.steerCalls).toEqual([{ message: "steer this turn", imageCount: 0 }]);
+
+    fakeSession.finishSubmittedUserMessage({
+      id: "entry-steer-1",
+      parentId: null,
+      text: "steer this turn",
+    });
+
+    const userMessages = events.timelineItems().filter((item) => item.type === "user_message");
+    expect(userMessages).toEqual([
+      {
+        type: "user_message",
+        text: "steer this turn",
+        messageId: "entry-steer-1",
+        clientMessageId: "client-steer-1",
+      },
+    ]);
+  });
+
+  test("does not reuse the foreground client ID for a steer without one", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("work", { clientMessageId: "client-prompt-1" });
+
+    await session.steerActiveTurn("steer without a client ID", { expectedTurnId: turnId });
+    fakeSession.finishSubmittedUserMessage({
+      id: "entry-steer-1",
+      parentId: null,
+      text: "steer without a client ID",
+    });
+
+    expect(events.timelineItems()).toContainEqual({
+      type: "user_message",
+      text: "steer without a client ID",
+      messageId: "entry-steer-1",
+    });
+  });
+
+  test("keeps multiple steers correlated in admission order", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("work");
+
+    await session.steerActiveTurn("steer one", {
+      expectedTurnId: turnId,
+      clientMessageId: "client-steer-1",
+    });
+    await session.steerActiveTurn("steer two", {
+      expectedTurnId: turnId,
+      clientMessageId: "client-steer-2",
+    });
+
+    fakeSession.finishSubmittedUserMessage({ id: "entry-1", parentId: null, text: "steer one" });
+    fakeSession.finishSubmittedUserMessage({ id: "entry-2", parentId: null, text: "steer two" });
+
+    const userMessages = events.timelineItems().filter((item) => item.type === "user_message");
+    expect(userMessages).toEqual([
+      {
+        type: "user_message",
+        text: "steer one",
+        messageId: "entry-1",
+        clientMessageId: "client-steer-1",
+      },
+      {
+        type: "user_message",
+        text: "steer two",
+        messageId: "entry-2",
+        clientMessageId: "client-steer-2",
+      },
+    ]);
+  });
+
+  test("reports unavailable when the expected turn is not the active one", async () => {
+    const { pi, session } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("run");
+
+    const stale = await session.steerActiveTurn("steer", {
+      expectedTurnId: "turn-that-ended",
+    });
+    expect(stale).toEqual({ status: "unavailable" });
+
+    fakeSession.finishTurn();
+    await flushTurnScheduling();
+    const idle = await session.steerActiveTurn("steer", { expectedTurnId: turnId });
+    expect(idle).toEqual({ status: "unavailable" });
+    expect(fakeSession.steerCalls).toEqual([]);
+  });
+
+  test("keeps slash-command steers on the interrupt fallback", async () => {
+    const { pi, session } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("run");
+
+    const result = await session.steerActiveTurn("/model", { expectedTurnId: turnId });
+
+    expect(result).toEqual({ status: "unavailable" });
+    expect(fakeSession.steerCalls).toEqual([]);
+  });
+
+  test("falls back when the Pi binary lacks the steer RPC", async () => {
+    const { pi, session } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("run");
+    fakeSession.steerError = new Error("Unknown command: steer");
+
+    const result = await session.steerActiveTurn("steer", { expectedTurnId: turnId });
+
+    expect(result).toEqual({ status: "unavailable" });
+    expect(fakeSession.steerCalls).toEqual([{ message: "steer", imageCount: 0 }]);
+  });
+
+  test("surfaces an ambiguous steer failure without interrupting", async () => {
+    const { pi, session } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("run");
+    fakeSession.steerError = new Error("Pi RPC socket closed");
+
+    await expect(session.steerActiveTurn("steer", { expectedTurnId: turnId })).rejects.toThrow(
+      "Pi RPC socket closed",
+    );
+  });
+
+  test("denies pending permissions that block an accepted steer", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("work");
+    fakeSession.emit({
+      type: "extension_ui_request",
+      id: "perm-1",
+      method: "confirm",
+      title: "Allow command?",
+    });
+    await events.nextPermissionRequest();
+    expect(session.getPendingPermissions()).toHaveLength(1);
+
+    const result = await session.steerActiveTurn("answer instead", {
+      expectedTurnId: turnId,
+      clearPendingPermissions: true,
+    });
+
+    expect(result).toEqual({ status: "accepted" });
+    expect(fakeSession.extensionUiResponses).toEqual([
+      { id: "perm-1", response: { cancelled: true } },
+    ]);
+    expect(session.getPendingPermissions()).toEqual([]);
+  });
+
+  test("leaves permissions open for a steer without the clearing flag", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const { turnId } = await session.startTurn("work");
+    fakeSession.emit({
+      type: "extension_ui_request",
+      id: "perm-1",
+      method: "confirm",
+      title: "Allow command?",
+    });
+    await events.nextPermissionRequest();
+
+    const result = await session.steerActiveTurn("answer instead", { expectedTurnId: turnId });
+
+    expect(result).toEqual({ status: "accepted" });
+    expect(fakeSession.extensionUiResponses).toEqual([]);
+    expect(session.getPendingPermissions()).toHaveLength(1);
+  });
+
+  test("drops pending steer correlation once the turn completes", async () => {
+    const { pi, session, events } = await createSession();
+    const fakeSession = pi.latestSession();
+    const first = await session.startTurn("work");
+    await session.steerActiveTurn("stale steer", {
+      expectedTurnId: first.turnId,
+      clientMessageId: "client-steer-1",
+    });
+    fakeSession.finishTurn();
+    await flushTurnScheduling();
+
+    const second = await session.startTurn("next");
+    await session.steerActiveTurn("fresh steer", { expectedTurnId: second.turnId });
+    fakeSession.finishSubmittedUserMessage({
+      id: "entry-late",
+      parentId: null,
+      text: "stale steer",
+    });
+
+    const userMessages = events.timelineItems().filter((item) => item.type === "user_message");
+    expect(userMessages).toEqual([
+      { type: "user_message", text: "stale steer", messageId: "entry-late" },
+    ]);
   });
 });
 
@@ -1362,10 +2650,11 @@ describe("PiRpcAgentClient", () => {
     const client = new PiRpcAgentClient({
       logger: pino({ level: "silent" }),
       runtime: new FakePi(),
-      providerParams: { sessionDir: sessionsDir },
     });
 
-    await expect(client.listImportableSessions({ cwd })).resolves.toEqual([
+    await expect(
+      client.listImportableSessions({ cwd, providerOptions: { sessionDir: sessionsDir } }),
+    ).resolves.toEqual([
       {
         providerHandleId: sessionFile,
         cwd,
@@ -1413,7 +2702,9 @@ describe("PiRpcAgentClient", () => {
       },
     });
 
-    await expect(client.listImportableSessions({ cwd })).resolves.toMatchObject([
+    await expect(
+      client.listImportableSessions({ cwd, providerOptions: { sessionDir: sessionsDir } }),
+    ).resolves.toMatchObject([
       {
         providerHandleId: sessionFile,
         cwd,
@@ -1463,10 +2754,17 @@ describe("PiRpcAgentClient", () => {
       "utf8",
     );
     const pi = new FakePi();
+    pi.queueSessionSetup((session) => {
+      session.state.model = {
+        ...RESTRICTED_THINKING_MODEL,
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4.5",
+      };
+      session.state.thinkingLevel = "high";
+    });
     const client = new PiRpcAgentClient({
       logger: pino({ level: "silent" }),
       runtime: pi,
-      providerParams: { sessionDir: sessionsDir },
     });
 
     const imported = await client.importSession(
@@ -1480,8 +2778,6 @@ describe("PiRpcAgentClient", () => {
       "pi",
       "--mode",
       "rpc",
-      "--model",
-      "openrouter/anthropic/claude-sonnet-4.5",
       "--thinking",
       "high",
       "--session",
@@ -1533,6 +2829,133 @@ describe("PiRpcAgentClient", () => {
     });
     expect(pi.recordedLaunches[0]).toMatchObject({ cwd: "/workspace/with-extension" });
   });
+
+  test("marks the model Pi resolves from its own settings as the catalog default", async () => {
+    const pi = new FakePi();
+    const unconfigured = { provider: "openai", id: "gpt-4", name: "GPT-4", reasoning: false };
+    const configured = { provider: "zai", id: "glm-5.3", name: "GLM-5.3", reasoning: true };
+    pi.queueSessionSetup((session) => {
+      session.models = [unconfigured, configured];
+      session.state = { ...session.state, model: configured };
+    });
+
+    const catalog = await createClient(pi).fetchCatalog({
+      scope: "workspace",
+      cwd: "/workspace/project",
+      force: false,
+    });
+
+    expect(catalog.models.filter((model) => model.isDefault).map((model) => model.id)).toEqual([
+      "zai/glm-5.3",
+    ]);
+  });
+
+  test("honors per-model Pi thinking maps and clamps the catalog default upward", async () => {
+    const pi = new FakePi();
+    pi.queueSessionSetup((session) => {
+      session.models = [RESTRICTED_THINKING_MODEL];
+    });
+    const client = createClient(pi);
+
+    const catalog = await client.fetchCatalog({
+      scope: "workspace",
+      cwd: "/workspace/project",
+      force: false,
+    });
+
+    expect(catalog.models).toEqual([
+      {
+        provider: "pi",
+        id: "kimi-coding/kimi-k3",
+        label: "Kimi K3",
+        description: "kimi-coding/kimi-k3",
+        metadata: { provider: "kimi-coding", modelId: "kimi-k3" },
+        thinkingOptions: [
+          { id: "low", label: "Low", description: "Faster reasoning" },
+          { id: "high", label: "High", description: "Deeper reasoning", isDefault: true },
+          { id: "max", label: "Max", description: "Extreme reasoning" },
+        ],
+        defaultThinkingOptionId: "high",
+      },
+    ]);
+  });
+
+  test.each<PiThinkingCatalogCase>([
+    {
+      name: "no thinking map",
+      model: { ...RESTRICTED_THINKING_MODEL, thinkingLevelMap: undefined },
+      optionIds: ["off", "minimal", "low", "medium", "high"],
+      defaultThinkingOptionId: "medium",
+    },
+    {
+      name: "a partial thinking map",
+      model: {
+        ...RESTRICTED_THINKING_MODEL,
+        thinkingLevelMap: { minimal: null, medium: null, xhigh: "extra-high", max: null },
+      },
+      optionIds: ["off", "low", "high", "xhigh"],
+      defaultThinkingOptionId: "high",
+    },
+    {
+      name: "explicitly mapped extended levels",
+      model: {
+        ...RESTRICTED_THINKING_MODEL,
+        thinkingLevelMap: { xhigh: "extra-high", max: "maximum" },
+      },
+      optionIds: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+      defaultThinkingOptionId: "medium",
+    },
+    {
+      name: "only lower thinking levels",
+      model: {
+        ...RESTRICTED_THINKING_MODEL,
+        thinkingLevelMap: { medium: null, high: null },
+      },
+      optionIds: ["off", "minimal", "low"],
+      defaultThinkingOptionId: "low",
+    },
+    {
+      name: "a non-reasoning model",
+      model: { ...RESTRICTED_THINKING_MODEL, reasoning: false },
+      optionIds: undefined,
+      defaultThinkingOptionId: undefined,
+    },
+    {
+      name: "no supported thinking levels",
+      model: {
+        ...RESTRICTED_THINKING_MODEL,
+        thinkingLevelMap: {
+          ...RESTRICTED_THINKING_MODEL.thinkingLevelMap,
+          low: null,
+          high: null,
+          max: null,
+        },
+      },
+      optionIds: [],
+      defaultThinkingOptionId: "off",
+    },
+  ])(
+    "resolves Pi thinking options for $name",
+    async ({ model, optionIds, defaultThinkingOptionId }) => {
+      const pi = new FakePi();
+      pi.queueSessionSetup((session) => {
+        session.models = [model];
+      });
+      const catalog = await createClient(pi).fetchCatalog({
+        scope: "workspace",
+        cwd: "/workspace/project",
+        force: false,
+      });
+
+      expect(catalog.models).toHaveLength(1);
+      const thinkingOptions = catalog.models[0]?.thinkingOptions;
+      expect(thinkingOptions?.map((option) => option.id)).toEqual(optionIds);
+      expect(catalog.models[0]?.defaultThinkingOptionId).toBe(defaultThinkingOptionId);
+      expect(
+        thinkingOptions?.filter((option) => option.isDefault).map((option) => option.id),
+      ).toEqual(optionIds?.filter((id) => id === defaultThinkingOptionId));
+    },
+  );
 
   test("lists no draft features without starting a Pi session", async () => {
     const pi = new FakePi();
@@ -1758,10 +3181,11 @@ describe("PiRpcAgentClient", () => {
 
   test("rewinds conversation through the Pi tree navigation bridge", async () => {
     const { pi, session, events } = await createSession();
-    pi.latestSession().capturedUserEntries = [
+    pi.latestSession().treeUserEntries = [
       { id: "entry-1", parentId: null, text: "first prompt" },
       { id: "entry-3", parentId: "entry-2", text: "second prompt" },
     ];
+    pi.latestSession().contextUserEntries = pi.latestSession().treeUserEntries;
 
     await session.startTurn("first prompt");
     pi.latestSession().finishTurn({ role: "assistant", content: [] });
@@ -1775,6 +3199,23 @@ describe("PiRpcAgentClient", () => {
       supportsRewindBoth: false,
     });
     expect(pi.latestSession().treeNavigationRequests).toEqual(["entry-1"]);
+  });
+
+  test("rewinds a row whose Pi entry compaction summarized away", async () => {
+    const { pi, session } = await createSession();
+    const fakeSession = pi.latestSession();
+    // Compaction summarized entry-1, so the replayed branch starts at entry-3.
+    fakeSession.treeUserEntries = [
+      { id: "entry-1", parentId: null, text: "first prompt" },
+      { id: "entry-3", parentId: "entry-2", text: "second prompt" },
+    ];
+    fakeSession.contextUserEntries = [
+      { id: "entry-3", parentId: "entry-2", text: "second prompt" },
+    ];
+
+    await session.revertConversation?.({ messageId: "entry-1" });
+
+    expect(fakeSession.treeNavigationRequests).toEqual(["entry-1"]);
   });
 
   test("injects MCP servers without replacing the Pi global MCP config", async () => {
@@ -1832,8 +3273,6 @@ describe("PiRpcAgentClient", () => {
       "pi",
       "--mode",
       "rpc",
-      "--thinking",
-      "medium",
       "--mcp-config",
       actualLaunch.mcpConfigPath,
       "--extension",
@@ -1891,6 +3330,102 @@ describe("PiRpcAgentClient", () => {
     ).rejects.toThrow(`Failed to parse Pi MCP config: ${configPath}`);
   });
 
+  test("registers MCP servers through Pi's built-in MCP when pi-mcp-adapter is not loaded", async () => {
+    const pi = new FakePi();
+    pi.queueCommands([
+      {
+        name: "mcp",
+        source: "extension",
+        sourceInfo: { path: "builtin:mcp", source: "builtin" },
+      },
+    ]);
+    const session = await createClient(pi).createSession(
+      createConfig({
+        mcpServers: {
+          paseo: {
+            type: "http",
+            url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+            headers: { Authorization: "Bearer token" },
+          },
+          local: { type: "stdio", command: "node", args: ["server.js"], env: { KEY: "`${x}`" } },
+        },
+      }),
+    );
+
+    expect(session.capabilities.supportsMcpServers).toBe(true);
+    const actualLaunch = pi.recordedLaunches[1]!;
+    expect(actualLaunch.argv).not.toContain("--mcp-config");
+    const extensionPath = actualLaunch.extensionPaths[0]!;
+    expect(await readRegisteredMcpServers(extensionPath)).toEqual({
+      paseo: {
+        url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+        headers: { Authorization: "Bearer token" },
+      },
+      local: { command: "node", args: ["server.js"], env: { KEY: "`${x}`" } },
+    });
+
+    await session.close();
+    expect(existsSync(extensionPath)).toBe(false);
+  });
+
+  test("registers the resumed session's MCP servers through Pi's built-in MCP", async () => {
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const original = await client.createSession(createConfig());
+    const persistence = original.describePersistence()!;
+    await original.close();
+
+    pi.queueCommands([{ name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp" } }]);
+    const session = await client.resumeSession(persistence, {
+      mcpServers: {
+        paseo: { type: "http", url: "http://127.0.0.1:7777/mcp/agents?callerAgentId=agent-2" },
+      },
+    });
+    onTestFinished(() => session.close());
+
+    expect(session.capabilities.supportsMcpServers).toBe(true);
+    const actualLaunch = pi.recordedLaunches.at(-1)!;
+    expect(actualLaunch.session).toBe(persistence.nativeHandle);
+    expect(actualLaunch.argv).not.toContain("--mcp-config");
+    expect(await readRegisteredMcpServers(actualLaunch.extensionPaths[0]!)).toEqual({
+      paseo: { url: "http://127.0.0.1:7777/mcp/agents?callerAgentId=agent-2" },
+    });
+  });
+
+  test("uses pi-mcp-adapter when it replaces Pi's built-in MCP", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "paseo-pi-agent-"));
+    onTestFinished(() => rmSync(agentDir, { recursive: true, force: true }));
+    const pi = new FakePi();
+    pi.queueCommands([
+      { name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp" } },
+      { name: "mcp:1", source: "extension", sourceInfo: { source: "npm:pi-mcp-adapter" } },
+    ]);
+    const session = await createClient(pi).createSession(
+      createConfig({
+        mcpServers: { paseo: { type: "http", url: "http://127.0.0.1:6767/mcp/agents" } },
+      }),
+      { env: { PI_CODING_AGENT_DIR: agentDir } },
+    );
+    onTestFinished(() => session.close());
+
+    const actualLaunch = pi.recordedLaunches[1]!;
+    expect(actualLaunch.argv).toContain("--mcp-config");
+    expect(await readRegisteredMcpServers(actualLaunch.extensionPaths[0]!)).toEqual({});
+  });
+
+  test.each([
+    { name: "legacy", config: { type: "sse" as const, url: "https://example.com/sse" } },
+    { name: "foo.bar", config: { type: "http" as const, url: "https://example.com/mcp" } },
+  ])("rejects $name, which Pi's built-in MCP cannot register", async ({ name, config }) => {
+    const pi = new FakePi();
+    pi.queueCommands([{ name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp" } }]);
+
+    await expect(
+      createClient(pi).createSession(createConfig({ mcpServers: { [name]: config } })),
+    ).rejects.toThrow(name);
+    expect(pi.recordedLaunches).toHaveLength(1);
+  });
+
   test("does not pass MCP config when pi-mcp-adapter is not loaded", async () => {
     const pi = new FakePi();
     pi.queueCommands([]);
@@ -1914,8 +3449,6 @@ describe("PiRpcAgentClient", () => {
       "pi",
       "--mode",
       "rpc",
-      "--thinking",
-      "medium",
       "--extension",
       actualLaunch.extensionPaths[0],
     ]);

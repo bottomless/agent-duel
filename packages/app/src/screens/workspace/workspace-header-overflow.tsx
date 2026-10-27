@@ -20,8 +20,8 @@ import { WorkspaceActionsMenuItems } from "@/git/workspace-actions";
 import {
   WorkspaceOpenInEditorMenuItems,
   WorkspaceOpenInEditorSubTrigger,
-} from "./workspace-open-in-editor-button";
-import { WorkspaceScriptsMenuItems } from "./workspace-scripts-button";
+} from "@/workspace/open-in-editor/button";
+import { WorkspaceScriptsMenuItems } from "./scripts/workspace-scripts-button";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
 import type { WorkspaceFileLocation } from "@/workspace/file-open";
 import type { Theme } from "@/styles/theme";
@@ -213,7 +213,7 @@ export function WorkspaceHeaderOverflow(props: WorkspaceHeaderOverflowProps) {
 
 const styles = StyleSheet.create((theme) => ({
   tooltipText: {
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     color: theme.colors.popoverForeground,
   },
   trigger: {

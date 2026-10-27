@@ -56,6 +56,7 @@ import type {
 import type { AgentProviderDefinition } from "@getpaseo/protocol/provider-manifest";
 import {
   getFeatureHighlightColor,
+  isFeatureActive,
   getFeatureTooltip,
   getAgentControlHintKey,
   resolveAgentModelSelection,
@@ -65,7 +66,11 @@ import { readMeasuredWidth } from "@/hooks/use-container-width";
 import { useToast } from "@/contexts/toast-context";
 import { toErrorMessage } from "@/utils/error-messages";
 import { showProviderNoticeToast } from "@/utils/provider-notice-toast";
-import { useAgentControlCommandCenterActions } from "@/command-center/agent-control-registration";
+import {
+  useAgentControlCommandCenterActions,
+  type AgentControlCommandCenterSource,
+} from "@/command-center/agent-control-registration";
+import { useComposerKeyboardScope } from "@/composer/keyboard-scope";
 import { isNative } from "@/constants/platform";
 import {
   resolveComposerControlDensity,
@@ -82,6 +87,8 @@ import {
   useAgentProfilePicker,
   type AgentProfileApplyTarget,
   type AgentProfilePicker,
+  type AgentProfileSeed,
+  type DraftAgentProfileControls,
 } from "@/agent-profiles";
 import { Switch } from "@/components/ui/switch";
 import { ArenaAutoAcceptControl } from "@/arena/auto-accept-control";
@@ -127,6 +134,8 @@ interface ControlledAgentControlsProps {
   agentProfiles?: AgentProfilePicker | null;
   onApplyAgentProfile?: (profileId: string) => void;
   onEditAgentProfiles?: () => void;
+  onCreateAgentProfile?: (seed: AgentProfileSeed) => void;
+  onEditAgentProfile?: (profileId: string) => void;
   features?: AgentFeature[];
   onSetFeature?: (featureId: string, value: unknown) => void;
   onDropdownClose?: () => void;
@@ -150,7 +159,6 @@ interface ControlledAgentControlsProps {
 export interface DraftAgentControlsProps {
   providerDefinitions: AgentProviderDefinition[];
   selectedProvider: AgentProvider | null;
-  onSelectProvider: (provider: AgentProvider) => void;
   modeOptions: AgentMode[];
   selectedMode: string;
   onSelectMode: (modeId: string) => void;
@@ -164,6 +172,7 @@ export interface DraftAgentControlsProps {
   thinkingOptions: NonNullable<AgentModelDefinition["thinkingOptions"]>;
   selectedThinkingOptionId: string;
   onSelectThinkingOption: (thinkingOptionId: string) => void;
+  onApplyAgentProfile: DraftAgentProfileControls["applyProfile"];
   features?: AgentFeature[];
   onSetFeature?: (featureId: string, value: unknown) => void;
   onDropdownClose?: () => void;
@@ -183,9 +192,26 @@ export interface DraftAgentControlsProps {
 interface AgentControlsProps {
   agentId: string;
   serverId: string;
-  isPaneFocused: boolean;
   onDropdownClose?: () => void;
   isCompactLayout?: boolean;
+}
+
+function AgentControlCommandCenterRegistration({
+  sourceId,
+  enabled,
+  controls,
+}: {
+  sourceId: string;
+  enabled: boolean;
+  controls: AgentControlCommandCenterSource;
+}) {
+  const { isActiveComposer } = useComposerKeyboardScope();
+  useAgentControlCommandCenterActions({
+    sourceId,
+    enabled: enabled && isActiveComposer,
+    controls,
+  });
+  return null;
 }
 
 function findOptionLabel(
@@ -214,8 +240,7 @@ function getModeProviderDefinitions(modeControl: AgentModeControlValue | null) {
 }
 
 function getFeatureIconColor(
-  featureId: string,
-  enabled: boolean,
+  feature: AgentFeature,
   palette: {
     blue: { 400: string };
     green: { 400: string };
@@ -223,11 +248,11 @@ function getFeatureIconColor(
   },
   foregroundMuted: string,
 ): string {
-  if (!enabled) {
+  if (!isFeatureActive(feature)) {
     return foregroundMuted;
   }
 
-  switch (getFeatureHighlightColor(featureId)) {
+  switch (getFeatureHighlightColor(feature.id)) {
     case "blue":
       return palette.blue[400];
     case "green":
@@ -440,6 +465,7 @@ type AgentControlsSlice = {
   runtimeModelId: string | null;
   model: string | null | undefined;
   features: AgentFeature[] | undefined;
+  runtimeThinkingOptionId: string | null;
   thinkingOptionId: string | null | undefined;
   lastUsage: unknown;
 } | null;
@@ -460,6 +486,7 @@ function selectAgentControlsSlice(
     runtimeModelId: currentAgent.runtimeInfo?.model ?? null,
     model: currentAgent.model,
     features: currentAgent.features,
+    runtimeThinkingOptionId: currentAgent.runtimeInfo?.thinkingOptionId ?? null,
     thinkingOptionId: currentAgent.thinkingOptionId,
     lastUsage: currentAgent.lastUsage,
   };
@@ -473,6 +500,15 @@ function resolveSnapshotSelectedEntry(
     return null;
   }
   return snapshotEntries.find((e) => e.provider === agentProvider) ?? null;
+}
+
+function resolveSnapshotModeIds(
+  entry: ReturnType<typeof resolveSnapshotSelectedEntry>,
+): string[] | null {
+  if (entry?.status !== "ready" || !entry.modes) {
+    return null;
+  }
+  return entry.modes.map((mode) => mode.id);
 }
 
 function buildAgentProviderDefinitions(
@@ -527,6 +563,8 @@ function ControlledAgentControls({
   agentProfiles = null,
   onApplyAgentProfile,
   onEditAgentProfiles,
+  onCreateAgentProfile,
+  onEditAgentProfile,
   features,
   onSetFeature,
   onDropdownClose,
@@ -809,6 +847,8 @@ function ControlledAgentControls({
             onSetFeature={onSetFeature}
             onApplyAgentProfile={onApplyAgentProfile}
             onEditAgentProfiles={onEditAgentProfiles}
+            onCreateAgentProfile={onCreateAgentProfile}
+            onEditAgentProfile={onEditAgentProfile}
             onDropdownClose={onDropdownClose}
             onModelSelectorOpen={onModelSelectorOpen}
             onRetryModelProvider={onRetryModelProvider}
@@ -856,6 +896,8 @@ function ControlledAgentControls({
             onSetFeature={onSetFeature}
             onApplyAgentProfile={onApplyAgentProfile}
             onEditAgentProfiles={onEditAgentProfiles}
+            onCreateAgentProfile={onCreateAgentProfile}
+            onEditAgentProfile={onEditAgentProfile}
             onDropdownClose={onDropdownClose}
             onModelSelectorOpen={onModelSelectorOpen}
             onRetryModelProvider={onRetryModelProvider}
@@ -880,6 +922,7 @@ function ControlledAgentControls({
             modeControl={modeControl}
             glyphSize={layoutContextValue.glyphSize}
             modelSelectorServerId={modelSelectorServerId}
+            canSwitchProvider={Boolean(onSelectProviderAndModel)}
           />
         )}
       </View>
@@ -899,6 +942,8 @@ interface DesktopAgentControlsContentProps {
   onSetFeature?: (featureId: string, value: unknown) => void;
   onApplyAgentProfile?: (profileId: string) => void;
   onEditAgentProfiles?: () => void;
+  onCreateAgentProfile?: (seed: AgentProfileSeed) => void;
+  onEditAgentProfile?: (profileId: string) => void;
   onDropdownClose?: () => void;
   onModelSelectorOpen?: () => void;
   onRetryModelProvider?: (provider: AgentProvider) => void;
@@ -959,6 +1004,8 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
     onSetFeature,
     onApplyAgentProfile,
     onEditAgentProfiles,
+    onCreateAgentProfile,
+    onEditAgentProfile,
     onDropdownClose,
     onModelSelectorOpen,
     onRetryModelProvider,
@@ -1047,6 +1094,8 @@ function DesktopAgentControlsContent(props: DesktopAgentControlsContentProps) {
                 profiles={agentProfiles}
                 onApplyProfile={onApplyAgentProfile}
                 onEditProfiles={onEditAgentProfiles}
+                onCreateProfile={onCreateAgentProfile}
+                onEditProfile={onEditAgentProfile}
                 isLoading={isModelLoading}
                 disabled={modelDisabled}
                 onOpen={onModelSelectorOpen}
@@ -1165,6 +1214,8 @@ interface SheetAgentControlsContentProps {
   onSetFeature?: (featureId: string, value: unknown) => void;
   onApplyAgentProfile?: (profileId: string) => void;
   onEditAgentProfiles?: () => void;
+  onCreateAgentProfile?: (seed: AgentProfileSeed) => void;
+  onEditAgentProfile?: (profileId: string) => void;
   onDropdownClose?: () => void;
   onModelSelectorOpen?: () => void;
   onRetryModelProvider?: (provider: AgentProvider) => void;
@@ -1194,6 +1245,7 @@ interface SheetAgentControlsContentProps {
   modeControl?: AgentModeControlValue | null;
   glyphSize: number;
   modelSelectorServerId: string | null;
+  canSwitchProvider: boolean;
 }
 
 function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
@@ -1206,6 +1258,8 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
     onSetFeature,
     onApplyAgentProfile,
     onEditAgentProfiles,
+    onCreateAgentProfile,
+    onEditAgentProfile,
     onDropdownClose,
     onModelSelectorOpen,
     onRetryModelProvider,
@@ -1230,6 +1284,7 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
     modeControl,
     glyphSize,
     modelSelectorServerId,
+    canSwitchProvider,
   } = props;
 
   const thinkingAnchorRef = useRef<View | null>(null);
@@ -1301,10 +1356,13 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
       providers={modelSelectorProviders}
       selectedProvider={provider}
       selectedModel={selectedModelId ?? ""}
+      thinkingLabel={hasThinking ? displayThinking : null}
       onSelect={handleSheetModelSelect}
       profiles={agentProfiles}
       onApplyProfile={onApplyAgentProfile}
       onEditProfiles={onEditAgentProfiles}
+      onCreateProfile={onCreateAgentProfile}
+      onEditProfile={onEditAgentProfile}
       isLoading={isModelLoading}
       disabled={modelDisabled}
       onOpen={onModelSelectorOpen}
@@ -1313,6 +1371,7 @@ function SheetAgentControlsContent(props: SheetAgentControlsContentProps) {
       isRetryingProvider={isRetryingModelProvider}
       serverId={modelSelectorServerId}
       glyphSize={glyphSize}
+      canSwitchProvider={canSwitchProvider}
     >
       {sheetControls}
     </CompactModelSheet>
@@ -1376,8 +1435,7 @@ function DesktopFeatureItem({
           <AgentControlTrigger
             icon={FeatureIcon}
             iconColor={getFeatureIconColor(
-              feature.id,
-              feature.value,
+              feature,
               theme.colors.palette,
               theme.colors.foregroundMuted,
             )}
@@ -1400,6 +1458,10 @@ function DesktopFeatureItem({
   if (feature.type === "select") {
     const FeatureIcon = getAgentFeatureIcon(feature.icon);
     const selectedOption = feature.options.find((o) => o.id === feature.value);
+    const iconOnly = feature.desktopTrigger === "icon";
+    const tooltip = iconOnly
+      ? `${feature.label}: ${selectedOption?.label ?? feature.label}`
+      : getFeatureTooltip(feature);
     return (
       <>
         <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
@@ -1407,18 +1469,24 @@ function DesktopFeatureItem({
             <AgentControlTrigger
               ref={featureAnchorRef}
               icon={FeatureIcon}
+              iconColor={getFeatureIconColor(
+                feature,
+                theme.colors.palette,
+                theme.colors.foregroundMuted,
+              )}
               surface="toolbar"
               label={feature.label}
               value={selectedOption?.label ?? feature.label}
+              showToolbarLabel={!iconOnly}
               open={openSelector === featureSelector}
               disabled={disabled}
               onPress={handleSelectPress}
-              accessibilityLabel={getFeatureTooltip(feature)}
+              accessibilityLabel={tooltip}
               testID={`agent-feature-${feature.id}`}
             />
           </TooltipTrigger>
           <TooltipContent side="top" align="center" offset={8}>
-            <Text style={styles.tooltipText}>{getFeatureTooltip(feature)}</Text>
+            <Text style={styles.tooltipText}>{tooltip}</Text>
           </TooltipContent>
         </Tooltip>
         <Combobox
@@ -1465,45 +1533,55 @@ function SheetFeatureItem({
   );
   const sheetHeader = useMemo<SheetHeader>(() => ({ title: feature.label }), [feature.label]);
 
-  const handleTogglePress = useCallback(() => {
-    if (feature.type === "toggle") {
-      onSetFeature?.(feature.id, !feature.value);
-    }
-  }, [feature, onSetFeature]);
-
   const handleSelectOption = useCallback(
     (optionId: string) => {
-      onSetFeature?.(feature.id, optionId);
+      onSetFeature?.(feature.id, feature.type === "toggle" ? optionId === "true" : optionId);
     },
-    [feature.id, onSetFeature],
+    [feature.id, feature.type, onSetFeature],
   );
-  const comboboxOptions = useMemo<ComboboxOption[]>(
-    () =>
-      feature.type === "select"
-        ? feature.options.map((option) => ({ id: option.id, label: option.label }))
-        : [],
-    [feature],
-  );
+  const comboboxOptions = useMemo<ComboboxOption[]>(() => {
+    if (feature.type === "select") {
+      return feature.options.map((option) => ({ id: option.id, label: option.label }));
+    }
+    return [
+      { id: "true", label: t("agentControls.features.on") },
+      { id: "false", label: t("agentControls.features.off") },
+    ];
+  }, [feature, t]);
 
   if (feature.type === "toggle") {
     const FeatureIcon = getAgentFeatureIcon(feature.icon);
     return (
-      <AgentControlTrigger
-        icon={FeatureIcon}
-        iconColor={getFeatureIconColor(
-          feature.id,
-          feature.value,
-          theme.colors.palette,
-          theme.colors.foregroundMuted,
-        )}
-        surface="sheet"
-        label={feature.label}
-        value={feature.value ? t("agentControls.features.on") : t("agentControls.features.off")}
-        disabled={disabled}
-        onPress={handleTogglePress}
-        accessibilityLabel={getFeatureTooltip(feature)}
-        testID={`agent-feature-${feature.id}`}
-      />
+      <>
+        <AgentControlTrigger
+          ref={featureAnchorRef}
+          icon={FeatureIcon}
+          iconColor={getFeatureIconColor(
+            feature,
+            theme.colors.palette,
+            theme.colors.foregroundMuted,
+          )}
+          surface="sheet"
+          label={feature.label}
+          value={feature.value ? t("agentControls.features.on") : t("agentControls.features.off")}
+          open={openSelector === featureSelector}
+          disabled={disabled}
+          onPress={handleSelectPress}
+          accessibilityLabel={getFeatureTooltip(feature)}
+          testID={`agent-feature-${feature.id}`}
+        />
+        <Combobox
+          options={comboboxOptions}
+          value={String(feature.value)}
+          onSelect={handleSelectOption}
+          open={openSelector === featureSelector}
+          onOpenChange={handleFeatureOpenChange}
+          anchorRef={featureAnchorRef}
+          presentation="push"
+          searchable={false}
+          header={sheetHeader}
+        />
+      </>
     );
   }
 
@@ -1515,6 +1593,11 @@ function SheetFeatureItem({
         <AgentControlTrigger
           ref={featureAnchorRef}
           icon={FeatureIcon}
+          iconColor={getFeatureIconColor(
+            feature,
+            theme.colors.palette,
+            theme.colors.foregroundMuted,
+          )}
           surface="sheet"
           label={feature.label}
           value={selectedOption?.label ?? feature.label}
@@ -1566,18 +1649,13 @@ function ThinkingComboboxOption({
   );
 }
 
-export const AgentControls = memo(function AgentControls({
-  agentId,
-  serverId,
-  isPaneFocused: _isPaneFocused,
-  onDropdownClose,
-  isCompactLayout,
-}: AgentControlsProps) {
-  const { updatePreferences } = useFormPreferences();
-  const agent = useSessionStore(
-    useShallow((state) => selectAgentControlsSlice(state, serverId, agentId)),
-  );
-  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
+interface ArenaAgentControlsInput {
+  serverId: string;
+  agentId: string;
+  agentStatus: NonNullable<AgentControlsSlice>["status"] | undefined;
+}
+
+function useArenaAgentControls({ serverId, agentId, agentStatus }: ArenaAgentControlsInput) {
   const arenaPreferences = useArenaPreferences(arenaAgentPreferenceKey(serverId, agentId));
   const arenaSession = useArenaSessionQuery(serverId, agentId);
   const singleAgent = arenaSession.data?.singleAgent;
@@ -1586,10 +1664,27 @@ export const AgentControls = memo(function AgentControls({
       singleAgentControlsLocked({
         singleAgent,
         modelSize: arenaPreferences.modelSize,
-        running: agent?.status === "running" || agent?.status === "initializing",
+        running: agentStatus === "running" || agentStatus === "initializing",
       }),
-    [singleAgent, arenaPreferences.modelSize, agent?.status],
+    [singleAgent, arenaPreferences.modelSize, agentStatus],
   );
+  const battleModeDisabled = resolveBattleModeDisabled(arenaSession.data?.chat);
+  return { arenaPreferences, arenaSession, singleAgent, singleAgentLocked, battleModeDisabled };
+}
+
+export const AgentControls = memo(function AgentControls({
+  agentId,
+  serverId,
+  onDropdownClose,
+  isCompactLayout,
+}: AgentControlsProps) {
+  const { updatePreferences } = useFormPreferences();
+  const agent = useSessionStore(
+    useShallow((state) => selectAgentControlsSlice(state, serverId, agentId)),
+  );
+  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
+  const { arenaPreferences, arenaSession, singleAgent, singleAgentLocked, battleModeDisabled } =
+    useArenaAgentControls({ serverId, agentId, agentStatus: agent?.status });
   const toast = useToast();
   const modeControl = useLiveAgentModeControl(serverId, agentId);
   const commandCenterModes = toCommandCenterModes(modeControl);
@@ -1634,6 +1729,7 @@ export const AgentControls = memo(function AgentControls({
     models,
     runtimeModelId: agent?.runtimeModelId,
     configuredModelId: agent?.model,
+    runtimeThinkingOptionId: agent?.runtimeThinkingOptionId,
     explicitThinkingOptionId: agent?.thinkingOptionId,
   });
 
@@ -1673,9 +1769,13 @@ export const AgentControls = memo(function AgentControls({
   // A running agent is one provider's process, so only that provider's profiles
   // can apply to it.
   const profileProviders = useMemo(() => (agentProvider ? [agentProvider] : []), [agentProvider]);
+  const profileModeIds = useMemo(
+    () => resolveSnapshotModeIds(snapshotSelectedEntry),
+    [snapshotSelectedEntry],
+  );
   const profileTarget = useMemo<AgentProfileApplyTarget>(
-    () => ({ kind: "agent", agentId }),
-    [agentId],
+    () => ({ kind: "agent", agentId, availableModeIds: profileModeIds }),
+    [agentId, profileModeIds],
   );
   const agentProfiles = useAgentProfilePicker({
     serverId,
@@ -1741,10 +1841,8 @@ export const AgentControls = memo(function AgentControls({
     [agentId, agentProvider, client, toast, updatePreferences],
   );
 
-  useAgentControlCommandCenterActions({
-    sourceId: `agent:${serverId}:${agentId}`,
-    enabled: false,
-    controls: {
+  const commandCenterControls = useMemo<AgentControlCommandCenterSource>(
+    () => ({
       serverId,
       ownerKey: agentId,
       provider: agentProvider,
@@ -1765,8 +1863,31 @@ export const AgentControls = memo(function AgentControls({
         list: agent?.features,
         set: handleSetFeature,
       },
-    },
-  });
+    }),
+    [
+      activeModelId,
+      agent?.features,
+      agentId,
+      agentModelSelectorProviders,
+      agentProvider,
+      commandCenterModes,
+      handleSelectCommandCenterModel,
+      handleSelectThinkingOption,
+      handleSetFeature,
+      modeProviderDefinitions,
+      modelSelection.selectedThinkingId,
+      modelSelection.thinkingOptions,
+      serverId,
+    ],
+  );
+
+  const commandCenterRegistration = (
+    <AgentControlCommandCenterRegistration
+      sourceId={`agent:${serverId}:${agentId}`}
+      enabled={false}
+      controls={commandCenterControls}
+    />
+  );
 
   const handleModelSelectorOpen = useCallback(() => {
     refetchSnapshotIfStale(agentProvider);
@@ -1812,48 +1933,50 @@ export const AgentControls = memo(function AgentControls({
   }
 
   return (
-    <ControlledAgentControls
-      provider={agent.provider}
-      modelSelectorProviders={agentModelSelectorProviders}
-      modelOptions={modelOptions}
-      selectedModelId={modelSelection.activeModelId ?? undefined}
-      onSelectModel={handleSelectModel}
-      agentProfiles={agentProfiles}
-      onApplyAgentProfile={agentProfiles?.applyProfile}
-      thinkingOptions={[...ARENA_THINKING_OPTIONS]}
-      selectedThinkingOptionId={arenaPreferences.thinking}
-      onSelectThinkingOption={handleArenaThinking}
-      features={agent.features}
-      onSetFeature={handleSetFeature}
-      isModelLoading={snapshotIsLoading || selectedProviderIsLoading}
-      onModelSelectorOpen={handleModelSelectorOpen}
-      onRetryModelProvider={handleRetryModelProvider}
-      isRetryingModelProvider={snapshotIsRefreshing}
-      onDropdownClose={onDropdownClose}
-      disabled={!client}
-      modeControl={modeControl}
-      modelSelectorServerId={serverId}
-      isCompactLayout={isCompactLayout}
-      battleMode={arenaPreferences.battleMode}
-      onBattleModeChange={handleArenaBattleMode}
-      battleModeDisabled={resolveBattleModeDisabled(arenaSession.data?.chat)}
-      battleActive={battleHoldsComposer(arenaSession.data)}
-      battleToggleHidden={hidesBattleToggle({
-        snapshot: arenaSession.data,
-        agentRunning: agent.status === "running",
-      })}
-      modelSize={arenaPreferences.modelSize}
-      onModelSizeChange={handleModelSizeChange}
-      singleAgentLocked={singleAgentLocked}
-      singleAgent={singleAgent}
-    />
+    <>
+      {commandCenterRegistration}
+      <ControlledAgentControls
+        provider={agent.provider}
+        modelSelectorProviders={agentModelSelectorProviders}
+        modelOptions={modelOptions}
+        selectedModelId={modelSelection.activeModelId ?? undefined}
+        onSelectModel={handleSelectModel}
+        agentProfiles={agentProfiles}
+        onApplyAgentProfile={agentProfiles?.applyProfile}
+        thinkingOptions={[...ARENA_THINKING_OPTIONS]}
+        selectedThinkingOptionId={arenaPreferences.thinking}
+        onSelectThinkingOption={handleArenaThinking}
+        features={agent.features}
+        onSetFeature={handleSetFeature}
+        isModelLoading={snapshotIsLoading || selectedProviderIsLoading}
+        onModelSelectorOpen={handleModelSelectorOpen}
+        onRetryModelProvider={handleRetryModelProvider}
+        isRetryingModelProvider={snapshotIsRefreshing}
+        onDropdownClose={onDropdownClose}
+        disabled={!client}
+        modeControl={modeControl}
+        modelSelectorServerId={serverId}
+        isCompactLayout={isCompactLayout}
+        battleMode={arenaPreferences.battleMode}
+        onBattleModeChange={handleArenaBattleMode}
+        battleModeDisabled={battleModeDisabled}
+        battleActive={battleHoldsComposer(arenaSession.data)}
+        battleToggleHidden={hidesBattleToggle({
+          snapshot: arenaSession.data,
+          agentRunning: agent.status === "running",
+        })}
+        modelSize={arenaPreferences.modelSize}
+        onModelSizeChange={handleModelSizeChange}
+        singleAgentLocked={singleAgentLocked}
+        singleAgent={singleAgent}
+      />
+    </>
   );
 });
 
 export function DraftAgentControls({
   providerDefinitions,
   selectedProvider,
-  onSelectProvider,
   modeOptions,
   selectedMode,
   onSelectMode,
@@ -1867,6 +1990,7 @@ export function DraftAgentControls({
   thinkingOptions,
   selectedThinkingOptionId,
   onSelectThinkingOption,
+  onApplyAgentProfile,
   features,
   onSetFeature,
   onDropdownClose,
@@ -1908,20 +2032,10 @@ export function DraftAgentControls({
     () => ({
       kind: "draft",
       controls: {
-        selectProvider: onSelectProvider,
-        selectProviderAndModel: onSelectProviderAndModel,
-        selectMode: onSelectMode,
-        selectThinkingOption: onSelectThinkingOption,
-        setFeature: onSetFeature,
+        applyProfile: onApplyAgentProfile,
       },
     }),
-    [
-      onSelectMode,
-      onSelectProvider,
-      onSelectProviderAndModel,
-      onSelectThinkingOption,
-      onSetFeature,
-    ],
+    [onApplyAgentProfile],
   );
   const agentProfiles = useAgentProfilePicker({
     serverId: modelSelectorServerId,
@@ -2007,7 +2121,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   battleLabel: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.normal,
   },
   modeBadge: {
@@ -2051,13 +2165,13 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     flexShrink: 1,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.normal,
   },
   tooltipText: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
-    lineHeight: theme.fontSize.sm * 1.4,
+    fontSize: theme.fontSize.base,
+    lineHeight: theme.fontSize.base * 1.4,
   },
   combinedSheetControls: {
     gap: theme.spacing[1],

@@ -19,15 +19,17 @@
     "build:arena-runtime": "node scripts/build-arena-runtime.mjs",
     "build:deployment-config": "node scripts/build-deployment-config.mjs",
     "build:main": "tsc -p tsconfig.json && npm run build:notification-permissions",
-    "capture-harness": "./capture-harness/run.sh",
+    "capture-harness": "npm run build:main && ./capture-harness/run.sh",
     "dev": "./scripts/dev.sh",
     "dev:win": "powershell ./scripts/dev.ps1",
     "test:e2e:renderer": "cross-env E2E_DESKTOP_RUNTIME=1 playwright test --config=playwright.config.ts --project=desktop",
     "test:e2e:browser-tabs": "npm run build:main && node ./e2e/browser-tabs.e2e.mjs",
     "verify:electron-cdp": "node ./scripts/verify-electron-cdp.mjs",
-    "test": "vitest run --exclude \"e2e/**\"",
+    "test": "install-electron && vitest run --exclude \"e2e/**\"",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
-    "build:notification-permissions": "node ./scripts/build-notification-permissions.mjs"
+    "build:notification-permissions": "node ./scripts/build-notification-permissions.mjs",
+    "test:e2e:lifecycle": "npm run build:main && node ./e2e/daemon-lifecycle.e2e.mjs",
+    "test:e2e:window-startup": "npm run build:main && node ./e2e/window-startup.e2e.mjs"
   },
   "dependencies": {
     "@getpaseo/cli": "*",
@@ -38,14 +40,16 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@types/node": "24.6.0",
     "@types/ws": "^8.5.14",
-    "electron": "41.2.0",
+    "electron": "44.2.0",
     "electron-builder": "26.8.1",
     "node-api-headers": "^1.9.0",
     "typescript": "5.9.3",
     "unzip-crx-3": "^0.2.0",
     "vitest": "^4.1.6",
     "wait-on": "8.0.5"
-  }
+  },
+  "desktopName": "Agent Duel.desktop"
 }

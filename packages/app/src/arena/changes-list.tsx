@@ -1,5 +1,5 @@
 import { Fragment, memo, useCallback, useMemo, useState, type ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react-native";
 import { DiffStat } from "@/components/diff-stat";
@@ -8,6 +8,7 @@ import type { ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import type { ArenaChangesRow } from "./changes-rows";
 import { divergenceStatusLabel } from "./divergence";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 const ThemedChevronDown = withUnistyles(ChevronDown);
 const ThemedChevronRight = withUnistyles(ChevronRight);
@@ -31,7 +32,7 @@ const VISIBLE_ROWS = 8;
  * open row is the diff's header, so the diff carries no close control of its
  * own. git's verdict and the per-side counts are words, not pills, so nothing
  * on the row reads as a tab. Hover follows docs/hover.md: a plain View tracks
- * the pointer, the Pressable inside it takes the press.
+ * the pointer, the PressHighlight inside it takes the press.
  */
 export const ArenaChangesList = memo(function ArenaChangesList({
   rows,
@@ -132,7 +133,7 @@ function ChangesRow({
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}
     >
-      <Pressable
+      <PressHighlight
         onPress={handlePress}
         style={[styles.row, hovered && styles.rowHovered, open && styles.rowOpen]}
         accessibilityRole="button"
@@ -157,7 +158,7 @@ function ChangesRow({
           <SideStat side="a" row={row} waiting={waitingFor === "a"} />
           <SideStat side="b" row={row} waiting={waitingFor === "b"} />
         </View>
-      </Pressable>
+      </PressHighlight>
     </View>
   );
 }
@@ -242,10 +243,10 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     color: theme.colors.foreground,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   status: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
   statusSame: {
@@ -272,15 +273,15 @@ const styles = StyleSheet.create((theme) => ({
   },
   sideLabel: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     minWidth: 12,
   },
   untouched: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   waiting: {
     color: theme.colors.foregroundExtraMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
 }));

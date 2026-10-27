@@ -73,7 +73,7 @@ export function ArenaWorktreeMenuButton({
   worktreeName?: string;
 }) {
   const toast = useToast();
-  const openWorkspaceTabFocused = useWorkspaceLayoutStore((state) => state.openTabFocused);
+  const openWorkspaceTab = useWorkspaceLayoutStore((state) => state.openTab);
   const sideLabel = side.toUpperCase();
   const persistenceKey = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
   const displayPath = contestantWorktreeDisplayPath(worktree, worktreeName);
@@ -83,8 +83,12 @@ export function ArenaWorktreeMenuButton({
   // to the next, so the session outlives the worktree it started in.
   const openTerminal = useCallback(() => {
     if (!persistenceKey) return;
-    openWorkspaceTabFocused(persistenceKey, buildArenaSeatTerminalTarget({ agentId, side }));
-  }, [agentId, openWorkspaceTabFocused, persistenceKey, side]);
+    openWorkspaceTab({
+      workspaceKey: persistenceKey,
+      target: buildArenaSeatTerminalTarget({ agentId, side }),
+      intent: "reveal",
+    });
+  }, [agentId, openWorkspaceTab, persistenceKey, side]);
 
   const copyPath = useCallback(() => {
     void copyToClipboard(worktree)
@@ -139,6 +143,6 @@ const styles = StyleSheet.create((theme) => ({
   path: {
     color: theme.colors.foreground,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
 }));

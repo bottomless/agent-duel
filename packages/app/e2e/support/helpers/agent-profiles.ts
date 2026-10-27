@@ -102,21 +102,24 @@ export interface SeededProviderModel {
  * list is what avoids running anything: replacement models skip catalog
  * discovery, and Claude's static modes mean the provider never spawns. The
  * command only has to resolve for the availability probe, hence `node`.
+ * Providers with dynamic catalogs can pass a small RPC fixture as `command`.
  */
 export async function seedModelProvider(input: {
   id: string;
   label: string;
   models: SeededProviderModel[];
+  extends?: "claude" | "pi";
+  command?: string[];
 }): Promise<HostSeed> {
   const client = await connectAgentProfilesClient();
   await client.patchDaemonConfig({
     providers: {
       [input.id]: {
-        extends: "claude",
+        extends: input.extends ?? "claude",
         label: input.label,
         description: `${input.label} test provider`,
         enabled: true,
-        command: ["node"],
+        command: input.command ?? ["node"],
         models: input.models,
       },
     },
@@ -251,7 +254,7 @@ async function fillAgentProfileForm(page: Page, draft: AgentProfileDraft): Promi
     await chooseSelectFieldOption(page, { field: "mode", option: draft.mode });
   }
   if (draft.notes !== undefined) {
-    await modal.getByRole("textbox", { name: "Notes for agents", exact: true }).fill(draft.notes);
+    await modal.getByRole("textbox", { name: "When to use", exact: true }).fill(draft.notes);
   }
 }
 
@@ -305,11 +308,18 @@ export async function expectAgentProfileForm(
   const modal = editModal(page);
   await expect(modal).toBeVisible({ timeout: 30_000 });
   await expect(modal.getByRole("textbox", { name: "Name", exact: true })).toHaveValue(name);
+  const notesHint = modal.getByTestId("agent-profile-notes-field-hint");
+  await expect(notesHint).toHaveText(
+    "Helps agents choose this profile when starting another agent.",
+  );
+  expect(await notesHint.evaluate((element) => getComputedStyle(element).webkitLineClamp)).not.toBe(
+    "1",
+  );
   for (const [field, value] of Object.entries(expected)) {
     if (field === "notes") {
-      await expect(
-        modal.getByRole("textbox", { name: "Notes for agents", exact: true }),
-      ).toHaveValue(value);
+      await expect(modal.getByRole("textbox", { name: "When to use", exact: true })).toHaveValue(
+        value,
+      );
       continue;
     }
     await expect(
@@ -449,6 +459,50 @@ export async function expectModelRowSelected(
   await expect(
     pickerViewport(page).getByTestId(`model-row-${input.provider}-${input.modelId}`),
   ).toHaveAttribute("aria-selected", "true", { timeout: 30_000 });
+}
+
+function modelRow(page: Page, input: { provider: string; modelId: string }): Locator {
+  return pickerViewport(page).getByTestId(`model-row-${input.provider}-${input.modelId}`);
+}
+
+/**
+ * A model row's profile action is its own button. On web, a button inside the
+ * row's button is invalid HTML that React reports on every render.
+ */
+export async function expectModelRowProfileActionBesideRow(
+  page: Page,
+  input: { provider: string; modelId: string },
+): Promise<void> {
+  const row = modelRow(page, input);
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await expect(pickerViewport(page).locator("button button")).toHaveCount(0);
+  await expect(row.getByRole("button")).toHaveCount(0);
+}
+
+/** The hover-revealed plus on an unprofiled model row opens a seeded profile form. */
+export async function expectCreateProfileFromModelRow(
+  page: Page,
+  input: { provider: string; modelId: string; modelLabel: string },
+): Promise<void> {
+  await modelRow(page, input).hover();
+  await pickerViewport(page)
+    .getByTestId(`model-create-profile-${input.provider}-${input.modelId}`)
+    .click();
+  const modal = editModal(page);
+  await expect(modal).toBeVisible({ timeout: 30_000 });
+  await expect(modal.getByRole("textbox", { name: "Name", exact: true })).toHaveValue(
+    input.modelLabel,
+  );
+  await expect(modal.getByRole("button", { name: `Model (${input.modelLabel})` })).toBeVisible();
+  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(modal).toHaveCount(0, { timeout: 30_000 });
+}
+
+export async function selectModelRow(
+  page: Page,
+  input: { provider: string; modelId: string },
+): Promise<void> {
+  await modelRow(page, input).click();
 }
 
 // ─── Cross-provider model search ───────────────────────────────────────────

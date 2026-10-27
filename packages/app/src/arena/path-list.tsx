@@ -68,21 +68,21 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     color: theme.colors.foreground,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   label: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
   file: {
     color: theme.colors.destructive,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   directory: {
     color: theme.colors.foregroundMuted,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
 }));

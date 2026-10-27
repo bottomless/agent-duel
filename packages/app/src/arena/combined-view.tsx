@@ -397,17 +397,17 @@ const styles = StyleSheet.create((theme) => ({
     width: GUTTER_NUMBER_WIDTH,
     textAlign: "right",
     fontFamily: theme.fontFamily.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     lineHeight: diffTextHeight(theme),
     color: theme.colors.foregroundMuted,
   },
   marker: {
-    width: Math.ceil(theme.fontSize.xs * 3.5),
+    width: Math.ceil(theme.fontSize.sm * 3.5),
     flexShrink: 0,
     marginLeft: theme.spacing[1],
     textAlign: "center",
     fontFamily: theme.fontFamily.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     lineHeight: diffTextHeight(theme),
     color: "transparent",
   },
@@ -474,12 +474,12 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface2,
   },
   captionText: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foreground,
   },
   captionMutedText: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foregroundMuted,
   },
@@ -491,6 +491,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   warning: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

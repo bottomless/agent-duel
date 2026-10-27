@@ -303,7 +303,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   note: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
@@ -327,7 +327,7 @@ const styles = StyleSheet.create((theme) => ({
     borderLeftColor: theme.colors.border,
   },
   headerText: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
   headerA: {
@@ -374,17 +374,17 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     textAlign: "right",
     fontFamily: theme.fontFamily.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     lineHeight: diffTextHeight(theme),
     color: theme.colors.foregroundMuted,
   },
   bothMarker: {
-    width: Math.ceil(theme.fontSize.xs * 3.5),
+    width: Math.ceil(theme.fontSize.sm * 3.5),
     flexShrink: 0,
     marginLeft: theme.spacing[1],
     textAlign: "center",
     fontFamily: theme.fontFamily.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     lineHeight: diffTextHeight(theme),
     color: theme.colors.statusMerged,
     fontWeight: theme.fontWeight.medium,
@@ -447,6 +447,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   warning: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

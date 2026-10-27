@@ -7,6 +7,7 @@ export interface WorkspaceStructureHostPlacement {
   iconWorkingDir: string;
   worktreeSupport: "supported" | "unsupported" | "unknown";
   customIconRevision?: string | null;
+  iconRevision?: string;
 }
 
 export interface WorkspaceStructureProject {
@@ -29,6 +30,14 @@ interface WorkspaceStructureSession {
   workspaces: Iterable<WorkspaceDescriptor>;
 }
 
+export type WorkspaceSort = "manual" | "created" | "lastPrompt";
+
+interface WorkspaceSortItem {
+  workspaceName: string;
+  workspaceKey: string;
+  sortTime: number;
+}
+
 interface ProjectDraft {
   viewKey: string;
   projectKey: string | null;
@@ -37,12 +46,13 @@ interface ProjectDraft {
   projectKind: WorkspaceDescriptor["projectKind"];
   iconWorkingDir: string;
   hosts: Map<string, WorkspaceStructureHostPlacement>;
-  workspaces: Array<{ workspaceId: string; workspaceName: string; workspaceKey: string }>;
+  workspaces: WorkspaceSortItem[];
 }
 
 /** The single app boundary that turns host-local projects into grouped display projects. */
 export function buildWorkspaceStructureProjects(input: {
   sessions: WorkspaceStructureSession[];
+  workspaceSort?: WorkspaceSort;
 }): WorkspaceStructureProject[] {
   const byProject = new Map<string, ProjectDraft>();
   const projectEntries: Array<{ serverId: string; project: ProjectDescriptor }> = [];
@@ -83,7 +93,7 @@ export function buildWorkspaceStructureProjects(input: {
       const viewKey = viewKeyByServerProjectId.get(session.serverId)?.get(workspace.projectId);
       if (!viewKey) continue;
       byProject.get(viewKey)?.workspaces.push({
-        workspaceId: workspace.id,
+        sortTime: workspaceSortTime(workspace, input.workspaceSort),
         workspaceName: workspace.name,
         workspaceKey: `${session.serverId}:${workspace.id}`,
       });
@@ -99,7 +109,7 @@ export function buildWorkspaceStructureProjects(input: {
       iconWorkingDir: draft.iconWorkingDir,
       hosts: Array.from(draft.hosts.values()),
       workspaceKeys: draft.workspaces
-        .sort(compareWorkspaceStructureItems)
+        .sort(input.workspaceSort ? compareWorkspaceTimes : compareWorkspaceStructureItems)
         .map((workspace) => workspace.workspaceKey),
     }))
     .sort(
@@ -160,6 +170,7 @@ function addProjectToView(input: {
     iconWorkingDir: project.projectRootPath,
     worktreeSupport: project.projectKind === "git" ? "supported" : "unsupported",
     customIconRevision: project.projectCustomIconRevision,
+    iconRevision: project.projectIconRevision,
   };
   const draft = byProject.get(viewKey);
   if (!draft) {
@@ -194,14 +205,27 @@ function getOrCreate<K, V>(map: Map<K, V>, key: K, create: () => V): V {
   return value;
 }
 
-function compareWorkspaceStructureItems(
-  left: { workspaceId: string; workspaceName: string },
-  right: { workspaceId: string; workspaceName: string },
-): number {
+function compareWorkspaceStructureItems(left: WorkspaceSortItem, right: WorkspaceSortItem): number {
   return (
     left.workspaceName.localeCompare(right.workspaceName, undefined, {
       numeric: true,
       sensitivity: "base",
-    }) || left.workspaceId.localeCompare(right.workspaceId, undefined, { sensitivity: "base" })
+    }) || left.workspaceKey.localeCompare(right.workspaceKey)
   );
+}
+
+function workspaceSortTime(
+  workspace: WorkspaceDescriptor,
+  sort: WorkspaceSort | undefined,
+): number {
+  if (!sort) return 0;
+  const time =
+    sort === "lastPrompt"
+      ? (workspace.lastUserMessageAt ?? workspace.createdAt)
+      : workspace.createdAt;
+  return time?.getTime() ?? 0;
+}
+
+function compareWorkspaceTimes(left: WorkspaceSortItem, right: WorkspaceSortItem): number {
+  return right.sortTime - left.sortTime || left.workspaceKey.localeCompare(right.workspaceKey);
 }

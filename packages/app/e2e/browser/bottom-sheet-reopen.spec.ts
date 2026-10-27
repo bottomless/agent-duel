@@ -10,6 +10,7 @@ async function openMockAgentAtMobileBreakpoint(page: Page) {
     repoPrefix: "bottom-sheet-reopen-",
     title: "Bottom sheet reopen e2e",
     initialPrompt: "Prepare a bottom sheet reopen test agent.",
+    model: "ten-second-stream",
   });
   await openAgentRoute(page, session);
   await expect(page.getByTestId("workspace-tab-switcher-trigger")).toBeVisible({
@@ -20,16 +21,6 @@ async function openMockAgentAtMobileBreakpoint(page: Page) {
     timeout: 30_000,
   });
   return session;
-}
-
-async function withMobileMockAgent(page: Page, run: () => Promise<void>) {
-  const session = await openMockAgentAtMobileBreakpoint(page);
-
-  try {
-    await run();
-  } finally {
-    await session.cleanup();
-  }
 }
 
 function bottomSheetBackdrop(page: Page) {
@@ -90,11 +81,21 @@ async function openTabSwitcher(page: Page) {
 async function openModelSelector(page: Page) {
   await page.getByRole("button", { name: /Select model/ }).click();
   await expectBottomSheetOpen(page);
-  await expect(
-    page.getByLabel("Bottom Sheet", { exact: true }).getByText("Ten second stream", {
-      exact: true,
-    }),
-  ).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("agent-controls-settings-list")).toBeVisible({ timeout: 10_000 });
+}
+
+async function dismissStackedModelPickerWithBackdrop(page: Page) {
+  await page
+    .getByTestId("agent-controls-settings-list")
+    .getByRole("button", { name: /Select model/ })
+    .click();
+  await expect(page.getByTestId("agent-controls-model-browser-sheet")).toBeInViewport();
+  await page.mouse.click(MOBILE_VIEWPORT.width / 2, 24);
+  // In CI, Gorhom retains the dismissed sheet below the viewport.
+  // Dismissal is complete when it leaves the displayed surface.
+  await expect(page.getByTestId("agent-controls-model-browser-sheet")).not.toBeInViewport();
+  await expect(page.getByTestId("agent-controls-model-sheet")).toBeVisible();
+  await expect(page.getByTestId("agent-controls-settings-list")).toBeVisible();
 }
 
 async function openAndCloseTabSwitcherTwice(page: Page) {
@@ -112,27 +113,38 @@ async function openAndCloseModelSelectorTwice(page: Page) {
 }
 
 test.describe("mobile bottom sheet reopen", () => {
-  test("tab switcher can open, close, reopen, and close again", async ({ page }) => {
-    await withMobileMockAgent(page, async () => {
-      await openAndCloseTabSwitcherTwice(page);
-    });
-  });
+  test("sheets reopen and model search returns to configuration", async ({ page }) => {
+    const session = await openMockAgentAtMobileBreakpoint(page);
+    try {
+      await test.step("tab switcher opens, closes, and reopens", async () => {
+        await openAndCloseTabSwitcherTwice(page);
+      });
 
-  test("model selector can open, close, reopen, and close again", async ({ page }) => {
-    await withMobileMockAgent(page, async () => {
-      await openAndCloseModelSelectorTwice(page);
-    });
-  });
+      await test.step("model selector opens, closes, and reopens", async () => {
+        await openAndCloseModelSelectorTwice(page);
+      });
 
-  test("model selector closes after model selection", async ({ page }) => {
-    await withMobileMockAgent(page, async () => {
-      await openModelSelector(page);
-      const sheet = page.getByLabel("Bottom Sheet", { exact: true });
+      await test.step("model search returns to configuration", async () => {
+        await openModelSelector(page);
+        const sheet = page.getByTestId("agent-controls-model-sheet");
 
-      await sheet.getByText("Ten second stream", { exact: true }).click();
+        await dismissStackedModelPickerWithBackdrop(page);
 
-      await expect(sheet).not.toBeVisible({ timeout: 10_000 });
-      await expect(page.getByRole("button", { name: /Ten second stream/ })).toBeVisible();
-    });
+        await page.getByTestId("model-search-all-input").click();
+        const model = page.getByRole("button", { name: /^Ten second stream/ });
+        await expect(model).toBeVisible({
+          timeout: 10_000,
+        });
+
+        await model.click();
+
+        await expect(sheet).toBeVisible();
+        await expect(page.getByTestId("agent-controls-settings-list")).toBeVisible();
+        await expect(page.getByTestId("agent-controls-model")).toContainText("Ten second stream");
+        await expect(page.getByTestId("agent-controls-model-browser-sheet")).not.toBeInViewport();
+      });
+    } finally {
+      await session.cleanup();
+    }
   });
 });

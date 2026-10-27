@@ -5,14 +5,13 @@ import {
   useEffect,
   useMemo,
   useRef,
-  type ComponentProps,
   type ReactElement,
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text, View, useWindowDimensions } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
+import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { ChevronLeft } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -21,12 +20,14 @@ import {
   type ContextBridge,
 } from "@/components/ui/isolated-bottom-sheet-modal";
 import { SPACING, type Theme } from "@/styles/theme";
+import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useMenuContext, MenuContextProvider } from "./menu-context";
 import { MenuPage } from "./menu-item";
 import { currentPageId, isSubPageOpen } from "./menu-navigation";
 import { AnchoredSurface, MenuOverlay } from "./menu-overlay";
 import { getMenuSheetBottomPadding } from "./menu-sheet-layout";
-import type { Alignment, Placement } from "./menu-anchor";
+import type { Alignment, Placement } from "../anchor";
+import type { KeyboardFocusScope } from "@/keyboard/actions";
 
 const ThemedChevronLeft = withUnistyles(ChevronLeft);
 const mutedIconMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -68,6 +69,15 @@ export interface MenuPageDefinition {
   id: string;
   title: string;
   content: ReactNode;
+  /**
+   * Whether the pointer opens and closes this page on its own. Default true.
+   *
+   * A page that takes typed input sets this false: hover intent would open it on a pointer that
+   * was only passing through, and then dismiss it — draft and all — the moment the hands moved
+   * to the keyboard and the mouse drifted off the flyout. While such a page is open, the whole
+   * surface stops closing on hover, since its parent leads back to the same dismissal.
+   */
+  hoverIntent?: boolean;
 }
 
 interface MenuSurfaceContextValue {
@@ -94,6 +104,8 @@ export interface MenuSurfaceProps {
   pages?: readonly MenuPageDefinition[];
   /** Title shown on the sheet's root page. Sheets always have a header; popovers never do. */
   sheetTitle?: string;
+  /** Controls on the right of the sheet's root title. */
+  sheetTrailing?: ReactNode;
   side?: Placement;
   align?: Alignment;
   offset?: number;
@@ -105,6 +117,8 @@ export interface MenuSurfaceProps {
   horizontalPadding?: number;
   scrollable?: boolean;
   testID?: string;
+  /** Limits ordinary app shortcuts to the time this menu owns keyboard focus. */
+  keyboardFocusScope?: KeyboardFocusScope;
 }
 
 /**
@@ -112,7 +126,17 @@ export interface MenuSurfaceProps {
  * popover (plus one flyout per open submenu) or a bottom sheet showing one page at a time.
  */
 export function MenuSurface(props: MenuSurfaceProps): ReactElement | null {
-  const { presentation } = useMenuContext("MenuSurface");
+  const { presentation, open, setOpen } = useMenuContext("MenuSurface");
+  const active = useRetainedPanelActive();
+  // A menu belongs to the panel that opened it. When that panel leaves the screen the menu closes
+  // for good, rather than waiting hidden to reappear with the panel: a row that opened a sheet
+  // and promoted it to a tab, say, would otherwise bring the list back on the next tab switch.
+  useEffect(() => {
+    if (!active && open) setOpen(false);
+  }, [active, open, setOpen]);
+  // Portals escape the hidden panel. Remove the surface in its inactive commit,
+  // before freezing can suspend an async menu action's closing update.
+  if (!active) return null;
   if (presentation === "sheet") {
     return <MenuSheetSurface {...props} />;
   }
@@ -188,6 +212,7 @@ function MenuPopoverSurface({
   horizontalPadding = 16,
   scrollable = false,
   testID,
+  keyboardFocusScope,
 }: MenuSurfaceProps): ReactElement | null {
   const menu = useMenuContext("MenuSurface");
   const { value: surfaceValue, getAnchor } = useSubAnchors();
@@ -206,9 +231,26 @@ function MenuPopoverSurface({
     [menu.path, pages],
   );
 
+  // `hoverIntent: false` takes a page off the pointer entirely — it is not opened by resting on
+  // its trigger, and while it is open nothing on this surface closes on a pointer leaving it.
+  const hoverValue = useMemo<MenuSurfaceContextValue>(() => {
+    const locked = openPages.some(({ page }) => page.hoverIntent === false);
+    return {
+      ...surfaceValue,
+      hoverOpen: (sub) => {
+        if (pages.find((page) => page.id === sub.id)?.hoverIntent === false) return;
+        surfaceValue.hoverOpen(sub);
+      },
+      hoverClose: (depth) => {
+        if (locked) return;
+        surfaceValue.hoverClose(depth);
+      },
+    };
+  }, [openPages, pages, surfaceValue]);
+
   return (
-    <MenuSurfaceContext.Provider value={surfaceValue}>
-      <MenuOverlay visible={menu.open} onClose={handleClose}>
+    <MenuSurfaceContext.Provider value={hoverValue}>
+      <MenuOverlay visible={menu.open} onClose={handleClose} restoreFocusRef={menu.triggerRef}>
         <>
           <AnchoredSurface
             open={menu.open}
@@ -226,6 +268,7 @@ function MenuPopoverSurface({
             horizontalPadding={horizontalPadding}
             scrollable={scrollable}
             testID={testID}
+            keyboardFocusScope={keyboardFocusScope}
           >
             <MenuPage depth={0}>{children}</MenuPage>
           </AnchoredSurface>
@@ -303,8 +346,11 @@ function MenuSheetSurface({
   children,
   pages = [],
   sheetTitle,
+  sheetTrailing,
   testID,
+  keyboardFocusScope,
 }: MenuSurfaceProps): ReactElement | null {
+  const { height: windowHeight } = useWindowDimensions();
   const menu = useMenuContext("MenuSurface");
   const { value: surfaceValue } = useSubAnchors();
   const safeAreaInsets = useSafeAreaInsets();
@@ -318,6 +364,10 @@ function MenuSheetSurface({
     }),
     [safeAreaInsets.bottom],
   );
+  const sheetDataSet = useMemo(
+    () => (keyboardFocusScope ? { keyboardScope: keyboardFocusScope } : undefined),
+    [keyboardFocusScope],
+  );
 
   const handleClose = useCallback(() => menu.setOpen(false), [menu]);
   const { sheetRef, handleSheetChange, handleSheetDismiss } = useIsolatedBottomSheetVisibility({
@@ -325,18 +375,6 @@ function MenuSheetSurface({
     isEnabled: true,
     onClose: handleClose,
   });
-
-  const renderBackdrop = useCallback(
-    (backdropProps: ComponentProps<typeof BottomSheetBackdrop>) => (
-      <BottomSheetBackdrop
-        {...backdropProps}
-        appearsOnIndex={0}
-        disappearsOnIndex={-1}
-        opacity={0.45}
-      />
-    ),
-    [],
-  );
 
   const openPageId = currentPageId(menu.path);
   const openPage = openPageId ? pages.find((page) => page.id === openPageId) : null;
@@ -361,14 +399,21 @@ function MenuSheetSurface({
       // Content-sized rather than fixed snap points: a pushed page is rarely the same height
       // as the page it replaced, and a fixed sheet would either clip it or leave dead space.
       enableDynamicSizing
+      maxDynamicContentSize={windowHeight * 0.8}
       onChange={handleSheetChange}
       onDismiss={handleSheetDismiss}
-      backdropComponent={renderBackdrop}
+      backdropOpacity={0.45}
       enablePanDownToClose
-      keyboardBehavior="extend"
+      // `interactive` rather than `extend`, which is what every other sheet in the app uses.
+      // `extend` grows the sheet to its largest snap point, and with `enableDynamicSizing` that
+      // point is the content's own height — so a short page does not grow, the keyboard comes up
+      // over it, and the field you are typing into is behind the keys. `interactive` moves the
+      // sheet up instead, which is the only thing a content-sized sheet can usefully do.
+      keyboardBehavior="interactive"
       keyboardBlurBehavior="restore"
     >
       <BottomSheetScrollView
+        dataSet={sheetDataSet}
         contentContainerStyle={sheetScrollContentStyle}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -381,7 +426,9 @@ function MenuSheetSurface({
           </>
         ) : (
           <>
-            {sheetTitle ? <MenuSheetHeader title={sheetTitle} onBack={null} /> : null}
+            {sheetTitle ? (
+              <MenuSheetHeader title={sheetTitle} onBack={null} trailing={sheetTrailing} />
+            ) : null}
             <MenuPage depth={0}>{children}</MenuPage>
           </>
         )}
@@ -393,9 +440,11 @@ function MenuSheetSurface({
 function MenuSheetHeader({
   title,
   onBack,
+  trailing = null,
 }: {
   title: string;
   onBack: (() => void) | null;
+  trailing?: ReactNode;
 }): ReactElement {
   const { t } = useTranslation();
   return (
@@ -415,6 +464,7 @@ function MenuSheetHeader({
       <Text style={styles.sheetTitle} numberOfLines={1}>
         {title}
       </Text>
+      {trailing ? <View style={styles.sheetTrailing}>{trailing}</View> : null}
     </View>
   );
 }
@@ -427,6 +477,11 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[3],
     paddingTop: theme.spacing[1],
     paddingBottom: theme.spacing[3],
+  },
+  sheetTrailing: {
+    flex: 1,
+    flexDirection: "row",
+    justifyContent: "flex-end",
   },
   sheetBackButton: {
     width: 24,

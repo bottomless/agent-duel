@@ -1,4 +1,5 @@
 import type pino from "pino";
+import type { SessionDelivery } from "../owned-subscriptions/index.js";
 import { isAbsolute } from "node:path";
 import { getErrorMessage } from "@getpaseo/protocol/error-utils";
 import { getForgeDefinitionOrNeutral } from "@getpaseo/protocol/forge-manifest";
@@ -118,6 +119,9 @@ function toLegacyGithubSearchItems(items: ForgeSearchResultItem[]): LegacyGithub
  * real CheckoutDiffManager satisfies this structurally; tests supply a fake.
  */
 export interface CheckoutDiffSubscriber {
+  read(
+    params: Omit<CheckoutDiffSubscriptionRequest, "signal">,
+  ): Promise<CheckoutDiffSnapshotPayload>;
   subscribe(
     params: CheckoutDiffSubscriptionRequest,
     listener: (snapshot: CheckoutDiffSnapshotPayload) => void,
@@ -162,7 +166,7 @@ export class CheckoutSession {
   private readonly paseoHome: string;
   private readonly worktreesRoot: string | undefined;
   private readonly logger: pino.Logger;
-  private readonly diffSubscriptions = new Map<string, () => void>();
+  private readonly statusUpdateFingerprints = new Map<string, string>();
 
   constructor(options: CheckoutSessionOptions) {
     this.host = options.host;
@@ -285,7 +289,10 @@ export class CheckoutSession {
     const { cwd, requestId } = msg;
 
     try {
-      const { baseRef, commits } = await listCheckoutCommits({ cwd: expandTilde(cwd) });
+      const { baseRef, commits } = await listCheckoutCommits({
+        cwd: expandTilde(cwd),
+        context: { paseoHome: this.paseoHome, worktreesRoot: this.worktreesRoot },
+      });
       this.host.emit({
         type: "checkout.commits.list.response",
         payload: { cwd, baseRef, commits, error: null, requestId },
@@ -422,48 +429,77 @@ export class CheckoutSession {
     }
   }
 
-  async handleSubscribeDiffRequest(msg: SubscribeCheckoutDiffRequest): Promise<void> {
-    const cwd = expandTilde(msg.cwd);
-    this.diffSubscriptions.get(msg.subscriptionId)?.();
-    const abort = new AbortController();
-    const unsubscribe = () => abort.abort();
-    this.diffSubscriptions.set(msg.subscriptionId, unsubscribe);
+  async handleReadDiffRequest(
+    msg: Extract<SessionInboundMessage, { type: "checkout.diff.get.request" }>,
+  ): Promise<void> {
+    const snapshot = await this.checkoutDiffManager.read({
+      cwd: expandTilde(msg.cwd),
+      compare: msg.compare,
+    });
+    this.host.emit({
+      type: "checkout.diff.get.response",
+      payload: { ...snapshot, requestId: msg.requestId },
+    });
+  }
 
+  async handleSubscribeDiffRequest(
+    msg: SubscribeCheckoutDiffRequest,
+    ownership: SessionDelivery,
+  ): Promise<void> {
+    let bootstrap: Promise<CheckoutDiffSubscription> | undefined;
+    const owner = ownership.begin(
+      "diffs",
+      msg.subscriptionId,
+      async () => {
+        await bootstrap?.then(
+          (subscription) => subscription.unsubscribe(),
+          () => undefined,
+        );
+      },
+      `diff:${msg.subscriptionId}`,
+    );
+    let ready = false;
+    let pending: CheckoutDiffSnapshotPayload | null = null;
+    const emitSnapshot = (snapshot: CheckoutDiffSnapshotPayload) =>
+      owner.emit({
+        type: "checkout_diff_update",
+        payload: { ...snapshot, subscriptionId: owner.responseId },
+      });
     try {
-      const subscription = await this.checkoutDiffManager.subscribe(
-        { cwd, compare: msg.compare, signal: abort.signal },
+      bootstrap = this.checkoutDiffManager.subscribe(
+        { cwd: expandTilde(msg.cwd), compare: msg.compare, signal: owner.signal },
         (snapshot) => {
-          this.host.emit({
-            type: "checkout_diff_update",
-            payload: {
-              subscriptionId: msg.subscriptionId,
-              ...snapshot,
-            },
-          });
+          if (owner.signal.aborted) return;
+          if (ready) emitSnapshot(snapshot);
+          else pending = snapshot;
         },
       );
-
+      const subscription = await bootstrap;
+      if (owner.signal.aborted) {
+        subscription.unsubscribe();
+        return;
+      }
       this.host.emit({
         type: "subscribe_checkout_diff_response",
         payload: {
-          subscriptionId: msg.subscriptionId,
           ...subscription.initial,
+          subscriptionId: owner.responseId,
           requestId: msg.requestId,
         },
       });
+      ready = true;
+      if (pending) emitSnapshot(pending);
     } catch (error) {
-      if (this.diffSubscriptions.get(msg.subscriptionId) === unsubscribe) {
-        this.diffSubscriptions.delete(msg.subscriptionId);
-      }
-      unsubscribe();
+      await owner.release();
       throw error;
     }
   }
 
-  handleUnsubscribeDiffRequest(msg: UnsubscribeCheckoutDiffRequest): void {
-    const unsubscribe = this.diffSubscriptions.get(msg.subscriptionId);
-    this.diffSubscriptions.delete(msg.subscriptionId);
-    unsubscribe?.();
+  async handleUnsubscribeDiffRequest(
+    msg: UnsubscribeCheckoutDiffRequest,
+    ownership: SessionDelivery,
+  ): Promise<void> {
+    await ownership.release(msg.subscriptionId);
   }
 
   async handleRefreshRequest(msg: CheckoutRefreshRequest): Promise<void> {
@@ -544,20 +580,24 @@ export class CheckoutSession {
   emitStatusUpdate(cwd: string, snapshot: WorkspaceGitRuntimeSnapshot): void {
     try {
       const requestId = `subscription:${cwd}`;
+      const payload = {
+        ...buildCheckoutStatusPayloadFromSnapshot({
+          cwd,
+          requestId,
+          snapshot,
+        }),
+        prStatus: buildCheckoutPrStatusPayloadFromSnapshot({
+          cwd,
+          requestId,
+          snapshot,
+        }),
+      };
+      const fingerprint = JSON.stringify(payload);
+      if (this.statusUpdateFingerprints.get(cwd) === fingerprint) return;
+      this.statusUpdateFingerprints.set(cwd, fingerprint);
       this.host.emit({
         type: "checkout_status_update",
-        payload: {
-          ...buildCheckoutStatusPayloadFromSnapshot({
-            cwd,
-            requestId,
-            snapshot,
-          }),
-          prStatus: buildCheckoutPrStatusPayloadFromSnapshot({
-            cwd,
-            requestId,
-            snapshot,
-          }),
-        },
+        payload,
       });
     } catch (error) {
       this.logger.warn({ err: error, cwd }, "Failed to emit workspace checkout status update");
@@ -940,10 +980,14 @@ export class CheckoutSession {
         }
       }
 
-      await mergeFromBase(cwd, {
-        baseRef: msg.baseRef,
-        requireCleanTarget: msg.requireCleanTarget ?? true,
-      });
+      await mergeFromBase(
+        cwd,
+        {
+          baseRef: msg.baseRef,
+          requireCleanTarget: msg.requireCleanTarget ?? true,
+        },
+        { paseoHome: this.paseoHome, worktreesRoot: this.worktreesRoot },
+      );
       await this.gitMutation.notifyGitMutation(cwd, "merge-from-base", { invalidateForge: true });
       this.scheduleDiffRefresh(cwd);
 
@@ -1055,6 +1099,7 @@ export class CheckoutSession {
           base: msg.baseRef,
         },
         service,
+        { paseoHome: this.paseoHome, worktreesRoot: this.worktreesRoot },
       );
       await this.gitMutation.notifyGitMutation(cwd, "create-pr", { invalidateForge: true });
 
@@ -1435,9 +1480,10 @@ export class CheckoutSession {
 
     try {
       const resolvedCwd = expandTilde(cwd);
-      // COMPAT(githubSearchRpc): added in v0.1.106, remove after 2026-12-28 —
-      // the legacy github_search RPC is GitHub by definition; the modern
-      // forge.search RPC resolves the cwd's forge.
+      // COMPAT(githubSearchRpc): the legacy github_search RPC is GitHub by
+      // definition; forge.search.* shipped in v0.2.0-beta.1 and resolves the
+      // cwd's forge. Remove after 2027-01-17 once the supported client floor
+      // is >= v0.2.0.
       const resolvedForge =
         msg.type === "github_search_request"
           ? { forge: "github", service: this.github }
@@ -1534,10 +1580,7 @@ export class CheckoutSession {
   }
 
   cleanup(): void {
-    for (const unsubscribe of this.diffSubscriptions.values()) {
-      unsubscribe();
-    }
-    this.diffSubscriptions.clear();
+    this.statusUpdateFingerprints.clear();
   }
 }
 

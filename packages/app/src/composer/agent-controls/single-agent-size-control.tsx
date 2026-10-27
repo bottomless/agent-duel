@@ -126,13 +126,13 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "center",
     borderRadius: theme.borderRadius.lg,
   },
-  label: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
+  label: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.base },
   active: { backgroundColor: theme.colors.surface2 },
   disabled: { opacity: 0.5 },
   explanation: {
     padding: theme.spacing[3],
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
-    lineHeight: theme.fontSize.sm * 1.4,
+    fontSize: theme.fontSize.base,
+    lineHeight: theme.fontSize.base * 1.4,
   },
 }));

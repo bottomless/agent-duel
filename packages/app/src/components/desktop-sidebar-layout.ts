@@ -4,7 +4,7 @@ import {
 } from "@/constants/layout";
 import { MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "@/stores/panel-store";
 
-export const MIN_DESKTOP_CENTER_WIDTH = 400;
+const MIN_DESKTOP_CENTER_WIDTH = 400;
 
 export function resolveDesktopSidebarVisibility(input: {
   chromeEnabled: boolean;

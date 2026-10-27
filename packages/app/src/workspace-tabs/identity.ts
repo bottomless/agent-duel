@@ -15,6 +15,9 @@ export function normalizeWorkspaceTabTarget(
     const setup = normalizeWorkspaceDraftTabSetup(value.setup);
     return setup ? { kind: "draft", draftId, setup } : { kind: "draft", draftId };
   }
+  if (value.kind === "new_tab") {
+    return { kind: "new_tab" };
+  }
   if (value.kind === "agent") {
     const agentId = trimNonEmpty(value.agentId);
     return agentId ? { kind: "agent", agentId } : null;
@@ -27,20 +30,16 @@ export function normalizeWorkspaceTabTarget(
       : null;
   }
   if (value.kind === "arena_terminal") {
-    const agentId = trimNonEmpty(value.agentId);
-    const side = value.side === "a" || value.side === "b" ? value.side : null;
-    // A tab persisted before shells were per-instance names no instance, and there is no
-    // shell to reattach it to. Dropping it is what the reader sees as the tab not coming back.
-    const instanceId = trimNonEmpty(value.instanceId);
-    return agentId && side && instanceId
-      ? { kind: "arena_terminal", agentId, side, instanceId }
-      : null;
+    return normalizeArenaTerminalTabTarget(value);
   }
   if (value.kind === "file") {
     return normalizeFileTabTarget(value);
   }
   if (value.kind === "working_diff") {
     return normalizeWorkingDiffTabTarget(value);
+  }
+  if (value.kind === "plugin") {
+    return normalizePluginTabTarget(value);
   }
   return normalizeSimpleWorkspaceTabTarget(value);
 }
@@ -59,6 +58,11 @@ function normalizeSimpleWorkspaceTabTarget(value: WorkspaceTabTarget): Workspace
       const browserId = trimNonEmpty(value.browserId);
       return browserId ? { kind: "browser", browserId } : null;
     }
+    case "changes":
+    case "changes_tree":
+    case "files":
+    case "pull_request":
+      return { kind: value.kind };
     case "setup": {
       const workspaceId = trimNonEmpty(value.workspaceId);
       return workspaceId ? { kind: "setup", workspaceId } : null;
@@ -67,12 +71,6 @@ function normalizeSimpleWorkspaceTabTarget(value: WorkspaceTabTarget): Workspace
       const sha = trimNonEmpty(value.sha);
       return sha ? { kind: "commit_diff", sha } : null;
     }
-    case "changes":
-      return { kind: "changes" };
-    case "files":
-      return { kind: "files" };
-    case "pull_request":
-      return { kind: "pull_request" };
     default:
       return null;
   }
@@ -121,8 +119,14 @@ export function workspaceTabTargetsEqual(
   if (left.kind === "terminal" && right.kind === "terminal") {
     return left.terminalId === right.terminalId;
   }
-  if (left.kind === "arena_terminal" && right.kind === "arena_terminal") {
-    return left.instanceId === right.instanceId;
+  if (left.kind === "plugin" && right.kind === "plugin") {
+    return (
+      left.pluginId === right.pluginId &&
+      left.panelId === right.panelId &&
+      left.context === right.context &&
+      (left.context === "workspace" ||
+        (right.context === "agent" && left.agentId === right.agentId))
+    );
   }
   return secondaryWorkspaceTabTargetsEqual(left, right);
 }
@@ -140,16 +144,36 @@ function secondaryWorkspaceTabTargetsEqual(
   if (left.kind === "working_diff" && right.kind === "working_diff") {
     return left.focusPath === right.focusPath && left.focusRequestId === right.focusRequestId;
   }
+  if (left.kind === "files" && right.kind === "files") {
+    return true;
+  }
+  if (left.kind === "changes_tree" && right.kind === "changes_tree") {
+    return true;
+  }
+  if (left.kind === "changes" && right.kind === "changes") {
+    return true;
+  }
+  if (left.kind === "pull_request" && right.kind === "pull_request") {
+    return true;
+  }
   if (left.kind === "setup" && right.kind === "setup") {
     return left.workspaceId === right.workspaceId;
   }
   if (left.kind === "commit_diff" && right.kind === "commit_diff") {
     return left.sha === right.sha;
   }
-  if (left.kind === "changes" || left.kind === "files" || left.kind === "pull_request") {
-    return true;
-  }
-  return false;
+  return arenaTerminalTabTargetsEqual(left, right);
+}
+
+function arenaTerminalTabTargetsEqual(
+  left: WorkspaceTabTarget,
+  right: WorkspaceTabTarget,
+): boolean {
+  return (
+    left.kind === "arena_terminal" &&
+    right.kind === "arena_terminal" &&
+    left.instanceId === right.instanceId
+  );
 }
 
 function workspaceDraftTabSetupsEqual(
@@ -186,6 +210,9 @@ function recordsShallowEqual(
 }
 
 export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): string {
+  if (target.kind === "new_tab") {
+    throw new Error("New tabs do not have deterministic target identities");
+  }
   if (target.kind === "draft") {
     return target.draftId;
   }
@@ -213,10 +240,34 @@ export function buildDeterministicWorkspaceTabId(target: WorkspaceTabTarget): st
   if (target.kind === "working_diff") {
     return "working_diff";
   }
-  if (target.kind === "changes" || target.kind === "files" || target.kind === "pull_request") {
+  if (
+    target.kind === "changes" ||
+    target.kind === "changes_tree" ||
+    target.kind === "files" ||
+    target.kind === "pull_request"
+  ) {
     return target.kind;
   }
+  if (target.kind === "plugin") {
+    const identity = `${target.pluginId.length}_${target.pluginId}_${target.panelId.length}_${target.panelId}`;
+    return target.context === "workspace"
+      ? `plugin_workspace_${identity}`
+      : `plugin_agent_${identity}_${target.agentId.length}_${target.agentId}`;
+  }
   return `file_${target.path}`;
+}
+
+function normalizePluginTabTarget(
+  value: Extract<WorkspaceTabTarget, { kind: "plugin" }>,
+): WorkspaceTabTarget | null {
+  const pluginId = trimNonEmpty(value.pluginId);
+  const panelId = trimNonEmpty(value.panelId);
+  if (!pluginId || !panelId) return null;
+  if (value.context === "workspace") {
+    return { kind: "plugin", pluginId, panelId, context: "workspace" };
+  }
+  const agentId = trimNonEmpty(value.agentId);
+  return agentId ? { kind: "plugin", pluginId, panelId, context: "agent", agentId } : null;
 }
 
 function trimNonEmpty(value: string | null | undefined): string | null {
@@ -225,6 +276,19 @@ function trimNonEmpty(value: string | null | undefined): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeArenaTerminalTabTarget(
+  value: Extract<WorkspaceTabTarget, { kind: "arena_terminal" }>,
+): WorkspaceTabTarget | null {
+  const agentId = trimNonEmpty(value.agentId);
+  const side = value.side === "a" || value.side === "b" ? value.side : null;
+  // A tab persisted before shells were per-instance names no instance, and there is no
+  // shell to reattach it to. Dropping it is what the reader sees as the tab not coming back.
+  const instanceId = trimNonEmpty(value.instanceId);
+  return agentId && side && instanceId
+    ? { kind: "arena_terminal", agentId, side, instanceId }
+    : null;
 }
 
 function normalizeFileTabTarget(

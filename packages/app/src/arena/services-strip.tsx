@@ -123,7 +123,7 @@ const styles = StyleSheet.create((theme) => ({
   label: {
     flexShrink: 1,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   trailing: {
     flexDirection: "row",
@@ -132,6 +132,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   trailingText: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
 }));

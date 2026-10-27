@@ -1,5 +1,10 @@
 import type { OpenCodeServerAcquisition, OpenCodeServerManagerLike } from "./server-manager.js";
 
+const events = {
+  ready: async () => undefined,
+  subscribe: () => () => undefined,
+};
+
 export interface TestOpenCodeServerAcquisition {
   kind: "current" | "new" | "dedicated" | "existing";
   env?: Record<string, string>;
@@ -45,6 +50,8 @@ export class TestOpenCodeServerManager implements OpenCodeServerManagerLike {
     this.acquisitions.push(acquisition);
     return {
       server: this.server,
+      environment: input.env ?? {},
+      events,
       release: async () => {
         acquisition.released = true;
       },

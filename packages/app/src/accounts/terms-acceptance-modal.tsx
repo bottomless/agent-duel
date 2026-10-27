@@ -102,6 +102,10 @@ export function TermsAcceptanceModal({ endpoint, session, documents }: TermsAcce
 const styles = StyleSheet.create((theme) => ({
   root: { flex: 1, backgroundColor: theme.colors.surface0 },
   content: { gap: theme.spacing[4] },
-  description: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm, lineHeight: 20 },
-  error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
+  description: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
+    lineHeight: 20,
+  },
+  error: { color: theme.colors.destructive, fontSize: theme.fontSize.base },
 }));

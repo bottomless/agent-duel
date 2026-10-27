@@ -18,6 +18,7 @@ import type {
   AgentRuntimeInfo,
   AgentSession,
   AgentSessionConfig,
+  AgentSlashCommand,
   AgentStreamEvent,
   AgentTimelineItem,
   FetchCatalogOptions,
@@ -25,6 +26,8 @@ import type {
   ImportProviderSessionContext,
   ImportProviderSessionInput,
   ProviderCatalog,
+  SteerActiveTurnOptions,
+  SteerResult,
   ToolCallDetail,
   ToolCallTimelineItem,
 } from "../agent-sdk-types.js";
@@ -33,10 +36,20 @@ import { getAgentProviderDefinition } from "@getpaseo/protocol/provider-manifest
 
 export const MOCK_LOAD_TEST_PROVIDER_ID = "mock";
 export const MOCK_LOAD_TEST_DEFAULT_MODEL_ID = "five-minute-stream";
-export const MOCK_LOAD_TEST_HANDLED_COMMAND = "/mock handled-command";
+const MOCK_LOAD_TEST_COMMAND: AgentSlashCommand = {
+  name: "mock",
+  description: "Reply without starting a turn",
+  argumentHint: "handled-command",
+  kind: "command",
+};
+export const MOCK_LOAD_TEST_HANDLED_COMMAND = `/${MOCK_LOAD_TEST_COMMAND.name} ${MOCK_LOAD_TEST_COMMAND.argumentHint}`;
 const MOCK_LOAD_TEST_MODE_ID = "load-test";
 const MOCK_LOAD_TEST_DURATION_MS = 5 * 60 * 1000;
 const MOCK_LOAD_TEST_INTERVAL_MS = 40;
+
+function getPositiveFeatureInteger(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl4Kj8AAAAASUVORK5CYII=";
 
@@ -111,6 +124,20 @@ const MODELS: AgentModelDefinition[] = [
   },
   {
     provider: MOCK_LOAD_TEST_PROVIDER_ID,
+    id: "bursty-stream",
+    label: "Bursty stream",
+    description:
+      "Emits tokens in uneven bursts separated by idle gaps, reproducing the lumpy arrival pattern real models produce. Use this to measure streaming smoothness.",
+    metadata: {
+      durationMs: 60_000,
+      intervalMs: 0,
+      burstMinTokens: 1,
+      burstMaxTokens: 40,
+      burstGapMs: 90,
+    },
+  },
+  {
+    provider: MOCK_LOAD_TEST_PROVIDER_ID,
     id: "ten-second-stream",
     label: "Ten second stream",
     description: "Fast realistic stream for tests and smoke checks.",
@@ -125,7 +152,52 @@ const MODELS: AgentModelDefinition[] = [
       intervalMs: 5,
     },
   },
+  {
+    provider: MOCK_LOAD_TEST_PROVIDER_ID,
+    id: "max-only-thinking-stream",
+    label: "Max-only thinking stream",
+    description: "Fast realistic stream with one supported thinking level.",
+    thinkingOptions: [{ id: "max", label: "Max", isDefault: true }],
+    defaultThinkingOptionId: "max",
+    metadata: {
+      durationMs: 10_000,
+      intervalMs: 5,
+    },
+  },
+  {
+    provider: MOCK_LOAD_TEST_PROVIDER_ID,
+    id: "e2e-fast-stream",
+    label: "E2E fast stream",
+    description: "Short deterministic stream for browser tests.",
+    isSelectable: false,
+    metadata: {
+      durationMs: 2_000,
+      intervalMs: 20,
+    },
+  },
 ];
+
+/**
+ * Bursty emission: instead of one token per interval, emit a run of tokens
+ * back-to-back and then idle. Real models arrive this way, and it is the arrival
+ * pattern the client's paced reveal exists to smooth out. Burst sizes come from a
+ * seeded generator so a run is reproducible.
+ */
+interface BurstProfile {
+  minTokens: number;
+  maxTokens: number;
+  gapMs: number;
+}
+
+function nextBurstSize(profile: BurstProfile, sequence: number): number {
+  // Deterministic hash of the burst index; no Math.random so runs are repeatable.
+  let hash = (sequence + 1) * 2654435761;
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 2246822519);
+  hash ^= hash >>> 13;
+  const span = profile.maxTokens - profile.minTokens + 1;
+  return profile.minTokens + ((hash >>> 0) % span);
+}
 
 interface ActiveTurn {
   turnId: string;
@@ -141,6 +213,8 @@ interface ActiveTurn {
   queue: CycleEvent[];
   emittedTokens: number;
   turnStarted: boolean;
+  burst: BurstProfile | null;
+  burstIndex: number;
 }
 
 type CycleEvent =
@@ -160,9 +234,12 @@ interface AgentStreamStressRequest {
   coalesced: boolean;
 }
 
+type SteeringReplayShape = "claude" | "codex";
+
 interface MockQuestionOption {
   label: string;
   description?: string;
+  preview?: string;
 }
 
 interface MockQuestionPromptQuestion {
@@ -188,12 +265,29 @@ function shouldEmitTurnFailure(prompt: AgentPromptInput): boolean {
   return /emit\s+(?:a\s+)?synthetic\s+turn\s+failure/i.test(promptToText(prompt));
 }
 
+function parseSteeringReplayShape(prompt: AgentPromptInput): SteeringReplayShape | null {
+  const match = /replay a (claude|codex)-shaped foreground shell tool call/i.exec(
+    promptToText(prompt),
+  );
+  return match?.[1] === "claude" || match?.[1] === "codex" ? match[1] : null;
+}
+
 function parseSettledAssistantImageMarkdown(prompt: AgentPromptInput): string | null {
   const match = /^emit settled assistant image markdown:\s*(!\[[^\]\r\n]*\]\(.+\))\s*$/i.exec(
     promptToText(prompt),
   );
   return match?.[1] ?? null;
 }
+
+const ROLLOUT_FLAG_PREVIEW = [
+  "Ship it dark behind the new-surface flag, then turn it on for internal users before everyone else.",
+  "",
+  'if (flags.enabled("new-surface")) {',
+  "  render(<NewSurface />);",
+  "}",
+  ...Array.from({ length: 40 }, (_, i) => `// rollout step ${i + 1}`),
+  "// LAST PREVIEW LINE",
+].join("\n");
 
 function parseMockQuestionPrompt(prompt: AgentPromptInput): MockQuestionPromptRequest | null {
   const text = promptToText(prompt);
@@ -233,7 +327,10 @@ function parseMockQuestionPrompt(prompt: AgentPromptInput): MockQuestionPromptRe
       {
         question: "Which rollout should we use?",
         header: "rollout",
-        options: [{ label: "Immediately" }, { label: "Behind feature flag" }],
+        options: [
+          { label: "Immediately" },
+          { label: "Behind feature flag", preview: ROLLOUT_FLAG_PREVIEW },
+        ],
         multiSelect: false,
       },
       {
@@ -251,15 +348,28 @@ function resolveModelProfile(modelId: string | null | undefined): {
   modelId: string;
   durationMs: number;
   intervalMs: number;
+  burst: BurstProfile | null;
 } {
   const model = MODELS.find((entry) => entry.id === modelId) ?? MODELS[0];
   const metadata = model.metadata ?? {};
+  const burstMinTokens =
+    typeof metadata.burstMinTokens === "number" ? metadata.burstMinTokens : null;
+  const burstMaxTokens =
+    typeof metadata.burstMaxTokens === "number" ? metadata.burstMaxTokens : null;
   return {
     modelId: model.id,
     durationMs:
       typeof metadata.durationMs === "number" ? metadata.durationMs : MOCK_LOAD_TEST_DURATION_MS,
     intervalMs:
       typeof metadata.intervalMs === "number" ? metadata.intervalMs : MOCK_LOAD_TEST_INTERVAL_MS,
+    burst:
+      burstMinTokens !== null && burstMaxTokens !== null
+        ? {
+            minTokens: Math.max(1, burstMinTokens),
+            maxTokens: Math.max(Math.max(1, burstMinTokens), burstMaxTokens),
+            gapMs: typeof metadata.burstGapMs === "number" ? metadata.burstGapMs : 90,
+          }
+        : null,
   };
 }
 
@@ -555,6 +665,12 @@ function buildCycleQueue(turnId: string, cycle: number): CycleEvent[] {
   return queue;
 }
 
+function buildBurstyStreamQueue(cycle: number): CycleEvent[] {
+  return tokenize(
+    [buildIntroParagraph(cycle), buildMidParagraph(), buildClosingParagraph()].join("\n\n"),
+  ).map((text) => ({ kind: "assistant_token", text }));
+}
+
 function createToolCall(input: {
   callId: string;
   name: string;
@@ -637,11 +753,19 @@ export class MockLoadTestAgentClient implements AgentClient {
   }
 }
 
+function getConfiguredAssistantResponses(value: unknown): string[] {
+  return Array.isArray(value) && value.every((response) => typeof response === "string")
+    ? [...value]
+    : [];
+}
+
 export class MockLoadTestAgentSession implements AgentSession {
   readonly provider: AgentProvider = MOCK_LOAD_TEST_PROVIDER_ID;
   readonly capabilities = CAPABILITIES;
   readonly features: AgentFeature[] = [];
   readonly id: string;
+  private readonly usageSessionKey = randomUUID();
+
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
   private readonly history: AgentStreamEvent[] = [];
   private readonly logger?: Logger;
@@ -652,10 +776,12 @@ export class MockLoadTestAgentSession implements AgentSession {
   private readonly assistantResponse: string | null;
   private readonly streamingReasoningResponse: string | null;
   private readonly streamingReasoningIntervalMs: number;
+  private readonly assistantResponses: string[];
   private readonly streamingAssistantResponse: string | null;
   private readonly streamingAssistantIntervalMs: number;
   private readonly rewindError: string | null;
   private remainingPromptRejections: number;
+  private remainingSteerFailures: number;
 
   constructor(options: { config: AgentSessionConfig; sessionId: string; logger?: Logger }) {
     this.id = options.sessionId;
@@ -672,6 +798,9 @@ export class MockLoadTestAgentSession implements AgentSession {
         : null;
     this.streamingReasoningIntervalMs = resolveStreamingInterval(
       options.config.featureValues?.mockStreamingReasoningIntervalMs,
+    );
+    this.assistantResponses = getConfiguredAssistantResponses(
+      options.config.featureValues?.mockAssistantResponses,
     );
     this.streamingAssistantResponse =
       typeof options.config.featureValues?.mockStreamingAssistantResponse === "string"
@@ -691,6 +820,18 @@ export class MockLoadTestAgentSession implements AgentSession {
       requestedPromptRejections > 0
         ? requestedPromptRejections
         : 0;
+    this.remainingSteerFailures = getPositiveFeatureInteger(
+      options.config.featureValues?.mockSteerAmbiguousFailures,
+    );
+  }
+
+  usageSession() {
+    return {
+      provider: this.provider,
+      model: this.modelId ?? undefined,
+      env: {},
+      sessionKey: this.usageSessionKey,
+    };
   }
 
   async run(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<AgentRunResult> {
@@ -735,6 +876,8 @@ export class MockLoadTestAgentSession implements AgentSession {
       queue: [],
       emittedTokens: 0,
       turnStarted: false,
+      burst: profile.burst,
+      burstIndex: 0,
     };
     this.activeTurn = turn;
     const largePayload = parseLargeAgentStreamPayloadPrompt(prompt);
@@ -742,15 +885,21 @@ export class MockLoadTestAgentSession implements AgentSession {
     const questionPrompt = parseMockQuestionPrompt(prompt);
     const structuredBranchName = parseStructuredBranchNamePrompt(prompt);
     const settledAssistantImageMarkdown = parseSettledAssistantImageMarkdown(prompt);
+    const steeringReplayShape = parseSteeringReplayShape(prompt);
     const scheduleTurn = () => {
       if (shouldEmitTurnFailure(prompt)) {
         this.scheduleFailedTurn(turn);
       } else if (this.streamingReasoningResponse !== null) {
         this.scheduleStreamingReasoningTurn(turn, this.streamingReasoningResponse);
+      } else if (steeringReplayShape) {
+        this.scheduleSteeringReplayTurn(turn, steeringReplayShape);
       } else if (this.streamingAssistantResponse !== null) {
         this.scheduleStreamingAssistantTurn(turn, this.streamingAssistantResponse);
-      } else if (this.assistantResponse !== null) {
-        this.scheduleSettledAssistantTurn(turn, this.assistantResponse);
+      } else if (this.assistantResponses.length > 0 || this.assistantResponse !== null) {
+        this.scheduleSettledAssistantTurn(
+          turn,
+          (this.assistantResponses.shift() ?? this.assistantResponse)!,
+        );
       } else if (structuredBranchName) {
         this.scheduleSettledAssistantTurn(turn, JSON.stringify(structuredBranchName));
       } else if (settledAssistantImageMarkdown) {
@@ -822,6 +971,10 @@ export class MockLoadTestAgentSession implements AgentSession {
     userMessageTimer.unref?.();
     if (userMessageDelayMs === 0) scheduleTurn();
     return { turnId };
+  }
+
+  async listCommands(): Promise<AgentSlashCommand[]> {
+    return [MOCK_LOAD_TEST_COMMAND];
   }
 
   tryHandleOutOfBand(
@@ -940,6 +1093,20 @@ export class MockLoadTestAgentSession implements AgentSession {
     });
   }
 
+  async steerActiveTurn(
+    _prompt: AgentPromptInput,
+    options: SteerActiveTurnOptions,
+  ): Promise<SteerResult> {
+    if (this.activeTurn?.turnId !== options.expectedTurnId) {
+      return { status: "unavailable" };
+    }
+    if (this.remainingSteerFailures > 0) {
+      this.remainingSteerFailures -= 1;
+      throw new Error("Requested mock steer transport failure");
+    }
+    return { status: "accepted" };
+  }
+
   async close(): Promise<void> {
     await this.interrupt();
     this.listeners.clear();
@@ -1033,6 +1200,52 @@ export class MockLoadTestAgentSession implements AgentSession {
         timeline: [],
         canceled: false,
       });
+    }, 0);
+    turn.timer.unref?.();
+  }
+
+  private scheduleSteeringReplayTurn(turn: ActiveTurn, shape: SteeringReplayShape): void {
+    turn.timer = setTimeout(() => {
+      if (this.activeTurn !== turn) return;
+      this.clearTurnTimer(turn);
+      this.emitTurnStarted(turn);
+      if (shape === "codex") {
+        this.emitTimeline(turn.turnId, {
+          type: "assistant_message",
+          text: "Running the foreground command.",
+          messageId: turn.assistantMessageId,
+        });
+      }
+      const callId = `${turn.turnId}:steering-replay-shell`;
+      const detail: ToolCallDetail = {
+        type: "shell",
+        command: "sleep 5",
+        cwd: "/tmp/paseo-mock-load",
+      };
+      this.emitTimeline(
+        turn.turnId,
+        createToolCall({ callId, name: "bash", status: "running", detail }),
+      );
+      turn.timer = setTimeout(() => {
+        if (this.activeTurn !== turn) return;
+        this.clearTurnTimer(turn);
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId,
+            name: "bash",
+            status: "completed",
+            detail: { ...detail, output: "", exitCode: 0 },
+          }),
+        );
+        this.emitTimeline(turn.turnId, {
+          type: "assistant_message",
+          text: "Foreground command completed after steering.",
+          messageId: turn.assistantMessageId,
+        });
+        this.finishTurnWithText(turn, "Foreground command completed after steering.");
+      }, 5_000);
+      turn.timer.unref?.();
     }, 0);
     turn.timer.unref?.();
   }
@@ -1171,7 +1384,11 @@ export class MockLoadTestAgentSession implements AgentSession {
       title: "Plan",
       description: "Review the proposed plan before implementation starts.",
       input: {
-        plan: "1. Add the README note.\n2. Keep the change scoped.\n3. Verify the diff.",
+        // The (c), the quoted flag and the --- are load-bearing: they trip
+        // three different markdown-it typographer rules, and
+        // plan-card-markdown.spec.ts asserts all three render verbatim. That
+        // is the only guard against the plan card's parser prop going missing.
+        plan: '1. Add the (c) README note.\n2. Run --name="my repo".\n3. Verify ---buzz in the diff.',
       },
       actions: [
         {
@@ -1372,17 +1589,24 @@ export class MockLoadTestAgentSession implements AgentSession {
       return;
     }
 
-    if (turn.queue.length === 0) {
-      turn.cycle += 1;
-      turn.queue = buildCycleQueue(turn.turnId, turn.cycle);
-    }
+    const eventsThisTick = turn.burst ? nextBurstSize(turn.burst, turn.burstIndex) : 1;
+    turn.burstIndex += 1;
 
-    const event = turn.queue.shift();
-    if (event) {
+    for (let emitted = 0; emitted < eventsThisTick; emitted += 1) {
+      if (turn.queue.length === 0) {
+        turn.cycle += 1;
+        turn.queue = turn.burst
+          ? buildBurstyStreamQueue(turn.cycle)
+          : buildCycleQueue(turn.turnId, turn.cycle);
+      }
+      const event = turn.queue.shift();
+      if (!event) {
+        break;
+      }
       this.dispatchCycleEvent(turn, event);
     }
 
-    this.schedule(turn, turn.intervalMs);
+    this.schedule(turn, turn.burst ? turn.burst.gapMs : turn.intervalMs);
   }
 
   private dispatchCycleEvent(turn: ActiveTurn, event: CycleEvent): void {

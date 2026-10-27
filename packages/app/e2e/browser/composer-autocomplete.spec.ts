@@ -9,7 +9,16 @@ import { expectWorkspaceTabVisible } from "../support/helpers/archive-tab";
 import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
 import { getServerId } from "../support/helpers/server-id";
 import { switchWorkspaceViaSidebar } from "../support/helpers/workspace-ui";
-import { openGlobalNewWorkspaceComposer } from "../support/helpers/new-workspace";
+import {
+  closeMobileAgentSidebar,
+  expectMobileAgentSidebarHidden,
+  expectMobileAgentSidebarVisible,
+  openMobileAgentSidebar,
+} from "../support/helpers/sidebar";
+import {
+  expectNewWorkspaceProjectSelected,
+  openGlobalNewWorkspaceComposer,
+} from "../support/helpers/new-workspace";
 
 const TEST_COMMANDS = [
   {
@@ -93,16 +102,6 @@ interface PopoverFrame {
 interface PopoverFrameRecorderWindow extends Window {
   __composerAutocompleteFrames?: PopoverFrame[];
   __stopComposerAutocompleteFrameRecorder?: () => void;
-}
-
-async function getTopTestIdAtPoint(page: Page, x: number, y: number) {
-  return page.evaluate(
-    ([pointX, pointY]) => {
-      const element = document.elementFromPoint(pointX, pointY);
-      return element?.closest("[data-testid]")?.getAttribute("data-testid") ?? null;
-    },
-    [x, y],
-  );
 }
 
 async function installListCommandsStub(page: Page): Promise<void> {
@@ -337,6 +336,16 @@ function expectPopoverFramesStable(frames: PopoverFrame[]): void {
   ).toBeUndefined();
 }
 
+function recordCommandRequestsByAgentId(page: Page): string[] {
+  const requests: string[] = [];
+  const record = ({ payload }: { payload: string | Buffer }) => {
+    if (typeof payload !== "string" || !payload.includes("list_commands_request")) return;
+    if (!payload.includes("draftConfig")) requests.push(payload);
+  };
+  page.on("websocket", (socket) => socket.on("framesent", record));
+  return requests;
+}
+
 function expectPopoverDoesNotDisappearAfterFirstVisible(frames: PopoverFrame[]): void {
   const firstVisibleIndex = frames.findIndex(
     (frame) =>
@@ -358,6 +367,25 @@ function expectPopoverDoesNotDisappearAfterFirstVisible(frames: PopoverFrame[]):
 }
 
 test.describe("Composer autocomplete", () => {
+  test("keeps New workspace off the running-agent command list before a project is chosen", async ({
+    page,
+  }) => {
+    const commandRequestsByAgentId = recordCommandRequestsByAgentId(page);
+
+    await page.goto("/new");
+    await expectNewWorkspaceProjectSelected(page, "Choose project");
+    await composerLocator(page).fill("/");
+
+    const popover = page
+      .getByTestId("composer-autocomplete-popover")
+      .filter({ visible: true })
+      .first();
+    await expect(popover).toContainText("Choose a project to see commands", { timeout: 30_000 });
+    await expect(popover).not.toContainText("/clear");
+    await expect(popover).not.toContainText("/exit");
+    expect(commandRequestsByAgentId).toEqual([]);
+  });
+
   test("stays visible after returning from app-wide routes", async ({ page }) => {
     await installListCommandsStub(page);
     const serverId = getServerId();
@@ -543,6 +571,88 @@ test.describe("Composer autocomplete", () => {
     }
   });
 
+  test("uses the live cursor when accepting a slash command", async ({ page }) => {
+    await installListCommandsStub(page);
+    const agent = await openReadyMockAgent(page);
+
+    try {
+      const input = composerLocator(page);
+      await expect(input).toBeEditable({ timeout: 30_000 });
+      await input.fill("/tdd");
+      await expect(
+        page
+          .getByTestId("composer-autocomplete-popover")
+          .getByText("/tdd", { exact: true })
+          .first(),
+      ).toBeVisible({ timeout: 30_000 });
+
+      await input.evaluate((element) => {
+        if (!(element instanceof HTMLTextAreaElement)) {
+          throw new Error("Composer input is not a textarea");
+        }
+        element.setSelectionRange(0, 0);
+        element.dispatchEvent(new Event("select", { bubbles: true }));
+        element.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Tab",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+
+      await expect(input).toHaveValue("/tdd");
+      const selectionStart = await input.evaluate(
+        (element) => (element as HTMLTextAreaElement).selectionStart,
+      );
+      expect(selectionStart).toBe(0);
+    } finally {
+      await agent.cleanup();
+    }
+  });
+
+  test("uses the live input when clicking a slash command", async ({ page }) => {
+    await installListCommandsStub(page);
+    const agent = await openReadyMockAgent(page);
+
+    try {
+      const input = composerLocator(page);
+      await expect(input).toBeEditable({ timeout: 30_000 });
+      await input.fill("/td");
+      const option = page
+        .getByTestId("composer-autocomplete-popover")
+        .getByText("/tdd", { exact: true })
+        .first();
+      await expect(option).toBeVisible({ timeout: 30_000 });
+
+      await option.evaluate((element) => {
+        const textarea = document.querySelector('textarea[aria-label="Message agent..."]');
+        if (!(textarea instanceof HTMLTextAreaElement)) {
+          throw new Error("Composer input is not a textarea");
+        }
+        const valueSetter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )?.set;
+        if (!valueSetter) throw new Error("Textarea value setter is unavailable");
+        valueSetter.call(textarea, "/tdd suffix");
+        textarea.setSelectionRange(4, 4);
+        textarea.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            data: "d suffix",
+            inputType: "insertText",
+          }),
+        );
+        (element as HTMLElement).click();
+      });
+
+      await expect(input).toHaveValue("/tdd suffix");
+    } finally {
+      await agent.cleanup();
+    }
+  });
+
   test("stays anchored to the composer when the desktop sidebar is open", async ({ page }) => {
     await installListCommandsStub(page);
     const agent = await openReadyMockAgent(page);
@@ -589,19 +699,15 @@ test.describe("Composer autocomplete", () => {
           timeout: 30_000,
         });
 
-        await page.getByRole("button", { name: "Open menu" }).click();
-        await expect(page.getByTestId("sidebar-close")).toBeInViewport({ timeout: 5_000 });
+        // The sidebar covers the composer, so the composer gives up its popover while the
+        // sidebar is open and brings it back once the sidebar closes.
+        await openMobileAgentSidebar(page);
+        await expectMobileAgentSidebarVisible(page);
+        await expect(popover).toHaveCount(0);
 
-        const popoverBox = await popover.boundingBox();
-        expect(popoverBox).not.toBeNull();
-
-        const topTestId = await getTopTestIdAtPoint(
-          page,
-          popoverBox!.x + popoverBox!.width / 2,
-          popoverBox!.y + popoverBox!.height / 2,
-        );
-
-        expect(topTestId).not.toBe("composer-autocomplete-popover");
+        await closeMobileAgentSidebar(page);
+        await expectMobileAgentSidebarHidden(page);
+        await expect(popover.getByText("/help", { exact: true }).first()).toBeVisible();
       } finally {
         await agent.cleanup();
       }

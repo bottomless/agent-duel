@@ -36,6 +36,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   text: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

@@ -3,9 +3,11 @@ import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
 import { mkdtempSync, rmSync } from "node:fs";
-import net from "node:net";
+import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
+import pino, { type Logger } from "pino";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { findExecutable } from "../../../executable-resolution/executable-resolution.js";
@@ -259,7 +261,9 @@ describe("OpenCodeServerManager generations", () => {
       const reopenedChat = manager.acquireCurrent();
       await vi.waitFor(() => expect(runtime.launchedPorts).toEqual([4097]));
       catalogReady.resolve();
-      await vi.waitFor(() => expect(catalogClient.acquires).toBe(2));
+      // The reload detaches the catalogue load that began before the key, so at least the
+      // reload's own fetch must be waiting on this start.
+      await vi.waitFor(() => expect(catalogClient.acquires).toBeGreaterThanOrEqual(1));
       await runtime.settle();
       runtime.processForPort(4097).announceListening();
 
@@ -468,6 +472,58 @@ describe("OpenCodeServerManager generations", () => {
     await second.release();
   });
 
+  test("logs generation lifecycle transitions", async () => {
+    const { logger, records } = createCapturingLogger();
+    const { manager } = createTestManager([4081, 4082], { logger });
+
+    const first = await manager.acquireCurrent();
+    const second = await manager.acquireNew();
+    await second.release();
+    await first.release();
+    await manager.shutdown();
+
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ msg: "OpenCode server generation started", port: 4081 }),
+        expect.objectContaining({ msg: "OpenCode server generation retired", port: 4081 }),
+        expect.objectContaining({ msg: "OpenCode server generation started", port: 4082 }),
+        expect.objectContaining({ msg: "OpenCode server generation released", port: 4082 }),
+        expect.objectContaining({ msg: "OpenCode server generation exited", port: 4081 }),
+      ]),
+    );
+  });
+  test("shares one real SDK event stream across acquisitions until generation shutdown", async () => {
+    const responses: ServerResponse[] = [];
+    let requestCount = 0;
+    const upstream = createServer((_request, response) => {
+      requestCount += 1;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.flushHeaders();
+      responses.push(response);
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("Missing upstream address");
+    const { manager } = createTestManager([address.port]);
+
+    const first = await manager.acquireCurrent();
+    const second = await manager.acquireCurrent();
+    expect(first.events).toBe(second.events);
+    await vi.waitFor(() => expect(responses).toHaveLength(1));
+    responses[0]?.write(
+      `data: ${JSON.stringify({ directory: "/workspace", payload: { type: "server.connected", properties: {} } })}\n\n`,
+    );
+    await first.events.ready();
+    expect(requestCount).toBe(1);
+
+    await first.release();
+    expect(requestCount).toBe(1);
+    await second.release();
+    expect(requestCount).toBe(1);
+    await manager.shutdown();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
   test("uses an explicit base environment for the server process", async () => {
     const baseEnv = { HOME: "/isolated/home", PATH: "/isolated/bin" };
     const { manager, runtime } = createTestManager([4091], { baseEnv });
@@ -475,6 +531,7 @@ describe("OpenCodeServerManager generations", () => {
     const acquisition = await manager.acquireCurrent();
 
     expect(runtime.spawnCalls[0]?.options.baseEnv).toEqual(baseEnv);
+    expect(acquisition.environment).toBe(runtime.spawnCalls[0]?.options.baseEnv);
     await acquisition.release();
   });
 
@@ -604,6 +661,25 @@ describe("OpenCodeServerManager generations", () => {
     await failure;
     expect(runtime.terminatedPorts).toEqual([4471]);
     expect(await runtime.managedProcesses.list()).toEqual([]);
+  });
+
+  test("aborted acquisition transfers no reference and leaves startup reusable", async () => {
+    const { manager, runtime } = createTestManager([4477], { autoAnnounce: false });
+    const controller = new AbortController();
+
+    const abortedAcquisition = manager.acquireCurrent(controller.signal);
+    await runtime.settle();
+    controller.abort(new Error("catalog refresh expired"));
+
+    await expect(abortedAcquisition).rejects.toThrow("catalog refresh expired");
+    runtime.processForPort(4477).announceListening();
+
+    const nextAcquisition = await manager.acquireCurrent();
+    expect(nextAcquisition.server.url).toBe("http://127.0.0.1:4477");
+    expect(runtime.launchedPorts).toEqual([4477]);
+
+    await nextAcquisition.release();
+    expect(runtime.terminatedPorts).toEqual([4477]);
   });
 
   test("shutdown kills a server that is still starting", async () => {
@@ -761,7 +837,7 @@ describe("OpenCodeServerManager managed process ledger", () => {
 describe.runIf(process.platform === "win32")(
   "OpenCodeServerManager Windows OpenCode npm install",
   () => {
-    test("starts the helper server from opencode.exe instead of the npm opencode.cmd shim", async () => {
+    test("resolves the Windows npm shim to its native helper executable", async () => {
       const detectedOpenCode = await findExecutable("opencode");
       expect(detectedOpenCode, "Windows CI must install opencode-ai before server tests").not.toBe(
         null,
@@ -770,43 +846,35 @@ describe.runIf(process.platform === "win32")(
 
       const tempDir = mkdtempSync(path.join(os.tmpdir(), "opencode-real-windows-"));
       const opencodeHomeDir = path.join(tempDir, "opencode-home");
-      const managedProcesses = new FakeManagedProcesses();
+      const runtime = new FakeOpenCodeServerRuntime([4604], { autoAnnounce: true });
       const manager = new OpenCodeServerManager({
         logger: createTestLogger(),
-        managedProcesses,
+        managedProcesses: runtime.managedProcesses,
         resolveHomeDir: () => opencodeHomeDir,
+        portAllocator: runtime.allocatePort,
+        spawnServerProcess: runtime.spawnServerProcess,
+        terminateProcess: runtime.terminateProcess,
       });
-      let acquiredPort: number | null = null;
 
       try {
-        const acquisition = await manager.acquireDedicated({
-          OPENCODE_AUTH_CONTENT: "{}",
-          OPENCODE_DISABLE_AUTOUPDATE: "1",
-          OPENCODE_DISABLE_AUTOCOMPACT: "1",
-          OPENCODE_DISABLE_MODELS_FETCH: "1",
-          OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-          OPENCODE_PURE: "1",
-          OPENCODE_TEST_HOME: path.join(tempDir, "test-home"),
-        });
-        acquiredPort = acquisition.server.port;
-
-        const records = await managedProcesses.list();
+        // Resolve the actual npm installation. Generation lifecycle coverage above
+        // owns process readiness; this regression owns the Windows launch command.
+        const acquisition = await manager.acquireCurrent();
+        const records = await runtime.managedProcesses.list();
         expect(records).toHaveLength(1);
         const record = records[0]!;
         expect(path.extname(record.command).toLowerCase()).toBe(".exe");
-        expect(path.normalize(record.command).toLowerCase()).toContain(
-          path.normalize("node_modules/opencode-ai/bin/opencode.exe").toLowerCase(),
+        expect(path.normalize(record.command).toLowerCase()).toMatch(
+          /opencode-(?:ai|windows-(?:x64|arm64))[\\/]bin[\\/]opencode\.exe$/,
         );
         expect(record.command.toLowerCase()).not.toBe(detectedOpenCode!.toLowerCase());
-        expect(record.args).toEqual(["serve", "--port", String(acquiredPort)]);
+        expect(record.args).toEqual(["serve", "--port", String(acquisition.server.port)]);
+        await acquisition.release();
       } finally {
-        await manager.shutdown().catch(() => undefined);
-        if (acquiredPort !== null) {
-          await waitForClosedPort(acquiredPort, 5_000);
-        }
-        rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        await manager.shutdown();
+        rmSync(tempDir, { recursive: true, force: true });
       }
-    }, 60_000);
+    });
   },
 );
 
@@ -875,6 +943,7 @@ function createTestManager(
     includeStdin?: boolean;
     portAllocator?: () => Promise<number>;
     terminationGate?: Promise<void>;
+    logger?: Logger;
   } = {},
 ): {
   manager: OpenCodeServerManager;
@@ -889,7 +958,7 @@ function createTestManager(
   });
   return {
     manager: new OpenCodeServerManager({
-      logger: createTestLogger(),
+      logger: options.logger ?? createTestLogger(),
       baseEnv: options.baseEnv,
       managedProcesses: runtime.managedProcesses,
       portAllocator: options.portAllocator ?? runtime.allocatePort,
@@ -903,6 +972,17 @@ function createTestManager(
     }),
     runtime,
   };
+}
+
+function createCapturingLogger(): { logger: Logger; records: Array<Record<string, unknown>> } {
+  const records: Array<Record<string, unknown>> = [];
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      records.push(JSON.parse(chunk.toString()) as Record<string, unknown>);
+      callback();
+    },
+  });
+  return { logger: pino({ level: "info" }, stream), records };
 }
 
 class FakeOpenCodeServerRuntime {
@@ -1079,38 +1159,4 @@ class FakeManagedProcesses implements ManagedProcessRegistry {
       errors: [],
     };
   }
-}
-
-async function waitForClosedPort(port: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!(await canConnectToPort(port))) {
-      return;
-    }
-    await sleep(100);
-  }
-  throw new Error(`OpenCode helper server still accepts connections on port ${port}`);
-}
-
-function canConnectToPort(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = net.createConnection({ host: "127.0.0.1", port });
-    let settled = false;
-    const settle = (connected: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      socket.destroy();
-      resolve(connected);
-    };
-
-    socket.once("connect", () => settle(true));
-    socket.once("error", () => settle(false));
-    socket.setTimeout(500, () => settle(false));
-  });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

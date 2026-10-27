@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { StyleSheet } from "react-native-unistyles";
 import type { SignInMethod } from "@getpaseo/protocol/accounts/schemas";
 import { Button } from "@/components/ui/button";
-import { SettingsSection } from "@/screens/settings/settings-section";
+import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { settingsStyles } from "@/styles/settings";
 import { signOut } from "./client";
 import { useAccountsEndpoint } from "./endpoint";
@@ -19,7 +19,7 @@ const METHOD_LABEL_KEYS: Record<SignInMethod, string> = {
 const styles = StyleSheet.create((theme) => ({
   error: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     marginTop: theme.spacing[1],
   },
 }));

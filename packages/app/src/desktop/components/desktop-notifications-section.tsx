@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDesktopPermissions } from "@/desktop/permissions/use-desktop-permissions";
 import { useDesktopSettings } from "@/desktop/settings/desktop-settings";
-import { SettingsSection } from "@/screens/settings/settings-section";
+import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { getDesktopHost, isElectronRuntimeMac } from "@/desktop/host";
 import { settingsStyles } from "@/styles/settings";
 
@@ -222,6 +222,7 @@ export function DesktopNotificationsSection() {
       </View>
       {settingsState === "error" ? (
         <Alert
+          size="sm"
           variant="error"
           title={t("settings.notifications.openSettingsFailed")}
           description={t("settings.notifications.openSettingsManually")}
@@ -230,6 +231,7 @@ export function DesktopNotificationsSection() {
       ) : null}
       {testNotificationState.status === "success" ? (
         <Alert
+          size="sm"
           variant="info"
           title={t("settings.notifications.sentTitle")}
           description={t("settings.notifications.sentDescription")}
@@ -238,6 +240,7 @@ export function DesktopNotificationsSection() {
       ) : null}
       {testNotificationState.status === "error" ? (
         <Alert
+          size="sm"
           variant="error"
           title={t("settings.notifications.sendFailedTitle")}
           description={testNotificationState.message}

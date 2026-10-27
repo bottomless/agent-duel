@@ -32,7 +32,7 @@ export function validateDraftSubmission(input: {
   };
   autoSubmitConfig: WorkspaceDraftAutoSubmitConfig | null;
   workspaceDirectory: string | null;
-  hasClient: boolean;
+  isConnected: boolean;
 }): string | null {
   const {
     text,
@@ -40,7 +40,7 @@ export function validateDraftSubmission(input: {
     composerState,
     autoSubmitConfig,
     workspaceDirectory,
-    hasClient,
+    isConnected,
   } = input;
   const readiness = resolveSubmissionReadiness({
     text,
@@ -54,7 +54,7 @@ export function validateDraftSubmission(input: {
     },
     autoSubmitConfig,
     workspaceDirectory,
-    hasClient,
+    isConnected,
   });
   return readiness.ok ? null : (readiness.reason ?? null);
 }

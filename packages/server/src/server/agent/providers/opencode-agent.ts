@@ -1,3 +1,4 @@
+import { validateProviderOptions } from "../provider-options.js";
 import { ArenaSessionActivitySchema } from "@getpaseo/protocol/arena/activity";
 import { ArenaEnvironmentTrimSchema } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
@@ -31,6 +32,8 @@ import {
 } from "@opencode-ai/sdk/v2/client";
 import fs from "node:fs/promises";
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
+import { randomBytes, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { createPathEquivalenceMatcher } from "../../../utils/path.js";
 import pLimit from "p-limit";
 import type { Logger } from "pino";
@@ -69,6 +72,7 @@ import {
   type AgentTimelineItem,
   type AgentUsage,
   type FetchCatalogOptions,
+  type ProviderRefreshContext,
   type ImportableProviderSession,
   type ImportProviderSessionContext,
   type ImportProviderSessionInput,
@@ -77,10 +81,16 @@ import {
   type ResolveAgentCreateConfigResult,
   type McpServerConfig,
   type ProviderCatalog,
+  type SteerActiveTurnOptions,
+  type SteerResult,
   type ToolCallDetail,
   type ToolCallTimelineItem,
 } from "../agent-sdk-types.js";
 import { importSessionFromPersistence } from "../provider-session-import.js";
+import {
+  raceProviderRefreshAbort,
+  runProviderRefreshActivity,
+} from "../provider-refresh-deadline.js";
 import {
   isDefaultAgentCreateConfigUnattended,
   resolveDefaultAgentCreateConfig,
@@ -94,11 +104,22 @@ import { withTimeout } from "../../../utils/promise-timeout.js";
 import { execCommand } from "../../../utils/spawn.js";
 import { mapOpencodeToolCall } from "./opencode/tool-call-mapper.js";
 import {
+  OPENCODE_EVENT_STREAM_READY_TIMEOUT_MS,
   OpenCodeServerManager,
+  OPENCODE_SERVER_STARTUP_TIMEOUT_MS,
+  ARENA_BACKEND_EXECUTABLE_ENV,
+  ARENA_BACKEND_ROOT_ENV,
   resolveOpenCodeServerLaunch,
   type OpenCodeServerAcquisition,
   type OpenCodeServerManagerLike,
 } from "./opencode/server-manager.js";
+import type { OpenCodeBridge } from "./opencode/bridge.js";
+import {
+  OpenCodeEventConsumer,
+  type OpenCodeEventStreamDiagnostics,
+  type OpenCodeEventSource,
+  type OpenCodeEventSourceInput,
+} from "./opencode/event-consumer.js";
 import { resolveOpenCodeHomeDir } from "./opencode/paths.js";
 import {
   formatProviderDiagnostic,
@@ -139,6 +160,17 @@ function parseJsonOrNull(text: string): unknown {
   }
 }
 
+function formatOpenCodeEventStreamDiagnostics(diagnostics: OpenCodeEventStreamDiagnostics): string {
+  return [
+    "opencode-stream",
+    `attempt=${diagnostics.attempt}`,
+    `phase=${diagnostics.phase}`,
+    `elapsedMs=${diagnostics.elapsedMs}`,
+    ...(diagnostics.lastOutcome ? [`lastOutcome=${diagnostics.lastOutcome}`] : []),
+    ...(diagnostics.lastError ? [`lastError=${JSON.stringify(diagnostics.lastError)}`] : []),
+  ].join(" ");
+}
+
 const OPENCODE_CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: true,
   supportsSessionPersistence: true,
@@ -155,10 +187,60 @@ const OPENCODE_CAPABILITIES: AgentCapabilityFlags = {
 const OPENCODE_BUILD_MODE_ID = "build";
 const OPENCODE_LEGACY_FULL_ACCESS_MODE_ID = "full-access";
 const OPENCODE_DEFAULT_VARIANT_ID = "default";
+
+// The Arena engine lists no providers so contestants stay blind (`arena/privacy.ts`
+// `providerList` in arena-backend), so its models cannot be looked up in that catalog.
+function isArenaModel(modelId: string): boolean {
+  return modelId.startsWith("arena/");
+}
+
+const EMPTY_OPENCODE_EVENT_SOURCE: OpenCodeEventSource = {
+  ready: async () => undefined,
+  subscribe: () => () => undefined,
+};
+const OPENCODE_ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+let lastOpenCodeMessageTimestamp = -1;
+let openCodeMessageCounter = 0;
+
+function createOpenCodeMessageId(
+  now = Date.now(),
+  random = (length: number) =>
+    Array.from(randomBytes(length), (value) => OPENCODE_ID_ALPHABET[value % 62]).join(""),
+): string {
+  if (now !== lastOpenCodeMessageTimestamp) openCodeMessageCounter = 0;
+  lastOpenCodeMessageTimestamp = now;
+  openCodeMessageCounter += 1;
+  const ascending = (BigInt(now) * 0x1000n + BigInt(openCodeMessageCounter))
+    .toString(16)
+    .padStart(12, "0")
+    .slice(-12);
+  return `msg_${ascending}${random(14)}`;
+}
 const OPENCODE_AUTO_ACCEPT_FEATURE_ID = "auto_accept";
 const OPENCODE_PERSISTED_SESSION_LIMIT = 200;
 const OPENCODE_PENDING_ABORT_START_TIMEOUT_MS = 10_000;
 const OPENCODE_CHILD_SESSION_HYDRATION_LIMIT = 100;
+const OPENCODE_STOP_STATUS_MAX_DELAY_MS = 1_000;
+
+function waitForOpenCodeStopProbe(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs).unref();
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function recoverChildStatus(snapshot: boolean, type: unknown, assistant?: OpenCodeSessionMessage) {
+  if (type === "busy" || type === "retry") return "running";
+  if (assistant && "error" in assistant.info && assistant.info.error) return "failed";
+  const time = assistant?.info.time;
+  if (snapshot || (time && "completed" in time && time.completed !== undefined)) return "completed";
+}
+
 const OPENCODE_CHILD_SESSION_SERVER_REGISTRY_LIMIT = 500;
 const OPENCODE_PERMISSION_ACTION_ALLOW_ONCE = "allow_once";
 const OPENCODE_PERMISSION_ACTION_ALLOW_ALWAYS = "allow_always";
@@ -319,6 +401,16 @@ type OpenCodeAgentConfig = Omit<AgentSessionConfig, "providerOptions"> & {
   /** The daemon's `$PASEO_HOME/uploads`; see `uploadDirectoriesForPrompt`. */
   uploadsRoot?: string;
 };
+
+const OPENCODE_SESSION_ENV_KEYS = new Set(["PASEO_AGENT_ID", "PASEO_AGENT_CWD"]);
+
+function requiresDedicatedOpenCodeServer(
+  config: OpenCodeAgentConfig,
+  launchContext?: AgentLaunchContext,
+): boolean {
+  if (config.mcpServers && Object.keys(config.mcpServers).length > 0) return true;
+  return Object.keys(launchContext?.env ?? {}).some((key) => !OPENCODE_SESSION_ENV_KEYS.has(key));
+}
 type OpenCodeMessageRole = "user" | "assistant";
 type OpenCodePersistedSession = OpenCodeSession | OpenCodeGlobalSession;
 
@@ -342,9 +434,9 @@ type OpenCodeMcpConfig =
     };
 
 const MCP_ALREADY_PRESENT_ERROR_TOKENS = ["already", "exists", "connected"] as const;
-const OPENCODE_PROVIDER_LIST_TIMEOUT_MS = 30_000;
 const OPENCODE_METADATA_CONCURRENCY = 4;
 const openCodeMetadataLimit = pLimit(OPENCODE_METADATA_CONCURRENCY);
+
 const OPENCODE_HANDLED_BUILTIN_SLASH_COMMANDS: AgentSlashCommand[] = [
   {
     name: "compact",
@@ -588,19 +680,6 @@ function readOpenCodeMcpOperationError(data: unknown, name: string): unknown {
   return entry.error ?? `OpenCode reported MCP server '${name}' failed`;
 }
 
-function resolvePartDedupeKey(
-  part: { id: string; messageID: string },
-  partType: "text" | "reasoning",
-): string | null {
-  if (part.id.trim().length > 0) {
-    return `${partType}:${part.id}`;
-  }
-  if (part.messageID.trim().length > 0) {
-    return `${partType}:message:${part.messageID}`;
-  }
-  return null;
-}
-
 function matchesHydratedFingerprint(
   fingerprints: Map<string, string> | undefined,
   id: string,
@@ -781,11 +860,14 @@ function buildOpenCodeModelDefinition(
   },
 ): AgentModelDefinition {
   const rawVariants = model.variants ? Object.keys(model.variants) : [];
-  // OpenCode lists only overrides; its base model behavior is selected by omitting `variant`.
+  // Like OpenCode's web UI, Default omits `variant` and lets OpenCode resolve it.
+  // Reserve that choice instead of exposing a second upstream `default` entry.
   const thinkingOptions = rawVariants.length
     ? [
         { id: OPENCODE_DEFAULT_VARIANT_ID, label: "Default", isDefault: true },
-        ...rawVariants.map((id) => ({ id, label: id })),
+        ...rawVariants
+          .filter((id) => id !== OPENCODE_DEFAULT_VARIANT_ID)
+          .map((id) => ({ id, label: id })),
       ]
     : [];
 
@@ -1043,12 +1125,22 @@ function buildOpenCodeUserTimelineText(prompt: AgentPromptInput): string {
     .join("\n");
 }
 
+function isOpenCodeDefinitiveSteerRejection(error: unknown, status?: number): boolean {
+  if (status === 404) return true;
+  const message = toDiagnosticErrorMessage(error).toLowerCase();
+  return /session\s+(?:is\s+)?(?:not found|inactive|not active|not running)/.test(message);
+}
+
 async function collectOpenCodeImportableSessionsFromSdk(
   client: Pick<OpencodeClient, "experimental">,
   options?: ListImportableSessionsOptions,
 ): Promise<ImportableProviderSession[]> {
   const limit = options?.limit ?? OPENCODE_PERSISTED_SESSION_LIMIT;
-  const sessionListLimit = options?.cwd ? Math.max(limit, OPENCODE_PERSISTED_SESSION_LIMIT) : limit;
+  const scanLimit = Math.min(options?.scanLimit ?? limit, 500);
+  const sessionListLimit = Math.min(
+    options?.cwd ? Math.max(scanLimit, OPENCODE_PERSISTED_SESSION_LIMIT) : scanLimit,
+    500,
+  );
   const response = await client.experimental.session.list({
     archived: true,
     roots: true,
@@ -1060,9 +1152,7 @@ async function collectOpenCodeImportableSessionsFromSdk(
     throw new Error(`Failed to list OpenCode sessions: ${JSON.stringify(response.error)}`);
   }
 
-  const matchesCwd = options?.cwd ? createPathEquivalenceMatcher(options.cwd) : null;
-  return (response.data ?? [])
-    .filter((session) => !matchesCwd || matchesCwd(session.directory))
+  return selectOpenCodeSessionsForWorkspace(response.data ?? [], options?.cwd)
     .sort((left, right) => getOpenCodeSessionTimestamp(right) - getOpenCodeSessionTimestamp(left))
     .slice(0, limit)
     .map((session) => ({
@@ -1073,6 +1163,25 @@ async function collectOpenCodeImportableSessionsFromSdk(
       lastPromptPreview: null,
       lastActivityAt: new Date(getOpenCodeSessionTimestamp(session)),
     }));
+}
+
+function selectOpenCodeSessionsForWorkspace(
+  sessions: OpenCodePersistedSession[],
+  cwd: string | undefined,
+): OpenCodePersistedSession[] {
+  if (!cwd) return sessions;
+  const belongsToWorkspace = createPathEquivalenceMatcher(cwd);
+  return sessions.filter((session) => belongsToWorkspace(session.directory));
+}
+
+function openCodeCatalogDirectory(
+  options: FetchCatalogOptions,
+  resolveHomeDir: () => string,
+): { directory: string; needsDirectory: boolean } {
+  if (options.scope === "workspace") {
+    return { directory: options.cwd, needsDirectory: false };
+  }
+  return { directory: resolveHomeDir(), needsDirectory: true };
 }
 
 function normalizeOpenCodeSessionTitle(title: string | null | undefined): string | null {
@@ -1186,11 +1295,15 @@ function findOpenCodeCompactionPart(
 async function readOpenCodeSessionMessagesFromSdk(
   client: Pick<OpencodeClient, "session">,
   session: OpenCodePersistedSession,
+  signal?: AbortSignal,
 ): Promise<OpenCodeSessionMessage[]> {
-  const response = await client.session.messages({
-    sessionID: session.id,
-    directory: session.directory,
-  });
+  const response = await client.session.messages(
+    {
+      sessionID: session.id,
+      directory: session.directory,
+    },
+    signal ? { signal } : undefined,
+  );
 
   if (response.error || !response.data) {
     return [];
@@ -1298,7 +1411,7 @@ function buildOpenCodeReplayUserMessage(
     if (part.type === "text") {
       const attachment = arenaAttachment(part.metadata);
       if (attachment !== undefined) labeledAttachments.push(attachment);
-      else if (part.synthetic !== true) text += part.text;
+      else if (isUserAuthoredOpenCodeText(part)) text += part.text;
       continue;
     }
     if (part.type === "file" && part.mime.startsWith("image/")) {
@@ -1396,6 +1509,7 @@ interface OpenCodeAgentClientDeps {
   createClient?: OpenCodeClientFactory;
   resolveHomeDir?: () => string;
   managedProcesses?: ManagedProcessRegistry;
+  bridge?: OpenCodeBridge;
   arenaMode?: boolean;
   getArenaPreviewBaseUrl?: () => string | null;
   uploadsRoot?: string;
@@ -1533,6 +1647,14 @@ function createSdkOpenCodeClient(options: {
   } satisfies OpencodeClientConfig & { directory: string });
 }
 
+/** Whether OpenCode sessions run on the Agent Arena backend instead of a stock OpenCode. */
+export function isOpenCodeArenaBackendConfigured(): boolean {
+  return Boolean(
+    process.env[ARENA_BACKEND_ROOT_ENV]?.trim() ||
+    process.env[ARENA_BACKEND_EXECUTABLE_ENV]?.trim(),
+  );
+}
+
 const GitMetadataResultSchema = z.union([
   z.object({ message: z.string().min(1) }),
   z.object({ title: z.string().min(1), body: z.string() }),
@@ -1542,7 +1664,7 @@ const GitMetadataResultSchema = z.union([
 
 export class OpenCodeAgentClient implements AgentClient {
   readonly provider = "opencode" as const;
-  readonly capabilities = OPENCODE_CAPABILITIES;
+  readonly capabilities: AgentCapabilityFlags;
   readonly resolveCreateConfig = resolveOpenCodeCreateConfig;
   readonly isCreateConfigUnattended = isOpenCodeCreateConfigUnattended;
 
@@ -1552,6 +1674,7 @@ export class OpenCodeAgentClient implements AgentClient {
   private readonly logger: Logger;
   private readonly runtimeSettings?: ProviderRuntimeSettings;
   private readonly modelContextWindows = new Map<string, number>();
+  private readonly bridge?: OpenCodeBridge;
   private readonly arenaMode: boolean;
   private readonly moveSession: (input: OpenCodeMoveSessionInput) => Promise<void>;
   private readonly forkArenaSession: (input: OpenCodeArenaForkInput) => Promise<string>;
@@ -1563,23 +1686,47 @@ export class OpenCodeAgentClient implements AgentClient {
     deps: OpenCodeAgentClientDeps = {},
   ) {
     this.logger = logger.child({ module: "agent", provider: "opencode" });
+    this.arenaMode = deps.arenaMode ?? isOpenCodeArenaBackendConfigured();
+    // The bridge plugin hooks the shell of every session on its server, and an Arena backend's
+    // contestants are sessions no Paseo agent is bound to.
+    this.bridge = this.arenaMode ? undefined : deps.bridge;
+    this.capabilities = {
+      ...OPENCODE_CAPABILITIES,
+      ...(this.bridge ? { supportsNativePaseoTools: true } : {}),
+    };
     this.runtimeSettings = runtimeSettings;
+    this.createOpenCodeClient = deps.createClient ?? createSdkOpenCodeClient;
     this.serverManager =
       deps.serverManager ??
       OpenCodeServerManager.getInstance(this.logger, runtimeSettings, {
         managedProcesses: deps.managedProcesses,
         resolveHomeDir: deps.resolveHomeDir,
         getArenaPreviewBaseUrl: deps.getArenaPreviewBaseUrl,
+        createEventSource: ({
+          serverUrl,
+          processExit,
+          listening,
+          logger: eventLogger,
+          controlToken,
+        }) =>
+          new OpenCodeEventConsumer({
+            serverUrl,
+            processExit,
+            listening,
+            logger: eventLogger,
+            createClient: (baseUrl) =>
+              this.createOpenCodeClient({
+                baseUrl,
+                directory: "",
+                ...(this.arenaMode ? { controlToken } : {}),
+              }),
+          }),
+        decorateServerEnv: this.bridge
+          ? (env) => this.bridge?.decorateServerEnv(env) ?? env
+          : undefined,
       });
-    this.createOpenCodeClient = deps.createClient ?? createSdkOpenCodeClient;
     this.resolveHomeDir = deps.resolveHomeDir ?? resolveOpenCodeHomeDir;
     this.uploadsRoot = deps.uploadsRoot;
-    this.arenaMode =
-      deps.arenaMode ??
-      Boolean(
-        process.env["PASEO_ARENA_BACKEND_ROOT"]?.trim() ||
-        process.env["PASEO_ARENA_BACKEND_EXECUTABLE"]?.trim(),
-      );
     this.moveSession = deps.moveSession ?? moveOpenCodeSession;
     this.forkArenaSession = deps.forkArenaSession ?? forkArenaOpenCodeSession;
   }
@@ -1713,24 +1860,12 @@ export class OpenCodeAgentClient implements AgentClient {
     };
   }
 
-  private acquireSessionServer(
-    launchContext?: AgentLaunchContext,
-  ): Promise<OpenCodeServerAcquisition> {
-    // Arena's backend already isolates contestant state by chat, session, and
-    // worktree. Sharing one ref-counted server avoids retaining a heavyweight
-    // Bun process for every open Arena workspace.
-    if (this.arenaMode || !launchContext?.env) {
-      return this.serverManager.acquireCurrent();
-    }
-    return this.serverManager.acquireDedicated(launchContext.env);
-  }
-
   private arenaRecovery(config: OpenCodeAgentConfig): ArenaRuntimeRecovery | undefined {
     if (!this.arenaMode) return;
     return {
       acquire: async (url) =>
         this.serverManager.acquireExisting(url) ?? (await this.serverManager.acquireCurrent()),
-      createClient: (server) => this.createServerClient(server, config.cwd),
+      connect: (acquisition) => this.toServerConnection(acquisition, config.cwd),
     };
   }
 
@@ -1740,15 +1875,30 @@ export class OpenCodeAgentClient implements AgentClient {
     options?: AgentCreateSessionOptions,
   ): Promise<AgentSession> {
     const openCodeConfig = this.assertConfig(config);
-    const acquisition = await this.acquireSessionServer(launchContext);
-    const { url } = acquisition.server;
-    const client = this.createServerClient(acquisition.server, openCodeConfig.cwd);
+    const connectServer = this.connectServer.bind(this, openCodeConfig, launchContext);
+    const connection = await connectServer();
+    const { client } = connection;
+
+    // OpenCode stores permission rules on the session, so they are set here and on resume
+    // rather than sent with each prompt, which drops them.
+    const permission = buildOpenCodePermissionRules(
+      openCodeConfig.providerOptions,
+      openCodeConfig.toolPolicy,
+    );
 
     try {
+      // Creating the first session for a directory is part of OpenCode coming up, so it
+      // shares the server startup budget instead of a shorter one that fails agent
+      // creation on contended cold starts.
       const response = await withTimeout(
-        client.session.create({ directory: openCodeConfig.cwd }),
-        10_000,
-        "OpenCode session.create timed out after 10s",
+        client.session.create({
+          directory: openCodeConfig.cwd,
+          ...(permission ? { permission } : {}),
+        }),
+        OPENCODE_SERVER_STARTUP_TIMEOUT_MS,
+        `OpenCode session.create timed out after ${Math.round(
+          OPENCODE_SERVER_STARTUP_TIMEOUT_MS / 1000,
+        )}s`,
       );
 
       if (response.error) {
@@ -1761,23 +1911,28 @@ export class OpenCodeAgentClient implements AgentClient {
       }
 
       await this.populateModelContextWindowCache(client, openCodeConfig.cwd);
+      const unbindBridge = this.bindBridgeSession(session.id, launchContext);
 
       return new OpenCodeAgentSession(
         openCodeConfig,
         client,
         session.id,
         this.logger,
+        connection.environment,
         new Map(this.modelContextWindows),
-        acquisition.release,
+        connection.events,
+        connection.release,
         options?.persistSession,
         launchContext?.agentId,
-        url,
+        connection.url,
         false,
+        unbindBridge,
+        connectServer,
         this.arenaRecovery(openCodeConfig),
-        this.arenaMode ? acquisition.server.controlToken : undefined,
+        connection.controlToken,
       );
     } catch (error) {
-      await acquisition.release();
+      await connection.release();
       throw error;
     }
   }
@@ -1791,8 +1946,8 @@ export class OpenCodeAgentClient implements AgentClient {
       throw new Error("OpenCode fork requires a source session id");
     }
     const openCodeConfig = this.assertConfig(input.config);
-    let acquisition = await this.acquireSessionServer(input.launchContext);
-    let { url } = acquisition.server;
+    let acquisition = await this.acquireServer(openCodeConfig, input.launchContext);
+    const { url } = acquisition.server;
     const sourceClient = this.createServerClient(acquisition.server, input.sourceCwd);
     let forkedSessionId: string | null = null;
     let forkCwd = input.sourceCwd;
@@ -1869,27 +2024,34 @@ export class OpenCodeAgentClient implements AgentClient {
           }
           await acquisition.release();
           acquisition = refreshedAcquisition;
-          url = refreshedAcquisition.server.url;
         }
         forkCwd = openCodeConfig.cwd;
       }
 
-      const targetClient = this.createServerClient(acquisition.server, openCodeConfig.cwd);
+      const connection = this.toServerConnection(acquisition, openCodeConfig.cwd);
+      const targetClient = connection.client;
+      // A fork starts without the source's permission rules.
+      await this.applySessionPermissionRules(targetClient, openCodeConfig, forkedSessionId);
       await this.populateModelContextWindowCache(targetClient, openCodeConfig.cwd);
+      const unbindBridge = this.bindBridgeSession(forkedSessionId, input.launchContext);
 
       return new OpenCodeAgentSession(
         openCodeConfig,
         targetClient,
         forkedSessionId,
         this.logger,
+        connection.environment,
         new Map(this.modelContextWindows),
-        acquisition.release,
+        connection.events,
+        connection.release,
         input.options?.persistSession,
         input.launchContext?.agentId,
-        url,
+        connection.url,
         false,
+        unbindBridge,
+        this.connectServer.bind(this, openCodeConfig, input.launchContext),
         this.arenaRecovery(openCodeConfig),
-        this.arenaMode ? acquisition.server.controlToken : undefined,
+        connection.controlToken,
       );
     } catch (error) {
       if (forkedSessionId) {
@@ -1958,45 +2120,127 @@ export class OpenCodeAgentClient implements AgentClient {
     const registeredAcquisition = registeredServerUrl
       ? this.serverManager.acquireExisting(registeredServerUrl)
       : null;
-    const acquisition = registeredAcquisition ?? (await this.acquireSessionServer(launchContext));
-    const { url } = acquisition.server;
-    const client = this.createServerClient(acquisition.server, openCodeConfig.cwd);
+    const connectServer = this.connectServer.bind(this, openCodeConfig, launchContext);
+    const connection = registeredAcquisition
+      ? this.toServerConnection(registeredAcquisition, openCodeConfig.cwd)
+      : await connectServer();
+    const { client } = connection;
 
     try {
+      await this.applySessionPermissionRules(client, openCodeConfig, handle.sessionId);
       await this.populateModelContextWindowCache(client, openCodeConfig.cwd);
+      const unbindBridge = this.bindBridgeSession(handle.sessionId, launchContext);
 
       return new OpenCodeAgentSession(
         openCodeConfig,
         client,
         handle.sessionId,
         this.logger,
+        connection.environment,
         new Map(this.modelContextWindows),
-        acquisition.release,
+        connection.events,
+        connection.release,
         undefined,
         launchContext?.agentId,
-        url,
+        connection.url,
         registeredAcquisition !== null,
+        unbindBridge,
+        connectServer,
         this.arenaRecovery(openCodeConfig),
-        this.arenaMode ? acquisition.server.controlToken : undefined,
+        connection.controlToken,
       );
     } catch (error) {
-      await acquisition.release();
+      await connection.release();
       throw error;
     }
   }
 
-  async fetchCatalog(options: FetchCatalogOptions): Promise<ProviderCatalog> {
-    const acquisition = options.force
-      ? await this.serverManager.acquireNew()
-      : await this.serverManager.acquireCurrent();
-    const isGlobalCatalog = options.scope === "global";
+  private async applySessionPermissionRules(
+    client: OpencodeClient,
+    config: OpenCodeAgentConfig,
+    sessionId: string,
+  ): Promise<void> {
+    const permission = buildOpenCodePermissionRules(config.providerOptions, config.toolPolicy);
+    if (!permission) return;
+    const response = readOpenCodeRecord(
+      await client.session.update({ sessionID: sessionId, directory: config.cwd, permission }),
+    );
+    if (response?.error) {
+      throw new Error(
+        `Failed to apply OpenCode session permission rules: ${toDiagnosticErrorMessage(response.error)}`,
+      );
+    }
+  }
 
+  private async connectServer(
+    config: OpenCodeAgentConfig,
+    launchContext?: AgentLaunchContext,
+  ): Promise<OpenCodeServerConnection> {
+    const acquisition = await this.acquireServer(config, launchContext);
+    return this.toServerConnection(acquisition, config.cwd);
+  }
+
+  private toServerConnection(
+    acquisition: OpenCodeServerAcquisition,
+    directory: string,
+  ): OpenCodeServerConnection {
+    return {
+      client: this.createServerClient(acquisition.server, directory),
+      events: acquisition.events,
+      environment: acquisition.environment,
+      url: acquisition.server.url,
+      release: acquisition.release,
+      ...(this.arenaMode ? { controlToken: acquisition.server.controlToken } : {}),
+    };
+  }
+
+  private acquireServer(
+    config: OpenCodeAgentConfig,
+    launchContext?: AgentLaunchContext,
+  ): Promise<OpenCodeServerAcquisition> {
+    // Arena's backend already isolates contestant state by chat, session, and
+    // worktree. Sharing one ref-counted server avoids retaining a heavyweight
+    // Bun process for every open Arena workspace.
+    if (this.arenaMode) {
+      return this.serverManager.acquireCurrent();
+    }
+    if (!this.bridge || requiresDedicatedOpenCodeServer(config, launchContext)) {
+      return launchContext?.env
+        ? this.serverManager.acquireDedicated(launchContext.env)
+        : this.serverManager.acquireCurrent();
+    }
+    return this.serverManager.acquireCurrent();
+  }
+
+  private bindBridgeSession(
+    sessionId: string,
+    launchContext?: AgentLaunchContext,
+  ): (() => void) | undefined {
+    if (!this.bridge || !launchContext) return undefined;
+    return this.bridge.bindSession({
+      sessionId,
+      env: launchContext.env ?? {},
+      tools: launchContext.paseoTools,
+    });
+  }
+
+  async fetchCatalog(
+    options: FetchCatalogOptions,
+    context?: ProviderRefreshContext,
+  ): Promise<ProviderCatalog> {
+    let acquisition: OpenCodeServerAcquisition | undefined;
     try {
-      // OpenCode treats the catalog directory as a workspace. The global catalog
-      // is not a project, so use the neutral OpenCode home instead of user home.
-      const directory = isGlobalCatalog ? this.resolveHomeDir() : options.cwd;
+      await runProviderRefreshActivity(context, "server.acquire", async () => {
+        acquisition = options.force
+          ? await this.serverManager.acquireNew(context?.signal)
+          : await this.serverManager.acquireCurrent(context?.signal);
+      });
+      if (!acquisition) throw new Error("OpenCode server acquisition did not complete");
+      context?.signal.throwIfAborted();
+      const catalogDirectory = openCodeCatalogDirectory(options, this.resolveHomeDir);
+      const { directory } = catalogDirectory;
 
-      if (isGlobalCatalog) {
+      if (catalogDirectory.needsDirectory) {
         await fs.mkdir(directory, { recursive: true });
         this.logger.debug(
           { directory },
@@ -2006,12 +2250,12 @@ export class OpenCodeAgentClient implements AgentClient {
 
       const client = this.createServerClient(acquisition.server, directory);
       const [models, modes] = await Promise.all([
-        this.fetchModelsFromClient(client, directory),
-        this.fetchModesFromClient(client, directory),
+        this.fetchModelsFromClient(client, directory, context),
+        this.fetchModesFromClient(client, directory, context),
       ]);
       return { models, modes };
     } finally {
-      await acquisition.release();
+      await acquisition?.release();
     }
   }
 
@@ -2182,12 +2426,13 @@ export class OpenCodeAgentClient implements AgentClient {
   }
 
   async unarchiveNativeSession(handle: AgentPersistenceHandle): Promise<void> {
-    await this.setNativeSessionArchived(handle, null);
+    // OpenCode's numeric archive field uses zero as the active-session sentinel.
+    await this.setNativeSessionArchived(handle, 0);
   }
 
   private async setNativeSessionArchived(
     handle: AgentPersistenceHandle,
-    archivedAt: number | null,
+    archivedAt: number,
   ): Promise<void> {
     const metadata = (handle.metadata ?? {}) as Partial<AgentSessionConfig>;
     if (!metadata.cwd) {
@@ -2200,15 +2445,8 @@ export class OpenCodeAgentClient implements AgentClient {
       (await this.serverManager.acquireCurrent());
     const client = this.createServerClient(acquisition.server, metadata.cwd);
     try {
-      // OpenCode accepts null to clear the archive timestamp, but this SDK
-      // release's generated request type still exposes only number.
-      const updateSession = client.session.update.bind(client.session) as (parameters: {
-        sessionID: string;
-        directory?: string;
-        time?: { archived?: number | null };
-      }) => ReturnType<typeof client.session.update>;
       const response = readOpenCodeRecord(
-        await updateSession({
+        await client.session.update({
           sessionID: handle.sessionId,
           directory: metadata.cwd,
           time: { archived: archivedAt },
@@ -2216,9 +2454,7 @@ export class OpenCodeAgentClient implements AgentClient {
       );
       if (response?.error) {
         throw new Error(
-          `Failed to ${
-            archivedAt === null ? "unarchive" : "archive"
-          } OpenCode session: ${toDiagnosticErrorMessage(response.error)}`,
+          `Failed to ${archivedAt === 0 ? "unarchive" : "archive"} OpenCode session: ${toDiagnosticErrorMessage(response.error)}`,
         );
       }
     } finally {
@@ -2336,14 +2572,18 @@ export class OpenCodeAgentClient implements AgentClient {
   private async fetchModelsFromClient(
     client: OpencodeClient,
     directory: string,
+    context?: ProviderRefreshContext,
   ): Promise<AgentModelDefinition[]> {
-    const response = await openCodeMetadataLimit(() =>
-      withTimeout(
-        client.provider.list({ directory }),
-        OPENCODE_PROVIDER_LIST_TIMEOUT_MS,
-        `OpenCode provider.list timed out after ${
-          OPENCODE_PROVIDER_LIST_TIMEOUT_MS / 1000
-        }s - server may not be authenticated or connected to any providers`,
+    const response = await runProviderRefreshActivity(context, "provider.list", () =>
+      raceProviderRefreshAbort(
+        context?.signal,
+        openCodeMetadataLimit(() => {
+          context?.signal.throwIfAborted();
+          return client.provider.list(
+            { directory },
+            context ? { signal: context.signal } : undefined,
+          );
+        }),
       ),
     );
 
@@ -2393,7 +2633,7 @@ export class OpenCodeAgentClient implements AgentClient {
     }
 
     const models: AgentModelDefinition[] = [];
-    this.modelContextWindows.clear();
+    const contextWindows = new Map<string, number>();
     for (const provider of providers.all) {
       if (!isAccessible(provider)) {
         continue;
@@ -2403,7 +2643,7 @@ export class OpenCodeAgentClient implements AgentClient {
         const definition = buildOpenCodeModelDefinition(provider, modelId, model);
         const contextWindowMaxTokens = extractOpenCodeModelContextWindow(model);
         if (contextWindowMaxTokens !== undefined) {
-          this.modelContextWindows.set(
+          contextWindows.set(
             buildOpenCodeModelLookupKey(provider.id, modelId),
             contextWindowMaxTokens,
           );
@@ -2412,18 +2652,25 @@ export class OpenCodeAgentClient implements AgentClient {
       }
     }
 
+    context?.signal.throwIfAborted();
+    this.modelContextWindows.clear();
+    for (const [key, value] of contextWindows) this.modelContextWindows.set(key, value);
+
     return models;
   }
 
   private async fetchModesFromClient(
     client: OpencodeClient,
     directory: string,
+    context?: ProviderRefreshContext,
   ): Promise<AgentMode[]> {
-    const response = await openCodeMetadataLimit(() =>
-      withTimeout(
-        client.app.agents({ directory }),
-        10_000,
-        "OpenCode app.agents timed out after 10s",
+    const response = await runProviderRefreshActivity(context, "app.agents", () =>
+      raceProviderRefreshAbort(
+        context?.signal,
+        openCodeMetadataLimit(() => {
+          context?.signal.throwIfAborted();
+          return client.app.agents({ directory }, context ? { signal: context.signal } : undefined);
+        }),
       ),
     );
 
@@ -2442,7 +2689,9 @@ export class OpenCodeAgentClient implements AgentClient {
     if (config.provider !== "opencode") {
       throw new Error(`OpenCodeAgentClient received config for provider '${config.provider}'`);
     }
-    const providerOptions = OpenCodeProviderOptionsSchema.parse(config.providerOptions ?? {});
+    const providerOptions =
+      validateProviderOptions("opencode", OpenCodeProviderOptionsSchema, config.providerOptions) ??
+      {};
     return normalizeOpenCodeConfig({
       ...config,
       provider: "opencode",
@@ -2474,17 +2723,17 @@ export interface OpenCodeEventTranslationState {
   messageRoles: Map<string, OpenCodeMessageRole>;
   pendingUserMessageText?: string | null;
   pendingClientMessageId?: string | null;
+  pendingSteerSubmissions?: OpenCodePendingSteerSubmission[];
   emittedUserMessageIds?: Set<string>;
   accumulatedUsage: AgentUsage;
   sessionTotalCostUsd?: number;
-  streamedPartKeys: Set<string>;
+  materializedParts: Map<string, { messageId: string; emittedText: string; closed: boolean }>;
   emittedStructuredMessageIds: Set<string>;
   compactionSummaryMessageIds: Set<string>;
   emittedCompactionPartIds: Set<string>;
   hydratedMessageFingerprints?: Map<string, string>;
   hydratedPartFingerprints?: Map<string, string>;
   suppressAssistantMessagesUntilIdle?: { active: boolean };
-  /** Tracks the type of each part by ID, learned from message.part.updated events. */
   partTypes: Map<string, string>;
   subAgentsByCallId?: Map<string, OpenCodeSubAgentActivityState>;
   subAgentCallIdByChildSessionId?: Map<string, string>;
@@ -2492,6 +2741,17 @@ export interface OpenCodeEventTranslationState {
   subagentPresentationByChildId?: Map<string, OpenCodeSubagentPresentationState>;
   modelContextWindowsByModelKey?: ReadonlyMap<string, number>;
   onAssistantModelContextWindowResolved?: (contextWindowMaxTokens: number) => void;
+  onMaterializationMismatch?: (diagnostic: {
+    partId: string;
+    messageId: string;
+    kind: "text" | "reasoning";
+  }) => void;
+}
+
+interface OpenCodePendingSteerSubmission {
+  providerMessageId: string;
+  text: string;
+  clientMessageId: string | null;
 }
 
 interface OpenCodeTraceData {
@@ -2811,7 +3071,6 @@ export function translateOpenCodeEvent(
 }
 
 function resetOpenCodeTurnTrackingState(state: OpenCodeEventTranslationState): void {
-  state.streamedPartKeys.clear();
   state.partTypes.clear();
   state.compactionSummaryMessageIds.clear();
   state.emittedCompactionPartIds.clear();
@@ -2908,7 +3167,7 @@ function appendOpenCodeChildSessionDetected(
   child: OpenCodeChildSessionInfo,
   state: OpenCodeEventTranslationState,
   events: AgentStreamEvent[],
-  status: "running" | "completed" = "running",
+  status: "running" | "completed" | null = "running",
 ): boolean {
   if (
     child.id === state.sessionId ||
@@ -2941,9 +3200,10 @@ function appendOpenCodeChildSessionDetected(
     event: {
       type: "upsert",
       id: child.id,
+      parentSubagentId: child.parentSessionId === state.sessionId ? null : child.parentSessionId,
       ...(title ? { title } : {}),
       ...(child.title && !presentation.descriptionFromLink ? { description: child.title } : {}),
-      status,
+      ...(status ? { status } : {}),
       ...(child.directory ? { cwd: child.directory } : {}),
       ...(subtitle ? { subtitle } : {}),
     },
@@ -3214,11 +3474,19 @@ function appendOpenCodeUserMessageUpdated(
   state: OpenCodeEventTranslationState,
   events: AgentStreamEvent[],
 ): void {
-  const text = state.pendingUserMessageText;
+  const pendingSteerIndex = state.pendingSteerSubmissions?.findIndex(
+    (submission) => submission.providerMessageId === info.id,
+  );
+  const pendingSteer =
+    pendingSteerIndex !== undefined && pendingSteerIndex >= 0
+      ? state.pendingSteerSubmissions?.splice(pendingSteerIndex, 1)[0]
+      : undefined;
+  const text = pendingSteer?.text ?? state.pendingUserMessageText;
   if (!text || text.trim().length === 0 || state.emittedUserMessageIds?.has(info.id)) {
     return;
   }
   state.emittedUserMessageIds?.add(info.id);
+  const clientMessageId = pendingSteer?.clientMessageId ?? state.pendingClientMessageId;
   events.push({
     type: "timeline",
     provider: "opencode",
@@ -3226,7 +3494,7 @@ function appendOpenCodeUserMessageUpdated(
       type: "user_message",
       text,
       messageId: info.id,
-      ...(state.pendingClientMessageId ? { clientMessageId: state.pendingClientMessageId } : {}),
+      ...(clientMessageId ? { clientMessageId } : {}),
     },
   });
 }
@@ -3315,6 +3583,11 @@ function shouldSuppressOpenCodeAssistantPart(
   );
 }
 
+// OpenCode marks text it adds to a user message itself with `synthetic` and hides it from its own UI.
+function isUserAuthoredOpenCodeText(part: { synthetic?: boolean }): boolean {
+  return part.synthetic !== true;
+}
+
 function appendOpenCodeTextPart(
   part: Extract<
     Extract<OpenCodeEvent, { type: "message.part.updated" }>["properties"]["part"],
@@ -3326,9 +3599,8 @@ function appendOpenCodeTextPart(
 ): void {
   if (messageRole === "user") {
     if (
-      part.synthetic ||
-      !part.time?.end ||
       !part.text ||
+      !isUserAuthoredOpenCodeText(part) ||
       state.emittedUserMessageIds?.has(part.messageID)
     ) {
       return;
@@ -3348,19 +3620,28 @@ function appendOpenCodeTextPart(
   if (!part.time?.end) {
     return;
   }
-  const partKey = resolvePartDedupeKey(part, "text");
-  if (partKey && state.streamedPartKeys.delete(partKey)) {
+  const materialized = state.materializedParts.get(part.id);
+  if (materialized?.closed) return;
+  const emittedText = materialized?.messageId === part.messageID ? materialized.emittedText : "";
+  if (!part.text.startsWith(emittedText)) {
+    state.onMaterializationMismatch?.({
+      partId: part.id,
+      messageId: part.messageID,
+      kind: "text",
+    });
     return;
   }
-  if (part.text) {
+  const suffix = part.text.slice(emittedText.length);
+  state.materializedParts.set(part.id, {
+    messageId: part.messageID,
+    emittedText: part.text,
+    closed: true,
+  });
+  if (suffix) {
     events.push({
       type: "timeline",
       provider: "opencode",
-      item: {
-        type: "assistant_message",
-        text: part.text,
-        messageId: part.messageID,
-      },
+      item: { type: "assistant_message", text: suffix, messageId: part.messageID },
     });
   }
 }
@@ -3376,15 +3657,28 @@ function appendOpenCodeReasoningPart(
   if (!part.time.end) {
     return;
   }
-  const partKey = resolvePartDedupeKey(part, "reasoning");
-  if (partKey && state.streamedPartKeys.delete(partKey)) {
+  const materialized = state.materializedParts.get(part.id);
+  if (materialized?.closed) return;
+  const emittedText = materialized?.messageId === part.messageID ? materialized.emittedText : "";
+  if (!part.text.startsWith(emittedText)) {
+    state.onMaterializationMismatch?.({
+      partId: part.id,
+      messageId: part.messageID,
+      kind: "reasoning",
+    });
     return;
   }
-  if (part.text) {
+  const suffix = part.text.slice(emittedText.length);
+  state.materializedParts.set(part.id, {
+    messageId: part.messageID,
+    emittedText: part.text,
+    closed: true,
+  });
+  if (suffix) {
     events.push({
       type: "timeline",
       provider: "opencode",
-      item: { type: "reasoning", text: part.text },
+      item: { type: "reasoning", text: suffix },
     });
   }
 }
@@ -3410,9 +3704,7 @@ function appendOpenCodeMessagePartDelta(
   }
 
   if (isReasoning) {
-    if (partID) {
-      state.streamedPartKeys.add(`reasoning:${partID}`);
-    }
+    if (!appendOpenCodeMaterializedDelta(state, partID, messageID, delta)) return;
     events.push({
       type: "timeline",
       provider: "opencode",
@@ -3434,9 +3726,7 @@ function appendOpenCodeMessagePartDelta(
     state.compactionSummaryMessageIds.add(assistantMessageId);
     return;
   }
-  if (partID) {
-    state.streamedPartKeys.add(`text:${partID}`);
-  }
+  if (!appendOpenCodeMaterializedDelta(state, partID, assistantMessageId, delta)) return;
   events.push({
     type: "timeline",
     provider: "opencode",
@@ -3446,6 +3736,23 @@ function appendOpenCodeMessagePartDelta(
       messageId: assistantMessageId,
     },
   });
+}
+
+function appendOpenCodeMaterializedDelta(
+  state: OpenCodeEventTranslationState,
+  partId: string | undefined,
+  messageId: string,
+  delta: string,
+): boolean {
+  if (!partId) return true;
+  const previous = state.materializedParts.get(partId);
+  if (previous?.closed) return false;
+  state.materializedParts.set(partId, {
+    messageId,
+    emittedText: `${previous?.emittedText ?? ""}${delta}`,
+    closed: false,
+  });
+  return true;
 }
 
 function appendOpenCodePermissionAsked(
@@ -3610,7 +3917,6 @@ function appendOpenCodeSessionStatus(
     });
     return;
   }
-  // "busy" is transient — no terminal event, no surfaced activity.
 }
 
 interface Deferred<T> {
@@ -3716,7 +4022,7 @@ function isOpenCodeTerminalEvent(event: OpenCodeEvent, sessionId: string): boole
 }
 
 function isOpenCodeProviderInternalEvent(event: AgentStreamEvent): boolean {
-  return event.type === "provider_subagent";
+  return event.type === "provider_subagent" || event.type === "model_changed";
 }
 
 function readOpenCodeChildSessionInfo(value: unknown): OpenCodeChildSessionInfo | null {
@@ -3780,31 +4086,30 @@ async function listOpenCodeChildSessions(
   client: OpencodeClient,
   sessionId: string,
   directory: string,
+  signal?: AbortSignal,
 ): Promise<OpenCodeChildSessionInfo[]> {
-  try {
-    const pathResponse: unknown = await Reflect.apply(client.session.children, client.session, [
-      { path: { id: sessionId } },
-    ]);
-    const pathChildren = readOpenCodeChildSessionInfosFromResponse(pathResponse);
-    if (pathChildren) {
-      return pathChildren;
-    }
-  } catch (error) {
-    if (!(error instanceof Error)) {
-      throw error;
-    }
-  }
-
-  const sessionIdResponse = await client.session.children({
-    sessionID: sessionId,
-    directory,
-  });
+  const sessionIdResponse = await client.session.children(
+    { sessionID: sessionId, directory },
+    { signal },
+  );
   return readOpenCodeChildSessionInfosFromResponse(sessionIdResponse) ?? [];
 }
 
+/** One OpenCode server generation a session talks to. */
+interface OpenCodeServerConnection {
+  environment: Record<string, string>;
+  client: OpencodeClient;
+  events: OpenCodeEventSource;
+  url: string;
+  release: () => Promise<void>;
+  /** Sent with every request to an Arena backend, which refuses requests without it. */
+  controlToken?: string;
+}
+
 interface ArenaRuntimeRecovery {
+  /** The live server at `url`, or the current server once that one is gone. */
   acquire(url: string): Promise<OpenCodeServerAcquisition>;
-  createClient(server: OpenCodeServerAcquisition["server"]): OpencodeClient;
+  connect(acquisition: OpenCodeServerAcquisition): OpenCodeServerConnection;
 }
 
 class OpenCodeAgentSession implements AgentSession {
@@ -3812,7 +4117,11 @@ class OpenCodeAgentSession implements AgentSession {
   readonly capabilities = OPENCODE_CAPABILITIES;
 
   private readonly config: OpenCodeAgentConfig;
-  private client: OpencodeClient;
+  private server: OpenCodeServerConnection;
+  /** Connects to the server generation that is current now. */
+  private readonly connectServer: (() => Promise<OpenCodeServerConnection>) | null;
+  private serverExited = false;
+  private reconnection: Promise<void> | null = null;
   private readonly sessionId: string;
   private readonly logger: Logger;
   private readonly modelContextWindowsByModelKey: ReadonlyMap<string, number>;
@@ -3822,21 +4131,21 @@ class OpenCodeAgentSession implements AgentSession {
   private abortController: AbortController | null = null;
   private accumulatedUsage: AgentUsage = {};
   private sessionTotalCostUsd: number | undefined;
-  private mcpConfigured = false;
-  private mcpSetupPromise: Promise<void> | null = null;
-  /** Tracks the role of each message by ID to distinguish user from assistant messages */
+  private mcpSetup: Promise<void> | null = null;
   private messageRoles = new Map<string, OpenCodeMessageRole>();
   private pendingUserMessageText: string | null = null;
   private pendingClientMessageId: string | null = null;
+  private pendingSteerSubmissions: OpenCodePendingSteerSubmission[] = [];
   private emittedUserMessageIds = new Set<string>();
-  /** Tracks streamed textual part IDs to suppress final full-text echoes from OpenCode. */
-  private streamedPartKeys = new Set<string>();
-  /** Tracks assistant messages already emitted from structured payloads. */
+  private materializedParts = new Map<
+    string,
+    { messageId: string; emittedText: string; closed: boolean }
+  >();
+  private activeDispatchMessageId: string | null = null;
   private emittedStructuredMessageIds = new Set<string>();
   private compactionSummaryMessageIds = new Set<string>();
   private emittedCompactionPartIds = new Set<string>();
   private suppressAssistantMessagesUntilIdle = { active: false };
-  /** Tracks the type of each part by ID, learned from message.part.updated events. */
   private partTypes = new Map<string, string>();
   private availableModesCache: AgentMode[] | null = null;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
@@ -3860,48 +4169,151 @@ class OpenCodeAgentSession implements AgentSession {
   >();
   private readonly childTranslationStates = new Map<string, OpenCodeEventTranslationState>();
   private readonly childSessionCwds = new Map<string, string>();
+  private readonly childStatuses = new Map<
+    string,
+    Extract<Extract<AgentStreamEvent, { type: "provider_subagent" }>["event"], { type: "upsert" }>
+  >();
   private readonly pendingPermissionDirectories = new Map<string, string>();
   private childHydrationPromise: Promise<void> | null = null;
   private childHydrationCompleted = false;
   private readonly unrelatedSessionIds = new Set<string>();
   private selectedModelContextWindowMaxTokens: number | undefined;
-  private releaseServer: (() => Promise<void>) | null;
+  private releaseBridge: (() => void) | null;
   private readonly arenaStreamKey: string;
   private arenaRecoveryTask: Promise<void> | undefined;
-  private eventStreamAbortController: AbortController | null = null;
-  private eventStreamReady: Deferred<void> | null = null;
-  private eventStreamTask: Promise<void> | null = null;
+  private ingress = Promise.resolve();
+  private gapRepairRevision = 0;
+  private recoveryAbortController = new AbortController();
+  private unsubscribeEvents: (() => void) | null = null;
   private closed = false;
   private readonly persistSession: boolean;
   private deletedFromProvider = false;
+  private readonly usageSessionKey = randomUUID();
   constructor(
     config: OpenCodeAgentConfig,
     client: OpencodeClient,
     sessionId: string,
     logger: Logger,
+    private readonly harnessEnvironment: Record<string, string>,
     modelContextWindowsByModelKey: ReadonlyMap<string, number> = new Map(),
-    releaseServer?: () => Promise<void>,
+    events: OpenCodeEventSource = EMPTY_OPENCODE_EVENT_SOURCE,
+    releaseServer: () => Promise<void> = async () => undefined,
     persistSession = true,
     private readonly agentId?: string,
-    private serverUrl?: string,
+    serverUrl?: string,
     private readonly externallyDriven = false,
+    releaseBridge?: () => void,
+    connectServer?: () => Promise<OpenCodeServerConnection>,
     private readonly arenaRuntimeRecovery?: ArenaRuntimeRecovery,
-    private controlToken?: string,
+    controlToken?: string,
   ) {
     this.config = config;
-    this.client = client;
+    this.server = {
+      client,
+      events,
+      url: serverUrl ?? "",
+      release: releaseServer,
+      environment: this.harnessEnvironment,
+      ...(controlToken ? { controlToken } : {}),
+    };
+    this.connectServer = connectServer ?? null;
+    // The stream namespace stays stable while a managed Arena backend changes ports.
     this.arenaStreamKey = JSON.stringify([serverUrl, sessionId]);
     this.sessionId = sessionId;
     this.logger = logger.child({ agentId: this.agentId });
     this.modelContextWindowsByModelKey = modelContextWindowsByModelKey;
     this.currentMode = normalizeOpenCodeModeId(config.modeId);
     this.autoAcceptEnabled = !config.toolPolicy && isOpenCodeAutoAcceptEnabled(config);
-    this.releaseServer = releaseServer ?? null;
+    this.releaseBridge = releaseBridge ?? null;
     this.persistSession = persistSession;
     this.selectedModelContextWindowMaxTokens = this.resolveConfiguredModelContextWindowMaxTokens(
       config.model,
     );
-    this.startEventStream();
+    this.subscribeServerEvents();
+  }
+
+  usageSession() {
+    if (this.closed) return null;
+    return {
+      provider: "opencode",
+      model: this.config.model,
+      env: this.harnessEnvironment,
+      sessionKey: this.usageSessionKey,
+    };
+  }
+
+  private get client(): OpencodeClient {
+    return this.server.client;
+  }
+
+  private get serverUrl(): string | undefined {
+    return this.server.url || undefined;
+  }
+
+  private get controlToken(): string | undefined {
+    return this.server.controlToken;
+  }
+
+  private get events(): OpenCodeEventSource {
+    return this.server.events;
+  }
+
+  private subscribeServerEvents(): void {
+    this.unsubscribeEvents = this.events.subscribe((input) => {
+      if ("type" in input && input.type === "server-exited") {
+        this.recoveryAbortController.abort(input.error);
+        this.serverExited = true;
+      }
+      this.ingress = this.ingress
+        .then(() => this.consumeEventSourceInput(input))
+        .catch((error) => {
+          this.logger.warn(
+            { err: error, sessionId: this.sessionId },
+            "OpenCode event ingress failed",
+          );
+        });
+    });
+  }
+
+  /**
+   * The OpenCode session outlives the server process that served it, and Paseo starts the
+   * next server on a new port. Move to the current server before talking to OpenCode again,
+   * so the session does not keep calling a port nothing listens on.
+   */
+  private async reconnectIfServerExited(): Promise<void> {
+    if (!this.serverExited || !this.connectServer) return;
+    this.reconnection ??= this.reconnect(this.connectServer).finally(() => {
+      this.reconnection = null;
+    });
+    await this.reconnection;
+  }
+
+  private async reconnect(connectServer: () => Promise<OpenCodeServerConnection>): Promise<void> {
+    const exited = this.server;
+    const next = await connectServer();
+    if (this.closed) {
+      await next.release();
+      return;
+    }
+    this.unsubscribeEvents?.();
+    this.unsubscribeEvents = null;
+    // Let the exited server's queued events, including its exit, settle while no turn is
+    // running, so none of them can fail a turn started on the new server.
+    await this.ingress;
+    if (this.closed) {
+      await next.release();
+      return;
+    }
+    this.server = next;
+    this.serverExited = false;
+    this.recoveryAbortController = new AbortController();
+    this.mcpSetup = null;
+    this.subscribeServerEvents();
+    this.logger.info(
+      { sessionId: this.sessionId, previousUrl: exited.url, url: next.url },
+      "OpenCode session moved to the current server after its server exited",
+    );
+    await exited.release();
   }
 
   get id(): string | null {
@@ -4052,14 +4464,17 @@ class OpenCodeAgentSession implements AgentSession {
     };
   }
 
-  private ensureArenaRuntime(): Promise<void> {
-    if (!this.arenaRuntimeRecovery || !this.serverUrl) return Promise.resolve();
-    if (!this.arenaRecoveryTask) {
-      this.arenaRecoveryTask = this.recoverArenaRuntime().finally(() => {
-        this.arenaRecoveryTask = undefined;
-      });
-    }
-    return this.arenaRecoveryTask;
+  /**
+   * Arena requests follow the backend to its current server. A credential change stops every
+   * server at once, before any of them can report its exit to the sessions it served.
+   */
+  private async ensureArenaRuntime(): Promise<void> {
+    await this.reconnectIfServerExited();
+    if (!this.arenaRuntimeRecovery || !this.serverUrl) return;
+    this.arenaRecoveryTask ??= this.recoverArenaRuntime().finally(() => {
+      this.arenaRecoveryTask = undefined;
+    });
+    await this.arenaRecoveryTask;
   }
 
   private async recoverArenaRuntime(): Promise<void> {
@@ -4067,27 +4482,18 @@ class OpenCodeAgentSession implements AgentSession {
     const url = this.serverUrl;
     if (!recovery || !url) return;
     const acquisition = await recovery.acquire(url);
-    let adopted = false;
-    try {
+    if (this.closed || acquisition.server.url === url || this.reconnection) {
+      await acquisition.release();
       if (this.closed) throw new Error("OpenCode session is closed");
-      if (acquisition.server.url === url) return;
-      const client = recovery.createClient(acquisition.server);
-      this.eventStreamAbortController?.abort();
-      await this.eventStreamTask?.catch(() => {});
-      if (this.closed) throw new Error("OpenCode session is closed");
-      const release = this.releaseServer;
-      this.client = client;
-      this.serverUrl = acquisition.server.url;
-      this.controlToken = acquisition.server.controlToken;
-      this.releaseServer = acquisition.release;
-      adopted = true;
-      await release?.();
-      // Arena reconnects must also move canonical transcript reads to the new backend.
-      // The stream namespace stays stable while the managed backend changes ports.
-      this.startEventStream();
-    } finally {
-      if (!adopted) await acquisition.release();
+      await this.reconnection;
+      return;
     }
+    // Moving the session also moves canonical transcript reads to the new backend.
+    const next = recovery.connect(acquisition);
+    this.reconnection = this.reconnect(async () => next).finally(() => {
+      this.reconnection = null;
+    });
+    await this.reconnection;
   }
 
   private async *arenaStream(
@@ -4216,16 +4622,37 @@ class OpenCodeAgentSession implements AgentSession {
       sessionId: this.sessionId,
       model: this.config.model ?? null,
       modeId: this.currentMode,
+      thinkingOptionId: this.config.thinkingOptionId ?? null,
     };
   }
 
   async setModel(modelId: string | null): Promise<void> {
+    await this.reconnectIfServerExited();
     const normalizedModelId =
       typeof modelId === "string" && modelId.trim().length > 0 ? modelId : null;
+    let variant = this.config.thinkingOptionId;
+    if (!normalizedModelId) {
+      variant = undefined;
+    } else if (variant && !isArenaModel(normalizedModelId)) {
+      const model = this.parseModel(normalizedModelId);
+      const response = await this.client.provider.list({ directory: this.config.cwd });
+      if (response.error)
+        throw new Error(`Failed to fetch OpenCode providers: ${JSON.stringify(response.error)}`);
+      const provider = response.data?.all.find((entry) => entry.id === model?.providerID);
+      const target = model && provider?.models[model.modelID];
+      if (!target) throw new Error(`OpenCode model unavailable: ${normalizedModelId}`);
+      if (!Object.hasOwn(target.variants ?? {}, variant)) variant = undefined;
+    }
     this.config.model = normalizedModelId ?? undefined;
+    this.config.thinkingOptionId = variant;
     this.selectedModelContextWindowMaxTokens = this.resolveConfiguredModelContextWindowMaxTokens(
       this.config.model,
     );
+    this.notifySubscribers({
+      type: "thinking_option_changed",
+      provider: "opencode",
+      thinkingOptionId: variant ?? null,
+    });
   }
 
   async setThinkingOption(thinkingOptionId: string | null): Promise<void> {
@@ -4273,7 +4700,98 @@ class OpenCodeAgentSession implements AgentSession {
     }
   }
 
+  async steerActiveTurn(
+    prompt: AgentPromptInput,
+    options: SteerActiveTurnOptions,
+  ): Promise<SteerResult> {
+    if (this.closed || this.activeForegroundTurnId !== options.expectedTurnId) {
+      return { status: "unavailable" };
+    }
+    if (await this.resolveSlashCommandInvocation(prompt)) {
+      return { status: "unavailable" };
+    }
+    if (this.activeForegroundTurnId !== options.expectedTurnId) {
+      return { status: "unavailable" };
+    }
+
+    const promptId = createOpenCodeMessageId();
+    const pending: OpenCodePendingSteerSubmission = {
+      providerMessageId: promptId,
+      text: buildOpenCodeUserTimelineText(prompt),
+      clientMessageId: options.clientMessageId ?? null,
+    };
+    this.pendingSteerSubmissions.push(pending);
+
+    const parts = buildOpenCodePromptParts(prompt);
+    const systemPrompt = composeSystemPromptParts(
+      this.config.systemPrompt,
+      this.config.daemonAppendSystemPrompt,
+    );
+    const model = this.parseModel(this.config.model);
+    const effectiveMode = resolveOpenCodeRuntimeAgentId(this.currentMode);
+    const effectiveVariant = this.config.thinkingOptionId ?? undefined;
+
+    try {
+      await this.allowReadingUploads(prompt);
+      const response = await this.client.session.promptAsync({
+        sessionID: this.sessionId,
+        directory: this.config.cwd,
+        messageID: promptId,
+        parts,
+        ...(systemPrompt ? { system: systemPrompt } : {}),
+        ...(model ? { model } : {}),
+        ...(effectiveMode ? { agent: effectiveMode } : {}),
+        ...(effectiveVariant ? { variant: effectiveVariant } : {}),
+      });
+      if (response.error) {
+        if (
+          isOpenCodeDefinitiveSteerRejection(
+            response.error,
+            (response as unknown as { response?: { status?: number } }).response?.status,
+          )
+        ) {
+          this.removePendingSteerSubmission(promptId);
+          return { status: "unavailable" };
+        }
+        throw new Error(
+          `OpenCode steer request failed: ${toDiagnosticErrorMessage(response.error)}`,
+        );
+      }
+      if (options.clearPendingPermissions) {
+        await this.clearPendingPermissionsForSteer();
+      }
+      return { status: "accepted" };
+    } catch (error) {
+      if (isOpenCodeDefinitiveSteerRejection(error)) {
+        this.removePendingSteerSubmission(promptId);
+        return { status: "unavailable" };
+      }
+      throw error;
+    }
+  }
+
+  private removePendingSteerSubmission(providerMessageId: string): void {
+    const index = this.pendingSteerSubmissions.findIndex(
+      (submission) => submission.providerMessageId === providerMessageId,
+    );
+    if (index >= 0) {
+      this.pendingSteerSubmissions.splice(index, 1);
+    }
+  }
+
+  private async clearPendingPermissionsForSteer(): Promise<void> {
+    const requestIds = Array.from(this.pendingPermissions.keys());
+    for (const requestId of requestIds) {
+      if (!this.pendingPermissions.has(requestId)) continue;
+      await this.respondToPermission(requestId, {
+        behavior: "deny",
+        message: "The user answered with a message instead of approving. Their message follows.",
+      });
+    }
+  }
+
   async revertBoth(input: { messageId: string }): Promise<void> {
+    await this.reconnectIfServerExited();
     await revertOpenCodeConversationAndFiles({
       client: this.client,
       sessionId: this.sessionId,
@@ -4326,9 +4844,7 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   private async waitUntilProviderIdle(): Promise<void> {
-    if (this.turnState.status !== "stopping") {
-      return;
-    }
+    if (this.turnState.status !== "stopping") return;
     await withTimeout(
       this.observeProviderStopBoundary(this.turnState.stop),
       OPENCODE_PENDING_ABORT_START_TIMEOUT_MS,
@@ -4337,34 +4853,21 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   private async observeProviderStopBoundary(stop: OpenCodeStop): Promise<void> {
+    let delayMs = 100;
     while (this.isStopping(stop)) {
-      const eventStreamTask = this.eventStreamTask;
-      const boundary = await (eventStreamTask
-        ? Promise.race([
-            stop.terminal.promise.then(() => "terminal" as const),
-            eventStreamTask.then(
-              () => "stream_ended" as const,
-              () => "stream_ended" as const,
-            ),
-          ])
-        : Promise.resolve("stream_ended" as const));
-      if (boundary === "terminal") {
-        return;
-      }
+      const boundary = await Promise.race([
+        stop.terminal.promise.then(() => "terminal" as const),
+        waitForOpenCodeStopProbe(delayMs, this.recoveryAbortController.signal).then(
+          () => "probe" as const,
+        ),
+      ]);
+      if (boundary === "terminal") return;
       await this.reconcileStopWithProviderStatus(stop);
+      delayMs = Math.min(delayMs * 2, OPENCODE_STOP_STATUS_MAX_DELAY_MS);
     }
   }
 
-  /**
-   * The event stream dropped mid-stop, so the canceled run's terminal may have
-   * gone with it. `session.status` is the provider's authority on whether the
-   * runner is still going, and an idle answer ends the stop through the same
-   * transition an SSE terminal takes. A failed probe is not evidence either way,
-   * so the stop keeps waiting on the replacement stream instead of rejecting a
-   * caller that a later terminal would have released.
-   */
   private async reconcileStopWithProviderStatus(stop: OpenCodeStop): Promise<void> {
-    await this.ensureEventStreamReady();
     try {
       if ((await this.readProviderRunnerStatus()) === "idle") {
         this.finishStoppingTurn(stop);
@@ -4382,9 +4885,10 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   private async readProviderRunnerStatus(): Promise<OpenCodeRunnerStatus> {
-    const response = await this.client.session.status({
-      directory: this.config.cwd,
-    });
+    const response = await this.client.session.status(
+      { directory: this.config.cwd },
+      { signal: this.recoveryAbortController.signal },
+    );
     if (response.error) {
       throw new Error(
         `Failed to confirm OpenCode session status: ${toDiagnosticErrorMessage(response.error)}`,
@@ -4444,10 +4948,21 @@ class OpenCodeAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
+    if (this.closed) {
+      throw new Error("OpenCode session is closed");
+    }
     if (this.turnState.status === "running") {
       throw new Error("A foreground turn is already active");
     }
-    await this.awaitRunnerQuiescence();
+    await this.reconnectIfServerExited();
+    try {
+      await this.awaitRunnerQuiescence();
+    } catch (error) {
+      this.rethrowRunnerWaitError(error);
+    }
+    if (this.closed) {
+      throw new Error("OpenCode session is closed");
+    }
     if (this.turnState.status !== "idle") {
       throw new Error("OpenCode is still stopping the previous turn");
     }
@@ -4470,22 +4985,17 @@ class OpenCodeAgentSession implements AgentSession {
     const effectiveVariant = thinkingOptionId ?? undefined;
     const effectiveMode = resolveOpenCodeRuntimeAgentId(this.currentMode);
 
-    try {
-      await this.ensureEventStreamReady();
-    } catch (error) {
-      if (this.abortController === turnAbortController) {
-        this.abortController = null;
-      }
-      throw error;
-    }
+    await this.awaitEventStreamReady(turnAbortController);
 
     const turnId = this.createTurnId();
+    this.materializedParts.clear();
     this.turnState = { status: "running", turnId };
     this.notifySubscribers({ type: "turn_started", provider: "opencode" }, turnId);
 
     const slashCommand = await this.resolveSlashCommandInvocation(prompt);
     if (slashCommand) {
       if (slashCommand.commandName === "compact" || slashCommand.commandName === "summarize") {
+        this.activeDispatchMessageId = null;
         this.suppressAssistantMessagesUntilIdle.active = true;
         void this.client.session
           .summarize({
@@ -4523,12 +5033,14 @@ class OpenCodeAgentSession implements AgentSession {
 
       // command() is only dispatch acknowledgement. OpenCode session events are
       // the source of truth for when the command turn becomes idle or fails.
+      this.activeDispatchMessageId = createOpenCodeMessageId();
       void this.client.session
         .command({
           sessionID: this.sessionId,
           directory: this.config.cwd,
           command: slashCommand.commandName,
           arguments: slashCommand.args ?? "",
+          messageID: this.activeDispatchMessageId,
           ...(this.config.model ? { model: this.config.model } : {}),
           ...(effectiveMode ? { agent: effectiveMode } : {}),
           ...(effectiveVariant ? { variant: effectiveVariant } : {}),
@@ -4576,6 +5088,8 @@ class OpenCodeAgentSession implements AgentSession {
           );
         });
     } else {
+      const dispatchMessageId = createOpenCodeMessageId();
+      this.activeDispatchMessageId = dispatchMessageId;
       // Wrap in an async IIFE so a synchronous throw from promptAsync (e.g.
       // SDK input validation) is caught alongside async rejections. A plain
       // `.then().catch()` chain would let a sync throw escape unhandled.
@@ -4593,14 +5107,11 @@ class OpenCodeAgentSession implements AgentSession {
             this.config.systemPrompt,
             this.config.daemonAppendSystemPrompt,
           );
-          const permission = buildOpenCodePermissionRules(
-            this.config.providerOptions,
-            this.config.toolPolicy,
-          );
           await this.allowReadingUploads(prompt);
           const promptResponse = await this.client.session.promptAsync({
             sessionID: this.sessionId,
             directory: this.config.cwd,
+            messageID: dispatchMessageId,
             parts,
             ...(options?.outputSchema
               ? {
@@ -4611,7 +5122,6 @@ class OpenCodeAgentSession implements AgentSession {
                 }
               : {}),
             ...(systemPrompt ? { system: systemPrompt } : {}),
-            ...(permission ? { permission } : {}),
             ...(model ? { model } : {}),
             ...(effectiveMode ? { agent: effectiveMode } : {}),
             ...(effectiveVariant ? { variant: effectiveVariant } : {}),
@@ -4658,6 +5168,32 @@ class OpenCodeAgentSession implements AgentSession {
 
     return { turnId };
   }
+
+  private async awaitEventStreamReady(turnAbortController: AbortController): Promise<void> {
+    try {
+      await withTimeout(
+        this.events.ready(),
+        OPENCODE_EVENT_STREAM_READY_TIMEOUT_MS,
+        "OpenCode server.connected event",
+      );
+    } catch (error) {
+      if (this.abortController === turnAbortController) this.abortController = null;
+      if (!(error instanceof Error) || error.message !== "OpenCode server.connected event") {
+        throw error;
+      }
+      const diagnostics = this.events.diagnostics?.();
+      if (!diagnostics) throw error;
+      throw new Error(
+        `${error.message}; your message was not sent. ${formatOpenCodeEventStreamDiagnostics(diagnostics)}`,
+        { cause: error },
+      );
+    }
+  }
+
+  private rethrowRunnerWaitError(error: unknown): never {
+    if (this.closed) throw new Error("OpenCode session is closed", { cause: error });
+    throw error;
+  }
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
     this.subscribers.add(callback);
     this.startExternalStatusReconciliation();
@@ -4681,7 +5217,7 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   private async reconcileExternalRunnerStatus(): Promise<void> {
-    await this.ensureEventStreamReady();
+    await this.events.ready();
     const observedRevision = this.runnerStatusRevision;
     const runnerStatus = await this.readProviderRunnerStatus();
     if (
@@ -4726,54 +5262,136 @@ class OpenCodeAgentSession implements AgentSession {
     });
   }
 
-  private async hydrateChildSessions(): Promise<void> {
-    const queue = [this.sessionId];
-    const visited = new Set<string>();
-    while (queue.length > 0 && visited.size < OPENCODE_CHILD_SESSION_HYDRATION_LIMIT) {
-      const parentSessionId = queue.shift();
-      if (!parentSessionId || visited.has(parentSessionId)) {
-        continue;
-      }
-      visited.add(parentSessionId);
-      const children = await listOpenCodeChildSessions(
-        this.client,
-        parentSessionId,
-        this.config.cwd,
-      );
-      if (this.closed) return;
-      for (const child of children) {
-        const detectionEvents: AgentStreamEvent[] = [];
-        appendOpenCodeChildSessionDetected(
-          child,
-          this.createTranslationState(),
-          detectionEvents,
-          "completed",
-        );
-        for (const event of detectionEvents) {
-          this.recordProviderInternalEvent(event);
-          this.notifySubscribers(event, null);
-        }
-        try {
-          await this.hydrateChildSessionTimeline(child);
-        } catch (error) {
-          this.logger.warn(
-            { err: error, sessionId: child.id },
-            "OpenCode child timeline hydration failed",
-          );
-        }
-        if (visited.size + queue.length < OPENCODE_CHILD_SESSION_HYDRATION_LIMIT) {
-          queue.push(child.id);
-        }
-      }
+  private async hydrateChildSessions(recovered = false): Promise<void> {
+    const discovered = await this.discoverChildSessions();
+    const statusesByDirectory = await this.readChildStatuses(discovered);
+    for (const child of discovered) {
+      await this.hydrateDiscoveredChild(child, statusesByDirectory, recovered);
     }
   }
 
-  private async hydrateChildSessionTimeline(child: OpenCodeChildSessionInfo): Promise<void> {
-    const messages = await readOpenCodeSessionMessagesFromSdk(this.client, {
-      id: child.id,
-      directory: child.directory ?? this.config.cwd,
-      ...(child.revert ? { revert: child.revert } : {}),
-    } as OpenCodePersistedSession);
+  private async discoverChildSessions(): Promise<OpenCodeChildSessionInfo[]> {
+    const queue = [{ id: this.sessionId, directory: this.config.cwd }];
+    const visited = new Set<string>();
+    const discovered: OpenCodeChildSessionInfo[] = [];
+    while (queue.length > 0 && visited.size < OPENCODE_CHILD_SESSION_HYDRATION_LIMIT) {
+      const parent = queue.shift();
+      if (!parent || visited.has(parent.id)) {
+        continue;
+      }
+      visited.add(parent.id);
+      const children = await listOpenCodeChildSessions(
+        this.client,
+        parent.id,
+        parent.directory,
+        this.recoveryAbortController.signal,
+      );
+      if (this.closed) return discovered;
+      for (const child of children) {
+        discovered.push(child);
+        if (visited.size + queue.length < OPENCODE_CHILD_SESSION_HYDRATION_LIMIT) {
+          queue.push({ id: child.id, directory: child.directory ?? parent.directory });
+        }
+      }
+    }
+    return discovered;
+  }
+
+  private async readChildStatuses(
+    children: OpenCodeChildSessionInfo[],
+  ): Promise<Map<string, Record<string, unknown> | null>> {
+    const statusesByDirectory = new Map<string, Record<string, unknown> | null>();
+    for (const directory of new Set(children.map((child) => child.directory ?? this.config.cwd))) {
+      const response = await this.client.session
+        .status({ directory }, { signal: this.recoveryAbortController.signal })
+        .catch(() => null);
+      const record = readOpenCodeRecord(response);
+      statusesByDirectory.set(
+        directory,
+        record && !record.error ? readOpenCodeRecord(record.data) : null,
+      );
+    }
+    return statusesByDirectory;
+  }
+
+  private async hydrateDiscoveredChild(
+    child: OpenCodeChildSessionInfo,
+    statusesByDirectory: Map<string, Record<string, unknown> | null>,
+    recovered: boolean,
+  ): Promise<void> {
+    const directory = child.directory ?? this.config.cwd;
+    const snapshot = statusesByDirectory.get(directory) ?? null;
+    const status = readOpenCodeRecord(snapshot?.[child.id]);
+    const active = snapshot === null || status?.type === "busy" || status?.type === "retry";
+    const detectedStatus = active ? "running" : "completed";
+    const detectionEvents: AgentStreamEvent[] = [];
+    appendOpenCodeChildSessionDetected(
+      child,
+      this.createTranslationState(),
+      detectionEvents,
+      recovered ? null : detectedStatus,
+    );
+    for (const event of detectionEvents) {
+      this.recordProviderInternalEvent(event);
+      this.notifySubscribers(event, null);
+    }
+    let messages: OpenCodeSessionMessage[] | null = null;
+    try {
+      messages = await this.hydrateChildSessionTimeline(child, recovered);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, sessionId: child.id },
+        "OpenCode child timeline hydration failed",
+      );
+    }
+    if (!recovered) return;
+    const latestAssistant = messages?.findLast((message) => message.info.role === "assistant");
+    const recoveredStatus = recoverChildStatus(snapshot !== null, status?.type, latestAssistant);
+    if (!recoveredStatus) return;
+    const statusEvent: AgentStreamEvent = {
+      type: "provider_subagent",
+      provider: "opencode",
+      event: { type: "upsert", id: child.id, status: recoveredStatus },
+    };
+    this.recordProviderInternalEvent(statusEvent);
+    this.notifySubscribers(statusEvent, null);
+  }
+
+  private async hydrateChildSessionTimeline(
+    child: OpenCodeChildSessionInfo,
+    recovered = false,
+  ): Promise<OpenCodeSessionMessage[]> {
+    const messages = await readOpenCodeSessionMessagesFromSdk(
+      this.client,
+      {
+        id: child.id,
+        directory: child.directory ?? this.config.cwd,
+        ...(child.revert ? { revert: child.revert } : {}),
+      } as OpenCodePersistedSession,
+      this.recoveryAbortController.signal,
+    );
+    if (recovered) {
+      for (const message of messages) {
+        await this.consumeOpenCodeStreamEvent({
+          rawEvent: {
+            directory: child.directory ?? this.config.cwd,
+            payload: { type: "message.updated", properties: { info: message.info } },
+          },
+          eventCount: 0,
+        });
+        for (const part of message.parts) {
+          await this.consumeOpenCodeStreamEvent({
+            rawEvent: {
+              directory: child.directory ?? this.config.cwd,
+              payload: { type: "message.part.updated", properties: { part } },
+            },
+            eventCount: 0,
+          });
+        }
+      }
+      this.emitHydratedChildPresentation(child, messages);
+      return messages;
+    }
     const translationState = this.getChildTranslationState(child.id);
     let latestReplayedMessage: OpenCodeSessionMessage | null = null;
     for (const message of messages) {
@@ -4806,6 +5424,7 @@ class OpenCodeAgentSession implements AgentSession {
       }
     }
     this.emitHydratedChildPresentation(child, messages);
+    return messages;
   }
 
   /**
@@ -4863,131 +5482,204 @@ class OpenCodeAgentSession implements AgentSession {
       if (event.event.cwd) {
         this.childSessionCwds.set(event.event.id, event.event.cwd);
       }
-      if (this.serverUrl) {
-        registerOpenCodeChildSessionServerUrl(event.event.id, this.serverUrl);
+      if (this.server.url) {
+        registerOpenCodeChildSessionServerUrl(event.event.id, this.server.url);
       }
     } else if (event.event.type === "remove") {
       unregisterOpenCodeChildSessionServerUrl(event.event.id);
       this.childTranslationStates.delete(event.event.id);
       this.childSessionCwds.delete(event.event.id);
+      this.childStatuses.delete(event.event.id);
       this.subagentPresentationByChildId.delete(event.event.id);
     }
   }
 
-  private startEventStream(): void {
-    void this.ensureEventStreamReady().catch((error) => {
-      this.logger.warn({ err: error, sessionId: this.sessionId }, "OpenCode event stream failed");
-    });
+  private async consumeEventSourceInput(input: OpenCodeEventSourceInput): Promise<void> {
+    if (!("payload" in input)) {
+      if (this.turnState.status === "stopping") return this.finishStoppingTurn(this.turnState.stop);
+      const turnId = this.activeForegroundTurnId;
+      if (turnId) {
+        this.finishForegroundTurn(
+          { type: "turn_failed", provider: "opencode", error: input.error.message },
+          turnId,
+        );
+      }
+      return;
+    }
+    if (input.payload.type === "server.connected") {
+      await this.reconcileAfterGap(++this.gapRepairRevision);
+      return;
+    }
+    await this.consumeOpenCodeStreamEvent({ rawEvent: input, eventCount: 0 });
   }
 
-  private ensureEventStreamReady(): Promise<void> {
-    if (this.closed) {
-      return Promise.reject(new Error("OpenCode session is closed"));
+  private async reconcileAfterGap(revision: number, refresh = true, delay = 100): Promise<void> {
+    if (revision !== this.gapRepairRevision) return;
+    const turnId = this.activeForegroundTurnId;
+    const dispatchMessageId = this.activeDispatchMessageId;
+    await this.refreshGapScope(refresh);
+    if (revision !== this.gapRepairRevision || !turnId) return;
+    const runnerStatus = await this.readProviderRunnerStatus().catch(() => null);
+    if (revision !== this.gapRepairRevision) return;
+    if (runnerStatus === null) {
+      this.scheduleGapRepair(revision, delay);
+      return;
     }
-    if (this.eventStreamReady) {
-      return this.eventStreamReady.promise;
+    if (dispatchMessageId === null) {
+      if (runnerStatus === "idle") {
+        this.suppressAssistantMessagesUntilIdle.active = false;
+        this.finishForegroundTurn({ type: "turn_completed", provider: "opencode" }, turnId);
+      }
+      return;
     }
-
-    const eventStreamAbortController = new AbortController();
-    const eventStreamReady = createDeferred<void>();
-    this.eventStreamAbortController = eventStreamAbortController;
-    this.eventStreamReady = eventStreamReady;
-    const eventStreamTask = this.consumeEventStream(
-      eventStreamAbortController,
-      eventStreamReady,
-    ).finally(() => {
-      if (this.eventStreamAbortController === eventStreamAbortController) {
-        this.eventStreamAbortController = null;
-        this.eventStreamReady = null;
+    const messages = await readOpenCodeSessionMessagesFromSdk(
+      this.client,
+      { id: this.sessionId, directory: this.config.cwd } as OpenCodePersistedSession,
+      this.recoveryAbortController.signal,
+    ).catch(() => null);
+    if (revision !== this.gapRepairRevision) return;
+    if (messages === null) {
+      this.scheduleGapRepair(revision, delay);
+      return;
+    }
+    const boundary = messages.findIndex((message) => message.info.id === dispatchMessageId);
+    if (boundary < 0) {
+      if (runnerStatus === "idle") {
+        this.finishForegroundTurn(
+          { type: "turn_failed", provider: "opencode", error: "Active dispatch not found" },
+          turnId,
+        );
       }
-      if (this.eventStreamTask === eventStreamTask) {
-        this.eventStreamTask = null;
+      return;
+    }
+    for (const message of messages.slice(boundary)) {
+      if (revision !== this.gapRepairRevision) return;
+      await this.consumeOpenCodeStreamEvent({
+        rawEvent: {
+          directory: this.config.cwd,
+          payload: { type: "message.updated", properties: { info: message.info } },
+        },
+        eventCount: 0,
+      });
+      for (const part of message.parts) {
+        if (revision !== this.gapRepairRevision) return;
+        await this.consumeOpenCodeStreamEvent({
+          rawEvent: {
+            directory: this.config.cwd,
+            payload: { type: "message.part.updated", properties: { part } },
+          },
+          eventCount: 0,
+        });
       }
-    });
-    this.eventStreamTask = eventStreamTask;
-    void eventStreamTask.catch((error) => {
-      this.logger.warn(
-        { err: error, sessionId: this.sessionId },
-        "OpenCode event stream task failed",
-      );
-    });
-
-    return eventStreamReady.promise;
+    }
+    if (runnerStatus === "idle" && this.activeForegroundTurnId === turnId) {
+      await this.settleRecoveredGap(messages, boundary);
+    }
   }
 
-  private async consumeEventStream(
-    eventStreamAbortController: AbortController,
-    eventStreamReady: Deferred<void>,
+  private async refreshGapScope(refresh: boolean): Promise<void> {
+    if (!refresh) return;
+    await this.hydrateChildSessions(true).catch(() => undefined);
+    await this.reconcileBlockingRequests();
+  }
+
+  private async settleRecoveredGap(
+    messages: OpenCodeSessionMessage[],
+    boundary: number,
   ): Promise<void> {
-    this.traceOpenCode("provider.opencode.subscribe.start", {
-      sessionId: this.sessionId,
-      cwd: this.config.cwd,
-    });
-    let eventStreamReadyResolved = false;
-    try {
-      const result = await this.client.global.event({
-        signal: eventStreamAbortController.signal,
-        sseMaxRetryAttempts: 0,
-      });
-      eventStreamReadyResolved = true;
-      this.traceOpenCode("provider.opencode.subscribe.ready", {
-        sessionId: this.sessionId,
-      });
-      eventStreamReady.resolve();
-
-      let eventCount = 0;
-      for await (const rawEvent of result.stream) {
-        eventCount += 1;
-        await this.consumeOpenCodeStreamEvent({ rawEvent, eventCount });
-      }
-
-      this.traceOpenCode("provider.opencode.stream.eof", {
-        eventCount,
-        aborted: eventStreamAbortController.signal.aborted,
-        activeTurnId: this.activeForegroundTurnId,
-      });
-
-      if (!eventStreamAbortController.signal.aborted) {
-        if (!eventStreamReadyResolved) {
-          eventStreamReady.reject(new Error("OpenCode event stream ended before it became ready"));
+    const latestAssistant = messages
+      .slice(boundary)
+      .findLast((message) => message.info.role === "assistant");
+    const persistedError =
+      latestAssistant && "error" in latestAssistant.info ? latestAssistant.info.error : undefined;
+    const payload = persistedError
+      ? {
+          type: "session.error" as const,
+          properties: { sessionID: this.sessionId, error: persistedError },
         }
-        const activeTurnId = this.activeForegroundTurnId;
-        if (activeTurnId) {
-          this.traceOpenCode("provider.opencode.turn.fail_eof", {
-            turnId: activeTurnId,
-            eventCount,
-          });
-          this.finishForegroundTurn(
-            {
-              type: "turn_failed",
-              provider: "opencode",
-              error: "OpenCode event stream ended before the turn reached a terminal state",
+      : {
+          type: "session.status" as const,
+          properties: { sessionID: this.sessionId, status: { type: "idle" as const } },
+        };
+    await this.consumeOpenCodeStreamEvent({
+      rawEvent: { directory: this.config.cwd, payload },
+      eventCount: 0,
+    });
+  }
+
+  private scheduleGapRepair(revision: number, delayMs: number): void {
+    setTimeout(() => {
+      if (revision !== this.gapRepairRevision || this.recoveryAbortController.signal.aborted)
+        return;
+      const nextDelay = Math.min(delayMs * 2, OPENCODE_STOP_STATUS_MAX_DELAY_MS);
+      this.ingress = this.ingress
+        .then(() => this.reconcileAfterGap(revision, false, nextDelay))
+        .catch(() => undefined);
+    }, delayMs).unref();
+  }
+
+  private async reconcileBlockingRequests(): Promise<void> {
+    const directories = new Set([this.config.cwd, ...this.childSessionCwds.values()]);
+    for (const directory of directories) {
+      const [permissions, questions] = await Promise.all([
+        this.client.permission
+          .list({ directory }, { signal: this.recoveryAbortController.signal })
+          .catch(() => null),
+        this.client.question
+          .list({ directory }, { signal: this.recoveryAbortController.signal })
+          .catch(() => null),
+      ]);
+      for (const [kind, response] of [
+        ["tool", permissions],
+        ["question", questions],
+      ] as const) {
+        const record = readOpenCodeRecord(response);
+        if (!record || record.error || !Array.isArray(record.data)) continue;
+        const liveIds = new Set<string>();
+        for (const properties of record.data) {
+          const propertiesRecord = readOpenCodeRecord(properties);
+          const id = readNonEmptyString(propertiesRecord?.id);
+          const sessionId = readNonEmptyString(propertiesRecord?.sessionID);
+          if (!id || !sessionId || !this.isOwnedSessionId(sessionId)) continue;
+          liveIds.add(id);
+          await this.consumeOpenCodeStreamEvent({
+            rawEvent: {
+              directory,
+              payload: {
+                type: kind === "question" ? "question.asked" : "permission.asked",
+                properties,
+              },
             },
-            activeTurnId,
+            eventCount: 0,
+          });
+        }
+        for (const [id, pendingDirectory] of this.pendingPermissionDirectories) {
+          const pending = this.pendingPermissions.get(id);
+          if (
+            pendingDirectory !== directory ||
+            liveIds.has(id) ||
+            (kind === "question") !== (pending?.kind === "question")
+          ) {
+            continue;
+          }
+          this.pendingPermissionDirectories.delete(id);
+          this.pendingPermissions.delete(id);
+          this.notifySubscribers(
+            {
+              type: "permission_resolved",
+              provider: "opencode",
+              requestId: id,
+              resolution: { behavior: "allow" },
+            },
+            null,
           );
         }
       }
-    } catch (error) {
-      this.traceOpenCode("provider.opencode.subscribe.error", {
-        turnId: this.activeForegroundTurnId ?? undefined,
-        error:
-          error instanceof Error ? { name: error.name, message: error.message } : String(error),
-      });
-      if (!eventStreamReadyResolved) {
-        eventStreamReady.reject(error);
-      }
-      const activeTurnId = this.activeForegroundTurnId;
-      if (!eventStreamAbortController.signal.aborted && activeTurnId) {
-        this.finishForegroundTurn(
-          {
-            type: "turn_failed",
-            provider: "opencode",
-            error: toDiagnosticErrorMessage(error),
-          },
-          activeTurnId,
-        );
-      }
     }
+  }
+
+  private isOwnedSessionId(sessionId: string): boolean {
+    return sessionId === this.sessionId || this.knownChildSessionIds.has(sessionId);
   }
 
   private async consumeOpenCodeStreamEvent(params: {
@@ -5114,12 +5806,15 @@ class OpenCodeAgentSession implements AgentSession {
 
   private startAutonomousTurn(): string {
     const turnId = this.createTurnId();
+    this.materializedParts.clear();
     this.turnState = { status: "running", turnId };
     this.runningToolCalls.clear();
     this.subAgentsByCallId.clear();
     this.subAgentCallIdByChildSessionId.clear();
+    this.pendingSteerSubmissions = [];
     this.pendingUserMessageText = null;
     this.pendingClientMessageId = null;
+    this.activeDispatchMessageId = null;
     this.abortController = null;
     this.notifySubscribers({ type: "turn_started", provider: "opencode" }, turnId);
     return turnId;
@@ -5146,6 +5841,7 @@ class OpenCodeAgentSession implements AgentSession {
     }
     this.pendingUserMessageText = null;
     this.pendingClientMessageId = null;
+    this.pendingSteerSubmissions = [];
     this.turnState = { status: "idle" };
     this.abortController = null;
     this.notifySubscribers(event, turnId);
@@ -5155,7 +5851,6 @@ class OpenCodeAgentSession implements AgentSession {
     return this.turnState.status === "stopping" && this.turnState.stop === stop;
   }
 
-  /** Stops the session runner and returns the abort this Stop issued. */
   private issueStop(turnId: string | null): Promise<void> {
     if (this.turnState.status === "stopping") {
       // Stop pressed again during a stop retries that same stop. There is one
@@ -5177,11 +5872,11 @@ class OpenCodeAgentSession implements AgentSession {
     }
     this.pendingUserMessageText = null;
     this.pendingClientMessageId = null;
+    this.pendingSteerSubmissions = [];
     this.abortController = null;
     return abort;
   }
 
-  /** Issues one more session-scoped abort for this stop and returns it. */
   private issueOwnedAbort(stop: OpenCodeStop): Promise<void> {
     const abort = this.runOwnedAbort(stop.pendingCancellationTurnId);
     // Abort is session-scoped, so its settlement is too: an older request lands
@@ -5283,6 +5978,15 @@ class OpenCodeAgentSession implements AgentSession {
     if (this.closed) {
       return;
     }
+    if (event.type === "provider_subagent" && event.event.type === "upsert" && event.event.status) {
+      const previous = this.childStatuses.get(event.event.id);
+      const current =
+        event.event.parentSubagentId === undefined && previous?.parentSubagentId !== undefined
+          ? { ...event.event, parentSubagentId: previous.parentSubagentId }
+          : event.event;
+      if (isDeepStrictEqual(previous, current)) return;
+      this.childStatuses.set(event.event.id, structuredClone(current));
+    }
     const turnId = turnIdOverride === null ? null : (turnIdOverride ?? this.activeForegroundTurnId);
     const tagged = turnId ? { ...event, turnId } : event;
     this.traceOpenCode("provider.opencode.event_emit", {
@@ -5292,13 +5996,12 @@ class OpenCodeAgentSession implements AgentSession {
     for (const callback of this.subscribers) {
       try {
         callback(tagged);
-      } catch {
-        // Subscriber callback error isolation
-      }
+      } catch {}
     }
   }
 
   private createTurnId(): string {
+    this.gapRepairRevision += 1;
     return `opencode-turn-${this.nextTurnOrdinal++}`;
   }
 
@@ -5316,6 +6019,7 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+    await this.reconnectIfServerExited();
     const sessionResponse = await this.client.session.get({
       sessionID: this.sessionId,
       directory: this.config.cwd,
@@ -5345,6 +6049,7 @@ class OpenCodeAgentSession implements AgentSession {
       return this.availableModesCache;
     }
 
+    await this.reconnectIfServerExited();
     const response = await openCodeMetadataLimit(() =>
       this.client.app.agents({
         directory: this.config.cwd,
@@ -5363,6 +6068,7 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   async listCommands(): Promise<AgentSlashCommand[]> {
+    await this.reconnectIfServerExited();
     return await listOpenCodeCommandsFromSdk(this.client, this.config.cwd);
   }
 
@@ -5469,25 +6175,12 @@ class OpenCodeAgentSession implements AgentSession {
 
   async close(): Promise<void> {
     try {
-      // Flip closed before clearing subscribers so any event the SDK delivers
-      // after the abort (between here and subscribers.clear) is swallowed by
-      // notifySubscribers instead of bubbling through provider-runner as an
-      // unhandled rejection in whichever test the daemon hops to next.
       this.closed = true;
       this.abortController?.abort();
-      const eventStreamTask = this.eventStreamTask;
-      this.eventStreamAbortController?.abort();
-      if (eventStreamTask) {
-        await eventStreamTask.catch((error) => {
-          this.logger.debug(
-            { err: error, sessionId: this.sessionId },
-            "OpenCode event stream failed during close",
-          );
-        });
-      }
-      this.eventStreamAbortController = null;
-      this.eventStreamReady = null;
-      this.eventStreamTask = null;
+      this.recoveryAbortController.abort();
+      this.unsubscribeEvents?.();
+      this.unsubscribeEvents = null;
+      await this.ingress.catch(() => undefined);
       this.subscribers.clear();
       await abortOpenCodeSession({
         client: this.client,
@@ -5498,8 +6191,9 @@ class OpenCodeAgentSession implements AgentSession {
       await this.deleteProviderSessionIfEphemeral();
       this.turnState = { status: "idle" };
     } finally {
-      await this.releaseServer?.();
-      this.releaseServer = null;
+      this.releaseBridge?.();
+      this.releaseBridge = null;
+      await this.server.release();
     }
   }
 
@@ -5575,25 +6269,18 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   private async ensureMcpServersConfigured(): Promise<void> {
-    if (this.mcpConfigured) {
-      return;
-    }
-
     const mcpServers = this.config.mcpServers;
     if (!mcpServers || Object.keys(mcpServers).length === 0) {
-      this.mcpConfigured = true;
       return;
     }
 
-    if (!this.mcpSetupPromise) {
-      this.mcpSetupPromise = this.configureMcpServers(mcpServers);
-    }
-
+    const setup = (this.mcpSetup ??= this.configureMcpServers(mcpServers));
     try {
-      await this.mcpSetupPromise;
-      this.mcpConfigured = true;
+      await setup;
     } catch (error) {
-      this.mcpSetupPromise = null;
+      if (this.mcpSetup === setup) {
+        this.mcpSetup = null;
+      }
       throw error;
     }
   }
@@ -5643,10 +6330,11 @@ class OpenCodeAgentSession implements AgentSession {
       messageRoles: this.messageRoles,
       pendingUserMessageText: this.pendingUserMessageText,
       pendingClientMessageId: this.pendingClientMessageId,
+      pendingSteerSubmissions: this.pendingSteerSubmissions,
       emittedUserMessageIds: this.emittedUserMessageIds,
       accumulatedUsage: this.accumulatedUsage,
       sessionTotalCostUsd: this.sessionTotalCostUsd,
-      streamedPartKeys: this.streamedPartKeys,
+      materializedParts: this.materializedParts,
       emittedStructuredMessageIds: this.emittedStructuredMessageIds,
       compactionSummaryMessageIds: this.compactionSummaryMessageIds,
       emittedCompactionPartIds: this.emittedCompactionPartIds,
@@ -5657,6 +6345,12 @@ class OpenCodeAgentSession implements AgentSession {
       knownChildSessionIds: this.knownChildSessionIds,
       subagentPresentationByChildId: this.subagentPresentationByChildId,
       modelContextWindowsByModelKey: this.modelContextWindowsByModelKey,
+      onMaterializationMismatch: (diagnostic) => {
+        this.logger.warn(
+          { ...diagnostic, sessionId: this.sessionId },
+          "OpenCode final part snapshot replaced streamed content",
+        );
+      },
       onAssistantModelContextWindowResolved: (contextWindowMaxTokens) => {
         this.accumulatedUsage.contextWindowMaxTokens = contextWindowMaxTokens;
         if (!this.config.model) {
@@ -5677,7 +6371,7 @@ class OpenCodeAgentSession implements AgentSession {
       messageRoles: new Map(),
       emittedUserMessageIds: new Set(),
       accumulatedUsage: {},
-      streamedPartKeys: new Set(),
+      materializedParts: new Map(),
       emittedStructuredMessageIds: new Set(),
       compactionSummaryMessageIds: new Set(),
       emittedCompactionPartIds: new Set(),
@@ -5690,6 +6384,12 @@ class OpenCodeAgentSession implements AgentSession {
       knownChildSessionIds: new Set(),
       subagentPresentationByChildId: this.subagentPresentationByChildId,
       modelContextWindowsByModelKey: this.modelContextWindowsByModelKey,
+      onMaterializationMismatch: (diagnostic) => {
+        this.logger.warn(
+          { ...diagnostic, sessionId },
+          "OpenCode final part snapshot replaced streamed content",
+        );
+      },
     };
     this.childTranslationStates.set(sessionId, state);
     return state;
@@ -5814,6 +6514,7 @@ class OpenCodeAgentSession implements AgentSession {
     eventDirectory?: string,
   ): Promise<AgentStreamEvent[]> {
     const eventSessionId = getOpenCodeEventSessionId(event);
+    const runtimeModelChanged = this.syncRuntimeModel(event, eventSessionId);
     if (
       event.type !== "session.created" &&
       eventSessionId &&
@@ -5830,6 +6531,12 @@ class OpenCodeAgentSession implements AgentSession {
       }
     }
     const translated = translateOpenCodeEvent(event, this.createTranslationState());
+    if (runtimeModelChanged)
+      translated.push({
+        type: "model_changed",
+        provider: this.provider,
+        runtimeInfo: await this.getRuntimeInfo(),
+      });
     this.appendProviderSubagentEvents(event, translated);
 
     const events: AgentStreamEvent[] = [];
@@ -5843,11 +6550,12 @@ class OpenCodeAgentSession implements AgentSession {
     for (const translatedEvent of translated) {
       this.recordProviderInternalEvent(translatedEvent);
       if (translatedEvent.type === "permission_requested") {
-        // Arena can move the main session into a chat worktree without changing its session ID.
-        // The global event envelope identifies the InstanceState that owns the pending request.
+        // A known child answers in its own directory. Arena can move the main session into a chat
+        // worktree without changing its session ID; the global event envelope identifies the
+        // InstanceState that owns that session's pending request.
         const directory =
-          eventDirectory ??
           (eventSessionId ? this.childSessionCwds.get(eventSessionId) : undefined) ??
+          eventDirectory ??
           this.config.cwd;
         const autoApproved = await this.tryAutoApproveToolPermission(
           translatedEvent.request,
@@ -5871,6 +6579,20 @@ class OpenCodeAgentSession implements AgentSession {
     }
 
     return events;
+  }
+
+  private syncRuntimeModel(event: OpenCodeEvent, eventSessionId: string | null): boolean {
+    if (event.type !== "message.updated" || eventSessionId !== this.sessionId) return false;
+    const info = event.properties.info;
+    let model: string | undefined;
+    if (info.role === "assistant") model = resolveOpenCodeModelLookupKeyFromAssistantMessage(info);
+    if (info.role === "user" && info.model)
+      model = buildOpenCodeModelLookupKey(info.model.providerID, info.model.modelID);
+    if (!model || model === this.config.model) return false;
+    this.config.model = model;
+    this.selectedModelContextWindowMaxTokens =
+      this.resolveConfiguredModelContextWindowMaxTokens(model);
+    return true;
   }
 
   private async tryAutoApproveToolPermission(

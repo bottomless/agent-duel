@@ -197,7 +197,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   label: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
   bullets: {
@@ -207,7 +207,7 @@ const styles = StyleSheet.create((theme) => ({
   subject: {
     flexShrink: 1,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   row: {
     flexDirection: "row",
@@ -219,12 +219,12 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     color: theme.colors.foreground,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   // What happened is prose, so it leaves the name's mono face.
   note: {
     color: theme.colors.foregroundMuted,
     fontFamily: theme.fontFamily?.ui,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

@@ -58,7 +58,7 @@ export async function observeCommandCenterScroll(page: Page): Promise<void> {
 }
 
 export async function openCommandCenterWithKeyboard(page: Page): Promise<Locator> {
-  await expect(page.getByTestId("sidebar-command-center-search")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("sidebar-search")).toBeVisible({ timeout: 30_000 });
   await page.keyboard.press("Meta+K");
   const panel = page.getByTestId("command-center-panel");
   await expect(panel).toBeVisible({ timeout: 30_000 });
@@ -83,6 +83,7 @@ export async function expectCommandCenterToRemainAtTheTop(page: Page): Promise<v
 export async function expectPrimaryCommandCenterActions(panel: Locator): Promise<void> {
   const expectedActions = [
     { title: "New workspace", shortcut: "⌘N" },
+    { title: "Import session" },
     { title: "History" },
     { title: "Schedules" },
     { title: "Settings", shortcut: "⌘," },
@@ -105,6 +106,9 @@ export async function expectPrimaryCommandCenterActions(panel: Locator): Promise
   await input.fill("home");
   await expect(panel.getByRole("button").filter({ hasText: "Home" })).toBeVisible();
   await expect(panel.getByRole("button").filter({ hasText: "Add project" })).toHaveCount(0);
+  await input.fill("import");
+  await expect(panel.getByRole("button").filter({ hasText: "Import session" })).toBeVisible();
+  await expect(panel.getByRole("button").filter({ hasText: "Home" })).toHaveCount(0);
   await input.fill("");
 }
 
@@ -164,4 +168,43 @@ export async function expectTightTwoLineResultSpacing(
     .getByTestId("command-center-workspace-subtitle")
     .evaluate((element) => element.getBoundingClientRect().top);
   expect(subtitleTop - titleTop).toBeLessThanOrEqual(18);
+}
+
+/** Wait for the browser to deliver wheel events before publishing a daemon update. */
+export async function scrollCommandCenterAwayFromSelection(page: Page, panel: Locator) {
+  await page.setViewportSize({ width: 1280, height: 500 });
+  const viewport = panel.getByTestId("command-center-results");
+  await viewport.hover();
+  await page.mouse.wheel(0, 300);
+  await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(100);
+  const samples = await sampleCommandCenterScroll(panel);
+  const offset = samples.at(-1)!;
+  expect(offset).toBeGreaterThan(100);
+  return offset;
+}
+
+async function sampleCommandCenterScroll(panel: Locator): Promise<number[]> {
+  return panel.getByTestId("command-center-results").evaluate(async (viewport) => {
+    const samples: number[] = [];
+    for (let frame = 0; frame < 30; frame += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      samples.push(viewport.scrollTop);
+    }
+    return samples;
+  });
+}
+
+export async function expectCommandCenterScrollToStayAt(panel: Locator, offset: number) {
+  const samples = await sampleCommandCenterScroll(panel);
+  expect(Math.min(...samples)).toBe(offset);
+  expect(Math.max(...samples)).toBe(offset);
+}
+
+export async function expectKeyboardNavigationToResume(page: Page, panel: Locator, offset: number) {
+  await page.keyboard.press("ArrowDown");
+  await expect
+    .poll(() => panel.getByTestId("command-center-results").evaluate((el) => el.scrollTop))
+    .toBeLessThan(offset);
+  const second = panel.getByTestId("command-center-results").getByRole("button").nth(1);
+  await expect(second).toBeInViewport({ ratio: 1 });
 }

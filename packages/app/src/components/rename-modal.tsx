@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Text, TextInput, View } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
@@ -8,6 +8,7 @@ import { type FieldControlSize } from "@/components/ui/control-geometry";
 import { FormTextInput } from "@/components/ui/form-field";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
+import type { EditingTextInputHandle } from "@/components/ui/text-input";
 
 export interface AdaptiveRenameModalProps {
   visible: boolean;
@@ -49,7 +50,7 @@ export function AdaptiveRenameModal({
   const [seed, setSeed] = useState(initialValue);
   const [seedKey, setSeedKey] = useState(0);
   const typedRef = useRef(false);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<EditingTextInputHandle>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -78,7 +79,7 @@ export function AdaptiveRenameModal({
       if (isWeb && node instanceof HTMLInputElement) {
         node.setSelectionRange(0, length);
       } else if (!isWeb && length > 0) {
-        node.setNativeProps({ selection: { start: 0, end: length } });
+        node.replaceText(node.getText(), { start: 0, end: length });
       }
     }, 50);
     return () => clearTimeout(timeout);
@@ -202,7 +203,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   errorText: {
     color: theme.colors.palette.red[300],
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   actions: {
     flexDirection: "row",

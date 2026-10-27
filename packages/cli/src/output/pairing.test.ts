@@ -10,6 +10,9 @@ describe("formatPairingInstructions", () => {
 
     expect(output).toContain(QR);
     expect(output.split("\n")).toContain(URL);
+    expect(output).toContain(
+      "Treat this pairing link like a password. Anyone with it can access this daemon.",
+    );
   });
 
   it("does not print a QR that would reach the terminal edge", () => {
@@ -26,5 +29,18 @@ describe("formatPairingInstructions", () => {
     expect(output).not.toContain(QR);
     expect(output).toContain("terminal width could not be detected");
     expect(output.split("\n")).toContain(URL);
+  });
+
+  it("redacts a password in a printed connection URI", () => {
+    const output = formatPairingInstructions({
+      qr: null,
+      url: URL,
+      connectionUri: "relay://relay.paseo.sh:443/srv_test?key=public&password=private-value",
+    });
+
+    expect(output).toContain(
+      "relay://relay.paseo.sh:443/srv_test?key=public&password=%5Bredacted%5D",
+    );
+    expect(output).not.toContain("private-value");
   });
 });

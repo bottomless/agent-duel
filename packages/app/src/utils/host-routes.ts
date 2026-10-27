@@ -489,6 +489,11 @@ export function resolveKnownHostRoute(input: {
 export const SETTINGS_SECTION_SLUGS = [
   "general",
   "appearance",
+  "sidebar",
+  "chat",
+  "terminal",
+  "browser",
+  "files",
   "shortcuts",
   "notifications",
   "storage",
@@ -500,7 +505,7 @@ export function isSettingsSectionSlug(value: string): value is SettingsSectionSl
   return (SETTINGS_SECTION_SLUGS as readonly string[]).includes(value);
 }
 
-export const HOST_SECTION_SLUGS = ["projects"] as const;
+export const HOST_SECTION_SLUGS = ["projects", "plugins"] as const;
 
 export type HostSectionSlug = (typeof HOST_SECTION_SLUGS)[number];
 

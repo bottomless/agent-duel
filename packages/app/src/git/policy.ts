@@ -332,6 +332,18 @@ export function buildGitActions(input: BuildGitActionsInput): GitActions {
   return { primary, secondary: listed, menu: [] };
 }
 
+/**
+ * The actions a flattened list shows after the primary. `secondary` keeps the actions the policy
+ * can promote to `primary`, and the translator rebuilds those objects, so a flattening consumer
+ * has to drop the promoted one by id or it renders it twice.
+ */
+export function actionsWithoutPrimary(gitActions: GitActions): GitAction[] {
+  const primaryActionId = gitActions.primary?.id;
+  return [...gitActions.secondary, ...gitActions.menu].filter(
+    (action) => action.id !== primaryActionId,
+  );
+}
+
 function getPrimaryActionId(input: BuildGitActionsInput): GitActionId | null {
   if (input.shouldPromoteArchive) {
     return "archive-workspace";

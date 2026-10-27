@@ -15,7 +15,7 @@ function endpointFromConnection(connection: HostConnection): AccountsEndpoint | 
   return {
     baseUrl: target.baseUrl,
     authHeader: target.authHeader,
-    daemonPassword: connection.type === "directTcp" ? (connection.password ?? null) : null,
+    daemonPassword: null,
   };
 }
 
@@ -43,7 +43,7 @@ export function resolveAccountsEndpoint(
       return {
         baseUrl: target.baseUrl,
         authHeader: target.authHeader,
-        daemonPassword: connection.password ?? null,
+        daemonPassword: host.password ?? null,
       };
     }
   }

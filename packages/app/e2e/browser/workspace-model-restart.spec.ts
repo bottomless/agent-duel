@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { execSync, spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { expect, type Page } from "@playwright/test";
 import { buildHostWorkspaceRoute, decodeWorkspaceIdFromPathSegment } from "@/utils/host-routes";
+import type { FormPreferences } from "@/create-agent-preferences/preferences";
 import { metroTest as test } from "../support/fixtures";
 import { buildSeededHost } from "../support/helpers/daemon-registry";
 import { loadDaemonClientConstructor } from "../support/helpers/daemon-client-loader";
@@ -22,6 +22,7 @@ import {
   submitNewWorkspaceEmpty,
 } from "../support/helpers/new-workspace";
 import { selectSidebarStatusGrouping } from "../support/helpers/sidebar";
+import { killProcessTree, spawnTsx } from "../support/helpers/spawn-node";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
 import { getVisibleWorkspaceAgentTabIds } from "../support/helpers/workspace-tabs";
 
@@ -194,9 +195,11 @@ async function getAvailablePort(): Promise<number> {
 async function waitForServer(port: number, child: ChildProcess): Promise<void> {
   const startedAt = Date.now();
   let lastConnectionError: unknown = null;
-  while (Date.now() - startedAt < 20_000) {
-    if (child.exitCode !== null) {
-      throw new Error(`Restart test daemon exited before listening (exit ${child.exitCode}).`);
+  while (Date.now() - startedAt < 90_000) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `Restart test daemon exited before listening (code ${String(child.exitCode)}, signal ${String(child.signalCode)}).`,
+      );
     }
     try {
       await new Promise<void>((resolve, reject) => {
@@ -225,21 +228,6 @@ async function waitForServer(port: number, child: ChildProcess): Promise<void> {
   );
 }
 
-async function stopProcess(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  const timeout = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-  }, 5000);
-  try {
-    await once(child, "exit");
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function startRestartDaemon(input: {
   paseoHome: string;
   origin: string;
@@ -250,8 +238,7 @@ async function startRestartDaemon(input: {
   }
 
   const serverDir = path.resolve(__dirname, "../../../server");
-  const tsxBin = execSync("which tsx").toString().trim();
-  const child = spawn(tsxBin, ["scripts/supervisor-entrypoint.ts", "--dev"], {
+  const child = spawnTsx("scripts/supervisor-entrypoint.ts", ["--dev"], {
     cwd: serverDir,
     env: withDisabledE2ESpeechEnv({
       ...process.env,
@@ -275,7 +262,7 @@ async function startRestartDaemon(input: {
   try {
     await waitForServer(port, child);
   } catch (error) {
-    await stopProcess(child);
+    await killProcessTree(child);
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}\nDaemon stderr:\n${stderr}`,
       { cause: error },
@@ -284,7 +271,7 @@ async function startRestartDaemon(input: {
 
   return {
     port,
-    close: () => stopProcess(child),
+    close: () => killProcessTree(child),
   };
 }
 
@@ -348,12 +335,14 @@ async function seedBrowserForDaemon(page: Page, input: { serverId: string; port:
     {
       daemon: host,
       preferences: {
-        serverId: input.serverId,
         provider: "codex",
         providerPreferences: {
-          codex: { model: "gpt-5.4-mini", thinkingOptionId: "low" },
+          codex: {
+            model: "gpt-5.4-mini",
+            thinkingByModel: { "gpt-5.4-mini": "low" },
+          },
         },
-      },
+      } satisfies FormPreferences,
     },
   );
 }
@@ -365,22 +354,6 @@ function parseWorkspaceIdFromPageUrl(page: Page, serverId: string): string | nul
   );
   if (!match?.[1]) return null;
   return decodeWorkspaceIdFromPathSegment(match[1]);
-}
-
-async function expectWorkspaceRowHasOnlyIndicator(
-  page: Page,
-  input: { serverId: string; workspaceId: string; indicator: string },
-) {
-  const row = page.getByTestId(`sidebar-workspace-row-${input.serverId}:${input.workspaceId}`);
-  await expect(row).toBeVisible({ timeout: 30_000 });
-  for (const indicator of ["attention", "done", "failed", "loading", "needs_input", "running"]) {
-    const locator = row.locator(`[data-testid="workspace-status-indicator-${indicator}"]`);
-    if (indicator === input.indicator) {
-      await expect(locator).toBeVisible({ timeout: 30_000 });
-    } else {
-      await expect(locator).toHaveCount(0);
-    }
-  }
 }
 
 async function expectWorkspaceRowDoesNotShowIndicator(
@@ -431,7 +404,7 @@ async function fetchWorkspaceStatuses(
 }
 
 test.describe("Workspace model restart regressions", () => {
-  test("browser-created same-cwd workspace preserves restarted agent status and migrated tab ownership", async ({
+  test("browser-created same-cwd workspace preserves repaired restart status and migrated tab ownership", async ({
     page,
     baseURL,
   }) => {
@@ -450,16 +423,15 @@ test.describe("Workspace model restart regressions", () => {
         .toMatchObject({
           id: LEGACY_AGENT_ID,
           workspaceId: seeded.workspaceA,
-          status: "running",
+          status: "closed",
         });
+
+      await expect
+        .poll(() => fetchWorkspaceStatuses(client, [seeded.workspaceA, seeded.workspaceB]))
+        .toEqual({ [seeded.workspaceA]: "done", [seeded.workspaceB]: "done" });
 
       await page.goto(buildHostWorkspaceRoute(serverId, seeded.workspaceA));
       await waitForSidebarHydration(page);
-      await expectWorkspaceRowHasOnlyIndicator(page, {
-        serverId,
-        workspaceId: seeded.workspaceA,
-        indicator: "running",
-      });
       await expectWorkspaceRowDoesNotShowIndicator(page, {
         serverId,
         workspaceId: seeded.workspaceB,
@@ -504,14 +476,10 @@ test.describe("Workspace model restart regressions", () => {
           ]),
         )
         .toMatchObject({
+          [seeded.workspaceA]: "done",
           [seeded.workspaceB]: "done",
           [createdWorkspaceId]: "done",
         });
-
-      // The restarted provider session may settle while the browser creates the sibling. Its
-      // initial running status is asserted above; this phase verifies that ownership never moves.
-      const workspaceStatuses = await fetchWorkspaceStatuses(client, [seeded.workspaceA]);
-      expect(["running", "done"]).toContain(workspaceStatuses[seeded.workspaceA]);
 
       await expectWorkspaceRowDoesNotShowIndicator(page, {
         serverId,

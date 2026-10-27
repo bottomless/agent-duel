@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Plus, Trash2 } from "lucide-react-native";
@@ -6,7 +13,6 @@ import {
   Pressable,
   type PressableStateCallbackType,
   Text,
-  TextInput,
   type TextStyle,
   View,
   type StyleProp,
@@ -14,22 +20,32 @@ import {
 } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
-import { Shortcut } from "@/components/ui/shortcut";
+import {
+  EditingTextInput as TextInput,
+  type EditingTextInputHandle,
+} from "@/components/ui/text-input";
+import { useIsCompactFormFactor } from "@/constants/layout";
+import { createReviewEditorScope } from "./editor";
 import { isWeb } from "@/constants/platform";
-import { useHasFinePointer } from "@/hooks/use-fine-pointer";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import type { Theme } from "@/styles/theme";
-import type { ShortcutKey } from "@/utils/format-shortcut";
-import { useWorkspaceFocusRestoration } from "@/workspace/focus";
-import { useReviewDraftComments, useReviewDraftStore, type ReviewDraftComment } from "./store";
+import {
+  useReviewDraftComments,
+  useReviewDraftStore,
+  saveReviewDraftComment,
+  type ReviewDraftComment,
+} from "./store";
 import { buildReviewableDiffTargetKey, type ReviewableDiffTarget } from "@/utils/diff-layout";
+import {
+  INLINE_REVIEW_EDITOR_HEIGHT,
+  INLINE_REVIEW_GAP,
+  INLINE_REVIEW_VERTICAL_PADDING,
+  isInlineReviewEditorForTarget,
+  type InlineReviewActions,
+  type InlineReviewEditorState,
+} from "./geometry";
 
 type PressableState = PressableStateCallbackType & { hovered?: boolean };
-type WebTextInputRef = TextInput & {
-  getNativeElement?: () => unknown;
-  getNativeRef?: () => unknown;
-};
-
 function iconButtonStyle({ hovered, pressed }: PressableState): StyleProp<ViewStyle> {
   return [styles.iconButton, (hovered || pressed) && styles.iconButtonHovered];
 }
@@ -38,21 +54,15 @@ function iconButtonDestructiveStyle({ hovered, pressed }: PressableState): Style
   return [styles.iconButton, (hovered || pressed) && styles.iconButtonDestructiveHovered];
 }
 
-function getWebTextInputElement(input: TextInput | null): HTMLElement | null {
+function getWebTextInputElement(input: EditingTextInputHandle | null): HTMLElement | null {
   if (!isWeb || typeof HTMLElement === "undefined" || !input) {
     return null;
   }
-  const webInput = input as WebTextInputRef;
-  const element = webInput.getNativeElement?.() ?? webInput.getNativeRef?.() ?? input;
+  const element = input.getNativeRef();
   return element instanceof HTMLElement ? element : null;
 }
 
-export const INLINE_REVIEW_COMMENT_HEIGHT = 72;
-export const INLINE_REVIEW_EDITOR_HEIGHT = 132;
-const INLINE_REVIEW_GAP = 6;
 export const SMALL_ACTION_HIT_SLOP = 8;
-const REVIEW_CANCEL_SHORTCUT_KEYS: ShortcutKey[] = ["Esc"];
-const REVIEW_SAVE_SHORTCUT_KEYS: ShortcutKey[] = ["mod", "Enter"];
 const foregroundMutedIconColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const destructiveIconColorMapping = (theme: Theme) => ({ color: theme.colors.destructive });
 const accentForegroundIconColorMapping = (theme: Theme) => ({
@@ -62,20 +72,33 @@ const ThemedPencil = withUnistyles(Pencil);
 const ThemedPlus = withUnistyles(Plus);
 const ThemedTrash2 = withUnistyles(Trash2);
 
-export interface InlineReviewEditorState {
-  target: ReviewableDiffTarget;
-  commentId: string | null;
-  body: string;
+function InlineReviewAddIcon({ style, testID }: { style?: StyleProp<ViewStyle>; testID?: string }) {
+  return (
+    <View style={[styles.gutterActionVisual, style]} testID={testID}>
+      <ThemedPlus size={16} strokeWidth={2.4} uniProps={accentForegroundIconColorMapping} />
+    </View>
+  );
 }
 
-export interface InlineReviewActions {
-  commentsByTarget: ReadonlyMap<string, ReviewDraftComment[]>;
-  editor: InlineReviewEditorState | null;
-  onStartComment: (target: ReviewableDiffTarget) => void;
-  onEditComment: (target: ReviewableDiffTarget, comment: ReviewDraftComment) => void;
-  onCancelEditor: () => void;
-  onSaveEditor: (body: string) => void;
-  onDeleteComment: (id: string) => void;
+export function InlineReviewAddButton({
+  onPress,
+  style,
+}: {
+  onPress: () => void;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={t("review.comment.add")}
+      hitSlop={SMALL_ACTION_HIT_SLOP}
+      onPress={onPress}
+      style={[styles.gutterActionVisual, style]}
+    >
+      <ThemedPlus size={16} strokeWidth={2.4} uniProps={accentForegroundIconColorMapping} />
+    </Pressable>
+  );
 }
 
 export function groupInlineReviewCommentsByTarget(
@@ -89,166 +112,43 @@ export function groupInlineReviewCommentsByTarget(
   return grouped;
 }
 
-export function useInlineReviewController(input: { reviewDraftKey: string }): InlineReviewActions {
+const reviewEditors = createReviewEditorScope({
+  saveComment: saveReviewDraftComment,
+  deleteComment: (input) => useReviewDraftStore.getState().deleteComment(input),
+});
+
+export function useInlineReviewController(input: {
+  reviewDraftKey: string;
+  presentation?: string;
+}): InlineReviewActions & {
+  sheetEditor: InlineReviewEditorState | null;
+  onChangeEditorBody: (body: string) => void;
+} {
+  const isCompact = useIsCompactFormFactor();
   const reviewComments = useReviewDraftComments(input.reviewDraftKey);
   const commentsByTarget = useMemo(
     () => groupInlineReviewCommentsByTarget(reviewComments),
     [reviewComments],
   );
-  const [editor, setEditor] = useState<InlineReviewEditorState | null>(null);
-  const addComment = useReviewDraftStore((state) => state.addComment);
-  const updateComment = useReviewDraftStore((state) => state.updateComment);
-  const deleteComment = useReviewDraftStore((state) => state.deleteComment);
-
-  useEffect(() => {
-    setEditor(null);
-  }, [input.reviewDraftKey]);
-
-  const handleStartComment = useCallback((target: ReviewableDiffTarget) => {
-    setEditor({ target, commentId: null, body: "" });
-  }, []);
-
-  const handleEditComment = useCallback(
-    (target: ReviewableDiffTarget, comment: ReviewDraftComment) => {
-      setEditor({ target, commentId: comment.id, body: comment.body });
-    },
-    [],
+  const model = useMemo(
+    () => reviewEditors.forDraft(input.reviewDraftKey, input.presentation ?? "diff"),
+    [input.reviewDraftKey, input.presentation],
   );
-
-  const handleCancelEditor = useCallback(() => {
-    setEditor(null);
-  }, []);
-
-  const handleSaveEditor = useCallback(
-    (body: string) => {
-      const trimmedBody = body.trim();
-      if (!editor || trimmedBody.length === 0) {
-        return;
-      }
-
-      if (editor.commentId) {
-        updateComment({
-          key: input.reviewDraftKey,
-          id: editor.commentId,
-          updates: { body: trimmedBody },
-        });
-      } else {
-        addComment({
-          key: input.reviewDraftKey,
-          comment: {
-            filePath: editor.target.filePath,
-            side: editor.target.side,
-            lineNumber: editor.target.lineNumber,
-            body: trimmedBody,
-          },
-        });
-      }
-      setEditor(null);
-    },
-    [addComment, editor, input.reviewDraftKey, updateComment],
-  );
-
-  const handleDeleteComment = useCallback(
-    (id: string) => {
-      deleteComment({ key: input.reviewDraftKey, id });
-      setEditor((current) => (current?.commentId === id ? null : current));
-    },
-    [deleteComment, input.reviewDraftKey],
-  );
-
-  return useMemo<InlineReviewActions>(
+  const editor = useSyncExternalStore(model.subscribe, model.getState, model.getState);
+  return useMemo(
     () => ({
       commentsByTarget,
-      editor,
-      onStartComment: handleStartComment,
-      onEditComment: handleEditComment,
-      onCancelEditor: handleCancelEditor,
-      onSaveEditor: handleSaveEditor,
-      onDeleteComment: handleDeleteComment,
+      editor: isCompact ? null : editor,
+      sheetEditor: isCompact ? editor : null,
+      onChangeEditorBody: model.setBody,
+      onStartComment: model.start,
+      onEditComment: model.edit,
+      onCancelEditor: model.cancel,
+      onSaveEditor: model.save,
+      onDeleteComment: model.delete,
     }),
-    [
-      commentsByTarget,
-      editor,
-      handleCancelEditor,
-      handleDeleteComment,
-      handleEditComment,
-      handleSaveEditor,
-      handleStartComment,
-    ],
+    [commentsByTarget, editor, isCompact, model],
   );
-}
-
-export function isInlineReviewEditorForTarget(
-  editor: InlineReviewEditorState | null,
-  target: ReviewableDiffTarget | null | undefined,
-): boolean {
-  return Boolean(
-    editor &&
-    target &&
-    buildReviewableDiffTargetKey(editor.target) === buildReviewableDiffTargetKey(target),
-  );
-}
-
-export function getInlineReviewThreadState(input: {
-  reviewTarget: ReviewableDiffTarget | null | undefined;
-  reviewActions?: InlineReviewActions;
-}): {
-  comments: ReviewDraftComment[];
-  hasEditor: boolean;
-  editingCommentId: string | null;
-  height: number;
-} | null {
-  const { reviewTarget, reviewActions } = input;
-  if (!reviewTarget || !reviewActions) {
-    return null;
-  }
-
-  const comments = reviewActions.commentsByTarget.get(reviewTarget.key) ?? [];
-  const editorForTarget = isInlineReviewEditorForTarget(reviewActions.editor, reviewTarget)
-    ? reviewActions.editor
-    : null;
-  const hasEditor = editorForTarget !== null;
-  const editingCommentId = editorForTarget?.commentId ?? null;
-  const editingExisting =
-    editingCommentId !== null && comments.some((comment) => comment.id === editingCommentId);
-
-  const visibleCommentCount = editingExisting ? comments.length - 1 : comments.length;
-  const editorCount = hasEditor ? 1 : 0;
-  const visibleBlockCount = visibleCommentCount + editorCount;
-  if (visibleBlockCount === 0) {
-    return null;
-  }
-
-  const height =
-    visibleCommentCount * INLINE_REVIEW_COMMENT_HEIGHT +
-    editorCount * INLINE_REVIEW_EDITOR_HEIGHT +
-    Math.max(0, visibleBlockCount - 1) * INLINE_REVIEW_GAP;
-
-  return { comments, hasEditor, editingCommentId, height };
-}
-
-export function getSplitInlineReviewThreadState(input: {
-  left: ReviewableDiffTarget | null | undefined;
-  right: ReviewableDiffTarget | null | undefined;
-  reviewActions?: InlineReviewActions;
-}): {
-  left: ReturnType<typeof getInlineReviewThreadState>;
-  right: ReturnType<typeof getInlineReviewThreadState>;
-  height: number;
-} | null {
-  const left = getInlineReviewThreadState({
-    reviewTarget: input.left,
-    reviewActions: input.reviewActions,
-  });
-  const right = getInlineReviewThreadState({
-    reviewTarget: input.right,
-    reviewActions: input.reviewActions,
-  });
-  const height = Math.max(left?.height ?? 0, right?.height ?? 0);
-  if (height === 0) {
-    return null;
-  }
-  return { left, right, height };
 }
 
 export function InlineReviewGutterCell({
@@ -351,9 +251,7 @@ export function InlineReviewGutterCell({
         <View style={labelStyle}>
           {children}
           {showAction ? (
-            <View style={actionIconStyle} testID={actionTestID}>
-              <ThemedPlus size={16} strokeWidth={2.4} uniProps={accentForegroundIconColorMapping} />
-            </View>
+            <InlineReviewAddIcon style={actionIconStyle} testID={actionTestID} />
           ) : null}
         </View>
       </View>
@@ -387,7 +285,8 @@ export function InlineReviewThread({
   const editorElement = editor ? (
     <InlineReviewEditor
       key={editingCommentId ?? "new"}
-      initialBody={editor.body}
+      body={editor.body}
+      onChangeBody={reviewActions.onChangeEditorBody}
       onCancel={reviewActions.onCancelEditor}
       onSave={reviewActions.onSaveEditor}
       testID="inline-review-editor"
@@ -494,47 +393,35 @@ export function getInlineReviewThreadViewportStyle({
 }
 
 export function InlineReviewEditor({
-  initialBody,
+  body,
+  onChangeBody,
   onCancel,
   onSave,
   testID,
 }: {
-  initialBody: string;
+  body: string;
+  onChangeBody: (body: string) => void;
   onCancel: () => void;
   onSave: (body: string) => void;
   testID?: string;
 }) {
   const { t } = useTranslation();
-  const inputRef = useRef<TextInput | null>(null);
-  const focus = useWorkspaceFocusRestoration();
-  const canShowKeyboardHints = useHasFinePointer();
-  const [body, setBody] = useState(initialBody);
+  const inputRef = useRef<EditingTextInputHandle | null>(null);
   const [isFocused, setIsFocused] = useState(false);
   const trimmedBody = body.trim();
   const canSave = trimmedBody.length > 0;
-  const showKeyboardHints = isFocused && canShowKeyboardHints;
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
   const handleFocus = useCallback(() => {
-    focus.unfocus();
     setIsFocused(true);
-  }, [focus]);
+  }, []);
   const handleBlur = useCallback(() => {
     setIsFocused(false);
-    focus.restore();
-  }, [focus]);
+  }, []);
   const handleSave = useCallback(() => onSave(trimmedBody), [onSave, trimmedBody]);
-  const cancelShortcut = useMemo(
-    () => (showKeyboardHints ? <Shortcut keys={REVIEW_CANCEL_SHORTCUT_KEYS} /> : null),
-    [showKeyboardHints],
-  );
-  const saveShortcut = useMemo(
-    () => (showKeyboardHints ? <Shortcut keys={REVIEW_SAVE_SHORTCUT_KEYS} /> : null),
-    [showKeyboardHints],
-  );
 
   useEffect(() => {
     const element = getWebTextInputElement(inputRef.current);
@@ -584,8 +471,8 @@ export function InlineReviewEditor({
         placeholder={t("review.comment.placeholder")}
         placeholderTextColor={styles.placeholderColor.color}
         multiline
-        value={body}
-        onChangeText={setBody}
+        initialValue={body}
+        onChangeText={onChangeBody}
         onFocus={handleFocus}
         onBlur={handleBlur}
         style={inputStyle}
@@ -598,7 +485,6 @@ export function InlineReviewEditor({
           onPress={onCancel}
           variant="ghost"
           size="xs"
-          trailing={cancelShortcut}
         >
           {t("review.comment.cancel")}
         </Button>
@@ -610,7 +496,6 @@ export function InlineReviewEditor({
           onPress={handleSave}
           variant="default"
           size="xs"
-          trailing={saveShortcut}
         >
           {t("review.comment.save")}
         </Button>
@@ -642,6 +527,8 @@ const styles = StyleSheet.create((theme) => ({
     position: "absolute",
     right: -10,
     top: Math.floor((theme.lineHeight.diff - 22) / 2),
+  },
+  gutterActionVisual: {
     width: 22,
     height: 22,
     borderRadius: theme.borderRadius.md,
@@ -658,7 +545,7 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
     gap: INLINE_REVIEW_GAP,
-    paddingVertical: theme.spacing[2],
+    paddingVertical: INLINE_REVIEW_VERTICAL_PADDING,
     paddingHorizontal: theme.spacing[3],
   },
   commentBlock: {
@@ -676,8 +563,8 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
-    lineHeight: theme.fontSize.sm * 1.4,
+    fontSize: theme.fontSize.content,
+    lineHeight: theme.fontSize.content * 1.4,
   },
   commentActions: {
     flexDirection: "row",
@@ -725,8 +612,8 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.md,
     paddingHorizontal: theme.spacing[3],
     paddingVertical: theme.spacing[2],
-    fontSize: theme.fontSize.sm,
-    lineHeight: theme.fontSize.sm * 1.4,
+    fontSize: theme.fontSize.content,
+    lineHeight: theme.fontSize.content * 1.4,
     textAlignVertical: "top",
     ...(isWeb
       ? {

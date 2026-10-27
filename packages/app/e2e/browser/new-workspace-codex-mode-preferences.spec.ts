@@ -1,6 +1,10 @@
-import { expect, test, type Page } from "../support/fixtures";
+import { expect, type Page } from "../support/fixtures";
+import { test } from "../support/creation-fixtures";
+import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
+import type { FormPreferences } from "@/create-agent-preferences/preferences";
 import { gotoAppShell } from "../support/helpers/app";
-import { daemonWsRoutePattern } from "../support/helpers/daemon-port";
+import { captureWorkspaceAgentRequest } from "../support/helpers/creation";
 import { openAgentRoute } from "../support/helpers/mock-agent";
 import {
   openGlobalNewWorkspaceComposer,
@@ -10,70 +14,56 @@ import {
 import { expectNoTruncation } from "../support/helpers/no-truncation";
 import { escapeRegex } from "../support/helpers/regex";
 import { seedWorkspace } from "../support/helpers/seed-client";
-import { getServerId } from "../support/helpers/server-id";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
 
 const CREATE_AGENT_PREFERENCES_KEY = "@paseo:create-agent-preferences";
 
-type WebSocketMessage = string | Buffer;
-
-interface CreateAgentRequestMessage {
-  type: "create_agent_request";
-  config?: {
-    provider?: unknown;
-    modeId?: unknown;
-  };
-}
-
-function parseWebSocketJson(message: WebSocketMessage): unknown {
-  const rawMessage = typeof message === "string" ? message : message.toString("utf8");
+async function seedCodexDefaultPermissionPreferences(page: Page, cwd: string): Promise<string> {
+  const client = await connectDaemonClient<DaemonClient>({
+    clientIdPrefix: "codex-mode-preferences",
+  });
   try {
-    return JSON.parse(rawMessage);
-  } catch {
-    return null;
-  }
-}
-
-function getSessionMessage(message: WebSocketMessage): Record<string, unknown> | null {
-  const envelope = parseWebSocketJson(message);
-  if (!envelope || typeof envelope !== "object") {
-    return null;
-  }
-  const maybeEnvelope = envelope as { type?: unknown; message?: unknown };
-  if (maybeEnvelope.type !== "session" || !maybeEnvelope.message) {
-    return null;
-  }
-  if (typeof maybeEnvelope.message !== "object") {
-    return null;
-  }
-  return maybeEnvelope.message as Record<string, unknown>;
-}
-
-async function seedCodexDefaultPermissionPreferences(page: Page, serverId: string): Promise<void> {
-  await page.addInitScript(
-    ({ preferencesKey, serverId: seededServerId }) => {
-      localStorage.setItem(
-        preferencesKey,
-        JSON.stringify({
-          serverId: seededServerId,
-          provider: "codex",
-          providerPreferences: {
-            codex: {
-              model: "gpt-5.4-mini",
-              mode: "auto",
-              thinkingByModel: {
-                "gpt-5.4-mini": "low",
+    await expect
+      .poll(
+        async () =>
+          (await client.getProvidersSnapshot({ cwd })).entries.find(
+            (entry) => entry.provider === "codex",
+          )?.status,
+      )
+      .toBe("ready");
+    const snapshot = await client.getProvidersSnapshot({ cwd });
+    const model = snapshot.entries
+      .find((entry) => entry.provider === "codex")
+      ?.models?.find((candidate) => candidate.thinkingOptions?.length);
+    if (!model?.thinkingOptions?.[0])
+      throw new Error("Codex catalogue must expose a model with thinking options");
+    await page.addInitScript(
+      ({ preferencesKey, modelId, thinkingOptionId }) => {
+        localStorage.setItem(
+          preferencesKey,
+          JSON.stringify({
+            provider: "codex",
+            providerPreferences: {
+              codex: {
+                model: modelId,
+                mode: "auto",
+                thinkingByModel: { [modelId]: thinkingOptionId },
               },
+              mock: { model: "ten-second-stream" },
             },
-            mock: {
-              model: "ten-second-stream",
-            },
-          },
-        }),
-      );
-    },
-    { preferencesKey: CREATE_AGENT_PREFERENCES_KEY, serverId },
-  );
+          } satisfies FormPreferences),
+        );
+      },
+      {
+        preferencesKey: CREATE_AGENT_PREFERENCES_KEY,
+        modelId: model.id,
+        thinkingOptionId: model.thinkingOptions[0].id,
+      },
+    );
+    return model.id;
+  } finally {
+    await client.close();
+  }
 }
 
 async function readCodexModePreference(page: Page): Promise<unknown> {
@@ -119,48 +109,17 @@ async function expectThinkingOptionsFit(page: Page): Promise<void> {
   await expect(page.getByTestId("combobox-desktop-container")).toHaveCount(0, { timeout: 5_000 });
 }
 
-async function recordAndBlockCreateAgentRequests(page: Page): Promise<{
-  waitForCreateAgentRequest(): Promise<CreateAgentRequestMessage>;
-}> {
-  let resolveRequest: ((message: CreateAgentRequestMessage) => void) | null = null;
-  const createAgentSeen = new Promise<CreateAgentRequestMessage>((resolve) => {
-    resolveRequest = resolve;
-  });
-
-  await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
-    const server = ws.connectToServer();
-
-    ws.onMessage((message) => {
-      const sessionMessage = getSessionMessage(message);
-      if (sessionMessage?.type === "create_agent_request") {
-        resolveRequest?.(sessionMessage as unknown as CreateAgentRequestMessage);
-        return;
-      }
-      server.send(message);
-    });
-
-    server.onMessage((message) => {
-      ws.send(message);
-    });
-  });
-
-  return {
-    waitForCreateAgentRequest: () => createAgentSeen,
-  };
-}
-
 test.describe("New workspace Codex mode preferences", () => {
   test.describe.configure({ timeout: 240_000 });
 
   test("keeps Full Access as the global Codex mode after the workspace draft auto-submit handoff", async ({
     page,
+    startup,
   }) => {
-    const serverId = getServerId();
     const seeded = await seedWorkspace({ repoPrefix: "codex-mode-preferences-" });
-    const createAgentRecorder = await recordAndBlockCreateAgentRequests(page);
-    await seedCodexDefaultPermissionPreferences(page, serverId);
-
+    const createAgentRecorder = await captureWorkspaceAgentRequest(page, { block: false });
     try {
+      await seedCodexDefaultPermissionPreferences(page, seeded.repoPath);
       await gotoAppShell(page);
       await waitForSidebarHydration(page);
       await openGlobalNewWorkspaceComposer(page);
@@ -179,8 +138,12 @@ test.describe("New workspace Codex mode preferences", () => {
       ).toBeVisible();
 
       await submitNewWorkspacePrompt(page, "Keep Codex full access selected globally.");
-      const createAgentRequest = await createAgentRecorder.waitForCreateAgentRequest();
+      const createAgentRequest = await createAgentRecorder.waitForRequest();
 
+      await expect(page).toHaveURL(/\/workspace\//);
+      await expect(
+        page.getByText("Keep Codex full access selected globally.", { exact: true }).first(),
+      ).toBeVisible();
       expect(createAgentRequest.config).toMatchObject({
         provider: "codex",
         modeId: "full-access",
@@ -188,24 +151,24 @@ test.describe("New workspace Codex mode preferences", () => {
       await expect
         .poll(() => readCodexModePreference(page), { timeout: 10_000 })
         .toBe("full-access");
+      await startup.fail();
+      await expect(page.getByText(/Creation startup failed for test/).first()).toBeVisible();
     } finally {
       await seeded.cleanup();
     }
   });
 
   test("uses the live Codex agent mode as the next New Workspace default", async ({ page }) => {
-    const serverId = getServerId();
     const seeded = await seedWorkspace({ repoPrefix: "codex-live-mode-preferences-" });
-    await seedCodexDefaultPermissionPreferences(page, serverId);
-
     try {
+      const model = await seedCodexDefaultPermissionPreferences(page, seeded.repoPath);
       const agent = await seeded.client.createAgent({
         provider: "codex",
         cwd: seeded.repoPath,
         workspaceId: seeded.workspaceId,
         title: "Codex live mode preference e2e",
         modeId: "auto",
-        model: "gpt-5.4-mini",
+        model,
       });
 
       await openAgentRoute(page, {

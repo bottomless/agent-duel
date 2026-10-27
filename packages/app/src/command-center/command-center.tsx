@@ -1,9 +1,10 @@
+import equal from "fast-deep-equal";
+import { recordRenderProfileReasons } from "@/utils/render-profiler";
 import {
   FlatList,
   Modal,
   Pressable,
   Text,
-  TextInput,
   View,
   type LayoutChangeEvent,
   type ListRenderItemInfo,
@@ -11,19 +12,34 @@ import {
   type NativeSyntheticEvent,
   type PressableStateCallbackType,
 } from "react-native";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronRight, Folder, X } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import {
-  BottomSheetBackdrop,
-  BottomSheetFlatList,
-  BottomSheetTextInput,
-  type BottomSheetFlatListMethods,
-} from "@gorhom/bottom-sheet";
-import { AgentStatusDot } from "@/components/agent-status-dot";
+import { BottomSheetFlatList, type BottomSheetFlatListMethods } from "@gorhom/bottom-sheet";
+import { useAgentDescriptor, resolveAgentLabel } from "@/agent-presentation";
+import { StatusIcon } from "@/components/status-icon";
+import { useWorkspaceStatus } from "@/workspace-status";
+import type { SurfaceBackdrop } from "@/styles/surface-backdrop";
+import type { Theme } from "@/styles/theme";
+import { HighlightedText, type HighlightedTextProps } from "@/components/ui/highlighted-text";
+import { findHighlightRanges } from "@/components/ui/highlighted-text-segments";
 import { MaterialFileIcon } from "@/components/material-file-icon";
+import { ProjectIconView } from "@/components/project-icon-view";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import {
+  EditingTextInput as TextInput,
+  type EditingTextInputHandle,
+} from "@/components/ui/text-input";
 import { Shortcut } from "@/components/ui/shortcut";
 import {
   IsolatedBottomSheetModal,
@@ -31,8 +47,11 @@ import {
 } from "@/components/ui/isolated-bottom-sheet-modal";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative, isWeb } from "@/constants/platform";
-import { useAggregatedAgents, type AggregatedAgent } from "@/hooks/use-aggregated-agents";
+import { useAggregatedAgents } from "@/hooks/use-aggregated-agents";
 import { useProjects } from "@/hooks/use-projects";
+import { useTimeAgo } from "@/hooks/use-time-ago";
+import { createProjectIconTarget } from "@/projects/icon-target";
+import { useProjectIcons } from "@/projects/icons";
 import {
   OverlayLayerProvider,
   useGlobalWebOverlayLayer,
@@ -44,32 +63,41 @@ import {
   type CommandCenterScope,
 } from "@/stores/keyboard-shortcuts-store";
 import { navigateToWorkspace } from "@/stores/navigation-active-workspace-store";
-import { keyboardActionDispatcher } from "@/keyboard/keyboard-action-dispatcher";
+import { useKeyboardActionDispatcher } from "@/keyboard/keyboard-action-dispatcher-context";
 import {
   clearCommandCenterFocusRestoreElement,
   takeCommandCenterFocusRestoreElement,
 } from "@/utils/command-center-focus-restore";
 import { focusWithRetries } from "@/utils/web-focus";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
-import { formatTimeAgo } from "@/utils/time";
 import { shortenPath } from "@/utils/shorten-path";
+import { projectIconPlaceholderLabelFromDisplayName } from "@/utils/project-display-name";
+import {
+  COMMAND_CENTER_LINE_HEIGHT,
+  COMMAND_CENTER_LIST_METRICS,
+  COMMAND_CENTER_SECTION_GAP,
+  type CommandCenterListMetrics,
+} from "./list-metrics";
 import { useCommandCenterContributions } from "./provider";
+import { filterAndRankWorkspaces } from "./workspace-search";
 import {
   buildContributionSections,
+  filterAndRankBuiltInResults,
   joinSubtitleParts,
-  moveActiveResultId,
-  preserveActiveResultId,
+  PINNED_SECTION_BAND,
   projectCommandCenterRows,
   type CommandCenterAgentResult,
   type CommandCenterFileResult,
   type CommandCenterListRow,
   type CommandCenterResult,
   type CommandCenterResultSection,
+  type CommandCenterSearchFields,
   type CommandCenterWorkspaceResult,
 } from "./results";
+import { createCommandCenterInteraction, type CommandCenterInteraction } from "./interaction";
 import { useWorkspaceFileSearch } from "./workspace-file-search";
 
-const ThemedBottomSheetTextInput = withUnistyles(BottomSheetTextInput, (theme) => ({
+const ThemedBottomSheetTextInput = withUnistyles(TextInput, (theme) => ({
   placeholderTextColor: theme.colors.foregroundMuted,
 }));
 const ThemedTextInput = withUnistyles(TextInput, (theme) => ({
@@ -86,118 +114,154 @@ const ThemedLoadingSpinner = withUnistyles(LoadingSpinner, (theme) => ({
 }));
 const COMMAND_CENTER_SNAP_POINTS = ["60%", "90%"];
 const KEYBOARD_SHOULD_PERSIST_TAPS = "always" as const;
-const DEFAULT_CATEGORY_RESULT_LIMIT = 5;
 
-function sortAgents(left: AggregatedAgent, right: AggregatedAgent): number {
-  const leftNeedsInput = (left.pendingPermissionCount ?? 0) > 0 ? 1 : 0;
-  const rightNeedsInput = (right.pendingPermissionCount ?? 0) > 0 ? 1 : 0;
-  if (leftNeedsInput !== rightNeedsInput) return rightNeedsInput - leftNeedsInput;
-  const leftAttention = left.requiresAttention ? 1 : 0;
-  const rightAttention = right.requiresAttention ? 1 : 0;
-  if (leftAttention !== rightAttention) return rightAttention - leftAttention;
-  const leftRunning = left.status === "running" ? 1 : 0;
-  const rightRunning = right.status === "running" ? 1 : 0;
-  if (leftRunning !== rightRunning) return rightRunning - leftRunning;
-  return right.lastActivityAt.getTime() - left.lastActivityAt.getTime();
+/** `cwd` is not rendered, so a path match must never outrank a match on text the user can see. */
+function agentSearchFields(result: CommandCenterAgentResult): CommandCenterSearchFields {
+  return { visible: [result.title, result.subtitle], hidden: [result.agent.cwd] };
 }
 
-function matchesQuery(searchText: string, query: string): boolean {
-  const normalized = query.trim().toLowerCase();
-  return !normalized || searchText.includes(normalized);
+function createWorkspaceResultAction(serverId: string, workspaceId: string) {
+  return () => {
+    clearCommandCenterFocusRestoreElement();
+    navigateToWorkspace({ serverId, workspaceId });
+  };
 }
 
-function limitDefaultCategoryResults<Result>(results: Result[], query: string): Result[] {
-  return query.trim() ? results : results.slice(0, DEFAULT_CATEGORY_RESULT_LIMIT);
+function createAgentResultAction(serverId: string, agentId: string) {
+  return () => {
+    clearCommandCenterFocusRestoreElement();
+    navigateToAgent({ serverId, agentId });
+  };
+}
+
+/**
+ * Build every pinned row. Deliberately not keyed on `query`: none of this work depends on what
+ * was typed. Ordering belongs to `filterAndRankBuiltInResults`, which ranks on every keystroke.
+ */
+function useBuiltInRows(open: boolean): {
+  workspaces: CommandCenterWorkspaceResult[];
+  agents: CommandCenterAgentResult[];
+} {
+  const { t } = useTranslation();
+  const previousRows = useRef(
+    new Map<string, CommandCenterAgentResult | CommandCenterWorkspaceResult>(),
+  );
+  const { agents } = useAggregatedAgents({ demand: open });
+  const { projects } = useProjects({ enabled: open });
+  const showHost = useHosts().length > 1;
+  const iconTargets = useMemo(
+    () =>
+      open
+        ? projects.flatMap((project) =>
+            project.hosts.flatMap((host) => {
+              const target = createProjectIconTarget({
+                projectViewKey: project.viewKey,
+                placement: { ...host, iconWorkingDir: host.repoRoot },
+              });
+              return target ? [target] : [];
+            }),
+          )
+        : [],
+    [open, projects],
+  );
+  const iconDataByProjectViewKey = useProjectIcons({ projects: iconTargets });
+
+  return useMemo(() => {
+    if (!open) {
+      previousRows.current.clear();
+      return { workspaces: [], agents: [] };
+    }
+    // Built-in IDs identify immutable navigation targets. Reuse their callbacks and unchanged
+    // row data so a directory update does not invalidate every mounted ResultRow.
+    const nextRows = new Map<string, CommandCenterAgentResult | CommandCenterWorkspaceResult>();
+    const preserve = <T extends CommandCenterAgentResult | CommandCenterWorkspaceResult>(
+      row: T,
+    ): T => {
+      const previous = previousRows.current.get(row.id);
+      if (previous) row.run = previous.run;
+      const stable = previous && equal(previous, row) ? (previous as T) : row;
+      nextRows.set(row.id, stable);
+      return stable;
+    };
+    const allWorkspaces: CommandCenterWorkspaceResult[] = [];
+    for (const project of projects) {
+      const workspaceProject = {
+        viewKey: project.viewKey,
+        name: project.projectName,
+        iconDataUri: iconDataByProjectViewKey.get(project.viewKey) ?? null,
+      };
+      for (const host of project.hosts) {
+        for (const workspace of host.workspaces) {
+          if (workspace.archivingAt) continue;
+          allWorkspaces.push(
+            preserve({
+              kind: "workspace",
+              id: `workspace:${host.serverId}:${workspace.id}`,
+              title: workspace.title ?? workspace.name,
+              subtitle: joinSubtitleParts([
+                showHost ? host.serverName : null,
+                project.projectName,
+                workspace.currentBranch,
+              ]),
+              serverId: host.serverId,
+              workspaceId: workspace.id,
+              project: workspaceProject,
+              changeRequestNumber: workspace.changeRequestNumber,
+              activityAt: workspace.statusEnteredAt,
+              run: createWorkspaceResultAction(host.serverId, workspace.id),
+            }),
+          );
+        }
+      }
+    }
+    const workspaceTitleByKey = new Map(
+      allWorkspaces.map((workspace) => [workspace.id.slice("workspace:".length), workspace.title]),
+    );
+    const agentRows = agents.map<CommandCenterAgentResult>((agent) => {
+      const workspaceTitle = agent.workspaceId
+        ? workspaceTitleByKey.get(`${agent.serverId}:${agent.workspaceId}`)
+        : undefined;
+      return preserve({
+        kind: "agent",
+        id: `agent:${agent.serverId}:${agent.id}`,
+        agent,
+        title: resolveAgentLabel(agent.title) ?? t("workspace.tabs.loading"),
+        subtitle: joinSubtitleParts([
+          showHost ? agent.serverLabel : null,
+          workspaceTitle ?? shortenPath(agent.cwd),
+        ]),
+        activityAt: agent.lastActivityAt,
+        run: createAgentResultAction(agent.serverId, agent.id),
+      });
+    });
+    previousRows.current = nextRows;
+    return { workspaces: allWorkspaces, agents: agentRows };
+  }, [agents, iconDataByProjectViewKey, open, projects, showHost, t]);
 }
 
 function useBuiltInSections(open: boolean, query: string): CommandCenterResultSection[] {
   const { t } = useTranslation();
-  const { agents } = useAggregatedAgents();
-  const { projects } = useProjects({ enabled: open });
-  const showHost = useHosts().length > 1;
+  const rows = useBuiltInRows(open);
 
   return useMemo(() => {
     if (!open) return [];
-    const allWorkspaces: CommandCenterWorkspaceResult[] = [];
-    for (const project of projects) {
-      for (const host of project.hosts) {
-        for (const workspace of host.workspaces) {
-          if (workspace.archivingAt) continue;
-          const title = workspace.title ?? workspace.name;
-          const subtitle = joinSubtitleParts([
-            showHost ? host.serverName : null,
-            project.projectName,
-            workspace.currentBranch,
-          ]);
-          const searchText = `${title} ${subtitle}`.toLowerCase();
-          allWorkspaces.push({
-            kind: "workspace",
-            id: `workspace:${host.serverId}:${workspace.id}`,
-            title,
-            subtitle,
-            searchText,
-            run: () => {
-              clearCommandCenterFocusRestoreElement();
-              navigateToWorkspace({ serverId: host.serverId, workspaceId: workspace.id });
-            },
-          });
-        }
-      }
-    }
-    allWorkspaces.sort((left, right) => {
-      const titleDelta = left.title.localeCompare(right.title, undefined, {
-        numeric: true,
-        sensitivity: "base",
-      });
-      return titleDelta || left.subtitle.localeCompare(right.subtitle);
-    });
-    const workspaceTitleByKey = new Map(
-      allWorkspaces.map((workspace) => [workspace.id.slice("workspace:".length), workspace.title]),
-    );
-    const workspaces = limitDefaultCategoryResults(
-      allWorkspaces.filter((workspace) => matchesQuery(workspace.searchText, query)),
-      query,
-    );
-    const agentResults = limitDefaultCategoryResults(
-      agents
-        .map<CommandCenterAgentResult>((agent) => {
-          const title = agent.title || t("shell.commandCenter.newAgent");
-          const workspaceTitle = agent.workspaceId
-            ? workspaceTitleByKey.get(`${agent.serverId}:${agent.workspaceId}`)
-            : undefined;
-          const location = workspaceTitle ?? shortenPath(agent.cwd);
-          const subtitle = joinSubtitleParts([
-            showHost ? agent.serverLabel : null,
-            location,
-            formatTimeAgo(agent.lastActivityAt),
-          ]);
-          return {
-            kind: "agent",
-            id: `agent:${agent.serverId}:${agent.id}`,
-            agent,
-            title,
-            subtitle,
-            searchText: `${title} ${subtitle} ${agent.cwd}`.toLowerCase(),
-            run: () => {
-              clearCommandCenterFocusRestoreElement();
-              navigateToAgent({ serverId: agent.serverId, agentId: agent.id });
-            },
-          };
-        })
-        .filter((agent) => matchesQuery(agent.searchText, query))
-        .sort((left, right) => sortAgents(left.agent, right.agent)),
-      query,
-    );
     return [
       {
         id: "workspaces",
+        band: PINNED_SECTION_BAND,
         rank: 2,
         title: t("shell.commandCenter.workspaces"),
-        results: workspaces,
+        results: filterAndRankWorkspaces(rows.workspaces, query),
       },
-      { id: "agents", rank: 3, title: t("shell.commandCenter.agents"), results: agentResults },
+      {
+        id: "agents",
+        band: PINNED_SECTION_BAND,
+        rank: 3,
+        title: t("shell.commandCenter.agents"),
+        results: filterAndRankBuiltInResults(rows.agents, query, agentSearchFields),
+      },
     ];
-  }, [agents, open, projects, query, showHost, t]);
+  }, [open, query, rows, t]);
 }
 
 interface CommandCenterState {
@@ -208,10 +272,8 @@ interface CommandCenterState {
   setQuery(query: string): void;
   activeId: string | null;
   rows: readonly CommandCenterListRow[];
-  results: readonly CommandCenterResult[];
-  rowIndexByResultId: ReadonlyMap<string, number>;
   offsets: readonly number[];
-  inputRef: React.RefObject<TextInput | null>;
+  inputRef: React.RefObject<EditingTextInputHandle | null>;
   fileSearchLoading: boolean;
   fileSearchError: string | null;
   close(): void;
@@ -219,17 +281,20 @@ interface CommandCenterState {
   key(key: string): boolean;
 }
 
-function useCommandCenterState(): CommandCenterState {
+function useCommandCenterState(
+  listMetrics: CommandCenterListMetrics,
+  interaction: CommandCenterInteraction,
+): CommandCenterState {
+  const keyboardActionDispatcher = useKeyboardActionDispatcher();
   const { t } = useTranslation();
   const open = useKeyboardShortcutsStore((state) => state.commandCenterOpen);
   const scope = useKeyboardShortcutsStore((state) => state.commandCenterScope);
   const setOpen = useKeyboardShortcutsStore((state) => state.setCommandCenterOpen);
   const setScope = useKeyboardShortcutsStore((state) => state.setCommandCenterScope);
   const snapshot = useCommandCenterContributions();
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<EditingTextInputHandle>(null);
   const previousOpenRef = useRef(open);
-  const [query, setQuery] = useState("");
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const { query, activeId } = useSyncExternalStore(interaction.subscribe, interaction.getSnapshot);
   const builtInSections = useBuiltInSections(open, query);
   const {
     entries: fileSearchEntries,
@@ -247,10 +312,20 @@ function useCommandCenterState(): CommandCenterState {
       filePath: entry.path,
       title: entry.name,
       subtitle: entry.directory,
-      searchText: entry.path.toLowerCase(),
       run: () => openFile(entry.path),
     }));
-    return [{ id: "files", rank: 4, title: t("shell.commandCenter.files"), results }];
+    // File rows are matched by the daemon, so they carry no client-side score and cannot be
+    // relevance-compared against the rows that do. Pinning them keeps the section comparator
+    // total: band is decided before any score is read.
+    return [
+      {
+        id: "files",
+        band: PINNED_SECTION_BAND,
+        rank: 4,
+        title: t("shell.commandCenter.files"),
+        results,
+      },
+    ];
   }, [fileSearchEntries, openFile, t]);
   const contributionSections = useMemo(
     () => buildContributionSections(snapshot.contributions, query),
@@ -262,10 +337,13 @@ function useCommandCenterState(): CommandCenterState {
         scope === "files"
           ? fileSections
           : [...contributionSections, ...fileSections, ...builtInSections],
+        listMetrics,
       ),
-    [builtInSections, contributionSections, fileSections, scope],
+    [builtInSections, contributionSections, fileSections, listMetrics, scope],
   );
-  const resolvedActiveId = preserveActiveResultId(activeId, projection.selectableResults);
+  useLayoutEffect(() => {
+    interaction.update({ open, scope, query, projection, loading: fileSearchLoading });
+  }, [interaction, open, scope, query, projection, fileSearchLoading]);
 
   const close = useCallback(() => setOpen(false), [setOpen]);
   const select = useCallback(
@@ -288,18 +366,25 @@ function useCommandCenterState(): CommandCenterState {
         return true;
       }
       if (pressed === "Enter") {
-        const selected = results.find((result) => result.id === resolvedActiveId);
+        const selected = results.find((result) => result.id === activeId);
         if (!selected) return false;
         select(selected);
         return true;
       }
       if (pressed !== "ArrowDown" && pressed !== "ArrowUp") return false;
-      if (results.length === 0) return false;
-      const direction = pressed === "ArrowDown" ? "next" : "previous";
-      setActiveId(moveActiveResultId(resolvedActiveId, results, direction));
-      return true;
+      return interaction.move(pressed === "ArrowDown" ? "next" : "previous");
     },
-    [close, open, projection.selectableResults, query, resolvedActiveId, scope, select, setScope],
+    [
+      close,
+      open,
+      projection.selectableResults,
+      query,
+      activeId,
+      scope,
+      select,
+      setScope,
+      interaction,
+    ],
   );
 
   useEffect(() => {
@@ -309,8 +394,6 @@ function useCommandCenterState(): CommandCenterState {
       const timer = setTimeout(() => inputRef.current?.focus(), 0);
       return () => clearTimeout(timer);
     }
-    setQuery("");
-    setActiveId(null);
     if (!wasOpen) return;
     const element = takeCommandCenterFocusRestoreElement();
     if (!element) return;
@@ -321,18 +404,16 @@ function useCommandCenterState(): CommandCenterState {
         keyboardActionDispatcher.dispatch({ id: "message-input.focus", scope: "message-input" }),
     });
     return cancel;
-  }, [open]);
+  }, [keyboardActionDispatcher, open]);
 
   return {
     open,
     scope,
     clearScope: () => setScope(null),
     query,
-    setQuery,
-    activeId: resolvedActiveId,
+    setQuery: interaction.setQuery,
+    activeId,
     rows: projection.rows,
-    results: projection.selectableResults,
-    rowIndexByResultId: projection.rowIndexByResultId,
     offsets: projection.offsets,
     inputRef,
     fileSearchLoading,
@@ -345,11 +426,20 @@ function useCommandCenterState(): CommandCenterState {
 
 interface ResultRowProps {
   result: CommandCenterResult;
+  height: number;
+  query: string;
   active: boolean;
   onSelect(result: CommandCenterResult): void;
 }
 
-const ResultRow = memo(function ResultRow({ result, active, onSelect }: ResultRowProps) {
+const ResultRow = memo(function ResultRow({
+  result,
+  height,
+  query,
+  active,
+  onSelect,
+}: ResultRowProps) {
+  recordRenderProfileReasons(`CommandCenterResultRow:${result.id}`, ["render"]);
   const press = useCallback(() => onSelect(result), [onSelect, result]);
   const choice =
     result.kind === "contribution" && result.contribution.presentation.kind === "choice"
@@ -366,15 +456,10 @@ const ResultRow = memo(function ResultRow({ result, active, onSelect }: ResultRo
   const style = useCallback(
     ({ hovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.row,
-      (result.kind === "agent" ||
-        result.kind === "workspace" ||
-        (result.kind === "contribution" &&
-          result.contribution.presentation.kind === "action" &&
-          Boolean(result.contribution.presentation.subtitle))) &&
-        styles.tallRow,
+      { height },
       (Boolean(hovered) || pressed || active) && styles.activeRow,
     ],
-    [active, result],
+    [active, height],
   );
   return (
     <Pressable
@@ -388,12 +473,161 @@ const ResultRow = memo(function ResultRow({ result, active, onSelect }: ResultRo
         result.kind === "file" ? `command-center-file-row-${result.filePath}` : choice?.testId
       }
     >
-      <ResultContent result={result} />
+      {(state) => (
+        <ResultContent
+          result={result}
+          query={query}
+          backdrop={
+            active ||
+            state.pressed ||
+            Boolean((state as PressableStateCallbackType & { hovered?: boolean }).hovered)
+              ? "surface1"
+              : "surface0"
+          }
+        />
+      )}
     </Pressable>
   );
 });
 
-function ResultContent({ result }: { result: CommandCenterResult }) {
+/**
+ * Text with the query's terms marked. Marks use the same matcher options the rows were ranked
+ * with, so a mark always points at something that made the row match.
+ */
+function QueryHighlightedText({
+  query,
+  text,
+  ...props
+}: { query: string } & Omit<HighlightedTextProps, "ranges">) {
+  const ranges = useMemo(() => findHighlightRanges(query, text), [query, text]);
+  return <HighlightedText text={text} ranges={ranges} {...props} />;
+}
+
+/**
+ * The subtitle line of a workspace or agent row. The timestamp is its own text so a long branch
+ * truncates without pushing the time out of view, and so the time is never part of what the
+ * query matches against. It keeps itself current while the command center stays open.
+ */
+function SubtitleWithTimestamp({
+  query,
+  subtitle,
+  activityAt,
+  testID,
+}: {
+  query: string;
+  subtitle: string;
+  activityAt: Date | null;
+  testID: string;
+}) {
+  const timeAgo = useTimeAgo(activityAt);
+  return (
+    <View style={styles.subtitleLine}>
+      <QueryHighlightedText
+        query={query}
+        text={subtitle}
+        style={[styles.subtitle, styles.subtitleText]}
+        numberOfLines={1}
+        testID={testID}
+      />
+      {timeAgo ? (
+        <Text style={styles.subtitle} numberOfLines={1} testID="command-center-result-timestamp">
+          {/* Non-breaking: web collapses a leading plain space in its own flex item. */}
+          {subtitle ? `\u00a0· ${timeAgo}` : timeAgo}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+const providerIconMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+
+function AgentResultContent({
+  result,
+  query,
+  backdrop,
+}: {
+  result: CommandCenterAgentResult;
+  query: string;
+  backdrop: SurfaceBackdrop;
+}) {
+  const agent = result.agent;
+  const descriptor = useAgentDescriptor(
+    { kind: "agent", agentId: agent.id },
+    { serverId: agent.serverId },
+  );
+  const Icon = useMemo(
+    () => withUnistyles(descriptor.icon, providerIconMapping),
+    [descriptor.icon],
+  );
+  return (
+    <View style={styles.rowContent} testID={`command-center-agent-${agent.serverId}:${agent.id}`}>
+      <View style={styles.rowMain}>
+        <View style={styles.iconSlot}>
+          <StatusIcon statusBucket={descriptor.statusBucket} size={16} backdrop={backdrop}>
+            <View accessibilityRole="image" accessibilityLabel={descriptor.subtitle}>
+              <Icon size={16} />
+            </View>
+          </StatusIcon>
+        </View>
+        <View style={styles.textContent}>
+          <QueryHighlightedText
+            query={query}
+            text={result.title}
+            style={styles.title}
+            numberOfLines={1}
+          />
+          <SubtitleWithTimestamp
+            query={query}
+            subtitle={result.subtitle}
+            activityAt={result.activityAt}
+            testID="command-center-agent-subtitle"
+          />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function WorkspaceResultIcon({
+  result,
+  backdrop,
+}: {
+  result: CommandCenterWorkspaceResult;
+  backdrop: SurfaceBackdrop;
+}) {
+  const statusBucket = useWorkspaceStatus(result.serverId, result.workspaceId);
+  return (
+    <StatusIcon statusBucket={statusBucket} size={16} backdrop={backdrop}>
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" aria-hidden>
+        <WorkspaceProjectIcon project={result.project} />
+      </View>
+    </StatusIcon>
+  );
+}
+
+/** The same project icon the sidebar's workspace rows lead with: its image, or a lettered square. */
+function WorkspaceProjectIcon({ project }: { project: CommandCenterWorkspaceResult["project"] }) {
+  const initial = projectIconPlaceholderLabelFromDisplayName(project.name).charAt(0).toUpperCase();
+  return (
+    <ProjectIconView
+      iconDataUri={project.iconDataUri}
+      initial={initial}
+      projectViewKey={project.viewKey}
+      size={16}
+      textStyle={styles.projectIconFallbackText}
+    />
+  );
+}
+
+function ResultContent({
+  result,
+  query,
+  backdrop,
+}: {
+  result: CommandCenterResult;
+  query: string;
+  backdrop: SurfaceBackdrop;
+}) {
   if (result.kind === "file") {
     return (
       <View style={styles.rowContent}>
@@ -402,13 +636,16 @@ function ResultContent({ result }: { result: CommandCenterResult }) {
             <MaterialFileIcon fileName={result.title} size={16} />
           </View>
           <Text style={styles.fileLine} numberOfLines={1} testID="command-center-file-line">
-            <Text style={styles.fileName} testID="command-center-file-name">
-              {result.title}
-            </Text>
+            <QueryHighlightedText
+              query={query}
+              text={result.title}
+              style={styles.fileName}
+              testID="command-center-file-name"
+            />
             {result.subtitle ? (
               <Text style={styles.filePath} testID="command-center-file-path">
                 {" "}
-                {result.subtitle}
+                <QueryHighlightedText query={query} text={result.subtitle} />
               </Text>
             ) : null}
           </Text>
@@ -417,48 +654,30 @@ function ResultContent({ result }: { result: CommandCenterResult }) {
     );
   }
   if (result.kind === "agent") {
-    const agent = result.agent;
-    return (
-      <View style={styles.rowContent} testID={`command-center-agent-${agent.serverId}:${agent.id}`}>
-        <View style={styles.rowMain}>
-          <View style={styles.iconSlot}>
-            <AgentStatusDot
-              status={agent.status}
-              requiresAttention={agent.requiresAttention}
-              showInactive
-            />
-          </View>
-          <View style={styles.textContent}>
-            <Text style={styles.title} numberOfLines={1}>
-              {result.title}
-            </Text>
-            <Text style={styles.subtitle} numberOfLines={1} testID="command-center-agent-subtitle">
-              {result.subtitle}
-            </Text>
-          </View>
-        </View>
-      </View>
-    );
+    return <AgentResultContent result={result} query={query} backdrop={backdrop} />;
   }
   if (result.kind === "workspace") {
     const key = result.id.slice("workspace:".length);
     return (
       <View style={styles.rowContent} testID={`command-center-workspace-${key}`}>
         <View style={styles.rowMain}>
+          {/* Decorative: the fallback icon's initial must not prefix the row's accessible name. */}
           <View style={styles.iconSlot}>
-            <ThemedFolder size={16} strokeWidth={2.2} />
+            <WorkspaceResultIcon result={result} backdrop={backdrop} />
           </View>
           <View style={styles.textContent}>
-            <Text style={styles.title} numberOfLines={1}>
-              {result.title}
-            </Text>
-            <Text
-              style={styles.subtitle}
+            <QueryHighlightedText
+              query={query}
+              text={result.title}
+              style={styles.title}
               numberOfLines={1}
+            />
+            <SubtitleWithTimestamp
+              query={query}
+              subtitle={result.subtitle}
+              activityAt={result.activityAt}
               testID="command-center-workspace-subtitle"
-            >
-              {result.subtitle}
-            </Text>
+            />
           </View>
         </View>
       </View>
@@ -476,11 +695,19 @@ function ResultContent({ result }: { result: CommandCenterResult }) {
             </View>
           ) : null}
           <View style={styles.textContent}>
-            <Text style={styles.title} numberOfLines={1}>
-              {presentation.title}
-            </Text>
+            <QueryHighlightedText
+              query={query}
+              text={presentation.title}
+              style={styles.title}
+              numberOfLines={1}
+            />
             {presentation.subtitle ? (
-              <Text style={styles.subtitle}>{presentation.subtitle}</Text>
+              <QueryHighlightedText
+                query={query}
+                text={presentation.subtitle}
+                style={styles.subtitle}
+                numberOfLines={1}
+              />
             ) : null}
           </View>
         </View>
@@ -505,14 +732,14 @@ function ResultContent({ result }: { result: CommandCenterResult }) {
               style={styles.breadcrumbPart}
             >
               {index > 0 ? <ThemedChevronRight size={13} strokeWidth={2} /> : null}
-              <Text
+              <QueryHighlightedText
+                query={query}
+                text={part}
                 style={
                   index === presentation.path.length - 1 ? styles.title : styles.breadcrumbGroup
                 }
                 numberOfLines={1}
-              >
-                {part}
-              </Text>
+              />
             </View>
           ))}
         </View>
@@ -527,11 +754,9 @@ function ResultContent({ result }: { result: CommandCenterResult }) {
 }
 
 function SectionRow({ row }: { row: Extract<CommandCenterListRow, { kind: "section" }> }) {
-  let sizeStyle = styles.dividerSection;
-  if (row.title && row.divider) sizeStyle = styles.dividedSection;
-  if (row.title && !row.divider) sizeStyle = styles.titledSection;
+  const style = useMemo(() => [styles.section, { height: row.height }], [row.height]);
   return (
-    <View style={sizeStyle}>
+    <View style={style}>
       {row.divider ? <View style={styles.sectionDivider} /> : null}
       {row.title ? <Text style={styles.sectionLabel}>{row.title}</Text> : null}
     </View>
@@ -540,61 +765,40 @@ function SectionRow({ row }: { row: Extract<CommandCenterListRow, { kind: "secti
 
 export function CommandCenter() {
   const { t } = useTranslation();
-  const state = useCommandCenterState();
   const isCompact = useIsCompactFormFactor();
-  const showBottomSheet = isCompact && isNative;
-  const modalLayer = useGlobalWebOverlayLayer("modal", isWeb && state.open && !showBottomSheet);
   const listRef = useRef<FlatList<CommandCenterListRow>>(null);
   const bottomSheetListRef = useRef<BottomSheetFlatListMethods>(null);
-  const bottomSheetInputRef = useRef<React.ElementRef<typeof BottomSheetTextInput>>(null);
-  const scrollMetricsRef = useRef({ offset: 0, visibleLength: 0 });
+  const bottomSheetInputRef = useRef<EditingTextInputHandle>(null);
+  const [interaction] = useState(() =>
+    createCommandCenterInteraction((offset) => {
+      const list = listRef.current ?? bottomSheetListRef.current;
+      list?.scrollToOffset({ offset, animated: false });
+    }),
+  );
+  const state = useCommandCenterState(
+    isCompact ? COMMAND_CENTER_LIST_METRICS.compact : COMMAND_CENTER_LIST_METRICS.desktop,
+    interaction,
+  );
+  const showBottomSheet = isCompact && isNative;
+  const modalLayer = useGlobalWebOverlayLayer("modal", isWeb && state.open && !showBottomSheet);
   const { sheetRef, handleSheetChange, handleSheetDismiss } = useIsolatedBottomSheetVisibility({
     visible: state.open,
     isEnabled: showBottomSheet,
     onClose: state.close,
   });
 
-  const revealActiveResult = useCallback(() => {
-    if (!state.open || !state.activeId) return;
-    const index = state.rowIndexByResultId.get(state.activeId);
-    if (index === undefined) return;
-    const { offset, visibleLength } = scrollMetricsRef.current;
-    if (visibleLength <= 0) return;
-    const rowTop = state.offsets[index];
-    const rowBottom = rowTop + state.rows[index].height;
-    let nextOffset: number | null = null;
-    if (rowTop < offset) nextOffset = rowTop;
-    if (rowBottom > offset + visibleLength) nextOffset = rowBottom - visibleLength;
-    if (nextOffset === null) return;
-    const ref = showBottomSheet ? bottomSheetListRef.current : listRef.current;
-    const boundedOffset = Math.max(0, nextOffset);
-    scrollMetricsRef.current.offset = boundedOffset;
-    ref?.scrollToOffset({ offset: boundedOffset, animated: false });
-  }, [
-    showBottomSheet,
-    state.activeId,
-    state.offsets,
-    state.open,
-    state.rowIndexByResultId,
-    state.rows,
-  ]);
-  useEffect(() => {
-    if (!state.open) {
-      scrollMetricsRef.current = { offset: 0, visibleLength: 0 };
-      return;
-    }
-    revealActiveResult();
-  }, [revealActiveResult, state.open]);
   const handleListLayout = useCallback(
     (event: LayoutChangeEvent) => {
-      scrollMetricsRef.current.visibleLength = event.nativeEvent.layout.height;
-      revealActiveResult();
+      interaction.layout(event.nativeEvent.layout.height);
     },
-    [revealActiveResult],
+    [interaction],
   );
-  const handleListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    scrollMetricsRef.current.offset = event.nativeEvent.contentOffset.y;
-  }, []);
+  const handleListScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      interaction.scrolled(event.nativeEvent.contentOffset.y);
+    },
+    [interaction],
+  );
   useEffect(() => {
     if (!showBottomSheet || !state.open) return;
     const timer = setTimeout(() => bottomSheetInputRef.current?.focus(), 300);
@@ -608,11 +812,13 @@ export function CommandCenter() {
       ) : (
         <ResultRow
           result={item.result}
+          height={item.height}
+          query={state.query}
           active={item.result.id === state.activeId}
           onSelect={state.select}
         />
       ),
-    [state.activeId, state.select],
+    [state.activeId, state.query, state.select],
   );
   const getItemLayout = useCallback(
     (_data: ArrayLike<CommandCenterListRow> | null | undefined, index: number) => ({
@@ -658,6 +864,14 @@ export function CommandCenter() {
     windowSize: 5,
     onLayout: handleListLayout,
     onScroll: handleListScroll,
+    onScrollBeginDrag: interaction.beginManualScroll,
+    onTouchStart: interaction.beginManualScroll,
+    ...(isWeb
+      ? {
+          onWheel: interaction.beginManualScroll,
+          onMouseDown: interaction.beginManualScroll,
+        }
+      : {}),
     scrollEventThrottle: 16,
   };
   const keyPress = useCallback(
@@ -678,12 +892,6 @@ export function CommandCenter() {
     layer: modalLayer,
     onKeyDown: handleWebOverlayKeyDown,
   });
-  const backdrop = useCallback(
-    (props: React.ComponentProps<typeof BottomSheetBackdrop>) => (
-      <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} opacity={0.45} />
-    ),
-    [],
-  );
 
   if (showBottomSheet) {
     return (
@@ -695,7 +903,7 @@ export function CommandCenter() {
         enableDynamicSizing={false}
         onChange={handleSheetChange}
         onDismiss={handleSheetDismiss}
-        backdropComponent={backdrop}
+        backdropOpacity={0.45}
         enablePanDownToClose
         backgroundStyle={styles.sheetBackground}
         handleIndicatorStyle={styles.sheetHandle}
@@ -710,7 +918,8 @@ export function CommandCenter() {
           <ThemedBottomSheetTextInput
             testID="command-center-input"
             ref={bottomSheetInputRef}
-            value={state.query}
+            initialValue={state.query}
+            variant="bottom-sheet"
             onChangeText={state.setQuery}
             onKeyPress={keyPress}
             onSubmitEditing={submit}
@@ -748,7 +957,7 @@ export function CommandCenter() {
               <ThemedTextInput
                 testID="command-center-input"
                 ref={state.inputRef}
-                value={state.query}
+                initialValue={state.query}
                 onChangeText={state.setQuery}
                 placeholder={
                   state.scope === "files"
@@ -816,7 +1025,7 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     paddingTop: theme.spacing[12],
   },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0, 0, 0, 0.5)" },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(0, 0, 0, 0.5)" },
   panel: {
     width: 640,
     height: 560,
@@ -866,24 +1075,25 @@ const styles = StyleSheet.create((theme) => ({
   },
   scopeChipLabel: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: "500",
   },
   results: { flex: 1 },
+  // Sections and rows take their height from list-metrics; these styles only place content in it.
+  section: { justifyContent: "flex-end" },
   sectionLabel: {
     paddingHorizontal: theme.spacing[4],
-    paddingBottom: theme.spacing[2],
-    fontSize: theme.fontSize.xs,
+    paddingBottom: COMMAND_CENTER_SECTION_GAP,
+    fontSize: theme.fontSize.sm,
+    lineHeight: COMMAND_CENTER_LINE_HEIGHT.sectionLabel,
     color: theme.colors.foregroundMuted,
   },
   sectionDivider: {
     height: 1,
-    marginTop: theme.spacing[2],
-    marginBottom: theme.spacing[2],
+    marginVertical: COMMAND_CENTER_SECTION_GAP,
     backgroundColor: theme.colors.border,
   },
-  row: { height: 36, paddingHorizontal: theme.spacing[4], paddingVertical: theme.spacing[2] },
-  tallRow: { height: 56 },
+  row: { paddingHorizontal: theme.spacing[4], justifyContent: "center" },
   activeRow: { backgroundColor: theme.colors.surface1 },
   rowContent: {
     flexDirection: "row",
@@ -901,15 +1111,32 @@ const styles = StyleSheet.create((theme) => ({
   textContent: { flex: 1, minWidth: 0 },
   title: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
-    lineHeight: 18,
+    fontSize: theme.fontSize.base,
+    lineHeight: COMMAND_CENTER_LINE_HEIGHT.title,
     flexShrink: 1,
   },
-  fileLine: { flex: 1, minWidth: 0, fontSize: theme.fontSize.sm, lineHeight: 20 },
+  fileLine: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: theme.fontSize.base,
+    lineHeight: COMMAND_CENTER_LINE_HEIGHT.singleLine,
+  },
   fileName: { color: theme.colors.foreground },
   filePath: { color: theme.colors.foregroundMuted },
-  subtitle: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs, lineHeight: 16 },
-  iconSlot: { width: 16, height: 20, alignItems: "center", justifyContent: "center" },
+  subtitle: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    lineHeight: COMMAND_CENTER_LINE_HEIGHT.subtitle,
+  },
+  subtitleLine: { flexDirection: "row", minWidth: 0 },
+  subtitleText: { flexShrink: 1, minWidth: 0 },
+  iconSlot: {
+    width: 16,
+    height: COMMAND_CENTER_LINE_HEIGHT.singleLine,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  projectIconFallbackText: { fontSize: 9 },
   rowShortcut: { flexShrink: 0 },
   breadcrumb: {
     flex: 1,
@@ -926,8 +1153,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   breadcrumbGroup: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-    lineHeight: 20,
+    fontSize: theme.fontSize.base,
+    lineHeight: COMMAND_CENTER_LINE_HEIGHT.singleLine,
     flexShrink: 0,
   },
   emptyText: {
@@ -935,7 +1162,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: theme.spacing[6],
     textAlign: "center",
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   errorText: {
     paddingHorizontal: theme.spacing[4],
@@ -943,11 +1170,8 @@ const styles = StyleSheet.create((theme) => ({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
     color: theme.colors.statusDanger,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   sheetBackground: { backgroundColor: theme.colors.surface0 },
   sheetHandle: { backgroundColor: theme.colors.palette.zinc[600] },
-  titledSection: { height: 32, justifyContent: "flex-end" },
-  dividedSection: { height: 49, justifyContent: "flex-end" },
-  dividerSection: { height: 17, justifyContent: "flex-end" },
 }));

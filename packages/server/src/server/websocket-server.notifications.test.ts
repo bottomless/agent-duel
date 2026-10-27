@@ -1,3 +1,5 @@
+import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
+import { SessionDelivery } from "./session/owned-subscriptions/index.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Server as HTTPServer } from "http";
 import type pino from "pino";
@@ -108,6 +110,8 @@ function createServer(agentManagerOverrides?: Record<string, unknown>) {
     ...agentManagerOverrides,
   };
   const daemonConfigStore = {
+    get: vi.fn(() => ({})),
+    onApply: vi.fn(() => () => {}),
     onChange: vi.fn(() => () => {}),
   };
 
@@ -123,6 +127,7 @@ function createServer(agentManagerOverrides?: Record<string, unknown>) {
     null,
     { allowedOrigins: new Set() },
     createWorkspaceAutoNameStub(),
+    createWorkspaceRuntimeStore(),
     undefined,
     undefined,
     undefined,
@@ -175,11 +180,13 @@ function createSessionWithActivity(
     appVisible: boolean;
     appVisibilityChangedAt?: Date;
   } | null,
+  subscribed = true,
 ) {
   return {
     getClientActivity: vi.fn(() => activity),
     supports: () => false,
     supportsForSource: () => false,
+    subscribesToAgent: vi.fn(async () => subscribed),
   };
 }
 
@@ -192,11 +199,18 @@ function connectClient(
     appVisible: boolean;
     appVisibilityChangedAt?: Date;
   } | null,
+  options: { subscribed?: boolean } = {},
 ) {
   const ws = createOpenSocket();
+  const delivery = new SessionDelivery(() => {});
+  delivery.attach(ws, false);
   asInternals<WebSocketServerInternals>(server).sessions.set(ws, {
     kind: "trusted",
-    session: createSessionWithActivity(activity),
+    session: {
+      ...createSessionWithActivity(activity, options.subscribed ?? true),
+      delivery,
+      wantsSourceNotification: () => true,
+    },
     clientId: "client-test",
     appVersion: null,
     connectionLogger: createLogger(),
@@ -266,6 +280,30 @@ describe("VoiceAssistantWebSocketServer notification payloads", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("does not emit attention or include presence without an agent-directory subscription", async () => {
+    const { server, pushNotifications } = createServer();
+    const now = new Date();
+    const unsubscribed = connectClient(
+      server,
+      {
+        deviceType: "web",
+        appVisible: true,
+        focusedAgentId: "agent-1",
+        lastActivityAt: now,
+      },
+      { subscribed: false },
+    );
+
+    await asInternals<WebSocketServerInternals>(server).broadcastAgentAttention({
+      agentId: "agent-1",
+      provider: "claude",
+      reason: "finished",
+    });
+
+    expect(unsubscribed.send).not.toHaveBeenCalled();
+    expect(pushNotifications.sent).toHaveLength(1);
   });
 
   it("uses assistant preview text for push notifications with markdown removed", async () => {

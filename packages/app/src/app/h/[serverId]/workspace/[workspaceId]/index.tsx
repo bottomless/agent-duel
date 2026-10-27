@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigation } from "@react-navigation/native";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useNavigation } from "expo-router/react-navigation";
 import { StyleSheet, View } from "react-native";
-import { useGlobalSearchParams, useLocalSearchParams, useRootNavigationState } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { HostRouteBootstrapBoundary } from "@/components/host-route-bootstrap-boundary";
 import { RetainedPanel } from "@/components/retained-panel";
 import {
@@ -11,16 +11,18 @@ import {
 import { useHasHydratedWorkspaces, useWorkspaceExists } from "@/stores/session-store-hooks";
 import type { WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { WorkspaceScreen } from "@/screens/workspace/workspace-screen";
-import { useWorkspaceLayoutStoreHydrated } from "@/stores/workspace-layout-store";
+import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import {
-  areWorkspaceSelectionListsEqual,
+  areRetainedWorkspaceSelectionListsEqual,
   areWorkspaceSelectionsEqual,
+  getNextWorkspaceDeckExpirationDelay,
   getWorkspaceSelectionKey,
   orderWorkspaceSelectionsForStableRender,
-  pruneMountedWorkspaceSelections,
+  reconcileRetainedWorkspaceSelections,
+  resolveWorkspaceDeckRetentionLimit,
+  type RetainedWorkspaceSelection,
   resolveWorkspaceDeckEntries,
   shouldKeepWorkspaceDeckEntryMounted,
-  WORKSPACE_DECK_MAX_MOUNTED_WORKSPACES,
 } from "@/screens/workspace/workspace-deck-retention";
 import {
   decodeWorkspaceIdFromPathSegment,
@@ -31,8 +33,9 @@ import {
   replaceBrowserRouteWithCanonicalHostWorkspaceRoute,
   stripHostWorkspaceRouteEchoSearchFromBrowserUrlAfterCommit,
 } from "@/utils/host-route-browser";
-import { prepareWorkspaceTab } from "@/utils/workspace-navigation";
-import { isWeb } from "@/constants/platform";
+import { prepareWorkspaceTab } from "@/utils/prepare-workspace-tab";
+import { isNative, isWeb } from "@/constants/platform";
+import { RenderProfile } from "@/utils/render-profiler";
 
 function getParamValue(value: string | string[] | undefined): string {
   if (typeof value === "string") {
@@ -61,6 +64,8 @@ function getOpenIntentTarget(openIntent: WorkspaceOpenIntent): WorkspaceTabTarge
   return { kind: "draft", draftId: openIntent.draftId };
 }
 
+// COMPAT(workspace-open-url): added in v0.12.0, remove after 2027-01-22.
+// Bookmarks and older clients still send ?open=; internal navigation uses pending model state.
 function stripOpenSearchParamFromBrowserUrl() {
   if (!isWeb || typeof window === "undefined") {
     return;
@@ -78,7 +83,9 @@ function clearConsumedOpenIntent(input: {
 }) {
   input.navigation.setParams({ open: undefined });
   if (isWeb) {
-    stripOpenSearchParamFromBrowserUrl();
+    // Expo commits the incoming browser URL after setParams. Strip the consumed legacy input
+    // after that commit so it cannot be restored into the address bar and replayed on reload.
+    window.setTimeout(stripOpenSearchParamFromBrowserUrl, 0);
   }
 }
 
@@ -92,14 +99,9 @@ export default function HostWorkspaceIndexRoute() {
 
 function HostWorkspaceRouteContent() {
   const navigation = useNavigation();
-  const rootNavigationState = useRootNavigationState();
-  const hasHydratedWorkspaceLayoutStore = useWorkspaceLayoutStoreHydrated();
-  const consumedIntentRef = useRef<string | null>(null);
   const params = useLocalSearchParams<{
     serverId?: string | string[];
     workspaceId?: string | string[];
-  }>();
-  const globalParams = useGlobalSearchParams<{
     open?: string | string[];
   }>();
   const serverId = getParamValue(params.serverId);
@@ -107,20 +109,7 @@ function HostWorkspaceRouteContent() {
   const workspaceId = workspaceValue
     ? (decodeWorkspaceIdFromPathSegment(workspaceValue) ?? "")
     : "";
-  const openValue = getParamValue(globalParams.open);
-  const hasHydratedWorkspaces = useHasHydratedWorkspaces(serverId);
-  const workspaceExists = useWorkspaceExists(serverId, workspaceId);
-  const openIntent = useMemo(() => parseWorkspaceOpenIntent(openValue), [openValue]);
-  const recoveryAgentId = openIntent?.kind === "agent" ? openIntent.agentId : null;
-  const isAgentOpenIntent = recoveryAgentId !== null;
-  const isOpenIntentWaitingForWorkspace = Boolean(
-    isAgentOpenIntent && (!hasHydratedWorkspaces || !workspaceExists),
-  );
-  // Recovery mounts the deck before the workspace exists. Keep it mounted when
-  // restoration adds the descriptor so the pending action and agent target survive.
-  const [canMountWorkspaceDeck, setCanMountWorkspaceDeck] = useState(
-    !openValue || isOpenIntentWaitingForWorkspace,
-  );
+  const openValue = getParamValue(params.open);
   useEffect(() => {
     if (!serverId || !workspaceId) {
       return;
@@ -128,104 +117,58 @@ function HostWorkspaceRouteContent() {
     stripHostWorkspaceRouteEchoSearchFromBrowserUrlAfterCommit();
   }, [serverId, workspaceId]);
 
-  useEffect(() => {
-    if (!openValue) {
-      return;
-    }
-    if (!rootNavigationState?.key) {
-      return;
-    }
-    if (!hasHydratedWorkspaceLayoutStore) {
-      return;
-    }
-    if (isOpenIntentWaitingForWorkspace) {
-      return;
-    }
-
-    const consumptionKey = `${serverId}:${workspaceId}:${openValue}`;
-    if (consumedIntentRef.current === consumptionKey) {
-      clearConsumedOpenIntent({
-        navigation: navigation as unknown as {
-          setParams: (params: { open?: string | undefined }) => void;
-        },
-      });
-      setCanMountWorkspaceDeck(true);
-      return;
-    }
-    consumedIntentRef.current = consumptionKey;
-
+  useLayoutEffect(() => {
+    if (!openValue || !serverId || !workspaceId) return;
+    const openIntent = parseWorkspaceOpenIntent(openValue);
     if (openIntent) {
-      prepareWorkspaceTab({
-        serverId,
-        workspaceId,
-        target: getOpenIntentTarget(openIntent),
-        pin: openIntent.kind === "agent",
-      });
+      prepareWorkspaceTab(
+        {
+          serverId,
+          workspaceId,
+          target: getOpenIntentTarget(openIntent),
+          pin: openIntent.kind === "agent",
+        },
+        { openTab: useWorkspaceLayoutStore.getState().deferOpenTab },
+      );
     }
-
-    // Expo Router's replace ignores query-param-only changes (findDivergentState
-    // skips search params). Strip ?open from the browser URL directly so the
-    // address bar reflects the clean workspace route.
     clearConsumedOpenIntent({
       navigation: navigation as unknown as {
         setParams: (params: { open?: string | undefined }) => void;
       },
     });
+  }, [navigation, openValue, serverId, workspaceId]);
 
-    setCanMountWorkspaceDeck(true);
-  }, [
-    hasHydratedWorkspaceLayoutStore,
-    isOpenIntentWaitingForWorkspace,
-    navigation,
-    openIntent,
-    openValue,
-    rootNavigationState?.key,
-    serverId,
-    workspaceId,
-  ]);
-
-  if (
-    openValue &&
-    !isOpenIntentWaitingForWorkspace &&
-    (!canMountWorkspaceDeck || !hasHydratedWorkspaceLayoutStore)
-  ) {
-    return null;
-  }
-
-  return <WorkspaceDeck recoveryRequested={isAgentOpenIntent} recoveryAgentId={recoveryAgentId} />;
+  return <WorkspaceDeck />;
 }
 
-function WorkspaceDeck({
-  recoveryRequested,
-  recoveryAgentId,
-}: {
-  recoveryRequested: boolean;
-  recoveryAgentId: string | null;
-}) {
+function WorkspaceDeck() {
   const activeSelection = useActiveWorkspaceSelection();
-  const [mountedSelections, setMountedSelections] = useState<ActiveWorkspaceSelection[]>(() =>
-    activeSelection ? [activeSelection] : [],
+  const [retainedSelections, setRetainedSelections] = useState<RetainedWorkspaceSelection[]>(() =>
+    activeSelection ? [{ selection: activeSelection, inactiveSince: null }] : [],
   );
   const unmountWorkspaceSelection = useCallback((selection: ActiveWorkspaceSelection) => {
-    setMountedSelections((current) =>
-      current.filter(
-        (mountedSelection) => !areWorkspaceSelectionsEqual(mountedSelection, selection),
-      ),
+    setRetainedSelections((current) =>
+      current.filter((entry) => !areWorkspaceSelectionsEqual(entry.selection, selection)),
     );
   }, []);
 
-  const nextMountedSelections = useMemo(
+  const reconciliationNow = Date.now();
+  const nextRetainedSelections = useMemo(
     () =>
-      pruneMountedWorkspaceSelections({
-        currentSelections: mountedSelections,
+      reconcileRetainedWorkspaceSelections({
+        currentEntries: retainedSelections,
         activeSelection,
-        maxMountedWorkspaces: WORKSPACE_DECK_MAX_MOUNTED_WORKSPACES,
+        now: reconciliationNow,
+        maxMountedWorkspaces: resolveWorkspaceDeckRetentionLimit({ isNative }),
       }),
-    [activeSelection, mountedSelections],
+    [activeSelection, reconciliationNow, retainedSelections],
   );
   const renderedSelections = useMemo(
-    () => orderWorkspaceSelectionsForStableRender(nextMountedSelections),
-    [nextMountedSelections],
+    () =>
+      orderWorkspaceSelectionsForStableRender(
+        nextRetainedSelections.map((entry) => entry.selection),
+      ),
+    [nextRetainedSelections],
   );
   const renderedEntries = useMemo(
     () => resolveWorkspaceDeckEntries({ selections: renderedSelections, activeSelection }),
@@ -233,40 +176,58 @@ function WorkspaceDeck({
   );
 
   useLayoutEffect(() => {
-    if (!areWorkspaceSelectionListsEqual(mountedSelections, nextMountedSelections)) {
-      setMountedSelections(nextMountedSelections);
+    if (!areRetainedWorkspaceSelectionListsEqual(retainedSelections, nextRetainedSelections)) {
+      setRetainedSelections(nextRetainedSelections);
     }
-  }, [mountedSelections, nextMountedSelections]);
+  }, [nextRetainedSelections, retainedSelections]);
+
+  useEffect(() => {
+    const expirationDelay = getNextWorkspaceDeckExpirationDelay({
+      entries: nextRetainedSelections,
+      activeSelection,
+      now: reconciliationNow,
+    });
+    if (expirationDelay === null) {
+      return;
+    }
+    const timeout = setTimeout(() => {
+      setRetainedSelections((current) =>
+        reconcileRetainedWorkspaceSelections({
+          currentEntries: current,
+          activeSelection,
+          now: Date.now(),
+          maxMountedWorkspaces: resolveWorkspaceDeckRetentionLimit({ isNative }),
+        }),
+      );
+    }, expirationDelay + 1);
+    return () => clearTimeout(timeout);
+  }, [activeSelection, nextRetainedSelections, reconciliationNow]);
 
   return (
-    <View style={styles.deck}>
-      {renderedEntries.map(({ selection, active }) => {
-        return (
-          <WorkspaceDeckEntry
-            key={getWorkspaceSelectionKey(selection)}
-            selection={selection}
-            active={active}
-            recoveryRequested={recoveryRequested}
-            recoveryAgentId={recoveryAgentId}
-            onUnmountInactive={unmountWorkspaceSelection}
-          />
-        );
-      })}
-    </View>
+    <RenderProfile id="WorkspaceDeck">
+      <View style={styles.deck}>
+        {renderedEntries.map(({ selection, active }) => {
+          return (
+            <WorkspaceDeckEntry
+              key={getWorkspaceSelectionKey(selection)}
+              selection={selection}
+              active={active}
+              onUnmountInactive={unmountWorkspaceSelection}
+            />
+          );
+        })}
+      </View>
+    </RenderProfile>
   );
 }
 
 function WorkspaceDeckEntry({
   selection,
   active,
-  recoveryRequested,
-  recoveryAgentId,
   onUnmountInactive,
 }: {
   selection: ActiveWorkspaceSelection;
   active: boolean;
-  recoveryRequested: boolean;
-  recoveryAgentId: string | null;
   onUnmountInactive: (selection: ActiveWorkspaceSelection) => void;
 }) {
   const hasHydratedWorkspaces = useHasHydratedWorkspaces(selection.serverId);
@@ -296,8 +257,6 @@ function WorkspaceDeckEntry({
         serverId={selection.serverId}
         workspaceId={selection.workspaceId}
         isRouteFocused={active}
-        recoveryRequested={active && recoveryRequested}
-        recoveryAgentId={active ? recoveryAgentId : null}
       />
     </RetainedPanel>
   );

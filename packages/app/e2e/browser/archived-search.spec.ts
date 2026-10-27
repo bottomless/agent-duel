@@ -61,7 +61,7 @@ test.describe("Archived search", () => {
     const workspaceId = created.workspace.id;
 
     // Archived in creation order, so the newest chat is still the newest archived one.
-    for (const title of [TITLES.terminal, TITLES.unbilled, TITLES.billing]) {
+    for (const title of [TITLES.terminal, TITLES.billing, TITLES.unbilled]) {
       const agent = await createIdleAgent(client, { cwd: tempRepo.path, workspaceId, title });
       await archiveAgentFromDaemon(client, agent.id);
     }
@@ -80,30 +80,29 @@ test.describe("Archived search", () => {
     await openArchived(page);
 
     // Seeded newest-first, and at rest the archive is chronological.
-    await expectVisibleTitles(page, [TITLES.billing, TITLES.unbilled, TITLES.terminal]);
+    await expectVisibleTitles(page, [TITLES.unbilled, TITLES.billing, TITLES.terminal]);
     await expect(page.getByText("Today", { exact: true })).toHaveCount(1, { timeout: 30_000 });
 
     await search(page, `${NONCE} billing`);
     await expectVisibleTitles(page, [TITLES.billing]);
 
-    // Ranked results are one flat list — a day heading would claim an order
-    // the list no longer has.
+    // Search results are one flat list without day headings.
     await expect(page.getByText("Today", { exact: true })).toHaveCount(0, { timeout: 30_000 });
 
     await page.getByTestId("sidebar-archived-search-clear").click();
     await expect(page.getByTestId("sidebar-archived-search-input")).toHaveValue("");
-    await expectVisibleTitles(page, [TITLES.billing, TITLES.unbilled, TITLES.terminal]);
+    await expectVisibleTitles(page, [TITLES.unbilled, TITLES.billing, TITLES.terminal]);
     await expect(page.getByText("Today", { exact: true })).toHaveCount(1, { timeout: 30_000 });
   });
 
-  test("ranks a whole-word hit above one buried inside a word", async ({ page }) => {
+  test("keeps newer partial matches before older stronger matches", async ({ page }) => {
     await resetSeededPageState(page);
     await openArchived(page);
 
-    // "bill" starts a word in "billing" and hides inside "unbilled", so the
-    // stronger match leads even though both chats are equally recent.
+    // "bill" starts a word in "billing" and hides inside "unbilled". Results stay
+    // chronological, so the newer partial match still leads.
     await search(page, `${NONCE} bill`);
-    await expectVisibleTitles(page, [TITLES.billing, TITLES.unbilled]);
+    await expectVisibleTitles(page, [TITLES.unbilled, TITLES.billing]);
   });
 
   test("marks the characters each result matched on", async ({ page }) => {
@@ -140,6 +139,6 @@ test.describe("Archived search", () => {
     await expect(page.getByText("No archived chats match")).toBeVisible({ timeout: 30_000 });
 
     await page.getByText("Clear search").click();
-    await expectVisibleTitles(page, [TITLES.billing, TITLES.unbilled, TITLES.terminal]);
+    await expectVisibleTitles(page, [TITLES.unbilled, TITLES.billing, TITLES.terminal]);
   });
 });

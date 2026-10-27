@@ -4,10 +4,12 @@ import { GitCompareArrows } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
 import invariant from "tiny-invariant";
 import { useRetainedPanelActive } from "@/components/retained-panel";
-import { GitDiffPane } from "@/git/diff-pane";
+import { ChangesSurface } from "@/git/diff-pane";
 import { useAddFileToChat } from "@/hooks/use-add-file-to-chat";
 import { usePaneContext } from "@/panels/pane-context";
-import type { PanelDescriptor, PanelRegistration } from "@/panels/panel-registry";
+import { definePanel, type PanelDescriptor } from "@/panels/panel-registry";
+import { changesStateSchema, defaultChangesState } from "@/panels/changes/state";
+import { usePanelState } from "@/panels/use-panel-state";
 import { useSidePanelBrowseTarget } from "@/panels/side-panel-browse-target";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { SidePanelDirectoryMissing } from "@/panels/side-panel-directory-missing";
@@ -23,6 +25,7 @@ function ChangesPanel() {
   invariant(target.kind === "changes", "ChangesPanel requires changes target");
   const workspaceRoot = useWorkspaceDirectory(serverId, workspaceId);
   const isActive = useRetainedPanelActive();
+  const [changesState, setChangesState] = usePanelState(changesStateSchema, defaultChangesState);
   const handleOpenFile = useCallback(
     (path: string) => openFileInWorkspace({ location: { path }, disposition: "side" }),
     [openFileInWorkspace],
@@ -40,7 +43,7 @@ function ChangesPanel() {
   }
 
   return (
-    <GitDiffPane
+    <ChangesSurface
       serverId={serverId}
       workspaceId={pane.workspaceId}
       cwd={pane.workspaceRoot}
@@ -49,10 +52,12 @@ function ChangesPanel() {
       onAddToChat={canAddToChat && !pane.readOnly ? addFile : undefined}
       branchTargets={branchTargets}
       readOnly={pane.readOnly}
-      // A contestant commits as it works and its worktree is detached, so the
-      // committed view would diff against the repository base and bury the run.
-      // Uncommitted is where its changes are; the menu still offers the other.
-      cleanFallbackMode={pane.readOnly ? "uncommitted" : undefined}
+      state={changesState}
+      onStateChange={setChangesState}
+      // A contestant commits as it works and its worktree is detached, so all changes and
+      // the committed view would diff against the repository base and bury the run.
+      // Uncommitted is where its changes are; the menu still offers the others.
+      defaultComparison={pane.readOnly ? "uncommitted" : undefined}
     />
   );
 }
@@ -69,8 +74,7 @@ function useChangesPanelDescriptor(): PanelDescriptor {
   };
 }
 
-export const changesPanelRegistration: PanelRegistration<"changes"> = {
-  kind: "changes",
+export const changesPanelRegistration = definePanel("changes", {
   component: ChangesPanel,
   useDescriptor: useChangesPanelDescriptor,
-};
+});

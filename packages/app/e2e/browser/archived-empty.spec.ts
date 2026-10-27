@@ -33,7 +33,7 @@ test("Archived shows an empty placeholder when the host has no archived chats", 
         localStorage.setItem("@paseo:daemon-registry", JSON.stringify([seededHost]));
         localStorage.setItem("@paseo:create-agent-preferences", JSON.stringify(preferences));
       },
-      { seededHost: host, preferences: buildCreateAgentPreferences(serverId) },
+      { seededHost: host, preferences: buildCreateAgentPreferences() },
     );
 
     await gotoAppShell(page);

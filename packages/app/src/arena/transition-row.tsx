@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { AlertTriangle, ChevronDown, ChevronRight, Monitor } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -10,6 +10,7 @@ import {
   transitionSummaryLabel,
   type ArenaTransition,
 } from "./environment";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 const ThemedAlertTriangle = withUnistyles(AlertTriangle);
 const ThemedChevronDown = withUnistyles(ChevronDown);
@@ -96,7 +97,7 @@ export function ArenaTransitionRow({ transition }: { transition?: ArenaTransitio
   const Icon = failed ? ThemedAlertTriangle : ThemedMonitor;
   return (
     <View style={styles.root} testID="arena-environment-transition">
-      <Pressable
+      <PressHighlight
         onPress={handleToggle}
         style={styles.header}
         accessibilityRole="button"
@@ -116,7 +117,7 @@ export function ArenaTransitionRow({ transition }: { transition?: ArenaTransitio
             <ThemedChevronRight size={14} uniProps={mutedColorMapping} />
           )}
         </View>
-      </Pressable>
+      </PressHighlight>
       {expanded ? <TransitionDetails transition={transition} /> : null}
     </View>
   );
@@ -138,7 +139,7 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   toggle: {
     flexDirection: "row",
@@ -147,7 +148,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   toggleText: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   details: {
     gap: theme.spacing[3],
@@ -162,7 +163,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   title: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
   row: {
@@ -178,21 +179,21 @@ const styles = StyleSheet.create((theme) => ({
   command: {
     color: theme.colors.foreground,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   path: {
     flex: 1,
     minWidth: 0,
     color: theme.colors.foreground,
     fontFamily: theme.fontFamily?.mono,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   meta: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   failure: {
     color: theme.colors.statusDanger,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
 }));

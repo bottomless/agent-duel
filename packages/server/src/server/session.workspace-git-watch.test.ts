@@ -1,9 +1,16 @@
+import { createWorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
+import { createAgentMessageDeliveryStub } from "./test-utils/session-stubs.js";
+import {
+  createMessageReceiptsStub,
+  createTestCreationService,
+} from "./test-utils/session-stubs.js";
 import { describe, expect, test, vi } from "vitest";
 import path from "node:path";
 import type pino from "pino";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
 import { createServiceProxySubsystem, type ServiceProxySubsystem } from "./service-proxy.js";
 import { Session, type SessionOptions } from "./session.js";
+import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import { asInternals, createStub } from "./test-utils/class-mocks.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
 import { createTestLogger } from "../test-utils/test-logger.js";
@@ -22,13 +29,6 @@ import { createNoopWorkspaceGitService } from "./test-utils/workspace-git-servic
 import type { WorkspaceGitObserverService } from "./session/workspace-git-observer/workspace-git-observer-service.js";
 
 interface SessionInternals {
-  workspaceUpdatesSubscription: {
-    subscriptionId: string;
-    filter: undefined;
-    isBootstrapping: boolean;
-    pendingUpdatesByWorkspaceId: Map<string, unknown>;
-    lastEmittedByWorkspaceId: Map<string, unknown>;
-  };
   buildWorkspaceDescriptorMap: () => Promise<Map<string, unknown>>;
   workspaceGitObserver: WorkspaceGitObserverService;
   listAgentPayloads: () => Promise<unknown[]>;
@@ -136,7 +136,7 @@ function createSessionForWorkspaceGitWatchTests(options?: {
   workspaces: Map<string, ReturnType<typeof createPersistedWorkspaceRecord>>;
   workspaceGitService: WorkspaceGitService & {
     registerWorkspace: ReturnType<typeof vi.fn>;
-    peekSnapshot: ReturnType<typeof vi.fn>;
+
     getSnapshot: ReturnType<typeof vi.fn>;
     refresh: ReturnType<typeof vi.fn>;
     requestWorkingTreeWatch: ReturnType<typeof vi.fn>;
@@ -178,7 +178,7 @@ function createSessionForWorkspaceGitWatchTests(options?: {
         unsubscribe,
       };
     }),
-    peekSnapshot: vi.fn((cwd: string) => createWorkspaceRuntimeSnapshot(cwd)),
+
     getSnapshot: vi.fn(async (cwd: string) => createWorkspaceRuntimeSnapshot(cwd)),
     refresh: vi.fn(async () => {}),
     requestWorkingTreeWatch: vi.fn(async (cwd: string) => ({
@@ -190,8 +190,12 @@ function createSessionForWorkspaceGitWatchTests(options?: {
   };
 
   const session = new Session({
+    workspaceRuntimeStore: createWorkspaceRuntimeStore(),
+    messageReceipts: createMessageReceiptsStub(),
+    agentMessages: createAgentMessageDeliveryStub(),
+    creationService: createTestCreationService(),
     clientId: "test-client",
-    scopes: ["*"],
+    permissions: OWNER_PERMISSIONS,
     onMessage: (message) => emitted.push(message as { type: string; payload: unknown }),
     logger: createStub<pino.Logger>(logger),
     downloadTokenStore: createStub<SessionOptions["downloadTokenStore"]>({}),
@@ -200,6 +204,7 @@ function createSessionForWorkspaceGitWatchTests(options?: {
     agentManager: createStub<SessionOptions["agentManager"]>({
       subscribe: () => () => {},
       listAgents: () => [],
+      listProviderSubagentActivity: () => [],
       getAgent: () => null,
     }),
     agentStorage: createStub<SessionOptions["agentStorage"]>({
@@ -328,13 +333,11 @@ describe("workspace git watch targets", () => {
       cwd: REPO_CWD,
       name: "main",
     });
-    sessionAny.workspaceUpdatesSubscription = {
-      subscriptionId: "sub-1",
-      filter: undefined,
-      isBootstrapping: false,
-      pendingUpdatesByWorkspaceId: new Map(),
-      lastEmittedByWorkspaceId: new Map(),
-    };
+    await session.handleMessage({
+      type: "fetch_workspaces_request",
+      requestId: "workspace-demand",
+      subscribe: {},
+    });
 
     let descriptor = {
       id: "ws-10",
@@ -391,7 +394,6 @@ describe("workspace git watch targets", () => {
   test("emits checkout_status_update to a client subscribed to the workspace git target", async () => {
     const { session, emitted, projects, workspaces, workspaceGitService, subscriptions } =
       createSessionForWorkspaceGitWatchTests();
-    const sessionAny = asInternals<SessionInternals>(session);
     seedGitWorkspace({
       projects,
       workspaces,
@@ -400,13 +402,11 @@ describe("workspace git watch targets", () => {
       cwd: REPO_CWD,
       name: "main",
     });
-    sessionAny.workspaceUpdatesSubscription = {
-      subscriptionId: "sub-1",
-      filter: undefined,
-      isBootstrapping: false,
-      pendingUpdatesByWorkspaceId: new Map(),
-      lastEmittedByWorkspaceId: new Map(),
-    };
+    await session.handleMessage({
+      type: "fetch_workspaces_request",
+      requestId: "workspace-demand",
+      subscribe: {},
+    });
 
     syncGitObserver(session, REPO_CWD, "ws-10");
     emitted.length = 0;
@@ -490,6 +490,11 @@ describe("workspace git watch targets", () => {
       name: "old-branch",
     });
 
+    await session.handleMessage({
+      type: "fetch_workspaces_request",
+      requestId: "branch-demand",
+      subscribe: {},
+    });
     await session.syncWorkspaceGitObserversForExternalWorkspaceIds(["ws-10"]);
 
     subscriptions[0]?.listener(
@@ -572,7 +577,6 @@ describe("workspace git watch targets", () => {
   test("embeds PR status in checkout_status_update for GitHub-inclusive snapshot pushes", async () => {
     const { session, emitted, projects, workspaces, subscriptions } =
       createSessionForWorkspaceGitWatchTests();
-    const sessionAny = asInternals<SessionInternals>(session);
     seedGitWorkspace({
       projects,
       workspaces,
@@ -581,13 +585,11 @@ describe("workspace git watch targets", () => {
       cwd: REPO_CWD,
       name: "main",
     });
-    sessionAny.workspaceUpdatesSubscription = {
-      subscriptionId: "sub-1",
-      filter: undefined,
-      isBootstrapping: false,
-      pendingUpdatesByWorkspaceId: new Map(),
-      lastEmittedByWorkspaceId: new Map(),
-    };
+    await session.handleMessage({
+      type: "fetch_workspaces_request",
+      requestId: "workspace-demand",
+      subscribe: {},
+    });
 
     syncGitObserver(session, REPO_CWD, "ws-10");
     emitted.length = 0;

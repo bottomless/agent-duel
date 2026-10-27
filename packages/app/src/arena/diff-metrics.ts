@@ -4,7 +4,7 @@ type DiffTheme = Pick<Theme, "fontSize" | "lineHeight">;
 
 // Shared geometry keeps gutters, paired columns and stacked regions aligned at any font size.
 export function diffTextHeight(theme: DiffTheme): number {
-  return Math.max(theme.lineHeight.diff, Math.ceil(theme.fontSize.xs * 1.4));
+  return Math.max(theme.lineHeight.diff, Math.ceil(theme.fontSize.sm * 1.4));
 }
 
 export function diffRowHeight(theme: DiffTheme): number {

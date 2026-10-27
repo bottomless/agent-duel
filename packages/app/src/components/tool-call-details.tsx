@@ -1,4 +1,4 @@
-import React, { useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,10 @@ import { StyleSheet } from "react-native-unistyles";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
+import {
+  buildPaseoToolDetailSections,
+  type PaseoToolDetailSection,
+} from "@getpaseo/protocol/paseo-tool-presentation/index";
 import { buildLineDiff, parseUnifiedDiff, type DiffLine } from "@/utils/tool-call-parsers";
 import { highlightDiffLines } from "@/utils/diff-highlight";
 import { hasMeaningfulToolCallDetail } from "@/utils/tool-call-detail-state";
@@ -28,6 +32,7 @@ const ScrollView = isWeb ? RNScrollView : GHScrollView;
 // ---- Content Component ----
 
 interface ToolCallDetailsContentProps {
+  toolName?: string;
   detail?: ToolCallDetail;
   errorText?: string;
   maxHeight?: number;
@@ -189,48 +194,6 @@ function ShellDetailSection({ command, output, ds }: ShellDetailProps) {
                 <Text style={styles.shellPrompt}>$ </Text>
                 {normalizedCommand}
                 {hasOutput ? `\n\n${commandOutput}` : ""}
-              </Text>
-            </View>
-          </ScrollView>
-        </ScrollView>
-      </View>
-    </View>
-  );
-}
-
-interface WorktreeSetupDetailProps {
-  log: string;
-  branchName: string;
-  worktreePath: string;
-  ds: DetailStyles;
-}
-
-function WorktreeSetupDetailSection({
-  log,
-  branchName,
-  worktreePath,
-  ds,
-}: WorktreeSetupDetailProps) {
-  const setupLog = log.replace(/^\n+/, "");
-  const hasLog = setupLog.length > 0;
-  return (
-    <View style={ds.sectionFillStyle}>
-      <View style={ds.codeBlockFillStyle}>
-        <ScrollView
-          style={ds.codeVerticalScrollStyle}
-          contentContainerStyle={styles.codeVerticalContent}
-          nestedScrollEnabled
-          showsVerticalScrollIndicator
-        >
-          <ScrollView
-            horizontal
-            nestedScrollEnabled
-            showsHorizontalScrollIndicator
-            contentContainerStyle={styles.codeHorizontalContent}
-          >
-            <View style={styles.codeLine} dataSet={CODE_SURFACE_DATASET}>
-              <Text selectable style={styles.scrollText}>
-                {hasLog ? setupLog : `Preparing worktree ${branchName} at ${worktreePath}`}
               </Text>
             </View>
           </ScrollView>
@@ -644,7 +607,42 @@ function buildUnknownSections(detail: UnknownDetail, ds: DetailStyles, t: TFunct
   return out;
 }
 
+function PaseoDetailSection({ section }: { section: PaseoToolDetailSection }) {
+  return (
+    <View style={styles.paseoSection}>
+      <Text style={styles.paseoSectionTitle}>{section.title}</Text>
+      {section.kind === "prose" ? (
+        <Text selectable style={styles.paseoProse}>
+          {section.text}
+        </Text>
+      ) : (
+        <View style={styles.paseoFields}>
+          {section.fields.map((field) => (
+            <View key={field.label} style={styles.paseoFieldRow}>
+              <Text style={styles.paseoFieldLabel}>{field.label}</Text>
+              <Text selectable style={styles.paseoFieldValue}>
+                {field.value}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function buildPaseoUnknownSections(
+  toolName: string | undefined,
+  detail: UnknownDetail,
+): ReactNode[] | null {
+  if (!toolName) return null;
+  const sections = buildPaseoToolDetailSections(toolName, detail.input, detail.output);
+  if (!sections) return null;
+  return sections.map((section) => <PaseoDetailSection key={section.title} section={section} />);
+}
+
 function buildDetailSections(
+  toolName: string | undefined,
   detail: ToolCallDetail | undefined,
   diffLines: DiffLine[] | undefined,
   ds: DetailStyles,
@@ -656,17 +654,7 @@ function buildDetailSections(
       <ShellDetailSection key="shell" command={detail.command} output={detail.output} ds={ds} />,
     ];
   }
-  if (detail.type === "worktree_setup") {
-    return [
-      <WorktreeSetupDetailSection
-        key="worktree-setup"
-        log={detail.log}
-        branchName={detail.branchName}
-        worktreePath={detail.worktreePath}
-        ds={ds}
-      />,
-    ];
-  }
+  if (detail.type === "worktree_setup") return [];
   if (detail.type === "sub_agent") {
     return [
       <SubAgentDetailSection
@@ -719,7 +707,7 @@ function buildDetailSections(
     return [<ScrollablePlainTextSection key="plain-text" text={detail.text} ds={ds} />];
   }
   if (detail.type === "unknown") {
-    return buildUnknownSections(detail, ds, t);
+    return buildPaseoUnknownSections(toolName, detail) ?? buildUnknownSections(detail, ds, t);
   }
   return [];
 }
@@ -759,6 +747,7 @@ function LoadingSkeleton({ containerStyle }: { containerStyle: StyleProp<ViewSty
 }
 
 export function ToolCallDetailsContent({
+  toolName,
   detail,
   errorText,
   maxHeight,
@@ -771,7 +760,7 @@ export function ToolCallDetailsContent({
   const ds = useDetailStyles(detail, resolvedMaxHeight, fillAvailableHeight, compact);
   const diffLines = useDiffLines(detail);
 
-  const sections: ReactNode[] = buildDetailSections(detail, diffLines, ds, t);
+  const sections: ReactNode[] = buildDetailSections(toolName, detail, diffLines, ds, t);
 
   if (errorText) {
     sections.push(<ErrorSection key="error" errorText={errorText} ds={ds} />);
@@ -812,8 +801,48 @@ const styles = StyleSheet.create((theme) => {
     },
     groupHeaderText: {
       color: theme.colors.foregroundMuted,
-      fontSize: theme.fontSize.sm,
+      fontSize: theme.fontSize.base,
       fontWeight: theme.fontWeight.normal,
+    },
+    paseoSection: {
+      gap: theme.spacing[3],
+      paddingHorizontal: theme.spacing[4],
+      paddingVertical: theme.spacing[4],
+      borderBottomWidth: theme.borderWidth[1],
+      borderBottomColor: theme.colors.border,
+    },
+    paseoSectionTitle: {
+      color: theme.colors.foreground,
+      fontSize: theme.fontSize.base,
+      fontWeight: theme.fontWeight.medium,
+    },
+    paseoProse: {
+      color: theme.colors.foreground,
+      fontSize: theme.fontSize.content,
+      lineHeight: Math.round(theme.fontSize.content * 1.5),
+      overflowWrap: "anywhere",
+    },
+    paseoFields: {
+      gap: theme.spacing[3],
+    },
+    paseoFieldRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: theme.spacing[4],
+    },
+    paseoFieldLabel: {
+      width: 120,
+      color: theme.colors.foregroundMuted,
+      fontSize: theme.fontSize.sm,
+      lineHeight: Math.round(theme.fontSize.base * 1.5),
+    },
+    paseoFieldValue: {
+      flex: 1,
+      minWidth: 0,
+      color: theme.colors.foreground,
+      fontSize: theme.fontSize.base,
+      lineHeight: Math.round(theme.fontSize.base * 1.5),
+      overflowWrap: "anywhere",
     },
     section: {
       gap: theme.spacing[2],
@@ -832,19 +861,19 @@ const styles = StyleSheet.create((theme) => {
     // A hair below the base sizes, for callers that want a denser detail
     // view (e.g. Agent Arena's side-by-side contestant threads).
     plainTextCompact: {
-      fontSize: theme.fontSize.base - 1,
+      fontSize: theme.fontSize.lg - 1,
       lineHeight: 21,
     },
     sectionTitle: {
       color: theme.colors.foregroundMuted,
-      fontSize: theme.fontSize.xs,
+      fontSize: theme.fontSize.sm,
       fontWeight: theme.fontWeight.semibold,
       textTransform: "uppercase",
       letterSpacing: 0.5,
     },
     rangeText: {
       color: theme.colors.foregroundMuted,
-      fontSize: theme.fontSize.xs,
+      fontSize: theme.fontSize.sm,
     },
     diffContainer: {
       borderWidth: theme.borderWidth[1],
@@ -944,7 +973,7 @@ const styles = StyleSheet.create((theme) => {
     },
     emptyStateText: {
       color: theme.colors.foregroundMuted,
-      fontSize: theme.fontSize.sm,
+      fontSize: theme.fontSize.base,
       fontStyle: "italic",
     },
     loadingContainer: {

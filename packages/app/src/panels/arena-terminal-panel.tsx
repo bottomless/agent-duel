@@ -9,7 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { TerminalPane } from "@/components/terminal-pane";
 import { usePaneContext, usePaneFocus } from "@/panels/pane-context";
 import { SidePanelDirectoryMissing } from "@/panels/side-panel-directory-missing";
-import type { PanelDescriptor, PanelRegistration } from "@/panels/panel-registry";
+import { definePanel, type PanelDescriptor } from "@/panels/panel-registry";
 import { agentLabel } from "@/arena/environment";
 import { createArenaWorktreeTerminal } from "@/arena/open-worktree-terminal";
 import {
@@ -49,7 +49,7 @@ const noticeIconMapping = (theme: Theme) => ({ color: theme.colors.statusWarning
 const styles = StyleSheet.create((theme) => ({
   placeholderText: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   pane: {
     flex: 1,
@@ -76,12 +76,12 @@ const styles = StyleSheet.create((theme) => ({
     borderBottomColor: theme.colors.border,
   },
   noticeText: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foreground,
   },
   noticeHint: {
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
     flexShrink: 1,
   },
@@ -355,8 +355,7 @@ function ArenaTerminalStrandedNotice({ side }: { side: ArenaSide }) {
   );
 }
 
-export const arenaTerminalPanelRegistration: PanelRegistration<"arena_terminal"> = {
-  kind: "arena_terminal",
+export const arenaTerminalPanelRegistration = definePanel("arena_terminal", {
   component: ArenaTerminalPanel,
   useDescriptor: useArenaTerminalPanelDescriptor,
-};
+});

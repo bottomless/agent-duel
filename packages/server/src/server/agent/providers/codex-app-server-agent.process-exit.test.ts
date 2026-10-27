@@ -11,6 +11,7 @@ import type {
   AgentLaunchContext,
   AgentSession,
   AgentSessionConfig,
+  AgentStreamEvent,
 } from "../agent-sdk-types.js";
 import { CodexAppServerAgentClient, CodexAppServerAgentSession } from "./codex-app-server-agent.js";
 import {
@@ -19,6 +20,87 @@ import {
 } from "./codex/test-utils/fake-app-server.js";
 
 const logger = createTestLogger();
+
+interface PendingPlanLifecycle {
+  close(): Promise<void>;
+  crashDuringActiveTurn(): Promise<void>;
+  expectCanceledPlan(): void;
+}
+
+async function withPendingPlan(
+  runScenario: (plan: PendingPlanLifecycle) => Promise<void>,
+): Promise<void> {
+  const workdir = mkdtempSync(join(tmpdir(), "codex-plan-cancel-"));
+  const appServer = createFakeCodexAppServer();
+  const client = new ProcessExitCodexClient([appServer]);
+  const session = await client.createSession({
+    provider: "codex",
+    cwd: workdir,
+    modeId: "auto",
+    model: "gpt-5.4",
+    featureValues: { plan_mode: true },
+  });
+  const events: AgentStreamEvent[] = [];
+  session.subscribe((event) => events.push(event));
+  try {
+    const run = session.run("make a plan");
+    await appServer.waitForTurnStart();
+    appServer.startsTurn({ threadId: "thread-1", turnId: "plan-turn" });
+    appServer.updatesPlan({ threadId: "thread-1", steps: ["Inspect README"] });
+    appServer.completeTurn();
+    await run;
+    const proposal = events.find(
+      (event) =>
+        event.type === "timeline" &&
+        event.item.type === "tool_call" &&
+        event.item.name === "plan_approval",
+    );
+    expect(proposal).toBeDefined();
+    const [request] = session.getPendingPermissions?.() ?? [];
+    expect(request).toBeDefined();
+    await runScenario({
+      close: () => session.close(),
+      async crashDuringActiveTurn() {
+        appServer.startsTurn({ threadId: "thread-1", turnId: "autonomous-turn" });
+        await expect
+          .poll(() => events.filter((event) => event.type === "turn_started").length)
+          .toBe(2);
+        appServer.child.emit("exit", 17, null);
+        await expect.poll(() => events.some((event) => event.type === "turn_failed")).toBe(true);
+      },
+      expectCanceledPlan() {
+        expect(session.getPendingPermissions?.()).toEqual([]);
+        expect(events).toContainEqual({
+          ...proposal,
+          item: expect.objectContaining({
+            type: "tool_call",
+            name: "plan_approval",
+            callId: request?.id,
+            status: "canceled",
+            detail: { type: "plan", text: "- Inspect README" },
+          }),
+        });
+      },
+    });
+  } finally {
+    await session.close();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+}
+
+test("closing a session retains a canceled pending plan", async () => {
+  await withPendingPlan(async (plan) => {
+    await plan.close();
+    plan.expectCanceledPlan();
+  });
+});
+
+test("an active provider crash retains a canceled pending plan", async () => {
+  await withPendingPlan(async (plan) => {
+    await plan.crashDuringActiveTurn();
+    plan.expectCanceledPlan();
+  });
+});
 
 class ProcessExitCodexClient extends CodexAppServerAgentClient implements AgentClient {
   constructor(private readonly appServers: FakeCodexAppServer[]) {
@@ -107,6 +189,62 @@ test("unexpected Codex app-server exit fails the active run and agent", async ()
       await manager.closeAgent(agentId);
     }
     unsubscribe();
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("replacement self-heals when Codex reports that the tracked turn is already idle", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "codex-already-idle-replace-"));
+  const appServer = createFakeCodexAppServer({
+    "turn/interrupt": () => ({
+      __jsonRpcError: { code: -32600, message: "no active turn to interrupt" },
+    }),
+  });
+  const manager = new AgentManager({
+    clients: { codex: new ProcessExitCodexClient([appServer]) },
+    logger,
+  });
+  let agentId: string | null = null;
+
+  try {
+    const agent = await manager.createAgent(
+      { provider: "codex", cwd: workdir, modeId: "auto", model: "gpt-5.4" },
+      undefined,
+      { workspaceId: undefined },
+    );
+    agentId = agent.id;
+    const firstRun = manager.runAgent(agent.id, "keep working");
+    const firstTurnStart = await appServer.waitForTurnStart();
+    appServer.startsTurn({
+      threadId: String(firstTurnStart.threadId),
+      turnId: "native-turn-already-idle",
+    });
+    await manager.waitForAgentRunStart(agent.id);
+
+    const replacementStream = await manager.replaceAgentRun(agent.id, "replacement prompt");
+    const replacementEvents = (async () => {
+      const events = [];
+      for await (const event of replacementStream) {
+        events.push(event);
+      }
+      return events;
+    })();
+
+    await expect
+      .poll(() => appServer.requests().filter((message) => message.method === "turn/start").length)
+      .toBe(2);
+    appServer.startsTurn({ threadId: "thread-1", turnId: "native-turn-replacement" });
+    appServer.completeTurn({ threadId: "thread-1" });
+
+    await expect(firstRun).resolves.toMatchObject({ canceled: true });
+    await expect(replacementEvents).resolves.toContainEqual(
+      expect.objectContaining({ type: "turn_completed" }),
+    );
+    expect(manager.getAgent(agent.id)?.lifecycle).toBe("idle");
+  } finally {
+    if (agentId && manager.getAgent(agentId)) {
+      await manager.closeAgent(agentId);
+    }
     rmSync(workdir, { recursive: true, force: true });
   }
 });

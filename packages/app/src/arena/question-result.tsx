@@ -37,7 +37,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   heading: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
   },
   muted: {
@@ -49,11 +49,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   prompt: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   answer: {
     color: theme.colors.accent,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     paddingLeft: theme.spacing[3],
   },
 }));

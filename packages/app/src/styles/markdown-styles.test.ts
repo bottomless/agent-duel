@@ -1,143 +1,72 @@
 import { describe, expect, it } from "vitest";
-import {
-  createCompactMarkdownStyles,
-  createMarkdownStyles,
-  createSubduedMarkdownStyles,
-} from "./markdown-styles";
-import { darkPureBlackTheme, darkTheme, lightTheme } from "./theme";
+import { createMarkdownStyles } from "@/components/markdown/styles";
+import { applyMarkdownStyleVariant } from "./markdown-styles";
+import { darkPureBlackTheme, darkTheme, lightTheme, type Theme } from "./theme";
 
-describe("createMarkdownStyles", () => {
-  it("applies shrink-and-wrap constraints to long markdown text and links", () => {
-    const styles = createMarkdownStyles(darkTheme);
+function variantStyles(
+  theme: Theme,
+  variant: Parameters<typeof applyMarkdownStyleVariant>[2],
+  compact = false,
+) {
+  return applyMarkdownStyleVariant(
+    theme,
+    createMarkdownStyles(theme, { compact, blockGap: 16 }),
+    variant,
+  );
+}
 
-    expect(styles.body).toMatchObject({
-      flexShrink: 1,
-      minWidth: 0,
-      width: "100%",
-    });
-
-    expect(styles.paragraph).toMatchObject({
-      flexShrink: 1,
-      minWidth: 0,
-      width: "100%",
-      flexWrap: "wrap",
-    });
-
-    expect(styles.text).toMatchObject({
-      flexShrink: 1,
-      minWidth: 0,
-      overflowWrap: "anywhere",
-    });
-
-    expect(styles.link).toMatchObject({
-      flexShrink: 1,
-      minWidth: 0,
-      overflowWrap: "anywhere",
-    });
-
-    expect(styles.blocklink).toMatchObject({
-      flexShrink: 1,
-      minWidth: 0,
-      overflowWrap: "anywhere",
-    });
-  });
-
-  it("keeps assistant markdown text selectable on web", () => {
-    const styles = createMarkdownStyles(darkTheme);
-
-    expect(styles.body).toMatchObject({
-      userSelect: "text",
-    });
-    expect(styles.text).toMatchObject({
-      userSelect: "text",
-    });
-    expect(styles.heading1).toMatchObject({
-      userSelect: "text",
-    });
-    expect(styles.link).toMatchObject({
-      userSelect: "text",
-    });
-    expect(styles.code_inline).toMatchObject({
-      userSelect: "text",
-    });
-    expect(styles.code_block).toMatchObject({
-      userSelect: "text",
-    });
-    expect(styles.fence).toMatchObject({
-      userSelect: "text",
-    });
-    expect(styles.bullet_list_icon).toMatchObject({
-      userSelect: "text",
-    });
-    expect(styles.ordered_list_icon).toMatchObject({
-      userSelect: "text",
-    });
-  });
-
-  it("uses the mono font-size token directly for inline and block code", () => {
-    const styles = createMarkdownStyles(darkTheme);
-    const compactStyles = createCompactMarkdownStyles(darkTheme);
-
-    expect(styles.code_inline).toMatchObject({
-      fontFamily: darkTheme.fontFamily.mono,
-      fontSize: darkTheme.fontSize.code,
-    });
-    expect(styles.code_inline).not.toHaveProperty("lineHeight");
-    expect(styles.code_block).toMatchObject({
-      fontFamily: darkTheme.fontFamily.mono,
-      fontSize: darkTheme.fontSize.code,
-    });
-    expect(styles.fence).toMatchObject({
-      fontFamily: darkTheme.fontFamily.mono,
-      fontSize: darkTheme.fontSize.code,
-    });
-    expect(compactStyles.code_inline).toMatchObject({
-      fontFamily: darkTheme.fontFamily.mono,
-      fontSize: darkTheme.fontSize.code,
-    });
-    expect(compactStyles.code_inline).not.toHaveProperty("lineHeight");
+describe("applyMarkdownStyleVariant", () => {
+  it("returns the shared styles unchanged without a variant", () => {
+    const shared = createMarkdownStyles(darkTheme, { blockGap: 16 });
+    expect(applyMarkdownStyleVariant(darkTheme, shared, {})).toEqual(shared);
   });
 
   it("keeps secondary prose muted while preserving code contrast", () => {
-    const styles = createSubduedMarkdownStyles(darkTheme, false);
+    const { markdownStyle } = variantStyles(darkTheme, { subdued: true });
 
-    expect(styles.body.color).toBe(darkTheme.colors.foregroundMuted);
-    expect(styles.text.color).toBe(darkTheme.colors.foregroundMuted);
-    expect(styles.heading3).toMatchObject({
+    expect(markdownStyle.paragraph?.color).toBe(darkTheme.colors.foregroundMuted);
+    expect(markdownStyle.list?.color).toBe(darkTheme.colors.foregroundMuted);
+    expect(markdownStyle.h3).toMatchObject({
       color: darkTheme.colors.foreground,
-      fontSize: darkTheme.fontSize.base,
-      borderBottomWidth: 0,
+      fontSize: markdownStyle.paragraph?.fontSize,
+      fontWeight: darkTheme.fontWeight.semibold,
     });
-    expect(styles.fence.color).toBe(darkTheme.colors.foreground);
-    expect(styles.code_inline.color).toBe(darkTheme.colors.foreground);
+    expect(markdownStyle.codeBlock?.color).toBe(darkTheme.colors.foreground);
+    expect(markdownStyle.code?.color).toBe(darkTheme.colors.foreground);
+    expect(markdownStyle.strong?.color).toBe(darkTheme.colors.foreground);
   });
 
   it.each([
     ["light", lightTheme],
     ["dark", darkTheme],
     ["pure black", darkPureBlackTheme],
-  ])("preserves wrapping and selection in the %s subdued theme", (_name, theme) => {
-    const styles = createSubduedMarkdownStyles(theme, true);
+  ])("keeps selection and the code font in the %s subdued theme", (_name, theme) => {
+    const styles = variantStyles(theme, { subdued: true }, true);
 
-    expect(styles.body).toMatchObject({
-      color: theme.colors.foregroundMuted,
-      flexShrink: 1,
-      minWidth: 0,
-      userSelect: "text",
-      width: "100%",
-    });
-    expect(styles.text).toMatchObject({
-      color: theme.colors.foregroundMuted,
-      flexShrink: 1,
-      minWidth: 0,
-      overflowWrap: "anywhere",
-      userSelect: "text",
-    });
-    expect(styles.fence).toMatchObject({
+    expect(styles.selectionColor).toBe(theme.colors.terminal.selectionBackground);
+    expect(styles.markdownStyle.paragraph?.color).toBe(theme.colors.foregroundMuted);
+    expect(styles.markdownStyle.codeBlock).toMatchObject({
       color: theme.colors.foreground,
-      fontFamily: theme.fontFamily.mono,
       fontSize: theme.fontSize.code,
-      userSelect: "text",
     });
+  });
+
+  it("puts flat headings one step above the body in the regular text colour", () => {
+    const { markdownStyle } = variantStyles(darkTheme, { flatHeadings: true }, true);
+
+    expect(markdownStyle.paragraph?.color).toBe(darkTheme.colors.foreground);
+    for (const heading of [markdownStyle.h1, markdownStyle.h2, markdownStyle.h6]) {
+      expect(heading).toMatchObject({
+        color: darkTheme.colors.foreground,
+        fontSize: darkTheme.fontSize.lg,
+        fontWeight: darkTheme.fontWeight.semibold,
+      });
+    }
+  });
+
+  it("caps the text at the reading measure", () => {
+    const styles = variantStyles(darkTheme, { flatHeadings: true, proseMeasure: true });
+
+    expect(styles.containerStyle?.maxWidth).toBe(darkTheme.contentMaxWidth);
   });
 });

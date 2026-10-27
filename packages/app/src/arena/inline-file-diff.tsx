@@ -122,6 +122,6 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
     padding: theme.spacing[2],
   },
-  caption: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
-  error: { color: theme.colors.destructive, fontSize: theme.fontSize.xs },
+  caption: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
+  error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
 }));

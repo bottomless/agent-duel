@@ -1,4 +1,17 @@
 import type { z } from "zod";
+import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
+
+export class PaseoToolInputError extends Error {
+  readonly status = 400;
+
+  constructor(
+    message: string,
+    readonly issues?: z.ZodError["issues"],
+  ) {
+    super(message);
+    this.name = "PaseoToolInputError";
+  }
+}
 
 export interface PaseoToolExecutionContext {
   signal?: AbortSignal;
@@ -36,6 +49,7 @@ export interface PaseoToolCatalog {
 
 export interface PaseoToolRuntimeContext {
   callerAgentId?: string;
+  paseoToolPolicy?: ProviderPaseoToolsPolicy;
   enableVoiceTools?: boolean;
   voiceOnly?: boolean;
 }

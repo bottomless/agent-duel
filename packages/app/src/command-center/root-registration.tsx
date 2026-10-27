@@ -8,6 +8,7 @@ import {
   FolderPlus,
   Home,
   Keyboard,
+  PanelLeft,
   Plus,
   Settings,
 } from "lucide-react-native";
@@ -15,7 +16,7 @@ import { withUnistyles } from "react-native-unistyles";
 import { getIsElectronRuntime, useIsCompactFormFactor } from "@/constants/layout";
 import { useKeyboardShortcutOverrides } from "@/hooks/use-keyboard-shortcut-overrides";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
-import { keyboardActionDispatcher } from "@/keyboard/keyboard-action-dispatcher";
+import { useKeyboardActionDispatcher } from "@/keyboard/keyboard-action-dispatcher-context";
 import { useHosts } from "@/runtime/host-runtime";
 import { useKeyboardShortcutsAvailable } from "@/keyboard/availability";
 import { resolveShortcutKeysForAction } from "@/keyboard/keyboard-shortcuts";
@@ -52,6 +53,9 @@ const ThemedFolder = withUnistyles(Folder, (theme) => ({ color: theme.colors.for
 const ThemedCircleDashed = withUnistyles(CircleDashed, (theme) => ({
   color: theme.colors.foregroundMuted,
 }));
+const ThemedPanelLeft = withUnistyles(PanelLeft, (theme) => ({
+  color: theme.colors.foregroundMuted,
+}));
 
 function PlusIcon({ size }: CommandCenterIconProps) {
   return <ThemedPlus size={size} strokeWidth={2.4} />;
@@ -85,7 +89,12 @@ function CircleDashedIcon({ size }: CommandCenterIconProps) {
   return <ThemedCircleDashed size={size} strokeWidth={2.2} />;
 }
 
+function PanelLeftIcon({ size }: CommandCenterIconProps) {
+  return <ThemedPanelLeft size={size} strokeWidth={2.2} />;
+}
+
 export function CommandCenterRootActions() {
+  const keyboardActionDispatcher = useKeyboardActionDispatcher();
   const { t } = useTranslation();
   const { overrides } = useKeyboardShortcutOverrides();
   const shortcutsAvailable = useKeyboardShortcutsAvailable();
@@ -108,6 +117,9 @@ export function CommandCenterRootActions() {
   const setGroupMode = useSidebarViewStore((state) => state.setGroupMode);
   const setListView = useSidebarViewStore((state) => state.setListView);
   const openAgentListForLayout = usePanelStore((state) => state.openAgentListForLayout);
+  const toggleMobileAgentList = usePanelStore((state) => state.toggleMobileAgentList);
+  const toggleDesktopAgentList = usePanelStore((state) => state.toggleDesktopAgentList);
+  const toggleAgentList = isCompact ? toggleMobileAgentList : toggleDesktopAgentList;
   const shortcutPlatform = useMemo(
     () => ({ isMac: getShortcutOs() === "mac", isDesktop: getIsElectronRuntime() }),
     [],
@@ -158,8 +170,8 @@ export function CommandCenterRootActions() {
         id: "home",
         group: "actions",
         groupRank: 0,
-        rank: 2,
-        keywords: ["home", "start", "import", "session", "pair", "device", "providers"],
+        rank: 3,
+        keywords: ["home", "start", "pair", "device", "providers"],
         visibility: "query",
         run: () => {
           clearCommandCenterFocusRestoreElement();
@@ -176,7 +188,7 @@ export function CommandCenterRootActions() {
         id: "archived-chats",
         group: "actions",
         groupRank: 0,
-        rank: 3,
+        rank: 4,
         keywords: ["archived", "archive", "history", "recent"],
         visibility: "always",
         run: () => {
@@ -204,7 +216,7 @@ export function CommandCenterRootActions() {
         id: "settings",
         group: "actions",
         groupRank: 0,
-        rank: 5,
+        rank: 6,
         keywords: ["settings", "preferences", "config", "configuration"],
         visibility: "always",
         run: () => {
@@ -221,6 +233,33 @@ export function CommandCenterRootActions() {
             undefined,
         },
       },
+      // Toggle left sidebar is global: it calls the panel store directly and works on every route.
+      // The side panel and focus toggles do NOT belong here — their handlers live in
+      // workspace-screen.tsx behind `enabled: isRouteFocused && ...`, so registering them globally
+      // would list entries that silently no-op off a workspace route. They live in
+      // workspace-contributions.ts instead. That is why the three toggles render in two
+      // non-adjacent sections; don't "tidy" them back together.
+      {
+        id: "toggle-left-sidebar",
+        group: "actions",
+        groupRank: 0,
+        rank: 8,
+        keywords: ["toggle", "sidebar", "left", "panel", "workspaces"],
+        visibility: "query",
+        run: () => {
+          clearCommandCenterFocusRestoreElement();
+          toggleAgentList();
+        },
+        presentation: {
+          kind: "action",
+          title: t("settings.shortcuts.help.toggleLeftSidebar"),
+          sectionTitle: t("shell.commandCenter.actions"),
+          icon: PanelLeftIcon,
+          shortcutKeys:
+            resolveShortcutKeysForAction("toggle-left-sidebar", overrides, shortcutPlatform) ??
+            undefined,
+        },
+      },
     ];
 
     if (shortcutsAvailable) {
@@ -228,7 +267,7 @@ export function CommandCenterRootActions() {
         id: "keyboard-shortcuts",
         group: "actions",
         groupRank: 0,
-        rank: 6,
+        rank: 7,
         keywords: ["keyboard", "shortcuts", "keys", "hotkeys"],
         visibility: "always",
         run: () => setShortcutsDialogOpen(true),
@@ -261,6 +300,7 @@ export function CommandCenterRootActions() {
   }, [
     groupMode,
     homeRoute,
+    keyboardActionDispatcher,
     openAddProject,
     openAgentListForLayout,
     overrides,
@@ -271,6 +311,7 @@ export function CommandCenterRootActions() {
     shortcutPlatform,
     shortcutsAvailable,
     t,
+    toggleAgentList,
   ]);
 
   useCommandCenterActions({ sourceId: "root", enabled: true, actions });

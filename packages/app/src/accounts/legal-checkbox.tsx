@@ -1,9 +1,10 @@
 import { useCallback, useMemo } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useMutation } from "@tanstack/react-query";
 import type { LegalDocuments } from "@getpaseo/protocol/accounts/schemas";
 import { openExternalUrl } from "@/utils/open-external-url";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 interface LegalCheckboxProps {
   documents: LegalDocuments;
@@ -33,7 +34,7 @@ export function LegalCheckbox({
   return (
     <View style={styles.container}>
       <View style={styles.row}>
-        <Pressable
+        <PressHighlight
           accessibilityRole="checkbox"
           accessibilityLabel="I agree to the Terms of Service and acknowledge the Privacy Policy"
           accessibilityState={accessibilityState}
@@ -45,7 +46,7 @@ export function LegalCheckbox({
           <View style={boxStyle}>
             <Text style={styles.check}>{checked ? "✓" : ""}</Text>
           </View>
-        </Pressable>
+        </PressHighlight>
         <Text style={styles.label}>
           I agree to the{" "}
           <Text accessibilityRole="link" style={styles.link} onPress={openTerms}>
@@ -82,14 +83,14 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
   },
   checked: { backgroundColor: theme.colors.foreground, borderColor: theme.colors.foreground },
-  check: { color: theme.colors.surface0, fontSize: theme.fontSize.sm },
+  check: { color: theme.colors.surface0, fontSize: theme.fontSize.base },
   label: {
     flex: 1,
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     lineHeight: 20,
   },
   link: { color: theme.colors.foreground, textDecorationLine: "underline" },
-  status: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
-  error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
+  status: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.base },
+  error: { color: theme.colors.destructive, fontSize: theme.fontSize.base },
 }));

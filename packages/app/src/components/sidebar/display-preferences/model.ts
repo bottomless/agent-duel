@@ -1,10 +1,15 @@
+import type { WorkspaceSort } from "@/projects/workspace-structure";
 import { useCallback, useMemo } from "react";
 import {
   useAppSettings,
   type SidebarWorkspaceTrailing,
   type WorkspaceTitleSource,
 } from "@/hooks/use-settings";
-import { useSidebarViewStore, type SidebarGroupMode } from "@/stores/sidebar-view-store";
+import {
+  useSidebarViewStore,
+  type SidebarGroupMode,
+  type SidebarLabelFilter,
+} from "@/stores/sidebar-view-store";
 import { DEFAULT_SIDEBAR_CHECKS_DISPLAY, type SidebarChecksDisplay } from "./checks-display";
 import { DEFAULT_SIDEBAR_ROW_ITEMS, type SidebarRowItem, type SidebarRowItems } from "./row-items";
 
@@ -12,7 +17,11 @@ import { DEFAULT_SIDEBAR_ROW_ITEMS, type SidebarRowItem, type SidebarRowItems } 
 export type SidebarTrailingChoice = Exclude<SidebarWorkspaceTrailing, "none">;
 
 export interface SidebarDisplayPreferences {
+  showBackground: boolean;
+  toggleBackground: () => void;
   grouping: SidebarGroupMode;
+  workspaceSort: WorkspaceSort;
+  setWorkspaceSort: (sort: WorkspaceSort) => void;
   setGrouping: (mode: SidebarGroupMode) => void;
   titleSource: WorkspaceTitleSource;
   setTitleSource: (source: WorkspaceTitleSource) => void;
@@ -26,6 +35,13 @@ export interface SidebarDisplayPreferences {
   hostFilters: readonly string[];
   toggleHostFilter: (serverId: string) => void;
   clearHostFilters: () => void;
+  /** Raw stored selection. For anything the user sees, use the model's resolved list instead. */
+  projectFilters: readonly string[];
+  toggleProjectFilter: (viewKey: string) => void;
+  clearProjectFilters: () => void;
+  labelFilter: SidebarLabelFilter;
+  toggleLabelFilter: (name: string) => void;
+  clearLabelFilter: () => void;
 }
 
 /**
@@ -37,11 +53,21 @@ export interface SidebarDisplayPreferences {
  * this for a value and set it; where it lands is this module's problem.
  */
 export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
+  const showBackground = useSidebarViewStore((state) => state.showBackground);
+  const toggleBackground = useSidebarViewStore((state) => state.toggleBackground);
+  const workspaceSort = useSidebarViewStore((state) => state.workspaceSort);
+  const setWorkspaceSort = useSidebarViewStore((state) => state.setWorkspaceSort);
   const grouping = useSidebarViewStore((state) => state.groupMode);
   const setGrouping = useSidebarViewStore((state) => state.setGroupMode);
   const hostFilters = useSidebarViewStore((state) => state.hostFilters);
   const toggleHostFilter = useSidebarViewStore((state) => state.toggleHostFilter);
   const clearHostFilters = useSidebarViewStore((state) => state.clearHostFilters);
+  const projectFilters = useSidebarViewStore((state) => state.projectFilters);
+  const toggleProjectFilter = useSidebarViewStore((state) => state.toggleProjectFilter);
+  const clearProjectFilters = useSidebarViewStore((state) => state.clearProjectFilters);
+  const labelFilter = useSidebarViewStore((state) => state.labelFilter);
+  const toggleLabelFilter = useSidebarViewStore((state) => state.toggleLabelFilter);
+  const clearLabelFilter = useSidebarViewStore((state) => state.clearLabelFilter);
 
   const {
     settings: {
@@ -87,7 +113,11 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
 
   return useMemo(
     () => ({
+      showBackground,
+      toggleBackground,
       grouping,
+      workspaceSort,
+      setWorkspaceSort,
       setGrouping,
       titleSource: workspaceTitleSource,
       setTitleSource,
@@ -100,9 +130,19 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       hostFilters,
       toggleHostFilter,
       clearHostFilters,
+      projectFilters,
+      toggleProjectFilter,
+      clearProjectFilters,
+      labelFilter,
+      toggleLabelFilter,
+      clearLabelFilter,
     }),
     [
+      showBackground,
+      toggleBackground,
       grouping,
+      workspaceSort,
+      setWorkspaceSort,
       setGrouping,
       workspaceTitleSource,
       setTitleSource,
@@ -115,6 +155,12 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       hostFilters,
       toggleHostFilter,
       clearHostFilters,
+      projectFilters,
+      toggleProjectFilter,
+      clearProjectFilters,
+      labelFilter,
+      toggleLabelFilter,
+      clearLabelFilter,
     ],
   );
 }

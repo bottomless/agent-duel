@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 
 import { FileTransferOpcode, type FileTransferFrame } from "@getpaseo/protocol/binary-frames/index";
 import { getErrorMessage } from "@getpaseo/protocol/error-utils";
@@ -30,7 +31,9 @@ interface EarlyFrames {
 interface PendingUpload {
   requestId: string;
   id: string;
-  attempt: number;
+  source: object;
+  completed: boolean;
+  finished(response: FileUploadResponse | null): void;
   fileName: string;
   mimeType: string;
   size: number;
@@ -39,6 +42,7 @@ interface PendingUpload {
   started: boolean;
   staleTimeout: ReturnType<typeof setTimeout>;
   queue: Promise<void>;
+  cleanup?: Promise<void>;
 }
 
 export class FileUploadStore {
@@ -50,8 +54,9 @@ export class FileUploadStore {
   private readonly paseoHome: string;
   private readonly staleUploadTimeoutMs: number;
   private readonly earlyFrameTimeoutMs: number;
-  private readonly pending = new Map<string, PendingUpload>();
-  private readonly early = new Map<string, EarlyFrames>();
+  private readonly defaultSource = {};
+  private readonly pending = new Map<object, Map<string, PendingUpload>>();
+  private readonly early = new Map<object, Map<string, EarlyFrames>>();
   private earlyBytes = 0;
 
   constructor(options: FileUploadStoreOptions) {
@@ -62,38 +67,45 @@ export class FileUploadStore {
       options.earlyFrameTimeoutMs ?? FileUploadStore.defaultEarlyFrameTimeoutMs;
   }
 
-  beginUpload(request: FileUploadRequest): void {
-    const existingUpload = this.pending.get(request.requestId);
-    if (existingUpload) {
-      this.clearPendingUpload(existingUpload);
-      void existingUpload.queue.then(() => this.removeUploadDirectory(existingUpload));
-    }
-
+  beginUpload(
+    request: FileUploadRequest,
+    source: object = this.defaultSource,
+    finished: (response: FileUploadResponse | null) => void = () => {},
+  ): () => Promise<void> {
+    const existingUpload = this.pending.get(source)?.get(request.requestId);
+    if (existingUpload) void this.cancel(existingUpload).catch(() => {});
     const fileName = sanitizeFileName(request.fileName);
-    const attempt = existingUpload ? existingUpload.attempt + 1 : 1;
-    const id = buildUploadId(request.requestId, attempt);
+    const id = `upload_${randomUUID()}`;
     const uploadDir = join(this.paseoHome, "uploads", id);
     const upload: PendingUpload = {
       requestId: request.requestId,
       id,
-      attempt,
+      source,
+      completed: false,
+      finished,
       fileName,
       mimeType: request.mimeType,
       size: request.size,
       path: join(uploadDir, fileName),
       receivedBytes: 0,
       started: false,
-      staleTimeout: this.createStaleUploadTimeout(request.requestId),
+      staleTimeout: this.createStaleUploadTimeout(source, request.requestId),
       queue: Promise.resolve(),
     };
-    this.pending.set(request.requestId, upload);
+    const uploads = this.pending.get(source) ?? new Map<string, PendingUpload>();
+    uploads.set(request.requestId, upload);
+    this.pending.set(source, uploads);
     this.replayEarlyFrames(upload);
+    return () => this.cancel(upload);
   }
 
-  async receiveFrame(frame: FileTransferFrame): Promise<FileUploadResponse | null> {
-    const upload = this.pending.get(frame.requestId);
+  async receiveFrame(
+    frame: FileTransferFrame,
+    source: object = this.defaultSource,
+  ): Promise<FileUploadResponse | null> {
+    const upload = this.pending.get(source)?.get(frame.requestId);
     if (!upload) {
-      return this.holdEarlyFrame(frame);
+      return this.holdEarlyFrame(frame, source);
     }
     return this.enqueueFrame(upload, frame);
   }
@@ -104,6 +116,13 @@ export class FileUploadStore {
   ): Promise<FileUploadResponse | null> {
     this.refreshStaleUploadTimeout(upload);
     const operation = upload.queue.then(() => this.applyFrame(upload, frame));
+    void operation.then(
+      (response) => {
+        if (response) upload.finished(response);
+        return undefined;
+      },
+      () => upload.finished(null),
+    );
     upload.queue = operation.then(
       () => undefined,
       () => undefined,
@@ -115,24 +134,29 @@ export class FileUploadStore {
    * Keep a frame until its request registers the upload, and answer the frame's caller with what
    * applying it produced then. Frames whose request never comes are dropped after a while.
    */
-  private holdEarlyFrame(frame: FileTransferFrame): Promise<FileUploadResponse | null> {
+  private holdEarlyFrame(
+    frame: FileTransferFrame,
+    source: object,
+  ): Promise<FileUploadResponse | null> {
     const bytes = frame.payload.byteLength;
     if (this.earlyBytes + bytes > FileUploadStore.maxEarlyFrameBytes) {
       return Promise.resolve(null);
     }
     return new Promise((settle) => {
-      let held = this.early.get(frame.requestId);
+      const heldBySource = this.early.get(source) ?? new Map<string, EarlyFrames>();
+      this.early.set(source, heldBySource);
+      let held = heldBySource.get(frame.requestId);
       if (!held) {
         held = {
           frames: [],
           bytes: 0,
           timeout: setTimeout(
-            () => this.dropEarlyFrames(frame.requestId),
+            () => this.dropEarlyFrames(source, frame.requestId),
             this.earlyFrameTimeoutMs,
           ),
         };
         held.timeout.unref?.();
-        this.early.set(frame.requestId, held);
+        heldBySource.set(frame.requestId, held);
       }
       // A copy, so the bytes do not depend on the socket's buffer once the event is over.
       held.frames.push({ frame: { ...frame, payload: new Uint8Array(frame.payload) }, settle });
@@ -141,25 +165,27 @@ export class FileUploadStore {
     });
   }
 
-  private takeEarlyFrames(requestId: string): EarlyFrame[] {
-    const held = this.early.get(requestId);
-    if (!held) {
+  private takeEarlyFrames(source: object, requestId: string): EarlyFrame[] {
+    const heldBySource = this.early.get(source);
+    const held = heldBySource?.get(requestId);
+    if (!heldBySource || !held) {
       return [];
     }
-    this.early.delete(requestId);
+    heldBySource.delete(requestId);
+    if (heldBySource.size === 0) this.early.delete(source);
     clearTimeout(held.timeout);
     this.earlyBytes -= held.bytes;
     return held.frames;
   }
 
   private replayEarlyFrames(upload: PendingUpload): void {
-    for (const { frame, settle } of this.takeEarlyFrames(upload.requestId)) {
+    for (const { frame, settle } of this.takeEarlyFrames(upload.source, upload.requestId)) {
       void this.enqueueFrame(upload, frame).then(settle, () => settle(null));
     }
   }
 
-  private dropEarlyFrames(requestId: string): void {
-    for (const { settle } of this.takeEarlyFrames(requestId)) {
+  private dropEarlyFrames(source: object, requestId: string): void {
+    for (const { settle } of this.takeEarlyFrames(source, requestId)) {
       settle(null);
     }
   }
@@ -168,7 +194,7 @@ export class FileUploadStore {
     upload: PendingUpload,
     frame: FileTransferFrame,
   ): Promise<FileUploadResponse | null> {
-    if (this.pending.get(upload.requestId) !== upload) {
+    if (this.pending.get(upload.source)?.get(upload.requestId) !== upload) {
       return null;
     }
 
@@ -217,12 +243,17 @@ export class FileUploadStore {
         `Upload size mismatch: expected ${upload.size}, received ${upload.receivedBytes}.`,
       );
     }
+    upload.completed = true;
     return buildUploadResponse(upload, null);
   }
 
-  private createStaleUploadTimeout(requestId: string): ReturnType<typeof setTimeout> {
+  private createStaleUploadTimeout(
+    source: object,
+    requestId: string,
+  ): ReturnType<typeof setTimeout> {
     const timeout = setTimeout(() => {
-      this.expireStaleUpload(requestId);
+      const upload = this.pending.get(source)?.get(requestId);
+      if (upload) void this.cancel(upload).catch(() => {});
     }, this.staleUploadTimeoutMs);
     timeout.unref?.();
     return timeout;
@@ -230,30 +261,25 @@ export class FileUploadStore {
 
   private refreshStaleUploadTimeout(upload: PendingUpload): void {
     clearTimeout(upload.staleTimeout);
-    upload.staleTimeout = this.createStaleUploadTimeout(upload.requestId);
+    upload.staleTimeout = this.createStaleUploadTimeout(upload.source, upload.requestId);
   }
 
-  private expireStaleUpload(requestId: string): void {
-    const upload = this.pending.get(requestId);
-    if (!upload) {
-      return;
-    }
+  private cancel(upload: PendingUpload): Promise<void> {
+    if (upload.cleanup) return upload.cleanup;
     this.clearPendingUpload(upload);
-    const cleanup = upload.queue.then(
-      () => this.removeUploadDirectory(upload),
-      () => this.removeUploadDirectory(upload),
-    );
-    upload.queue = cleanup.then(
-      () => undefined,
-      () => undefined,
-    );
+    upload.cleanup = upload.queue.then(async () => {
+      if (!upload.completed) await this.removeUploadDirectory(upload);
+      return undefined;
+    });
+    upload.finished(null);
+    return upload.cleanup;
   }
 
   private clearPendingUpload(upload: PendingUpload): void {
     clearTimeout(upload.staleTimeout);
-    if (this.pending.get(upload.requestId) === upload) {
-      this.pending.delete(upload.requestId);
-    }
+    const uploads = this.pending.get(upload.source);
+    if (uploads?.get(upload.requestId) === upload) uploads.delete(upload.requestId);
+    if (uploads?.size === 0) this.pending.delete(upload.source);
   }
 
   private async removeFailedUpload(upload: PendingUpload): Promise<void> {
@@ -262,9 +288,7 @@ export class FileUploadStore {
   }
 
   private async removeUploadDirectory(upload: PendingUpload): Promise<void> {
-    await rm(join(this.paseoHome, "uploads", upload.id), { recursive: true, force: true }).catch(
-      () => undefined,
-    );
+    await rm(join(this.paseoHome, "uploads", upload.id), { recursive: true, force: true });
   }
 }
 
@@ -288,18 +312,26 @@ function buildUploadResponse(upload: PendingUpload, error: string | null): FileU
   };
 }
 
-function sanitizeUploadId(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, "_") || "file";
-}
+// Most file systems cap a single file name at 255 bytes.
+const MAX_FILE_NAME_BYTES = 255;
 
-function buildUploadId(requestId: string, attempt: number): string {
-  const baseId = `upload_${sanitizeUploadId(requestId)}`;
-  return attempt === 1 ? baseId : `${baseId}_${attempt}`;
-}
-
+// Keeps the client's file name, replacing only what cannot appear in a single
+// file name on Linux, macOS, or Windows.
 function sanitizeFileName(value: string): string {
   const name = basename(value)
-    .replace(/[^a-zA-Z0-9._ -]/g, "_")
+    .replace(/[\p{Cc}\\/:*?"<>|]/gu, "_")
     .trim();
-  return name.length > 0 && name !== "." && name !== ".." ? name : "upload";
+  return fitFileNameLength(name.length > 0 && name !== "." && name !== ".." ? name : "upload");
+}
+
+function fitFileNameLength(name: string): string {
+  if (Buffer.byteLength(name) <= MAX_FILE_NAME_BYTES) return name;
+  const extension = extname(name);
+  const keptExtension = Buffer.byteLength(extension) < MAX_FILE_NAME_BYTES ? extension : "";
+  let stem = "";
+  for (const char of name.slice(0, name.length - keptExtension.length)) {
+    if (Buffer.byteLength(stem + char + keptExtension) > MAX_FILE_NAME_BYTES) break;
+    stem += char;
+  }
+  return stem + keptExtension;
 }

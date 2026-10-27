@@ -4,7 +4,6 @@ import { ThumbsDown, ThumbsUp } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { useSessionStore } from "@/stores/session-store";
 import { settingsStyles } from "@/styles/settings";
 import { useArenaTurnMutation } from "./use-arena-session";
@@ -131,7 +130,7 @@ export function SingleAgentComposerTooltip({
 const styles = StyleSheet.create((theme) => ({
   column: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
+    maxWidth: theme.contentMaxWidth,
     alignSelf: "center",
     paddingHorizontal: theme.spacing[4],
     paddingVertical: theme.spacing[3],
@@ -140,12 +139,12 @@ const styles = StyleSheet.create((theme) => ({
   heading: { gap: theme.spacing[2] },
   title: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
+    fontSize: theme.fontSize.lg,
     fontWeight: theme.fontWeight.medium,
   },
-  description: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
+  description: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.base },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: theme.spacing[2] },
-  error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
+  error: { color: theme.colors.destructive, fontSize: theme.fontSize.base },
   composer: { width: "100%" },
-  tooltip: { color: theme.colors.foreground, fontSize: theme.fontSize.xs },
+  tooltip: { color: theme.colors.foreground, fontSize: theme.fontSize.sm },
 }));

@@ -2,7 +2,7 @@ import { persistAttachmentFromBlob } from "@/attachments/service";
 import type { AttachmentMetadata } from "@/attachments/types";
 import { getFileNameFromPath } from "@/attachments/utils";
 import { getIsElectron } from "@/constants/platform";
-import { readDesktopFileBytes } from "@/attachments/picked-file";
+import { readDesktopFileBytes } from "@/attachments/selected-file";
 import type { PickedImageAttachmentInput } from "@/hooks/image-attachment-picker";
 
 /**

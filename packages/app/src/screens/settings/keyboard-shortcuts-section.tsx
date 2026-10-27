@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { View, Text, type PressableStateCallbackType } from "react-native";
-import { useIsFocused } from "@react-navigation/native";
+import { useIsFocused } from "expo-router/react-navigation";
 import { MoreHorizontal, Pencil, Undo2, X } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { Theme } from "@/styles/theme";
 import { settingsStyles } from "@/styles/settings";
-import { SettingsSection } from "@/screens/settings/settings-section";
+import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -19,6 +19,8 @@ import { useKeyboardShortcutOverrides } from "@/hooks/use-keyboard-shortcut-over
 import {
   buildKeyboardShortcutHelpSections,
   getBindingIdForAction,
+  normalizeCapturedShortcutCombo,
+  isShortcutCaptureComplete,
   getDefaultKeysForAction,
   resolveShortcutKeysForAction,
   type KeyboardShortcutHelpRow,
@@ -268,6 +270,8 @@ function ShortcutRow({
 
   const isBindable = bindingId !== null;
   const showDone = isCapturing && capturedCombos.length > 0;
+  const captureComplete =
+    bindingId !== null && isShortcutCaptureComplete(bindingId, capturedCombos);
   const showClear = displayChord !== null;
   // Reset restores the default, so it is only meaningful when there is a
   // default to restore. A binding that ships without one would otherwise show a
@@ -287,11 +291,14 @@ function ShortcutRow({
             capturedCombos={capturedCombos}
             heldModifiers={heldModifiers}
           />
+          {showDone && !captureComplete && (
+            <Text style={styles.capturingText}>{t("settings.shortcuts.captureIndexPrompt")}</Text>
+          )}
         </View>
         {isCapturing ? (
           <>
             {showDone && (
-              <Button variant="ghost" size="sm" onPress={onDone}>
+              <Button variant="ghost" size="sm" disabled={!captureComplete} onPress={onDone}>
                 {t("settings.shortcuts.actions.done")}
               </Button>
             )}
@@ -356,7 +363,10 @@ export function KeyboardShortcutsSection() {
   );
 
   const saveCapture = useCallback(() => {
-    if (capturingBindingId === null || capturedCombos.length === 0) {
+    if (
+      capturingBindingId === null ||
+      !isShortcutCaptureComplete(capturingBindingId, capturedCombos)
+    ) {
       return;
     }
     void setOverride(capturingBindingId, capturedCombos.join(" "));
@@ -377,8 +387,7 @@ export function KeyboardShortcutsSection() {
       event.preventDefault();
       event.stopPropagation();
 
-      const key = event.key ?? "";
-      if (key === "Backspace") {
+      if (event.code === "Backspace" && heldModifiersFromEvent(event) === null) {
         setCapturedCombos((current) => (current.length > 0 ? current.slice(0, -1) : current));
         return;
       }
@@ -390,7 +399,8 @@ export function KeyboardShortcutsSection() {
       }
 
       setHeldModifiers(null);
-      setCapturedCombos((current) => [...current, comboString]);
+      const capturedCombo = normalizeCapturedShortcutCombo(capturingBindingId!, comboString);
+      setCapturedCombos((current) => [...current, capturedCombo]);
     }
 
     window.addEventListener("keydown", handleKeyDown, true);
@@ -505,7 +515,7 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface2,
   },
   rowLabel: {
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     color: theme.colors.foreground,
     flexShrink: 1,
   },
@@ -535,11 +545,11 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface3,
   },
   capturingText: {
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
   },
   unassignedText: {
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
   },
   separator: {
@@ -550,7 +560,7 @@ const styles = StyleSheet.create((theme) => ({
     padding: theme.spacing[4],
   },
   mobileText: {
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
   },
 }));

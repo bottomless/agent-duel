@@ -164,7 +164,7 @@ const styles = StyleSheet.create((theme) => ({
   task: {
     flex: 1,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   settledTask: {
     color: theme.colors.foregroundMuted,
@@ -172,10 +172,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   status: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
   },
   note: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

@@ -1,6 +1,5 @@
 import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { WorkspaceFilesRecoveryBanner } from "@/screens/workspace/workspace-route-state-views";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
 import type { WorkspaceRecoveryModel } from "@/workspace-recovery/model";
@@ -43,6 +42,6 @@ const styles = StyleSheet.create((theme) => ({
   // would and does not stretch across a wide pane.
   banner: {
     width: "100%",
-    maxWidth: MAX_CONTENT_WIDTH,
+    maxWidth: theme.contentMaxWidth,
   },
 }));

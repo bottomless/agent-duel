@@ -1,10 +1,14 @@
-import { useMemo, type ReactElement, type ReactNode } from "react";
+import { type ReactElement, type ReactNode } from "react";
 import { Text, View, type PressableProps, type StyleProp, type ViewStyle } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Shortcut } from "@/components/ui/shortcut";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { isWeb } from "@/constants/platform";
+import {
+  iconButtonChromeFrameStyle,
+  useIconButtonChromeStyle,
+} from "@/components/ui/icon-button-chrome";
 
 interface HeaderToggleButtonState {
   hovered: boolean;
@@ -42,7 +46,11 @@ export function HeaderToggleButton({
       ? ({ "aria-expanded": expandedState } as Record<string, boolean>)
       : null;
 
-  const combinedStyle = useMemo(() => [headerIconSlotStyle.slot, style], [style]);
+  const combinedStyle = useIconButtonChromeStyle({
+    size: "large",
+    disabled: Boolean(disabled),
+    style,
+  });
 
   return (
     <Tooltip delayDuration={tooltipDelayDuration} enabledOnDesktop enabledOnMobile={false}>
@@ -68,16 +76,6 @@ export function HeaderToggleButton({
   );
 }
 
-export const headerIconSlotStyle = StyleSheet.create((theme) => ({
-  slot: {
-    padding: {
-      xs: theme.spacing[3],
-      md: theme.spacing[2],
-    },
-    borderRadius: theme.borderRadius.lg,
-  },
-}));
-
 const styles = StyleSheet.create((theme) => ({
   tooltipRow: {
     flexDirection: "row",
@@ -85,8 +83,12 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
   },
   tooltipText: {
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     color: theme.colors.popoverForeground,
   },
   shortcut: {},
 }));
+
+export const headerIconSlotStyle = {
+  slot: iconButtonChromeFrameStyle("large"),
+};

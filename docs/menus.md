@@ -26,6 +26,15 @@ when you have actually looked at it on a phone.
 `ContextMenu` is the exception: it defaults to `compactMode="sheet"` and enables native long press.
 Disable mobile triggering explicitly on draggable rows, where long press belongs to drag instead.
 
+## When the items differ per form factor
+
+A menu whose contents depend on what else is on screen gets one component per surface, not one
+component with `isMobile` branches inside it. The workspace header menu is the example
+(`packages/app/src/screens/workspace/workspace-header-menu.tsx`): compact has no tab strip, so it
+carries new-tab actions, while wide leaves those to the strip's `+` menu and lists workspace
+actions only. Items both surfaces share live in one component that each menu renders, from the same
+callbacks, so the two can't drift.
+
 ## Selecting an item on iOS
 
 Retained upstream behavior for existing native adapters. Agent Duel targets browser
@@ -39,6 +48,17 @@ and it loses. Selections used to be dropped entirely for exactly that reason.
 
 The consequence for callers: an `onSelect` on iOS runs a beat after the press. Don't add a second
 delay on top of it, and don't read state that the same press mutated.
+
+This is why a row inside a menu surface goes through `selectItem` rather than calling its handler
+from its own `Pressable`. `MenuItem` is not the only row shape on the engine — `ComposerTrackRow`
+is another, with its own icons and hover-revealed actions — but both hand the press to the engine
+and take `closeOnSelect` to say whether choosing them ends the surface. A row that owns its press
+outright leaves the surface open behind whatever it opened, and skips the iOS wait.
+
+A row whose result opens a sheet passes `closeOnSelect={false}`: the sheet stacks over the menu
+sheet and uncovers it on close, so the menu is where the user lands next. A row that opens a tab
+closes, because the tab replaces the pane the menu belongs to. The subagents track asks the layout
+store which one a row is (`useSubagentOpensInSheet`), since the answer changes with the layout.
 
 ## Pages
 
@@ -65,6 +85,25 @@ Opening a submenu truncates the path to the depth of the trigger that opened it.
 sliding the pointer across a row of triggers would stack up every flyout it passed instead of
 swapping between them.
 
+## A page that takes input
+
+A menu page can hold a small form — `MenuTextField` is the field for it, drawn as a row's own
+fill so its text lands on the same rail as the labels above it. Two things have to be true for
+that page, and both are set on the page definition rather than discovered later:
+
+- **`hoverIntent: false`.** A branch you skim is opened and closed by the pointer; a form is not.
+  Without this the page opens on a pointer that was only passing through, and dismisses itself —
+  draft and all — the moment your hands move to the keyboard and the mouse drifts off the flyout.
+  While such a page is open, the whole surface stops closing on hover, because the parent flyout
+  leads back to the same dismissal.
+- **The compact presentation has to be a sheet.** `MenuTextField` resolves to
+  `BottomSheetTextInput` on compact native, which reads the sheet's context and has none in a
+  popover.
+
+The sheet keeps `keyboardBehavior="interactive"`. `extend` grows a sheet to its largest snap
+point, and with `enableDynamicSizing` that point is the content's own height — a short page does
+not grow, and the keyboard comes up over the field you are typing into.
+
 ## Hover intent
 
 A flyout **overlaps its parent by 5pt** rather than sitting beside it. With a gap there is a strip
@@ -88,6 +127,9 @@ opens on press.
 | ---------- | -------------------------- | ------------------------- |
 | `selected` | This is the chosen value   | A check, and nothing else |
 | `active`   | This row's submenu is open | The fill, and no check    |
+
+`selected` also announces itself as `aria-checked`, so a multi-select page is audible as the list
+of on/off things it is.
 
 A selected row does **not** get a background. A check and a fill are two separate claims about the
 same state, and showing both makes a chosen row compete with the row the pointer is actually on.
@@ -145,6 +187,10 @@ its own.
 - **Released height.** Reanimated's web entering animation leaves an inline height snapshot on
   the surface. `AnchoredSurface` clears it, and a `revision` prop re-clears it when content
   identity changes — a pushed page taller than the one it replaced is clipped without that.
+- **Animate only once placed.** The same snapshot carries top/left, and Reanimated writes it back
+  750ms after mount. `AnchoredSurface` remounts the surface when its position resolves so the
+  entering animation never ends at the off-screen measuring position; on a slow machine that
+  write moved the open menu back off-screen.
 - **Sheets size to content.** `enableDynamicSizing`, not fixed snap points. A pushed page is
   rarely the height of the page before it.
 - **The sheet's content is teleported out of the menu's subtree**, so `MenuSheetSurface` rebuilds
@@ -153,7 +199,16 @@ its own.
   [floating-panels.md](floating-panels.md).
 - **One overlay per menu.** Submenus render inside their parent's layer and paint no second
   backdrop, so there is exactly one `Modal` on native no matter how deep the menu goes.
-- Anchoring, flipping, and edge clamping live in `menu-anchor.ts` and are unit-tested. Fix
-  positioning bugs there, not at a call site.
+- **Sheet stacking and backdrop dismissal belong to `IsolatedBottomSheetModal`.** Menus only
+  request a backdrop opacity. See [floating-panels.md](floating-panels.md#gotcha-6--bottom-sheet-refs-are-not-lifecycle-truth).
+- **A menu closes when its panel leaves the screen.** `MenuSurface` closes the menu when its
+  retained panel goes inactive. Hiding the surface alone leaves the open state behind, and the
+  menu would reappear with the panel on the next tab switch.
+- **Retained panels own visibility.** The shared menu surface unmounts when its panel becomes
+  inactive. An async action can navigate before its menu closes; a hidden panel must not leave a
+  portal backdrop blocking the destination. On web the chat suspends one commit after it goes
+  inactive, and that inactive commit is where the surface unmounts.
+- Anchoring, flipping, and edge clamping live in `components/ui/anchor.ts`, shared with the hover
+  card, and are unit-tested. Fix positioning bugs there, not at a call site.
 - Everything else about floating surfaces on Android — Portal/Modal escape, lifecycle gates,
   status-bar offset, the open flash — is in [floating-panels.md](floating-panels.md).

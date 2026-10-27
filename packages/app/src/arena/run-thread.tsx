@@ -154,6 +154,7 @@ function ArenaPart({
       <QuestionFormCard
         permission={question.permission}
         isResponding={questionResponding}
+        responseError={null}
         onRespond={handleQuestionResponse}
       />
     );
@@ -797,14 +798,14 @@ const styles = StyleSheet.create((theme) => ({
   },
   muted: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   error: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   stoppedNote: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
 }));

@@ -12,6 +12,7 @@ import {
   shouldStopDevDaemonOnSignal,
 } from "./dev-runner-config.mjs";
 
+import { waitForMetro } from "./dev-runner-readiness.mjs";
 import { resolveDevElectronArgs } from "./dev-runner-args.mjs";
 import { prepareDevApplication } from "./dev-application.mjs";
 import { ensureDevSessionKeys } from "./dev-session-keys.mjs";
@@ -437,7 +438,7 @@ if (!stopping) {
 }
 
 try {
-  await waitForPort(expoPort);
+  await waitForMetro(expoDevUrl);
 } catch (error) {
   console.error(`[dev] ${error.message}`);
   exitCode = 1;
@@ -453,6 +454,7 @@ if (!stopping) {
       env: process.env,
       colorEnv,
       expoDevUrl,
+      devBuildLabel,
     }),
   );
   const debuggerPort = Number(process.env.PASEO_ELECTRON_REMOTE_DEBUGGING_PORT);

@@ -8,7 +8,6 @@ import {
   type PropsWithChildren,
   type ReactElement,
   type ReactNode,
-  type Ref,
 } from "react";
 import { Pressable, Text, View } from "react-native";
 import type {
@@ -175,6 +174,7 @@ export function Button({
   ...props
 }: PropsWithChildren<
   Omit<PressableProps, "style"> & {
+    ref?: React.Ref<View>;
     variant?: ButtonVariant;
     size?: ButtonSize;
     leftIcon?: LeftIcon;
@@ -182,8 +182,6 @@ export function Button({
     style?: StyleProp<ViewStyle>;
     textStyle?: StyleProp<TextStyle>;
     loading?: boolean;
-    /** Reaches the underlying `Pressable` through the rest props. */
-    ref?: Ref<View>;
   }
 >) {
   const [hovered, setHovered] = useState(false);

@@ -1,10 +1,13 @@
 import { describe, expect, test } from "vitest";
 import {
+  AgentTimelineItemPayloadSchema,
+  SendAgentMessageRequestSchema,
   FileExplorerRequestSchema,
   PaseoWorktreeArchiveRequestSchema,
   parseServerInfoStatusPayload,
   SessionInboundMessageSchema,
   SessionOutboundMessageSchema,
+  WorkspaceProjectDescriptorPayloadSchema,
 } from "./messages.js";
 
 function workspaceDescriptor(overrides: Record<string, unknown> = {}) {
@@ -83,6 +86,28 @@ describe("Arena resolution retry messages", () => {
 
     expect(request.type).toBe("arena.turn.retry_resolution.request");
     expect(response.type).toBe("arena.turn.retry_resolution.response");
+  });
+});
+
+describe("project icon revision compatibility", () => {
+  const project = {
+    projectId: "project-1",
+    projectDisplayName: "Project",
+    projectRootPath: "/repo/project",
+    projectKind: "git" as const,
+  };
+
+  test("accepts an old project snapshot without an effective icon revision", () => {
+    expect(WorkspaceProjectDescriptorPayloadSchema.parse(project)).toEqual(project);
+  });
+
+  test("accepts an effective icon revision on a new project snapshot", () => {
+    expect(
+      WorkspaceProjectDescriptorPayloadSchema.parse({
+        ...project,
+        projectIconRevision: "automatic:none:v1",
+      }),
+    ).toEqual({ ...project, projectIconRevision: "automatic:none:v1" });
   });
 });
 
@@ -354,6 +379,21 @@ describe("agent detach RPC", () => {
     }
     expect(parsed.features?.importSessionWorkspaceTarget).toBe(true);
   });
+
+  test("parses the session import search feature gate", () => {
+    const parsed = parseServerInfoStatusPayload({
+      status: "server_info",
+      serverId: "srv-test",
+      features: {
+        importSessionSearch: true,
+      },
+    });
+
+    if (!parsed) {
+      throw new Error("Expected server info payload to parse");
+    }
+    expect(parsed.features?.importSessionSearch).toBe(true);
+  });
 });
 
 describe("agent setting action responses", () => {
@@ -515,3 +555,52 @@ describe("viewed timeline subscription messages", () => {
     });
   });
 });
+
+test("agent messages are an optional semantic payload on existing tool rows", () => {
+  const legacy = {
+    type: "tool_call",
+    callId: "delivery",
+    name: "agent_message",
+    status: "completed",
+    error: null,
+    detail: { type: "plain_text", text: "Done" },
+  };
+  const agentMessage = {
+    event: "finished",
+    sender: { id: "server::worker", title: "Reviewer" },
+    text: "Done",
+  };
+  expect(AgentTimelineItemPayloadSchema.parse(legacy)).toEqual(legacy);
+  expect(AgentTimelineItemPayloadSchema.parse({ ...legacy, agentMessage })).toEqual({
+    ...legacy,
+    agentMessage,
+  });
+  expect(
+    AgentTimelineItemPayloadSchema.safeParse({
+      ...legacy,
+      agentMessage: { ...agentMessage, sender: { id: 42 } },
+    }).success,
+  ).toBe(false);
+});
+
+test.each(["all", "base", "uncommitted"] as const)(
+  "preserves %s review attachments while ignoring unknown attachments",
+  (mode) => {
+    const attachment = {
+      type: "review",
+      mimeType: "application/paseo-review",
+      cwd: "/repo",
+      mode,
+      baseRef: "main",
+      comments: [],
+    };
+    const parsed = SendAgentMessageRequestSchema.parse({
+      type: "send_agent_message_request",
+      requestId: "review",
+      agentId: "agent",
+      text: "Review",
+      attachments: [{ type: "future_attachment" }, attachment],
+    });
+    expect(parsed.attachments).toEqual([attachment]);
+  },
+);

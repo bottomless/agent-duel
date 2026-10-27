@@ -20,6 +20,7 @@ import type {
 } from "./workspace-registry.js";
 import { createRealpathAwarePathMatcher } from "../utils/path.js";
 import { runWithGitCommandPriority } from "../utils/run-git-command.js";
+import { WorkspaceAutomationBlockedError } from "./workspace-automation-gate.js";
 
 export type ActiveWorkspaceRef = Pick<
   PersistedWorkspaceRecord,
@@ -31,7 +32,7 @@ export interface ArchiveDependencies {
   // Base directory that may hold worktrees across repositories.
   paseoWorktreesBaseRoot?: string;
   github: ForgeService;
-  workspaceGitService: Pick<WorkspaceGitService, "getSnapshot">;
+  workspaceGitService: Pick<WorkspaceGitService, "getSnapshot" | "invalidateWorktrees">;
   agentManager: Pick<AgentManager, "listAgents" | "getAgent" | "archiveAgent" | "archiveSnapshot">;
   agentStorage: Pick<AgentStorage, "listByWorkspace">;
   // Resolves the worktree at a path to its workspaceId for archive-by-path. The
@@ -50,6 +51,7 @@ export interface ArchiveDependencies {
   clearWorkspaceArchiving: (workspaceIds: Iterable<string>) => void;
   killTerminalsForWorkspace: (workspaceId: string) => Promise<void>;
   stopWorkspaceSetup?: (workspaceId: string) => Promise<void>;
+  assertWorkspaceAutomationAllowed?: (workspaceId: string) => Promise<void>;
   sessionLogger?: Logger;
 }
 
@@ -357,21 +359,20 @@ async function maybeRemoveDirectory(
   }
 
   const archivedWorkspaceIdSet = new Set(archivedWorkspaceIds);
-  const teardownCwds = uniqueFilesystemPaths(
-    target.teardownTargets
-      .filter(
-        (teardownTarget) =>
-          teardownTarget.workspaceId === null ||
-          archivedWorkspaceIdSet.has(teardownTarget.workspaceId),
-      )
-      .map((teardownTarget) => teardownTarget.cwd),
+  const teardownTargets = target.teardownTargets.filter(
+    (teardownTarget) =>
+      teardownTarget.workspaceId === null || archivedWorkspaceIdSet.has(teardownTarget.workspaceId),
   );
 
   try {
-    for (const teardownCwd of teardownCwds) {
+    const allowedTeardownTargets = await filterAllowedTeardownTargets(
+      dependencies,
+      teardownTargets,
+    );
+    for (const teardownTarget of uniqueTeardownTargets(allowedTeardownTargets)) {
       await runWorktreeTeardownCommands({
         worktreePath: backing.path,
-        teardownCwd,
+        teardownCwd: teardownTarget.cwd,
         repoRootPath: backing.mainRepoRoot ?? undefined,
       });
     }
@@ -407,6 +408,7 @@ async function maybeRemoveDirectory(
       paseoHome: dependencies.paseoHome,
       worktreesBaseRoot: dependencies.paseoWorktreesBaseRoot,
     });
+    dependencies.workspaceGitService.invalidateWorktrees();
     dependencies.github.invalidate({ cwd: backing.path });
     return true;
   } catch (error) {
@@ -418,10 +420,31 @@ async function maybeRemoveDirectory(
   }
 }
 
-function uniqueFilesystemPaths(paths: string[]): string[] {
-  const unique: string[] = [];
-  for (const candidate of paths) {
-    if (!unique.some((existing) => createRealpathAwarePathMatcher(existing)(candidate))) {
+async function filterAllowedTeardownTargets(
+  dependencies: ArchiveDependencies,
+  targets: Array<{ workspaceId: string | null; cwd: string }>,
+): Promise<Array<{ workspaceId: string | null; cwd: string }>> {
+  const allowed: Array<{ workspaceId: string | null; cwd: string }> = [];
+  const blockedCwds: string[] = [];
+  for (const target of targets) {
+    try {
+      if (target.workspaceId)
+        await dependencies.assertWorkspaceAutomationAllowed?.(target.workspaceId);
+      allowed.push(target);
+    } catch (error) {
+      if (!(error instanceof WorkspaceAutomationBlockedError)) throw error;
+      blockedCwds.push(target.cwd);
+    }
+  }
+  return allowed.filter(
+    (target) => !blockedCwds.some((cwd) => createRealpathAwarePathMatcher(cwd)(target.cwd)),
+  );
+}
+
+function uniqueTeardownTargets<T extends { cwd: string }>(targets: T[]): T[] {
+  const unique: T[] = [];
+  for (const candidate of targets) {
+    if (!unique.some((existing) => createRealpathAwarePathMatcher(existing.cwd)(candidate.cwd))) {
       unique.push(candidate);
     }
   }
@@ -444,7 +467,7 @@ export async function archiveWorkspaceContents(
   const archivedAgents = new Set<string>();
 
   const liveAgents = dependencies.agentManager
-    .listAgents()
+    .listAgents({ includeInternal: true })
     .filter((agent) => agent.workspaceId === workspaceId);
   for (const agent of liveAgents) {
     archivedAgents.add(agent.id);

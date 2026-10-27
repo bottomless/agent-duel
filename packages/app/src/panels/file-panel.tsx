@@ -2,8 +2,8 @@ import { useMemo } from "react";
 import invariant from "tiny-invariant";
 import { FilePane } from "@/file-pane/pane";
 import { usePaneContext } from "@/panels/pane-context";
+import { definePanel } from "@/panels/panel-registry";
 import { SidePanelDirectoryMissing } from "@/panels/side-panel-directory-missing";
-import type { PanelRegistration } from "@/panels/panel-registry";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { createMaterialFileIcon } from "@/components/material-file-icon";
 
@@ -21,7 +21,7 @@ function useFilePanelDescriptor(target: { kind: "file"; path: string }) {
 }
 
 function FilePanel() {
-  const { serverId, workspaceId, target, fileNavigationRevision } = usePaneContext();
+  const { serverId, workspaceId, target, panelRevision } = usePaneContext();
   const workspaceDirectory = useWorkspaceDirectory(serverId, workspaceId);
   invariant(target.kind === "file", "FilePanel requires file target");
   if (!workspaceDirectory) {
@@ -32,13 +32,12 @@ function FilePanel() {
       serverId={serverId}
       workspaceRoot={workspaceDirectory}
       location={target}
-      navigationRevision={fileNavigationRevision ?? 0}
+      navigationRevision={panelRevision ?? 0}
     />
   );
 }
 
-export const filePanelRegistration: PanelRegistration<"file"> = {
-  kind: "file",
+export const filePanelRegistration = definePanel("file", {
   component: FilePanel,
   useDescriptor: useFilePanelDescriptor,
-};
+});

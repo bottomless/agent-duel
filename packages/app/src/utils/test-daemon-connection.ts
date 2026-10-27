@@ -1,4 +1,9 @@
-import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import {
+  DaemonAuthenticationError,
+  DaemonClient,
+  getDaemonAuthFailureReason,
+  type DaemonAuthFailureReason,
+} from "@getpaseo/client/internal/daemon-client";
 import type { DaemonClientConfig } from "@getpaseo/client/internal/daemon-client";
 import type { HostConnection } from "@/types/host-connection";
 import { getAccountSessionToken } from "@/accounts/session-store";
@@ -10,37 +15,57 @@ import {
   shouldUseTlsForDefaultHostedRelay,
 } from "./daemon-endpoints";
 import {
-  buildLocalDaemonTransportUrl,
-  createDesktopLocalDaemonTransportFactory,
+  buildDesktopDaemonTransportUrl,
+  createDesktopDaemonTransportFactory,
 } from "@/desktop/daemon/desktop-daemon-transport";
+import type { DesktopDaemonTransportTarget } from "@/desktop/daemon/desktop-daemon";
 
 export interface DaemonProbeClient {
   readonly lastError: string | null;
+  readonly authFailureReason?: DaemonAuthFailureReason | null;
   connect(): Promise<void>;
   close(): Promise<void>;
   getLastServerInfoMessage(): { serverId: string; hostname: string | null } | null;
 }
 
-interface LocalTransportUrlInput {
-  transportType: "socket" | "pipe";
-  transportPath: string;
-}
-
 export interface DaemonConnectionDependencies<TClient extends DaemonProbeClient> {
   getClientId(): Promise<string>;
   resolveAppVersion(): string | null;
-  createLocalTransportFactory(): DaemonClientConfig["transportFactory"] | null;
-  buildLocalTransportUrl(input: LocalTransportUrlInput): string;
+  createDesktopTransportFactory(): DaemonClientConfig["transportFactory"] | null;
+  buildDesktopTransportUrl(input: DesktopDaemonTransportTarget): string;
   createClient(config: DaemonClientConfig): TClient;
 }
 
 const defaultDaemonConnectionDependencies: DaemonConnectionDependencies<DaemonClient> = {
   getClientId: getOrCreateClientId,
   resolveAppVersion,
-  createLocalTransportFactory: createDesktopLocalDaemonTransportFactory,
-  buildLocalTransportUrl: buildLocalDaemonTransportUrl,
+  createDesktopTransportFactory: createDesktopDaemonTransportFactory,
+  buildDesktopTransportUrl: buildDesktopDaemonTransportUrl,
   createClient: (config) => new DaemonClient(config),
 };
+
+function buildRemoteSshClientConfig(input: {
+  connection: Extract<HostConnection, { type: "remoteSsh" }>;
+  base: Omit<DaemonClientConfig, "url">;
+  desktopTransportFactory: DaemonClientConfig["transportFactory"] | null;
+  buildDesktopTransportUrl: (target: DesktopDaemonTransportTarget) => string;
+}): DaemonClientConfig {
+  if (!input.desktopTransportFactory) {
+    throw new Error("Remote SSH is only available in the desktop app.");
+  }
+  return {
+    ...input.base,
+    transportFactory: input.desktopTransportFactory,
+    url: input.buildDesktopTransportUrl({
+      transportType: "ssh",
+      host: input.connection.host,
+      ...(input.connection.sshPort !== undefined ? { sshPort: input.connection.sshPort } : {}),
+      ...(input.connection.daemonPort !== undefined
+        ? { daemonPort: input.connection.daemonPort }
+        : {}),
+    }),
+  };
+}
 
 function normalizeNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -66,33 +91,43 @@ function pickBestReason(reason: string | null, lastError: string | null): string
   return "Unable to connect";
 }
 
-function isIncorrectPasswordFailure(input: {
-  config: DaemonClientConfig;
-  reason: string | null;
-  lastError: string | null;
-}): boolean {
-  if (!input.config.password) {
-    return false;
-  }
-  const details = [input.reason, input.lastError].filter(Boolean).join("\n").toLowerCase();
-  return (
-    details.includes("401") ||
-    details.includes("4001") ||
-    details.includes("unauthorized") ||
-    details.includes("code 1006")
-  );
-}
-
 export class DaemonConnectionTestError extends Error {
   reason: string | null;
   lastError: string | null;
+  authFailureReason: DaemonAuthFailureReason | null;
 
-  constructor(message: string, details: { reason: string | null; lastError: string | null }) {
+  constructor(
+    message: string,
+    details: {
+      reason: string | null;
+      lastError: string | null;
+      authFailureReason?: DaemonAuthFailureReason | null;
+    },
+  ) {
     super(message);
     this.name = "DaemonConnectionTestError";
     this.reason = details.reason;
     this.lastError = details.lastError;
+    this.authFailureReason = details.authFailureReason ?? null;
   }
+}
+
+export function getConnectionAuthFailureReason(error: unknown): DaemonAuthFailureReason | null {
+  if (error instanceof DaemonConnectionTestError) return error.authFailureReason;
+  return getDaemonAuthFailureReason(error);
+}
+
+function resolveConnectionCredentials(
+  connection: HostConnection,
+  options:
+    | { password?: string; localCredential?: DaemonClientConfig["localCredential"] }
+    | undefined,
+): Pick<DaemonClientConfig, "password" | "localCredential"> {
+  const password = options?.password;
+  return {
+    ...(password ? { password } : {}),
+    ...(options?.localCredential ? { localCredential: options.localCredential } : {}),
+  };
 }
 
 export async function buildClientConfig(
@@ -101,14 +136,21 @@ export async function buildClientConfig(
   options?: {
     capabilities?: DaemonClientConfig["capabilities"];
     trace?: DaemonClientConfig["trace"];
+    password?: string;
+    localCredential?: DaemonClientConfig["localCredential"];
   },
   deps: Pick<
     DaemonConnectionDependencies<DaemonProbeClient>,
-    "getClientId" | "resolveAppVersion" | "createLocalTransportFactory" | "buildLocalTransportUrl"
+    | "getClientId"
+    | "resolveAppVersion"
+    | "createDesktopTransportFactory"
+    | "buildDesktopTransportUrl"
   > = defaultDaemonConnectionDependencies,
 ): Promise<DaemonClientConfig> {
+  if (connection.type === "routed")
+    throw new Error("Routed host connections are resolved by HostRuntime");
   const clientId = await deps.getClientId();
-  const localTransportFactory = deps.createLocalTransportFactory();
+  const desktopTransportFactory = deps.createDesktopTransportFactory();
   const base = {
     clientId,
     clientType: "mobile" as const,
@@ -118,29 +160,38 @@ export async function buildClientConfig(
     // The probe is a real connection, so it has to present the same account the
     // app will: a daemon with accounts refuses an unauthenticated socket.
     getSessionToken: getAccountSessionToken,
+    ...resolveConnectionCredentials(connection, options),
     ...(options?.capabilities ? { capabilities: options.capabilities } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
     ...((connection.type === "directSocket" || connection.type === "directPipe") &&
-    localTransportFactory
-      ? { transportFactory: localTransportFactory }
+    desktopTransportFactory
+      ? { transportFactory: desktopTransportFactory }
       : {}),
   };
 
   if (connection.type === "directSocket" || connection.type === "directPipe") {
     return {
       ...base,
-      url: deps.buildLocalTransportUrl({
+      url: deps.buildDesktopTransportUrl({
         transportType: connection.type === "directSocket" ? "socket" : "pipe",
         transportPath: connection.path,
       }),
     };
   }
 
+  if (connection.type === "remoteSsh") {
+    return buildRemoteSshClientConfig({
+      connection,
+      base,
+      desktopTransportFactory,
+      buildDesktopTransportUrl: deps.buildDesktopTransportUrl,
+    });
+  }
+
   if (connection.type === "directTcp") {
     return {
       ...base,
       url: buildDaemonWebSocketUrl(connection.endpoint, { useTls: connection.useTls ?? false }),
-      ...(connection.password ? { password: connection.password } : {}),
     };
   }
 
@@ -155,7 +206,11 @@ export async function buildClientConfig(
       useTls: connection.useTls ?? shouldUseTlsForDefaultHostedRelay(connection.relayEndpoint),
       serverId,
     }),
-    e2ee: { enabled: true, daemonPublicKeyB64: connection.daemonPublicKeyB64 },
+    e2ee: {
+      enabled: true,
+      daemonPublicKeyB64: connection.daemonPublicKeyB64,
+      ...(connection.minimumSecurityMode ? { minimumMode: connection.minimumSecurityMode } : {}),
+    },
   };
 }
 
@@ -218,11 +273,13 @@ export function connectAndProbe(
             error instanceof Error ? error.message : String(error),
           );
           const lastError = normalizeNonEmptyString(client.lastError);
-          const message = isIncorrectPasswordFailure({ config, reason, lastError })
-            ? "Incorrect password"
+          const authFailureReason =
+            getDaemonAuthFailureReason(error) ?? client.authFailureReason ?? null;
+          const message = authFailureReason
+            ? new DaemonAuthenticationError(authFailureReason).message
             : pickBestReason(reason, lastError);
           void client.close().catch(() => undefined);
-          reject(new DaemonConnectionTestError(message, { reason, lastError }));
+          reject(new DaemonConnectionTestError(message, { reason, lastError, authFailureReason }));
         });
     },
   );
@@ -231,13 +288,17 @@ export function connectAndProbe(
 interface ProbeOptions {
   serverId?: string;
   timeoutMs?: number;
+  password?: string;
+  localCredential?: DaemonClientConfig["localCredential"];
   capabilities?: DaemonClientConfig["capabilities"];
   trace?: DaemonClientConfig["trace"];
 }
 
 function resolveTimeout(connection: HostConnection, options?: ProbeOptions): number {
   if (options?.timeoutMs) return options.timeoutMs;
-  return connection.type === "relay" ? 10_000 : 6_000;
+  if (connection.type === "relay") return 10_000;
+  if (connection.type === "remoteSsh") return 15_000;
+  return 6_000;
 }
 
 export function connectToDaemon(

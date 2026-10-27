@@ -136,7 +136,6 @@ export function FeedbackSheet({ visible, onClose, contextTarget }: FeedbackSheet
       footer={footer}
       desktopMaxWidth={480}
       snapPoints={["72%", "90%"]}
-      sizeContentToCurrentSnapPoint
       testID="feedback-sheet"
     >
       {submitted ? (
@@ -200,7 +199,7 @@ export function FeedbackSheet({ visible, onClose, contextTarget }: FeedbackSheet
 const styles = StyleSheet.create((theme) => ({
   subtitle: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   messageInput: {
     minHeight: 128,
@@ -220,16 +219,16 @@ const styles = StyleSheet.create((theme) => ({
   },
   detailsTitle: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   detailsDescription: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
-    lineHeight: Math.round(theme.fontSize.xs * 1.45),
+    fontSize: theme.fontSize.sm,
+    lineHeight: Math.round(theme.fontSize.sm * 1.45),
   },
   errorText: {
     color: theme.colors.destructive,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   footerActions: {
     flex: 1,
@@ -256,13 +255,13 @@ const styles = StyleSheet.create((theme) => ({
   },
   successTitle: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
+    fontSize: theme.fontSize.lg,
     fontWeight: theme.fontWeight.medium,
     textAlign: "center",
   },
   successDescription: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     textAlign: "center",
   },
 }));

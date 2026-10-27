@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { type Dirent, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +9,9 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import type {
+  AgentClient,
   AgentLaunchContext,
+  AgentPermissionRequest,
   AgentSession,
   AgentSessionConfig,
   AgentSlashCommand,
@@ -19,6 +21,7 @@ import {
   buildCodexAppServerEnv,
   CodexAppServerAgentClient,
   CodexAppServerAgentSession,
+  codexMicrosoftStoreBinaryCandidates,
   codexAppServerTurnInputFromPrompt,
   listCodexSkills,
   mapCodexPatchNotificationToToolCall,
@@ -46,6 +49,41 @@ describe("mapCodexPlanUpdateToTodo", () => {
     });
   });
 });
+
+describe("Codex executable discovery", () => {
+  test("only considers sorted Codex Store packages", () => {
+    const entries = [
+      { name: "Other.App_1", isDirectory: () => true },
+      { name: "OpenAI.Codex_z", isDirectory: () => true },
+      { name: "OpenAI.Codex_a", isDirectory: () => true },
+      { name: "OpenAI.Codex_file", isDirectory: () => false },
+    ] as unknown as Dirent[];
+
+    expect(codexMicrosoftStoreBinaryCandidates("C:\\Packages", entries)).toEqual([
+      path.join(
+        "C:\\Packages",
+        "OpenAI.Codex_a",
+        "LocalCache",
+        "Local",
+        "OpenAI",
+        "Codex",
+        "bin",
+        "codex.exe",
+      ),
+      path.join(
+        "C:\\Packages",
+        "OpenAI.Codex_z",
+        "LocalCache",
+        "Local",
+        "OpenAI",
+        "Codex",
+        "bin",
+        "codex.exe",
+      ),
+    ]);
+  });
+});
+
 import { CodexAppServerClient } from "./codex/app-server-transport.js";
 import {
   createFakeCodexAppServer,
@@ -57,6 +95,7 @@ import {
 } from "./codex/test-utils/fake-app-server.js";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
 import { asInternals as castInternals, createStub } from "../../test-utils/class-mocks.js";
+import { AgentManager } from "../agent-manager.js";
 import { buildProviderRegistry } from "../provider-registry.js";
 
 interface CollaborationModeRecord {
@@ -68,10 +107,14 @@ interface CollaborationModeRecord {
 }
 
 interface CodexSessionTestAccess {
+  codexUserMessageTurns(): {
+    resolve(messageId: string): { index: number; turnId: string | null } | null;
+    count(): number;
+  };
   ensureThreadLoaded(): Promise<void>;
   handleToolApprovalRequest(params: unknown): Promise<unknown>;
   handleNotification(method: string, params: unknown): void;
-  loadPersistedHistory(): Promise<void>;
+  loadPersistedHistory(client: CodexClientLike | null): Promise<void>;
   refreshResolvedCollaborationMode(): void;
   serviceTier: "fast" | null;
   planModeEnabled: boolean;
@@ -84,7 +127,7 @@ interface CodexClientLike {
 }
 
 type CodexTestSession = AgentSession & {
-  connected: boolean;
+  connectionState: "disconnected" | "history-ready" | "connected";
   currentThreadId: string | null;
   activeForegroundTurnId: string | null;
   client: CodexClientLike | null;
@@ -125,14 +168,22 @@ function createSession(
     options.goalsEnabled === true,
     options.autoReviewEnabled === true,
   ) as CodexTestSession;
-  session.connected = true;
+  session.connectionState = "connected";
   session.currentThreadId = "test-thread";
   session.activeForegroundTurnId = "test-turn";
   return session;
 }
 
-function createProviderWithFakeAppServer(appServer: FakeCodexAppServer): CodexAppServerAgentClient {
-  const provider = new CodexAppServerAgentClient(createTestLogger());
+function createProviderWithFakeAppServer(
+  appServer: FakeCodexAppServer,
+  options?: {
+    runtimeSettings?: ConstructorParameters<typeof CodexAppServerAgentClient>[1];
+    customProvider?: { id: string; label: string; extends: string };
+  },
+): CodexAppServerAgentClient {
+  const provider = new CodexAppServerAgentClient(createTestLogger(), options?.runtimeSettings, {
+    customProvider: options?.customProvider,
+  });
   const internals = castInternals<{
     goalsEnabledPromise: Promise<boolean> | null;
     autoReviewEnabledPromise: Promise<boolean> | null;
@@ -143,6 +194,257 @@ function createProviderWithFakeAppServer(appServer: FakeCodexAppServer): CodexAp
   internals.spawnAppServer = async () => appServer.child;
   return provider;
 }
+
+async function startPublicSteeringSession(
+  appServer: FakeCodexAppServer,
+  resolveSlashCommandInvocation?: (prompt: AgentPromptInput) => Promise<{
+    commandName: string;
+    args?: string;
+  } | null>,
+): Promise<{ session: AgentSession; paseoTurnId: string }> {
+  const session = new CodexAppServerAgentSession(
+    createConfig({ cwd: "/workspace/project" }),
+    null,
+    createTestLogger(),
+    async () => appServer.child,
+    { resolveSlashCommandInvocation },
+  );
+  const started = await session.startTurn("first");
+  await appServer.waitForTurnStart();
+  appServer.startsTurn({ threadId: "thread-1", turnId: "native-A" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return { session, paseoTurnId: started.turnId };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+describe("Codex active-turn steering admission", () => {
+  test("a steer without the clearing contract leaves permissions open", async () => {
+    const appServer = createFakeCodexAppServer({
+      "turn/steer": () => ({ turn: { id: "native-A" } }),
+    });
+    const { session, paseoTurnId } = await startPublicSteeringSession(appServer);
+    castInternals<{ emitSyntheticPlanApprovalRequest: (planText: string) => void }>(
+      session,
+    ).emitSyntheticPlanApprovalRequest("Ship the thing");
+
+    await expect(
+      session.steerActiveTurn!("background notification", { expectedTurnId: paseoTurnId }),
+    ).resolves.toEqual({ status: "accepted" });
+    expect(session.getPendingPermissions()).toHaveLength(1);
+
+    const requestId = session.getPendingPermissions()[0]!.id;
+    await session.respondToPermission(requestId, { behavior: "deny", message: "test cleanup" });
+    await session.close();
+    appServer.assertNoErrors();
+  });
+
+  test("a clearing steer denies every pending permission through its provider handler", async () => {
+    const appServer = createFakeCodexAppServer({
+      "turn/steer": () => ({ turn: { id: "native-A" } }),
+    });
+    const { session, paseoTurnId } = await startPublicSteeringSession(appServer);
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+
+    const commandPermission = waitForNextPermission(session);
+    appServer.requestCommandApproval({
+      itemId: "command-1",
+      threadId: "thread-1",
+      turnId: "native-A",
+      command: "git status",
+      cwd: "/workspace/project",
+      reason: "Needs approval",
+    });
+    await commandPermission;
+
+    const filePermission = waitForNextPermission(session);
+    appServer.requestFileChangeApproval({
+      itemId: "file-1",
+      threadId: "thread-1",
+      turnId: "native-A",
+      reason: "Apply the patch",
+    });
+    await filePermission;
+
+    const questionPermission = waitForNextPermission(session);
+    appServer.requestUserInput({
+      itemId: "question-1",
+      threadId: "thread-1",
+      turnId: "native-A",
+      questions: [
+        {
+          id: "choice",
+          header: "Choice",
+          question: "Which option?",
+          options: [{ label: "One" }, { label: "Two" }],
+        },
+      ],
+    });
+    await questionPermission;
+
+    const mcpPermission = waitForNextPermission(session);
+    appServer.requestMcpElicitation({
+      threadId: "thread-1",
+      turnId: "native-A",
+      serverName: "browser",
+      message: "Open this page?",
+      requestedSchema: { type: "object", properties: {} },
+    });
+    await mcpPermission;
+
+    castInternals<{ emitSyntheticPlanApprovalRequest: (planText: string) => void }>(
+      session,
+    ).emitSyntheticPlanApprovalRequest("Ship the thing");
+    expect(session.getPendingPermissions()).toHaveLength(5);
+
+    await expect(
+      session.steerActiveTurn!("review this instead", {
+        expectedTurnId: paseoTurnId,
+        clearPendingPermissions: true,
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+
+    expect(session.getPendingPermissions()).toEqual([]);
+    await expect(appServer.waitForApprovalDecision("command-1")).resolves.toEqual({
+      decision: "decline",
+    });
+    await expect(appServer.waitForApprovalDecision("file-1")).resolves.toEqual({
+      decision: "decline",
+    });
+    await expect(appServer.waitForApprovalDecision("question-1")).resolves.toEqual({ answers: {} });
+    await expect(appServer.waitForMcpElicitationDecision()).resolves.toEqual({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline",
+        item: expect.objectContaining({
+          name: "plan_approval",
+          detail: { type: "plan", text: "Ship the thing" },
+          metadata: expect.objectContaining({ approved: false }),
+        }),
+      }),
+    );
+    await session.close();
+    appServer.assertNoErrors();
+  });
+
+  test("does not steer B when A completes while command resolution is pending", async () => {
+    const commandResolution = deferred<{ commandName: string } | null>();
+    const resolverEntered = deferred<void>();
+    const appServer = createFakeCodexAppServer();
+    const { session, paseoTurnId } = await startPublicSteeringSession(appServer, async (prompt) => {
+      if (prompt !== "/held") return null;
+      resolverEntered.resolve();
+      return commandResolution.promise;
+    });
+
+    const steer = session.steerActiveTurn!("/held", {
+      expectedTurnId: paseoTurnId,
+      clientMessageId: "steer-A",
+    });
+    await resolverEntered.promise;
+    appServer.completeTurn({ threadId: "thread-1" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const startedB = await session.startTurn("second");
+    appServer.startsTurn({ threadId: "thread-1", turnId: "native-B" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    commandResolution.resolve(null);
+
+    await expect(steer).resolves.toEqual({ status: "unavailable" });
+    expect(startedB.turnId).not.toBe(paseoTurnId);
+    expect(appServer.requests().filter((request) => request.method === "turn/steer")).toEqual([]);
+    await session.close();
+    appServer.assertNoErrors();
+  });
+
+  test.each([
+    ["method unavailable", -32601, "method not found", undefined, "unavailable"],
+    ["no active turn", -32600, "no active turn to steer", undefined, "unavailable"],
+    [
+      "expected turn mismatch",
+      -32600,
+      "expected active turn id `native-A` but found `native-B`",
+      undefined,
+      "unavailable",
+    ],
+    [
+      "output schema mismatch",
+      -32600,
+      "active turn uses a different output schema",
+      undefined,
+      "unavailable",
+    ],
+    [
+      "review turn",
+      -32600,
+      "cannot steer a review turn",
+      { codexErrorInfo: { activeTurnNotSteerable: { turnKind: "review" } } },
+      "unavailable",
+    ],
+    ["unknown invalid request", -32600, "input must not be empty", undefined, "throws"],
+  ] as const)("classifies JSON-RPC $0", async (_name, code, message, data, expected) => {
+    const appServer = createFakeCodexAppServer({
+      "turn/steer": () => ({ __jsonRpcError: { code, message, ...(data ? { data } : {}) } }),
+    });
+    const { session, paseoTurnId } = await startPublicSteeringSession(appServer);
+    const steer = session.steerActiveTurn!("follow up", {
+      expectedTurnId: paseoTurnId,
+      clientMessageId: "steer-frame",
+    });
+    if (expected === "unavailable") {
+      await expect(steer).resolves.toEqual({ status: "unavailable" });
+    } else {
+      await expect(steer).rejects.toThrow(message);
+    }
+    await session.close();
+    appServer.assertNoErrors();
+  });
+
+  test("leaves a JSON-RPC server error ambiguous", async () => {
+    const appServer = createFakeCodexAppServer({
+      "turn/steer": () => ({
+        __jsonRpcError: { code: -32000, message: "connection lost" },
+      }),
+    });
+    const { session, paseoTurnId } = await startPublicSteeringSession(appServer);
+    await expect(
+      session.steerActiveTurn!("follow up", {
+        expectedTurnId: paseoTurnId,
+        clientMessageId: "steer-transport",
+      }),
+    ).rejects.toThrow("connection lost");
+    await session.close();
+  });
+
+  test("rejects an in-flight steer when the app-server transport disconnects", async () => {
+    const appServer = createFakeCodexAppServer({
+      "turn/steer": () => new Promise<void>(() => undefined),
+    });
+    const { session, paseoTurnId } = await startPublicSteeringSession(appServer);
+    const steer = session.steerActiveTurn!("follow up", {
+      expectedTurnId: paseoTurnId,
+      clientMessageId: "steer-disconnect",
+    });
+    await appServer.waitForRequest("turn/steer");
+    appServer.disconnect();
+
+    await expect(steer).rejects.toThrow("Codex app-server exited");
+    expect(appServer.requests().filter((request) => request.method === "turn/steer")).toHaveLength(
+      1,
+    );
+    await session.close();
+  });
+});
 
 async function startCompactionTurnTest(): Promise<{
   appServer: FakeCodexAppServer;
@@ -202,7 +504,7 @@ function asInternals(session: CodexTestSession): CodexSessionTestAccess {
 }
 
 function markdownImageSource(markdown: string): string {
-  const match = markdown.match(/^!\[[^\]]*]\((.*)\)$/);
+  const match = markdown.trim().match(/^!\[[^\]]*]\((.*)\)$/);
   if (!match) {
     throw new Error(`Expected markdown image, got: ${markdown}`);
   }
@@ -212,13 +514,14 @@ function markdownImageSource(markdown: string): string {
 
 function emitCodexUserMessage(
   appServer: FakeCodexAppServer,
-  input: { id: string; text: string; threadId?: string },
+  input: { id: string; text: string; threadId?: string; turnId?: string },
 ): void {
   appServer.child.stdout.write(
     `${JSON.stringify({
       method: "item/started",
       params: {
         threadId: input.threadId ?? "thread-1",
+        ...(input.turnId ? { turnId: input.turnId } : {}),
         item: {
           type: "userMessage",
           id: input.id,
@@ -317,6 +620,131 @@ process.stdin.on("data", (chunk) => {
   }
 }
 
+async function withCustomCodexProviderHome<T>(
+  run: (input: {
+    session: AgentSession;
+    readCaptured: () => CapturedFakeCodexRecord[];
+  }) => Promise<T>,
+  providerPrompts: Record<string, string> = {},
+): Promise<T> {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "codex-provider-home-"));
+  const daemonCodexHome = path.join(tempDir, "daemon-codex-home");
+  const providerCodexHome = path.join(tempDir, "provider-codex-home");
+  const fakeAppServerPath = path.join(tempDir, "fake-codex-app-server.cjs");
+  const capturedRequestsPath = path.join(tempDir, "requests.jsonl");
+  mkdirSync(path.join(daemonCodexHome, "prompts"), { recursive: true });
+  mkdirSync(path.join(providerCodexHome, "prompts"), { recursive: true });
+  writeFileSync(
+    path.join(daemonCodexHome, "prompts", "probe-default.md"),
+    "---\ndescription: Daemon home prompt\n---\nfrom the daemon home\n",
+  );
+  writeFileSync(
+    path.join(providerCodexHome, "prompts", "probe-profile.md"),
+    "---\ndescription: Provider home prompt\n---\nfrom the provider home\n",
+  );
+  for (const [name, content] of Object.entries(providerPrompts)) {
+    writeFileSync(path.join(providerCodexHome, "prompts", `${name}.md`), content);
+  }
+  writeFileSync(
+    fakeAppServerPath,
+    `
+const fs = require("node:fs");
+
+const capturePath = process.env.PASEO_FAKE_CODEX_CAPTURE;
+let buffer = "";
+
+fs.appendFileSync(capturePath, JSON.stringify({ kind: "env", CODEX_HOME: process.env.CODEX_HOME }) + "\\n");
+
+function resultFor(method) {
+  if (method === "collaborationMode/list") return { data: [] };
+  if (method === "skills/list") return { data: [] };
+  if (method === "model/list") return { data: [{ id: "profile-model", isDefault: true }] };
+  if (method === "thread/start") return { thread: { id: "thread-1" } };
+  return {};
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer += chunk.toString();
+  for (;;) {
+    const newlineIndex = buffer.indexOf("\\n");
+    if (newlineIndex === -1) break;
+    const line = buffer.slice(0, newlineIndex).trim();
+    buffer = buffer.slice(newlineIndex + 1);
+    if (!line) continue;
+    const message = JSON.parse(line);
+    fs.appendFileSync(capturePath, JSON.stringify({ kind: "request", method: message.method, params: message.params }) + "\\n");
+    process.stdout.write(JSON.stringify({ id: message.id, result: resultFor(message.method) }) + "\\n");
+  }
+});
+`,
+  );
+
+  vi.stubEnv("CODEX_HOME", daemonCodexHome);
+  const registry = buildProviderRegistry(createTestLogger(), {
+    providerOverrides: {
+      "profile-codex": {
+        extends: "codex",
+        label: "Profile Codex",
+        command: [process.execPath, fakeAppServerPath],
+        env: {
+          CODEX_HOME: providerCodexHome,
+          PASEO_FAKE_CODEX_CAPTURE: capturedRequestsPath,
+        },
+      },
+    },
+  });
+  const session = await registry["profile-codex"].createClient(createTestLogger()).createSession({
+    provider: "profile-codex",
+    cwd: tempDir,
+    modeId: "auto",
+  });
+
+  try {
+    expect(session.usageSession?.()).toMatchObject({
+      provider: "codex",
+      env: { CODEX_HOME: providerCodexHome },
+    });
+    expect(session.usageSession?.()?.sessionKey).toBe(session.usageSession?.()?.sessionKey);
+    return await run({
+      session,
+      readCaptured: () =>
+        readFileSync(capturedRequestsPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as CapturedFakeCodexRecord),
+    });
+  } finally {
+    await session.close();
+    expect(session.usageSession?.()).toBeNull();
+    vi.unstubAllEnvs();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function listPromptCommandsFromCustomCodexHome(): Promise<string[]> {
+  return withCustomCodexProviderHome(async ({ session }) => {
+    const commands = await session.listCommands!();
+    return commands.map((command) => command.name).filter((name) => name.startsWith("prompts:"));
+  });
+}
+
+async function runPromptFromCustomCodexHome(
+  prompt: string,
+  providerPrompts: Record<string, string> = {},
+): Promise<CapturedFakeCodexRecord[]> {
+  return withCustomCodexProviderHome(async ({ session, readCaptured }) => {
+    await session.startTurn(prompt);
+    return readCaptured();
+  }, providerPrompts);
+}
+
+async function expandCustomPrompt(template: string, args: string): Promise<string> {
+  const records = await runPromptFromCustomCodexHome(`/prompts:template ${args}`, { template });
+  const turnStart = records.find((record) => record.method === "turn/start");
+  const params = turnStart?.params as { input: Array<{ text: string }> };
+  return params.input[0].text;
+}
+
 function capturedThreadStartConfig(records: CapturedFakeCodexRecord[]): unknown {
   const threadStart = records.find((record) => record.method === "thread/start");
   const params = threadStart?.params as Record<string, unknown> | undefined;
@@ -347,6 +775,7 @@ let buffer = "";
 function resultFor(method, params) {
   if (method === "initialize") return {};
   if (method === "collaborationMode/list") return { data: [] };
+  if (method === "model/list") return { data: [] };
   if (method === "skills/list") {
     const cwds = params && params.cwds;
     const projectCwd = ${JSON.stringify(projectCwd)};
@@ -452,6 +881,94 @@ describe("Codex app-server provider", () => {
     });
   });
 
+  test("Default Permissions pins the user as approvals reviewer on thread/start", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const session = createSession(
+      { modeId: "auto", thinkingOptionId: "medium" },
+      { autoReviewEnabled: true },
+    );
+    session.currentThreadId = null;
+    session.activeForegroundTurnId = null;
+    session.client = {
+      request: vi.fn(async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        if (method === "thread/start") {
+          return { thread: { id: "default-mode-thread" } };
+        }
+        if (method === "turn/start") {
+          return {};
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      }),
+    };
+
+    await session.startTurn("trigger thread creation");
+
+    const startCall = requests.find((req) => req.method === "thread/start");
+    expect(startCall?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      approvalsReviewer: "user",
+    });
+  });
+
+  test("switching from auto-review back to Default returns approvals to the user", async () => {
+    const session = createSession({ modeId: "auto-review" }, { autoReviewEnabled: true });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/loaded/list") {
+        return { data: ["test-thread"] };
+      }
+      if (method === "turn/start") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    session.activeForegroundTurnId = null;
+    session.client = createStub<CodexClientLike>({ request });
+
+    await session.setMode("auto");
+    await session.startTurn("needs approval");
+
+    const turnStartCall = request.mock.calls.find(([method]) => method === "turn/start");
+    expect(turnStartCall?.[1]).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  test("Read-only pins the user as approvals reviewer on thread/start", async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const session = createSession(
+      { modeId: "read-only", thinkingOptionId: "medium" },
+      { autoReviewEnabled: true },
+    );
+    session.currentThreadId = null;
+    session.activeForegroundTurnId = null;
+    session.client = {
+      request: vi.fn(async (method: string, params: unknown) => {
+        requests.push({ method, params });
+        if (method === "thread/start") {
+          return { thread: { id: "read-only-thread" } };
+        }
+        if (method === "turn/start") {
+          return {};
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      }),
+    };
+
+    await session.startTurn("trigger thread creation");
+
+    const startCall = requests.find((req) => req.method === "thread/start");
+    expect(startCall?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+      approvalsReviewer: "user",
+    });
+  });
+
   test("setMode and setThinkingOption return a next-turn notice while a turn is active", async () => {
     const session = createSession({ modeId: "auto", thinkingOptionId: "medium" });
 
@@ -542,6 +1059,7 @@ describe("Codex app-server provider", () => {
     const turnStart = request.mock.calls.find(([method]) => method === "turn/start")?.[1];
     expect(turnStart).not.toHaveProperty("approvalPolicy");
     expect(turnStart).not.toHaveProperty("sandboxPolicy");
+    expect(turnStart).not.toHaveProperty("approvalsReviewer");
   });
 
   test("carries the complete native workspace-write policy including writable roots", async () => {
@@ -618,6 +1136,53 @@ describe("Codex app-server provider", () => {
           excludeTmpdirEnvVar: true,
         },
       });
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("keeps the default effort when a session without one is resumed after a restart", async () => {
+    const beforeRestart = createFakeCodexAppServer();
+    const firstSession = await createProviderWithFakeAppServer(beforeRestart).createSession(
+      createConfig({ thinkingOptionId: undefined }),
+    );
+    await firstSession.startTurn("first turn");
+    await expect(beforeRestart.waitForTurnStart()).resolves.toMatchObject({ effort: "medium" });
+    const handle = firstSession.describePersistence()!;
+    await firstSession.close();
+
+    const afterRestart = createFakeCodexAppServer();
+    // The daemon resumes with the stored agent config, which never recorded an effort.
+    const resumed = await createProviderWithFakeAppServer(afterRestart).resumeSession(handle, {
+      model: "gpt-5.4",
+      thinkingOptionId: undefined,
+    });
+
+    try {
+      await expect(resumed.getRuntimeInfo()).resolves.toMatchObject({
+        thinkingOptionId: "medium",
+      });
+      await resumed.startTurn("turn after restart");
+      await expect(afterRestart.waitForTurnStart()).resolves.toMatchObject({ effort: "medium" });
+      beforeRestart.assertNoErrors();
+      afterRestart.assertNoErrors();
+    } finally {
+      await resumed.close();
+    }
+  });
+
+  test("provider persistence leaves options owned by the stored agent config", async () => {
+    const appServer = createFakeCodexAppServer();
+    const provider = createProviderWithFakeAppServer(appServer);
+    const session = await provider.createSession(
+      createConfig({ providerOptions: { sandbox_mode: "read-only", approval_policy: "never" } }),
+    );
+    try {
+      await session.startTurn("persist the configured session");
+      await appServer.waitForTurnStart();
+      const handle = session.describePersistence()!;
+      expect(handle.metadata).not.toHaveProperty("providerOptions");
       appServer.assertNoErrors();
     } finally {
       await session.close();
@@ -730,7 +1295,13 @@ describe("Codex app-server provider", () => {
     child.stderr = new PassThrough() as ChildProcessWithoutNullStreams["stderr"];
     child.exitCode = null;
     child.signalCode = null;
-    child.kill = vi.fn(() => true) as ChildProcessWithoutNullStreams["kill"];
+    child.kill = vi.fn((signal) => {
+      if (signal === "SIGKILL") {
+        child.signalCode = "SIGKILL";
+        child.emit("exit", null, "SIGKILL");
+      }
+      return true;
+    }) as ChildProcessWithoutNullStreams["kill"];
     const client = new CodexAppServerClient(child, createTestLogger());
 
     try {
@@ -799,6 +1370,75 @@ describe("Codex app-server provider", () => {
     });
     appServer.assertNoErrors();
     await session.close();
+  });
+
+  test("answers each concurrent command approval callback that shares one item", async () => {
+    const appServer = createFakeCodexAppServer({
+      initialize: () => ({}),
+      "collaborationMode/list": () => ({ data: [] }),
+      "skills/list": () => ({ data: [] }),
+    });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    const requested: AgentPermissionRequest[] = [];
+    session.subscribe((event) => {
+      if (event.type === "permission_requested") requested.push(event.request);
+    });
+
+    try {
+      await session.connect();
+
+      const firstPermission = waitForNextPermission(session);
+      appServer.requestCommandApproval({
+        itemId: "shared-item",
+        approvalId: "callback-a",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        command: "git add a.txt",
+        cwd: "/workspace/project",
+        reason: "subcommand a",
+      });
+      await firstPermission;
+      const secondPermission = waitForNextPermission(session);
+      appServer.requestCommandApproval({
+        itemId: "shared-item",
+        approvalId: "callback-b",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        command: "git add b.txt",
+        cwd: "/workspace/project",
+        reason: "subcommand b",
+      });
+      await secondPermission;
+
+      expect(requested.map((request) => request.input?.command)).toEqual([
+        "git add a.txt",
+        "git add b.txt",
+      ]);
+      expect(new Set(requested.map((request) => request.id)).size).toBe(2);
+      expect(session.getPendingPermissions()).toHaveLength(2);
+
+      await session.respondToPermission(requested[0]!.id, { behavior: "allow" });
+      await session.respondToPermission(requested[1]!.id, {
+        behavior: "deny",
+        message: "not b",
+      });
+
+      await expect(appServer.waitForCommandApprovalDecision("callback-a")).resolves.toEqual({
+        decision: "accept",
+      });
+      await expect(appServer.waitForCommandApprovalDecision("callback-b")).resolves.toEqual({
+        decision: "decline",
+      });
+      expect(session.getPendingPermissions()).toHaveLength(0);
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
   });
 
   test("shows a successful shell command that produces no output", async () => {
@@ -963,6 +1603,51 @@ describe("Codex app-server provider", () => {
     }
   });
 
+  test.each(["python3 -i", "/usr/bin/zsh -lc 'python3 -i'"])(
+    "labels a terminal write started as %s with the command that started the terminal",
+    async (command) => {
+      const appServer = createFakeCodexAppServer();
+      const session = new CodexAppServerAgentSession(
+        createConfig({ cwd: "/workspace/project" }),
+        null,
+        createTestLogger(),
+        async () => appServer.child,
+      );
+
+      try {
+        await session.connect();
+        appServer.startsTerminalCommand({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "interactive-shell",
+          processId: "73",
+          command,
+        });
+
+        const terminalWrite = waitForTimelineToolCall(session, "terminal-session-73-1");
+        appServer.typesIntoTerminal({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "interactive-shell",
+          processId: "73",
+          text: "print(1)\n",
+        });
+
+        await expect(terminalWrite).resolves.toMatchObject({
+          item: {
+            callId: "terminal-session-73-1",
+            name: "terminal",
+            detail: { type: "plain_text", label: "python3 -i", text: "print(1)\n" },
+            metadata: { processId: "73" },
+          },
+        });
+        appServer.assertNoErrors();
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   test("keeps repeated writes to one terminal as separate timeline rows", async () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(
@@ -1115,6 +1800,28 @@ describe("Codex app-server provider", () => {
     await session.close();
   });
 
+  test("resumed session exposes usage before connecting and not after close", async () => {
+    let spawns = 0;
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      { sessionId: "saved-thread" },
+      createTestLogger(),
+      async () => {
+        spawns++;
+        throw new Error("unexpected spawn");
+      },
+      { environment: { HOME: "/fixture/codex", CODEX_HOME: "/fixture/profile" } },
+    );
+    expect(session.usageSession()).toMatchObject({
+      provider: "codex",
+      env: { CODEX_HOME: "/fixture/profile" },
+      sessionKey: expect.any(String),
+    });
+    expect(spawns).toBe(0);
+    await session.close();
+    expect(session.usageSession()).toBeNull();
+  });
+
   test("loads archived Codex history without resuming the native thread", async () => {
     const threadRequests: string[] = [];
     const appServer = createFakeCodexAppServer({
@@ -1137,21 +1844,60 @@ describe("Codex app-server provider", () => {
       purpose: "history",
     });
 
-    expect(threadRequests).toEqual(["thread/loaded/list", "thread/resume", "thread/read"]);
+    expect(threadRequests).toEqual(["thread/read"]);
+    await session.close();
+    appServer.assertNoErrors();
+  });
+
+  test("unarchives Codex when an active Paseo agent resumes an archived thread", async () => {
+    const threadRequests: string[] = [];
+    let resumeAttempts = 0;
+    const appServer = createFakeCodexAppServer({
+      "thread/loaded/list": () => {
+        threadRequests.push("thread/loaded/list");
+        return { data: [] };
+      },
+      "thread/resume": () => {
+        threadRequests.push("thread/resume");
+        resumeAttempts += 1;
+        if (resumeAttempts === 1) {
+          return Promise.reject(new Error(archivedThreadErrorMessage("archived-thread-id")));
+        }
+        return { thread: { id: "archived-thread-id" } };
+      },
+      "thread/unarchive": () => {
+        threadRequests.push("thread/unarchive");
+        return { thread: { id: "archived-thread-id" } };
+      },
+      "thread/read": () => {
+        threadRequests.push("thread/read");
+        return { thread: { turns: [] } };
+      },
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const session = await provider.resumeSession(archivedThreadHandle());
+
+    expect(threadRequests).toEqual([
+      "thread/loaded/list",
+      "thread/resume",
+      "thread/unarchive",
+      "thread/resume",
+      "thread/read",
+    ]);
     await session.close();
     appServer.assertNoErrors();
   });
 
   test("closes Codex app-server when an interactive resume fails", async () => {
     const appServer = createFakeCodexAppServer({
-      "thread/resume": () =>
-        Promise.reject(new Error(archivedThreadErrorMessage("archived-thread-id"))),
+      "thread/resume": () => Promise.reject(new Error("thread resume failed")),
     });
     const killSpy = vi.spyOn(appServer.child, "kill");
     const provider = createProviderWithFakeAppServer(appServer);
 
     await expect(provider.resumeSession(archivedThreadHandle())).rejects.toThrow(
-      archivedThreadErrorMessage("archived-thread-id"),
+      "thread resume failed",
     );
 
     expect(killSpy).toHaveBeenCalledWith("SIGTERM");
@@ -1196,6 +1942,31 @@ describe("Codex app-server provider", () => {
 
     expect(threadRequests).toEqual([
       { method: "thread/unarchive", params: { threadId: "native-thread-id" } },
+    ]);
+    appServer.assertNoErrors();
+  });
+
+  test("archives the persisted native thread without opening an interactive session", async () => {
+    const threadRequests: Array<{ method: string; params: unknown }> = [];
+    const appServer = createFakeCodexAppServer({
+      "thread/archive": (params) => {
+        threadRequests.push({ method: "thread/archive", params });
+        return { thread: { id: "native-thread-id" } };
+      },
+    });
+    const provider = new CodexAppServerAgentClient(createTestLogger());
+    castInternals<{ spawnAppServer: () => Promise<ChildProcessWithoutNullStreams> }>(
+      provider,
+    ).spawnAppServer = async () => appServer.child;
+
+    await provider.archiveNativeSession({
+      provider: "codex",
+      sessionId: "persisted-thread-id",
+      nativeHandle: "native-thread-id",
+    });
+
+    expect(threadRequests).toEqual([
+      { method: "thread/archive", params: { threadId: "native-thread-id" } },
     ]);
     appServer.assertNoErrors();
   });
@@ -1317,6 +2088,195 @@ describe("Codex app-server provider", () => {
     appServer.assertNoErrors();
     await session.close();
   });
+
+  test("rewinds a legacy conversation with a bounded fork on Codex without thread/rollback", async () => {
+    const appServer = createFakeCodexAppServer({
+      initialize: () => ({ userAgent: "paseo/0.159.0 (Ubuntu 26.4.0; x86_64) (paseo; 0)" }),
+      "thread/read": () => ({
+        thread: { id: "thread-1", historyMode: "legacy", turns: [] },
+      }),
+      "thread/rollback": () => ({
+        __jsonRpcError: {
+          code: -32600,
+          message: "Invalid request: unknown variant `thread/rollback`",
+        },
+      }),
+    });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+
+    await session.startTurn("remember first");
+    emitCodexUserMessage(appServer, {
+      id: "codex-first",
+      text: "remember first",
+      turnId: "turn-first",
+    });
+    appServer.completeTurn();
+    await session.startTurn("remember second");
+    emitCodexUserMessage(appServer, {
+      id: "codex-second",
+      text: "remember second",
+      turnId: "turn-second",
+    });
+    appServer.completeTurn();
+
+    await session.revertConversation({ messageId: "codex-second" });
+
+    const forkRequests = appServer
+      .requests()
+      .filter((request) => request.method === "thread/fork")
+      .map((request) => request.params);
+    expect(forkRequests).toEqual([
+      {
+        threadId: "thread-1",
+        beforeTurnId: "turn-second",
+        cwd: "/workspace/project",
+        model: "gpt-5.4",
+        serviceTier: null,
+        excludeTurns: false,
+        persistExtendedHistory: true,
+      },
+    ]);
+    expect(appServer.recordedRollbacks).toEqual([]);
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({
+      sessionId: "forked-thread",
+    });
+    appServer.assertNoErrors();
+    await session.close();
+  });
+
+  test("rewinds a paginated conversation through the public session capability", async () => {
+    const appServer = createFakeCodexAppServer({
+      "thread/read": () => ({
+        thread: { id: "thread-1", historyMode: "paginated", turns: [] },
+      }),
+      "thread/rollback": () => {
+        throw new Error("paginated threads do not support thread/rollback");
+      },
+    });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+
+    await session.startTurn("remember first");
+    emitCodexUserMessage(appServer, {
+      id: "codex-first",
+      text: "remember first",
+      turnId: "turn-first",
+    });
+    appServer.completeTurn();
+    await session.startTurn("remember second");
+    emitCodexUserMessage(appServer, {
+      id: "codex-second",
+      text: "remember second",
+      turnId: "turn-second",
+    });
+    appServer.completeTurn();
+
+    await session.revertConversation({ messageId: "codex-first" });
+
+    const forkRequests = appServer
+      .requests()
+      .filter((request) => request.method === "thread/fork")
+      .map((request) => request.params);
+    expect(forkRequests).toEqual([
+      {
+        threadId: "thread-1",
+        beforeTurnId: "turn-first",
+        cwd: "/workspace/project",
+        model: "gpt-5.4",
+        serviceTier: null,
+        excludeTurns: false,
+        persistExtendedHistory: true,
+      },
+    ]);
+    expect(appServer.recordedRollbacks).toEqual([]);
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({
+      sessionId: "forked-thread",
+    });
+    appServer.assertNoErrors();
+    await session.close();
+  });
+
+  test.each(["legacy", "paginated"] as const)(
+    "rewinds a %s thread onto a fork that keeps the custom provider and runtime MCP servers",
+    async (historyMode) => {
+      const appServer = createFakeCodexAppServer(
+        historyMode === "paginated"
+          ? {
+              "thread/read": () => ({
+                thread: { id: "thread-1", historyMode: "paginated", turns: [] },
+              }),
+            }
+          : undefined,
+      );
+      const customCodexConfig = {
+        model_provider: "codex-custom",
+        model_providers: {
+          "codex-custom": {
+            name: "Custom Codex",
+            base_url: "https://custom-relay.example.com/v1",
+            env_key: "OPENAI_API_KEY",
+            requires_openai_auth: false,
+            wire_api: "responses",
+          },
+        },
+      };
+      const session = new CodexAppServerAgentSession(
+        createConfig({
+          cwd: "/workspace/project",
+          mcpServers: {
+            paseo: { type: "http", url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1" },
+          },
+        }),
+        null,
+        createTestLogger(),
+        async () => appServer.child,
+        { customCodexConfig },
+      );
+
+      await session.startTurn("remember first");
+      emitCodexUserMessage(appServer, {
+        id: "codex-first",
+        text: "remember first",
+        turnId: "turn-first",
+      });
+      appServer.completeTurn();
+      await session.startTurn("remember second");
+      emitCodexUserMessage(appServer, {
+        id: "codex-second",
+        text: "remember second",
+        turnId: "turn-second",
+      });
+      appServer.completeTurn();
+
+      await session.revertConversation({ messageId: "codex-first" });
+
+      const forkConfigs = appServer
+        .requests()
+        .filter((request) => request.method === "thread/fork")
+        .map((request) => (request.params as { config?: unknown }).config);
+      expect(forkConfigs).toEqual([
+        expect.objectContaining({
+          ...customCodexConfig,
+          mcp_servers: {
+            paseo: expect.objectContaining({
+              url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+            }),
+          },
+        }),
+      ]);
+      appServer.assertNoErrors();
+      await session.close();
+    },
+  );
 
   test("correlates a Codex user message with the submitting client message", async () => {
     const appServer = createFakeCodexAppServer();
@@ -1454,7 +2414,12 @@ describe("Codex app-server provider", () => {
       throw new Error(`resumeSession timed out; thread requests: ${threadRequests.join(", ")}`);
     }
 
-    expect(threadRequests).toEqual(["config/read", "thread/loaded/list", "thread/resume"]);
+    expect(threadRequests).toEqual([
+      "model/list",
+      "config/read",
+      "thread/loaded/list",
+      "thread/resume",
+    ]);
     expect(outcome).toBe("rejected");
     appServer.assertNoErrors();
   });
@@ -1474,7 +2439,9 @@ describe("Codex app-server provider", () => {
     };
 
     try {
-      await expect(listCodexSkills(cwd, workspaceGitService)).resolves.toContainEqual({
+      await expect(
+        listCodexSkills(cwd, path.join(tempDir, "codex-home"), workspaceGitService),
+      ).resolves.toContainEqual({
         name: "shipper",
         description: "Ship changes carefully.",
         argumentHint: "",
@@ -1626,6 +2593,71 @@ describe("Codex app-server provider", () => {
     });
   });
 
+  test("keeps an output field named properties as a field", () => {
+    const input = {
+      type: "object",
+      properties: { properties: { type: "string" } },
+      required: ["properties"],
+      additionalProperties: false,
+    };
+
+    expect(normalizeCodexOutputSchema(input)).toEqual(input);
+  });
+
+  test("normalizes schemas under keywords and leaves literal values alone", () => {
+    const literal = { type: "object", properties: { type: "string" } };
+    const input = {
+      type: "object",
+      properties: {
+        result: { $ref: "#/$defs/result" },
+        choice: { anyOf: [{ type: "object", properties: { id: { type: "string" } } }] },
+      },
+      $defs: {
+        properties: { type: "string" },
+        result: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          default: literal,
+          examples: [literal],
+          enum: [literal],
+          const: literal,
+        },
+      },
+    };
+
+    expect(normalizeCodexOutputSchema(input)).toEqual({
+      type: "object",
+      properties: {
+        result: { $ref: "#/$defs/result" },
+        choice: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { id: { type: "string" } },
+              required: ["id"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      required: ["result", "choice"],
+      additionalProperties: false,
+      $defs: {
+        properties: { type: "string" },
+        result: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          default: literal,
+          examples: [literal],
+          enum: [literal],
+          const: literal,
+          required: ["value"],
+          additionalProperties: false,
+        },
+      },
+    });
+  });
+
   test("passes a normalized output schema to turn/start", async () => {
     const session = createSession();
     const request = vi.fn(async (method: string) => {
@@ -1733,6 +2765,45 @@ describe("Codex app-server provider", () => {
       argumentHint: "",
       kind: "skill",
     });
+  });
+
+  test("lists custom prompts from the CODEX_HOME a custom provider runs Codex with", async () => {
+    await expect(listPromptCommandsFromCustomCodexHome()).resolves.toEqual([
+      "prompts:probe-profile",
+    ]);
+  });
+
+  test("runs a custom prompt from the CODEX_HOME a custom provider runs Codex with", async () => {
+    const records = await runPromptFromCustomCodexHome("/prompts:probe-profile");
+
+    expect(records.find((record) => record.kind === "env")?.CODEX_HOME).toMatch(
+      /provider-codex-home$/,
+    );
+    const turnStart = records.find((record) => record.method === "turn/start");
+    expect(JSON.stringify(turnStart?.params)).toContain("from the provider home");
+  });
+
+  test("inserts custom prompt arguments literally", async () => {
+    await expect(
+      expandCustomPrompt("Implement this exact request: $ARGUMENTS", "Preserve $1 unchanged"),
+    ).resolves.toBe("Implement this exact request: Preserve $1 unchanged");
+    await expect(
+      expandCustomPrompt("Treat this as literal replacement text: $VALUE.", 'VALUE="$&"'),
+    ).resolves.toBe("Treat this as literal replacement text: $&.");
+    await expect(expandCustomPrompt("$1 then $2", '"$2" two')).resolves.toBe("$2 then two");
+    await expect(expandCustomPrompt("$A and $B", 'A="$B" B=b')).resolves.toBe("$B and b");
+    await expect(
+      expandCustomPrompt("$ARGUMENTS", "keep __CODEX_DOLLAR_PLACEHOLDER__ as typed"),
+    ).resolves.toBe("keep __CODEX_DOLLAR_PLACEHOLDER__ as typed");
+  });
+
+  test("expands custom prompt placeholders and escapes", async () => {
+    await expect(
+      expandCustomPrompt("$1/$2 $NAME costs $$5, all: $ARGUMENTS, $MISSING", "one NAME=n two"),
+    ).resolves.toBe("one/two n costs $5, all: one NAME=n two, $MISSING");
+    await expect(
+      expandCustomPrompt("$$ARGUMENTS $$1 $$NAME $9|$NAME_SUFFIX", "first NAME=value"),
+    ).resolves.toBe("$ARGUMENTS $1 $NAME |$NAME_SUFFIX");
   });
 
   test("deduplicates Codex skill slash commands returned from multiple skill roots", async () => {
@@ -2854,6 +3925,22 @@ describe("Codex app-server provider", () => {
       turn: { status: "completed" },
     });
 
+    const providerSubagents = events.flatMap((event) =>
+      event.type === "provider_subagent" && event.event.type === "upsert" ? [event.event] : [],
+    );
+    expect(providerSubagents).toContainEqual(
+      expect.objectContaining({
+        id: "child-thread-root",
+        parentSubagentId: null,
+      }),
+    );
+    expect(providerSubagents).toContainEqual(
+      expect.objectContaining({
+        id: "grandchild-thread",
+        parentSubagentId: "child-thread-root",
+      }),
+    );
+
     const beforeParentCompletes = events
       .filter((event) => event.type === "timeline" && event.item.type === "tool_call")
       .map((event) => event.item);
@@ -2873,6 +3960,70 @@ describe("Codex app-server provider", () => {
     expect(events.at(-1)).toMatchObject({
       type: "timeline",
       item: { callId: "spawn-child-root", status: "completed" },
+    });
+  });
+
+  test("keeps a nested child under its spawning parent after a root interaction", () => {
+    const session = createSession();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+
+    asInternals(session).handleNotification("item/completed", {
+      threadId: "test-thread",
+      item: {
+        type: "subAgentActivity",
+        id: "spawn-child-root",
+        kind: "started",
+        agentThreadId: "child-thread-root",
+        agentPath: "/root/child",
+      },
+    });
+    asInternals(session).handleNotification("item/completed", {
+      threadId: "child-thread-root",
+      item: {
+        type: "subAgentActivity",
+        id: "spawn-grandchild",
+        kind: "started",
+        agentThreadId: "grandchild-thread",
+        agentPath: "/root/child/grandchild",
+      },
+    });
+    asInternals(session).handleNotification("item/completed", {
+      threadId: "test-thread",
+      item: {
+        type: "collabAgentToolCall",
+        id: "wait-for-grandchild",
+        tool: "wait",
+        status: "completed",
+        receiverThreadIds: ["grandchild-thread"],
+        agentsStates: {
+          "grandchild-thread": { status: "running", message: null },
+        },
+      },
+    });
+    asInternals(session).handleNotification("item/agentMessage/delta", {
+      threadId: "grandchild-thread",
+      itemId: "grandchild-after-wait",
+      delta: "Still nested.",
+    });
+
+    const grandchildUpserts = events.flatMap((event) =>
+      event.type === "provider_subagent" &&
+      event.event.type === "upsert" &&
+      event.event.id === "grandchild-thread"
+        ? [event.event]
+        : [],
+    );
+    expect(grandchildUpserts.map((event) => event.parentSubagentId)).toEqual([
+      "child-thread-root",
+      "child-thread-root",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "timeline",
+      item: {
+        callId: "spawn-child-root",
+        detail: { type: "sub_agent", log: expect.stringContaining("Still nested.") },
+      },
     });
   });
 
@@ -3063,6 +4214,34 @@ describe("Codex app-server provider", () => {
     }
   });
 
+  test("treats Codex already having no active turn as an acknowledged interrupt", async () => {
+    const appServer = createFakeCodexAppServer({
+      "turn/interrupt": () => ({
+        __jsonRpcError: { code: -32600, message: "no active turn to interrupt" },
+      }),
+    });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+
+    try {
+      const resultPromise = session.run("Wait for the child.");
+      await appServer.waitForTurnStart();
+      appServer.startsTurn({ threadId: "thread-1", turnId: "turn-already-idle" });
+
+      await expect(session.interrupt()).resolves.toBeUndefined();
+
+      appServer.completeTurn();
+      await resultPromise;
+      appServer.assertNoErrors();
+    } finally {
+      await session.close();
+    }
+  });
+
   test("waits for Codex to identify an accepted turn before interrupting it", async () => {
     const interruptedTurns: unknown[] = [];
     const appServer = createFakeCodexAppServer({
@@ -3095,7 +4274,7 @@ describe("Codex app-server provider", () => {
     }
   });
 
-  test("does not interrupt after the accepted turn terminates before identification", async () => {
+  test("acknowledges interruption when the accepted turn terminates before identification", async () => {
     const interruptedTurns: unknown[] = [];
     const appServer = createFakeCodexAppServer({
       "turn/interrupt": async (params) => {
@@ -3116,9 +4295,7 @@ describe("Codex app-server provider", () => {
       const interruptPromise = session.interrupt();
       appServer.completeTurn();
 
-      await expect(interruptPromise).rejects.toThrow(
-        "Cannot interrupt Codex before turn/started identifies the active turn",
-      );
+      await expect(interruptPromise).resolves.toBeUndefined();
       await resultPromise;
       expect(interruptedTurns).toEqual([]);
       appServer.assertNoErrors();
@@ -3127,7 +4304,7 @@ describe("Codex app-server provider", () => {
     }
   });
 
-  test("rejects an interrupt before Codex initializes the thread", async () => {
+  test("acknowledges interruption before Codex initializes a thread", async () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(
       createConfig({ cwd: "/workspace/project" }),
@@ -3136,11 +4313,51 @@ describe("Codex app-server provider", () => {
       async () => appServer.child,
     );
 
-    await expect(session.interrupt()).rejects.toThrow(
-      "Cannot interrupt Codex before the active thread is initialized",
-    );
+    await expect(session.interrupt()).resolves.toBeUndefined();
 
     await session.close();
+  });
+
+  test("cancels a cold start before it can issue a native turn", async () => {
+    const threadStart = deferred<{ thread: { id: string } }>();
+    const appServer = createFakeCodexAppServer({
+      "thread/start": () => threadStart.promise,
+    });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ cwd: "/workspace/project" }),
+      null,
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    const resultPromise = session.run("Start after the delayed thread.");
+
+    try {
+      await appServer.waitForRequest("thread/start");
+      let interruptSettled = false;
+      const interruptPromise = session.interrupt().then(() => {
+        interruptSettled = true;
+        return undefined;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(interruptSettled).toBe(false);
+
+      threadStart.resolve({ thread: { id: "thread-1" } });
+      await expect(interruptPromise).resolves.toBeUndefined();
+      await expect(resultPromise).rejects.toThrow("interrupted before reaching Codex");
+      expect(appServer.requests()).not.toContainEqual(
+        expect.objectContaining({ method: "turn/start" }),
+      );
+      appServer.assertNoErrors();
+    } finally {
+      threadStart.resolve({ thread: { id: "thread-1" } });
+      const nativeStart = await appServer.waitForTurnStart().catch(() => null);
+      if (nativeStart) {
+        appServer.startsTurn({ threadId: "thread-1", turnId: "cleanup-turn" });
+        appServer.completeTurn();
+      }
+      await resultPromise.catch(() => undefined);
+      await session.close();
+    }
   });
 
   test("interrupts an autonomous Codex turn identified by live notifications", async () => {
@@ -3367,7 +4584,7 @@ describe("Codex app-server provider", () => {
       }),
     };
 
-    await asInternals(session).loadPersistedHistory();
+    await asInternals(session).loadPersistedHistory(session.client);
 
     const history: AgentStreamEvent[] = [];
     for await (const event of session.streamHistory()) {
@@ -3398,6 +4615,35 @@ describe("Codex app-server provider", () => {
         },
       },
     ]);
+  });
+
+  test("retains native turn ids from persisted user messages", async () => {
+    const session = createSession();
+    session.client = {
+      request: vi.fn(async () => ({
+        thread: {
+          turns: [
+            {
+              id: "native-turn-1",
+              items: [
+                {
+                  type: "userMessage",
+                  id: "message-history",
+                  content: [{ type: "text", text: "History prompt" }],
+                },
+              ],
+            },
+          ],
+        },
+      })),
+    };
+
+    await asInternals(session).loadPersistedHistory(session.client);
+
+    expect(asInternals(session).codexUserMessageTurns().resolve("message-history")).toEqual({
+      index: 0,
+      turnId: "native-turn-1",
+    });
   });
 
   test("loads mixed legacy and MultiAgentV2 sub-agent history", async () => {
@@ -3461,7 +4707,7 @@ describe("Codex app-server provider", () => {
       }),
     };
 
-    await asInternals(session).loadPersistedHistory();
+    await asInternals(session).loadPersistedHistory(session.client);
 
     const history: AgentStreamEvent[] = [];
     for await (const event of session.streamHistory()) {
@@ -3578,6 +4824,69 @@ describe("Codex app-server provider", () => {
     });
   });
 
+  test("restores nested MultiAgentV2 ownership from persisted child threads", async () => {
+    const session = createSession();
+    session.client = {
+      request: vi.fn(async (method: string, params: unknown) => {
+        if (method !== "thread/read") {
+          return {};
+        }
+        const threadId = (params as { threadId?: string }).threadId;
+        const itemsByThreadId = {
+          "test-thread": [
+            {
+              type: "subAgentActivity",
+              id: "spawn-persisted-child",
+              kind: "started",
+              agentThreadId: "persisted-child",
+              agentPath: "/root/persisted-child",
+            },
+            {
+              type: "collabAgentToolCall",
+              id: "root-wait-grandchild",
+              tool: "wait",
+              status: "completed",
+              receiverThreadIds: ["persisted-grandchild"],
+              agentsStates: { "persisted-grandchild": { status: "completed" } },
+            },
+          ],
+          "persisted-child": [
+            {
+              type: "subAgentActivity",
+              id: "spawn-persisted-grandchild",
+              kind: "started",
+              agentThreadId: "persisted-grandchild",
+              agentPath: "/root/persisted-child/grandchild",
+            },
+          ],
+        } as const;
+        const items = threadId ? itemsByThreadId[threadId as keyof typeof itemsByThreadId] : [];
+        return {
+          thread: {
+            turns: items ? [{ items }] : [],
+          },
+        };
+      }),
+    };
+
+    await asInternals(session).loadPersistedHistory(session.client);
+
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) {
+      history.push(event);
+    }
+    const upserts = history.flatMap((event) =>
+      event.type === "provider_subagent" && event.event.type === "upsert" ? [event.event] : [],
+    );
+    expect(upserts).toEqual([
+      expect.objectContaining({ id: "persisted-child", parentSubagentId: null }),
+      expect.objectContaining({
+        id: "persisted-grandchild",
+        parentSubagentId: "persisted-child",
+      }),
+    ]);
+  });
+
   test("coalesces persisted MultiAgentV2 activity for one child into one terminal card", async () => {
     const session = createSession();
     session.client = {
@@ -3625,7 +4934,7 @@ describe("Codex app-server provider", () => {
       }),
     };
 
-    await asInternals(session).loadPersistedHistory();
+    await asInternals(session).loadPersistedHistory(session.client);
 
     const history: AgentStreamEvent[] = [];
     for await (const event of session.streamHistory()) {
@@ -3799,7 +5108,7 @@ describe("Codex app-server provider", () => {
       }),
     };
 
-    await asInternals(session).loadPersistedHistory();
+    await asInternals(session).loadPersistedHistory(session.client);
 
     const history: AgentStreamEvent[] = [];
     for await (const event of session.streamHistory()) {
@@ -3860,7 +5169,7 @@ describe("Codex app-server provider", () => {
       }),
     };
 
-    await asInternals(session).loadPersistedHistory();
+    await asInternals(session).loadPersistedHistory(session.client);
 
     const history: AgentStreamEvent[] = [];
     for await (const event of session.streamHistory()) {
@@ -4367,14 +5676,22 @@ describe("Codex app-server provider", () => {
       turn: { status: "completed", error: null },
     });
 
-    expect(
-      events.some(
-        (event) =>
-          event.type === "timeline" &&
-          event.item.type === "tool_call" &&
-          event.item.detail.type === "plan",
-      ),
-    ).toBe(false);
+    expect(events.at(-3)).toEqual({
+      type: "timeline",
+      provider: "codex",
+      turnId: "test-turn",
+      item: {
+        type: "tool_call",
+        callId: session.getPendingPermissions()[0]?.id,
+        name: "plan_approval",
+        status: "running",
+        error: null,
+        detail: {
+          type: "plan",
+          text: "- Inspect the existing auth flow\n- Implement the button behavior",
+        },
+      },
+    });
     expect(events.at(-2)).toEqual({
       type: "permission_requested",
       provider: "codex",
@@ -4409,7 +5726,7 @@ describe("Codex app-server provider", () => {
     });
   });
 
-  test("does not emit Codex plan thread items as timeline cards while plan approval is pending", () => {
+  test("does not complete Codex plan timeline cards while plan approval is pending", () => {
     const session = createSession({
       featureValues: { plan_mode: true, fast_mode: true },
     });
@@ -4435,6 +5752,7 @@ describe("Codex app-server provider", () => {
         type: "timeline",
         item: expect.objectContaining({
           type: "tool_call",
+          status: "completed",
           detail: expect.objectContaining({ type: "plan" }),
         }),
       }),
@@ -4684,7 +6002,7 @@ describe("Codex app-server provider", () => {
         turnId: "test-turn",
         item: {
           type: "assistant_message",
-          text: "![Image](file:///tmp/paseo%20image.png)",
+          text: "\n\n![Image](file:///tmp/paseo%20image.png)\n\n",
         },
       },
     ]);
@@ -4716,7 +6034,7 @@ describe("Codex app-server provider", () => {
           turnId: "test-turn",
           item: {
             type: "assistant_message",
-            text: `![Image](${expectedPath})`,
+            text: `\n\n![Image](${expectedPath})\n\n`,
           },
         },
       ]);
@@ -4900,6 +6218,107 @@ describe("Codex app-server provider", () => {
         provider: "codex",
         turnId: "test-turn",
         usage: undefined,
+      },
+    ]);
+  });
+
+  test.each([
+    [
+      "a usage limit",
+      { type: "usageLimitExceeded", limitId: "image_gen", resetsAt: 1786150800 },
+      { type: "usageLimitExceeded", limitId: "image_gen", resetsAt: 1786150800 },
+    ],
+    ["no failure details", null, { message: "Image generation failed" }],
+  ])(
+    "emits failed imageGeneration items with %s as failed tool calls",
+    (_label, failure, expectedError) => {
+      const session = createSession();
+      const events: AgentStreamEvent[] = [];
+      session.subscribe((event) => events.push(event));
+
+      asInternals(session).handleNotification("item/completed", {
+        item: {
+          id: "image-generation-failed",
+          type: "imageGeneration",
+          status: "failed",
+          revisedPrompt: "paint a blue whale",
+          result: "",
+          transparentBackground: null,
+          failure,
+          savedPath: null,
+        },
+      });
+
+      expect(events).toEqual([
+        {
+          type: "timeline",
+          provider: "codex",
+          turnId: "test-turn",
+          item: {
+            type: "tool_call",
+            callId: "image-generation-failed",
+            name: "image_generation",
+            status: "failed",
+            error: expectedError,
+            detail: {
+              type: "unknown",
+              input: { prompt: "paint a blue whale" },
+              output: null,
+            },
+          },
+        },
+      ]);
+    },
+  );
+
+  test("keeps failed imageGeneration items in persisted history", async () => {
+    const session = createSession();
+    session.client = {
+      request: vi.fn(async () => ({
+        thread: {
+          turns: [
+            {
+              items: [
+                {
+                  type: "imageGeneration",
+                  id: "image-generation-failed",
+                  status: "failed",
+                  revisedPrompt: "paint a blue whale",
+                  result: "",
+                  transparentBackground: null,
+                  failure: { type: "usageLimitExceeded", limitId: "image_gen", resetsAt: null },
+                  savedPath: null,
+                },
+              ],
+            },
+          ],
+        },
+      })),
+    };
+
+    await asInternals(session).loadPersistedHistory(session.client);
+
+    const history: AgentStreamEvent[] = [];
+    for await (const event of session.streamHistory()) {
+      history.push(event);
+    }
+
+    expect(history).toEqual([
+      {
+        type: "timeline",
+        provider: "codex",
+        item: {
+          type: "tool_call",
+          callId: "image-generation-failed",
+          name: "image_generation",
+          status: "failed",
+          error: { type: "usageLimitExceeded", limitId: "image_gen", resetsAt: null },
+          detail: {
+            type: "unknown",
+            input: { prompt: "paint a blue whale" },
+            output: null,
+          },
+        },
       },
     ]);
   });
@@ -5326,6 +6745,187 @@ describe("Codex app-server provider", () => {
 });
 
 describe("Codex importable sessions", () => {
+  const CODEX_THREAD_PAGE_CAP = 100;
+
+  // Codex answers thread/list with at most 100 rows per response whatever limit
+  // the caller asks for, and hands back a cursor for the remaining threads.
+  function cappedThreadListHandler(threads: Array<Record<string, unknown>>) {
+    return (input: unknown) => {
+      const params = (input ?? {}) as {
+        limit?: number;
+        cursor?: string;
+        cwd?: string;
+        sortKey?: string;
+      };
+      const recencyKey = params.sortKey === "updated_at" ? "updatedAt" : "createdAt";
+      const matching = threads
+        .filter((thread) => !params.cwd || thread.cwd === params.cwd)
+        .sort((a, b) => Number(b[recencyKey]) - Number(a[recencyKey]));
+      const offset = Number(params.cursor ?? 0);
+      const page = matching.slice(
+        offset,
+        offset + Math.min(params.limit ?? CODEX_THREAD_PAGE_CAP, CODEX_THREAD_PAGE_CAP),
+      );
+      const nextOffset = offset + page.length;
+      return {
+        data: page,
+        nextCursor: nextOffset < matching.length ? String(nextOffset) : null,
+      };
+    };
+  }
+
+  function threadsUsedInReverseCreationOrder(count: number) {
+    // The most recently used thread is also the oldest one created, so a scan
+    // that follows Codex's creation-time page order misses it.
+    return Array.from({ length: count }, (_, index) => ({
+      id: `thread-${index}`,
+      cwd: "/workspace/project-a",
+      preview: `Session ${index}`,
+      createdAt: index,
+      updatedAt: count - index,
+    }));
+  }
+
+  test("fills the requested window across the pages Codex caps at 100 rows", async () => {
+    const threads = threadsUsedInReverseCreationOrder(250);
+    const appServer = createFakeCodexAppServer({
+      "thread/list": cappedThreadListHandler([
+        ...threads,
+        { id: "other-project", cwd: "/workspace/project-b", createdAt: 9000, updatedAt: 9000 },
+      ]),
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const sessions = await provider.listImportableSessions({
+      limit: 240,
+      cwd: "/workspace/project-a",
+    });
+
+    expect(sessions.map((session) => session.providerHandleId)).toEqual(
+      threads.slice(0, 240).map((thread) => thread.id),
+    );
+    appServer.assertNoErrors();
+  });
+
+  test("keeps the scanned window on the most recently used threads", async () => {
+    const threads = threadsUsedInReverseCreationOrder(550);
+    const appServer = createFakeCodexAppServer({
+      "thread/list": cappedThreadListHandler(threads),
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const sessions = await provider.listImportableSessions({ limit: 500, scanLimit: 700 });
+
+    expect(sessions.map((session) => session.providerHandleId)).toEqual(
+      threads.slice(0, 500).map((thread) => thread.id),
+    );
+    appServer.assertNoErrors();
+  });
+
+  test("keeps a thread once when it moves onto a later page mid-scan", async () => {
+    // A thread used while the scan is paging sorts to the front and comes back
+    // on the next page.
+    const appServer = createFakeCodexAppServer({
+      "thread/list": (input) => {
+        const { cursor } = (input ?? {}) as { cursor?: string };
+        return cursor
+          ? {
+              data: [
+                { id: "thread-1", cwd: "/workspace/project-a", updatedAt: 9000 },
+                { id: "thread-3", cwd: "/workspace/project-a", updatedAt: 1000 },
+              ],
+              nextCursor: null,
+            }
+          : {
+              data: [
+                { id: "thread-1", cwd: "/workspace/project-a", updatedAt: 3000 },
+                { id: "thread-2", cwd: "/workspace/project-a", updatedAt: 2000 },
+              ],
+              nextCursor: "page-2",
+            };
+      },
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const sessions = await provider.listImportableSessions({ limit: 500, scanLimit: 500 });
+
+    expect(sessions.map((session) => session.providerHandleId)).toEqual([
+      "thread-1",
+      "thread-2",
+      "thread-3",
+    ]);
+    appServer.assertNoErrors();
+  });
+
+  test("stops scanning when Codex pages without handing back a new thread", async () => {
+    const appServer = createFakeCodexAppServer({
+      // A cursor cycle: the two pages after the first serve threads the scan
+      // already holds and point at each other, so it can never fill its window.
+      "thread/list": (input) => {
+        const { cursor } = (input ?? {}) as { cursor?: string };
+        const thread = { id: "thread-1", cwd: "/workspace/project-a" };
+        if (cursor === "page-a") return { data: [thread], nextCursor: "page-b" };
+        if (cursor === "page-b") return { data: [thread], nextCursor: "page-a" };
+        return { data: [thread], nextCursor: "page-a" };
+      },
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const sessions = await provider.listImportableSessions({ limit: 500, scanLimit: 500 });
+
+    expect(sessions.map((session) => session.providerHandleId)).toEqual(["thread-1"]);
+    appServer.assertNoErrors();
+  });
+
+  // Codex filters thread/list by model provider: with no `modelProviders` it
+  // returns only threads of the provider its own config selects, an empty
+  // list returns every provider, and a list returns only those providers.
+  function providerFilteringThreadListHandler(threads: Array<Record<string, unknown>>) {
+    return (input: unknown) => {
+      const { modelProviders } = (input ?? {}) as { modelProviders?: string[] };
+      const included = (thread: Record<string, unknown>) => {
+        if (modelProviders === undefined) return thread.modelProvider === "openai";
+        if (modelProviders.length === 0) return true;
+        return modelProviders.includes(String(thread.modelProvider));
+      };
+      return { data: threads.filter(included), nextCursor: null };
+    };
+  }
+
+  const threadsByModelProvider = [
+    { id: "stock-thread", cwd: "/workspace/project-a", modelProvider: "openai", updatedAt: 2 },
+    { id: "custom-thread", cwd: "/workspace/project-a", modelProvider: "my-codex", updatedAt: 1 },
+  ];
+
+  test("a custom Codex provider lists the threads it created", async () => {
+    const appServer = createFakeCodexAppServer({
+      "thread/list": providerFilteringThreadListHandler(threadsByModelProvider),
+    });
+    const provider = createProviderWithFakeAppServer(appServer, {
+      runtimeSettings: {
+        env: { OPENAI_BASE_URL: "https://llm.example.test/v1", OPENAI_API_KEY: "test-key" },
+      },
+      customProvider: { id: "my-codex", label: "My Codex", extends: "codex" },
+    });
+
+    const sessions = await provider.listImportableSessions({ cwd: "/workspace/project-a" });
+
+    expect(sessions.map((session) => session.providerHandleId)).toEqual(["custom-thread"]);
+    appServer.assertNoErrors();
+  });
+
+  test("stock Codex keeps listing only its own threads", async () => {
+    const appServer = createFakeCodexAppServer({
+      "thread/list": providerFilteringThreadListHandler(threadsByModelProvider),
+    });
+    const provider = createProviderWithFakeAppServer(appServer);
+
+    const sessions = await provider.listImportableSessions({ cwd: "/workspace/project-a" });
+
+    expect(sessions.map((session) => session.providerHandleId)).toEqual(["stock-thread"]);
+    appServer.assertNoErrors();
+  });
+
   test("listImportableSessions uses thread list metadata without hydrating thread history", async () => {
     const allThreads = [
       {
@@ -5406,7 +7006,164 @@ describe("Codex importable sessions", () => {
           capabilities: { experimentalApi: true, mcpServerOpenaiFormElicitation: true },
         },
       },
-      { method: "thread/list", params: { limit: 50, cwd: "/workspace/project-a" } },
+      {
+        method: "thread/list",
+        params: { limit: 50, sortKey: "updated_at", cwd: "/workspace/project-a" },
+      },
     ]);
   });
+});
+
+describe("Codex denied plan approvals", () => {
+  function planApprovalRows(events: AgentStreamEvent[]) {
+    return events.filter(
+      (event) =>
+        event.type === "timeline" &&
+        event.item.type === "tool_call" &&
+        event.item.name === "plan_approval" &&
+        event.item.status === "completed",
+    );
+  }
+
+  function createPlanSession(): { session: CodexTestSession; events: AgentStreamEvent[] } {
+    const session = createSession();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    castInternals<{ emitSyntheticPlanApprovalRequest: (planText: string) => void }>(
+      session,
+    ).emitSyntheticPlanApprovalRequest("Ship the thing");
+    return { session, events };
+  }
+
+  function pendingPlanRequestId(session: CodexTestSession): string {
+    const [request] = session.getPendingPermissions?.() ?? [];
+    if (!request) throw new Error("expected a pending plan permission");
+    return request.id;
+  }
+
+  test("answering the card with a denial records the plan decision", async () => {
+    const { session, events } = createPlanSession();
+    const requestId = pendingPlanRequestId(session);
+
+    await session.respondToPermission?.(requestId, {
+      behavior: "deny",
+      message: "The user answered with a message instead of approving.",
+    });
+
+    const [row] = planApprovalRows(events);
+    expect(row).toBeDefined();
+    expect((row as { item: { detail: unknown; metadata?: unknown } }).item).toMatchObject({
+      detail: { type: "plan", text: "Ship the thing" },
+      metadata: { approved: false },
+    });
+  });
+
+  test("a plan superseded by a new prompt records the same decision", () => {
+    const { session, events } = createPlanSession();
+
+    castInternals<{ dismissPendingPlanApprovals: (message: string) => void }>(
+      session,
+    ).dismissPendingPlanApprovals("Dismissed by a new prompt");
+
+    // dismissPendingPlanApprovals goes straight to resolvePlanPermission, so a
+    // row emitted from the response handler would miss this route entirely.
+    const [row] = planApprovalRows(events);
+    expect(row).toBeDefined();
+    expect((row as { item: { detail: unknown; metadata?: unknown } }).item).toMatchObject({
+      detail: { type: "plan", text: "Ship the thing" },
+      metadata: { approved: false },
+    });
+  });
+});
+
+describe("Codex interactive resume startup", () => {
+  test("delivers an autonomous turn that starts during resume to the first subscriber", async () => {
+    const appServer = createFakeCodexAppServer({
+      "turn/interrupt": () => ({}),
+      "thread/resume": () => {
+        appServer.startsTurn({ threadId: "saved-thread", turnId: "autonomous-turn" });
+        appServer.says({ threadId: "saved-thread", text: "Working on the goal" });
+        return { thread: { id: "saved-thread" } };
+      },
+      "thread/read": () => ({ thread: { turns: [] } }),
+    });
+    const session = new CodexAppServerAgentSession(
+      createConfig({ modeId: "full-access" }),
+      { sessionId: "saved-thread" },
+      createTestLogger(),
+      async () => appServer.child,
+    );
+    try {
+      await session.connect();
+      const events: AgentStreamEvent[] = [];
+      const unsubscribe = session.subscribe((event) => events.push(event));
+      expect(events.some((event) => event.type === "turn_started")).toBe(true);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "timeline" &&
+            event.item.type === "assistant_message" &&
+            event.item.text.includes("Working on the goal"),
+        ),
+      ).toBe(true);
+      await session.interrupt();
+      expect(
+        appServer.requests().find((request) => request.method === "turn/interrupt"),
+      ).toMatchObject({ params: { threadId: "saved-thread", turnId: "autonomous-turn" } });
+      unsubscribe();
+      const laterEvents: AgentStreamEvent[] = [];
+      session.subscribe((event) => laterEvents.push(event));
+      expect(laterEvents).toEqual([]);
+    } finally {
+      await session.close();
+      appServer.assertNoErrors();
+    }
+  });
+  test.each([false, true])(
+    "applies resumed goal events before returning (completed during resume: %s)",
+    async (completedDuringResume) => {
+      const appServer = createFakeCodexAppServer({
+        "thread/resume": () => {
+          appServer.startsTurn({ threadId: "saved-thread", turnId: "autonomous-turn" });
+          if (completedDuringResume) appServer.completeTurn({ threadId: "saved-thread" });
+          return { thread: { id: "saved-thread" } };
+        },
+        "thread/read": () => ({ thread: { turns: [] } }),
+      });
+      const session = new CodexAppServerAgentSession(
+        createConfig({ title: "Resumed goal", cwd: process.cwd() }),
+        { sessionId: "saved-thread" },
+        createTestLogger(),
+        async () => appServer.child,
+      );
+      const client: AgentClient = {
+        provider: "codex",
+        capabilities: session.capabilities,
+        isAvailable: async () => true,
+        fetchCatalog: async () => ({ models: [], modes: [] }),
+        createSession: async () => {
+          throw new Error("Unexpected create");
+        },
+        resumeSession: async () => {
+          await session.connect();
+          return session;
+        },
+      };
+      const manager = new AgentManager({ clients: { codex: client }, logger: createTestLogger() });
+      let id: string | undefined;
+      try {
+        const resumed = await manager.resumeAgentFromPersistence(
+          { provider: "codex", sessionId: "saved-thread" },
+          createConfig({ title: "Resumed goal", cwd: process.cwd() }),
+        );
+        id = resumed.id;
+        expect(resumed.lifecycle).toBe(completedDuringResume ? "idle" : "running");
+        expect(manager.getAgent(id)?.lifecycle).toBe(completedDuringResume ? "idle" : "running");
+      } finally {
+        if (id) await manager.closeAgent(id);
+        await session.close();
+        appServer.assertNoErrors();
+      }
+    },
+  );
 });

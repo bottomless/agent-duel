@@ -13,6 +13,8 @@ export interface SeedWorkspaceDescriptor {
   projectDisplayName: string;
   projectRootPath: string;
   workspaceDirectory: string;
+  diffStat: { additions: number; deletions: number } | null;
+  labels?: string[];
 }
 
 interface SeedProjectDescriptor {
@@ -44,6 +46,14 @@ export interface SeedDaemonClient {
   fetchWorkspaces(options?: { filter?: { projectId?: string } }): Promise<{
     entries: SeedWorkspaceDescriptor[];
   }>;
+  setWorkspaceTitle(workspaceId: string, title: string | null): Promise<{ title: string | null }>;
+  setWorkspacePinned(workspaceId: string, pinned: boolean): Promise<{ pinnedAt: string | null }>;
+  clearWorkspaceAttention(workspaceId: string): Promise<void>;
+  setWorkspaceLabel(input: {
+    workspaceId: string;
+    label: { name: string; color: "red" };
+    assigned: boolean;
+  }): Promise<unknown>;
   listProjects(): Promise<{ projects: SeedProjectDescriptor[] }>;
   createWorkspace(input: {
     source:
@@ -59,10 +69,12 @@ export interface SeedDaemonClient {
           worktreeSlug?: string;
         };
     title?: string;
+    background?: boolean;
   }): Promise<{
     workspace: SeedWorkspaceDescriptor | null;
     error: string | null;
   }>;
+  archiveWorkspace(workspaceId: string): Promise<{ error: string | null }>;
   /**
    * Force the daemon to recompute its git snapshot and diff for a checkout,
    * mirroring the UI's manual refresh. Tests use this to make an out-of-band
@@ -126,6 +138,7 @@ export interface SeedDaemonClient {
     predicate: (snapshot: { status: string }) => boolean,
     timeout?: number,
   ): Promise<{ status: string }>;
+  cancelAgent(agentId: string): Promise<void>;
   sendAgentMessage(agentId: string, text: string): Promise<void>;
   waitForFinish(
     agentId: string,
@@ -140,6 +153,7 @@ export interface SeedDaemonClient {
     features?: {
       projectAdd?: boolean;
       workspaceRecovery?: boolean;
+      workspaceMarkUnread?: boolean;
     } | null;
   } | null;
   fetchAgentHistory(options?: { page?: { limit: number }; archivedOnly?: boolean }): Promise<{
@@ -207,6 +221,7 @@ export interface SeededWorkspace {
 export async function seedWorkspace(options: {
   repoPrefix: string;
   title?: string;
+  background?: boolean;
   port?: number;
   sessionToken?: string;
   /** Repo fixture options; only applies to git projects (the default). */
@@ -226,6 +241,7 @@ export async function seedWorkspace(options: {
     const created = await client.createWorkspace({
       source: { kind: "directory", path: project.path },
       title: options.title,
+      background: options.background,
     });
     if (!created.workspace) {
       throw new Error(created.error ?? `Failed to create workspace ${project.path}`);

@@ -1,3 +1,5 @@
+import { revealWorkspaceTab } from "@/workspace-tabs/navigation";
+import { usePanelStore } from "@/stores/panel-store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useLocalSearchParams, usePathname } from "expo-router";
 import { useEffect, useSyncExternalStore } from "react";
@@ -25,6 +27,7 @@ export type { NavigateToWorkspaceInput } from "./navigation";
 const lastWorkspaceSelectionStorage: LastWorkspaceSelectionStorage = {
   read: () => AsyncStorage.getItem(LAST_WORKSPACE_SELECTION_STORAGE_KEY),
   write: (value) => AsyncStorage.setItem(LAST_WORKSPACE_SELECTION_STORAGE_KEY, value),
+  clear: () => AsyncStorage.removeItem(LAST_WORKSPACE_SELECTION_STORAGE_KEY),
 };
 
 const lastWorkspaceSelectionStore = createLastWorkspaceSelectionStore(
@@ -33,13 +36,18 @@ const lastWorkspaceSelectionStore = createLastWorkspaceSelectionStore(
 
 function navigateDeps(): NavigateToWorkspaceDeps {
   return {
+    revealTab: revealWorkspaceTab,
+    revealWorkspace: () => {
+      if (useWorkspaceLayoutStore.getState().layoutMode === "compact") {
+        usePanelStore.getState().showMobileAgent();
+      }
+    },
     getSessionWorkspaces: (serverId) => useSessionStore.getState().sessions[serverId]?.workspaces,
     getSessionAgents: (serverId) =>
       useSessionStore.getState().sessions[serverId]?.agents.values() ?? [],
-    openTabFocused: (workspaceKey, target) =>
-      useWorkspaceLayoutStore.getState().openTabFocused(workspaceKey, target),
-    pinAgent: (workspaceKey, agentId) =>
-      useWorkspaceLayoutStore.getState().pinAgent(workspaceKey, agentId),
+    isWorkspaceLayoutHydrated: () => useWorkspaceLayoutStore.persist.hasHydrated(),
+    deferOpenTab: (input) => useWorkspaceLayoutStore.getState().deferOpenTab(input),
+    openTab: (input) => useWorkspaceLayoutStore.getState().openTab(input),
     rememberLastWorkspace: (selection) => lastWorkspaceSelectionStore.remember(selection),
     navigateToRoute: (route) => {
       navigateToHostWorkspaceRoute(route);

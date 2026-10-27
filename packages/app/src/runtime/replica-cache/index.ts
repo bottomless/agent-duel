@@ -1,170 +1,660 @@
-import { Buffer } from "buffer";
 import { z } from "zod";
 import {
-  AgentSnapshotPayloadSchema,
-  ProjectPlacementPayloadSchema,
-  WorkspaceDescriptorPayloadSchema,
-  WorkspaceProjectDescriptorPayloadSchema,
-  type AgentSnapshotPayload,
-  type WorkspaceDescriptorPayload,
+  AgentStatusSchema,
+  AgentTimelineItemPayloadSchema,
+  WorkspaceGitHubRuntimePayloadSchema,
 } from "@getpaseo/protocol/messages";
+import { AgentProviderSchema } from "@getpaseo/protocol/provider-manifest";
+import type { PluginTimelineData } from "@getpaseo/plugin";
 import {
   normalizeProjectDescriptor,
   normalizeWorkspaceDescriptor,
-  selectAgentTimelineState,
-  useSessionStore,
   type Agent,
-  type SessionReplica,
-  type SessionState,
+  type AgentTimelineCursorState,
   type ProjectDescriptor,
   type WorkspaceDescriptor,
 } from "@/stores/session-store";
-import { isUnreconciledLocalUserMessage, type StreamItem } from "@/types/stream";
+import {
+  isUnreconciledLocalUserMessage,
+  type AgentToolCallData,
+  type StreamItem,
+} from "@/types/stream";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
+import { clearLegacyReplicaCache } from "./legacy-cleanup";
+import {
+  REPLICA_SINGLETON_ROW_ID,
+  type ReplicaRow,
+  type ReplicaRowChanges,
+  type ReplicaRowKey,
+  type ReplicaRowKind,
+  type ReplicaRowStore,
+} from "./row-store";
 
-const STORAGE_KEY = "@paseo:replica-cache";
-const CACHE_VERSION = 3;
-const PERSIST_DELAY_MS = 750;
+export type DirectoryReplicaMutation =
+  | { kind: "agent"; type: "upsert"; id: string; value: Agent }
+  | { kind: "agent"; type: "delete"; id: string }
+  | { kind: "workspace"; type: "upsert"; id: string; value: WorkspaceDescriptor }
+  | { kind: "workspace"; type: "delete"; id: string }
+  | { kind: "project"; type: "upsert"; id: string; value: ProjectDescriptor }
+  | { kind: "project"; type: "delete"; id: string };
+
+export interface CachedDirectory {
+  agents: Map<string, Agent>;
+  workspaces: Map<string, WorkspaceDescriptor>;
+  projects: Map<string, ProjectDescriptor>;
+  checkpoint?: DirectoryCheckpoint;
+}
+
+export interface CachedWorkspace {
+  workspace: WorkspaceDescriptor;
+  project?: ProjectDescriptor;
+}
+
+export interface DirectoryCursor {
+  generation: string;
+  afterSeq: number;
+}
+
+export interface DirectoryCheckpoint {
+  projects?: DirectoryCursor;
+  workspaces?: DirectoryCursor;
+  agents?: DirectoryCursor;
+}
+
+export interface CachedTimeline {
+  agentId: string;
+  items: StreamItem[];
+  range: AgentTimelineCursorState | null;
+  hasOlder: boolean;
+}
+
+const PERSIST_DELAY_MS = 1_000;
 const MAX_TIMELINE_ITEMS = 50;
-const MAX_CACHE_BYTES = 1024 * 1024;
-const DATE_TAG = "__paseoDate";
+const MAX_CACHE_BYTES = 32 * 1024 * 1024;
+const IsoDateSchema = z.iso.datetime();
+const TimelinePositionSchema = z.strictObject({
+  epoch: z.string(),
+  seq: z.number().int().nonnegative(),
+});
+const PluginTimelineDataSchema: z.ZodType<PluginTimelineData> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    z.number(),
+    z.string(),
+    z.array(PluginTimelineDataSchema),
+    z.record(z.string(), PluginTimelineDataSchema),
+  ]),
+);
 
-const StoredAgentSchema = z.object({
-  snapshot: AgentSnapshotPayloadSchema,
-  projectPlacement: ProjectPlacementPayloadSchema.nullable(),
-  lastActivityAt: z.string(),
+const TimelineItemBaseShape = {
+  id: z.string(),
+  timelineCursor: TimelinePositionSchema.optional(),
+  // COMPAT(active-turn-membership): absent on caches written before turn membership.
+  turnId: z.string().optional(),
+  timestamp: IsoDateSchema,
+};
+
+const TodoEntrySchema = z.strictObject({
+  text: z.string(),
+  completed: z.boolean(),
+  id: z.string().optional(),
+  status: z.enum(["pending", "in_progress", "completed", "cancelled"]).optional(),
+  activeForm: z.string().optional(),
 });
 
-const StoredTimelineSchema = z.object({
+const TaskActivitySchema = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("created"), count: z.number().int().nonnegative() }),
+  z.strictObject({
+    type: z.enum(["added", "started", "completed", "cancelled"]),
+    task: z.string(),
+  }),
+]);
+
+const StoredTimelineItemSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    ...TimelineItemBaseShape,
+    kind: z.literal("user_message"),
+    clientMessageId: z.string().optional(),
+    messageId: z.string().optional(),
+    text: z.string(),
+  }),
+  z.strictObject({
+    ...TimelineItemBaseShape,
+    kind: z.literal("assistant_message"),
+    messageId: z.string().optional(),
+    text: z.string(),
+    // Reject old caches containing display fragments; refetch the complete source text.
+  }),
+  z.strictObject({
+    ...TimelineItemBaseShape,
+    kind: z.literal("thought"),
+    text: z.string(),
+    status: z.enum(["loading", "ready"]),
+  }),
+  z.strictObject({
+    ...TimelineItemBaseShape,
+    kind: z.literal("todo_list"),
+    provider: AgentProviderSchema,
+    items: z.array(TodoEntrySchema),
+    activity: TaskActivitySchema,
+  }),
+  z.strictObject({
+    ...TimelineItemBaseShape,
+    kind: z.literal("notification"),
+    sourceType: z.enum(["error", "notification"]),
+    level: z.enum(["info", "warning", "error"]),
+    message: z.string(),
+  }),
+  z.strictObject({
+    ...TimelineItemBaseShape,
+    kind: z.literal("compaction"),
+    status: z.enum(["loading", "completed"]),
+    trigger: z.enum(["auto", "manual"]).optional(),
+    preTokens: z.number().nonnegative().optional(),
+  }),
+  z.strictObject({
+    ...TimelineItemBaseShape,
+    kind: z.literal("tool_call"),
+    provider: AgentProviderSchema,
+    item: AgentTimelineItemPayloadSchema.refine((item) => item.type === "tool_call"),
+  }),
+  z.strictObject({
+    ...TimelineItemBaseShape,
+    kind: z.literal("plugin"),
+    pluginId: z.string(),
+    pluginItemId: z.string(),
+    itemKind: z.string(),
+    version: z.number().int().positive(),
+    data: PluginTimelineDataSchema,
+  }),
+]);
+
+const AgentCapabilitiesSchema = z.strictObject({
+  supportsStreaming: z.boolean(),
+  supportsSessionPersistence: z.boolean(),
+  supportsSessionListing: z.boolean().optional(),
+  supportsDynamicModes: z.boolean(),
+  supportsMcpServers: z.boolean(),
+  supportsReasoningStream: z.boolean(),
+  supportsToolInvocations: z.boolean(),
+  supportsRewindConversation: z.boolean().optional(),
+  supportsRewindFiles: z.boolean().optional(),
+  supportsRewindBoth: z.boolean().optional(),
+});
+
+const StoredProjectCheckoutSchema = z.union([
+  z.strictObject({
+    cwd: z.string(),
+    isGit: z.literal(false),
+    currentBranch: z.null(),
+    remoteUrl: z.null(),
+    worktreeRoot: z.null(),
+    isPaseoOwnedWorktree: z.literal(false),
+    mainRepoRoot: z.null(),
+  }),
+  z.strictObject({
+    cwd: z.string(),
+    isGit: z.literal(true),
+    currentBranch: z.string().nullable(),
+    remoteUrl: z.string().nullable(),
+    worktreeRoot: z.string(),
+    isPaseoOwnedWorktree: z.literal(false),
+    mainRepoRoot: z.string().nullable(),
+  }),
+  z.strictObject({
+    cwd: z.string(),
+    isGit: z.literal(true),
+    currentBranch: z.string().nullable(),
+    remoteUrl: z.string().nullable(),
+    worktreeRoot: z.string(),
+    isPaseoOwnedWorktree: z.literal(true),
+    mainRepoRoot: z.string(),
+  }),
+]);
+
+const StoredProjectPlacementSchema = z.strictObject({
+  projectKey: z.string(),
+  projectName: z.string(),
+  workspaceName: z.string().nullable().optional(),
+  checkout: StoredProjectCheckoutSchema,
+});
+
+const StoredAgentSnapshotSchema = z.strictObject({
+  id: z.string(),
+  provider: AgentProviderSchema,
+  cwd: z.string(),
+  workspaceId: z.string().optional(),
+  model: z.string().nullable(),
+  thinkingOptionId: z.string().nullable().optional(),
+  createdAt: IsoDateSchema,
+  updatedAt: IsoDateSchema,
+  lastUserMessageAt: IsoDateSchema.nullable(),
+  status: AgentStatusSchema,
+  activeTurn: z
+    .strictObject({
+      turnId: z.string(),
+      startedAt: IsoDateSchema.nullable(),
+    })
+    .nullable()
+    .optional(),
+  capabilities: AgentCapabilitiesSchema,
+  currentModeId: z.string().nullable(),
+  availableModes: z.array(z.never()).max(0),
+  pendingPermissions: z.array(z.never()).max(0),
+  persistence: z.null(),
+  lastError: z.string().optional(),
+  title: z.string().nullable(),
+  labels: z.record(z.string(), z.string()),
+  requiresAttention: z.boolean().optional(),
+  attentionReason: z.enum(["finished", "error", "permission"]).nullable().optional(),
+  attentionTimestamp: IsoDateSchema.nullable().optional(),
+  archivedAt: IsoDateSchema.nullable().optional(),
+});
+
+const StoredAgentSchema = z.strictObject({
+  snapshot: StoredAgentSnapshotSchema,
+  turn: z
+    .discriminatedUnion("phase", [
+      z.strictObject({ phase: z.literal("idle") }),
+      z.strictObject({
+        phase: z.literal("open"),
+        turnId: z.string().nullable(),
+        startedAt: IsoDateSchema.nullable(),
+      }),
+    ])
+    .optional(),
+  projectPlacement: StoredProjectPlacementSchema.nullable(),
+  lastActivityAt: IsoDateSchema,
+});
+
+const WorkspaceScriptSchema = z.strictObject({
+  scriptName: z.string(),
+  type: z.enum(["script", "service"]),
+  hostname: z.string(),
+  port: z.number().int().positive().nullable(),
+  localProxyUrl: z.string().nullable().optional(),
+  publicProxyUrl: z.string().nullable().optional(),
+  proxyUrl: z.string().nullable(),
+  lifecycle: z.enum(["running", "stopped"]),
+  health: z.enum(["healthy", "unhealthy"]).nullable(),
+  exitCode: z.number().nullable(),
+  terminalId: z.string().nullable(),
+});
+
+const WorkspaceGitRuntimeSchema = z
+  .strictObject({
+    currentBranch: z.string().nullable().optional(),
+    remoteUrl: z.string().nullable().optional(),
+    isPaseoOwnedWorktree: z.boolean().optional(),
+    isDirty: z.boolean().nullable().optional(),
+    aheadBehind: z.strictObject({ ahead: z.number(), behind: z.number() }).nullable().optional(),
+    aheadOfOrigin: z.number().nullable().optional(),
+    behindOfOrigin: z.number().nullable().optional(),
+  })
+  .nullable()
+  .optional();
+
+const StoredWorkspaceSchema = z.strictObject({
+  // Require both keys: a cursor without these values would preserve the wrong sort on reconnect.
+  createdAt: IsoDateSchema.nullable(),
+  lastUserMessageAt: IsoDateSchema.nullable(),
+  id: z.string(),
+  projectId: z.string(),
+  projectDisplayName: z.string(),
+  projectCustomName: z.string().nullable(),
+  projectCustomIconRevision: z.string().nullable(),
+  projectRootPath: z.string(),
+  workspaceDirectory: z.string(),
+  worktreeSlug: z.string().optional(),
+  projectKind: z.enum(["git", "non_git", "directory"]),
+  workspaceKind: z.enum(["directory", "local_checkout", "checkout", "worktree"]),
+  // Require the flag so older rows that lost background visibility invalidate the workspace cursor.
+  background: z.boolean(),
+  name: z.string(),
+  title: z.string().nullable(),
+  pinnedAt: z.string().nullable(),
+  // Optional because entries written before labels existed have none. A cached workspace that
+  // dropped them painted its row without its chips and stayed that way: the directory cursor is
+  // current on reconnect, so the daemon has nothing newer to send back.
+  labels: z.array(z.string()).optional(),
+  status: z.enum(["needs_input", "failed", "running", "attention", "done"]),
+  statusEnteredAt: IsoDateSchema.nullable(),
+  activityAt: z.null(),
+  archivingAt: z.string().nullable(),
+  diffStat: z.strictObject({ additions: z.number(), deletions: z.number() }).nullable(),
+  scripts: z.array(WorkspaceScriptSchema),
+  gitRuntime: WorkspaceGitRuntimeSchema,
+  githubRuntime: WorkspaceGitHubRuntimePayloadSchema,
+  forge: z.string().optional(),
+});
+
+const StoredProjectSchema = z.strictObject({
+  projectId: z.string(),
+  projectKey: z.string().optional(),
+  projectDisplayName: z.string(),
+  projectCustomName: z.string().nullable(),
+  projectCustomIconRevision: z.string().nullable(),
+  projectIconRevision: z.string().optional(),
+  projectRootPath: z.string(),
+  projectKind: z.enum(["git", "non_git", "directory"]),
+});
+
+const StoredTimelineSchema = z.strictObject({
   agentId: z.string(),
-  items: z.unknown(),
-});
-
-const StoredHostSchema = z.object({
-  serverId: z.string(),
-  agents: z.array(StoredAgentSchema),
-  workspaces: z.array(WorkspaceDescriptorPayloadSchema),
-  projects: z.array(WorkspaceProjectDescriptorPayloadSchema).optional().default([]),
-  emptyProjects: z.array(WorkspaceProjectDescriptorPayloadSchema),
-  timeline: StoredTimelineSchema.nullable(),
-});
-
-const StoredCacheSchema = z.object({
-  version: z.literal(CACHE_VERSION),
-  hosts: z.array(StoredHostSchema),
+  items: z.array(StoredTimelineItemSchema),
+  range: z
+    .strictObject({
+      epoch: z.string(),
+      startSeq: z.number().int().nonnegative(),
+      endSeq: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  hasOlder: z.boolean(),
 });
 
 type StoredAgent = z.infer<typeof StoredAgentSchema>;
-type StoredHost = z.infer<typeof StoredHostSchema>;
-
-interface ReplicaInput {
-  agent: Agent | undefined;
-  workspace: WorkspaceDescriptor | undefined;
-  project: ProjectDescriptor | undefined;
-  timelineItems: StreamItem[] | undefined;
-}
-
-export interface ReplicaCacheStorage {
-  getItem: (key: string) => Promise<string | null>;
-  setItem: (key: string, value: string) => Promise<void>;
-}
+type StoredTimeline = z.infer<typeof StoredTimelineSchema>;
+type StoredTimelineItem = z.infer<typeof StoredTimelineItemSchema>;
+type StoredToolCall = Extract<StoredTimelineItem, { kind: "tool_call" }>["item"];
+type StoredWorkspace = z.infer<typeof StoredWorkspaceSchema>;
+type StoredProject = z.infer<typeof StoredProjectSchema>;
 
 interface ReplicaCacheOptions {
   maxBytes?: number;
+  clearLegacyCache?: () => Promise<void>;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+type StructuredReplicaUpsert =
+  | { serverId: string; kind: "agent"; id: string; value: Agent }
+  | { serverId: string; kind: "workspace"; id: string; value: WorkspaceDescriptor }
+  | { serverId: string; kind: "project"; id: string; value: ProjectDescriptor }
+  | { serverId: string; kind: "timeline"; id: string; value: CachedTimeline }
+  | { serverId: string; kind: "checkpoint"; id: string; value: DirectoryCheckpoint };
+
+const DirectoryCursorSchema = z.strictObject({
+  generation: z.string(),
+  afterSeq: z.number().int().nonnegative(),
+});
+
+const DirectoryCheckpointSchema = z.strictObject({
+  projects: DirectoryCursorSchema.optional(),
+  workspaces: DirectoryCursorSchema.optional(),
+  agents: DirectoryCursorSchema.optional(),
+});
+
+// Old checkpoints could describe a baseline that an overlapping refresh had discarded.
+// Revalidate directory contents once without evicting cached rows or timelines.
+const StoredDirectoryCheckpointSchema = z.strictObject({
+  version: z.literal(1),
+  cursors: DirectoryCheckpointSchema,
+});
+
+function serializeDirectoryCheckpoint(cursors: DirectoryCheckpoint) {
+  return { version: 1 as const, cursors };
 }
 
-function hasString(value: Record<string, unknown>, key: string): boolean {
-  return typeof value[key] === "string";
+function deserializeDirectoryCheckpoint(payload: string): DirectoryCheckpoint {
+  return parseStoredPayload(StoredDirectoryCheckpointSchema, payload).cursors;
 }
 
-function isStreamItem(value: unknown): value is StreamItem {
-  if (!isRecord(value) || !hasString(value, "id") || !(value.timestamp instanceof Date)) {
-    return false;
-  }
-  switch (value.kind) {
-    case "user_message":
-    case "assistant_message":
-      return hasString(value, "text");
-    case "thought":
-      return hasString(value, "text") && (value.status === "loading" || value.status === "ready");
-    case "tool_call":
-      return isRecord(value.payload) && isRecord(value.payload.data);
-    case "todo_list":
-      return hasString(value, "provider") && Array.isArray(value.items);
-    case "activity_log":
-      return hasString(value, "message") && hasString(value, "activityType");
-    case "compaction":
-      return value.status === "loading" || value.status === "completed";
-    default:
-      return false;
-  }
-}
-
-function encodeDates(value: unknown): unknown {
-  if (value instanceof Date) {
-    return { [DATE_TAG]: value.toISOString() };
-  }
-  if (Array.isArray(value)) {
-    return value.map(encodeDates);
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, encodeDates(entry)]));
-}
-
-function decodeDates(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(decodeDates);
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  if (Object.keys(value).length === 1 && typeof value[DATE_TAG] === "string") {
-    const date = new Date(value[DATE_TAG]);
-    return Number.isNaN(date.getTime()) ? value : date;
-  }
-  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, decodeDates(entry)]));
-}
-
-function deserializeTimeline(stored: StoredHost["timeline"]): SessionReplica["timeline"] {
+function deserializeTimeline(stored: StoredTimeline | null): CachedTimeline | null {
   if (!stored) {
-    return null;
-  }
-  const decoded = decodeDates(stored.items);
-  if (!Array.isArray(decoded) || !decoded.every(isStreamItem)) {
     return null;
   }
   return {
     agentId: stored.agentId,
-    items: decoded,
+    items: stored.items.map(deserializeTimelineItem),
+    range: stored.range,
+    hasOlder: stored.hasOlder,
+  };
+}
+
+function timelineBase(item: StreamItem) {
+  return {
+    id: item.id,
+    ...(item.timelineCursor ? { timelineCursor: item.timelineCursor } : {}),
+    ...(item.turnId ? { turnId: item.turnId } : {}),
+    timestamp: item.timestamp.toISOString(),
+  };
+}
+
+function serializeAgentToolCall(data: AgentToolCallData): StoredToolCall {
+  const base = {
+    type: "tool_call" as const,
+    callId: data.callId,
+    name: data.name,
+    detail: data.detail,
+    ...(data.metadata ? { metadata: data.metadata } : {}),
+    ...(data.agentMessage ? { agentMessage: data.agentMessage } : {}),
+  };
+  switch (data.status) {
+    case "running":
+    case "completed":
+    case "canceled":
+      return { ...base, status: data.status, error: null };
+    case "failed":
+      return { ...base, status: data.status, error: data.error };
+  }
+}
+
+function serializeTimelineItem(item: StreamItem): StoredTimelineItem | null {
+  const base = timelineBase(item);
+  switch (item.kind) {
+    case "user_message":
+      return {
+        ...base,
+        kind: item.kind,
+        ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+        ...(item.messageId ? { messageId: item.messageId } : {}),
+        text: item.text,
+      };
+    case "assistant_message":
+      return {
+        ...base,
+        kind: item.kind,
+        ...(item.messageId ? { messageId: item.messageId } : {}),
+        text: item.text,
+      };
+    case "thought":
+      return { ...base, kind: item.kind, text: item.text, status: item.status };
+    case "todo_list":
+      return {
+        ...base,
+        kind: item.kind,
+        provider: item.provider,
+        items: item.items,
+        activity: item.activity,
+      };
+    case "notification":
+      return {
+        ...base,
+        kind: item.kind,
+        sourceType: item.sourceType,
+        level: item.level,
+        message: item.message,
+      };
+    case "compaction":
+      return {
+        ...base,
+        kind: item.kind,
+        status: item.status,
+        ...(item.trigger ? { trigger: item.trigger } : {}),
+        ...(item.preTokens !== undefined ? { preTokens: item.preTokens } : {}),
+      };
+    case "tool_call":
+      if (item.payload.source !== "agent") return null;
+      return {
+        ...base,
+        kind: item.kind,
+        provider: item.payload.data.provider,
+        item: serializeAgentToolCall(item.payload.data),
+      };
+    case "plugin":
+      return {
+        ...base,
+        kind: item.kind,
+        pluginId: item.pluginId,
+        pluginItemId: item.pluginItemId,
+        itemKind: item.itemKind,
+        version: item.version,
+        data: item.data,
+      };
+  }
+}
+
+function deserializeTimelineItem(item: StoredTimelineItem): StreamItem {
+  if (item.kind === "plugin") {
+    return {
+      id: item.id,
+      ...(item.timelineCursor ? { timelineCursor: item.timelineCursor } : {}),
+      ...(item.turnId ? { turnId: item.turnId } : {}),
+      timestamp: new Date(item.timestamp),
+      kind: item.kind,
+      pluginId: item.pluginId,
+      pluginItemId: item.pluginItemId,
+      itemKind: item.itemKind,
+      version: item.version,
+      data: item.data,
+    };
+  }
+  return deserializeBuiltinTimelineItem(item);
+}
+
+function deserializeBuiltinTimelineItem(
+  item: Exclude<StoredTimelineItem, { kind: "plugin" }>,
+): StreamItem {
+  const base = {
+    id: item.id,
+    ...(item.timelineCursor ? { timelineCursor: item.timelineCursor } : {}),
+    ...(item.turnId ? { turnId: item.turnId } : {}),
+    timestamp: new Date(item.timestamp),
+  };
+  switch (item.kind) {
+    case "user_message":
+      return {
+        ...base,
+        kind: item.kind,
+        ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+        ...(item.messageId ? { messageId: item.messageId } : {}),
+        text: item.text,
+      };
+    case "assistant_message":
+      return {
+        ...base,
+        kind: item.kind,
+        ...(item.messageId ? { messageId: item.messageId } : {}),
+        text: item.text,
+      };
+    case "thought":
+      return { ...base, kind: item.kind, text: item.text, status: item.status };
+    case "todo_list":
+      return {
+        ...base,
+        kind: item.kind,
+        provider: item.provider,
+        items: item.items,
+        activity: item.activity,
+      };
+    case "notification":
+      return {
+        ...base,
+        kind: item.kind,
+        sourceType: item.sourceType,
+        level: item.level,
+        message: item.message,
+      };
+    case "compaction":
+      return {
+        ...base,
+        kind: item.kind,
+        status: item.status,
+        ...(item.trigger ? { trigger: item.trigger } : {}),
+        ...(item.preTokens !== undefined ? { preTokens: item.preTokens } : {}),
+      };
+    case "tool_call": {
+      const tool = item.item;
+      if (tool.type !== "tool_call") {
+        throw new Error("Stored tool call contains a non-tool timeline item");
+      }
+      return {
+        ...base,
+        kind: item.kind,
+        payload: {
+          source: "agent",
+          data: {
+            provider: item.provider,
+            callId: tool.callId,
+            name: tool.name,
+            status: tool.status,
+            error: tool.error,
+            detail: tool.detail,
+            ...(tool.metadata ? { metadata: tool.metadata } : {}),
+            ...(tool.agentMessage ? { agentMessage: tool.agentMessage } : {}),
+          },
+        },
+      };
+    }
+  }
+}
+
+function serializeProjectPlacement(agent: Agent): StoredAgent["projectPlacement"] {
+  return agent.projectPlacement ?? null;
+}
+
+function serializeAgentTurn(agent: Agent): NonNullable<StoredAgent["turn"]> {
+  if (agent.turn.phase === "idle") return { phase: "idle" };
+  return {
+    phase: "open",
+    turnId: agent.turn.turnId,
+    startedAt: agent.turn.startedAt?.toISOString() ?? null,
   };
 }
 
 function serializeAgent(agent: Agent): StoredAgent {
-  const snapshot: AgentSnapshotPayload = {
+  const snapshot = {
     id: agent.id,
     provider: agent.provider,
     cwd: agent.cwd,
     ...(agent.workspaceId ? { workspaceId: agent.workspaceId } : {}),
     model: agent.model,
-    ...(agent.features ? { features: agent.features } : {}),
     thinkingOptionId: agent.thinkingOptionId ?? null,
     createdAt: agent.createdAt.toISOString(),
     updatedAt: agent.updatedAt.toISOString(),
     lastUserMessageAt: agent.lastUserMessageAt?.toISOString() ?? null,
     status: agent.status,
-    capabilities: agent.capabilities,
+    ...(agent.turn.phase === "open" && agent.turn.turnId
+      ? {
+          activeTurn: {
+            turnId: agent.turn.turnId,
+            startedAt: agent.turn.startedAt?.toISOString() ?? null,
+          },
+        }
+      : {}),
+    capabilities: {
+      supportsStreaming: agent.capabilities.supportsStreaming,
+      supportsSessionPersistence: agent.capabilities.supportsSessionPersistence,
+      ...(agent.capabilities.supportsSessionListing !== undefined
+        ? { supportsSessionListing: agent.capabilities.supportsSessionListing }
+        : {}),
+      supportsDynamicModes: agent.capabilities.supportsDynamicModes,
+      supportsMcpServers: agent.capabilities.supportsMcpServers,
+      supportsReasoningStream: agent.capabilities.supportsReasoningStream,
+      supportsToolInvocations: agent.capabilities.supportsToolInvocations,
+      ...(agent.capabilities.supportsRewindConversation !== undefined
+        ? { supportsRewindConversation: agent.capabilities.supportsRewindConversation }
+        : {}),
+      ...(agent.capabilities.supportsRewindFiles !== undefined
+        ? { supportsRewindFiles: agent.capabilities.supportsRewindFiles }
+        : {}),
+      ...(agent.capabilities.supportsRewindBoth !== undefined
+        ? { supportsRewindBoth: agent.capabilities.supportsRewindBoth }
+        : {}),
+    },
     currentModeId: agent.currentModeId,
-    availableModes: agent.availableModes,
+    availableModes: [],
     pendingPermissions: [],
-    persistence: agent.persistence,
-    ...(agent.runtimeInfo ? { runtimeInfo: agent.runtimeInfo } : {}),
-    ...(agent.lastUsage ? { lastUsage: agent.lastUsage } : {}),
+    persistence: null,
     ...(agent.lastError ? { lastError: agent.lastError } : {}),
     title: agent.title,
     labels: agent.labels,
@@ -175,21 +665,40 @@ function serializeAgent(agent: Agent): StoredAgent {
   };
   return {
     snapshot,
-    projectPlacement: agent.projectPlacement ?? null,
+    turn: serializeAgentTurn(agent),
+    projectPlacement: serializeProjectPlacement(agent),
     lastActivityAt: agent.lastActivityAt.toISOString(),
   };
 }
 
 function deserializeAgent(serverId: string, stored: StoredAgent): Agent {
+  const normalized = normalizeAgentSnapshot(stored.snapshot, serverId);
+  let turn = normalized.turn;
+  if (stored.turn?.phase === "idle") turn = { phase: "idle", cancellationRequestId: null };
+  if (stored.turn?.phase === "open") {
+    turn = {
+      phase: "open",
+      turnId: stored.turn.turnId,
+      startedAt: stored.turn.startedAt ? new Date(stored.turn.startedAt) : null,
+      cancellationRequestId: null,
+    };
+  }
   return {
-    ...normalizeAgentSnapshot(stored.snapshot, serverId),
+    ...normalized,
+    turn,
     lastActivityAt: new Date(stored.lastActivityAt),
     projectPlacement: stored.projectPlacement,
   };
 }
 
-function serializeWorkspace(workspace: WorkspaceDescriptor): WorkspaceDescriptorPayload {
+function restoreWorkspace(stored: StoredWorkspace): WorkspaceDescriptor {
+  return normalizeWorkspaceDescriptor({ ...stored, createdAt: stored.createdAt ?? undefined });
+}
+
+function serializeWorkspace(workspace: WorkspaceDescriptor): StoredWorkspace {
   return {
+    createdAt: workspace.createdAt?.toISOString() ?? null,
+    lastUserMessageAt: workspace.lastUserMessageAt?.toISOString() ?? null,
     id: workspace.id,
     projectId: workspace.projectId,
     projectDisplayName: workspace.projectDisplayName,
@@ -200,304 +709,902 @@ function serializeWorkspace(workspace: WorkspaceDescriptor): WorkspaceDescriptor
     worktreeSlug: workspace.worktreeSlug,
     projectKind: workspace.projectKind,
     workspaceKind: workspace.workspaceKind,
+    background: workspace.background ?? false,
     name: workspace.name,
     title: workspace.title ?? null,
     pinnedAt: workspace.pinnedAt ?? null,
+    labels: workspace.labels,
     status: workspace.status,
     statusEnteredAt: workspace.statusEnteredAt?.toISOString() ?? null,
     activityAt: null,
     archivingAt: workspace.archivingAt,
     diffStat: workspace.diffStat,
-    scripts: workspace.scripts,
+    scripts: workspace.scripts.map((script) => ({
+      scriptName: script.scriptName,
+      type: script.type,
+      hostname: script.hostname,
+      port: script.port,
+      ...(script.localProxyUrl !== undefined ? { localProxyUrl: script.localProxyUrl } : {}),
+      ...(script.publicProxyUrl !== undefined ? { publicProxyUrl: script.publicProxyUrl } : {}),
+      proxyUrl: script.proxyUrl,
+      lifecycle: script.lifecycle,
+      health: script.health,
+      exitCode: script.exitCode,
+      terminalId: script.terminalId,
+    })),
     gitRuntime: workspace.gitRuntime,
     githubRuntime: workspace.githubRuntime,
     forge: workspace.forge,
-    project: workspace.project,
   };
 }
 
-function serializeProject(project: ProjectDescriptor) {
+function serializeProject(project: ProjectDescriptor): StoredProject {
   return {
     projectId: project.projectId,
     ...(project.projectKey ? { projectKey: project.projectKey } : {}),
     projectDisplayName: project.projectDisplayName,
     projectCustomName: project.projectCustomName,
+    projectCustomIconRevision: project.projectCustomIconRevision ?? null,
+    projectIconRevision: project.projectIconRevision,
     projectRootPath: project.projectRootPath,
     projectKind: project.projectKind,
   };
 }
 
-function replicaInputsEqual(left: ReplicaInput, right: ReplicaInput): boolean {
+function isTimelineItemStoredLosslessly(item: StreamItem): boolean {
+  switch (item.kind) {
+    case "user_message":
+      return (item.images?.length ?? 0) === 0 && (item.attachments?.length ?? 0) === 0;
+    case "tool_call":
+      return item.payload.source === "agent";
+    default:
+      return true;
+  }
+}
+
+function serializeTimeline(timeline: CachedTimeline): StoredTimeline | null {
+  const canonicalItems = timeline.items.filter(
+    (item) => item.kind !== "user_message" || !isUnreconciledLocalUserMessage(item),
+  );
+  const items = canonicalItems.map(serializeTimelineItem).filter((item) => item !== null);
+  const range = timeline.range;
+  const canPersistCoverage =
+    range !== null &&
+    range.retainedRanges === undefined &&
+    canonicalItems.length <= MAX_TIMELINE_ITEMS &&
+    items.length === canonicalItems.length &&
+    canonicalItems.every(
+      (item) =>
+        isTimelineItemStoredLosslessly(item) &&
+        item.timelineCursor?.epoch === range.epoch &&
+        item.timelineCursor.seq >= range.startSeq &&
+        item.timelineCursor.seq <= range.endSeq,
+    ) &&
+    canonicalItems.some((item) => item.timelineCursor?.seq === range.endSeq);
+  return {
+    agentId: timeline.agentId,
+    items: items.slice(-MAX_TIMELINE_ITEMS),
+    range: canPersistCoverage
+      ? { epoch: range.epoch, startSeq: range.startSeq, endSeq: range.endSeq }
+      : null,
+    hasOlder: canPersistCoverage ? timeline.hasOlder : false,
+  };
+}
+
+function rowKey(key: Pick<ReplicaRowKey, "kind" | "id">): string {
+  return `${key.kind}\u0000${key.id}`;
+}
+
+function pendingRowKey(key: ReplicaRowKey): string {
+  return `${key.serverId}\u0000${rowKey(key)}`;
+}
+
+// Budget accounting runs over every stored row of a touched host on each persist. Rows are
+// immutable once stored, so their size is computed once. The count itself avoids the JS Buffer
+// polyfill, which materialises the whole byte array just to measure it.
+const rowBytesCache = new WeakMap<ReplicaRow, number>();
+
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+function rowBytes(row: ReplicaRow): number {
+  let bytes = rowBytesCache.get(row);
+  if (bytes === undefined) {
+    bytes = utf8ByteLength(row.payload);
+    rowBytesCache.set(row, bytes);
+  }
+  return bytes;
+}
+
+function parseJsonPayload(payload: string): unknown {
+  return JSON.parse(payload);
+}
+
+function parseStoredPayload<Value>(schema: z.ZodType<Value>, payload: string): Value {
+  const parsed = schema.safeParse(parseJsonPayload(payload));
+  if (!parsed.success) throw new Error("Invalid replica row payload");
+  return parsed.data;
+}
+
+interface DirectoryReadAccumulator {
+  agents: Map<string, Agent>;
+  workspaces: Map<string, WorkspaceDescriptor>;
+  projects: Map<string, ProjectDescriptor>;
+  checkpoint?: DirectoryCheckpoint;
+}
+
+interface PendingReplicaChanges {
+  upserts: StructuredReplicaUpsert[];
+  deletes: ReplicaRowKey[];
+  baselines: Set<string>;
+}
+
+function applyDirectoryRow(
+  serverId: string,
+  row: ReplicaRow,
+  result: DirectoryReadAccumulator,
+): void {
+  switch (row.kind) {
+    case "agent": {
+      const stored = parseStoredPayload(StoredAgentSchema, row.payload);
+      if (stored.snapshot.id !== row.id) throw new Error("Replica agent row id mismatch");
+      result.agents.set(row.id, deserializeAgent(serverId, stored));
+      return;
+    }
+    case "workspace": {
+      const stored = parseStoredPayload(StoredWorkspaceSchema, row.payload);
+      if (stored.id !== row.id) throw new Error("Replica workspace row id mismatch");
+      result.workspaces.set(row.id, restoreWorkspace(stored));
+      return;
+    }
+    case "project": {
+      const stored = parseStoredPayload(StoredProjectSchema, row.payload);
+      if (stored.projectId !== row.id) throw new Error("Replica project row id mismatch");
+      result.projects.set(row.id, normalizeProjectDescriptor(stored));
+      return;
+    }
+    case "checkpoint":
+      if (row.id !== REPLICA_SINGLETON_ROW_ID) {
+        throw new Error("Replica checkpoint row id mismatch");
+      }
+      result.checkpoint = deserializeDirectoryCheckpoint(row.payload);
+      return;
+    default:
+      return;
+  }
+}
+
+function directoryEntityForRow(row: ReplicaRow): keyof DirectoryCheckpoint | undefined {
+  if (row.kind === "agent") return "agents";
+  if (row.kind === "workspace") return "workspaces";
+  if (row.kind === "project") return "projects";
+  return undefined;
+}
+
+interface ReplicaRead {
+  serverId: string;
+  kinds: readonly ReplicaRowKind[];
+  ids?: readonly string[];
+  invalidated: boolean;
+}
+
+function matchesReplicaRead(read: ReplicaRead, row: ReplicaRowKey): boolean {
   return (
-    left.agent === right.agent &&
-    left.workspace === right.workspace &&
-    left.project === right.project &&
-    left.timelineItems === right.timelineItems
+    read.serverId === row.serverId &&
+    read.kinds.includes(row.kind) &&
+    (!read.ids || read.ids.includes(row.id))
   );
-}
-
-function selectReplicaInput(session: SessionState, agentId: string | null): ReplicaInput {
-  const agent = agentId ? session.agents.get(agentId) : undefined;
-  const workspace = agent
-    ? ((agent.workspaceId ? session.workspaces.get(agent.workspaceId) : undefined) ??
-      Array.from(session.workspaces.values()).find(
-        (candidate) => candidate.workspaceDirectory === agent.cwd,
-      ))
-    : undefined;
-  const timeline = agentId
-    ? selectAgentTimelineState(session, agentId)
-    : { status: "cold" as const };
-  return {
-    agent,
-    workspace,
-    project: workspace ? session.projects.get(workspace.projectId) : undefined,
-    timelineItems: timeline.status === "cold" ? undefined : timeline.items,
-  };
-}
-
-/**
- * A message's images stay out of the cache. A replayed message holds them inline, and a few
- * screenshots would fill the cache's budget. A local send names the composer's stored copy, which
- * attachment garbage collection removes once no loaded message refers to it, so after a reload the
- * cached reference can point at nothing and would win over the daemon's copy. The daemon's timeline
- * keeps every message's images and brings them back.
- */
-function withoutImages(item: StreamItem): StreamItem {
-  if (item.kind !== "user_message" || !item.images) return item;
-  return { ...item, images: undefined };
-}
-
-function serializeHost(serverId: string, input: ReplicaInput): StoredHost {
-  const items = input.timelineItems
-    ?.filter((item) => item.kind !== "user_message" || !isUnreconciledLocalUserMessage(item))
-    .map(withoutImages);
-  return {
-    serverId,
-    agents: input.agent ? [serializeAgent(input.agent)] : [],
-    workspaces: input.workspace ? [serializeWorkspace(input.workspace)] : [],
-    projects: input.project ? [serializeProject(input.project)] : [],
-    emptyProjects: [],
-    timeline:
-      input.agent && items
-        ? {
-            agentId: input.agent.id,
-            items: encodeDates(items.slice(-MAX_TIMELINE_ITEMS)),
-          }
-        : null,
-  };
-}
-
-function deserializeHost(stored: StoredHost): SessionReplica {
-  const agents = stored.agents.map((entry) => deserializeAgent(stored.serverId, entry));
-  const workspaces = stored.workspaces.map(normalizeWorkspaceDescriptor);
-  const listedProjects = stored.projects.map(normalizeProjectDescriptor);
-  const legacyProjects = [
-    ...stored.emptyProjects.map(normalizeProjectDescriptor),
-    ...workspaces.map(legacyProjectDescriptorFromWorkspace),
-  ];
-  const projects = new Map(
-    [...legacyProjects, ...listedProjects].map((project) => [project.projectId, project]),
-  );
-  return {
-    agents: new Map(agents.map((agent) => [agent.id, agent])),
-    workspaces: new Map(workspaces.map((workspace) => [workspace.id, workspace])),
-    projects,
-    timeline: deserializeTimeline(stored.timeline),
-  };
-}
-
-function legacyProjectDescriptorFromWorkspace(workspace: WorkspaceDescriptor): ProjectDescriptor {
-  return {
-    projectId: workspace.projectId,
-    projectKey: null,
-    projectDisplayName: workspace.projectDisplayName,
-    projectCustomName: workspace.projectCustomName ?? null,
-    projectRootPath: workspace.projectRootPath,
-    projectKind: workspace.projectKind,
-  };
 }
 
 export class ReplicaCache {
   private readonly activeServerIds = new Set<string>();
-  private readonly storedHosts = new Map<string, StoredHost>();
-  private readonly lastFocusedAgentIds = new Map<string, string>();
-  private readonly capturedInputs = new Map<string, ReplicaInput>();
+  private readonly activeReads = new Set<ReplicaRead>();
+  private readonly storedRows = new Map<string, Map<string, ReplicaRow>>();
+  private readonly hostBytes = new Map<string, number>();
+  private readonly hostWriteOrder = new Map<string, true>();
+  private pendingUpserts = new Map<string, StructuredReplicaUpsert>();
+  private pendingDeletes = new Map<string, ReplicaRowKey>();
+  private pendingBaselines = new Set<string>();
+  private readonly invalidatedHosts = new Set<string>();
   private readonly maxBytes: number;
-  private needsPersist = false;
-  private unsubscribe: (() => void) | null = null;
+  private totalBytes = 0;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private writeQueue: Promise<void> = Promise.resolve();
+  private preparePromise: Promise<void> | null = null;
+  private storedIndexPromise: Promise<void> | null = null;
 
   constructor(
-    private readonly storage: ReplicaCacheStorage,
+    private readonly rowStore: ReplicaRowStore,
     options: ReplicaCacheOptions = {},
   ) {
-    const emptyPayloadBytes = Buffer.byteLength(
-      JSON.stringify({ version: CACHE_VERSION, hosts: [] }),
-      "utf8",
-    );
-    this.maxBytes = Math.max(options.maxBytes ?? MAX_CACHE_BYTES, emptyPayloadBytes);
+    this.maxBytes = Math.max(options.maxBytes ?? MAX_CACHE_BYTES, 0);
+    this.clearLegacyCache = options.clearLegacyCache ?? clearLegacyReplicaCache;
+  }
+
+  private readonly clearLegacyCache: () => Promise<void>;
+
+  async readAgent(serverId: string, agentId: string): Promise<Agent | undefined> {
+    const rows = await this.readRows(serverId, ["agent"], [agentId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    try {
+      const stored = parseStoredPayload(StoredAgentSchema, row.payload);
+      if (stored.snapshot.id !== row.id) throw new Error("Replica agent row id mismatch");
+      return deserializeAgent(serverId, stored);
+    } catch {
+      await this.deleteInvalidRow(row);
+      return undefined;
+    }
+  }
+
+  async readWorkspace(serverId: string, workspaceId: string): Promise<CachedWorkspace | undefined> {
+    const workspaceRow = (await this.readRows(serverId, ["workspace"], [workspaceId]))[0];
+    if (!workspaceRow) return undefined;
+    let workspace: WorkspaceDescriptor;
+    try {
+      const stored = parseStoredPayload(StoredWorkspaceSchema, workspaceRow.payload);
+      if (stored.id !== workspaceRow.id) throw new Error("Replica workspace row id mismatch");
+      workspace = restoreWorkspace(stored);
+    } catch {
+      await this.deleteInvalidRow(workspaceRow);
+      return undefined;
+    }
+
+    let project: ProjectDescriptor | undefined;
+    const projectRow = (await this.readRows(serverId, ["project"], [workspace.projectId]))[0];
+    if (projectRow) {
+      try {
+        const stored = parseStoredPayload(StoredProjectSchema, projectRow.payload);
+        if (stored.projectId !== projectRow.id) throw new Error("Replica project row id mismatch");
+        project = normalizeProjectDescriptor(stored);
+      } catch {
+        await this.deleteInvalidRow(projectRow);
+      }
+    }
+
+    return { workspace, ...(project ? { project } : {}) };
+  }
+
+  async readDirectory(serverId: string): Promise<CachedDirectory> {
+    const rows = await this.readRows(serverId, ["agent", "workspace", "project", "checkpoint"]);
+    const result: DirectoryReadAccumulator = {
+      agents: new Map(),
+      workspaces: new Map(),
+      projects: new Map(),
+    };
+    const invalidEntities = new Set<keyof DirectoryCheckpoint>();
+    const invalidRows: ReplicaRow[] = [];
+    for (const row of rows) {
+      try {
+        applyDirectoryRow(serverId, row, result);
+      } catch {
+        const invalidEntity = directoryEntityForRow(row);
+        if (invalidEntity) invalidEntities.add(invalidEntity);
+        invalidRows.push(row);
+      }
+    }
+    if (result.checkpoint && invalidEntities.size > 0) {
+      result.checkpoint = { ...result.checkpoint };
+      for (const entity of invalidEntities) delete result.checkpoint[entity];
+    }
+    if (invalidRows.length > 0) {
+      await this.repairInvalidDirectoryRows(serverId, invalidRows, result.checkpoint);
+    }
+    return result;
+  }
+
+  async readTimeline(serverId: string, agentId: string): Promise<CachedTimeline | undefined> {
+    const rows = await this.readRows(serverId, ["timeline"], [agentId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    try {
+      const stored = parseStoredPayload(StoredTimelineSchema, row.payload);
+      if (stored.agentId !== agentId) return undefined;
+      return deserializeTimeline(stored) ?? undefined;
+    } catch {
+      await this.deleteInvalidRow(row);
+      return undefined;
+    }
+  }
+
+  private async readRows(
+    serverId: string,
+    kinds: readonly ReplicaRowKind[],
+    ids?: readonly string[],
+  ): Promise<ReplicaRow[]> {
+    if (!this.activeServerIds.has(serverId)) return [];
+    try {
+      await this.prepareStore();
+      while (this.activeServerIds.has(serverId)) {
+        // A read may only answer from rows the store already holds, so it waits for this host's
+        // accepted commits to land. A store that rejects them will keep rejecting them: fail closed
+        // rather than re-attempt the write on every pass. A write rejected for another host leaves
+        // this host's stored rows readable.
+        const read: ReplicaRead = { serverId, kinds, ids, invalidated: false };
+        this.activeReads.add(read);
+        try {
+          if (!(await this.syncPending()) && this.hasPendingHostChanges(serverId)) return [];
+          if (read.invalidated || this.hasPendingReadChanges(read)) continue;
+          const rows = await this.rowStore.read(serverId, kinds, ids);
+          if (
+            this.activeServerIds.has(serverId) &&
+            !read.invalidated &&
+            !this.hasPendingReadChanges(read)
+          ) {
+            return rows;
+          }
+        } finally {
+          this.activeReads.delete(read);
+        }
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async deleteInvalidRow(row: ReplicaRow): Promise<void> {
+    const invalidEntity = directoryEntityForRow(row);
+    if (!invalidEntity) {
+      const changes = { upserts: [], deletes: [row] } satisfies ReplicaRowChanges;
+      await this.queueOperation(async () => {
+        await this.rowStore.apply(changes);
+        this.applyStoredChanges(changes);
+      });
+      return;
+    }
+
+    const checkpointRow = (
+      await this.readRows(row.serverId, ["checkpoint"], [REPLICA_SINGLETON_ROW_ID])
+    )[0];
+    let checkpoint: DirectoryCheckpoint | undefined;
+    if (checkpointRow) {
+      try {
+        checkpoint = deserializeDirectoryCheckpoint(checkpointRow.payload);
+        checkpoint = { ...checkpoint };
+        delete checkpoint[invalidEntity];
+      } catch {
+        checkpoint = undefined;
+      }
+    }
+    const changes: ReplicaRowChanges = {
+      deletes: [row, ...(checkpointRow && !checkpoint ? [checkpointRow] : [])],
+      upserts:
+        checkpointRow && checkpoint
+          ? [
+              {
+                serverId: row.serverId,
+                kind: "checkpoint",
+                id: REPLICA_SINGLETON_ROW_ID,
+                payload: JSON.stringify(serializeDirectoryCheckpoint(checkpoint)),
+              },
+            ]
+          : [],
+    };
+    await this.queueOperation(async () => {
+      await this.rowStore.apply(changes);
+      this.applyStoredChanges(changes);
+    });
+  }
+
+  private async repairInvalidDirectoryRows(
+    serverId: string,
+    invalidRows: ReplicaRow[],
+    checkpoint: DirectoryCheckpoint | undefined,
+  ): Promise<void> {
+    const checkpointWasInvalid = invalidRows.some((row) => row.kind === "checkpoint");
+    const changes: ReplicaRowChanges = {
+      deletes: invalidRows,
+      upserts:
+        checkpoint !== undefined && !checkpointWasInvalid
+          ? [
+              {
+                serverId,
+                kind: "checkpoint",
+                id: REPLICA_SINGLETON_ROW_ID,
+                payload: JSON.stringify(serializeDirectoryCheckpoint(checkpoint)),
+              },
+            ]
+          : [],
+    };
+    await this.queueOperation(async () => {
+      await this.rowStore.apply(changes);
+      this.applyStoredChanges(changes);
+    });
+  }
+
+  commitDirectoryMutations(
+    serverId: string,
+    mutations: readonly DirectoryReplicaMutation[],
+    checkpoint?: DirectoryCheckpoint,
+  ): void {
+    if (!this.activeServerIds.has(serverId)) return;
+    if (this.invalidatedHosts.has(serverId)) return;
+    for (const mutation of mutations) {
+      if (mutation.type === "delete") {
+        this.queueEntityDelete(serverId, mutation.kind, mutation.id);
+      } else {
+        this.queueUpsert({
+          serverId,
+          kind: mutation.kind,
+          id: mutation.id,
+          value: mutation.value,
+        } as StructuredReplicaUpsert);
+      }
+    }
+    if (checkpoint) {
+      this.queueUpsert({
+        serverId,
+        kind: "checkpoint",
+        id: REPLICA_SINGLETON_ROW_ID,
+        value: checkpoint,
+      });
+    }
+    this.schedulePersist();
+  }
+
+  replaceDirectoryBaseline(serverId: string, directory: CachedDirectory): void {
+    if (!this.activeServerIds.has(serverId)) return;
+    this.invalidateHostReads(serverId, ["agent", "workspace", "project", "checkpoint"]);
+    // Replacing the directory must not discard independently accepted timeline changes.
+    for (const [key, row] of this.pendingUpserts) {
+      if (row.serverId === serverId && row.kind !== "timeline") this.pendingUpserts.delete(key);
+    }
+    for (const [key, row] of this.pendingDeletes) {
+      if (row.serverId === serverId && row.kind !== "timeline") this.pendingDeletes.delete(key);
+    }
+    this.pendingBaselines.add(serverId);
+    for (const [id, value] of directory.agents) {
+      this.queueUpsert({ serverId, kind: "agent", id, value });
+    }
+    for (const [id, value] of directory.workspaces) {
+      this.queueUpsert({ serverId, kind: "workspace", id, value });
+    }
+    for (const [id, value] of directory.projects) {
+      this.queueUpsert({ serverId, kind: "project", id, value });
+    }
+    if (directory.checkpoint) {
+      this.queueUpsert({
+        serverId,
+        kind: "checkpoint",
+        id: REPLICA_SINGLETON_ROW_ID,
+        value: directory.checkpoint,
+      });
+    }
+    this.schedulePersist();
+  }
+
+  commitTimeline(serverId: string, agentId: string, timeline: CachedTimeline): void {
+    if (!this.activeServerIds.has(serverId)) return;
+    if (timeline.agentId !== agentId) throw new Error("Timeline cache key does not match payload");
+    this.queueUpsert({ serverId, kind: "timeline", id: agentId, value: timeline });
+    this.schedulePersist();
   }
 
   setHosts(serverIds: Iterable<string>): void {
     const next = new Set(serverIds);
+    const removed = [...this.activeServerIds].filter((serverId) => !next.has(serverId));
+    const added = [...next].filter((serverId) => !this.activeServerIds.has(serverId));
+    for (const serverId of [...removed, ...added]) this.invalidateHostReads(serverId);
     this.activeServerIds.clear();
     for (const serverId of next) this.activeServerIds.add(serverId);
-    let removedStoredHost = false;
-    for (const serverId of this.storedHosts.keys()) {
-      if (!next.has(serverId)) {
-        this.storedHosts.delete(serverId);
-        removedStoredHost = true;
-      }
+    for (const serverId of removed) {
+      this.removeStoredHost(serverId);
+      this.dropPendingHostChanges(serverId);
+      this.invalidatedHosts.delete(serverId);
+      this.queueOperation(() => this.rowStore.deleteHost(serverId));
     }
-    for (const serverId of this.lastFocusedAgentIds.keys()) {
-      if (!next.has(serverId)) this.lastFocusedAgentIds.delete(serverId);
-    }
-    for (const serverId of this.capturedInputs.keys()) {
-      if (!next.has(serverId)) this.capturedInputs.delete(serverId);
-    }
-    if (removedStoredHost) this.needsPersist = true;
-    if (this.unsubscribe && this.needsPersist) this.schedulePersist();
-  }
-
-  async restore(): Promise<void> {
-    let raw: string | null;
-    try {
-      raw = await this.storage.getItem(STORAGE_KEY);
-    } catch {
-      return;
-    }
-    if (!raw) return;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    const cache = StoredCacheSchema.safeParse(parsed);
-    if (!cache.success) return;
-    for (const host of cache.data.hosts) {
-      if (!this.activeServerIds.has(host.serverId)) {
-        this.needsPersist = true;
-        continue;
-      }
-      this.storedHosts.set(host.serverId, host);
-      if (host.timeline) this.lastFocusedAgentIds.set(host.serverId, host.timeline.agentId);
-    }
-    if (this.buildBoundedPayload().evicted) this.needsPersist = true;
-    for (const host of this.storedHosts.values()) {
-      useSessionStore.getState().restoreSessionReplica(host.serverId, deserializeHost(host));
-      const session = useSessionStore.getState().sessions[host.serverId];
-      if (session) {
-        this.capturedInputs.set(
-          host.serverId,
-          selectReplicaInput(session, this.lastFocusedAgentIds.get(host.serverId) ?? null),
-        );
-      }
-    }
-  }
-
-  start(): void {
-    if (this.unsubscribe) return;
-    const changedBeforeSubscription = this.captureSessions();
-    this.unsubscribe = useSessionStore.subscribe((state) => {
-      if (this.activeServerIds.size === 0) return;
-      let changed = false;
-      for (const serverId of this.activeServerIds) {
-        const session = state.sessions[serverId];
-        if (session && this.captureHost(serverId, session)) changed = true;
-      }
-      if (changed) this.schedulePersist();
-    });
-    if (changedBeforeSubscription || this.needsPersist) this.schedulePersist();
   }
 
   reconcileServerId(oldServerId: string, newServerId: string): void {
-    const stored = this.storedHosts.get(oldServerId);
-    if (stored) {
-      this.storedHosts.delete(oldServerId);
-      this.storedHosts.set(newServerId, { ...stored, serverId: newServerId });
+    this.invalidateHostReads(oldServerId);
+    this.invalidateHostReads(newServerId);
+    const rows = this.storedRows.get(oldServerId);
+    if (rows) {
+      const newRows = this.storedRows.get(newServerId) ?? new Map<string, ReplicaRow>();
+      this.totalBytes -=
+        (this.hostBytes.get(oldServerId) ?? 0) + (this.hostBytes.get(newServerId) ?? 0);
+      this.storedRows.delete(oldServerId);
+      for (const [key, row] of rows) newRows.set(key, { ...row, serverId: newServerId });
+      this.storedRows.set(newServerId, newRows);
+      const bytes = [...newRows.values()].reduce((sum, row) => sum + rowBytes(row), 0);
+      this.hostBytes.delete(oldServerId);
+      this.hostBytes.set(newServerId, bytes);
+      this.totalBytes += bytes;
+      this.hostWriteOrder.delete(oldServerId);
+      this.touchHost(newServerId);
     }
-    const focusedAgentId = this.lastFocusedAgentIds.get(oldServerId);
-    if (focusedAgentId) {
-      this.lastFocusedAgentIds.delete(oldServerId);
-      this.lastFocusedAgentIds.set(newServerId, focusedAgentId);
-    }
-    const capturedInput = this.capturedInputs.get(oldServerId);
-    if (capturedInput) {
-      this.capturedInputs.delete(oldServerId);
-      this.capturedInputs.set(newServerId, capturedInput);
-    }
+    this.renamePendingHostChanges(oldServerId, newServerId);
     if (this.activeServerIds.delete(oldServerId)) this.activeServerIds.add(newServerId);
-    this.needsPersist = true;
-    this.schedulePersist();
+    this.queueOperation(() => this.rowStore.renameHost(oldServerId, newServerId));
   }
 
   async flush(): Promise<void> {
+    await this.syncPending();
+  }
+
+  /** Resolves to whether every pending change reached the store. */
+  private async syncPending(): Promise<boolean> {
+    const persisted = await this.persist();
+    await this.writeQueue.catch(() => undefined);
+    return persisted;
+  }
+
+  private async flushPending(): Promise<void> {
+    await this.persist();
+  }
+
+  private async persist(): Promise<boolean> {
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
     }
-    this.captureSessions();
-    const { payload } = this.buildBoundedPayload();
-    this.needsPersist = false;
+    if (!this.hasPendingChanges()) return true;
     const write = this.writeQueue
       .catch(() => undefined)
-      .then(() => this.storage.setItem(STORAGE_KEY, payload));
-    this.writeQueue = write;
-    await write.catch(() => undefined);
+      .then(async () => {
+        const pending = this.drainPendingChanges();
+        try {
+          await this.prepareStore();
+          await this.ensureStoredIndex();
+          const changes = this.materializePendingChanges(pending);
+          const { changes: boundedChanges, evicted } = await this.fitChangesToBudget(changes);
+          if (boundedChanges.upserts.length > 0 || boundedChanges.deletes.length > 0) {
+            await this.rowStore.apply(boundedChanges);
+            this.applyStoredChanges(boundedChanges);
+          }
+          for (const serverId of pending.baselines) {
+            if (!evicted.has(serverId)) this.invalidatedHosts.delete(serverId);
+          }
+        } catch {
+          this.restorePendingChanges(pending);
+          if (this.hasPendingChanges()) this.schedulePersist();
+          return false;
+        }
+        return true;
+      });
+    // The queue only sequences writes; every consumer decides for itself what a failure means.
+    this.writeQueue = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    return write;
   }
 
-  private captureSessions(): boolean {
-    const sessions = useSessionStore.getState().sessions;
-    let changed = false;
-    for (const serverId of this.activeServerIds) {
-      const session = sessions[serverId];
-      if (!session) continue;
-      if (this.captureHost(serverId, session)) changed = true;
+  private queueEntityDelete(serverId: string, kind: ReplicaRowKind, id: string): void {
+    this.queueDelete({ serverId, kind, id });
+  }
+
+  private queueUpsert(row: StructuredReplicaUpsert): void {
+    this.invalidateRowReads(row);
+    const key = pendingRowKey(row);
+    this.pendingDeletes.delete(key);
+    this.pendingUpserts.set(key, row);
+  }
+
+  private queueDelete(key: ReplicaRowKey): void {
+    this.invalidateRowReads(key);
+    const pendingKey = pendingRowKey(key);
+    this.pendingUpserts.delete(pendingKey);
+    this.pendingDeletes.set(pendingKey, key);
+  }
+
+  private hasPendingChanges(): boolean {
+    return (
+      this.pendingUpserts.size > 0 || this.pendingDeletes.size > 0 || this.pendingBaselines.size > 0
+    );
+  }
+
+  private hasPendingReadChanges(read: ReplicaRead): boolean {
+    if (
+      this.pendingBaselines.has(read.serverId) &&
+      read.kinds.some((kind) => kind !== "timeline")
+    ) {
+      return true;
     }
-    return changed;
+    return (
+      [...this.pendingUpserts.values()].some((row) => matchesReplicaRead(read, row)) ||
+      [...this.pendingDeletes.values()].some((row) => matchesReplicaRead(read, row))
+    );
   }
 
-  private captureHost(serverId: string, session: SessionState): boolean {
-    if (session.focusedAgentId) {
-      this.lastFocusedAgentIds.set(serverId, session.focusedAgentId);
+  private invalidateRowReads(row: ReplicaRowKey): void {
+    for (const read of this.activeReads) {
+      if (matchesReplicaRead(read, row)) read.invalidated = true;
     }
-    const input = selectReplicaInput(session, this.lastFocusedAgentIds.get(serverId) ?? null);
-    const previous = this.capturedInputs.get(serverId);
-    if (previous && replicaInputsEqual(previous, input)) return false;
-
-    this.capturedInputs.set(serverId, input);
-    this.storedHosts.delete(serverId);
-    this.storedHosts.set(serverId, serializeHost(serverId, input));
-    return true;
   }
 
-  private buildBoundedPayload(): { payload: string; evicted: boolean } {
-    let evicted = false;
-    let payload = this.serialize();
-    while (Buffer.byteLength(payload, "utf8") > this.maxBytes && this.storedHosts.size > 0) {
-      const oldestServerId = this.storedHosts.keys().next().value;
-      if (oldestServerId === undefined) break;
-      this.storedHosts.delete(oldestServerId);
-      evicted = true;
-      payload = this.serialize();
+  private invalidateHostReads(serverId: string, kinds?: readonly ReplicaRowKind[]): void {
+    for (const read of this.activeReads) {
+      if (
+        read.serverId === serverId &&
+        (!kinds || kinds.some((kind) => read.kinds.includes(kind)))
+      ) {
+        read.invalidated = true;
+      }
     }
-    return { payload, evicted };
   }
 
-  private serialize(): string {
-    return JSON.stringify({
-      version: CACHE_VERSION,
-      hosts: Array.from(this.storedHosts.values()),
+  private hasPendingHostChanges(serverId: string): boolean {
+    if (this.pendingBaselines.has(serverId)) return true;
+    for (const row of this.pendingUpserts.values()) {
+      if (row.serverId === serverId) return true;
+    }
+    for (const row of this.pendingDeletes.values()) {
+      if (row.serverId === serverId) return true;
+    }
+    return false;
+  }
+
+  private drainPendingChanges(): PendingReplicaChanges {
+    const changes = {
+      upserts: [...this.pendingUpserts.values()],
+      deletes: [...this.pendingDeletes.values()],
+      baselines: this.pendingBaselines,
+    };
+    this.pendingUpserts = new Map();
+    this.pendingDeletes = new Map();
+    this.pendingBaselines = new Set();
+    return changes;
+  }
+
+  private materializePendingChanges(pending: PendingReplicaChanges): ReplicaRowChanges {
+    const deletes = new Map(pending.deletes.map((row) => [pendingRowKey(row), row]));
+    const upserts: ReplicaRow[] = [];
+    for (const upsert of pending.upserts) {
+      const row = this.materializeUpsert(upsert);
+      if (row) upserts.push(row);
+      else deletes.set(pendingRowKey(upsert), upsert);
+    }
+    for (const serverId of pending.baselines) {
+      const replacementKeys = new Set(
+        upserts.filter((row) => row.serverId === serverId && row.kind !== "timeline").map(rowKey),
+      );
+      for (const row of this.storedRows.get(serverId)?.values() ?? []) {
+        if (row.kind !== "timeline" && !replacementKeys.has(rowKey(row))) {
+          deletes.set(pendingRowKey(row), row);
+        }
+      }
+    }
+    return { upserts, deletes: [...deletes.values()] };
+  }
+
+  private materializeUpsert(upsert: StructuredReplicaUpsert): ReplicaRow | null {
+    let value: unknown;
+    switch (upsert.kind) {
+      case "agent":
+        value = serializeAgent(upsert.value);
+        break;
+      case "workspace":
+        value = serializeWorkspace(upsert.value);
+        break;
+      case "project":
+        value = serializeProject(upsert.value);
+        break;
+      case "timeline":
+        value = serializeTimeline(upsert.value);
+        if (!value) return null;
+        break;
+      case "checkpoint":
+        value = serializeDirectoryCheckpoint(upsert.value);
+        break;
+    }
+    return {
+      serverId: upsert.serverId,
+      kind: upsert.kind,
+      id: upsert.id,
+      payload: JSON.stringify(value),
+    };
+  }
+
+  private restorePendingChanges(changes: PendingReplicaChanges): void {
+    for (const serverId of changes.baselines) {
+      if (this.activeServerIds.has(serverId)) this.pendingBaselines.add(serverId);
+    }
+    for (const key of changes.deletes) {
+      const pendingKey = pendingRowKey(key);
+      if (
+        this.activeServerIds.has(key.serverId) &&
+        !this.pendingUpserts.has(pendingKey) &&
+        !this.pendingDeletes.has(pendingKey)
+      ) {
+        this.queueDelete(key);
+      }
+    }
+    for (const row of changes.upserts) {
+      const pendingKey = pendingRowKey(row);
+      if (
+        this.activeServerIds.has(row.serverId) &&
+        !this.pendingUpserts.has(pendingKey) &&
+        !this.pendingDeletes.has(pendingKey)
+      ) {
+        this.queueUpsert(row);
+      }
+    }
+  }
+
+  private applyStoredChanges(changes: ReplicaRowChanges): void {
+    const touchedServerIds = new Set<string>();
+    for (const key of changes.deletes) {
+      const rows = this.storedRows.get(key.serverId);
+      const previous = rows?.get(rowKey(key));
+      if (previous) {
+        rows?.delete(rowKey(key));
+        this.adjustHostBytes(key.serverId, -rowBytes(previous));
+      }
+      touchedServerIds.add(key.serverId);
+    }
+    for (const row of changes.upserts) {
+      const rows = this.storedRows.get(row.serverId) ?? new Map<string, ReplicaRow>();
+      const previous = rows.get(rowKey(row));
+      const previousBytes = previous ? rowBytes(previous) : 0;
+      rows.set(rowKey(row), row);
+      this.storedRows.set(row.serverId, rows);
+      this.adjustHostBytes(row.serverId, rowBytes(row) - previousBytes);
+      touchedServerIds.add(row.serverId);
+    }
+    for (const serverId of touchedServerIds) {
+      if ((this.storedRows.get(serverId)?.size ?? 0) === 0) {
+        this.removeStoredHost(serverId);
+      } else {
+        this.touchHost(serverId);
+      }
+    }
+  }
+
+  private adjustHostBytes(serverId: string, delta: number): void {
+    this.hostBytes.set(serverId, (this.hostBytes.get(serverId) ?? 0) + delta);
+    this.totalBytes += delta;
+  }
+
+  private touchHost(serverId: string): void {
+    this.hostWriteOrder.delete(serverId);
+    this.hostWriteOrder.set(serverId, true);
+  }
+
+  private async fitChangesToBudget(
+    changes: ReplicaRowChanges,
+  ): Promise<{ changes: ReplicaRowChanges; evicted: Set<string> }> {
+    const touchedServerIds = new Set<string>();
+    for (const key of changes.deletes) touchedServerIds.add(key.serverId);
+    for (const row of changes.upserts) touchedServerIds.add(row.serverId);
+
+    const projectedRows = new Map<string, Map<string, ReplicaRow>>();
+    const projectedBytes = new Map(this.hostBytes);
+    for (const serverId of touchedServerIds) {
+      projectedRows.set(serverId, new Map(this.storedRows.get(serverId)));
+    }
+    for (const key of changes.deletes) {
+      projectedRows.get(key.serverId)?.delete(rowKey(key));
+    }
+    for (const row of changes.upserts) {
+      projectedRows.get(row.serverId)?.set(rowKey(row), row);
+    }
+    for (const [serverId, rows] of projectedRows) {
+      projectedBytes.set(
+        serverId,
+        [...rows.values()].reduce((sum, row) => sum + rowBytes(row), 0),
+      );
+    }
+
+    const writeOrder = [...this.hostWriteOrder.keys()].filter(
+      (serverId) => !touchedServerIds.has(serverId),
+    );
+    writeOrder.push(...touchedServerIds);
+    let projectedTotal = [...projectedBytes.values()].reduce((sum, bytes) => sum + bytes, 0);
+    const evicted = new Set<string>();
+    while (projectedTotal > this.maxBytes) {
+      const serverId = writeOrder.shift();
+      if (serverId === undefined) break;
+      const bytes = projectedBytes.get(serverId) ?? 0;
+      projectedTotal -= bytes;
+      projectedBytes.delete(serverId);
+      evicted.add(serverId);
+      this.invalidatedHosts.add(serverId);
+      if (this.storedRows.has(serverId)) await this.rowStore.deleteHost(serverId);
+      this.removeStoredHost(serverId);
+    }
+
+    return {
+      changes: {
+        upserts: changes.upserts.filter((row) => !evicted.has(row.serverId)),
+        deletes: changes.deletes.filter((key) => !evicted.has(key.serverId)),
+      },
+      evicted,
+    };
+  }
+
+  private removeStoredHost(serverId: string): void {
+    this.totalBytes -= this.hostBytes.get(serverId) ?? 0;
+    this.storedRows.delete(serverId);
+    this.hostBytes.delete(serverId);
+    this.hostWriteOrder.delete(serverId);
+  }
+
+  private dropPendingHostChanges(serverId: string): void {
+    this.pendingBaselines.delete(serverId);
+    for (const [key, row] of this.pendingUpserts) {
+      if (row.serverId === serverId) this.pendingUpserts.delete(key);
+    }
+    for (const [key, row] of this.pendingDeletes) {
+      if (row.serverId === serverId) this.pendingDeletes.delete(key);
+    }
+  }
+
+  private renamePendingHostChanges(oldServerId: string, newServerId: string): void {
+    const changes = this.drainPendingChanges();
+    for (const key of changes.deletes) {
+      this.queueDelete(key.serverId === oldServerId ? { ...key, serverId: newServerId } : key);
+    }
+    for (const row of changes.upserts) {
+      this.queueUpsert(row.serverId === oldServerId ? { ...row, serverId: newServerId } : row);
+    }
+    for (const serverId of changes.baselines) {
+      this.pendingBaselines.add(serverId === oldServerId ? newServerId : serverId);
+    }
+    if (this.invalidatedHosts.delete(oldServerId)) this.invalidatedHosts.add(newServerId);
+  }
+
+  private prepareStore(): Promise<void> {
+    this.preparePromise ??= (async () => {
+      await this.rowStore.open();
+      // COMPAT(replica-blob-cache): remove after 2026-11
+      await this.clearLegacyCache().catch(() => undefined);
+    })();
+    return this.preparePromise;
+  }
+
+  private ensureStoredIndex(): Promise<void> {
+    this.storedIndexPromise ??= this.rowStore.readAll().then(async (hosts) => {
+      this.storedRows.clear();
+      this.hostBytes.clear();
+      this.hostWriteOrder.clear();
+      this.totalBytes = 0;
+      for (const host of hosts) {
+        if (!this.activeServerIds.has(host.serverId)) {
+          await this.rowStore.deleteHost(host.serverId);
+          continue;
+        }
+        const rows = new Map(host.rows.map((row) => [rowKey(row), row]));
+        const bytes = host.rows.reduce((sum, row) => sum + rowBytes(row), 0);
+        this.storedRows.set(host.serverId, rows);
+        this.hostBytes.set(host.serverId, bytes);
+        this.totalBytes += bytes;
+        this.touchHost(host.serverId);
+      }
+      return undefined;
     });
+    return this.storedIndexPromise;
+  }
+
+  private queueOperation(operation: () => Promise<void>): Promise<void> {
+    this.writeQueue = this.writeQueue
+      .catch(() => undefined)
+      .then(async () => {
+        await this.prepareStore();
+        await operation();
+        return undefined;
+      })
+      .catch(() => undefined);
+    return this.writeQueue;
   }
 
   private schedulePersist(): void {
     if (this.persistTimer) return;
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
-      void this.flush();
+      void this.flushPending();
     }, PERSIST_DELAY_MS);
   }
 }

@@ -42,8 +42,6 @@ extraResources:
     to: arena
   - from: ../app/dist
     to: app-dist
-  - from: ../../skills
-    to: skills
   - from: assets/editor-targets
     to: editor-target-icons
 publish:
@@ -53,6 +51,7 @@ publish:
 mac:
   icon: assets/icon.icns
   artifactName: "Agent-Duel-${version}-${arch}.${ext}"
+  minimumSystemVersion: "13.0.0"
   category: public.app-category.developer-tools
   hardenedRuntime: true
   notarize: true
@@ -72,12 +71,20 @@ linux:
   extraResources:
     - from: bin/paseo
       to: bin/paseo
+    - from: assets/icon.png
+      to: icon.png
   target:
     - AppImage
     - deb
     - rpm
     - tar.gz
+deb:
+  afterInstall: scripts/linux-sandbox/after-install.tpl
+rpm:
+  afterInstall: scripts/linux-sandbox/after-install.tpl
 appImage:
+  # A nonempty argument list replaces builder's hardcoded --no-sandbox default.
+  executableArgs: ['"--class=Agent Duel"']
   # Keep the AppImage filename stable across versions (no ${version}) so
   # electron-updater overwrites the file in place instead of renaming it to a new
   # versioned path. A rename orphans the old binary, breaks desktop shortcuts, and

@@ -22,32 +22,13 @@ export const STREAM_CONTENT_PADDING_TOP = SPACING[4];
 export const STREAM_CONTENT_TOP_INSET =
   STREAM_HISTORY_START_SLOT_HEIGHT + STREAM_CONTENT_PADDING_TOP;
 
-export function isSameAssistantBlockGroup(params: {
-  item: StreamItem | null | undefined;
-  other: StreamItem | null | undefined;
-}): boolean {
-  return (
-    params.item?.kind === "assistant_message" &&
-    params.other?.kind === "assistant_message" &&
-    params.item.blockGroupId !== undefined &&
-    params.item.blockGroupId === params.other.blockGroupId
-  );
-}
-
-export function getAssistantBlockSpacing(params: {
+export function getAssistantMessageSpacing(params: {
   item: StreamItem;
-  aboveItem: StreamItem | null | undefined;
-  belowItem: StreamItem | null | undefined;
-}): "default" | "compactTop" | "compactBottom" | "compactBoth" {
-  if (params.item.kind !== "assistant_message") {
-    return "default";
-  }
-  const compactTop = isSameAssistantBlockGroup({ item: params.item, other: params.aboveItem });
-  const compactBottom = isSameAssistantBlockGroup({ item: params.item, other: params.belowItem });
-  if (compactTop && compactBottom) return "compactBoth";
-  if (compactTop) return "compactTop";
-  if (compactBottom) return "compactBottom";
-  return "default";
+  hasFooterBelow?: boolean;
+}): "default" | "compactBottom" {
+  return params.item.kind === "assistant_message" && params.hasFooterBelow
+    ? "compactBottom"
+    : "default";
 }
 
 const isUserMessageItem = (item?: StreamItem | null) => item?.kind === "user_message";
@@ -65,6 +46,9 @@ export function getGapBetweenStreamItems(
   if (isUserMessageItem(item) && isUserMessageItem(belowItem)) {
     return SPACING[1];
   }
+  if (item.kind === "user_message" && belowItem.kind === "assistant_message") {
+    return 0;
+  }
   if (isToolSequenceItem(item) && isToolSequenceItem(belowItem)) {
     return 0;
   }
@@ -76,9 +60,6 @@ export function getGapBetweenStreamItems(
   }
   if (isToolSequenceItem(item) && belowItem.kind === "assistant_message") {
     return SPACING[1];
-  }
-  if (isSameAssistantBlockGroup({ item, other: belowItem })) {
-    return SPACING[3];
   }
   return SPACING[4];
 }

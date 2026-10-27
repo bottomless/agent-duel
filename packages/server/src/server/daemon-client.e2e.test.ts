@@ -121,7 +121,7 @@ test("createAgent without an initial prompt returns an idle snapshot", async () 
 
   try {
     await client.connect();
-    await client.fetchAgents({ subscribe: { subscriptionId: "create-no-prompt" } });
+    await client.fetchAgents({ subscribe: {} });
 
     const agent = await client.createAgent({
       provider: "codex",
@@ -157,15 +157,19 @@ test("DaemonClient uploads file bytes to daemon temp storage", async () => {
       chunkSize: 5,
     });
 
+    const uploadId = result.file?.id ?? "";
+    expect(uploadId).toMatch(
+      /^upload_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     expect(result).toEqual({
       requestId: "req-upload-e2e",
       file: {
         type: "uploaded_file",
-        id: "upload_req-upload-e2e",
+        id: uploadId,
         fileName: "notes.txt",
         mimeType: "text/plain",
         size: 11,
-        path: path.join(daemon.paseoHome, "uploads", "upload_req-upload-e2e", "notes.txt"),
+        path: path.join(daemon.paseoHome, "uploads", uploadId, "notes.txt"),
       },
       error: null,
     });
@@ -185,7 +189,7 @@ test("createAgent with background initialPrompt returns a running snapshot befor
 
   try {
     await client.connect();
-    await client.fetchAgents({ subscribe: { subscriptionId: "create-background-prompt" } });
+    await client.fetchAgents({ subscribe: {} });
 
     const agent = await client.createAgent({
       provider: "codex",
@@ -415,7 +419,7 @@ test("createAgent fails when the initial turn cannot start", async () => {
 
   try {
     await client.connect();
-    await client.fetchAgents({ subscribe: { subscriptionId: "create-start-failure" } });
+    await client.fetchAgents({ subscribe: {} });
 
     await expect(
       client.createAgent({
@@ -830,6 +834,29 @@ test("send_agent_message auto-unarchives archived agents", async () => {
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 180000);
+
+test("send_agent_message leaves an archived agent archived when its directory is gone", async () => {
+  const cwd = tmpCwd();
+  try {
+    const created = await ctx.client.createAgent({
+      config: {
+        ...getFullAccessConfig("codex"),
+        cwd,
+      },
+    });
+    const archived = await ctx.client.archiveAgent(created.id);
+    rmSync(cwd, { recursive: true, force: true });
+
+    await expect(ctx.client.sendMessage(created.id, "hello")).rejects.toThrow(
+      "Working directory does not exist",
+    );
+
+    const afterSend = await ctx.client.fetchAgent({ agentId: created.id });
+    expect(afterSend?.agent.archivedAt).toBe(archived.archivedAt);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 30000);
 
 test("refresh_agent auto-unarchives archived agents", async () => {
   const cwd = tmpCwd();
@@ -1324,7 +1351,7 @@ test("creates agent and exercises lifecycle", async () => {
   const cwd = tmpCwd();
 
   await ctx.client.fetchAgents({
-    subscribe: { subscriptionId: "daemon-client-lifecycle" },
+    subscribe: {},
   });
 
   const agentUpdatePromise = waitForSignal(15000, (resolve) => {
@@ -1472,7 +1499,7 @@ test("creates agent and exercises lifecycle", async () => {
       sawAssistantMessage = true;
     }
   });
-  const unsubscribeRawStream = ctx.client.on("agent_stream", (message) => {
+  const unsubscribeRawStream = ctx.client.subscribeAgentTimeline(agent.id, (message) => {
     if (message.type !== "agent_stream") {
       return;
     }

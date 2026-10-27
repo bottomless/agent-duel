@@ -1,14 +1,23 @@
-import { useCallback, useMemo, useRef } from "react";
-import { Pressable, Text, View, type PressableStateCallbackType } from "react-native";
+import { forwardRef, useCallback, useMemo, useRef } from "react";
+import { Text, View, type PressableProps } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, GitBranch, Swords } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import type { Theme } from "@/styles/theme";
 import { Combobox, ComboboxItem, type ComboboxProps } from "@/components/ui/combobox";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useToast } from "@/contexts/toast-context";
 import { useBranchSwitcher } from "@/hooks/use-branch-switcher";
+import {
+  ToolbarLabelSelectTrigger,
+  ToolbarLabelTriggerIcon,
+  toolbarLabelTriggerStyle,
+  type ToolbarLabelTriggerState,
+} from "@/components/ui/toolbar-label-trigger";
+import { extraMutedIconColorMapping } from "@/components/ui/icon-button-chrome";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 /**
  * A destination that is not a branch — an Arena contestant worktree, which lives
@@ -36,16 +45,43 @@ interface BranchSwitcherProps {
 const foregroundMutedIconColorMapping = (theme: Theme) => ({
   color: theme.colors.foregroundMuted,
 });
-
 const accentIconColorMapping = (theme: Theme) => ({
   color: theme.colors.accentBright,
 });
-
 const ThemedGitBranch = withUnistyles(GitBranch);
 const ThemedSwords = withUnistyles(Swords);
 const ThemedChevronDown = withUnistyles(ChevronDown);
 
 const EMPTY_PINNED_OPTIONS: BranchSwitcherPinnedOption[] = [];
+
+interface PinnedSelectTriggerProps extends Omit<PressableProps, "children" | "style"> {
+  label: string;
+  open?: boolean;
+}
+
+/** The branch trigger's geometry, marked as a contestant worktree rather than a branch. */
+const PinnedSelectTrigger = forwardRef<View, PinnedSelectTriggerProps>(function PinnedSelectTrigger(
+  { label, open = false, ...props },
+  ref,
+) {
+  const triggerStyle = useCallback(
+    (state: ToolbarLabelTriggerState) => toolbarLabelTriggerStyle({ ...state, open }),
+    [open],
+  );
+  return (
+    <PressHighlight {...props} ref={ref} style={triggerStyle}>
+      <ToolbarLabelTriggerIcon>
+        <ThemedSwords size={14} uniProps={accentIconColorMapping} />
+      </ToolbarLabelTriggerIcon>
+      <Text style={styles.pinnedLabel} numberOfLines={1}>
+        {label}
+      </Text>
+      <ToolbarLabelTriggerIcon>
+        <ThemedChevronDown size={12} uniProps={extraMutedIconColorMapping} />
+      </ToolbarLabelTriggerIcon>
+    </PressHighlight>
+  );
+});
 
 export function BranchSwitcher({
   currentBranchName,
@@ -78,14 +114,6 @@ export function BranchSwitcher({
   });
 
   const handleOpen = useCallback(() => setIsOpen(true), [setIsOpen]);
-
-  const triggerStyle = useCallback(
-    ({ hovered = false, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
-      styles.trigger,
-      (Boolean(hovered) || pressed) && styles.triggerHovered,
-    ],
-    [],
-  );
 
   const pinnedIds = useMemo(
     () => new Set(pinnedOptions.map((option) => option.id)),
@@ -142,34 +170,36 @@ export function BranchSwitcher({
     return null;
   }
 
-  const triggerLabel = pinnedSelected?.label ?? currentBranchName ?? "";
-
   return (
     <View ref={anchorRef} collapsable={false} style={styles.anchor}>
-      <Pressable
-        testID={testID}
-        onPress={handleOpen}
-        style={triggerStyle}
-        accessibilityRole="button"
-        accessibilityLabel={
-          pinnedSelected
-            ? pinnedSelected.label
-            : t("branchSwitcher.currentBranch", { branchName: currentBranchName })
-        }
-      >
-        {pinnedSelected ? (
-          <ThemedSwords size={14} uniProps={accentIconColorMapping} />
-        ) : (
-          <ThemedGitBranch size={14} uniProps={foregroundMutedIconColorMapping} />
-        )}
-        <Text
-          style={[styles.branchLabel, pinnedSelected ? styles.pinnedLabel : null]}
-          numberOfLines={1}
-        >
-          {triggerLabel}
-        </Text>
-        <ThemedChevronDown size={12} uniProps={foregroundMutedIconColorMapping} />
-      </Pressable>
+      <Tooltip delayDuration={300} enabledOnDesktop enabledOnMobile={false}>
+        <TooltipTrigger asChild>
+          {pinnedSelected ? (
+            <PinnedSelectTrigger
+              testID={testID}
+              label={pinnedSelected.label}
+              open={isOpen}
+              onPress={handleOpen}
+              accessibilityRole="button"
+              accessibilityLabel={pinnedSelected.label}
+            />
+          ) : (
+            <ToolbarLabelSelectTrigger
+              testID={testID}
+              label={currentBranchName ?? ""}
+              open={isOpen}
+              onPress={handleOpen}
+              accessibilityRole="button"
+              accessibilityLabel={t("branchSwitcher.currentBranch", {
+                branchName: currentBranchName,
+              })}
+            />
+          )}
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          <Text style={styles.tooltipText}>{t("branchSwitcher.triggerTooltip")}</Text>
+        </TooltipContent>
+      </Tooltip>
       <Combobox
         options={options}
         value={pinnedSelected?.id ?? currentBranchName ?? ""}
@@ -196,27 +226,15 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     minWidth: 0,
   },
-  trigger: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1],
-    minWidth: 0,
-    paddingVertical: theme.spacing[1],
-    paddingHorizontal: theme.spacing[2],
-    marginLeft: -theme.spacing[2],
-    borderRadius: theme.borderRadius.md,
-    flexShrink: 1,
-  },
-  triggerHovered: {
-    backgroundColor: theme.colors.surface1,
-  },
-  branchLabel: {
+  tooltipText: {
+    color: theme.colors.popoverForeground,
     fontSize: theme.fontSize.sm,
-    color: theme.colors.foreground,
-    fontWeight: theme.fontWeight.medium,
-    flexShrink: 1,
   },
   pinnedLabel: {
+    minWidth: 0,
+    flexShrink: 1,
+    fontSize: theme.fontSize.sm,
     color: theme.colors.accentBright,
+    fontWeight: theme.fontWeight.normal,
   },
 }));

@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { loadSessionMessageReaders } from "./new-workspace";
 import { daemonWsRoutePattern, wsRoutePatternForPort } from "./daemon-port";
 
 type WebSocketMessage = string | Buffer;
@@ -25,6 +26,13 @@ export interface OlderTimelinePagesGate {
 
 export interface DaemonHydrationGate {
   release(): void;
+}
+
+export interface RewindCompletionGate {
+  clearTimelineStreamCount(): void;
+  release(): void;
+  timelineStreamCount(): number;
+  waitForDelayedResponse(): Promise<void>;
 }
 
 export interface PromptJumpRequestTracker {
@@ -179,9 +187,69 @@ export async function holdDaemonHydration(page: Page): Promise<DaemonHydrationGa
   };
 }
 
+export async function holdRewindCompletion(
+  page: Page,
+  agentId: string,
+): Promise<RewindCompletionGate> {
+  let released = false;
+  let timelineStreamCount = 0;
+  const delayedForwards: Array<() => void> = [];
+  let resolveDelayedResponse: (() => void) | null = null;
+  const delayedResponse = new Promise<void>((resolve) => {
+    resolveDelayedResponse = resolve;
+  });
+
+  await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((message) => server.send(message));
+    server.onMessage((message) => {
+      const sessionMessage = getSessionMessage(message);
+      const payload = sessionMessage ? getPayload(sessionMessage) : null;
+      const streamEvent = payload?.event;
+      if (
+        sessionMessage?.type === "agent_stream" &&
+        payload?.agentId === agentId &&
+        streamEvent &&
+        typeof streamEvent === "object" &&
+        (streamEvent as { type?: unknown }).type === "timeline"
+      ) {
+        timelineStreamCount += 1;
+      }
+      if (
+        !released &&
+        (sessionMessage?.type === "agent.rewind.response" ||
+          sessionMessage?.type === "agent.timeline.replacement") &&
+        payload?.agentId === agentId
+      ) {
+        // The replacement also signals completion and removes the rewound row/menu.
+        // Hold it with the response so the pending-state assertion observes a pending rewind.
+        delayedForwards.push(() => ws.send(message));
+        if (sessionMessage.type === "agent.rewind.response") resolveDelayedResponse?.();
+        return;
+      }
+      ws.send(message);
+    });
+  });
+
+  return {
+    clearTimelineStreamCount() {
+      timelineStreamCount = 0;
+    },
+    release() {
+      released = true;
+      for (const forward of delayedForwards.splice(0)) {
+        forward();
+      }
+    },
+    timelineStreamCount: () => timelineStreamCount,
+    waitForDelayedResponse: () => delayedResponse,
+  };
+}
+
 export async function delayCreatedAgentInitialTailResponse(
   page: Page,
 ): Promise<CreatedAgentTimelineGate> {
+  const frames = await loadSessionMessageReaders();
   let createdAgentId: string | null = null;
   let releaseRequested = false;
   let delayedResponseSeen = false;
@@ -211,19 +279,24 @@ export async function delayCreatedAgentInitialTailResponse(
     });
 
     server.onMessage((message) => {
-      const sessionMessage = getSessionMessage(message);
-      const payload = sessionMessage ? getPayload(sessionMessage) : null;
-      if (sessionMessage?.type === "status" && payload?.status === "agent_created") {
-        const agentId = payload.agentId;
-        if (typeof agentId === "string") {
-          createdAgentId = agentId;
-          resolveCreatedAgent?.(agentId);
-        }
+      const sessionMessage = frames.server(message);
+      let createdId: unknown;
+      if (sessionMessage?.type === "agent.create.response") {
+        createdId = sessionMessage.payload.agent?.id;
+      } else if (
+        sessionMessage?.type === "status" &&
+        sessionMessage.payload.status === "agent_created"
+      ) {
+        createdId = sessionMessage.payload.agentId;
+      }
+      if (typeof createdId === "string") {
+        createdAgentId = createdId;
+        resolveCreatedAgent?.(createdId);
       }
 
       if (sessionMessage?.type === "fetch_agent_timeline_response") {
-        const agentId = payload?.agentId;
-        const direction = payload?.direction;
+        const agentId = sessionMessage.payload.agentId;
+        const direction = sessionMessage.payload.direction;
         if (
           !delayedResponseSeen &&
           typeof agentId === "string" &&
@@ -458,5 +531,78 @@ async function delayAgentTimelineResponse(
       }
     },
     waitForDelayedResponse: () => delayedResponse,
+  };
+}
+
+/** Holds real incoming frames so intermediate rendering assertions do not race the producer. */
+export async function holdAssistantStream(page: Page, agentId: string) {
+  const pending: Array<{ forward(): void; text: string }> = [];
+  let holding = false;
+  let released = false;
+  let forwardedText = "";
+  let notifyFrame: (() => void) | undefined;
+  let notifyInitialTimeline!: () => void;
+  const initialTimeline = new Promise<void>((resolve) => {
+    notifyInitialTimeline = resolve;
+  });
+
+  await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((message) => server.send(message));
+    server.onMessage((message) => {
+      const session = getSessionMessage(message);
+      const payload = session ? getPayload(session) : null;
+      if (session?.type === "fetch_agent_timeline_response" && payload?.agentId === agentId) {
+        notifyInitialTimeline();
+      }
+      const event = payload?.event as
+        | { type?: string; item?: { type?: string; text?: string } }
+        | undefined;
+      const text =
+        session?.type === "agent_stream" &&
+        payload?.agentId === agentId &&
+        event?.type === "timeline" &&
+        event.item?.type === "assistant_message"
+          ? (event.item.text ?? "")
+          : "";
+      if (text) holding = true;
+      if (holding && !released) {
+        pending.push({ forward: () => ws.send(message), text });
+        notifyFrame?.();
+      } else {
+        ws.send(message);
+      }
+    });
+  });
+
+  const forwardUntil = async (done: (text: string) => boolean): Promise<void> => {
+    while (!done(forwardedText)) {
+      const frame = pending.shift();
+      if (!frame) {
+        await new Promise<void>((resolve) => {
+          notifyFrame = resolve;
+        });
+        continue;
+      }
+      forwardedText += frame.text;
+      frame.forward();
+    }
+  };
+
+  return {
+    waitForInitialTimeline: () => initialTimeline,
+    showUntil: (text: string) => forwardUntil((forwarded) => forwarded.includes(text)),
+    async showThrough(prefix: string): Promise<void> {
+      await forwardUntil((text) => text.length >= prefix.length);
+      if (forwardedText !== prefix) {
+        throw new Error(
+          `Stream did not stop at ${JSON.stringify(prefix)}: ${JSON.stringify(forwardedText)}`,
+        );
+      }
+    },
+    release() {
+      released = true;
+      for (const frame of pending.splice(0)) frame.forward();
+    },
   };
 }

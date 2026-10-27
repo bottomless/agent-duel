@@ -8,6 +8,7 @@ export interface AcpProviderCatalogEntry {
   iconSvg: string | null;
   installLink: string;
   command: readonly [string, ...string[]];
+  bundledProvider?: boolean;
   env?: Readonly<Record<string, string>>;
   params?: Readonly<Record<string, unknown>>;
 }
@@ -132,7 +133,7 @@ const CATALOG_DATA = [
     title: "Devin CLI",
     description: "Cognition's Devin for Terminal via Agent Client Protocol",
     version: "manual",
-    iconId: null,
+    iconId: "devin",
     installLink: "https://cli.devin.ai/docs",
     command: ["devin", "acp"],
   },
@@ -188,6 +189,19 @@ const CATALOG_DATA = [
     command: ["npx", "-y", "@google/gemini-cli@0.52.0", "--acp"],
   },
   {
+    id: "gjc",
+    title: "Gajae Code",
+    description:
+      "Runs on the Claude/Codex/Gemini subscription you already pay for. Plan-before-mutation workflows, evidence-gated execution, and approval prompts for shell and destructive edits.",
+    version: "manual",
+    iconId: "gjc",
+    installLink: "https://gajae-code.com",
+    command: ["gjc", "acp"],
+    env: {
+      GJC_ACP_PERMISSION_MODE: "prompt",
+    },
+  },
+  {
     id: "glm-acp-agent",
     title: "GLM Agent",
     description:
@@ -221,9 +235,19 @@ const CATALOG_DATA = [
     title: "Hermes",
     description: "Nous Research self-improving AI agent",
     version: "manual",
-    iconId: null,
+    iconId: "hermes",
     installLink: "https://hermes-agent.nousresearch.com/docs/user-guide/features/acp",
     command: ["hermes", "acp"],
+  },
+  {
+    id: "hoplite",
+    bundledProvider: true,
+    title: "Hoplite",
+    description: "Cloud coding agent through the local hoplite acp bridge",
+    version: "manual",
+    iconId: "hoplite",
+    installLink: "https://hoplite.sh/docs/cli#install",
+    command: ["hoplite", "acp"],
   },
   {
     id: "junie",
@@ -248,7 +272,7 @@ const CATALOG_DATA = [
     title: "Kiro CLI",
     description: "Amazon's AI coding agent with native ACP support",
     version: "manual",
-    iconId: null,
+    iconId: "kiro",
     installLink: "https://kiro.dev/docs/cli/acp/",
     command: ["kiro-cli", "acp"],
   },
@@ -260,6 +284,15 @@ const CATALOG_DATA = [
     iconId: "kimi",
     installLink: "https://github.com/MoonshotAI/kimi-code",
     command: ["kimi", "acp"],
+  },
+  {
+    id: "minimax-code",
+    title: "MiniMax Code",
+    description: "MiniMax's coding agent for the terminal",
+    version: "0.1.2",
+    iconId: "minimax-code",
+    installLink: "https://agent.minimax.io",
+    command: ["npx", "-y", "@minimax-ai/code@0.1.2", "acp"],
   },
   {
     id: "minion-code",
@@ -367,6 +400,7 @@ export const ACP_PROVIDER_CATALOG: AcpProviderCatalogEntry[] = CATALOG_DATA.map(
   version: entry.version,
   installLink: entry.installLink,
   command: entry.command,
+  bundledProvider: "bundledProvider" in entry ? entry.bundledProvider : undefined,
   env: "env" in entry ? entry.env : undefined,
   params: "params" in entry ? entry.params : undefined,
   iconSvg: entry.iconId ? (ACP_PROVIDER_ICON_SVGS[entry.iconId] ?? null) : null,

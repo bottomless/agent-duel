@@ -1,10 +1,16 @@
-import type { AgentProvider, ToolCallDetail } from "@getpaseo/protocol/agent-types";
+import type { AgentMessage } from "@getpaseo/protocol/agent-message";
+import type {
+  AgentProvider,
+  AgentTimelineItem,
+  JsonValue,
+  ToolCallDetail,
+} from "@getpaseo/protocol/agent-types";
+import { timelineItemIdentity } from "@getpaseo/protocol/timeline-identity";
 import type { AgentAttachment, AgentStreamEventPayload } from "@getpaseo/protocol/messages";
 import type { AttachmentMetadata } from "@/attachments/types";
 import { labeledAttachmentKind } from "@/attachments/labeled-attachment";
 import { historyImageAttachment } from "@/attachments/history-image";
 import { extractTaskEntriesFromToolCall } from "../utils/tool-call-parsers";
-import { splitMarkdownBlocks } from "@/utils/split-markdown-blocks";
 
 /**
  * Simple hash function for deterministic ID generation
@@ -80,8 +86,9 @@ export type StreamItem =
   | ThoughtItem
   | ToolCallItem
   | TodoListItem
-  | ActivityLogItem
-  | CompactionItem;
+  | NotificationItem
+  | CompactionItem
+  | PluginTimelineStreamItem;
 
 export type UserMessageImageAttachment = AttachmentMetadata;
 
@@ -90,6 +97,7 @@ export interface UserMessageItem {
   id: string;
   clientMessageId?: string;
   messageId?: string;
+  turnId?: string;
   timelineCursor?: TimelinePosition;
   text: string;
   timestamp: Date;
@@ -101,6 +109,7 @@ export interface UserMessageInput {
   id?: string;
   clientMessageId?: string;
   messageId?: string;
+  turnId?: string;
   timelineCursor?: TimelinePosition;
   text: string;
   timestamp: Date;
@@ -118,6 +127,7 @@ export function createUserMessage(input: UserMessageInput): UserMessageItem {
     id,
     ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
     ...(input.messageId ? { messageId: input.messageId } : {}),
+    ...(input.turnId ? { turnId: input.turnId } : {}),
     ...(input.timelineCursor ? { timelineCursor: input.timelineCursor } : {}),
     text: input.text,
     timestamp: input.timestamp,
@@ -447,11 +457,18 @@ function removeUserMessageAt(items: UserMessageItem[], index: number): UserMessa
 }
 
 function mergeRetainedLifecycleItem(tail: StreamItem[], retained: StreamItem): StreamItem[] | null {
+  if (retained.kind === "plugin") {
+    return replaceTimelineIdentityItem(tail, retained);
+  }
   if (!retained.timelineCursor) {
     return null;
   }
   if (isAgentToolCallItem(retained)) {
-    const tailIndex = findExistingAgentToolCallIndex(tail, retained.payload.data.callId);
+    const identity = agentToolCallIdentity({
+      callId: retained.payload.data.callId,
+      turnId: retained.turnId,
+    });
+    const tailIndex = findExistingTimelineIdentityIndex(tail, identity);
     const existing = tail[tailIndex];
     if (tailIndex < 0 || !existing || !isAgentToolCallItem(existing)) {
       return null;
@@ -499,6 +516,20 @@ function mergeRetainedLifecycleItem(tail: StreamItem[], retained: StreamItem): S
     return next;
   }
   return null;
+}
+
+function replaceTimelineIdentityItem(
+  items: StreamItem[],
+  retained: PluginTimelineStreamItem,
+): StreamItem[] | null {
+  const identity = streamTimelineItemIdentity(retained);
+  if (identity === null) return null;
+  const index = findExistingTimelineIdentityIndex(items, identity);
+  const existing = items[index];
+  if (index < 0 || !existing || existing.kind !== "plugin") return null;
+  const next = [...items];
+  next[index] = retained;
+  return next;
 }
 
 function reconcileReplacementHeadAgainstTail(
@@ -691,11 +722,11 @@ export interface AssistantMessageItem {
   kind: "assistant_message";
   id: string;
   messageId?: string;
+  turnId?: string;
   timelineCursor?: TimelinePosition;
   text: string;
   timestamp: Date;
-  blockGroupId?: string;
-  blockIndex?: number;
+  /** Display-only fields, assigned after source-item plugin transforms. */
 }
 
 export interface TimelinePosition {
@@ -709,6 +740,7 @@ export interface ThoughtItem {
   kind: "thought";
   id: string;
   timelineCursor?: TimelinePosition;
+  turnId?: string;
   text: string;
   timestamp: Date;
   status: ThoughtStatus;
@@ -727,6 +759,7 @@ interface OrchestratorToolCallData {
 }
 
 export interface AgentToolCallData {
+  agentMessage?: AgentMessage;
   provider: AgentProvider;
   callId: string;
   name: string;
@@ -744,6 +777,7 @@ export interface ToolCallItem {
   kind: "tool_call";
   id: string;
   timelineCursor?: TimelinePosition;
+  turnId?: string;
   timestamp: Date;
   payload: ToolCallPayload;
 }
@@ -756,26 +790,43 @@ export function isAgentToolCallItem(item: StreamItem): item is AgentToolCallItem
   return item.kind === "tool_call" && item.payload.source === "agent";
 }
 
-type ActivityLogType = "system" | "info" | "success" | "error";
+type NotificationLevel = "info" | "warning" | "error";
 
-export interface ActivityLogItem {
-  kind: "activity_log";
+export interface NotificationItem {
+  kind: "notification";
+  sourceType: "error" | "notification";
   id: string;
   timelineCursor?: TimelinePosition;
+  turnId?: string;
   timestamp: Date;
-  activityType: ActivityLogType;
+  level: NotificationLevel;
   message: string;
-  metadata?: Record<string, unknown>;
 }
 
 export interface CompactionItem {
   kind: "compaction";
   id: string;
   timelineCursor?: TimelinePosition;
+  turnId?: string;
   timestamp: Date;
   status: "loading" | "completed";
   trigger?: "auto" | "manual";
   preTokens?: number;
+}
+
+export interface PluginTimelineStreamItem {
+  kind: "plugin";
+  id: string;
+  /** The id of the stream item a timeline transformer replaced; set only by projection. */
+  sourceId?: string;
+  timelineCursor?: TimelinePosition;
+  turnId?: string;
+  timestamp: Date;
+  pluginId: string;
+  pluginItemId: string;
+  itemKind: string;
+  version: number;
+  data: JsonValue;
 }
 
 export interface TodoEntry {
@@ -788,12 +839,13 @@ export interface TodoEntry {
 
 export type TaskActivity =
   | { type: "created"; count: number }
-  | { type: "added" | "started" | "completed" | "reopened" | "cancelled"; task: string };
+  | { type: "added" | "started" | "completed" | "cancelled"; task: string };
 
 export interface TodoListItem {
   kind: "todo_list";
   id: string;
   timelineCursor?: TimelinePosition;
+  turnId?: string;
   timestamp: Date;
   provider: AgentProvider;
   items: TodoEntry[];
@@ -897,6 +949,7 @@ function appendUserMessage(
   messageId?: string,
   clientMessageId?: string,
   timelineCursor?: TimelinePosition,
+  turnId?: string,
   content: ReplayedUserMessageContent = {},
 ): StreamItem[] {
   const { chunk, hasContent } = normalizeChunk(text);
@@ -910,6 +963,7 @@ function appendUserMessage(
     clientMessageId,
     messageId,
     timelineCursor,
+    turnId,
     text: chunk,
     timestamp,
     ...content,
@@ -1033,13 +1087,29 @@ function finalizeActiveThoughts(state: StreamItem[]): StreamItem[] {
   return mutated ? nextState : state;
 }
 
-function findExistingAgentToolCallIndex(state: StreamItem[], callId: string): number {
-  return state.findIndex(
-    (entry) =>
-      entry.kind === "tool_call" &&
-      entry.payload.source === "agent" &&
-      entry.payload.data.callId === callId,
-  );
+export function streamTimelineItemIdentity(item: StreamItem): string | null {
+  if (isAgentToolCallItem(item)) {
+    return agentToolCallIdentity({
+      callId: item.payload.data.callId,
+      turnId: item.turnId,
+    });
+  }
+  if (item.kind === "plugin") return `${item.pluginId}/${item.pluginItemId}`;
+  return null;
+}
+
+interface AgentToolCallIdentityInput {
+  callId: string;
+  turnId?: string;
+}
+
+function agentToolCallIdentity(input: AgentToolCallIdentityInput): string {
+  if (!input.turnId) return input.callId;
+  return `turn:${encodeURIComponent(input.turnId)}/${encodeURIComponent(input.callId)}`;
+}
+
+function findExistingTimelineIdentityIndex(state: StreamItem[], identity: string): number {
+  return state.findIndex((entry) => streamTimelineItemIdentity(entry) === identity);
 }
 
 function hasNonEmptyObject(value: unknown): boolean {
@@ -1176,13 +1246,18 @@ export function mergeAgentToolCallItem(
   };
 }
 
-function appendAgentToolCall(
-  state: StreamItem[],
-  data: AgentToolCallData,
-  timestamp: Date,
-  timelineCursor?: TimelinePosition,
-): StreamItem[] {
-  const existingIndex = findExistingAgentToolCallIndex(state, data.callId);
+interface AppendAgentToolCallInput {
+  state: StreamItem[];
+  data: AgentToolCallData;
+  timestamp: Date;
+  turnId?: string;
+  timelineCursor?: TimelinePosition;
+}
+
+function appendAgentToolCall(input: AppendAgentToolCallInput): StreamItem[] {
+  const { state, data, timestamp, turnId, timelineCursor } = input;
+  const identity = agentToolCallIdentity({ callId: data.callId, turnId });
+  const existingIndex = findExistingTimelineIdentityIndex(state, identity);
 
   if (existingIndex >= 0) {
     const existing = state[existingIndex];
@@ -1211,8 +1286,9 @@ function appendAgentToolCall(
 
   const item: ToolCallItem = {
     kind: "tool_call",
-    id: `agent_tool_${data.callId}`,
+    id: `agent_tool_${identity}`,
     ...(timelineCursor ? { timelineCursor } : {}),
+    ...(turnId ? { turnId } : {}),
     timestamp,
     payload: {
       source: "agent",
@@ -1226,7 +1302,7 @@ function appendAgentToolCall(
   return [...state, item];
 }
 
-function appendActivityLog(state: StreamItem[], entry: ActivityLogItem): StreamItem[] {
+function appendNotification(state: StreamItem[], entry: NotificationItem): StreamItem[] {
   const index = state.findIndex((existing) => existing.id === entry.id);
   if (index >= 0) {
     const next = [...state];
@@ -1234,6 +1310,34 @@ function appendActivityLog(state: StreamItem[], entry: ActivityLogItem): StreamI
     return next;
   }
   return [...state, entry];
+}
+
+function appendPluginTimelineItem(
+  state: StreamItem[],
+  item: Extract<AgentTimelineItem, { type: "plugin" }>,
+  timestamp: Date,
+  timelineCursor?: TimelinePosition,
+): StreamItem[] {
+  const identity = timelineItemIdentity(item);
+  if (identity === null) return state;
+  const nextItem: PluginTimelineStreamItem = {
+    kind: "plugin",
+    id: identity,
+    pluginId: item.pluginId,
+    pluginItemId: item.id,
+    itemKind: item.kind,
+    version: item.version,
+    data: item.data,
+    timestamp,
+    ...(timelineCursor ? { timelineCursor } : {}),
+  };
+  const existingIndex = findExistingTimelineIdentityIndex(state, identity);
+  if (existingIndex < 0) return [...state, nextItem];
+  const existing = state[existingIndex];
+  if (!existing || existing.kind !== "plugin") return state;
+  const next = [...state];
+  next[existingIndex] = { ...nextItem, id: existing.id };
+  return next;
 }
 
 function appendTodoList(
@@ -1339,8 +1443,6 @@ function deriveTaskActivities(
       activities.push({ type: "completed", task: task.text });
     } else if (after === "cancelled") {
       activities.push({ type: "cancelled", task: task.text });
-    } else if (before === "completed") {
-      activities.push({ type: "reopened", task: task.text });
     } else if (after === "in_progress") {
       activities.push({ type: "started", task: task.text });
     }
@@ -1362,10 +1464,6 @@ function reduceTimelineToolCall(
     .trim()
     .replace(/[.\s-]+/g, "_")
     .toLowerCase();
-  if (event.provider === "claude" && normalizedToolName === "exitplanmode") {
-    return state;
-  }
-
   if (
     event.provider === "claude" &&
     (normalizedToolName === "todowrite" || normalizedToolName === "todo_write")
@@ -1403,9 +1501,9 @@ function reduceTimelineToolCall(
     );
   }
 
-  return appendAgentToolCall(
+  return appendAgentToolCall({
     state,
-    {
+    data: {
       provider: event.provider,
       callId: item.callId,
       name: item.name,
@@ -1413,10 +1511,12 @@ function reduceTimelineToolCall(
       error: item.error,
       detail: item.detail,
       metadata: item.metadata,
+      ...(item.agentMessage ? { agentMessage: item.agentMessage } : {}),
     },
     timestamp,
     timelineCursor,
-  );
+    turnId: event.turnId,
+  });
 }
 
 function reduceTimelineCompaction(
@@ -1447,7 +1547,7 @@ function reduceTimelineCompaction(
   }
   const compaction: CompactionItem = {
     kind: "compaction",
-    id: createTimelineId("compaction", item.status, timestamp),
+    id: createUniqueTimelineId(state, "compaction", item.status, timestamp),
     ...(timelineCursor ? { timelineCursor } : {}),
     timestamp,
     status: item.status,
@@ -1477,6 +1577,7 @@ function reduceTimelineEvent(
           item.messageId,
           item.clientMessageId,
           timelineCursor,
+          event.turnId,
           replayedUserMessageContent(item),
         ),
       );
@@ -1511,19 +1612,36 @@ function reduceTimelineEvent(
       );
     }
     case "error": {
-      const activity: ActivityLogItem = {
-        kind: "activity_log",
-        id: createTimelineId("error", item.message ?? "", timestamp),
+      const notification: NotificationItem = {
+        kind: "notification",
+        sourceType: "error",
+        id: createUniqueTimelineId(state, "error", item.message ?? "", timestamp),
         ...(timelineCursor ? { timelineCursor } : {}),
         timestamp,
-        activityType: "error",
+        level: "error",
         message: item.message ?? "Unknown error",
       };
-      return finalizeActiveThoughts(appendActivityLog(state, activity));
+      return finalizeActiveThoughts(appendNotification(state, notification));
+    }
+    case "notification": {
+      const notification: NotificationItem = {
+        kind: "notification",
+        sourceType: "notification",
+        id: createUniqueTimelineId(state, "notification", item.message, timestamp),
+        ...(timelineCursor ? { timelineCursor } : {}),
+        timestamp,
+        level: item.level,
+        message: item.message,
+      };
+      return finalizeActiveThoughts(appendNotification(state, notification));
     }
     case "compaction":
       return finalizeActiveThoughts(
         reduceTimelineCompaction(state, item, timestamp, timelineCursor),
+      );
+    case "plugin":
+      return finalizeActiveThoughts(
+        appendPluginTimelineItem(state, item, timestamp, timelineCursor),
       );
     default:
       return state;
@@ -1542,13 +1660,16 @@ export function reduceStreamUpdate(
   const source = options?.source ?? "live";
   switch (event.type) {
     case "timeline":
-      return reduceTimelineEvent(
-        state,
+      return applyTimelineTurnId(
+        reduceTimelineEvent(
+          state,
+          event,
+          timestamp,
+          source,
+          options?.reservedItemIds,
+          options?.timelineCursor,
+        ),
         event,
-        timestamp,
-        source,
-        options?.reservedItemIds,
-        options?.timelineCursor,
       );
     case "thread_started":
     case "turn_started":
@@ -1564,6 +1685,51 @@ export function reduceStreamUpdate(
   }
 }
 
+function applyTimelineTurnId(
+  items: StreamItem[],
+  event: Extract<AgentStreamEventPayload, { type: "timeline" }>,
+): StreamItem[] {
+  const clientMessageId =
+    event.item.type === "user_message" ? event.item.clientMessageId : undefined;
+  if (clientMessageId) {
+    return reconcileCanonicalUserTurnMembership(items, clientMessageId, event.turnId);
+  }
+
+  if (!event.turnId || items.length === 0) return items;
+  const index = items.length - 1;
+  const last = items[index];
+  if (!last || last.turnId === event.turnId) return items;
+  return [
+    ...items.slice(0, index),
+    { ...last, turnId: event.turnId } as StreamItem,
+    ...items.slice(index + 1),
+  ];
+}
+
+function reconcileCanonicalUserTurnMembership(
+  items: StreamItem[],
+  clientMessageId: string,
+  turnId: string | undefined,
+): StreamItem[] {
+  const index = items.findIndex(
+    (item) => item.kind === "user_message" && item.clientMessageId === clientMessageId,
+  );
+  const matched = items[index];
+  if (!matched || matched.kind !== "user_message" || matched.turnId === turnId) {
+    return items;
+  }
+
+  // A canonical user row is authoritative for membership. This replaces a
+  // provisional optimistic turn and clears it for daemons that do not emit IDs.
+  const next = turnId
+    ? { ...matched, turnId }
+    : (() => {
+        const { turnId: _, ...withoutTurnId } = matched;
+        return withoutTurnId;
+      })();
+  return [...items.slice(0, index), next, ...items.slice(index + 1)];
+}
+
 /**
  * Hydrate stream state from a batch of AgentManager stream events
  */
@@ -1573,7 +1739,7 @@ export function hydrateStreamState(
     timestamp: Date;
     timelineCursor?: TimelinePosition;
   }>,
-  options?: { source?: StreamUpdateSource; reservedItemIds?: ReadonlySet<string> },
+  options?: Pick<StreamUpdateOptions, "source" | "reservedItemIds">,
 ): StreamItem[] {
   const hydrated = events.reduce<StreamItem[]>((state, { event, timestamp, timelineCursor }) => {
     return reduceStreamUpdate(state, event, timestamp, { ...options, timelineCursor });
@@ -1629,7 +1795,10 @@ function getEventItemKind(event: AgentStreamEventPayload): StreamItem["kind"] | 
     case "todo":
       return "todo_list";
     case "error":
-      return "activity_log";
+    case "notification":
+      return "notification";
+    case "plugin":
+      return "plugin";
     default:
       return null;
   }
@@ -1653,14 +1822,6 @@ function finalizeHeadItems(head: StreamItem[]): StreamItem[] {
     }
     return item;
   });
-}
-
-function createAssistantBlockId(params: { groupId: string; blockIndex: number }): string {
-  return `${params.groupId}:block:${params.blockIndex}`;
-}
-
-function getTrailingNewlineSuffix(text: string): string {
-  return /\n+$/.exec(text)?.[0] ?? "";
 }
 
 function getActiveAssistantHeadIndex(head: StreamItem[]): number {
@@ -1689,73 +1850,6 @@ function getTailAssistantToResume(params: {
     return null;
   }
   return params.tailAssistant;
-}
-
-function promoteCompletedAssistantBlocks(params: { tail: StreamItem[]; head: StreamItem[] }): {
-  tail: StreamItem[];
-  head: StreamItem[];
-  changedTail: boolean;
-  changedHead: boolean;
-} {
-  const assistantIndex = getActiveAssistantHeadIndex(params.head);
-  const activeItem = params.head[assistantIndex];
-  if (assistantIndex < 0 || !activeItem || activeItem.kind !== "assistant_message") {
-    return {
-      tail: params.tail,
-      head: params.head,
-      changedTail: false,
-      changedHead: false,
-    };
-  }
-
-  const blocks = splitMarkdownBlocks(activeItem.text);
-  if (blocks.length < 2) {
-    return {
-      tail: params.tail,
-      head: params.head,
-      changedTail: false,
-      changedHead: false,
-    };
-  }
-
-  const blockGroupId = activeItem.blockGroupId ?? activeItem.id;
-  const firstBlockIndex = activeItem.blockIndex ?? 0;
-  const completedBlocks = blocks.slice(0, -1);
-  const liveBlock = `${blocks[blocks.length - 1] ?? ""}${getTrailingNewlineSuffix(activeItem.text)}`;
-  const promotedItems = completedBlocks.map<AssistantMessageItem>((block, offset) => ({
-    ...activeItem,
-    id: createAssistantBlockId({
-      groupId: blockGroupId,
-      blockIndex: firstBlockIndex + offset,
-    }),
-    blockGroupId,
-    blockIndex: firstBlockIndex + offset,
-    text: block,
-  }));
-
-  const nextTail = flushHeadToTail(params.tail, promotedItems);
-  const liveItem: AssistantMessageItem = {
-    ...activeItem,
-    id: createAssistantBlockId({
-      groupId: blockGroupId,
-      blockIndex: firstBlockIndex + completedBlocks.length,
-    }),
-    blockGroupId,
-    blockIndex: firstBlockIndex + completedBlocks.length,
-    text: liveBlock,
-  };
-  const nextHead = [
-    ...params.head.slice(0, assistantIndex),
-    liveItem,
-    ...params.head.slice(assistantIndex + 1),
-  ];
-
-  return {
-    tail: nextTail,
-    head: nextHead,
-    changedTail: nextTail !== params.tail,
-    changedHead: true,
-  };
 }
 
 /**
@@ -1834,6 +1928,11 @@ export interface ApplyStreamEventResult {
   acknowledgedClientMessageIds?: string[];
 }
 
+/** Images or attachments alone are enough to show a user message without text. */
+function hasUserMessageContent(hasText: boolean, content: ReplayedUserMessageContent): boolean {
+  return hasText || Boolean(content.images ?? content.attachments);
+}
+
 function applyCanonicalUserMessageEvent(params: {
   tail: StreamItem[];
   head: StreamItem[];
@@ -1846,7 +1945,7 @@ function applyCanonicalUserMessageEvent(params: {
   if (event.type !== "timeline" || event.item.type !== "user_message") return null;
   const normalized = normalizeChunk(event.item.text);
   const content = replayedUserMessageContent(event.item);
-  const hasContent = normalized.hasContent || Boolean(content.images ?? content.attachments);
+  const hasContent = hasUserMessageContent(normalized.hasContent, content);
 
   const flushedTail = head.length > 0 ? flushHeadToTail(tail, head) : tail;
   const flushedHead = head.length > 0 ? [] : head;
@@ -1856,6 +1955,7 @@ function applyCanonicalUserMessageEvent(params: {
       createUniqueTimelineId([...tail, ...head], "user", normalized.chunk.trim(), timestamp),
     messageId: event.item.messageId,
     clientMessageId: event.item.clientMessageId,
+    turnId: event.turnId,
     timelineCursor,
     text: normalized.chunk,
     timestamp,
@@ -1869,11 +1969,25 @@ function applyCanonicalUserMessageEvent(params: {
       insert: hasContent ? "head" : "none",
       presentation: "existing",
     });
+    const reconciledTail = canonical.clientMessageId
+      ? reconcileCanonicalUserTurnMembership(
+          reconciled.tail,
+          canonical.clientMessageId,
+          event.turnId,
+        )
+      : reconciled.tail;
+    const reconciledHead = canonical.clientMessageId
+      ? reconcileCanonicalUserTurnMembership(
+          reconciled.head,
+          canonical.clientMessageId,
+          event.turnId,
+        )
+      : reconciled.head;
     return {
-      tail: reconciled.tail,
-      head: reconciled.head,
-      changedTail: reconciled.changedTail,
-      changedHead: reconciled.changedHead,
+      tail: reconciledTail,
+      head: reconciledHead,
+      changedTail: reconciled.changedTail || reconciledTail !== reconciled.tail,
+      changedHead: reconciled.changedHead || reconciledHead !== reconciled.head,
       acknowledgedClientMessageIds:
         reconciled.location?.matched && reconciled.location.message.clientMessageId
           ? [reconciled.location.message.clientMessageId]
@@ -1881,10 +1995,17 @@ function applyCanonicalUserMessageEvent(params: {
     };
   }
   const reconciled = placeCanonicalUserMessageAtTail(flushedTail, canonical, hasContent);
+  const reconciledTail = canonical.clientMessageId
+    ? reconcileCanonicalUserTurnMembership(
+        reconciled.items,
+        canonical.clientMessageId,
+        event.turnId,
+      )
+    : reconciled.items;
   return {
-    tail: reconciled.items,
+    tail: reconciledTail,
     head: flushedHead,
-    changedTail: flushedTail !== tail || reconciled.items !== flushedTail,
+    changedTail: flushedTail !== tail || reconciledTail !== flushedTail,
     changedHead: flushedHead !== head,
     acknowledgedClientMessageIds:
       reconciled.matched && reconciled.message.clientMessageId
@@ -1982,13 +2103,7 @@ export function applyStreamEvent(params: {
   if (incomingKind !== null && isStreamableKind(incomingKind)) {
     const reservedItemIds =
       incomingKind === "assistant_message" && getActiveAssistantHeadIndex(nextHead) < 0
-        ? new Set(
-            nextTail.flatMap((item) =>
-              item.kind === "assistant_message" && item.blockGroupId
-                ? [item.id, item.blockGroupId]
-                : [item.id],
-            ),
-          )
+        ? new Set(nextTail.map((item) => item.id))
         : undefined;
     const reduced = reduceStreamUpdate(nextHead, event, timestamp, {
       source,
@@ -1998,16 +2113,6 @@ export function applyStreamEvent(params: {
     if (reduced !== nextHead) {
       nextHead = reduced;
       changedHead = true;
-    }
-    if (incomingKind === "assistant_message") {
-      const promoted = promoteCompletedAssistantBlocks({
-        tail: nextTail,
-        head: nextHead,
-      });
-      nextTail = promoted.tail;
-      nextHead = promoted.head;
-      changedTail = changedTail || promoted.changedTail;
-      changedHead = changedHead || promoted.changedHead;
     }
     return { tail: nextTail, head: nextHead, changedTail, changedHead };
   }

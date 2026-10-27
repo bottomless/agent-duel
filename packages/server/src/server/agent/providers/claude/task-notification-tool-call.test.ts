@@ -7,6 +7,18 @@ import {
 } from "./task-notification-tool-call.js";
 
 describe("task-notification-tool-call", () => {
+  it.each([undefined, "ordinary queued prompt"])(
+    "ignores queue bookkeeping without a task notification (%s)",
+    (content) => {
+      expect(
+        mapTaskNotificationSystemRecordToToolCall({
+          type: "queue-operation",
+          operation: "enqueue",
+          content,
+        }),
+      ).toBeNull();
+    },
+  );
   it("detects task notification user content in string payloads", () => {
     expect(
       isTaskNotificationUserContent(
@@ -84,5 +96,18 @@ describe("task-notification-tool-call", () => {
     });
 
     expect(item).toBeNull();
+  });
+
+  it("keeps notifications without task IDs distinct by their message IDs", () => {
+    const items = ["message-1", "message-2"].map((messageId) =>
+      mapTaskNotificationUserContentToToolCall({
+        content: "<task-notification><status>completed</status></task-notification>",
+        messageId,
+      }),
+    );
+    expect(items.map((item) => item?.callId)).toEqual([
+      "task_notification_message-1",
+      "task_notification_message-2",
+    ]);
   });
 });

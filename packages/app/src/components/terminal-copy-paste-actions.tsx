@@ -3,17 +3,18 @@ import { Pressable, Text, type PressableStateCallbackType } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 
 export interface TerminalPasteActionProps {
-  hasClipboardText: boolean;
+  /** Clipboard holds text or an image, so a paste attempt can do something. */
+  hasClipboardContent: boolean;
   onPaste: () => void;
 }
 
-export function TerminalPasteAction({ hasClipboardText, onPaste }: TerminalPasteActionProps) {
+export function TerminalPasteAction({ hasClipboardContent, onPaste }: TerminalPasteActionProps) {
   return (
     <TerminalActionButton
       label="Paste"
       accessibilityLabel="Paste"
       testID="terminal-paste"
-      disabled={!hasClipboardText}
+      disabled={!hasClipboardContent}
       onPress={onPaste}
       variant="key"
     />
@@ -119,7 +120,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   keyButtonText: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
     textAlign: "center",
   },
@@ -134,7 +135,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   floatingButtonText: {
     color: "#f5f5f5",
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     textAlign: "center",
   },

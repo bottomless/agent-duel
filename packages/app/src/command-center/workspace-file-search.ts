@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { openWorkspaceFileFromExplorer } from "@/screens/workspace/workspace-file-open-command";
 import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
-import { usePanelStore } from "@/stores/panel-store";
+import { revealWorkspaceTab } from "@/workspace-tabs/navigation";
 import { useSessionStore } from "@/stores/session-store";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
@@ -131,9 +131,14 @@ export function useWorkspaceFileSearch(input: { enabled: boolean; query: string 
       openWorkspaceFileFromExplorer({
         filePath: path,
         persistenceKey: buildWorkspaceTabPersistenceKey({ serverId, workspaceId }),
-        showMobileAgent: usePanelStore.getState().showMobileAgent,
-        openWorkspaceTabFocused: useWorkspaceLayoutStore.getState().openTabFocused,
-        focusWorkspaceTab: useWorkspaceLayoutStore.getState().focusTab,
+        openWorkspaceTabInFocusedPane: (workspaceKey, target, placement) =>
+          useWorkspaceLayoutStore.getState().openTab({
+            workspaceKey,
+            target,
+            intent: "reveal",
+            placement,
+          }),
+        revealWorkspaceTab,
       });
     },
     [serverId, workspaceId],

@@ -25,6 +25,7 @@ interface E2EDaemonClientConfig {
   appVersion?: string;
   webSocketFactory?: NodeWebSocketFactory;
   getSessionToken?: () => string | null;
+  capabilities?: Record<string, unknown>;
 }
 
 function resolveDaemonWsUrl(port?: number): string {
@@ -36,6 +37,7 @@ export interface ConnectDaemonClientOptions {
   appVersion?: string;
   port?: number;
   sessionToken?: string;
+  capabilities?: Record<string, unknown>;
 }
 
 /**
@@ -54,6 +56,7 @@ export async function connectDaemonClient<ClientInstance extends { connect(): Pr
     appVersion: options.appVersion ?? loadAppVersion(),
     webSocketFactory: createNodeWebSocketFactory(),
     getSessionToken: () => options.sessionToken ?? null,
+    capabilities: options.capabilities,
   });
   await client.connect();
   return client;
@@ -66,4 +69,11 @@ function loadAppVersion(): string {
     throw new Error(`Missing app version in ${packageJsonPath}`);
   }
   return packageJson.version;
+}
+
+export async function loadProtocolSchemas(): Promise<typeof import("@getpaseo/protocol/messages")> {
+  const moduleUrl = pathToFileURL(
+    path.resolve(__dirname, "../../../../../packages/protocol/dist/messages.js"),
+  ).href;
+  return import(moduleUrl);
 }

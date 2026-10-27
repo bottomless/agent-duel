@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
   useConfirmDialogStore,
   type ConfirmDialogRequest,
 } from "@/utils/confirm-dialog";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 const EXIT_DURATION_MS = 160;
 
@@ -90,7 +91,7 @@ function ConfirmDialog({ request, open }: { request: ConfirmDialogRequest; open:
 
   return (
     <View style={scrimStyle} testID="confirm-dialog">
-      <Pressable
+      <PressHighlight
         accessibilityLabel={t("common.actions.dismiss")}
         style={styles.backdrop}
         onPress={cancel}
@@ -176,12 +177,12 @@ const styles = StyleSheet.create((theme) => ({
   },
   title: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
   },
   message: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     lineHeight: 20,
   },
   footer: {

@@ -9,7 +9,7 @@ import {
   invalidatePrPaneTimelineForCheckout,
 } from "@/git/query-keys";
 import { type CheckoutPrStatusPayload, normalizeCheckoutPrStatusPayload } from "@/git/pr-status";
-import { expireStaleDiffModeOverrides } from "@/review/store";
+import { resetDraftAgentCommandsForCheckout } from "@/hooks/agent-commands-query";
 
 export type CheckoutStatusPayload = CheckoutStatusResponse["payload"];
 export type { CheckoutPrStatusPayload } from "@/git/pr-status";
@@ -21,13 +21,8 @@ export interface CheckoutStatusClient {
   ) => Promise<CheckoutStatusPayload>;
 }
 
-// Checkout status enters the app through exactly two doors: daemon pushes
-// (applyCheckoutStatusUpdateFromEvent) and query fetches (fetchCheckoutStatus). Both run
-// the dirty-state reactions, so they hold regardless of which screens are mounted.
-
 export async function fetchCheckoutStatus({
   client,
-  serverId,
   cwd,
   refreshGit = false,
 }: {
@@ -37,7 +32,6 @@ export async function fetchCheckoutStatus({
   refreshGit?: boolean;
 }): Promise<CheckoutStatusPayload> {
   const payload = await client.getCheckoutStatus(cwd, { refreshGit });
-  expireStaleDiffModeOverrides({ serverId, cwd, isDirty: payload.isGit && payload.isDirty });
   return payload;
 }
 
@@ -110,14 +104,15 @@ export function applyCheckoutStatusUpdateFromEvent({
     ? normalizeCheckoutPrStatusPayload(payload.prStatus)
     : undefined;
   const cachePayload = prStatus ? { ...payload, prStatus } : payload;
+  const previousStatus = queryClient.getQueryData<CheckoutStatusPayload>(
+    checkoutStatusQueryKey(serverId, payload.cwd),
+  );
   queryClient.setQueryData(checkoutStatusQueryKey(serverId, payload.cwd), cachePayload);
+  if (previousStatus?.currentBranch !== payload.currentBranch) {
+    void resetDraftAgentCommandsForCheckout(queryClient, { serverId, cwd: payload.cwd });
+  }
   void queryClient.invalidateQueries({
     queryKey: checkoutCommitsQueryKey(serverId, payload.cwd),
-  });
-  expireStaleDiffModeOverrides({
-    serverId,
-    cwd: payload.cwd,
-    isDirty: payload.isGit && payload.isDirty,
   });
 
   if (!prStatus) {

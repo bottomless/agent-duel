@@ -107,8 +107,32 @@ export function rebindPaseoWorktreeChangeRequestHint(
     ...metadata,
     changeRequestLookupTarget: {
       ...target,
+      ...(target.headRef === previousBranch &&
+      !target.headRepositoryOwner &&
+      target.changeRequestNumber === undefined
+        ? { headRef: currentBranch }
+        : {}),
       localBranchName: currentBranch,
     },
+  });
+  return true;
+}
+
+export function pinPaseoWorktreeBranchIdentityIfMissing(
+  worktreeRoot: string,
+  branch: string,
+): boolean {
+  const metadata = readPaseoWorktreeMetadata(worktreeRoot);
+  if (!metadata || metadata.changeRequestLookupTarget) {
+    return false;
+  }
+  const target = createPaseoWorktreeChangeRequestHint({
+    headRef: branch,
+    localBranchName: branch,
+  });
+  writePaseoWorktreeMetadataFile(worktreeRoot, {
+    ...metadata,
+    changeRequestLookupTarget: target,
   });
   return true;
 }
@@ -138,6 +162,10 @@ function getGitDirForWorktreeRoot(worktreeRoot: string): string {
 export function getPaseoWorktreeMetadataPath(worktreeRoot: string): string {
   const gitDir = getGitDirForWorktreeRoot(worktreeRoot);
   return join(gitDir, "paseo", "worktree.json");
+}
+
+export function isQualifiedRef(ref: string): boolean {
+  return ref.trim().startsWith("refs/");
 }
 
 const REMOTE_TRACKING_PREFIX = "refs/remotes/";

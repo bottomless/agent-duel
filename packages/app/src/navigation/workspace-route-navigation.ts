@@ -1,4 +1,8 @@
-import type { NavigationAction, NavigationContainerRefWithCurrent } from "@react-navigation/native";
+import type {
+  NavigationAction,
+  NavigationContainerRef,
+  NavigationContainerRefWithCurrent,
+} from "expo-router/react-navigation";
 import { router, type Href } from "expo-router";
 import {
   encodeWorkspaceIdForPathSegment,
@@ -19,24 +23,37 @@ const defaultNavigateToHostWorkspaceRouteDeps: NavigateToHostWorkspaceRouteDeps 
 
 let rootNavigationRef: NavigationContainerRefWithCurrent<ReactNavigation.RootParamList> | null =
   null;
+let pendingIntent: { route: string; deps: NavigateToHostWorkspaceRouteDeps } | null = null;
 
 export function registerWorkspaceRouteNavigationRef(
   ref: NavigationContainerRefWithCurrent<ReactNavigation.RootParamList>,
 ): () => void {
   rootNavigationRef = ref;
+  const unsubscribe = ref.addListener("ready", flushPendingIntent);
+  flushPendingIntent();
   return () => {
+    unsubscribe();
     if (rootNavigationRef === ref) {
       rootNavigationRef = null;
     }
   };
 }
 
-function findStackKeyWithMountedRouteName(state: unknown, routeName: string): string | null {
+interface MountedRouteStack {
+  key: string;
+  focusedRouteName: string | null;
+}
+
+function findStackWithMountedRouteName(
+  state: unknown,
+  routeName: string,
+): MountedRouteStack | null {
   if (!state || typeof state !== "object") {
     return null;
   }
 
   const candidate = state as {
+    index?: unknown;
     key?: unknown;
     routes?: unknown;
   };
@@ -52,42 +69,59 @@ function findStackKeyWithMountedRouteName(state: unknown, routeName: string): st
         !!route && typeof route === "object" && (route as { name?: unknown }).name === routeName,
     )
   ) {
-    return candidate.key;
+    const focusedIndex =
+      typeof candidate.index === "number" &&
+      Number.isInteger(candidate.index) &&
+      candidate.index >= 0 &&
+      candidate.index < candidate.routes.length
+        ? candidate.index
+        : candidate.routes.length - 1;
+    const focusedRoute = candidate.routes[focusedIndex];
+    const focusedRouteName =
+      focusedRoute && typeof focusedRoute === "object"
+        ? (focusedRoute as { name?: unknown }).name
+        : null;
+    return {
+      key: candidate.key,
+      focusedRouteName: typeof focusedRouteName === "string" ? focusedRouteName : null,
+    };
   }
 
   for (const route of candidate.routes) {
     if (!route || typeof route !== "object") {
       continue;
     }
-    const childKey = findStackKeyWithMountedRouteName(
+    const childStack = findStackWithMountedRouteName(
       (route as { state?: unknown }).state,
       routeName,
     );
-    if (childKey) {
-      return childKey;
+    if (childStack) {
+      return childStack;
     }
   }
 
   return null;
 }
 
-function dispatchHostWorkspacePopTo(route: string): boolean {
+function dispatchHostWorkspacePopTo(
+  route: string,
+  navigation: NavigationContainerRef<ReactNavigation.RootParamList>,
+): boolean {
   const selection = parseHostWorkspaceRouteFromPathname(route);
-  const navigation = rootNavigationRef?.current;
-  if (!selection || !navigation?.isReady()) {
+  if (!selection) {
     return false;
   }
 
   const rootState = navigation.getRootState();
-  const target = findStackKeyWithMountedRouteName(rootState, ROOT_HOST_ROUTE_NAME);
-  if (!target) {
+  const hostStack = findStackWithMountedRouteName(rootState, ROOT_HOST_ROUTE_NAME);
+  if (!hostStack || hostStack.focusedRouteName === ROOT_HOST_ROUTE_NAME) {
     return false;
   }
   const open = getHostWorkspaceOpenParamFromPathname(route);
 
   const action: NavigationAction = {
     type: "POP_TO",
-    target,
+    target: hostStack.key,
     payload: {
       name: ROOT_HOST_ROUTE_NAME,
       params: {
@@ -113,9 +147,15 @@ export function navigateToHostWorkspaceRoute(
   route: string,
   deps: NavigateToHostWorkspaceRouteDeps = defaultNavigateToHostWorkspaceRouteDeps,
 ): void {
-  if (dispatchHostWorkspacePopTo(route)) {
-    return;
-  }
+  pendingIntent = { route, deps };
+  flushPendingIntent();
+}
 
-  deps.dismissTo(route);
+function flushPendingIntent(): void {
+  const navigation = rootNavigationRef?.current;
+  if (!pendingIntent || !navigation?.isReady()) return;
+
+  const { route, deps } = pendingIntent;
+  pendingIntent = null;
+  if (!dispatchHostWorkspacePopTo(route, navigation)) deps.dismissTo(route);
 }

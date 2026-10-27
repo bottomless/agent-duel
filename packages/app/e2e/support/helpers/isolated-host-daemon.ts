@@ -1,16 +1,10 @@
-import { once } from "node:events";
-import {
-  spawn,
-  execFileSync,
-  execSync,
-  type ChildProcess,
-  type SpawnOptions,
-} from "node:child_process";
+import { spawn, execFileSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { withDisabledE2ESpeechEnv } from "./speech-env";
+import { killProcessTree, spawnTsx } from "./spawn-node";
 
 export interface IsolatedHostDaemon {
   serverId: string;
@@ -47,13 +41,22 @@ async function getAvailablePort(): Promise<number> {
   });
 }
 
+export async function getAvailableHostDaemonPort(): Promise<number> {
+  const primaryPort = Number(process.env.E2E_DAEMON_PORT ?? 0);
+  let port = await getAvailablePort();
+  while (port === 6767 || port === 6768 || port === primaryPort) port = await getAvailablePort();
+  return port;
+}
+
 async function waitForServer(port: number, child: ChildProcess): Promise<void> {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + 90_000;
   let lastError: unknown = null;
 
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Isolated host daemon exited before listening (exit ${child.exitCode})`);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `Isolated host daemon exited before listening (code ${String(child.exitCode)}, signal ${String(child.signalCode)})`,
+      );
     }
     try {
       await new Promise<void>((resolve, reject) => {
@@ -81,26 +84,11 @@ async function waitForServer(port: number, child: ChildProcess): Promise<void> {
   );
 }
 
-async function stopProcess(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  const timeout = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-  }, 5_000);
-  try {
-    await once(child, "exit");
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 export async function startIsolatedHostDaemon(
   serverId: string,
   options: IsolatedHostDaemonOptions = {},
 ): Promise<IsolatedHostDaemon> {
-  const primaryPort = Number(process.env.E2E_DAEMON_PORT ?? 0);
-  let port = await getAvailablePort();
-  while (port === 6767 || port === primaryPort) port = await getAvailablePort();
+  const port = await getAvailableHostDaemonPort();
 
   const metroPort = process.env.E2E_METRO_PORT;
   if (!metroPort) throw new Error("E2E_METRO_PORT is required to start an isolated host daemon");
@@ -114,11 +102,17 @@ export async function startIsolatedHostDaemon(
       path.join(publishedPackageRoot, "package.json"),
       `${JSON.stringify({ private: true })}\n`,
     );
-    const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
     try {
+      const npmCli = process.env.npm_execpath;
+      if (!npmCli || path.basename(npmCli).toLowerCase() !== "npm-cli.js") {
+        throw new Error(
+          "Published-version E2E requires npm_execpath from npm. Start it through `npm run test:e2e`.",
+        );
+      }
       execFileSync(
-        npmCommand,
+        process.execPath,
         [
+          npmCli,
           "install",
           "--no-audit",
           "--no-fund",
@@ -128,6 +122,9 @@ export async function startIsolatedHostDaemon(
         { cwd: publishedPackageRoot, stdio: "ignore" },
       );
     } catch (error) {
+      if (!options.preserveHome) {
+        await rm(paseoHome, { recursive: true, force: true });
+      }
       await rm(publishedPackageRoot, { recursive: true, force: true });
       throw error;
     }
@@ -155,7 +152,6 @@ export async function startIsolatedHostDaemon(
   const serverDir = publishedPackageRoot
     ? path.join(publishedPackageRoot, "node_modules", "@getpaseo", "server")
     : path.resolve(__dirname, "../../../../server");
-  const tsxBin = execSync("which tsx").toString().trim();
   const spawnDaemon = async (): Promise<ChildProcess> => {
     const spawnOptions: SpawnOptions = {
       cwd: serverDir,
@@ -175,7 +171,7 @@ export async function startIsolatedHostDaemon(
     };
     const child = publishedPackageRoot
       ? spawn(process.execPath, ["dist/scripts/supervisor-entrypoint.js"], spawnOptions)
-      : spawn(tsxBin, ["scripts/supervisor-entrypoint.ts", "--dev"], spawnOptions);
+      : spawnTsx("scripts/supervisor-entrypoint.ts", ["--dev"], spawnOptions);
 
     let stderr = "";
     child.stderr?.on("data", (chunk: Buffer) => {
@@ -187,7 +183,7 @@ export async function startIsolatedHostDaemon(
       await waitForServer(port, child);
       return child;
     } catch (error) {
-      await stopProcess(child);
+      await killProcessTree(child);
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}\nDaemon stderr:\n${stderr}`,
         { cause: error },
@@ -216,13 +212,13 @@ export async function startIsolatedHostDaemon(
     getPid: () => child.pid,
     restart: async () => {
       if (closed) throw new Error(`Cannot restart closed isolated daemon ${serverId}`);
-      await stopProcess(child);
+      await killProcessTree(child);
       child = await spawnDaemon();
     },
     close: async () => {
       if (closed) return;
       closed = true;
-      await stopProcess(child);
+      await killProcessTree(child);
       if (!options.preserveHome) {
         await rm(paseoHome, { recursive: true, force: true });
       }

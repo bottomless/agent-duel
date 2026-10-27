@@ -1,6 +1,10 @@
 import { expect, test } from "../support/fixtures";
 import {
-  expectSameOlderHistoryLoadingOperation,
+  withSpokenTimeline,
+  captureSpokenTimeline,
+  reloadSpokenTimeline,
+  expectSpokenTimelinePrompt,
+  sendSpokenTimelinePrompt,
   expectStableHistoryStartGutter,
   expectTimelineAtHistoryStart,
   expectTimelinePromptCentered,
@@ -12,7 +16,6 @@ import {
   holdOlderHistoryPages,
   makeLoadedTimelineFitViewport,
   openAgentTimeline,
-  rememberOlderHistoryLoadingOperation,
   rememberTimelineViewport,
   rememberTimelinePromptPosition,
   reloadAgentTimelineFromPersistedReplica,
@@ -29,7 +32,25 @@ import {
 } from "../support/helpers/timeline-pagination";
 
 test.describe("Agent timeline pagination", () => {
-  test("keeps a fixed history-start gutter before, during, and after pagination", async ({
+  test("shows spoken words without voice instructions in history, live updates and after reload", async ({
+    page,
+  }, testInfo) => {
+    const historyText = "Please check the voice history.";
+    const liveText = "Now check the live voice message.";
+    await withSpokenTimeline(historyText, async (agent) => {
+      await openAgentTimeline(page, agent);
+      await expectSpokenTimelinePrompt(page, historyText);
+      await sendSpokenTimelinePrompt(agent, liveText);
+      await expectSpokenTimelinePrompt(page, liveText);
+      await captureSpokenTimeline(page, testInfo, "desktop");
+      await reloadSpokenTimeline(page);
+      await expectSpokenTimelinePrompt(page, liveText);
+      await captureSpokenTimeline(page, testInfo, "compact");
+      await expectSpokenTimelinePrompt(page, liveText);
+    });
+  });
+
+  test("keeps the history-start gutter and visible position stable through the final page", async ({
     page,
   }) => {
     const agent = await seedLongMockAgentTimeline({ turns: 40 });
@@ -41,8 +62,10 @@ test.describe("Agent timeline pagination", () => {
       await userScrollsTimelineToHistoryStart(page);
       await history.expectRequestedPages(1);
       await expectStableHistoryStartGutter(page);
+      const viewport = await rememberTimelineViewport(page);
 
       history.releasePage(1);
+      await expectTimelineViewportAnchoredAfterPrepend(page, viewport);
       await history.expectSettledWithRequestedPages(1);
       await expectStableHistoryStartGutter(page);
     } finally {
@@ -59,14 +82,18 @@ test.describe("Agent timeline pagination", () => {
       await expectTimelinePromptVisible(page, agent.newestPrompt);
       await expectTimelinePromptCentered(page, agent.newestPrompt);
       await expectTimelinePromptNotMounted(page, agent.oldestPrompt);
+      await expectTimelinePromptNotMounted(page, agent.initialTailOldestPrompt);
 
       await userScrollsTimelineToHistoryStart(page);
+      await expectTimelinePromptVisible(page, agent.initialTailOldestPrompt);
       await history.expectRequestedPages(1);
+      const viewport = await rememberTimelineViewport(page);
       history.releasePage(1);
+      await expectTimelineViewportAnchoredAfterPrepend(page, viewport);
       await history.expectSettledWithRequestedPages(1);
-      await expectTimelinePromptCentered(page, agent.firstOlderPagePrompt);
 
       await userScrollsTimelineToHistoryStart(page);
+      await expectTimelinePromptCentered(page, agent.firstOlderPagePrompt);
       await history.expectRequestedPages(2);
     } finally {
       await agent.cleanup();
@@ -103,23 +130,6 @@ test.describe("Agent timeline pagination", () => {
     }
   });
 
-  test("keeps the visible timeline position anchored while prepending a page", async ({ page }) => {
-    test.setTimeout(120_000);
-    const agent = await seedLongMockAgentTimeline({ turns: 80 });
-    try {
-      const history = await holdOlderHistoryPages(page, agent);
-      await openAgentTimeline(page, agent);
-      await userScrollsTimelineToHistoryStart(page);
-      await history.expectRequestedPages(1);
-      const viewport = await rememberTimelineViewport(page);
-
-      history.releasePage(1);
-      await expectTimelineViewportAnchoredAfterPrepend(page, viewport);
-    } finally {
-      await agent.cleanup();
-    }
-  });
-
   test("keeps visible history anchored when live output grows during a prepend", async ({
     page,
   }) => {
@@ -147,7 +157,8 @@ test.describe("Agent timeline pagination", () => {
 
   test("finishes loading an older page while live output continues", async ({ page }) => {
     test.setTimeout(120_000);
-    const agent = await seedLongMockAgentTimeline({ turns: 40 });
+    // The live turn streams for thirty minutes, so it is still running at every assertion.
+    const agent = await seedLongMockAgentTimeline({ turns: 40, liveTurns: "thirty-minute-stream" });
     try {
       const history = await holdOlderHistoryPages(page, agent);
       await openAgentTimeline(page, agent);
@@ -159,8 +170,11 @@ test.describe("Agent timeline pagination", () => {
         agent.agentId,
         (snapshot) => snapshot.status === "running",
       );
+      const timeline = page.locator('[data-testid="agent-chat-scroll"]:visible').first();
+      await expect(timeline.getByText("walking through").first()).toBeAttached();
       history.releasePage(1);
 
+      await expect(timeline.getByText(agent.newestOlderPagePrompt, { exact: true })).toBeAttached();
       await expect(page.getByTestId("load-older-history-spinner")).toBeHidden({ timeout: 5_000 });
       const running = await agent.client.fetchAgents({ scope: "active" });
       expect(running.entries.find((entry) => entry.agent.id === agent.agentId)?.agent.status).toBe(
@@ -171,28 +185,7 @@ test.describe("Agent timeline pagination", () => {
     }
   });
 
-  test("keeps the visible timeline anchored when the final page finishes", async ({ page }) => {
-    test.setTimeout(120_000);
-    const agent = await seedLongMockAgentTimeline({ turns: 40 });
-    try {
-      const history = await holdOlderHistoryPages(page, agent);
-      await openAgentTimeline(page, agent);
-      await userScrollsTimelineToHistoryStart(page);
-      await history.expectRequestedPages(1);
-      const position = await rememberTimelinePromptPosition(page, agent.initialTailOldestPrompt);
-
-      history.releasePage(1);
-
-      await expectTimelinePromptPositionPreserved(page, position);
-      await history.expectSettledWithRequestedPages(1);
-    } finally {
-      await agent.cleanup();
-    }
-  });
-
-  test("continues one loading operation while older pages still leave history start exposed", async ({
-    page,
-  }) => {
+  test("keeps loading while older pages still leave history start exposed", async ({ page }) => {
     test.setTimeout(120_000);
     const agent = await seedLongMockAgentTimeline({ turns: 80 });
     try {
@@ -201,12 +194,12 @@ test.describe("Agent timeline pagination", () => {
       await openAgentTimeline(page, agent);
       await scrollTimelineToOldestLoadedEdge(page);
       await history.expectRequestedPages(1);
-      const loading = await rememberOlderHistoryLoadingOperation(page);
+      await expect(page.getByTestId("load-older-history-spinner")).toBeVisible();
 
       history.releasePage(1);
       await history.expectRequestedPages(2);
       await expectTimelineAtHistoryStart(page);
-      await expectSameOlderHistoryLoadingOperation(page, loading);
+      await expect(page.getByTestId("load-older-history-spinner")).toBeVisible();
     } finally {
       await agent.cleanup();
     }

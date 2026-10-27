@@ -12,27 +12,15 @@ vi.mock("@/components/markdown/renderer", () => ({
     text,
     compact,
     subdued,
-    markdownit,
-    enableHtmlish,
-    enableDiagrams,
-    horizontalScrollCodeBlocks,
   }: {
     text: string;
     compact?: boolean;
     subdued?: boolean;
-    markdownit?: unknown;
-    enableHtmlish?: boolean;
-    enableDiagrams?: boolean;
-    horizontalScrollCodeBlocks?: boolean;
   }) => {
     markdownRenderer({
       text,
       compact,
       subdued,
-      markdownit,
-      enableHtmlish,
-      enableDiagrams,
-      horizontalScrollCodeBlocks,
     });
     return (
       <div data-testid="thinking-markdown" data-compact={String(Boolean(compact))}>
@@ -107,10 +95,6 @@ describe("ThinkingBlock", () => {
       compact: false,
       subdued: true,
       text: "Use `grid-template-columns`:\n\n```css\n.board { display: grid; }\n```",
-      markdownit: expect.anything(),
-      enableHtmlish: false,
-      enableDiagrams: false,
-      horizontalScrollCodeBlocks: true,
     });
   });
 

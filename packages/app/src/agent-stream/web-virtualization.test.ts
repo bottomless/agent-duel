@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CONTENT_MAX_WIDTH } from "@/styles/theme";
 import type { StreamItem } from "@/types/stream";
 import {
-  clearAssistantImageMetadataCache,
-  setAssistantImageMetadata,
-} from "@/utils/assistant-image-metadata";
+  setAssistantMessageHeight,
+  clearAssistantMessageHeightEstimateCache,
+} from "@/utils/assistant-message-height-estimate";
 import {
   DEFAULT_WEB_MOUNTED_RECENT_STREAM_ITEMS,
   DEFAULT_WEB_PARTIAL_VIRTUALIZATION_THRESHOLD,
@@ -122,8 +123,18 @@ describe("splitWebVirtualizedHistory", () => {
 
 describe("estimateStreamItemHeight", () => {
   it("uses compact estimates for collapsed tool sequence rows", () => {
-    expect(estimateStreamItemHeight(toolCall("tool", 1))).toBe(40);
-    expect(estimateStreamItemHeight(thought("thought", 2))).toBe(40);
+    expect(
+      estimateStreamItemHeight({
+        item: toolCall("tool", 1),
+        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+      }),
+    ).toBe(40);
+    expect(
+      estimateStreamItemHeight({
+        item: thought("thought", 2),
+        contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
+      }),
+    ).toBe(40);
   });
 
   it("uses a larger estimate for user messages with image attachments", () => {
@@ -145,26 +156,23 @@ describe("estimateStreamItemHeight", () => {
       ],
     };
 
-    expect(estimateStreamItemHeight(item)).toBe(220);
+    expect(estimateStreamItemHeight({ item, contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH })).toBe(
+      220,
+    );
   });
 
-  it("uses cached assistant image metadata when available", () => {
-    clearAssistantImageMetadataCache();
-    setAssistantImageMetadata(
-      {
-        source: "https://example.com/tall.png",
-      },
-      { width: 800, height: 1600 },
-    );
-
+  it("uses the renderer's whole-message measurement at the measured width", () => {
+    clearAssistantMessageHeightEstimateCache();
     const item: StreamItem = {
       kind: "assistant_message",
-      id: "a-image",
-      text: "Look at this\n\n![Screenshot](https://example.com/tall.png)",
+      id: "measured",
+      text: "First paragraph\n\n![Image](image.png)",
       timestamp: createTimestamp(2),
     };
-
-    expect(estimateStreamItemHeight(item)).toBeGreaterThan(220);
+    setAssistantMessageHeight({ markdown: item.text, width: 608, height: 640 });
+    expect(estimateStreamItemHeight({ item, contentMaxWidth: 608 })).toBe(640);
+    expect(estimateStreamItemHeight({ item, contentMaxWidth: 320 })).toBe(220);
+    clearAssistantMessageHeightEstimateCache();
   });
 });
 

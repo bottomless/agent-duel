@@ -139,7 +139,7 @@ const styles = StyleSheet.create((theme) => ({
   section: { paddingBottom: theme.spacing[2] },
   heading: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
     paddingHorizontal: theme.spacing[2],
     paddingTop: theme.spacing[3],
@@ -156,12 +156,12 @@ const styles = StyleSheet.create((theme) => ({
     paddingRight: theme.spacing[1],
   },
   details: { flex: 1, gap: 2, minWidth: 0 },
-  name: { color: theme.colors.foreground, fontSize: theme.fontSize.sm, opacity: 0.76 },
-  secondary: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs },
+  name: { color: theme.colors.foreground, fontSize: theme.fontSize.base, opacity: 0.76 },
+  secondary: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   hostError: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
+    fontSize: theme.fontSize.sm,
     paddingHorizontal: theme.spacing[2],
   },
-  error: { color: theme.colors.destructive, fontSize: theme.fontSize.xs },
+  error: { color: theme.colors.destructive, fontSize: theme.fontSize.sm },
 }));

@@ -11,6 +11,7 @@ function archivedChat(id: string, lastActivityAt: Date): AggregatedAgent {
     serverLabel: "Local",
     title: id,
     status: "closed",
+    turn: { phase: "idle", cancellationRequestId: null },
     lastActivityAt,
     cwd: "/repo",
     workspaceId: `ws-${id}`,

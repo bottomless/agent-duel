@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaRun, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import { DiffStat } from "@/components/diff-stat";
@@ -11,6 +11,7 @@ import {
   arenaRunFilesLabel,
   arenaRunStatusLabel,
 } from "./run-stats";
+import { PressHighlight } from "@/components/ui/press-highlight";
 
 // Stall detection only has to notice a run going quiet, not count seconds.
 const STALL_CHECK_INTERVAL_MS = 10_000;
@@ -139,7 +140,7 @@ function RunDiffStat({
   }
   return (
     <View onPointerEnter={handlePointerEnter} onPointerLeave={handlePointerLeave}>
-      <Pressable
+      <PressHighlight
         onPress={onOpenChanges}
         style={[styles.stat, styles.statPressable, hovered && styles.statHovered]}
         accessibilityRole="button"
@@ -147,7 +148,7 @@ function RunDiffStat({
         testID={`arena-run-diff-open-${side}`}
       >
         {stat}
-      </Pressable>
+      </PressHighlight>
     </View>
   );
 }
@@ -163,7 +164,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   text: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
   },
   stat: {
     flexDirection: "row",
@@ -182,7 +183,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   elapsed: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
+    fontSize: theme.fontSize.base,
     fontVariant: ["tabular-nums"],
   },
 }));

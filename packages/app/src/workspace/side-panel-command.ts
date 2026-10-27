@@ -26,5 +26,7 @@ export function openWorkspaceSidePanelTab(input: {
     return null;
   }
   usePanelStore.getState().showMobileAgent();
-  return useWorkspaceLayoutStore.getState().openTabFocused(persistenceKey, input.target);
+  return useWorkspaceLayoutStore
+    .getState()
+    .openTab({ workspaceKey: persistenceKey, target: input.target, intent: "reveal" });
 }
