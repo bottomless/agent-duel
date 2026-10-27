@@ -6,6 +6,7 @@ import { handleComparisonRequest } from "./comparison"
 import { defaultMetadataRateLimit, handleMetadataRequest, type MetadataRateLimit } from "./metadata"
 import { handleOpenRouterRequest } from "./openrouter"
 import { mediumModel } from "./default-pool"
+import type { VerifyVoteProof } from "./vote-evidence"
 
 export type ArenaServiceOptions = {
   /**
@@ -41,6 +42,8 @@ export type ArenaServiceOptions = {
    * no network between it and the engine and turns it off.
    */
   readonly streamRecovery?: boolean
+  /** Checks a vote frame's signature at the reveal. Unset where nothing serves a vote frame. */
+  readonly verifyVoteProof?: VerifyVoteProof
 }
 
 export type ArenaService = {
@@ -75,6 +78,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     metadataRateLimit:
       options.metadataRateLimit === null ? undefined : (options.metadataRateLimit ?? defaultMetadataRateLimit),
     streamRecovery: options.streamRecovery ?? true,
+    verifyVoteProof: options.verifyVoteProof,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)

@@ -254,6 +254,19 @@ describe("continuous research uploads", () => {
     ).toEqual({ kind: "transcript", data: "aGVsbG8=", dataEncoding: "base64" })
   })
 
+  test("keeps vote source metadata in research records", () => {
+    for (const collection of ["turns", "singleAgentRatings", "battleMetrics"] as const) {
+      expect(
+        projectResearchMutation({
+          collection,
+          id: "vote-record",
+          revision: 1,
+          document: { _id: "vote-record", vote: "tie", voteSource: "synthetic" },
+        }),
+      ).toMatchObject({ document: { voteSource: "synthetic" } })
+    }
+  })
+
   test("a transcript's images go as their own records, so a transcript with many images is no longer dropped", async () => {
     const images = Array.from({ length: 6 }, () => image())
     // Inline, the six images put the transcript's research record over the limit.

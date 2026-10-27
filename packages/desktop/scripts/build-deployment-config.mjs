@@ -50,6 +50,8 @@ function resolveControlPlane(env, { byok, updatesEnabled }) {
 export function resolveDeploymentConfig(env, detectedBuildSha) {
   const byok = readFlag(env, "PASEO_BYOK_BUILD");
   const updatesEnabled = readFlag(env, "PASEO_DESKTOP_UPDATES_ENABLED");
+  // The packaged smoke drives the app over Chromium's debugging protocol; a release refuses it.
+  const debuggingAllowed = readFlag(env, "PASEO_DESKTOP_SMOKE");
   const controlPlane = resolveControlPlane(env, { byok, updatesEnabled });
   const arenaBuildSha = env.OPENCODE_ARENA_BUILD_SHA?.trim() || detectedBuildSha;
   if (!/^[0-9a-f]{7,64}$/i.test(arenaBuildSha)) {
@@ -57,7 +59,7 @@ export function resolveDeploymentConfig(env, detectedBuildSha) {
       "OPENCODE_ARENA_BUILD_SHA must be a Git commit SHA when the repository HEAD is unavailable",
     );
   }
-  return { ...controlPlane, updatesEnabled, arenaBuildSha };
+  return { ...controlPlane, updatesEnabled, debuggingAllowed, arenaBuildSha };
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

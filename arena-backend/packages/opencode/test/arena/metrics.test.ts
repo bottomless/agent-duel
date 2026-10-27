@@ -545,6 +545,19 @@ describe("ArenaMetrics outcome", () => {
     expect([battleFor("b").sides.a?.won, battleFor("b").sides.b?.won]).toEqual([false, true])
   })
 
+  test("carries vote source into the battle metrics rollup", () => {
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn: { ...turnFor("tie"), voteSource: "synthetic" },
+      runs: [runFor("a"), runFor("b")],
+      generations: [],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.voteSource).toBe("synthetic")
+  })
+
   test("carries upstream inference cost into resolved battle research metrics", () => {
     const battle = computeBattleMetrics({
       chat: { _id: "chat" } as ChatDocument,

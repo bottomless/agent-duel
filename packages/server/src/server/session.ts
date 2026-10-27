@@ -21,6 +21,7 @@ import { basename, resolve, sep } from "path";
 import { homedir } from "node:os";
 import { CLIENT_CAPS, type ClientCapability } from "@getpaseo/protocol/client-capabilities";
 import type {
+  ArenaCastVote,
   ArenaEnvironmentStatus,
   ArenaEnvironmentTrim,
   ArenaSnapshot,
@@ -280,6 +281,7 @@ import { initializeProjectGit, inspectProjectGit } from "./project-git-service.j
 import { runGitCommand } from "../utils/run-git-command.js";
 import { CreateAgentLifecycleDispatch } from "./agent/create-agent-lifecycle-dispatch.js";
 import { resolveWorktreeSourceCwd } from "./workspace-source.js";
+import { requestVoteFrameUrl } from "./arena/vote-frame.js";
 
 function createArenaPreviewRouteManagerIfAvailable(
   serviceProxy: ServiceProxySubsystem | null,
@@ -295,6 +297,17 @@ type ArenaRunRequest = Extract<
 
 function isArenaRunRequest(msg: { type: string }): msg is ArenaRunRequest {
   return msg.type.startsWith("arena.run.");
+}
+
+type ArenaVoteRequest = Extract<
+  SessionInboundMessage,
+  { type: "arena.turn.vote.request" | "arena.single_agent.vote.request" }
+>;
+
+function voteCast(msg: ArenaVoteRequest): ArenaCastVote | undefined {
+  if (!msg.voteEvidence) return undefined;
+  if (!msg.voteProof) return { evidence: msg.voteEvidence };
+  return { evidence: msg.voteEvidence, proof: msg.voteProof };
 }
 
 type ProviderSubagentManagerEvent = Extract<
@@ -2102,9 +2115,24 @@ export class Session {
       }
       case "arena.byok.key.set.request":
         return this.handleArenaByokKeySet(msg);
+      case "arena.vote_frame.get_ticket.request":
+        return this.handleArenaVoteFrameTicket(msg);
       default:
         return undefined;
     }
+  }
+
+  private async handleArenaVoteFrameTicket(
+    msg: Extract<SessionInboundMessage, { type: "arena.vote_frame.get_ticket.request" }>,
+  ): Promise<void> {
+    const frameUrl = await requestVoteFrameUrl(
+      { kind: msg.kind, scopeId: msg.scopeId },
+      { logger: this.sessionLogger },
+    );
+    this.emit({
+      type: "arena.vote_frame.get_ticket.response",
+      payload: { requestId: msg.requestId, frameUrl },
+    });
   }
 
   private dispatchArenaMessage(
@@ -4201,7 +4229,7 @@ export class Session {
           return;
         }
         case "arena.turn.vote.request": {
-          const result = await arena.vote(msg.turnId, msg.vote, this.clientId);
+          const result = await arena.vote(msg.turnId, msg.vote, this.clientId, voteCast(msg));
           this.syncArenaPreviewRoutes(result);
           this.emit({
             type: "arena.turn.vote.response",
@@ -4357,7 +4385,12 @@ export class Session {
     if (!msg.ratingId) {
       throw new Error("Update Agent Duel before revealing a single-agent pass");
     }
-    const result = await arena.singleAgentVote(msg.ratingId, msg.vote, this.clientId);
+    const result = await arena.singleAgentVote(
+      msg.ratingId,
+      msg.vote,
+      this.clientId,
+      voteCast(msg),
+    );
     this.emit({
       type: "arena.single_agent.vote.response",
       payload: { requestId: msg.requestId, snapshot: result },

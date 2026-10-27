@@ -16,6 +16,7 @@ import type {
   ArenaEnvironmentTrim,
   ArenaReplyTarget,
   ArenaSingleAgentVote,
+  ArenaCastVote,
   ArenaReviewEvent,
   ArenaReviewIngestResult,
   ArenaSnapshot,
@@ -2075,6 +2076,15 @@ export class DaemonClient {
     return { configured: payload.configured };
   }
 
+  /** The control plane's vote frame for a battle turn or rating, or null where there is none. */
+  async arenaVoteFrameTicket(kind: "battle" | "single", scopeId: string): Promise<string | null> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"arena.vote_frame.get_ticket.response">({
+        message: { type: "arena.vote_frame.get_ticket.request", kind, scopeId },
+      });
+    return payload.frameUrl;
+  }
+
   async arenaResolve(agentId: string): Promise<ArenaSnapshot> {
     const payload =
       await this.sendNamespacedCorrelatedSessionRequest<"arena.session.resolve.response">({
@@ -2087,10 +2097,18 @@ export class DaemonClient {
     agentId: string,
     ratingId: string,
     vote: ArenaSingleAgentVote,
+    cast?: ArenaCastVote,
   ): Promise<ArenaSnapshot> {
     const payload =
       await this.sendNamespacedCorrelatedSessionRequest<"arena.single_agent.vote.response">({
-        message: { type: "arena.single_agent.vote.request", agentId, ratingId, vote },
+        message: {
+          type: "arena.single_agent.vote.request",
+          agentId,
+          ratingId,
+          vote,
+          voteEvidence: cast?.evidence,
+          voteProof: cast?.proof,
+        },
       });
     return payload.snapshot;
   }
@@ -2196,9 +2214,21 @@ export class DaemonClient {
     return { received: payload.received, accepted: payload.accepted };
   }
 
-  async arenaVote(agentId: string, turnId: string, vote: ArenaVote): Promise<ArenaSnapshot> {
+  async arenaVote(
+    agentId: string,
+    turnId: string,
+    vote: ArenaVote,
+    cast?: ArenaCastVote,
+  ): Promise<ArenaSnapshot> {
     const payload = await this.sendNamespacedCorrelatedSessionRequest<"arena.turn.vote.response">({
-      message: { type: "arena.turn.vote.request", agentId, turnId, vote },
+      message: {
+        type: "arena.turn.vote.request",
+        agentId,
+        turnId,
+        vote,
+        voteEvidence: cast?.evidence,
+        voteProof: cast?.proof,
+      },
       timeout: 120_000,
     });
     return payload.snapshot;

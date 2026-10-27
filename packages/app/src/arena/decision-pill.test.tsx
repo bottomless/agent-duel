@@ -2,20 +2,14 @@
  * @vitest-environment jsdom
  */
 import React from "react";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ArenaRun, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
 vi.stubGlobal("React", React);
 
-// The decision bar these buttons come from also lays out the composer slot; the pill uses none of it.
-vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
-}));
-
-// The pill only reads `pending` and the callbacks; the mutations themselves are the daemon's.
-vi.mock("./use-battle-actions", () => ({
-  useArenaBattleActions: () => ({
+const testMocks = vi.hoisted(() => ({
+  actions: {
     pending: false,
     pendingAction: undefined,
     choose: vi.fn(),
@@ -24,7 +18,28 @@ vi.mock("./use-battle-actions", () => ({
     stop: vi.fn(),
     resolveStop: vi.fn(),
     resume: vi.fn(),
-  }),
+  },
+  voteEvidence: vi.fn(async () => ({ activation: "script" as const })),
+}));
+
+// The decision bar these buttons come from also lays out the composer slot; the pill uses none of it.
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
+}));
+
+// The pill only reads `pending` and the callbacks; the mutations themselves are the daemon's.
+vi.mock("./use-battle-actions", () => ({
+  useArenaBattleActions: () => testMocks.actions,
+}));
+
+vi.mock("./vote-evidence", () => ({
+  voteEvidence: testMocks.voteEvidence,
+}));
+
+// No daemon serves a vote frame here, so every button takes its own click.
+vi.mock("./vote-frame", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./vote-frame")>()),
+  useVoteFrameUrl: () => null,
 }));
 
 import { ArenaDecisionPill } from "./decision-pill";
@@ -94,7 +109,10 @@ const failed = (side: "a" | "b", canRetry: boolean) =>
   });
 
 describe("ArenaDecisionPill", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
 
   it("offers Discard in Tie's place when both agents failed", () => {
     const view = render(
@@ -144,6 +162,29 @@ describe("ArenaDecisionPill", () => {
     expect(view.queryByTestId("arena-choose-tie")).not.toBeNull();
     expect(view.queryByTestId("arena-stopped-discard")).toBeNull();
     expect(view.queryByText(/Both agents failed/)).toBeNull();
+  });
+
+  it("passes the evidence from a side choice to the action", async () => {
+    const view = render(
+      <ArenaDecisionPill
+        serverId="server"
+        agentId="agent"
+        snapshot={awaitingVote([run({ id: "run-a", side: "a" }), run({ id: "run-b", side: "b" })], {
+          canTie: false,
+          canDiscardBattle: false,
+        })}
+        onHeightChange={noop}
+      />,
+    );
+
+    fireEvent.click(view.getByTestId("arena-choose-a"));
+
+    await waitFor(() => {
+      expect(testMocks.voteEvidence).toHaveBeenCalledTimes(1);
+      expect(testMocks.actions.choose).toHaveBeenCalledWith("a", {
+        evidence: { activation: "script" },
+      });
+    });
   });
 
   const interrupted = (side: "a" | "b") =>

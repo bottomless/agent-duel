@@ -13,6 +13,7 @@ describe("desktop deployment config", () => {
       controlPlaneUrl: "https://control.agentduel.test",
       sessionPublicKey: "public-key",
       updatesEnabled: false,
+      debuggingAllowed: false,
       arenaBuildSha: SHA,
     });
   });
@@ -22,6 +23,7 @@ describe("desktop deployment config", () => {
       controlPlaneUrl: "https://agent-duel-cloud.vercel.app",
       sessionPublicKey: expect.stringMatching(/^MCowBQYDK2VwAyEA/),
       updatesEnabled: false,
+      debuggingAllowed: false,
       arenaBuildSha: SHA,
     };
     expect(resolveDeploymentConfig({}, SHA)).toEqual(hosted);
@@ -42,6 +44,7 @@ describe("desktop deployment config", () => {
       controlPlaneUrl: null,
       sessionPublicKey: null,
       updatesEnabled: false,
+      debuggingAllowed: false,
       arenaBuildSha: SHA,
     });
   });
@@ -59,6 +62,13 @@ describe("desktop deployment config", () => {
     expect(() =>
       resolveDeploymentConfig({ PASEO_BYOK_BUILD: "1", PASEO_DESKTOP_UPDATES_ENABLED: "1" }, SHA),
     ).toThrow("PASEO_BYOK_BUILD=1 cannot be combined with PASEO_DESKTOP_UPDATES_ENABLED=1");
+  });
+
+  test("allows debugging only in a packaged smoke build", () => {
+    expect(resolveDeploymentConfig(HOSTED, SHA).debuggingAllowed).toBe(false);
+    expect(
+      resolveDeploymentConfig({ ...HOSTED, PASEO_DESKTOP_SMOKE: "1" }, SHA).debuggingAllowed,
+    ).toBe(true);
   });
 
   test("rejects flag values other than 0 or 1", () => {

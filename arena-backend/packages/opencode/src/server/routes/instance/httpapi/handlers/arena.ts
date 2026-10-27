@@ -75,6 +75,7 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
             ctx.payload.ratingID,
             ctx.payload.vote,
             ctx.payload.participantID,
+            { evidence: ctx.payload.voteEvidence, proof: ctx.payload.voteProof },
           ),
         ),
       )
@@ -126,13 +127,22 @@ export const arenaHandlers = HttpApiBuilder.group(InstanceHttpApi, "arena", (han
       .handle("reply", (ctx) =>
         map(arena.reply(ctx.params.turnID, ctx.payload.prompt, ctx.payload.target, ctx.payload.attachments)),
       )
-      .handle("vote", (ctx) => map(arena.vote(ctx.params.turnID, ctx.payload.vote, ctx.payload.participantID)))
+      .handle("vote", (ctx) =>
+        map(
+          arena.vote(ctx.params.turnID, ctx.payload.vote, ctx.payload.participantID, {
+            evidence: ctx.payload.voteEvidence,
+            proof: ctx.payload.voteProof,
+          }),
+        ),
+      )
       .handle("recordReview", (ctx) =>
         map(
           arena.recordReview(ctx.params.turnID, ctx.payload.events, ctx.payload.participantID, ctx.payload.ipAddress),
         ),
       )
-      .handle("retryResolution", (ctx) => map(arena.retryResolution(ctx.params.turnID, ctx.payload.mode, ctx.payload.answers)))
+      .handle("retryResolution", (ctx) =>
+        map(arena.retryResolution(ctx.params.turnID, ctx.payload.mode, ctx.payload.answers)),
+      )
       .handle("retryComparison", (ctx) => map(arena.retryComparison(ctx.params.turnID)))
       .handle("stop", (ctx) => map(arena.stop(ctx.params.turnID)))
       .handle("resolveStop", (ctx) => map(arena.resolveStop(ctx.params.turnID, ctx.payload.resolution)))
