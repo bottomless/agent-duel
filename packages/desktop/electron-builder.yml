@@ -9,6 +9,12 @@ protocols:
       - paseo
 afterPack: ./scripts/after-pack.js
 afterSign: ./scripts/after-sign.js
+# Packaged builds ignore --inspect and SIGUSR1, so nothing can open the main process to a
+# debugger; `features/debugging.ts` refuses Chromium's remote-debugging switches at launch.
+# RunAsNode stays on because the daemon and CLI run on this binary.
+electronFuses:
+  enableNodeCliInspectArguments: false
+  resetAdHocDarwinSignature: true
 directories:
   output: release
 files:

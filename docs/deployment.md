@@ -79,6 +79,16 @@ GitHub run number for both; retries keep that number. It also enforces increasin
 The resulting application contains no database, OpenRouter, OAuth, email, or
 private signing credential.
 
+A packaged build refuses debuggers, so Playwright and other CDP clients cannot drive a release to
+cast votes. electron-builder flips the `nodeCliInspect` fuse (`electronFuses` in
+`electron-builder.yml`), which ignores `--inspect` and `SIGUSR1`. At launch,
+`packages/desktop/src/features/debugging.ts` exits with a dialog if Chromium's remote-debugging
+switches are present, including ones passed through `PASEO_ELECTRON_FLAGS`, or if an inspector is
+already listening. DevTools is disabled for the main window and its menu item is hidden. A build
+with `PASEO_DESKTOP_SMOKE=1` keeps all of it, because the packaged smoke drives the app over CDP;
+never set it for a published artifact. Development runs from source and is never locked.
+`RunAsNode` stays on because the daemon and CLI run on the app binary.
+
 Build releases from a clean, committed checkout and publish that commit to
 `bottomless/agent-duel`. Attach the `.dmg` from `packages/desktop/release/` to a GitHub Release
 tagged at the same commit. Beside the download, include a **Source code for this build** link to
@@ -106,22 +116,24 @@ Use a fresh macOS user-data directory or clean test machine and verify:
    the daemon or losing local history.
 6. With the control plane restored, a signed-in Arena prompt starts both local contestants.
 7. Both sides stream, finish, and show the comparison experience.
-8. Before voting, inspect desktop traffic and local battle records: neither may contain a
+8. Launching the app with `--remote-debugging-port=9222` shows the "can't start" dialog, and nothing
+   listens on that port.
+9. Before voting, inspect desktop traffic and local battle records: neither may contain a
    contestant model name, slug, or routing token. Assigned proxy calls contain the opaque assignment
    id and scope id. Voting reveals both display names and applies the selected result to the original
    local repository.
-9. Inspect the Arena process environment, startup arguments, and one-time stdin value: none contains
-   the raw OpenCode control token. The stdin value contains the daemon-local control-plane
-   capability, loopback URL, and only a SHA-256 verifier for the OpenCode token. Confirm that
-   `GET /global/health` remains public, `/doc`, `/session`, `/arena`, and `/api/*` reject unauthenticated
-   requests, the daemon-authenticated battle still completes, and sign-out or Arena exit invalidates
-   the runtime capability. Do not set `OPENCODE_ARENA_ENABLE_DOCS=1` in a production build.
-10. Restart the application and confirm the account session survives through Electron encrypted
+10. Inspect the Arena process environment, startup arguments, and one-time stdin value: none contains
+    the raw OpenCode control token. The stdin value contains the daemon-local control-plane
+    capability, loopback URL, and only a SHA-256 verifier for the OpenCode token. Confirm that
+    `GET /global/health` remains public, `/doc`, `/session`, `/arena`, and `/api/*` reject unauthenticated
+    requests, the daemon-authenticated battle still completes, and sign-out or Arena exit invalidates
+    the runtime capability. Do not set `OPENCODE_ARENA_ENABLE_DOCS=1` in a production build.
+11. Restart the application and confirm the account session survives through Electron encrypted
     storage while the legacy renderer `AsyncStorage` session key is absent.
-11. Local SQLite history and artifact files survive an application restart.
-12. Signing out prevents new research, assignment, comparison, and OpenRouter operations while preserving local
+12. Local SQLite history and artifact files survive an application restart.
+13. Signing out prevents new research, assignment, comparison, and OpenRouter operations while preserving local
     history.
-13. The app's `Contents/Resources/licenses/` contains `LICENSE`, `LICENSE-APACHE`, `NOTICE`, and
+14. The app's `Contents/Resources/licenses/` contains `LICENSE`, `LICENSE-APACHE`, `NOTICE`, and
     `arena-backend/LICENSE`. The release's source link downloads the matching source without sign-in.
 
 Compare the happy path with the current `main` desktop build during the first

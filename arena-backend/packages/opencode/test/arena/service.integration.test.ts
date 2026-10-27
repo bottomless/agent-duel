@@ -3,6 +3,7 @@ import { $ } from "bun"
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { createHash, randomBytes } from "crypto"
 import { imageArtifactID } from "@agent-duel/arena-service/research-protocol"
+import type { VoteSource } from "@agent-duel/arena-service/vote-evidence"
 import { createServer } from "net"
 import { Global } from "@opencode-ai/core/global"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -40,6 +41,7 @@ import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { json, type PublicSnapshot, TOOL_OUTPUT_BODY } from "./harness"
 
 const arenaControlToken = "test-control-token"
+const stubVoteSource: VoteSource = "unverified"
 
 function request(path: string, init?: RequestInit) {
   const headers = new Headers(init?.headers)
@@ -440,7 +442,10 @@ function installOpenRouterStub(options?: {
     readonly assignmentID: string
     readonly model: (typeof testProfiles)[number]
   }
-  const assignmentSets = new Map<string, { readonly decision?: string; readonly assignments: Array<TestAssignment> }>()
+  const assignmentSets = new Map<
+    string,
+    { readonly decision?: string; readonly voteSource?: VoteSource; readonly assignments: Array<TestAssignment> }
+  >()
   const assignmentsByScope = new Map<string, TestAssignment>()
   const assignmentsByID = new Map<string, TestAssignment>()
   let assignmentSequence = 0
@@ -456,6 +461,7 @@ function installOpenRouterStub(options?: {
         kind: "battle" | "single"
         scopeID: string
         decision?: string
+        voteEvidence?: unknown
       }
       const key = `${body.kind}:${body.scopeID}`
       let set = assignmentSets.get(key)
@@ -486,15 +492,19 @@ function installOpenRouterStub(options?: {
       if (set.decision && set.decision !== body.decision) {
         return Response.json({
           decision: set.decision,
+          ...(set.voteSource ? { voteSource: set.voteSource } : {}),
           assignments: set.assignments.map(({ assignmentID, model }) => ({
             assignmentID,
             model: model.displayName,
           })),
         })
       }
-      assignmentSets.set(key, { ...set, decision: body.decision })
+      // The control plane classifies votes with private rules; the engine stores whatever source it returns.
+      const voteSource: VoteSource | undefined = "voteEvidence" in body ? stubVoteSource : undefined
+      assignmentSets.set(key, { ...set, decision: body.decision, voteSource })
       return Response.json({
         decision: body.decision,
+        ...(voteSource ? { voteSource } : {}),
         assignments: set.assignments.map(({ assignmentID, model }) => ({ assignmentID, model: model.displayName })),
       })
     }
@@ -2766,6 +2776,7 @@ describe("Arena service vertical slice", () => {
           body: JSON.stringify({
             ratingID: firstRating._id,
             vote: "up",
+            voteEvidence: { activation: "script" },
             participantID: "cid_single-agent-voter",
           }),
         }),
@@ -2843,6 +2854,7 @@ describe("Arena service vertical slice", () => {
       expect(memory.singleAgentRatings.values).toHaveLength(2)
       expect(memory.singleAgentRatings.values[0]).toMatchObject({
         vote: "up",
+        voteSource: "unverified",
         voteParticipantID: "cid_single-agent-voter",
       })
       expect(memory.singleAgentRatings.values[1]?.vote).toBeUndefined()
@@ -6111,7 +6123,6 @@ describe("Arena service vertical slice", () => {
       )
       expect(read.file.file).toBe(first)
       expect(read.divergence.status).toBe("only_a")
-
       ;(a as Mutable).runState = "pending"
       const neither = await request(`/arena/turns/${turnID}/diff`, { headers })
       expect(neither.ok).toBe(false)
@@ -6554,6 +6565,7 @@ describe("Arena service vertical slice", () => {
       await waitForTurn(memory.store, turnID, "application_failed")
       const unchanged = await memory.store.turn(turnID)
       expect(unchanged?.resolution).toEqual({ kind: "vote", vote: "a", appliedSide: "a" })
+      expect(unchanged?.voteSource).toBe("unverified")
       expect((await $`git rev-parse HEAD`.cwd(canonical).quiet().text()).trim()).toBe(head)
       expect(await Promise.all(runs.map((run) => exists(run.worktree)))).toEqual([true, true])
       expect(

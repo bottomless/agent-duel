@@ -8033,6 +8033,8 @@ export type ArenaSingleAgentVoteData = {
     ratingID: string
     vote: "up" | "down"
     participantID?: string
+    voteEvidence?: unknown
+    voteProof?: unknown
   }
   path: {
     sessionID: string
@@ -11853,6 +11855,8 @@ export type ArenaTurnVoteData = {
   body?: {
     vote: "a" | "b" | "tie"
     participantID?: string
+    voteEvidence?: unknown
+    voteProof?: unknown
   }
   path: {
     turnID: string

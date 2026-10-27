@@ -18,12 +18,14 @@ describe("packaged deployment config", () => {
       controlPlaneUrl: "https://agent-duel.test",
       sessionPublicKey: "public-key",
       updatesEnabled: false,
+      debuggingAllowed: false,
       arenaBuildSha: "ABCDEF1234567",
     });
 
     expect(readPackagedDeploymentConfig(configPath)).toEqual({
       controlPlane: { url: "https://agent-duel.test", sessionPublicKey: "public-key" },
       updatesEnabled: false,
+      debuggingAllowed: false,
       arenaBuildSha: "abcdef1234567",
     });
   });
@@ -33,6 +35,7 @@ describe("packaged deployment config", () => {
       controlPlaneUrl: null,
       sessionPublicKey: null,
       updatesEnabled: false,
+      debuggingAllowed: false,
       arenaBuildSha: "abcdef1234567",
     });
 
@@ -43,6 +46,20 @@ describe("packaged deployment config", () => {
     const configPath = writeConfig({
       controlPlaneUrl: "https://agent-duel.test",
       sessionPublicKey: null,
+      updatesEnabled: false,
+      debuggingAllowed: false,
+      arenaBuildSha: "abcdef1234567",
+    });
+
+    expect(() => readPackagedDeploymentConfig(configPath)).toThrow(
+      "Packaged Agent Duel deployment configuration is invalid",
+    );
+  });
+
+  it("rejects a package that does not declare whether it allows debugging", () => {
+    const configPath = writeConfig({
+      controlPlaneUrl: "https://agent-duel.test",
+      sessionPublicKey: "public-key",
       updatesEnabled: false,
       arenaBuildSha: "abcdef1234567",
     });

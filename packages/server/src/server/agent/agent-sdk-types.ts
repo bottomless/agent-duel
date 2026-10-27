@@ -17,6 +17,7 @@ import type {
   ArenaReviewIngestResult,
   ArenaSnapshot,
   ArenaVote,
+  ArenaCastVote,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ArenaPromptAttachment } from "../arena/prompt-attachments.js";
 import type { PaseoToolCatalog } from "./tools/types.js";
@@ -731,6 +732,7 @@ export interface AgentSession {
       ratingId: string,
       vote: "up" | "down",
       participantId: string,
+      cast?: ArenaCastVote,
     ): Promise<ArenaSnapshot>;
     archive(): Promise<ArenaSnapshot | null>;
     snapshot(chatId: string): Promise<ArenaSnapshot>;
@@ -752,7 +754,12 @@ export interface AgentSession {
     discardSteer(runId: string, messageIds: string[]): Promise<ArenaSnapshot>;
     retryRun(runId: string): Promise<ArenaSnapshot>;
     resumeBattle(turnId: string): Promise<ArenaSnapshot>;
-    vote(turnId: string, vote: ArenaVote, participantId: string): Promise<ArenaSnapshot>;
+    vote(
+      turnId: string,
+      vote: ArenaVote,
+      participantId: string,
+      cast?: ArenaCastVote,
+    ): Promise<ArenaSnapshot>;
     /**
      * Append what a voter did while reviewing. Idempotent on event id, so the
      * app may replay a flush it could not confirm.

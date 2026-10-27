@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode } from "react";
-import { Text, View } from "react-native";
+import { Text, View, type GestureResponderEvent } from "react-native";
 import { ThumbsDown, ThumbsUp } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,9 @@ import { MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { useSessionStore } from "@/stores/session-store";
 import { settingsStyles } from "@/styles/settings";
 import { useArenaTurnMutation } from "./use-arena-session";
+import type { ArenaCastVote } from "@getpaseo/protocol/arena/rpc-schemas";
+import { voteEvidence } from "./vote-evidence";
+import { useVoteFrameUrl, VoteFrame } from "./vote-frame";
 
 interface SingleAgentRatingDialogProps {
   serverId: string;
@@ -29,14 +32,25 @@ export function SingleAgentRatingDialog({
   const selectedVote =
     rating.variables?.kind === "single_agent_vote" ? rating.variables.vote : undefined;
 
-  const { mutate } = rating;
-  const voteUp = useCallback(() => {
-    mutate({ kind: "single_agent_vote", ratingId, vote: "up" });
-  }, [mutate, ratingId]);
+  const voteFrame = useVoteFrameUrl(serverId, "single", ratingId);
 
-  const voteDown = useCallback(() => {
-    mutate({ kind: "single_agent_vote", ratingId, vote: "down" });
-  }, [mutate, ratingId]);
+  const { mutate } = rating;
+  const voteUp = useCallback(
+    (cast: ArenaCastVote) => mutate({ kind: "single_agent_vote", ratingId, vote: "up", cast }),
+    [mutate, ratingId],
+  );
+  const voteDown = useCallback(
+    (cast: ArenaCastVote) => mutate({ kind: "single_agent_vote", ratingId, vote: "down", cast }),
+    [mutate, ratingId],
+  );
+  const handleVoteUp = useCallback(
+    async (event: GestureResponderEvent) => voteUp({ evidence: await voteEvidence(event) }),
+    [voteUp],
+  );
+  const handleVoteDown = useCallback(
+    async (event: GestureResponderEvent) => voteDown({ evidence: await voteEvidence(event) }),
+    [voteDown],
+  );
 
   return (
     <View style={styles.column}>
@@ -55,28 +69,44 @@ export function SingleAgentRatingDialog({
           </Text>
         </View>
         <View style={styles.actions}>
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={ThumbsUp}
+          <VoteFrame
+            frameUrl={voteFrame}
+            choice="up"
+            label="Thumbs up"
             disabled={disabled}
-            loading={rating.isPending && selectedVote === "up"}
-            onPress={voteUp}
-            testID="arena-single-agent-thumbs-up"
+            onVote={voteUp}
           >
-            Thumbs up
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={ThumbsDown}
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={ThumbsUp}
+              disabled={disabled}
+              loading={rating.isPending && selectedVote === "up"}
+              onPress={handleVoteUp}
+              testID="arena-single-agent-thumbs-up"
+            >
+              Thumbs up
+            </Button>
+          </VoteFrame>
+          <VoteFrame
+            frameUrl={voteFrame}
+            choice="down"
+            label="Thumbs down"
             disabled={disabled}
-            loading={rating.isPending && selectedVote === "down"}
-            onPress={voteDown}
-            testID="arena-single-agent-thumbs-down"
+            onVote={voteDown}
           >
-            Thumbs down
-          </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={ThumbsDown}
+              disabled={disabled}
+              loading={rating.isPending && selectedVote === "down"}
+              onPress={handleVoteDown}
+              testID="arena-single-agent-thumbs-down"
+            >
+              Thumbs down
+            </Button>
+          </VoteFrame>
           {onSkip ? (
             <Button
               variant="ghost"

@@ -48,6 +48,40 @@ to 3 MiB and a record to 2 MiB; oversized records are logged and dropped while t
 intact. The control plane still owns authentication, the OpenRouter proxy, and research
 ingestion.
 
+Battle votes and single-agent ratings record `voteSource`. The app does not decide it: it sends
+the raw input evidence with the vote. The reveal stores the evidence on the battle's assignment set
+and asks the deployment's `classifyVote` hook (`arena-service/src/vote-evidence.ts`) for the source
+and the version of the rules that decided it, so a rule change can reclassify stored votes. The
+rules live in the private control plane; never write them, or tests or docs that reveal them, in
+this repository. A BYOK build has no classifier and records evidence without a source. Research
+uploads keep `voteSource` on turns and ratings; historical records and BYOK votes can lack it.
+
+The evidence says whether the browser trusted the event and, on macOS and Windows, what the OS
+reported about the matching click or Enter/Space release: whether a process posted it (macOS), or
+its origin and device (Windows), how long before the lookup it arrived, and how far it was from the
+click. Never send process IDs, screen positions or key text.
+
+The desktop monitors consume an OS event once, in the same window, within two seconds, matching the
+pointer position or Enter/Space key, and deduplicate OS message redelivery even after consumption.
+That matching identifies the event and stays local; only the meaning of what the OS reported moves
+to the reveal. Windows matches physical screen coordinates after Electron converts the renderer's
+logical coordinates.
+
+A hosted build casts its votes through the control plane's vote frame. The daemon asks for a
+ticket per battle turn or rating (`arena.vote_frame.get_ticket`), and the app lays a transparent
+frame from that URL over each vote button (`packages/app/src/arena/vote-frame.tsx`). The frame takes
+the click, asks the app what the OS saw, and signs the ticket, the choice and the evidence with a
+secret its freshly obfuscated script carries. The app passes that signature with the vote, and the
+reveal stores `voteProof`: `verified`, `invalid`, or `absent` for a vote that did not come through
+the frame. The frame's code lives in the control plane, not in this repository. Until a frame
+reports ready, and in a BYOK build, the button underneath takes the click and the vote goes
+unsigned; no vote is refused for a missing or bad signature. Keep the frame mounted while its button
+is disabled: a remount reloads it, which costs the control plane a new script.
+
+Treat provenance as input evidence, not human attestation. A modified build can send any evidence,
+and Windows reports input from privileged UIAccess applications as hardware
+([Microsoft's origin definitions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ne-winuser-input_message_origin_id)).
+
 A session holds its images inline: a pasted one and every screenshot a contestant reads. A long
 run's transcript is then mostly images, and over the 10 MB artifact limit it is not kept at all,
 which stops the turn instead of asking for a vote. So the archive keeps each image as its own `image`

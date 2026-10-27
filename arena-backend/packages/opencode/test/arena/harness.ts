@@ -1,6 +1,7 @@
 // Shared harness for the Arena service integration tests. Moved out of
 // `service.integration.test.ts` unchanged so a second test file can use it.
 // This module registers no test hooks: keep every test and describe call out of it.
+import type { VoteSource } from "@agent-duel/arena-service/vote-evidence"
 import { Store } from "@/arena/mongo"
 import { hashArenaControlToken, setArenaCredentials } from "@/arena/credentials"
 import type {
@@ -25,6 +26,7 @@ export type Mutable = Record<string, unknown>
 type Update = Record<string, Record<string, unknown>>
 
 export const arenaControlToken = "test-control-token"
+const stubVoteSource: VoteSource = "unverified"
 
 export function arenaRequest(path: string, init?: RequestInit) {
   const headers = new Headers(init?.headers)
@@ -417,7 +419,10 @@ export function installOpenRouterStub(options?: {
     readonly assignmentID: string
     readonly model: (typeof testProfiles)[number]
   }
-  const assignmentSets = new Map<string, { readonly decision?: string; readonly assignments: TestAssignment[] }>()
+  const assignmentSets = new Map<
+    string,
+    { readonly decision?: string; readonly voteSource?: VoteSource; readonly assignments: TestAssignment[] }
+  >()
   const assignmentsByScope = new Map<string, TestAssignment>()
   const assignmentsByID = new Map<string, TestAssignment>()
   let assignmentSequence = 0
@@ -433,6 +438,7 @@ export function installOpenRouterStub(options?: {
         kind: "battle" | "single"
         scopeID: string
         decision?: string
+        voteEvidence?: unknown
       }
       const key = `${body.kind}:${body.scopeID}`
       let set = assignmentSets.get(key)
@@ -463,15 +469,19 @@ export function installOpenRouterStub(options?: {
       if (set.decision && set.decision !== body.decision) {
         return Response.json({
           decision: set.decision,
+          ...(set.voteSource ? { voteSource: set.voteSource } : {}),
           assignments: set.assignments.map(({ assignmentID, model }) => ({
             assignmentID,
             model: model.displayName,
           })),
         })
       }
-      assignmentSets.set(key, { ...set, decision: body.decision })
+      // The control plane classifies votes with private rules; the engine stores whatever source it returns.
+      const voteSource: VoteSource | undefined = "voteEvidence" in body ? stubVoteSource : undefined
+      assignmentSets.set(key, { ...set, decision: body.decision, voteSource })
       return Response.json({
         decision: body.decision,
+        ...(voteSource ? { voteSource } : {}),
         assignments: set.assignments.map(({ assignmentID, model }) => ({ assignmentID, model: model.displayName })),
       })
     }

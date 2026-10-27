@@ -5,6 +5,13 @@ import { authorize, type ArenaContext } from "./context"
 import type { StoredGenerationMetrics } from "./metrics"
 import { mediumModel } from "./default-pool"
 import { sampleOne, samplePair, type ModelProfile } from "./pool"
+import {
+  VoteEvidenceSchema,
+  type VoteEvidence,
+  type VoteProof,
+  type VoteProofCheck,
+  type VoteSource,
+} from "./vote-evidence"
 
 export type SingleAgentModelSize = "medium" | "frontier"
 
@@ -23,6 +30,11 @@ type AssignmentSetDocument = {
   readonly createdAt: Date
   decision?: AssignmentDecision
   revealedAt?: Date
+  /** Set with a vote. The evidence is kept so a later rule version can classify it again. */
+  voteSource?: VoteSource
+  voteSourceRules?: number
+  voteEvidence?: VoteEvidence
+  voteProof?: VoteProof
 }
 
 type PublicAssignment = Pick<PrivateAssignment, "assignmentID">
@@ -134,8 +146,24 @@ async function revealedAssignments(db: ArenaDb, document: AssignmentSetDocument)
   })
 }
 
+async function voteProof(context: ArenaContext, check: VoteProofCheck): Promise<VoteProof | undefined> {
+  if (!context.verifyVoteProof) return undefined
+  if (check.proof === undefined) return "absent"
+  return context.verifyVoteProof(check)
+}
+
+async function castVote(context: ArenaContext, check: VoteProofCheck) {
+  const proof = await voteProof(context, check)
+  const evidence = VoteEvidenceSchema.safeParse(check.evidence)
+  return {
+    ...context.classifyVote?.(check.evidence),
+    ...(evidence.success ? { voteEvidence: evidence.data } : {}),
+    ...(proof ? { voteProof: proof } : {}),
+  }
+}
+
 async function resolveSet(db: ArenaDb, context: ArenaContext, userId: string, input: Record<string, unknown>) {
-  requireOnly(input, ["action", "kind", "scopeID", "decision"])
+  requireOnly(input, ["action", "kind", "scopeID", "decision", "voteEvidence", "voteProof"])
   const kind = input.kind
   if (kind !== "battle" && kind !== "single") throw new Error("Arena assignment kind is invalid")
   const scopeID = requiredString(input.scopeID, "scopeID")
@@ -146,15 +174,28 @@ async function resolveSet(db: ArenaDb, context: ArenaContext, userId: string, in
   const assignments = collection(db)
   const id = setID(userId, kind, scopeID)
   const at = context.now()
+  // The engine sends `voteEvidence` only with a vote, null when the vote carried none.
+  const vote =
+    "voteEvidence" in input
+      ? await castVote(context, {
+          callerID: userId,
+          kind,
+          scopeID,
+          decision,
+          evidence: input.voteEvidence,
+          proof: input.voteProof,
+        })
+      : {}
   const revealed = await assignments.findOneAndUpdate(
     { _id: id, userId, kind, scopeID, decision: { $exists: false } },
-    { $set: { decision, revealedAt: at } },
+    { $set: { decision, revealedAt: at, ...vote } },
     { returnDocument: "after" },
   )
   const document = revealed ?? (await assignments.findOne({ _id: id, userId, kind, scopeID }))
   if (!document) return Response.json({ error: "Arena assignment was not found" }, { status: 404 })
   return Response.json({
     decision: document.decision,
+    ...(document.voteSource ? { voteSource: document.voteSource } : {}),
     assignments: await revealedAssignments(db, document),
   })
 }

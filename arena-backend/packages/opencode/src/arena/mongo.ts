@@ -9,6 +9,7 @@ import {
   type ArenaUpdate,
 } from "@agent-duel/arena-service/collection"
 import { MongoDb, type Configuration } from "@agent-duel/arena-service/mongo"
+import type { VoteSource } from "@agent-duel/arena-service/vote-evidence"
 import {
   abortedResolution,
   earlyResolution,
@@ -655,6 +656,7 @@ export class Store {
     ratingID: SingleAgentRatingDocument["_id"]
     vote: SingleAgentVote
     model: string
+    voteSource?: VoteSource
     participantID?: string
     at?: Date
   }) {
@@ -672,6 +674,7 @@ export class Store {
       {
         $set: {
           vote: input.vote,
+          ...(input.voteSource ? { voteSource: input.voteSource } : {}),
           "assignment.model": input.model,
           ...(input.participantID ? { voteParticipantID: input.participantID } : {}),
           voteAt: at,
@@ -1169,6 +1172,7 @@ export class Store {
     readonly turnID: string
     readonly resolution: Resolution
     readonly vote?: Vote
+    readonly voteSource?: VoteSource
     readonly participantID?: string
     readonly appliedSide?: Side
     /** Left out for a discard that names nobody (`identitiesRevealed`). */
@@ -1185,6 +1189,7 @@ export class Store {
         $set: {
           resolution: input.resolution,
           ...(input.vote ? { vote: input.vote } : {}),
+          ...(input.voteSource ? { voteSource: input.voteSource } : {}),
           ...(input.participantID ? { voteParticipantID: input.participantID } : {}),
           ...(input.resolution.kind === "vote" ? { selectedEarly: false } : {}),
           ...(input.resolution.kind === "vote"
@@ -1244,6 +1249,7 @@ export class Store {
     readonly turnID: string
     readonly side: Side
     readonly participantID?: string
+    readonly voteSource?: VoteSource
     readonly models: Readonly<Record<Side, string>>
     readonly at: Date
   }) {
@@ -1262,6 +1268,7 @@ export class Store {
           state: "early_selected",
           resolution,
           vote: input.side,
+          ...(input.voteSource ? { voteSource: input.voteSource } : {}),
           ...(input.participantID ? { voteParticipantID: input.participantID } : {}),
           selectedEarly: true,
           comparisonState: "skipped",

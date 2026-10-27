@@ -2,6 +2,7 @@ import type { BattleState, Resolution, Side, Vote } from "./domain"
 import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-tracker"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { GenerationMetrics, UsageTotals } from "@agent-duel/arena-service/metrics"
+import type { VoteSource } from "@agent-duel/arena-service/vote-evidence"
 import type { PlannedRef, ReviewAnswer, ReviewItem } from "./branch-review"
 import type { BuildMetadata } from "./provenance"
 
@@ -304,6 +305,7 @@ export type SingleAgentRatingDocument = {
   precedingTurnCount?: number
   resultTree?: string
   vote?: SingleAgentVote
+  voteSource?: VoteSource
   voteParticipantID?: string
   voteAt?: Date
   revealAt?: Date
@@ -377,6 +379,7 @@ export type TurnDocument = {
   failureReason?: string
   resolution?: Resolution
   vote?: Vote
+  voteSource?: VoteSource
   voteParticipantID?: string
   selectedEarly?: boolean
   /** Replies sent to the contestants while the battle ran. */
@@ -806,7 +809,7 @@ export type ReviewEventInput = {
 export const reviewFlushLimit = 500
 
 /** Bump when a derived field changes meaning, then recompute the whole table. */
-export const battleMetricsSchemaVersion = 8
+export const battleMetricsSchemaVersion = 9
 
 export type ReviewEffort = {
   /**
@@ -928,6 +931,8 @@ export type BattleMetricsDocument = {
   readonly modelPair: readonly string[]
   /** The vote as cast. `won` is false on both sides for a tie; this is how you find them. */
   readonly vote?: Vote
+  /** Where the vote came from. Absent on historical metrics rows. */
+  readonly voteSource?: VoteSource
   readonly resolutionKind?: string
   readonly selectedEarly: boolean
   /** A steer reaches both contestants, so it belongs to the turn, not a side. */

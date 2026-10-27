@@ -1,5 +1,6 @@
 import { app, Menu, BrowserWindow, ipcMain } from "electron";
 import { getActivePaseoBrowserWebContentsForHostWindow } from "./browser-webviews/index.js";
+import { isDebuggingAllowed } from "./debugging.js";
 
 interface ShowContextMenuInput {
   kind?: "terminal";
@@ -164,7 +165,7 @@ function buildApplicationMenuTemplate(
             });
           }),
         },
-        { role: "toggleDevTools" },
+        ...(isDebuggingAllowed() ? [{ role: "toggleDevTools" as const }] : []),
         { type: "separator" },
         { role: "togglefullscreen" },
       ],

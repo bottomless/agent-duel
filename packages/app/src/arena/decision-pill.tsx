@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from "react";
-import { Text, View, type LayoutChangeEvent } from "react-native";
+import { Text, View, type LayoutChangeEvent, type GestureResponderEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaCastVote, ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   ArenaRunningPillButton,
   ArenaSideChoiceButton,
@@ -17,37 +17,64 @@ import {
 } from "./decision-state";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
+import { voteEvidence } from "./vote-evidence";
+import { useVoteFrameUrl, VoteFrame } from "./vote-frame";
 
 function BattlePaneDecision({
   side,
   phase,
   actions,
+  voteFrame,
 }: {
   side: ArenaSide;
   phase: ArenaDecisionPhase;
   actions: ArenaBattleActions;
+  voteFrame: string | null;
 }) {
   const { pending, pendingAction } = actions;
-  const handleChoose = useCallback(() => {
-    void actions.choose(side);
-  }, [actions, side]);
-  const handlePickEarly = useCallback(() => {
-    void actions.pickEarly(side);
-  }, [actions, side]);
+  const choose = useCallback(
+    (cast: ArenaCastVote) => {
+      void actions.choose(side, cast);
+    },
+    [actions, side],
+  );
+  const pickEarly = useCallback(
+    (cast: ArenaCastVote) => {
+      void actions.pickEarly(side, cast);
+    },
+    [actions, side],
+  );
+  const handleChoose = useCallback(
+    async (event: GestureResponderEvent) => choose({ evidence: await voteEvidence(event) }),
+    [choose],
+  );
+  const handlePickEarly = useCallback(
+    async (event: GestureResponderEvent) => pickEarly({ evidence: await voteEvidence(event) }),
+    [pickEarly],
+  );
+  const sideLabel = side.toUpperCase();
   const pendingVote = pendingAction?.kind === "vote" && pendingAction.vote === side;
 
   if (phase.kind === "running") {
     const canPick = side === "a" ? phase.canPickA : phase.canPickB;
     if (!canPick) return null;
     return (
-      <ArenaSideChoiceButton
-        side={side}
-        kind="early"
-        loading={pendingVote}
+      <VoteFrame
+        frameUrl={voteFrame}
+        choice={side}
+        label={`Choose ${sideLabel} early`}
         disabled={pending}
-        onPress={handlePickEarly}
-        testID={`arena-pick-early-${side}-now`}
-      />
+        onVote={pickEarly}
+      >
+        <ArenaSideChoiceButton
+          side={side}
+          kind="early"
+          loading={pendingVote}
+          disabled={pending}
+          onPress={handlePickEarly}
+          testID={`arena-pick-early-${side}-now`}
+        />
+      </VoteFrame>
     );
   }
 
@@ -58,14 +85,22 @@ function BattlePaneDecision({
   if (phase.kind !== "awaiting_vote") return null;
   const canChoose = side === "a" ? phase.canChooseA : phase.canChooseB;
   return (
-    <ArenaSideChoiceButton
-      side={side}
-      kind="vote"
-      loading={pendingVote}
+    <VoteFrame
+      frameUrl={voteFrame}
+      choice={side}
+      label={`Choose ${sideLabel}`}
       disabled={pending || !canChoose}
-      onPress={handleChoose}
-      testID={`arena-choose-${side}`}
-    />
+      onVote={choose}
+    >
+      <ArenaSideChoiceButton
+        side={side}
+        kind="vote"
+        loading={pendingVote}
+        disabled={pending || !canChoose}
+        onPress={handleChoose}
+        testID={`arena-choose-${side}`}
+      />
+    </VoteFrame>
   );
 }
 
@@ -149,6 +184,8 @@ export function ArenaDecisionPill({
   const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
   const hint = decisionHint(phase);
   const visible = isArenaBattleOnScreen(snapshot) && showChoices;
+  const votable = visible && (phase.kind === "running" || phase.kind === "awaiting_vote");
+  const voteFrame = useVoteFrameUrl(serverId, "battle", votable ? snapshot.turn?.id : undefined);
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
     [onHeightChange],
@@ -173,7 +210,13 @@ export function ArenaDecisionPill({
               choice === "stop" ? (
                 <BattleStopDecision key="stop" phase={phase} actions={actions} />
               ) : (
-                <BattlePaneDecision key={choice} side={choice} phase={phase} actions={actions} />
+                <BattlePaneDecision
+                  key={choice}
+                  side={choice}
+                  phase={phase}
+                  actions={actions}
+                  voteFrame={voteFrame}
+                />
               ),
             )
           : null}
@@ -185,12 +228,12 @@ export function ArenaDecisionPill({
         ) : null}
         {phase.kind !== "running" && !interrupted ? (
           <>
-            <BattlePaneDecision side="a" phase={phase} actions={actions} />
+            <BattlePaneDecision side="a" phase={phase} actions={actions} voteFrame={voteFrame} />
             {phase.kind === "awaiting_vote" && !phase.canDiscard ? (
-              <VoteDecision actions={actions} disabled={!phase.canTie} />
+              <VoteDecision actions={actions} disabled={!phase.canTie} voteFrame={voteFrame} />
             ) : null}
             {stopped || bothFailed ? <DiscardDecision actions={actions} /> : null}
-            <BattlePaneDecision side="b" phase={phase} actions={actions} />
+            <BattlePaneDecision side="b" phase={phase} actions={actions} voteFrame={voteFrame} />
           </>
         ) : null}
       </View>

@@ -10,6 +10,8 @@ export interface PackagedDeploymentConfig {
   /** Null in a bring-your-own-key source build (`PASEO_BYOK_BUILD=1`). */
   controlPlane: PackagedControlPlane | null;
   updatesEnabled: boolean;
+  /** Only a packaged smoke build lets a debugger attach; a release refuses one at launch. */
+  debuggingAllowed: boolean;
   arenaBuildSha: string;
 }
 
@@ -30,6 +32,7 @@ export function readPackagedDeploymentConfig(
   const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
   if (
     typeof config.updatesEnabled !== "boolean" ||
+    typeof config.debuggingAllowed !== "boolean" ||
     typeof config.arenaBuildSha !== "string" ||
     !/^[0-9a-f]{7,64}$/i.test(config.arenaBuildSha)
   ) {
@@ -39,6 +42,7 @@ export function readPackagedDeploymentConfig(
   return {
     controlPlane: readControlPlane(config),
     updatesEnabled: config.updatesEnabled,
+    debuggingAllowed: config.debuggingAllowed,
     arenaBuildSha: config.arenaBuildSha.toLowerCase(),
   };
 }

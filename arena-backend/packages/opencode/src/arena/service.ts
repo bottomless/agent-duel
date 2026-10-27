@@ -57,7 +57,14 @@ import { generate as generateComparison, skip as skipComparison } from "./compar
 import { canonicalizeArenaEnvironment, canonicalizeTranscriptPaths, localizeArenaEnvironment } from "./canonical-path"
 import { comparisonTimeline, showedOutput } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
-import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
+import {
+  createBattleAssignments,
+  createSingleAssignment,
+  resolveAssignments,
+  submittedVote,
+  type CastVote,
+  type VoteSubmission,
+} from "./assignment-client"
 import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
@@ -590,8 +597,8 @@ function assignmentDecision(
   return "discard"
 }
 
-async function resolvedPlacement(turn: TurnDocument, decision: BattleAssignmentDecision) {
-  const resolved = await resolveAssignments("battle", turn._id, decision)
+async function resolvedPlacement(turn: TurnDocument, decision: BattleAssignmentDecision, vote?: CastVote) {
+  const resolved = await resolveAssignments("battle", turn._id, decision, vote)
   const models = new Map(resolved.assignments.map((value) => [value.assignmentID, value.model]))
   const a = models.get(turn.placement.a.assignmentID)
   const b = models.get(turn.placement.b.assignmentID)
@@ -600,6 +607,7 @@ async function resolvedPlacement(turn: TurnDocument, decision: BattleAssignmentD
     decision: resolved.decision,
     models: { a, b },
     metrics: resolved.assignments.flatMap((assignment) => assignment.metrics),
+    voteSource: resolved.voteSource,
   }
 }
 
@@ -1159,6 +1167,7 @@ export interface Interface {
     ratingID: string,
     vote: SingleAgentVote,
     participantID?: string,
+    submission?: VoteSubmission,
   ) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly startTurn: (
     chatID: string,
@@ -1190,6 +1199,7 @@ export interface Interface {
     turnID: string,
     vote: Vote,
     participantID?: string,
+    submission?: VoteSubmission,
   ) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly recordReview: (
     turnID: string,
@@ -3953,6 +3963,7 @@ export const layer: Layer.Layer<
       ratingID: string,
       vote: SingleAgentVote,
       rawParticipantID?: string,
+      submission?: VoteSubmission,
     ) {
       const store = yield* available()
       const chat = yield* promise(() => store.chatForSession(rawSessionID))
@@ -3965,7 +3976,9 @@ export const layer: Layer.Layer<
       const rating = yield* promise(() => store.singleAgentRatingByID(rawSessionID, ratingID))
       if (!rating) return yield* Effect.fail(new Error("Arena single-agent rating does not belong to this session"))
       if (!rating.completedAt) return yield* Effect.fail(new Error("Arena single-agent pass is not complete"))
-      const resolved = yield* promise(() => resolveAssignments("single", ratingID, `rate:${vote}`))
+      const resolved = yield* promise(() =>
+        resolveAssignments("single", ratingID, `rate:${vote}`, submittedVote(submission)),
+      )
       const committedVote = resolved.decision === "rate:up" ? "up" : "down"
       const model = resolved.assignments[0]?.model
       if (!model) return yield* Effect.fail(new Error("Arena single-agent reveal is invalid"))
@@ -3975,6 +3988,7 @@ export const layer: Layer.Layer<
           ratingID,
           vote: committedVote,
           model,
+          voteSource: resolved.voteSource,
           ...(admittedParticipantID ? { participantID: admittedParticipantID } : {}),
         }),
       )
@@ -8855,7 +8869,13 @@ export const layer: Layer.Layer<
             // The previous process stopped while ending a battle that never started. Recovery would
             // park it for Keep or Discard, which names the pair; it ends as it would have.
             if (turn.state === "creation_failed") {
-              yield* abortUnresolved(store, turn, "creation_failed", currentChat, "Arena battle failed before resolution")
+              yield* abortUnresolved(
+                store,
+                turn,
+                "creation_failed",
+                currentChat,
+                "Arena battle failed before resolution",
+              )
               return
             }
             if (
@@ -9552,6 +9572,7 @@ export const layer: Layer.Layer<
       vote?: Vote,
       retry?: boolean,
       rawParticipantID?: string,
+      castVote?: CastVote,
     ) => Effect.Effect<ReturnType<typeof project>, Error> = Effect.fn("Arena.promote")(function* (
       store: Store,
       turn: TurnDocument,
@@ -9563,11 +9584,12 @@ export const layer: Layer.Layer<
       vote?: Vote,
       retry = false,
       rawParticipantID?: string,
+      castVote?: CastVote,
     ) {
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
       if (!retry) {
-        const revealed = yield* promise(() => resolvedPlacement(turn, assignmentDecision(resolution)))
+        const revealed = yield* promise(() => resolvedPlacement(turn, assignmentDecision(resolution), castVote))
         resolution = committedResolution(resolution, revealed.decision)
         side = resolution.appliedSide ?? side
         vote = resolution.kind === "vote" ? resolution.vote : resolution.kind === "early" ? resolution.vote : undefined
@@ -9576,6 +9598,7 @@ export const layer: Layer.Layer<
             turnID: turn._id,
             resolution,
             vote,
+            voteSource: castVote ? revealed.voteSource : undefined,
             participantID: participantID(rawParticipantID),
             appliedSide: side,
             models: revealed.models,
@@ -10028,8 +10051,14 @@ export const layer: Layer.Layer<
       return yield* respond(store, chat._id)
     })
 
-    const vote = Effect.fn("Arena.vote")(function* (id: string, selected: Vote, rawParticipantID?: string) {
+    const vote = Effect.fn("Arena.vote")(function* (
+      id: string,
+      selected: Vote,
+      rawParticipantID?: string,
+      submission?: VoteSubmission,
+    ) {
       const store = yield* available()
+      const castVote = submittedVote(submission)
       const votingParticipantID = yield* Effect.try({
         try: () => participantID(rawParticipantID),
         catch: error,
@@ -10039,7 +10068,7 @@ export const layer: Layer.Layer<
       if (turn.resolution) return yield* respond(store, turn.chatID)
       if (turn.state === "running") {
         if (selected === "tie") return yield* Effect.fail(new Error("Arena ties require both contestant results"))
-        const revealed = yield* promise(() => resolvedPlacement(turn, `select:${selected}`))
+        const revealed = yield* promise(() => resolvedPlacement(turn, `select:${selected}`, castVote))
         const committed = committedResolution(earlyResolution(selected), revealed.decision)
         if (committed.kind !== "early") {
           return yield* Effect.fail(new Error(`Arena battle was already resolved as ${revealed.decision}`))
@@ -10049,6 +10078,7 @@ export const layer: Layer.Layer<
             turnID: turn._id,
             side: committed.vote,
             participantID: votingParticipantID,
+            voteSource: revealed.voteSource,
             models: revealed.models,
             at: new Date(),
           }),
@@ -10075,14 +10105,23 @@ export const layer: Layer.Layer<
       }
       if (turn.state === "awaiting_stop_resolution" && selected === "tie") {
         const resolved = voteResolution(selected)
-        return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
+        return yield* promote(
+          store,
+          turn,
+          resolved.appliedSide,
+          resolved,
+          selected,
+          false,
+          votingParticipantID,
+          castVote,
+        )
       }
       if (turn.state !== "awaiting_vote") return yield* Effect.fail(new Error("Arena turn is not ready for a vote"))
       if (canResumeBattle(turn, yield* promise(() => store.runsForTurn(turn._id)))) {
         return yield* Effect.fail(new Error("Resume or discard this battle before choosing"))
       }
       const resolved = voteResolution(selected)
-      return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
+      return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID, castVote)
     })
 
     const recordReview = Effect.fn("Arena.recordReview")(function* (
