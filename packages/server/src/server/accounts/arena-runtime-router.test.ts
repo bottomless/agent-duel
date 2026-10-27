@@ -81,6 +81,7 @@ describe("Arena runtime proxy", () => {
           "X-Arena-Assignment-ID": "assignment-1",
           "X-Arena-Scope-ID": "battle-1",
           "X-Arena-Generation-ID": "gen_00000000000000000000000000000001",
+          "X-Arena-Compaction": "auto",
         },
         body: JSON.stringify({ model: "contestant", stream: true }),
       },
@@ -102,6 +103,7 @@ describe("Arena runtime proxy", () => {
     expect(new Headers(init?.headers).get("x-agent-duel-version")).toBe("0.4.0-beta.14");
     expect(new Headers(init?.headers).get("x-agent-duel-os")).toBe(process.platform);
     expect(new Headers(init?.headers).get("x-agent-duel-arch")).toBe(process.arch);
+    expect(new Headers(init?.headers).get("x-arena-compaction")).toBe("auto");
   });
 
   it("stops the control-plane request when the Arena runtime disconnects mid-stream", async () => {

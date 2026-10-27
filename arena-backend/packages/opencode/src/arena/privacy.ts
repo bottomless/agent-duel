@@ -11,7 +11,7 @@ import { DateTime, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { ArenaAttachments } from "./attachments"
 import { ArenaRuntime } from "./runtime"
-import { paymentMessage } from "@agent-duel/arena-service/request-error"
+import { paymentMessage, requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
 import { ARENA_OFFLINE_MESSAGE } from "@/session/retry"
 
 const providerID = ProviderV2.ID.make("arena")
@@ -278,14 +278,16 @@ function contains(value: unknown, blocked: ReadonlySet<string>): boolean {
   return Object.entries(value).some(([name, item]) => blocked.has(key(name)) || contains(item, blocked))
 }
 
+// Messages the engine writes itself, which name no model and tell the voter what to do.
+const neutralMessages = new Set<unknown>([ArenaResponseRecovery.IDLE_EXHAUSTED, requestTooLargeMessage])
+
 function apiError(input: ApiError): ApiError {
   return {
     name: "APIError",
     data: {
-      message:
-        input.data.message === ArenaResponseRecovery.IDLE_EXHAUSTED
-          ? ArenaResponseRecovery.IDLE_EXHAUSTED
-          : (paymentMessage(input.data.statusCode, input.data.responseBody) ?? errorMessage),
+      message: neutralMessages.has(input.data.message)
+        ? input.data.message
+        : (paymentMessage(input.data.statusCode, input.data.responseBody) ?? errorMessage),
       isRetryable: input.data.isRetryable,
       ...(input.data.statusCode === undefined ? {} : { statusCode: input.data.statusCode }),
     },
@@ -317,13 +319,12 @@ function unknownError(input: unknown) {
     return {
       name: input.name,
       data: {
-        message:
-          input.data.message === ArenaResponseRecovery.IDLE_EXHAUSTED
-            ? ArenaResponseRecovery.IDLE_EXHAUSTED
-            : (paymentMessage(
-                typeof input.data.statusCode === "number" ? input.data.statusCode : undefined,
-                typeof input.data.responseBody === "string" ? input.data.responseBody : undefined,
-              ) ?? errorMessage),
+        message: neutralMessages.has(input.data.message)
+          ? (input.data.message as string)
+          : (paymentMessage(
+              typeof input.data.statusCode === "number" ? input.data.statusCode : undefined,
+              typeof input.data.responseBody === "string" ? input.data.responseBody : undefined,
+            ) ?? errorMessage),
         isRetryable: input.data.isRetryable === true,
         ...(typeof input.data.statusCode === "number" ? { statusCode: input.data.statusCode } : {}),
       },

@@ -10,6 +10,7 @@ import { hashArenaControlToken, setArenaCredentials } from "@/arena/credentials"
 import type { Store } from "@/arena/mongo"
 import { ArenaAttachments } from "@/arena/attachments"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
 import { ArenaPrivacy } from "@/arena/privacy"
 import { setStoreForTest } from "@/arena/runtime"
 import { GlobalBus } from "@/bus/global"
@@ -192,6 +193,20 @@ describe("ArenaPrivacy", () => {
     expect(result.info).toMatchObject({
       error: { data: { message: ArenaResponseRecovery.IDLE_EXHAUSTED, isRetryable: false } },
     })
+    expect(JSON.stringify(result)).not.toContain(hiddenSlug)
+  })
+
+  test("keeps the request-too-large explanation while stripping provider details", () => {
+    enableArenaControl()
+    const message = contestantMessage()
+    if (message.info.role !== "assistant") throw new Error("Expected assistant fixture")
+    message.info.error = new SessionV1.APIError({
+      message: requestTooLargeMessage,
+      isRetryable: false,
+      responseBody: hiddenSlug,
+    }).toObject()
+    const result = ArenaPrivacy.messages([message])[0]!
+    expect(result.info).toMatchObject({ error: { data: { message: requestTooLargeMessage, isRetryable: false } } })
     expect(JSON.stringify(result)).not.toContain(hiddenSlug)
   })
 

@@ -15,7 +15,7 @@ import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument, SingleAgentRatingDocument } from "./records"
 import { ArenaSchema } from "./schema"
 import { ArenaResponseRecovery } from "./response-recovery"
-import { runPaymentMessage } from "@agent-duel/arena-service/request-error"
+import { requestTooLargeMessage, runPaymentMessage } from "@agent-duel/arena-service/request-error"
 
 export type PublicIdentity = {
   readonly name: string
@@ -422,7 +422,9 @@ export function project(snapshot: BattleSnapshot) {
                 ? ArenaResponseRecovery.EXHAUSTED
                 : run.error.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)
                   ? ArenaResponseRecovery.IDLE_EXHAUSTED
-                  : (runPaymentMessage(run.error) ?? (revealed ? run.error : "Contestant run failed")),
+                  : run.error.includes(requestTooLargeMessage)
+                    ? requestTooLargeMessage
+                    : (runPaymentMessage(run.error) ?? (revealed ? run.error : "Contestant run failed")),
             }
           : {}),
         ...(run.startedAt ? { startedAt: run.startedAt } : {}),

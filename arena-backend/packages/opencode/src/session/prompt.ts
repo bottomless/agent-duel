@@ -1437,8 +1437,8 @@ const layer = Layer.effect(
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
-              // The savings threshold must not block a first request or loop on a request that
-              // remains large after compaction. Let those calls proceed at the provider's rates.
+              // Nothing can shrink a first request or the one right after a summary, so the control
+              // plane may only refuse them when they cannot fit the model at all.
               arenaRequestCompaction: !!lastFinished && !lastFinished.summary,
             })
 

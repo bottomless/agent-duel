@@ -36,11 +36,6 @@ export function markInitialDispatch(sessionID: string) {
   release(sessionID)
 }
 
-/** A preflight budget rejection defers the first request; setup must still stage the worktree. */
-export function markInitialRequestDeferred(sessionID: string) {
-  release(sessionID)
-}
-
 function release(sessionID: string) {
   const key = sessionID as SessionID
   const entry = pending.get(key)
