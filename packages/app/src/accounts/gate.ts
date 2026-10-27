@@ -9,12 +9,15 @@ export type AccountGate =
   | { kind: "disabled" }
   | { kind: "signed-out"; methods: readonly SignInMethod[] }
   | { kind: "acceptance-required" }
+  | { kind: "update-required" }
   | { kind: "signed-in" };
 
 export interface ResolveAccountGateInput {
   hasEndpoint: boolean;
   storeHydrated: boolean;
   methodsPhase: QueryPhase;
+  /** The control plane refuses this build; see `authMethodsResponseSchema`. */
+  updateRequired: boolean;
   accountsEnabled: boolean;
   methods: readonly SignInMethod[];
   hasStoredSession: boolean;
@@ -44,6 +47,8 @@ export function resolveAccountGate(input: ResolveAccountGateInput): AccountGate 
       ? { kind: "acceptance-required" }
       : { kind: "unreachable" };
   }
+  // Ahead of sign-in and terms: a refused build can do neither usefully until it updates.
+  if (input.updateRequired) return { kind: "update-required" };
   if (!input.accountsEnabled) {
     return { kind: "disabled" };
   }

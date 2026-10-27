@@ -117,9 +117,16 @@ The daemon password and account session are separate credentials; a remote clien
   key. The Arena process and its contestant subprocesses never receive the account token or provider
   key.
 - Every daemon request to the control plane (accounts, the Arena runtime proxy, feedback) carries
-  `X-Agent-Duel-Version` with the daemon's package version. The control plane keeps the latest one
-  on the account, so you can find accounts still on an old build; the private repository's
-  `scripts/db/app-versions.ts` counts them. Builds released before the header send none.
+  the headers from `clientHeaders` in `packages/server/src/server/accounts/config.ts`: the daemon's
+  package version, OS, OS release, CPU type, timezone, CPU model and core count, and memory in whole
+  gigabytes. Keep it to coarse build and machine facts; never add the computer name, user name,
+  paths, network addresses or device identifiers. The control plane keeps the latest values on the
+  account; the private repository's `scripts/db/app-versions.ts` counts them. Builds before
+  0.4.0-beta.14 send none.
+- The control plane can refuse builds below a minimum version or on a blocklist. It then answers
+  `/api/auth/methods` with `updateRequired: true`, and the account gate shows the update screen
+  (`packages/app/src/accounts/update-required.tsx`) in place of sign-in, terms and the app. The
+  private repository's `docs/accounts.md` owns the settings.
 
 `DaemonClient` reads the token through `getSessionToken` on every connection attempt rather than
 capturing it at construction. A client rejected while signed out is already reconnecting when the

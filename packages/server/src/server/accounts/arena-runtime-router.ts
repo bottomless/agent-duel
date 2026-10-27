@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import express from "express";
 import type { Logger } from "pino";
-import { appVersionHeader } from "./config.js";
+import { clientHeaders } from "./config.js";
 import { resolveArenaRuntimeCredentials } from "./credentials.js";
 import { isNetworkUnavailable, networkUnavailableBody } from "./network-unavailable.js";
 
@@ -68,7 +68,7 @@ export function createArenaRuntimeRouter(options: {
           Accept: req.header("accept") ?? "application/json",
           Authorization: `Bearer ${credentials.token}`,
           "Content-Type": "application/json",
-          [appVersionHeader]: options.appVersion,
+          ...clientHeaders(options.appVersion),
           ...(req.header("x-arena-assignment-id")
             ? { "X-Arena-Assignment-ID": req.header("x-arena-assignment-id")! }
             : {}),

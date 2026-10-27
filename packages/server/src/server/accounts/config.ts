@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { parse } from "dotenv";
 
@@ -10,8 +11,44 @@ export interface AccountsConfig {
 
 export type AccountsEnv = Readonly<Record<string, string | undefined>>;
 
-/** Sent on every control-plane request; the control plane keeps the latest one on the account. */
-export const appVersionHeader = "X-Agent-Duel-Version";
+let machineHeaders: Record<string, string> | undefined;
+
+// A header value that is not Latin-1 makes fetch throw, and CPU names come from the OS verbatim.
+function printable(value: string): string {
+  return value
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function readMachineHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "X-Agent-Duel-OS": process.platform,
+    "X-Agent-Duel-OS-Version": os.release(),
+    "X-Agent-Duel-Arch": process.arch,
+    // Whole gigabytes, so the figure describes a class of machine rather than one machine.
+    "X-Agent-Duel-Memory-GB": String(Math.round(os.totalmem() / 1024 ** 3)),
+  };
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (timezone) headers["X-Agent-Duel-Timezone"] = timezone;
+  const cpus = os.cpus();
+  const cpu = cpus[0] ? printable(cpus[0].model) : "";
+  if (cpu) {
+    headers["X-Agent-Duel-CPU"] = cpu;
+    headers["X-Agent-Duel-CPU-Cores"] = String(cpus.length);
+  }
+  return headers;
+}
+
+/**
+ * Sent on every control-plane request; the control plane keeps the latest values on the account and
+ * turns away builds below its minimum version. Only coarse build and machine facts: never the
+ * computer name, user name, paths, network addresses or device identifiers.
+ */
+export function clientHeaders(appVersion: string): Record<string, string> {
+  machineHeaders ??= readMachineHeaders();
+  return { "X-Agent-Duel-Version": appVersion, ...machineHeaders };
+}
 
 function trimmed(value: string | undefined): string | null {
   const next = value?.trim();

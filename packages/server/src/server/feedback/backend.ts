@@ -11,7 +11,7 @@ import {
   type FeedbackSubmissionResponse,
 } from "@getpaseo/protocol/feedback/schemas";
 import type { Logger } from "pino";
-import { appVersionHeader } from "../accounts/config.js";
+import { clientHeaders } from "../accounts/config.js";
 import { prepareFeedbackContextStream } from "./stream.js";
 
 export class FeedbackBackendError extends Error {
@@ -106,7 +106,7 @@ export class FeedbackBackend implements FeedbackRemote {
           headers: {
             Accept: "application/json",
             Authorization: `Bearer ${token}`,
-            [appVersionHeader]: this.appVersion,
+            ...clientHeaders(this.appVersion),
             "Content-Type": "application/json",
           },
           body: JSON.stringify(submission),
@@ -144,7 +144,7 @@ export class FeedbackBackend implements FeedbackRemote {
             contentType: contextContentType,
             handleUploadUrl: `${this.baseUrl}/api/feedback/context/upload`,
             clientPayload: JSON.stringify({ feedbackId, attempt }),
-            headers: { Authorization: `Bearer ${token}`, [appVersionHeader]: this.appVersion },
+            headers: { Authorization: `Bearer ${token}`, ...clientHeaders(this.appVersion) },
           },
         );
         const completion = feedbackContextCompletionSchema.parse({
@@ -159,7 +159,7 @@ export class FeedbackBackend implements FeedbackRemote {
             headers: {
               Accept: "application/json",
               Authorization: `Bearer ${token}`,
-              [appVersionHeader]: this.appVersion,
+              ...clientHeaders(this.appVersion),
               "Content-Type": "application/json",
             },
             body: JSON.stringify(completion),
@@ -196,7 +196,7 @@ export class FeedbackBackend implements FeedbackRemote {
           headers: {
             Accept: "application/json",
             Authorization: `Bearer ${token}`,
-            [appVersionHeader]: this.appVersion,
+            ...clientHeaders(this.appVersion),
             "Content-Type": "application/json",
           },
           body: JSON.stringify(failure),

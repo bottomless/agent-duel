@@ -98,6 +98,8 @@ describe("Arena runtime proxy", () => {
       "gen_00000000000000000000000000000001",
     );
     expect(new Headers(init?.headers).get("x-agent-duel-version")).toBe("0.4.0-beta.14");
+    expect(new Headers(init?.headers).get("x-agent-duel-os")).toBe(process.platform);
+    expect(new Headers(init?.headers).get("x-agent-duel-arch")).toBe(process.arch);
   });
 
   it("stops the control-plane request when the Arena runtime disconnects mid-stream", async () => {
