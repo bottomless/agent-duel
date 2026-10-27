@@ -5,6 +5,7 @@ import type {
   ArenaRun,
   ArenaSide,
   ArenaSnapshot,
+  ArenaCastVote,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import { useToast } from "@/contexts/toast-context";
 import { confirmDialog } from "@/utils/confirm-dialog";
@@ -65,11 +66,11 @@ export function useArenaBattleActions(
   );
 
   const choose = useCallback(
-    async (side: ArenaSide) => {
+    async (side: ArenaSide, cast: ArenaCastVote) => {
       if (!turnId) return;
       const early = turnState === "running";
       try {
-        await mutateTurn({ kind: "vote", turnId, vote: side });
+        await mutateTurn({ kind: "vote", turnId, vote: side, cast });
         if (early) {
           toast.show(EARLY_BATTLE_TOAST, { variant: "info", durationMs: 4_000 });
         }
@@ -83,7 +84,7 @@ export function useArenaBattleActions(
   // An early pick cancels the other side, so it asks first; the losing work
   // is gone the moment the vote lands.
   const pickEarly = useCallback(
-    async (side: ArenaSide) => {
+    async (side: ArenaSide, cast: ArenaCastVote) => {
       const label = sideLabel(side);
       const other = sideLabel(side === "a" ? "b" : "a");
       const confirmed = await confirmDialog({
@@ -94,19 +95,22 @@ export function useArenaBattleActions(
         destructive: true,
       });
       if (!confirmed) return;
-      await choose(side);
+      await choose(side, cast);
     },
     [choose],
   );
 
-  const tie = useCallback(async () => {
-    if (!turnId) return;
-    try {
-      await mutateTurn({ kind: "vote", turnId, vote: "tie" });
-    } catch (error) {
-      showError(error);
-    }
-  }, [mutateTurn, showError, turnId]);
+  const tie = useCallback(
+    async (cast: ArenaCastVote) => {
+      if (!turnId) return;
+      try {
+        await mutateTurn({ kind: "vote", turnId, vote: "tie", cast });
+      } catch (error) {
+        showError(error);
+      }
+    },
+    [mutateTurn, showError, turnId],
+  );
 
   const stop = useCallback(async () => {
     if (!turnId) return;

@@ -30,6 +30,7 @@ vi.mock("../deployment-config.js", () => ({
   readPackagedDeploymentConfig: () => ({
     controlPlane: { url: "https://agent-duel.test", sessionPublicKey: "public-key" },
     updatesEnabled: deploymentConfigMock.updatesEnabled,
+    debuggingAllowed: false,
     arenaBuildSha: "0123456789abcdef0123456789abcdef01234567",
   }),
 }));

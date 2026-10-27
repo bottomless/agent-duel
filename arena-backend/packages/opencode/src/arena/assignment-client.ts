@@ -6,6 +6,7 @@ import {
   type BattleAssignmentDecision,
   type SingleAssignmentDecision,
 } from "@agent-duel/arena-service/assignment-decision"
+import { VoteSource } from "@agent-duel/arena-service/vote-evidence"
 import type { GenerationMetrics, UsageTotals } from "./records"
 import type { SingleAgentModelSize } from "./records"
 
@@ -33,11 +34,12 @@ async function request(input: Readonly<Record<string, unknown>>) {
   const payload = (await response.json()) as {
     readonly assignments?: readonly unknown[]
     readonly decision?: unknown
+    readonly voteSource?: unknown
     readonly error?: string
   }
   if (!response.ok) throw new Error(payload.error ?? `Arena assignment request failed with status ${response.status}`)
   if (!Array.isArray(payload.assignments)) throw new Error("Arena assignment response is invalid")
-  return { assignments: payload.assignments, decision: payload.decision }
+  return { assignments: payload.assignments, decision: payload.decision, voteSource: payload.voteSource }
 }
 
 function opaque(value: unknown): OpaqueAssignment {
@@ -132,30 +134,69 @@ export async function createSingleAssignment(scopeID: string, modelSize: SingleA
 type ResolvedAssignments<D extends AssignmentDecision> = {
   readonly decision: D
   readonly assignments: readonly RevealedAssignment[]
+  /** Present once the decision was committed by a vote. */
+  readonly voteSource?: VoteSource
+}
+
+/** What the app sent with a vote; an API caller sends neither. The engine never interprets either. */
+export type VoteSubmission = {
+  readonly evidence?: unknown
+  /** The signature of the vote frame the control plane served, checked at the reveal. */
+  readonly proof?: unknown
+}
+
+/** A vote as the reveal receives it: null evidence marks an API caller. */
+export type CastVote = {
+  readonly evidence: unknown
+  readonly proof?: unknown
+}
+
+export function submittedVote(submission: VoteSubmission | undefined): CastVote {
+  const evidence = submission?.evidence ?? null
+  return submission?.proof === undefined ? { evidence } : { evidence, proof: submission.proof }
+}
+
+function resolvedVoteSource(value: unknown) {
+  if (value === undefined) return undefined
+  const source = VoteSource.find((candidate) => candidate === value)
+  if (!source) throw new Error("Arena resolved vote source is invalid")
+  return source
 }
 
 export function resolveAssignments(
   kind: "battle",
   scopeID: string,
   decision: BattleAssignmentDecision,
+  vote?: CastVote,
 ): Promise<ResolvedAssignments<BattleAssignmentDecision>>
 export function resolveAssignments(
   kind: "single",
   scopeID: string,
   decision: SingleAssignmentDecision,
+  vote: CastVote,
 ): Promise<ResolvedAssignments<SingleAssignmentDecision>>
 export async function resolveAssignments(
   kind: "battle" | "single",
   scopeID: string,
   decision: AssignmentDecision,
+  vote?: CastVote,
 ): Promise<ResolvedAssignments<AssignmentDecision>> {
-  const payload = await request({ action: "resolve", kind, scopeID, decision })
+  const payload = await request({
+    action: "resolve",
+    kind,
+    scopeID,
+    decision,
+    ...(vote ? { voteEvidence: vote.evidence } : {}),
+    ...(vote?.proof === undefined ? {} : { voteProof: vote.proof }),
+  })
   if (!isAssignmentDecision(kind, payload.decision)) {
     throw new Error("Arena resolved assignment decision is invalid")
   }
+  const voteSource = resolvedVoteSource(payload.voteSource)
   return {
     decision: payload.decision,
     assignments: payload.assignments.map(revealed),
+    ...(voteSource ? { voteSource } : {}),
   }
 }
 

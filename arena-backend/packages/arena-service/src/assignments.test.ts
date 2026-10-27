@@ -3,6 +3,7 @@ import { recordAssignmentGenerationMetrics, reserveRoutingAssignment } from "./a
 import { connectMongoDb } from "./mongo"
 import type { ModelPool } from "./pool"
 import { createArenaService } from "./service"
+import type { VerifyVoteProof, VoteProofCheck } from "./vote-evidence"
 
 const uri = process.env.OPENCODE_ARENA_MONGODB_URI
 const database = `agent_duel_assignments_test_${crypto.randomUUID().replaceAll("-", "")}`
@@ -70,7 +71,12 @@ function request(body: unknown) {
 }
 
 function service(
-  options: { readonly userId?: string; readonly ids?: readonly string[]; readonly random?: readonly number[] } = {},
+  options: {
+    readonly userId?: string
+    readonly ids?: readonly string[]
+    readonly random?: readonly number[]
+    readonly verifyVoteProof?: VerifyVoteProof
+  } = {},
 ) {
   const ids = [...(options.ids ?? ["assignment-a", "assignment-b"])]
   const random = [...(options.random ?? [0, 0.999])]
@@ -83,6 +89,7 @@ function service(
     random: () => random.shift() ?? 0,
     now: () => new Date("2000-01-01T00:00:00.000Z"),
     validateModels: async () => undefined,
+    verifyVoteProof: options.verifyVoteProof,
   })
 }
 
@@ -233,6 +240,125 @@ describe("Arena assignment control plane", () => {
         { assignmentID: "assignment-a", model: "GLM 5.3 FlashX" },
         { assignmentID: "assignment-b", model: "Grok 4.6" },
       ],
+    })
+  })
+
+  test("classifies the evidence a vote carries and keeps the first vote's source", async () => {
+    await service().assignments(request({ action: "create", kind: "battle", scopeID: "turn-evidence" }))
+    const voteEvidence = {
+      activation: "trusted",
+      input: "pointer",
+      os: {
+        status: "matched",
+        elapsedMs: 30,
+        distance: 1,
+        event: { platform: "darwin", sourceProcess: "present" },
+      },
+    }
+
+    const first = await service().assignments(
+      request({ action: "resolve", kind: "battle", scopeID: "turn-evidence", decision: "select:a", voteEvidence }),
+    )
+    expect(await first.json()).toMatchObject({ decision: "select:a", voteSource: "injected" })
+
+    const retry = await service().assignments(
+      request({
+        action: "resolve",
+        kind: "battle",
+        scopeID: "turn-evidence",
+        decision: "select:a",
+        voteEvidence: { activation: "script" },
+      }),
+    )
+    expect(await retry.json()).toMatchObject({ decision: "select:a", voteSource: "injected" })
+
+    const stored = await mongo.db.collection("arenaAssignmentSets").findOne({ scopeID: "turn-evidence" })
+    expect(stored).toMatchObject({ voteSource: "injected", voteSourceRules: 1, voteEvidence })
+  })
+
+  test("labels a vote without evidence an API vote and leaves other decisions unlabelled", async () => {
+    await service().assignments(request({ action: "create", kind: "battle", scopeID: "turn-api-vote" }))
+    await service().assignments(request({ action: "create", kind: "battle", scopeID: "turn-discard" }))
+
+    const vote = await service().assignments(
+      request({ action: "resolve", kind: "battle", scopeID: "turn-api-vote", decision: "tie", voteEvidence: null }),
+    )
+    expect(await vote.json()).toMatchObject({ decision: "tie", voteSource: "api" })
+
+    const discard = await service().assignments(
+      request({ action: "resolve", kind: "battle", scopeID: "turn-discard", decision: "discard" }),
+    )
+    const discarded = (await discard.json()) as Record<string, unknown>
+    expect(discarded.decision).toBe("discard")
+    expect("voteSource" in discarded).toBe(false)
+  })
+
+  test("records whether a vote frame's signature checks out where a verifier is configured", async () => {
+    const checks: VoteProofCheck[] = []
+    const verifying = service({
+      verifyVoteProof: async (check) => {
+        checks.push(check)
+        return check.proof === "good" ? "verified" : "invalid"
+      },
+    })
+    for (const scopeID of ["turn-signed", "turn-forged", "turn-unsigned", "turn-unframed"]) {
+      await verifying.assignments(request({ action: "create", kind: "battle", scopeID }))
+    }
+    const evidence = { activation: "script" }
+    await verifying.assignments(
+      request({
+        action: "resolve",
+        kind: "battle",
+        scopeID: "turn-signed",
+        decision: "select:b",
+        voteEvidence: evidence,
+        voteProof: "good",
+      }),
+    )
+    await verifying.assignments(
+      request({
+        action: "resolve",
+        kind: "battle",
+        scopeID: "turn-forged",
+        decision: "tie",
+        voteEvidence: evidence,
+        voteProof: "bad",
+      }),
+    )
+    await verifying.assignments(
+      request({
+        action: "resolve",
+        kind: "battle",
+        scopeID: "turn-unsigned",
+        decision: "select:a",
+        voteEvidence: null,
+      }),
+    )
+    await service().assignments(
+      request({
+        action: "resolve",
+        kind: "battle",
+        scopeID: "turn-unframed",
+        decision: "select:a",
+        voteEvidence: null,
+        voteProof: "good",
+      }),
+    )
+
+    expect(checks).toEqual([
+      { callerID: "user-1", kind: "battle", scopeID: "turn-signed", decision: "select:b", evidence, proof: "good" },
+      { callerID: "user-1", kind: "battle", scopeID: "turn-forged", decision: "tie", evidence, proof: "bad" },
+    ])
+    const stored = await mongo.db
+      .collection<{ _id: string; scopeID: string; voteProof?: string }>("arenaAssignmentSets")
+      .find({})
+      .toArray()
+    const proofs = Object.fromEntries(stored.map((set) => [set.scopeID, set.voteProof ?? "none"]))
+    expect(proofs).toEqual({
+      "turn-signed": "verified",
+      "turn-forged": "invalid",
+      "turn-unsigned": "absent",
+      "turn-unframed": "none",
     })
   })
 

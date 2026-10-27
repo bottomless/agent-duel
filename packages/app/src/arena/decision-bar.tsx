@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Text, View, type LayoutChangeEvent } from "react-native";
+import { Text, View, type LayoutChangeEvent, type GestureResponderEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet } from "react-native-unistyles";
-import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { ArenaCastVote, ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { ArenaTransitionStatus } from "./transition-status";
 import { arenaSetupStatus } from "./transition-progress";
@@ -15,6 +15,8 @@ import {
   type ArenaDecisionPhase,
 } from "./decision-state";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
+import { voteEvidence } from "./vote-evidence";
+import { VoteFrame } from "./vote-frame";
 
 /**
  * The decision for one side: the vote, the early pick, or keeping that side after a stop.
@@ -38,7 +40,7 @@ export function ArenaSideChoiceButton({
   label?: string;
   loading?: boolean;
   disabled?: boolean;
-  onPress: () => void;
+  onPress: (event: GestureResponderEvent) => void;
   testID: string;
 }) {
   const sideLabel = side.toUpperCase();
@@ -96,7 +98,7 @@ export function ArenaRunningPillButton({
   label: string;
   loading?: boolean;
   disabled?: boolean;
-  onPress: () => void;
+  onPress: (event: GestureResponderEvent) => void;
   testID: string;
   accessibilityLabel?: string;
 }) {
@@ -132,28 +134,45 @@ export function ArenaRunningPillButton({
 export function VoteDecision({
   actions,
   disabled,
+  voteFrame,
 }: {
   actions: ArenaBattleActions;
   disabled?: boolean;
+  voteFrame: string | null;
 }) {
   const { pending, pendingAction } = actions;
-  const tie = useCallback(() => {
-    void actions.tie();
-  }, [actions]);
+  const tie = useCallback(
+    (cast: ArenaCastVote) => {
+      void actions.tie(cast);
+    },
+    [actions],
+  );
+  const handleTie = useCallback(
+    async (event: GestureResponderEvent) => tie({ evidence: await voteEvidence(event) }),
+    [tie],
+  );
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      style={styles.pillChoice}
-      loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
+    <VoteFrame
+      frameUrl={voteFrame}
+      choice="tie"
+      label="Tie battle"
       disabled={pending || disabled}
-      onPress={tie}
-      accessibilityLabel="Tie battle"
-      accessibilityHint="A tie keeps Agent A's work."
-      testID="arena-choose-tie"
+      onVote={tie}
     >
-      Tie
-    </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        style={styles.pillChoice}
+        loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
+        disabled={pending || disabled}
+        onPress={handleTie}
+        accessibilityLabel="Tie battle"
+        accessibilityHint="A tie keeps Agent A's work."
+        testID="arena-choose-tie"
+      >
+        Tie
+      </Button>
+    </VoteFrame>
   );
 }
 

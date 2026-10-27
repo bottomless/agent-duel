@@ -114,11 +114,19 @@ export const ReviewEventsResult = Schema.Struct({
 export const VotePayload = Schema.Struct({
   vote: Schema.Literals(["a", "b", "tie"]),
   participantID: Schema.optional(Schema.String),
+  /** The app's input evidence. The reveal classifies it; absent when an API caller votes. */
+  voteEvidence: Schema.optional(Schema.Unknown),
+  /** The vote frame's signature, which the control plane checks at the reveal. */
+  voteProof: Schema.optional(Schema.Unknown),
 })
 export const SingleAgentVotePayload = Schema.Struct({
   ratingID: Schema.String,
   vote: Schema.Literals(["up", "down"]),
   participantID: Schema.optional(Schema.String),
+  /** The app's input evidence. The reveal classifies it; absent when an API caller votes. */
+  voteEvidence: Schema.optional(Schema.Unknown),
+  /** The vote frame's signature, which the control plane checks at the reveal. */
+  voteProof: Schema.optional(Schema.Unknown),
 })
 export const RetryResolutionPayload = Schema.Struct({
   /**

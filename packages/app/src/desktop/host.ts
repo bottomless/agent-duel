@@ -2,6 +2,7 @@ import { Platform } from "react-native";
 import { getElectronHost } from "@/desktop/electron/host";
 import type { BrowserKeyboardPolicy } from "@/desktop/browser/shortcuts";
 import type { SessionInboundMessage, SessionOutboundMessage } from "@getpaseo/protocol/messages";
+import type { ArenaOsActivation, ArenaVoteInput } from "@getpaseo/protocol/arena/rpc-schemas";
 
 type BrowserAutomationExecuteRequest = Extract<
   SessionOutboundMessage,
@@ -178,6 +179,9 @@ export interface DesktopHostBridge {
   notification?: DesktopNotificationBridge;
   accounts?: DesktopAccountsBridge;
   byok?: DesktopByokBridge;
+  voteInput?: {
+    observe(input: ArenaVoteInput): Promise<ArenaOsActivation>;
+  };
   opener?: DesktopOpenerBridge;
   editor?: DesktopEditorBridge;
   webUtils?: DesktopWebUtilsBridge;

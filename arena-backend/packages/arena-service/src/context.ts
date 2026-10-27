@@ -1,6 +1,7 @@
 import type { ArenaDb } from "./collection"
 import type { MetadataRateLimit } from "./metadata"
 import type { ModelPool } from "./pool"
+import type { VerifyVoteProof } from "./vote-evidence"
 
 /** The only facts the battle routes read about whoever is calling. */
 export type Caller = {
@@ -25,6 +26,7 @@ export type ArenaContext = {
   readonly metadataRateLimit?: MetadataRateLimit
   /** Heartbeats and replayable responses on contestant streams (`stream-recovery.ts`). */
   readonly streamRecovery: boolean
+  readonly verifyVoteProof?: VerifyVoteProof
 }
 
 type Failure = (message: string, status: number) => Response

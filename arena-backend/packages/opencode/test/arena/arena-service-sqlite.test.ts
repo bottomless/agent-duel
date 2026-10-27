@@ -265,4 +265,25 @@ describe("Arena service on the desktop SQLite local store", () => {
       reasoning: { effort: "xhigh" },
     })
   })
+
+  test("keeps a vote's evidence and classified source in the local store", async () => {
+    await using arena = await localService({ ids: ["assignment-a"], random: [0] })
+    await arena.assignments({ action: "create", kind: "single", scopeID: "rating-evidence" })
+    const voteEvidence = {
+      activation: "trusted",
+      input: "keyboard",
+      os: { status: "matched", elapsedMs: 8, distance: null, event: { platform: "darwin", sourceProcess: "none" } },
+    }
+
+    const resolved = await arena.assignments({
+      action: "resolve",
+      kind: "single",
+      scopeID: "rating-evidence",
+      decision: "rate:up",
+      voteEvidence,
+    })
+    expect(await resolved.json()).toMatchObject({ decision: "rate:up", voteSource: "native" })
+    const stored = await arena.db.collection("arenaAssignmentSets").findOne({ scopeID: "rating-evidence" })
+    expect(stored).toMatchObject({ voteSource: "native", voteSourceRules: 1, voteEvidence })
+  })
 })

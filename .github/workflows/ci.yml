@@ -14,6 +14,26 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  windows-vote-input:
+    name: Windows vote input
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+          cache: npm
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+      - name: Build server stack
+        run: npm run build:server
+      - name: Build desktop and native input monitor
+        run: npm run build:main --workspace=@getpaseo/desktop
+      - name: Test desktop provenance boundary
+        run: npm run test:e2e:vote-input --workspace=@getpaseo/desktop
+      - name: Attempt injected input and message spoofing
+        run: node packages/desktop/e2e/vote-input-windows.electron.mjs
   checks:
     name: checks
     runs-on: ubuntu-latest

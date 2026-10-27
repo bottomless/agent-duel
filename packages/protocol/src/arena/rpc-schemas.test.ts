@@ -3,6 +3,8 @@ import {
   ArenaRunQuestionRejectRequestSchema,
   ArenaRunQuestionReplyRequestSchema,
   ArenaSingleAgentVoteRequestSchema,
+  ArenaVoteEvidenceSchema,
+  ArenaVoteInputSchema,
   ArenaSnapshotSchema,
   ArenaTurnReplyRequestSchema,
   ArenaTurnRetryResolutionRequestSchema,
@@ -30,6 +32,7 @@ function snapshot() {
       state: "running",
       comparisonState: "pending",
       canVote: false,
+      canResumeBattle: false,
       canTie: false,
       canDiscardBattle: false,
       canRetryResolution: false,
@@ -210,6 +213,74 @@ describe("Arena RPC schemas", () => {
     expect("participantID" in start).toBe(false);
     expect("participantID" in vote).toBe(false);
     expect("participantID" in singleAgentVote).toBe(false);
+  });
+
+  it("carries raw vote evidence on both vote endpoints and leaves direct requests without it", () => {
+    const voteEvidence = {
+      activation: "trusted",
+      input: "pointer",
+      os: {
+        status: "matched",
+        elapsedMs: 14,
+        distance: 0,
+        event: { platform: "win32", origin: "hardware", device: "mouse" },
+      },
+    } as const;
+    const vote = ArenaTurnVoteRequestSchema.parse({
+      type: "arena.turn.vote.request",
+      requestId: "request-1",
+      agentId: "agent-1",
+      turnId: "turn-1",
+      vote: "a",
+      voteEvidence,
+    });
+    const singleAgentVote = ArenaSingleAgentVoteRequestSchema.parse({
+      type: "arena.single_agent.vote.request",
+      requestId: "request-2",
+      agentId: "agent-1",
+      ratingId: "rating-1",
+      vote: "up",
+    });
+
+    expect(vote.voteEvidence).toEqual(voteEvidence);
+    expect("voteEvidence" in singleAgentVote).toBe(false);
+  });
+
+  it("rejects a verdict in place of evidence", () => {
+    expect(ArenaVoteEvidenceSchema.safeParse({ activation: "native" }).success).toBe(false);
+    expect(
+      ArenaVoteEvidenceSchema.safeParse({
+        activation: "trusted",
+        input: "pointer",
+        os: { status: "matched", elapsedMs: 3, distance: 0, event: { platform: "linux" } },
+      }).success,
+    ).toBe(false);
+    expect(() =>
+      ArenaTurnVoteRequestSchema.parse({
+        type: "arena.turn.vote.request",
+        requestId: "request-1",
+        agentId: "agent-1",
+        turnId: "turn-1",
+        vote: "a",
+        voteEvidence: "native",
+      }),
+    ).toThrow();
+  });
+
+  it("accepts canonical pointer and keyboard vote inputs", () => {
+    expect(ArenaVoteInputSchema.parse({ kind: "pointer", screenX: 12.5, screenY: 48 })).toEqual({
+      kind: "pointer",
+      screenX: 12.5,
+      screenY: 48,
+    });
+    expect(ArenaVoteInputSchema.parse({ kind: "keyboard", key: "Enter" })).toEqual({
+      kind: "keyboard",
+      key: "Enter",
+    });
+    expect(
+      ArenaVoteInputSchema.safeParse({ kind: "pointer", screenX: Number.NaN, screenY: 48 }).success,
+    ).toBe(false);
+    expect(ArenaVoteInputSchema.safeParse({ kind: "keyboard", key: "Tab" }).success).toBe(false);
   });
 
   it("keeps the single-agent identity hidden until a thumbs vote is present", () => {

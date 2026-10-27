@@ -3,6 +3,50 @@ import { z } from "zod";
 export const ArenaSideSchema = z.enum(["a", "b"]);
 export const ArenaReplyTargetSchema = z.enum(["a", "b", "both"]);
 export const ArenaVoteSchema = z.enum(["a", "b", "tie"]);
+export const ArenaVoteInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("pointer"),
+    screenX: z.number().finite(),
+    screenY: z.number().finite(),
+  }),
+  z.object({ kind: z.literal("keyboard"), key: z.enum(["Enter", " ", "Spacebar"]) }),
+]);
+// Mirrors arena-service's `VoteEvidenceSchema`, which classifies the evidence at the reveal.
+export const ArenaOsActivationSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("no-monitor") }),
+  z.object({ status: z.literal("unavailable") }),
+  z.object({ status: z.literal("unmatched") }),
+  z.object({
+    status: z.literal("matched"),
+    elapsedMs: z.number().int().nonnegative(),
+    distance: z.number().nonnegative().nullable(),
+    event: z.discriminatedUnion("platform", [
+      z.object({
+        platform: z.literal("darwin"),
+        sourceProcess: z.enum(["none", "present", "unavailable"]),
+      }),
+      z.object({
+        platform: z.literal("win32"),
+        origin: z.enum(["hardware", "injected", "system", "unavailable"]),
+        device: z.enum(["mouse", "touchpad", "touch", "pen", "keyboard", "other", "unavailable"]),
+      }),
+    ]),
+  }),
+]);
+export const ArenaVoteEvidenceSchema = z.discriminatedUnion("activation", [
+  z.object({ activation: z.literal("unrecognized") }),
+  z.object({ activation: z.literal("script") }),
+  z.object({
+    activation: z.literal("trusted"),
+    input: z.enum(["pointer", "keyboard"]),
+    os: ArenaOsActivationSchema,
+  }),
+]);
+/** A cloud vote frame's signature over its ticket, the choice and the evidence. */
+export const ArenaVoteProofSchema = z.object({
+  ticket: z.string().min(1).max(256),
+  signature: z.string().min(1).max(256),
+});
 export const ArenaBattleStateSchema = z.enum([
   "creating",
   "worktrees_ready",
@@ -620,6 +664,8 @@ export const ArenaSingleAgentVoteRequestSchema = z.object({
   ...ArenaAgentRequestFields,
   ratingId: z.string().optional(),
   vote: z.enum(["up", "down"]),
+  voteEvidence: ArenaVoteEvidenceSchema.optional(),
+  voteProof: ArenaVoteProofSchema.optional(),
 });
 export const ArenaSingleAgentVoteResponseSchema = z.object({
   type: z.literal("arena.single_agent.vote.response"),
@@ -651,6 +697,23 @@ export const ArenaByokStatusGetResponseSchema = z.object({
   payload: z.object({
     requestId: z.string(),
     ...ArenaByokStatusSchema.shape,
+  }),
+});
+/**
+ * The vote frame the control plane serves for one battle turn or single-agent rating. A daemon
+ * without a control plane, or one that could not reach it, answers null and the app votes without it.
+ */
+export const ArenaVoteFrameGetTicketRequestSchema = z.object({
+  type: z.literal("arena.vote_frame.get_ticket.request"),
+  requestId: z.string(),
+  kind: z.enum(["battle", "single"]),
+  scopeId: z.string().min(1),
+});
+export const ArenaVoteFrameGetTicketResponseSchema = z.object({
+  type: z.literal("arena.vote_frame.get_ticket.response"),
+  payload: z.object({
+    requestId: z.string(),
+    frameUrl: z.string().url().nullable(),
   }),
 });
 export const ArenaByokKeySetResultSchema = z.object({ configured: z.boolean() });
@@ -829,6 +892,8 @@ export const ArenaTurnVoteRequestSchema = z.object({
   ...ArenaAgentRequestFields,
   turnId: z.string(),
   vote: ArenaVoteSchema,
+  voteEvidence: ArenaVoteEvidenceSchema.optional(),
+  voteProof: ArenaVoteProofSchema.optional(),
 });
 export const ArenaTurnVoteResponseSchema = z.object({
   type: z.literal("arena.turn.vote.response"),
@@ -1009,5 +1074,14 @@ export type ArenaFileContent = z.infer<typeof ArenaFileContentSchema>;
 export type ArenaSide = z.infer<typeof ArenaSideSchema>;
 export type ArenaReplyTarget = z.infer<typeof ArenaReplyTargetSchema>;
 export type ArenaVote = z.infer<typeof ArenaVoteSchema>;
+export type ArenaVoteInput = z.infer<typeof ArenaVoteInputSchema>;
+export type ArenaOsActivation = z.infer<typeof ArenaOsActivationSchema>;
+export type ArenaVoteEvidence = z.infer<typeof ArenaVoteEvidenceSchema>;
+export type ArenaVoteProof = z.infer<typeof ArenaVoteProofSchema>;
+/** What the app sends with a vote: its input evidence and, when a vote frame took the click, its signature. */
+export interface ArenaCastVote {
+  readonly evidence: ArenaVoteEvidence;
+  readonly proof?: ArenaVoteProof;
+}
 export type ArenaSingleAgentVote = "up" | "down";
 export type ArenaPermissionReply = z.infer<typeof ArenaPermissionReplySchema>;

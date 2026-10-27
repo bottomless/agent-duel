@@ -13,6 +13,7 @@ import type {
   ArenaReplyTarget,
   ArenaSnapshot,
   ArenaVote,
+  ArenaCastVote,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import { useArenaStream } from "./use-arena-stream";
 import { arenaSubscription } from "./stream-subscription";
@@ -195,7 +196,12 @@ export function useArenaStartMutation(serverId: string, agentId: string) {
 }
 
 export type ArenaTurnAction =
-  | { kind: "single_agent_vote"; ratingId: string; vote: "up" | "down" }
+  | {
+      kind: "single_agent_vote";
+      ratingId: string;
+      vote: "up" | "down";
+      cast: ArenaCastVote;
+    }
   | {
       kind: "reply";
       turnId: string;
@@ -207,7 +213,12 @@ export type ArenaTurnAction =
   | { kind: "discard_steer"; runId: string; messageIds: string[] }
   | { kind: "retry_run"; runId: string }
   | { kind: "resume_battle"; turnId: string }
-  | { kind: "vote"; turnId: string; vote: ArenaVote }
+  | {
+      kind: "vote";
+      turnId: string;
+      vote: ArenaVote;
+      cast: ArenaCastVote;
+    }
   | { kind: "stop"; turnId: string }
   | {
       kind: "resolve_stop";
@@ -281,7 +292,7 @@ export function useArenaTurnMutation(serverId: string, agentId: string) {
 async function runArenaTurnAction(client: DaemonClient, agentId: string, action: ArenaTurnAction) {
   switch (action.kind) {
     case "single_agent_vote":
-      return client.arenaSingleAgentVote(agentId, action.ratingId, action.vote);
+      return client.arenaSingleAgentVote(agentId, action.ratingId, action.vote, action.cast);
     case "reply":
       return client.arenaReply(
         agentId,
@@ -299,7 +310,7 @@ async function runArenaTurnAction(client: DaemonClient, agentId: string, action:
     case "resume_battle":
       return client.arenaResumeBattle(agentId, action.turnId);
     case "vote":
-      return client.arenaVote(agentId, action.turnId, action.vote);
+      return client.arenaVote(agentId, action.turnId, action.vote, action.cast);
     case "stop":
       return client.arenaStop(agentId, action.turnId);
     case "resolve_stop":
