@@ -39,8 +39,10 @@ Research validation and chunk conversion run after commit, so conversion failure
 canonical record and retain the failed mutation separately. Pending revisions survive restarts and
 account changes. Temporary upload failures retry with jittered exponential backoff capped at one
 minute. HTTP 400, 413 and 422 batches are split to isolate refused records; retain those records and
-any manifests depending on refused chunks separately, allowing other uploads to continue. Explicit
-recovery can requeue retained records after the cause is repaired. The queue is partitioned by the verified account and
+any manifests depending on refused chunks separately, allowing other uploads to continue. The
+uploader retries retained records hourly, including when no new local writes arrive. The recovery
+deadline survives restarts; still-invalid records return to quarantine for another hour. New writes
+do not wait for that deadline. The queue is partitioned by the verified account and
 hosted destination; a different account cannot upload its predecessor's pending records. BYOK
 creates no research queue or uploader.
 
@@ -60,7 +62,7 @@ per-call full request, response and tool-output artifacts stay local. Upload req
 by a checksum manifest in the original collection. Research readers resolve that manifest with
 `resolveResearchDocument` from arena-service, looking up chunks under the same account and source.
 Deploy the control plane's updated arena-service dependency before shipping this desktop protocol;
-an older server refuses chunks, and the desktop retains them for explicit recovery after the server upgrade.
+an older server refuses chunks, and the desktop retains them for automatic recovery after the server upgrade.
 
 `archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
 the previous cloud archive until its replacement arrives. Transcript and image archives are kept

@@ -6,6 +6,7 @@ const receiptSchema = z.object({ received: z.number().int().nonnegative(), store
 const FLUSH_INTERVAL_MS = 1000
 const UPLOAD_TIMEOUT_MS = 60_000
 const MAX_RETRY_MS = 60_000
+const REJECTED_RETRY_MS = 60 * 60_000
 
 export interface ResearchUploadWarning {
   reason: "upload_failed" | "upload_rejected"
@@ -24,6 +25,7 @@ export interface ResearchUploadOptions {
   timeoutMs?: number
   retryBaseMs?: number
   maxRetryMs?: number
+  rejectedRetryMs?: number
   now?: () => number
   random?: () => number
   fetch?: (url: string, init: RequestInit) => Promise<Response>
@@ -31,6 +33,7 @@ export interface ResearchUploadOptions {
 
 export class ResearchUploader {
   private timer: ReturnType<typeof setTimeout> | undefined
+  private timerAt = Infinity
   private inFlight: Promise<void> | undefined
   private controller: AbortController | undefined
   private closed = false
@@ -45,19 +48,26 @@ export class ResearchUploader {
 
   /** New writes only wake the uploader. They are already durable in the local write transaction. */
   wake() {
-    if (this.closed || this.inFlight || this.timer || !this.options.queue.count) return
+    if (this.closed || this.inFlight) return
+    const now = this.now()
+    const recovery = this.options.queue.recoveryAt(now, this.options.rejectedRetryMs ?? REJECTED_RETRY_MS)
+    const workAt = Math.min(this.options.queue.count ? now : Infinity, recovery ?? Infinity)
+    if (workAt === Infinity) return
     const retry = this.options.queue.retry()
-    const delay = Math.max(this.options.intervalMs ?? FLUSH_INTERVAL_MS, retry.nextAttempt - this.now())
+    const at = Math.max(now + (this.options.intervalMs ?? FLUSH_INTERVAL_MS), retry.nextAttempt, workAt)
+    if (this.timer && this.timerAt <= at) return
+    if (this.timer) clearTimeout(this.timer)
+    this.timerAt = at
     this.timer = setTimeout(() => {
       this.timer = undefined
       void this.flush()
-    }, delay)
+    }, at - now)
     this.timer.unref()
   }
 
   flush(): Promise<void> {
     if (this.inFlight) return this.inFlight
-    if (this.closed || !this.options.queue.count) return Promise.resolve()
+    if (this.closed) return Promise.resolve()
     if (this.options.queue.retry().nextAttempt > this.now()) {
       this.wake()
       return Promise.resolve()
@@ -68,6 +78,9 @@ export class ResearchUploader {
     let bytes = Buffer.byteLength(this.prefix) + 2
     let pending: QueuedResearchRecord[]
     try {
+      const now = this.now()
+      const recovery = this.options.queue.recoveryAt(now, this.options.rejectedRetryMs ?? REJECTED_RETRY_MS)
+      if (recovery !== undefined && recovery <= now) this.options.queue.retryRejected()
       pending = this.options.queue.peek(MAX_RESEARCH_BATCH_RECORDS, MAX_RESEARCH_BATCH_BYTES - bytes)
     } catch {
       this.defer(0, 0)
@@ -126,7 +139,7 @@ export class ResearchUploader {
               records: 1,
               bytes: Buffer.byteLength(payload),
               status,
-              retryAt: 0,
+              retryAt: this.options.queue.recoveryAt(this.now(), this.options.rejectedRetryMs ?? REJECTED_RETRY_MS)!,
             })
             return
           }

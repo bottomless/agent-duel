@@ -56,6 +56,9 @@ function fixture(options: Partial<ResearchUploadOptions> = {}) {
     advance() {
       now = queue.retry().nextAttempt
     },
+    setTime(value: number) {
+      now = value
+    },
     async [Symbol.asyncDispose]() {
       await uploader.close()
       database.close()
@@ -64,6 +67,112 @@ function fixture(options: Partial<ResearchUploadOptions> = {}) {
 }
 
 describe("durable research uploads", () => {
+  test("automatically uploads parked records after cloud repair without another local write", async () => {
+    const recovered = Promise.withResolvers<void>()
+    let attempts = 0
+    await using f = fixture({
+      intervalMs: 1,
+      rejectedRetryMs: 10,
+      now: Date.now,
+      fetch: async (_url, init) => {
+        attempts++
+        if (attempts === 1) return new Response(null, { status: 400 })
+        const batch = requestBatch(init)
+        expect(batch.records.map((record) => record.id)).toEqual(["run-a"])
+        recovered.resolve()
+        return Response.json({ received: 1, stored: 1 })
+      },
+    })
+    f.queue.enqueue(mutation(1))
+    await f.uploader.flush()
+    expect(f.queue.rejected().map((record) => record.id)).toEqual(["run-a"])
+    await recovered.promise
+    await f.uploader.flush()
+    expect(f.queue.count).toBe(0)
+    expect(f.queue.rejected()).toEqual([])
+    expect(attempts).toBe(2)
+  })
+
+  test("new writes wake promptly while rejected records wait for recovery", async () => {
+    const uploaded = Promise.withResolvers<void>()
+    await using f = fixture({
+      intervalMs: 1,
+      now: Date.now,
+      fetch: async (_url, init) => {
+        const batch = requestBatch(init)
+        if (batch.records.some((record) => record.id === "bad")) return new Response(null, { status: 400 })
+        expect(batch.records.map((record) => record.id)).toEqual(["good"])
+        uploaded.resolve()
+        return Response.json({ received: 1, stored: 1 })
+      },
+    })
+    f.queue.enqueue(mutation(1, "bad"))
+    await f.uploader.flush()
+    f.queue.enqueue(mutation(2, "good"))
+    f.uploader.wake()
+    await uploaded.promise
+    await f.uploader.flush()
+    expect(f.queue.rejected().map((record) => record.id)).toEqual(["bad"])
+    expect(f.queue.count).toBe(0)
+  })
+
+  test("restarts preserve rejected retry cooldowns and permanent rejection cannot block new writes", async () => {
+    await using dir = await tmpdir()
+    const file = path.join(dir.path, "queue.sqlite")
+    const sourceID = randomUUID()
+    const accepted: string[] = []
+    let now = 1000
+    let rejectedAttempts = 0
+    const options = {
+      url: "https://control.test",
+      token: "test",
+      sourceID,
+      intervalMs: 60_000,
+      now: () => now,
+      warn: () => {},
+      fetch: async (_url: string, init: RequestInit) => {
+        const batch = requestBatch(init)
+        if (batch.records.some((record) => record.id === "bad")) {
+          rejectedAttempts++
+          return new Response(null, { status: 400 })
+        }
+        accepted.push(...batch.records.map((record) => record.id))
+        return Response.json({ received: batch.records.length, stored: batch.records.length })
+      },
+    }
+    const first = new Database(file)
+    const initialQueue = new ResearchQueue(first, "account-a")
+    const initial = new ResearchUploader({ ...options, queue: initialQueue })
+    initialQueue.enqueue(mutation(1, "bad"))
+    await initial.flush()
+    await initial.close()
+    first.close()
+
+    const second = new Database(file)
+    const queue = new ResearchQueue(second, "account-a")
+    const uploader = new ResearchUploader({ ...options, queue })
+    try {
+      now += 60 * 60_000 - 1
+      await uploader.flush()
+      expect(rejectedAttempts).toBe(1)
+      const other = new ResearchQueue(second, "account-b")
+      expect(other.recoveryAt(now, 1)).toBeUndefined()
+      now++
+      await uploader.flush()
+      expect(rejectedAttempts).toBe(2)
+      await uploader.flush()
+      expect(rejectedAttempts).toBe(2)
+      queue.enqueue(mutation(2, "good"))
+      await uploader.flush()
+      expect(accepted).toEqual(["good"])
+      expect(rejectedAttempts).toBe(2)
+      expect(queue.recoveryAt(now, 1)).toBe(now + 60 * 60_000)
+    } finally {
+      await uploader.close()
+      second.close()
+    }
+  })
+
   test("keeps failed records and retries with exponential capped backoff until acknowledged", async () => {
     let attempt = 0
     await using f = fixture({
@@ -160,6 +269,48 @@ describe("durable research uploads", () => {
     while (f.queue.count) await f.uploader.flush()
     expect(uploaded.map((record) => record.id)).toEqual(["good"])
     expect(f.queue.rejected().find((record) => record.id === "large")?.reason).toBe("rejected_chunk")
+  })
+
+  test("new archives sharing refused chunks stay parked instead of bypassing the retry cooldown", async () => {
+    let attempts = 0
+    let repaired = false
+    const uploaded: ResearchRecord[] = []
+    await using f = fixture({
+      fetch: async (_url, init) => {
+        attempts++
+        const batch = requestBatch(init)
+        if (!repaired && batch.records.some((record) => record.collection === "chunks"))
+          return new Response(null, { status: 400 })
+        uploaded.push(...batch.records)
+        return Response.json({ received: batch.records.length, stored: batch.records.length })
+      },
+    })
+    const document = { text: "x".repeat(3 * 1024 * 1024) }
+    f.queue.enqueue({ collection: "runs", id: "first", revision: 1, document })
+    while (f.queue.count) await f.uploader.flush()
+    const before = attempts
+    f.queue.enqueue({ collection: "runs", id: "second", revision: 1, document })
+    while (f.queue.count) await f.uploader.flush()
+    expect(attempts).toBe(before)
+    expect(uploaded).toEqual([])
+    expect(
+      f.queue
+        .rejected()
+        .filter((record) => record.reason === "rejected_chunk")
+        .map((record) => record.id),
+    ).toEqual(["first", "second"])
+    repaired = true
+    f.setTime(1000 + 60 * 60_000)
+    while (f.queue.rejected().length || f.queue.count) await f.uploader.flush()
+    const chunks = new Map(
+      uploaded.filter((record) => record.collection === "chunks").map((record) => [record.id, record.document]),
+    )
+    expect(uploaded.filter((record) => record.collection === "runs").map((record) => record.id)).toEqual([
+      "first",
+      "second",
+    ])
+    for (const record of uploaded.filter((record) => record.collection === "runs"))
+      expect(await resolveResearchDocument(record.document, async (id) => chunks.get(id) ?? null)).toEqual(document)
   })
 
   test("rejected records survive reopening and can be explicitly retried after repair", async () => {

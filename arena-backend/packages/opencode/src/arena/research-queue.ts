@@ -47,10 +47,15 @@ export class ResearchQueue {
     database.run("CREATE INDEX IF NOT EXISTS arena_research_pending ON arena_research_queue(partition, sequence)")
     database.run(`CREATE TABLE IF NOT EXISTS arena_research_retry (
       partition TEXT PRIMARY KEY, failures INTEGER NOT NULL, next_attempt INTEGER NOT NULL)`)
+    database.run(`CREATE TABLE IF NOT EXISTS arena_research_recovery (
+      partition TEXT PRIMARY KEY, next_attempt INTEGER NOT NULL)`)
     database.run(`CREATE TABLE IF NOT EXISTS arena_research_rejected (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT, partition TEXT NOT NULL,
       collection TEXT NOT NULL, record_id TEXT NOT NULL, revision INTEGER NOT NULL,
       json TEXT NOT NULL, bytes INTEGER NOT NULL, reason TEXT NOT NULL)`)
+    database.run(
+      "CREATE INDEX IF NOT EXISTS arena_research_rejected_record ON arena_research_rejected(partition, collection, record_id, revision)",
+    )
     database.run(`CREATE TABLE IF NOT EXISTS arena_research_mutations (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT, partition TEXT NOT NULL,
       json TEXT NOT NULL)`)
@@ -102,9 +107,14 @@ export class ResearchQueue {
           const json = JSON.stringify(record)
           this.database
             .query(`INSERT OR IGNORE INTO arena_research_queue
-          (partition, collection, record_id, revision, json, bytes) VALUES (?, ?, ?, ?, ?, ?)`)
+          (partition, collection, record_id, revision, json, bytes)
+          SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE NOT EXISTS (
+            SELECT 1 FROM arena_research_rejected
+            WHERE partition = ?1 AND collection = ?2 AND record_id = ?3 AND revision = ?4)`)
             .run(this.partition, record.collection, record.id, record.revision, json, Buffer.byteLength(json))
         }
+        if (records.some((record) => record.document && "$researchChunks" in record.document))
+          this.quarantineDependentManifests()
         this.database
           .query("DELETE FROM arena_research_mutations WHERE partition = ? AND sequence = ?")
           .run(this.partition, item.sequence)
@@ -179,24 +189,28 @@ export class ResearchQueue {
           .run(reason, this.partition, record.sequence)
       }
       this.acknowledge(records)
-      // Publishing a manifest whose chunk was refused would replace a readable cloud archive
-      // with an unrecoverable one. Retain those manifests alongside the refused chunks.
-      this.database
-        .query(`INSERT INTO arena_research_rejected
+      this.quarantineDependentManifests()
+    })()
+  }
+
+  private quarantineDependentManifests() {
+    // Check both on rejection and when preparing later mutations: new archives can
+    // share chunks that are already parked. They must wait for the same recovery pass.
+    this.database
+      .query(`INSERT INTO arena_research_rejected
         (partition, collection, record_id, revision, json, bytes, reason)
         SELECT q.partition, q.collection, q.record_id, q.revision, q.json, q.bytes, 'rejected_chunk'
         FROM arena_research_queue q WHERE q.partition = ? AND EXISTS (
           SELECT 1 FROM json_each(q.json, '$.document.$researchChunks.ids') ids
           JOIN arena_research_rejected r ON r.record_id = ids.value
           WHERE r.partition = q.partition AND r.collection = 'chunks')`)
-        .run(this.partition)
-      this.database
-        .query(`DELETE FROM arena_research_queue WHERE partition = ? AND EXISTS (
+      .run(this.partition)
+    this.database
+      .query(`DELETE FROM arena_research_queue WHERE partition = ? AND EXISTS (
         SELECT 1 FROM arena_research_rejected r WHERE r.partition = arena_research_queue.partition
         AND r.collection = arena_research_queue.collection AND r.record_id = arena_research_queue.record_id
         AND r.revision = arena_research_queue.revision)`)
-        .run(this.partition)
-    })()
+      .run(this.partition)
   }
 
   rejected(): RejectedResearchRecord[] {
@@ -205,6 +219,20 @@ export class ResearchQueue {
         "SELECT sequence, record_id AS id, json, reason FROM arena_research_rejected WHERE partition = ? ORDER BY sequence",
       )
       .all(this.partition)
+  }
+
+  recoveryAt(now: number, interval: number): number | undefined {
+    if (!this.database.query("SELECT 1 FROM arena_research_rejected WHERE partition = ? LIMIT 1").get(this.partition))
+      return undefined
+    // Persist the deadline so restarts and new rejected writes cannot reset the cooldown.
+    this.database
+      .query("INSERT OR IGNORE INTO arena_research_recovery (partition, next_attempt) VALUES (?, ?)")
+      .run(this.partition, now + interval)
+    return this.database
+      .query<{ nextAttempt: number }, [string]>(
+        "SELECT next_attempt AS nextAttempt FROM arena_research_recovery WHERE partition = ?",
+      )
+      .get(this.partition)!.nextAttempt
   }
 
   retryRejected() {
@@ -222,6 +250,7 @@ export class ResearchQueue {
         ORDER BY sequence`)
         .run(this.partition)
       this.database.query("DELETE FROM arena_research_rejected WHERE partition = ?").run(this.partition)
+      this.database.query("DELETE FROM arena_research_recovery WHERE partition = ?").run(this.partition)
     })()
   }
 
