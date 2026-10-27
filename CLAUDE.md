@@ -2,8 +2,8 @@
 
 This repository is Agent Duel, a fork of Paseo built
 around blinded coding-agent battles. Preserve Paseo's local daemon and client
-architecture. Treat Electron as the product and the browser build as a local
-development and QA harness only. An unspecified request to run or test the app
+architecture. Treat Electron as the product. See [deployment](docs/deployment.md) for the
+public website and browser remote connection boundary. An unspecified request to run or test the app
 means the Agent Duel desktop stack, not the upstream Paseo daemon by itself.
 
 A battle runs two blinded contestants against one prompt in isolated worktrees, and the winner you
@@ -144,9 +144,7 @@ See [docs/development.md](docs/development.md) for full setup, build sync requir
 
 ## Platform gating
 
-The product target is Electron desktop, with macOS as the first release. The Expo
-browser build remains a development and QA harness; it is not deployed as a
-product. Native adapters are still in the codebase but nothing ships them: do
+The product target is Electron desktop, with macOS as the first release. See [deployment](docs/deployment.md) for the browser build boundary. Native adapters are still in the codebase but nothing ships them: do
 not add native branches, and do not write `.native.ts` files. Import the gates
 from `@/constants/platform`.
 
