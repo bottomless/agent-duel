@@ -374,3 +374,53 @@ export function canDiscardBattle(
     Side.every((side) => runs.some((run) => run.side === side && run.selectable !== true))
   )
 }
+
+/**
+ * May the voter choose this side of a finished battle?
+ *
+ * Only a result that can be chosen, so a battle whose runs both failed is never voted on: Discard
+ * and Retry are its only choices. A tie follows `canTie`, and a battle the engine's restart cut
+ * off resumes before anything is chosen. The service refuses what this refuses, and the app shows
+ * Choose from it.
+ */
+export function canVote(
+  turn: { readonly state: BattleState; readonly resolution?: unknown },
+  runs: ReadonlyArray<DecidedRun>,
+  vote: Vote,
+): boolean {
+  if (vote === "tie") return canTie(turn, runs)
+  return (
+    turn.state === "awaiting_vote" &&
+    turn.resolution === undefined &&
+    !canResumeBattle(turn, runs) &&
+    runs.some((run) => run.side === vote && run.selectable === true)
+  )
+}
+
+export const VoteDiscardedReason = ["contestant_failed"] as const
+export type VoteDiscardedReason = (typeof VoteDiscardedReason)[number]
+
+/**
+ * Why this resolution's vote does not count, if it does not.
+ *
+ * A vote between a result and a failure says nothing about which model is better, so it still
+ * applies the chosen side but is recorded as discarded. Analysis and the leaderboard drop it, and
+ * the voter is told before choosing. A failed side is one that settled without a result that can
+ * be chosen. An early pick needs the other side still working, so it never meets a failure.
+ *
+ * A side kept after Stop is marked the same way when the other side had already failed: metrics
+ * would otherwise file it as a win. A run the stop cut off ends as stopped, so a failure there is
+ * a run that ended in error before the stop.
+ */
+export function voteDiscardedReason(
+  resolution: Resolution | undefined,
+  runs: ReadonlyArray<DecidedRun>,
+): VoteDiscardedReason | undefined {
+  if (resolution?.kind === "stopped" && resolution.appliedSide) {
+    const failed = runs.some((run) => run.finalizedAt !== undefined && run.runState === "error")
+    return failed ? "contestant_failed" : undefined
+  }
+  if (resolution?.kind !== "vote") return undefined
+  const failed = runs.some((run) => run.finalizedAt !== undefined && run.selectable !== true)
+  return failed ? "contestant_failed" : undefined
+}

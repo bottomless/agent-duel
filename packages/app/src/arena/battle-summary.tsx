@@ -204,17 +204,20 @@ function RevealedIdentity({
   side,
   model,
   winner,
+  counted,
 }: {
   side: "a" | "b";
   model: string | undefined;
   winner: boolean;
+  /** False when a side failed: the chosen side applied, but nobody won the vote. */
+  counted: boolean;
 }) {
   return (
     <View style={styles.identity}>
       <Text style={styles.identities}>{side.toUpperCase()}:</Text>
       <ArenaModelVendorIcon model={model} size={ICON_SIZE.xs} tone="muted" />
       <Text style={styles.identities}>{arenaModelDisplayName(model)}</Text>
-      {winner ? <Text style={styles.identities}>(winner)</Text> : null}
+      {winner ? <Text style={styles.identities}>{counted ? "(winner)" : "(applied)"}</Text> : null}
     </View>
   );
 }
@@ -238,7 +241,9 @@ function BattleSummaryHeader({
       style={styles.cardHeader}
       accessibilityRole="button"
       accessibilityState={accessibilityState}
-      accessibilityLabel={`${expanded ? "Collapse" : "Expand"} battle summary. ${chosenLabel(item)}`}
+      accessibilityLabel={`${expanded ? "Collapse" : "Expand"} battle summary. ${chosenLabel(item)}${
+        item.voteDiscardedReason ? ". Vote not counted because an agent failed" : ""
+      }`}
     >
       {expanded ? (
         <ThemedChevronDown size={17} uniProps={mutedColorMapping} />
@@ -248,9 +253,19 @@ function BattleSummaryHeader({
       <View style={styles.headerText}>
         {item.identities ? (
           <View style={styles.identityRow}>
-            <RevealedIdentity side="a" model={item.identities.a.name} winner={winner === "a"} />
+            <RevealedIdentity
+              side="a"
+              model={item.identities.a.name}
+              winner={winner === "a"}
+              counted={!item.voteDiscardedReason}
+            />
             <Text style={styles.identities}>·</Text>
-            <RevealedIdentity side="b" model={item.identities.b.name} winner={winner === "b"} />
+            <RevealedIdentity
+              side="b"
+              model={item.identities.b.name}
+              winner={winner === "b"}
+              counted={!item.voteDiscardedReason}
+            />
             {showOutcome ? <Text style={styles.identities}>· {chosenLabel(item)}</Text> : null}
           </View>
         ) : (
@@ -261,7 +276,8 @@ function BattleSummaryHeader({
       {gitNotice && gitNotice.tone !== "info" ? (
         <Text style={styles.conflictBadge}>{gitNotice.title}</Text>
       ) : null}
-      {item.selectedEarly ? <Text style={styles.earlyBadge}>Early decision</Text> : null}
+      {item.selectedEarly ? <Text style={styles.mutedBadge}>Early decision</Text> : null}
+      {item.voteDiscardedReason ? <Text style={styles.mutedBadge}>Vote not counted</Text> : null}
     </Pressable>
   );
 }
@@ -780,7 +796,7 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[1],
   },
-  earlyBadge: {
+  mutedBadge: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.xs,
     paddingHorizontal: theme.spacing[2],

@@ -3675,12 +3675,16 @@ describe("Arena service vertical slice", () => {
       expect(router.utilityCalls()).toBe(1)
 
       // A tie applies A whatever A is, so it would have recorded a vote between two failures.
-      const tie = await request(`/arena/turns/${turnID}/vote`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ vote: "tie" }),
-      })
-      expect(tie.ok).toBe(false)
+      // Choosing either failure would do the same, so the engine refuses every vote.
+      expect(failed.turn?.canVote).toBe(false)
+      for (const vote of ["tie", "a", "b"]) {
+        const refused = await request(`/arena/turns/${turnID}/vote`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ vote }),
+        })
+        expect(refused.ok).toBe(false)
+      }
       const kept = await request(`/arena/turns/${turnID}/stop-resolution`, {
         method: "POST",
         headers,
@@ -3778,17 +3782,30 @@ describe("Arena service vertical slice", () => {
         body: JSON.stringify({ resolution: "discard" }),
       })
       expect(discard.ok).toBe(false)
+      const failedSide = chosen!.side === "a" ? "b" : "a"
+      const forFailure = await request(`/arena/turns/${turnID}/vote`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ vote: failedSide }),
+      })
+      expect(forFailure.ok).toBe(false)
       expect(router.battleDecision(turnID)).toBeUndefined()
 
-      await json<PublicSnapshot>(
+      // The finished side still applies, but a vote against a failure is recorded as not counted.
+      const voted = await json<PublicSnapshot>(
         await request(`/arena/turns/${turnID}/vote`, {
           method: "POST",
           headers,
           body: JSON.stringify({ vote: chosen!.side }),
         }),
       )
+      expect(voted.turn?.voteDiscardedReason).toBe("contestant_failed")
       await waitForTurn(memory.store, turnID, "complete")
       expect(router.battleDecision(turnID)).toBe(`select:${chosen!.side}`)
+      const stored = await memory.store.turn(turnID)
+      expect(stored?.vote).toBe(chosen!.side)
+      expect(stored?.appliedSide).toBe(chosen!.side)
+      expect(stored?.voteDiscardedReason).toBe("contestant_failed")
     } finally {
       router.restore()
     }

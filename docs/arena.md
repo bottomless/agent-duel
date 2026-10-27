@@ -291,8 +291,10 @@ choice while the battle runs sits there too. While neither result is selectable,
 button. When one result becomes selectable, put `Choose A early` or `Choose B early` in its side
 and `Stop` in the other side, and name the side still working above the pill
 (`Agent A is still working`). `Tie` is disabled unless both results can be chosen. When neither
-can, both sides failed: `Discard` takes Tie's place, under `Both agents failed · retry or
-discard` while a side can still be retried and `Both agents failed` once neither can.
+can, both sides failed: `Discard` takes Tie's place and `Choose A` and `Choose B` leave the pill,
+under `Both agents failed · retry or discard` while a side can still be retried and `Both agents
+failed` once neither can. When one side failed, the other can still be chosen under `Agent B failed
+· choosing A won't count as a vote`, and the resolved battle's header says `Vote not counted`.
 Choosing early stops the other side, so it confirms first. Discarding a battle also requires
 confirmation. Action failures remain on the battle until another attempt; the normal
 action controls provide the retry so a destructive operation is never retried automatically.
@@ -1086,7 +1088,13 @@ Use one utility request; increase evidence quality before adding model passes.
 
 ## Resolving
 
-- **Vote** at `awaiting_vote` applies that side (`arena/service.ts:4364`).
+- **Vote** at `awaiting_vote` applies that side, and only a side whose result can be chosen
+  (`canVote` in `arena/domain.ts`), so a failure is never voted for. A vote while the other side
+  failed still applies the chosen side, but it compares a result with a failure, so it does not
+  count: the turn and its battle metrics carry `voteDiscardedReason: "contestant_failed"`, the
+  metrics row has `won` false on both sides, and the research upload carries both
+  (`voteDiscardedReason`). Analysis and the leaderboard drop any battle where a side
+  failed. The control plane's resolve route records only `select:<side>`; it takes no other field.
 - **Early vote** while still `running` claims the resolution, then cancels the loser in the
   background until it reports terminal. Ties are rejected here — a tie needs both results. The
   early choice asks before sending one, since the other side's work is gone the moment it lands.
@@ -1097,7 +1105,8 @@ Use one utility request; increase evidence quality before adding model passes.
   runs failed (`canDiscardBattle`). It is the stopped battle's discard: the control plane records
   `discard`, not a vote, and the checkout is left as it was.
 - **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
-  (`arena/service.ts:4527`).
+  (`arena/service.ts:4527`). Keeping a side when the other had already failed, not just been
+  stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.
 
 **Applying** (`arena/service.ts:4039`) records the resolution and enters `applying` in one
 compare-and-set. The response and feed reveal that durable choice before transcript retention,

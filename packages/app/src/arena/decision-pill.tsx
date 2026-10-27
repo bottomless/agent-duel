@@ -125,6 +125,10 @@ function decisionHint(phase: ArenaDecisionPhase): string | null {
   if (phase.kind === "awaiting_stop_resolution") return "Battle stopped · choose what to keep";
   if (phase.kind !== "awaiting_vote") return null;
   if (phase.canResume) return "Agent Duel closed during the battle · resume or discard";
+  if (phase.failedSide) {
+    const other = phase.failedSide === "a" ? "B" : "A";
+    return `Agent ${phase.failedSide.toUpperCase()} failed · choosing ${other} won't count as a vote`;
+  }
   if (!phase.canDiscard) return null;
   return phase.canRetry ? "Both agents failed · retry or discard" : "Both agents failed";
 }
@@ -183,14 +187,16 @@ export function ArenaDecisionPill({
             <DiscardDecision actions={actions} />
           </>
         ) : null}
+        {/* Both agents failed: nothing can be chosen, so the pill holds Discard alone and each pane
+            keeps its Retry. */}
         {phase.kind !== "running" && !interrupted ? (
           <>
-            <BattlePaneDecision side="a" phase={phase} actions={actions} />
+            {bothFailed ? null : <BattlePaneDecision side="a" phase={phase} actions={actions} />}
             {phase.kind === "awaiting_vote" && !phase.canDiscard ? (
               <VoteDecision actions={actions} disabled={!phase.canTie} />
             ) : null}
             {stopped || bothFailed ? <DiscardDecision actions={actions} /> : null}
-            <BattlePaneDecision side="b" phase={phase} actions={actions} />
+            {bothFailed ? null : <BattlePaneDecision side="b" phase={phase} actions={actions} />}
           </>
         ) : null}
       </View>

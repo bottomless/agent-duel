@@ -1,4 +1,4 @@
-import { Side } from "./domain"
+import { Side, voteDiscardedReason } from "./domain"
 import {
   battleMetricsSchemaVersion,
   type BattleMetricsDocument,
@@ -304,12 +304,14 @@ function offsetFrom(base: Date, at: Date | undefined) {
   return at ? at.getTime() - base.getTime() : undefined
 }
 
-function winner(turn: TurnDocument, side: Side) {
+function winner(turn: TurnDocument, side: Side, discarded: boolean) {
   if (turn.resolution?.kind === "aborted") return false
   // A tie applies A to git (`domain.ts`, `voteResolution`) but nobody won it.
   // Reading `appliedSide` alone would file every tie as an A win and inflate
   // the left-column bias this table exists to measure.
   if (turn.vote === "tie") return false
+  // The chosen side applied, but a vote against a failure says nothing about the models.
+  if (discarded) return false
   return turn.appliedSide === side
 }
 
@@ -327,6 +329,9 @@ export type BattleMetricsInput = {
 /** One document per battle, each contestant nested under `sides`. */
 export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDocument {
   const { chat, turn, runs, generations, reviewEvents, transcripts, computedAt } = input
+  // Derived from the runs rather than read from the turn, so a recompute marks battles voted on
+  // before the turn recorded it.
+  const voteDiscarded = turn.voteDiscardedReason ?? voteDiscardedReason(turn.resolution, runs)
   const base = turn.createdAt
   const bySide = new Map(runs.map((run) => [run.side, run]))
   const completions: Partial<Record<Side, number>> = {}
@@ -402,7 +407,7 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
       // Absent when the transcript could not be read, so 0 reads as "said
       // nothing" rather than "nothing is known".
       ...(read ? { textMessageCount: textMessageCount(transcript) } : {}),
-      won: winner(turn, side),
+      won: winner(turn, side, voteDiscarded !== undefined),
     }
   }
 
@@ -428,6 +433,7 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
     ...(ipAddress ? { ipAddress } : {}),
     modelPair,
     ...(turn.vote ? { vote: turn.vote } : {}),
+    ...(voteDiscarded ? { voteDiscardedReason: voteDiscarded } : {}),
     ...(turn.resolution?.kind ? { resolutionKind: turn.resolution.kind } : {}),
     selectedEarly: turn.selectedEarly === true,
     steerCount: turn.steerCount ?? 0,

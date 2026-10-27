@@ -73,6 +73,7 @@ import {
   canResumeBattle,
   canRetryRun,
   canTie,
+  canVote,
   earlyResolution,
   chatSlug,
   generationName,
@@ -85,6 +86,7 @@ import {
   spareName,
   stoppedResolution,
   turnID as makeTurnID,
+  voteDiscardedReason,
   voteResolution,
   type Resolution,
   type Side,
@@ -9573,11 +9575,13 @@ export const layer: Layer.Layer<
         resolution = committedResolution(resolution, revealed.decision)
         side = resolution.appliedSide ?? side
         vote = resolution.kind === "vote" ? resolution.vote : resolution.kind === "early" ? resolution.vote : undefined
+        const discardedReason = voteDiscardedReason(resolution, yield* promise(() => store.runsForTurn(turn._id)))
         const recorded = yield* promise(() =>
           store.recordResolution({
             turnID: turn._id,
             resolution,
             vote,
+            ...(discardedReason ? { voteDiscardedReason: discardedReason } : {}),
             participantID: participantID(rawParticipantID),
             appliedSide: side,
             models: revealed.models,
@@ -10080,8 +10084,13 @@ export const layer: Layer.Layer<
         return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)
       }
       if (turn.state !== "awaiting_vote") return yield* Effect.fail(new Error("Arena turn is not ready for a vote"))
-      if (canResumeBattle(turn, yield* promise(() => store.runsForTurn(turn._id)))) {
+      const runs = yield* promise(() => store.runsForTurn(turn._id))
+      if (canResumeBattle(turn, runs)) {
         return yield* Effect.fail(new Error("Resume or discard this battle before choosing"))
+      }
+      // A failed side has no result to choose, so a battle whose sides both failed is only discarded.
+      if (!canVote(turn, runs, selected)) {
+        return yield* Effect.fail(new Error("Arena can only choose a result that finished"))
       }
       const resolved = voteResolution(selected)
       return yield* promote(store, turn, resolved.appliedSide, resolved, selected, false, votingParticipantID)

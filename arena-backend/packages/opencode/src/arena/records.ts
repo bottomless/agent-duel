@@ -1,4 +1,4 @@
-import type { BattleState, Resolution, Side, Vote } from "./domain"
+import type { BattleState, Resolution, Side, Vote, VoteDiscardedReason } from "./domain"
 import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-tracker"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { GenerationMetrics, UsageTotals } from "@agent-duel/arena-service/metrics"
@@ -384,6 +384,11 @@ export type TurnDocument = {
   failureReason?: string
   resolution?: Resolution
   vote?: Vote
+  /**
+   * Set when the vote was cast while a side had failed: the chosen side still applies, but the vote
+   * does not count (`voteDiscardedReason` in `domain.ts`).
+   */
+  voteDiscardedReason?: VoteDiscardedReason
   voteParticipantID?: string
   selectedEarly?: boolean
   /** Replies sent to the contestants while the battle ran. */
@@ -813,7 +818,7 @@ export type ReviewEventInput = {
 export const reviewFlushLimit = 500
 
 /** Bump when a derived field changes meaning, then recompute the whole table. */
-export const battleMetricsSchemaVersion = 8
+export const battleMetricsSchemaVersion = 9
 
 export type ReviewEffort = {
   /**
@@ -908,7 +913,10 @@ export type BattleSideMetrics = {
   /** A blinding leak: the contestant named its own vendor in text the voter read. */
   readonly mentionsOwnName?: boolean
   readonly matchedAlias?: string
-  /** False on both sides for a tie, which applies A to git without anyone winning. */
+  /**
+   * False on both sides for a tie, which applies A to git without anyone winning, and for a vote
+   * that does not count (`voteDiscardedReason`).
+   */
   readonly won: boolean
 }
 
@@ -935,6 +943,8 @@ export type BattleMetricsDocument = {
   readonly modelPair: readonly string[]
   /** The vote as cast. `won` is false on both sides for a tie; this is how you find them. */
   readonly vote?: Vote
+  /** The vote does not count, so `won` is false on both sides; drop these from any model ranking. */
+  readonly voteDiscardedReason?: VoteDiscardedReason
   readonly resolutionKind?: string
   readonly selectedEarly: boolean
   /** A steer reaches both contestants, so it belongs to the turn, not a side. */
@@ -958,6 +968,7 @@ export type BattleHistoryTurn = Pick<
   | "state"
   | "resolution"
   | "vote"
+  | "voteDiscardedReason"
   | "selectedEarly"
   | "appliedSide"
   | "canonicalUserMessageID"

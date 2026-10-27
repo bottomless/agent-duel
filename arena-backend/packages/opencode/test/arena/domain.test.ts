@@ -7,6 +7,7 @@ import {
   canRetryRun,
   canTie,
   canTransition,
+  canVote,
   chatSlug,
   earlyResolution,
   generationName,
@@ -22,6 +23,7 @@ import {
   MAX_MANUAL_RUN_RETRIES,
   SLOT_PATH_PATTERN,
   spareName,
+  voteDiscardedReason,
   voteResolution,
 } from "../../src/arena/domain"
 
@@ -257,6 +259,48 @@ describe("canTie and canDiscardBattle", () => {
     expect(canDiscardBattle({ state: "awaiting_vote" }, neither)).toBe(true)
     expect(canDiscardBattle({ state: "awaiting_vote" }, one)).toBe(false)
     expect(canDiscardBattle({ state: "awaiting_vote" }, both)).toBe(false)
+  })
+
+  test("votes only for a result that can be chosen", () => {
+    const awaiting = { state: "awaiting_vote" as const }
+    expect(canVote(awaiting, neither, "a")).toBe(false)
+    expect(canVote(awaiting, neither, "b")).toBe(false)
+    expect(canVote(awaiting, neither, "tie")).toBe(false)
+    expect(canVote(awaiting, one, "a")).toBe(false)
+    expect(canVote(awaiting, one, "b")).toBe(true)
+    expect(canVote(awaiting, both, "tie")).toBe(true)
+    expect(canVote({ state: "awaiting_vote", resolution: voteResolution("a") }, both, "a")).toBe(false)
+    expect(canVote({ state: "running" }, both, "a")).toBe(false)
+  })
+
+  test("a vote against a failed side is recorded as discarded", () => {
+    const settled = (side: "a" | "b", selectable: boolean, runState = selectable ? "complete" : "error") => ({
+      side,
+      selectable,
+      runState,
+      finalizedAt: new Date(0),
+    })
+    expect(voteDiscardedReason(voteResolution("b"), [settled("a", false), settled("b", true)])).toBe(
+      "contestant_failed",
+    )
+    expect(voteDiscardedReason(voteResolution("b"), [settled("a", true), settled("b", true)])).toBeUndefined()
+    expect(voteDiscardedReason(voteResolution("tie"), [settled("a", true), settled("b", true)])).toBeUndefined()
+    // An early pick needs the other side still working.
+    expect(
+      voteDiscardedReason(earlyResolution("a"), [settled("a", true), settled("b", false, "stopped")]),
+    ).toBeUndefined()
+    // A side kept after Stop counts only when the other side was cut off by the stop, not failed.
+    expect(
+      voteDiscardedReason(stoppedResolution("apply_a"), [settled("a", false, "stopped"), settled("b", false)]),
+    ).toBe("contestant_failed")
+    expect(
+      voteDiscardedReason(stoppedResolution("apply_a"), [
+        settled("a", false, "stopped"),
+        settled("b", false, "stopped"),
+      ]),
+    ).toBeUndefined()
+    expect(voteDiscardedReason(stoppedResolution("discard"), [settled("a", true), settled("b", false)])).toBeUndefined()
+    expect(voteDiscardedReason(undefined, [settled("a", false), settled("b", true)])).toBeUndefined()
   })
 
   test("discards a stopped battle whatever its results", () => {
