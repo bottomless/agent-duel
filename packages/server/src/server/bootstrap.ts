@@ -702,7 +702,10 @@ export async function createPaseoDaemon(
   // daemon memory, and this router can reach only the Arena control-plane APIs.
   app.use(
     "/api/arena-runtime",
-    createArenaRuntimeRouter({ logger: logger.child({ module: "arena-runtime-proxy" }) }),
+    createArenaRuntimeRouter({
+      logger: logger.child({ module: "arena-runtime-proxy" }),
+      appVersion: daemonVersion,
+    }),
   );
 
   // Local, harmless, and token-gated; deliberately skips daemon auth.
@@ -746,13 +749,17 @@ export async function createPaseoDaemon(
     accounts = createAccountsService({
       config: accountsConfig,
       logger,
+      appVersion: daemonVersion,
     });
     app.use("/api/auth", createAccountsRouter(accounts));
     app.use(createRequireSessionMiddleware(accounts));
     app.use(
       "/api/feedback",
       createFeedbackRouter({
-        backend: new FeedbackBackend(accountsConfig.controlPlaneUrl, { logger }),
+        backend: new FeedbackBackend(accountsConfig.controlPlaneUrl, {
+          logger,
+          appVersion: daemonVersion,
+        }),
         sessions: accounts.sessions,
         context: {
           capture: (feedback) => {

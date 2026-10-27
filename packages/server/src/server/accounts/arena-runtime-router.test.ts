@@ -19,7 +19,11 @@ beforeAll(async () => {
   const app = express();
   app.use(
     "/api/arena-runtime",
-    createArenaRuntimeRouter({ logger: pino({ enabled: false }), fetchImpl: upstream }),
+    createArenaRuntimeRouter({
+      logger: pino({ enabled: false }),
+      appVersion: "0.4.0-beta.14",
+      fetchImpl: upstream,
+    }),
   );
   server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -93,6 +97,7 @@ describe("Arena runtime proxy", () => {
     expect(new Headers(init?.headers).get("x-arena-generation-id")).toBe(
       "gen_00000000000000000000000000000001",
     );
+    expect(new Headers(init?.headers).get("x-agent-duel-version")).toBe("0.4.0-beta.14");
   });
 
   it("stops the control-plane request when the Arena runtime disconnects mid-stream", async () => {

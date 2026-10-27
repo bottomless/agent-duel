@@ -166,6 +166,7 @@ beforeEach(() => {
     createAccountsService({
       config,
       logger: pino({ enabled: false }),
+      appVersion: "0.4.0-beta.14",
       backend: backend as unknown as AccountsBackend,
       shutdownArena: async () => {
         shutdownCalls += 1;

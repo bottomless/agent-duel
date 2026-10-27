@@ -10,6 +10,9 @@ export interface AccountsConfig {
 
 export type AccountsEnv = Readonly<Record<string, string | undefined>>;
 
+/** Sent on every control-plane request; the control plane keeps the latest one on the account. */
+export const appVersionHeader = "X-Agent-Duel-Version";
+
 function trimmed(value: string | undefined): string | null {
   const next = value?.trim();
   return next ? next : null;

@@ -11,6 +11,7 @@ import {
   type FeedbackSubmissionResponse,
 } from "@getpaseo/protocol/feedback/schemas";
 import type { Logger } from "pino";
+import { appVersionHeader } from "../accounts/config.js";
 import { prepareFeedbackContextStream } from "./stream.js";
 
 export class FeedbackBackendError extends Error {
@@ -49,6 +50,7 @@ export type FeedbackContextBlobUpload = (
 
 export interface FeedbackBackendDependencies {
   readonly logger: Logger;
+  readonly appVersion: string;
   readonly request?: (request: Request) => Promise<Response>;
   readonly uploadBlob?: FeedbackContextBlobUpload;
   readonly wait?: (milliseconds: number) => Promise<void>;
@@ -81,6 +83,7 @@ async function responseError(response: Response) {
 export class FeedbackBackend implements FeedbackRemote {
   private readonly baseUrl: string;
   private readonly logger: Logger;
+  private readonly appVersion: string;
   private readonly request: (request: Request) => Promise<Response>;
   private readonly uploadBlob: FeedbackContextBlobUpload;
   private readonly wait: (milliseconds: number) => Promise<void>;
@@ -88,6 +91,7 @@ export class FeedbackBackend implements FeedbackRemote {
   constructor(baseUrl: string, dependencies: FeedbackBackendDependencies) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.logger = dependencies.logger;
+    this.appVersion = dependencies.appVersion;
     this.request = dependencies.request ?? ((request) => fetch(request));
     this.uploadBlob = dependencies.uploadBlob ?? uploadPresigned;
     this.wait = dependencies.wait ?? wait;
@@ -102,6 +106,7 @@ export class FeedbackBackend implements FeedbackRemote {
           headers: {
             Accept: "application/json",
             Authorization: `Bearer ${token}`,
+            [appVersionHeader]: this.appVersion,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(submission),
@@ -139,7 +144,7 @@ export class FeedbackBackend implements FeedbackRemote {
             contentType: contextContentType,
             handleUploadUrl: `${this.baseUrl}/api/feedback/context/upload`,
             clientPayload: JSON.stringify({ feedbackId, attempt }),
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { Authorization: `Bearer ${token}`, [appVersionHeader]: this.appVersion },
           },
         );
         const completion = feedbackContextCompletionSchema.parse({
@@ -154,6 +159,7 @@ export class FeedbackBackend implements FeedbackRemote {
             headers: {
               Accept: "application/json",
               Authorization: `Bearer ${token}`,
+              [appVersionHeader]: this.appVersion,
               "Content-Type": "application/json",
             },
             body: JSON.stringify(completion),
@@ -190,6 +196,7 @@ export class FeedbackBackend implements FeedbackRemote {
           headers: {
             Accept: "application/json",
             Authorization: `Bearer ${token}`,
+            [appVersionHeader]: this.appVersion,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(failure),

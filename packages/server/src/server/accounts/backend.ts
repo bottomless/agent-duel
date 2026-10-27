@@ -7,6 +7,7 @@ import {
   type OpenSignInFlowRequest,
   type AcceptTermsRequest,
 } from "@getpaseo/protocol/accounts/schemas";
+import { appVersionHeader } from "./config.js";
 
 export class AccountsBackendUnavailableError extends Error {
   constructor(readonly cause: unknown) {
@@ -53,6 +54,7 @@ export class AccountsBackend {
   constructor(
     baseUrl: string,
     private readonly logger: Logger,
+    private readonly appVersion: string,
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
   }
@@ -67,6 +69,7 @@ export class AccountsBackend {
         method: options.method ?? "POST",
         headers: {
           Accept: "application/json",
+          [appVersionHeader]: this.appVersion,
           ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
           ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
         },

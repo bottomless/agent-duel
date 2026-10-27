@@ -36,9 +36,15 @@ describe("feedback backend", () => {
       body: Blob;
       options: Parameters<FeedbackContextBlobUpload>[2];
     }> = [];
-    const requests: Array<{ url: string; authorization: string | null; body: unknown }> = [];
+    const requests: Array<{
+      url: string;
+      authorization: string | null;
+      version: string | null;
+      body: unknown;
+    }> = [];
     const backend = new FeedbackBackend("https://control-plane.test", {
       logger: pino({ level: "silent" }),
+      appVersion: "0.4.0-beta.14",
       uploadBlob: async (pathname, body, options) => {
         uploads.push({ pathname, body, options });
         return { pathname: `feedback/${feedbackId}/context-1-Rand0m.jsonl` };
@@ -47,6 +53,7 @@ describe("feedback backend", () => {
         requests.push({
           url: request.url,
           authorization: request.headers.get("authorization"),
+          version: request.headers.get("x-agent-duel-version"),
           body: await request.json(),
         });
         return Response.json({ id: feedbackId, contextStatus: "complete" });
@@ -63,7 +70,7 @@ describe("feedback backend", () => {
         contentType: "application/x-ndjson",
         handleUploadUrl: "https://control-plane.test/api/feedback/context/upload",
         clientPayload: JSON.stringify({ feedbackId, attempt: 1 }),
-        headers: { Authorization: "Bearer session-token" },
+        headers: { Authorization: "Bearer session-token", "X-Agent-Duel-Version": "0.4.0-beta.14" },
       },
     });
     const uploadedBytes = uploads[0]?.body.size ?? 0;
@@ -71,6 +78,7 @@ describe("feedback backend", () => {
       {
         url: "https://control-plane.test/api/feedback/context/complete",
         authorization: "Bearer session-token",
+        version: "0.4.0-beta.14",
         body: {
           feedbackId,
           attempt: 1,
@@ -93,6 +101,7 @@ describe("feedback backend", () => {
     const waits: number[] = [];
     const backend = new FeedbackBackend("https://control-plane.test", {
       logger: pino({ level: "silent" }),
+      appVersion: "0.4.0-beta.14",
       uploadBlob: async (_pathname, body) => {
         uploads.push(body);
         throw new Error("Upload unavailable");

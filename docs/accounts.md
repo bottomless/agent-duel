@@ -116,6 +116,10 @@ The daemon password and account session are separate credentials; a remote clien
 - The control-plane OpenRouter route replaces the account session with the server's real OpenRouter
   key. The Arena process and its contestant subprocesses never receive the account token or provider
   key.
+- Every daemon request to the control plane (accounts, the Arena runtime proxy, feedback) carries
+  `X-Agent-Duel-Version` with the daemon's package version. The control plane keeps the latest one
+  on the account, so you can find accounts still on an old build; the private repository's
+  `scripts/db/app-versions.ts` counts them. Builds released before the header send none.
 
 `DaemonClient` reads the token through `getSessionToken` on every connection attempt rather than
 capturing it at construction. A client rejected while signed out is already reconnecting when the

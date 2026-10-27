@@ -31,6 +31,7 @@ export interface AccountsService {
 export interface CreateAccountsServiceOptions {
   readonly config: AccountsConfig;
   readonly logger: Logger;
+  readonly appVersion: string;
   readonly backend?: AccountsBackend;
   readonly shutdownArena?: () => Promise<void>;
 }
@@ -42,7 +43,8 @@ export interface CreateAccountsServiceOptions {
  */
 export function createAccountsService(options: CreateAccountsServiceOptions): AccountsService {
   const backend =
-    options.backend ?? new AccountsBackend(options.config.controlPlaneUrl, options.logger);
+    options.backend ??
+    new AccountsBackend(options.config.controlPlaneUrl, options.logger, options.appVersion);
   const publicKey = resolveSessionPublicKey({
     PASEO_SESSION_PUBLIC_KEY: options.config.sessionPublicKey,
   });
