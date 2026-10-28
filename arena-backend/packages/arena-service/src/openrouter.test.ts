@@ -838,6 +838,69 @@ describe("OpenRouter proxy", () => {
     }
   })
 
+  test("tries a failed Claude ping once more, and answers the same way when both fail", async () => {
+    const claude = {
+      displayName: "Hidden Model",
+      slug: "anthropic/hidden-model",
+      canonicalSlug: "anthropic/hidden-model",
+      routing: { sort: "throughput" },
+    }
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "claude-side", model: claude }] },
+      ],
+    })
+    const upstream: (() => Response)[] = [
+      () => new Response("overloaded", { status: 529 }),
+      () => new Response(`data: ${JSON.stringify({ usage: { prompt_tokens: 10 } })}\n\ndata: [DONE]\n\n`),
+      () => {
+        throw new TypeError("fetch failed")
+      },
+      () => {
+        throw new TypeError("fetch failed")
+      },
+    ]
+    let sent = 0
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () => upstream[sent++]!(),
+    })
+    const ping = () =>
+      proxy(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "claude-side",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Keep-Alive": "1",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "hi" }], stream: true }),
+        }),
+      )
+    const info = spyOn(console, "info").mockImplementation(() => {})
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+
+    try {
+      const recovered = await ping()
+      expect(sent).toBe(2)
+      const failed = await ping()
+      expect(sent).toBe(4)
+      for (const answer of [recovered, failed]) {
+        expect(answer.status).toBe(204)
+        expect(answer.headers.get("X-Arena-Keep-Alive")).toBe("1")
+      }
+      expect(warn.mock.calls.map((call) => call[1])).toEqual([
+        JSON.stringify({ status: 529 }),
+        JSON.stringify({ status: "unsent" }),
+        JSON.stringify({ status: "unsent" }),
+      ])
+    } finally {
+      info.mockRestore()
+      warn.mockRestore()
+    }
+  })
+
   test("keeps a single-agent chat on one opaque key across its messages", async () => {
     const sessionID = "ses_private-session"
     const scope = (session: string, message: string) =>

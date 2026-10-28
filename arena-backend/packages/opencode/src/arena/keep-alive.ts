@@ -12,6 +12,9 @@
  * a reply before the vote that the pings cost more than the cache writes they save.
  */
 export const PING_EVERY_MS = 4 * 60_000
+// A ping that failed fast still has the rest of the cache's five minutes for one more try.
+export const RETRY_AFTER_MS = 15_000
+const CACHE_TTL_MS = 5 * 60_000
 // A wait this long is rarely a tool run; whatever it waits for, stop paying to keep the cache.
 export const MAX_WAIT_MS = 30 * 60_000
 // Sessions that never report idle (a crashed run) must not keep their conversations forever.
@@ -114,10 +117,11 @@ export class KeepAlive {
     entry.cancel = this.schedule(() => void this.fire(sessionID, entry), due - now)
   }
 
-  private async fire(sessionID: string, entry: Entry) {
+  private async fire(sessionID: string, entry: Entry, retry = false) {
     entry.cancel = undefined
     const ping = entry.ping
     if (!this.supported || this.sessions.get(sessionID) !== entry || entry.inFlight > 0 || !ping) return
+    const lastUse = entry.usedAt
     entry.usedAt = this.now()
     const result = await ping()
     if (result === "unsupported" && this.supported) {
@@ -125,12 +129,24 @@ export class KeepAlive {
       console.warn("[arena-keep-alive] The proxy does not take keep-alive pings; stopped sending them")
     }
     if (this.sessions.get(sessionID) !== entry) return
+    if (result === "failed" && !retry && this.retry(sessionID, entry, ping, lastUse)) return
     if (result !== "kept") {
       // Another request may have ended meanwhile and left its own ping; that one still stands.
       if (entry.ping === ping) entry.ping = undefined
       return
     }
     this.arm(sessionID, entry)
+  }
+
+  /** Tries a failed ping once more if the cache it keeps can still be alive by then. */
+  private retry(sessionID: string, entry: Entry, ping: Ping, lastUse: number) {
+    // A request that started or ended meanwhile owns the next ping.
+    if (entry.ping !== ping || entry.inFlight > 0 || entry.cancel || entry.waitingSince === undefined) return false
+    const due = this.now() + RETRY_AFTER_MS
+    // A ping that timed out has used up the cache's five minutes.
+    if (due >= lastUse + CACHE_TTL_MS || due - entry.waitingSince > this.maxWaitMs) return false
+    entry.cancel = this.schedule(() => void this.fire(sessionID, entry, true), RETRY_AFTER_MS)
+    return true
   }
 }
 

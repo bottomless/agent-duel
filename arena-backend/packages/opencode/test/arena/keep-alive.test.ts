@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
-import { idleSession, KeepAlive, MAX_WAIT_MS, PING_EVERY_MS, type PingResult } from "../../src/arena/keep-alive"
+import {
+  idleSession,
+  KeepAlive,
+  MAX_WAIT_MS,
+  PING_EVERY_MS,
+  RETRY_AFTER_MS,
+  type PingResult,
+} from "../../src/arena/keep-alive"
 import { AssignmentRegistry, proxy, streamProgress } from "../../src/arena/proxy"
 
 const MINUTE = 60_000
@@ -116,14 +123,46 @@ describe("ArenaKeepAlive", () => {
     expect(pings).toEqual([])
   })
 
-  test("stops a wait whose ping failed, and arms again on the next call", async () => {
+  test("tries a failed ping once more, then stops the wait and arms again on the next call", async () => {
     const { clock, keepAlive, pings, ping } = setup("failed")
     keepAlive.begin("session")(ping)
     await clock.advance(10 * MINUTE)
-    expect(pings).toEqual([4 * MINUTE])
+    expect(pings).toEqual([4 * MINUTE, 4 * MINUTE + RETRY_AFTER_MS])
     keepAlive.begin("session")(ping)
     await clock.advance(4 * MINUTE)
-    expect(pings).toEqual([4 * MINUTE, 14 * MINUTE])
+    expect(pings).toEqual([4 * MINUTE, 4 * MINUTE + RETRY_AFTER_MS, 14 * MINUTE])
+  })
+
+  test("keeps pinging from a retry that the proxy took", async () => {
+    const { clock, keepAlive } = setup()
+    const pings: number[] = []
+    const results: PingResult[] = ["failed", "kept"]
+    const ping = async () => {
+      pings.push(clock.now())
+      return results.shift() ?? "kept"
+    }
+    keepAlive.begin("session")(ping)
+    await clock.advance(9 * MINUTE)
+    const retried = 4 * MINUTE + RETRY_AFTER_MS
+    expect(pings).toEqual([4 * MINUTE, retried, retried + 4 * MINUTE])
+  })
+
+  test("does not retry when the cache would be gone before the retry", async () => {
+    const { clock, keepAlive, pings, ping } = setup("failed")
+    const end = keepAlive.begin("session")
+    await clock.advance(4.9 * MINUTE)
+    end(ping)
+    await clock.advance(10 * MINUTE)
+    expect(pings).toEqual([4.9 * MINUTE])
+  })
+
+  test("drops a pending retry when the next call starts", async () => {
+    const { clock, keepAlive, pings, ping } = setup("failed")
+    keepAlive.begin("session")(ping)
+    await clock.advance(4 * MINUTE + 1_000)
+    keepAlive.begin("session")
+    await clock.advance(10 * MINUTE)
+    expect(pings).toEqual([4 * MINUTE])
   })
 
   test("stops every ping once the proxy turns out not to know them", async () => {

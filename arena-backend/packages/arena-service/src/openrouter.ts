@@ -396,11 +396,22 @@ function logRefusal(context: RefusalContext, status: number, upstream: string) {
 
 // Nobody reads a ping's one token. Whether it read the cache is what tells a ping that kept the
 // entry from one that landed on another provider and wrote a new one, so that much is logged.
-async function logKeepAlive(response: Response, startedAt: number) {
-  const text = await response.text().catch(() => undefined)
-  if (!response.ok || text === undefined) {
-    console.warn("[arena-service] Keep-alive ping failed", JSON.stringify({ status: response.status }))
-    return
+/**
+ * A ping that failed kept nothing warm, so it gets one more try. Every ping still gets the same
+ * answer, so a failure names no model.
+ */
+async function keepCacheWarm(send: () => Promise<Response>, startedAt: number, signal: AbortSignal) {
+  for (let attempt = 0; attempt < 2 && !signal.aborted; attempt++) {
+    if (await logKeepAlive(await send().catch(() => undefined), startedAt)) break
+  }
+  return keepAliveAnswer()
+}
+
+async function logKeepAlive(response: Response | undefined, startedAt: number) {
+  const text = await response?.text().catch(() => undefined)
+  if (!response?.ok || text === undefined) {
+    console.warn("[arena-service] Keep-alive ping failed", JSON.stringify({ status: response?.status ?? "unsent" }))
+    return false
   }
   const metrics = metricsCollector("keep-alive", startedAt)
   const values = (response.headers.get("content-type") ?? "").includes("text/event-stream")
@@ -426,6 +437,7 @@ async function logKeepAlive(response: Response, startedAt: number) {
       cacheWriteTokens: measured?.usage?.cacheWriteTokens,
     }),
   )
+  return true
 }
 
 async function sanitizeAssignedResponse(
@@ -576,16 +588,9 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         ...(keepAlive ? { max_tokens: 1, max_completion_tokens: undefined } : {}),
       }),
     ).buffer
-    const response = await context.fetch(upstream, {
-      method: request.method,
-      headers,
-      body,
-      signal: request.signal,
-    })
-    if (keepAlive) {
-      await logKeepAlive(response, startedAt)
-      return keepAliveAnswer()
-    }
+    const send = () => context.fetch(upstream, { method: request.method, headers, body, signal: request.signal })
+    if (keepAlive) return await keepCacheWarm(send, startedAt, request.signal)
+    const response = await send()
     // Awaited so a body that fails to read or parse still gets the 502 below.
     const refusal = {
       userId: caller.id,
