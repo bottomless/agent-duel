@@ -23,11 +23,24 @@ No account storage code ships in this repository or the desktop app. The account
 records; the daemon passes the locally verified user to
 the Arena runtime when it resolves a session into a chat.
 
+## Personal leaderboard
+
+The hosted account's “My leaderboard” page reads its cross-device research history through the
+daemon. The control plane owns eligibility, ratings, and the live contestant pool. Keep account IDs
+out of the client request; forward the signed-in session and desktop version. BYOK builds have no
+hosted vote history, so hide the sidebar entry there.
+
+The endpoint returns both early-vote datasets in one response. Keep the toggle out of the query key
+and request parameters so it switches immediately, including while a refresh is pending or fails.
+Deploy the control-plane endpoint before shipping this desktop feature.
+
 ## Terms acceptance
 
 The hosted sign-in screen starts with an unchecked agreement to the Terms of Service and an
 acknowledgment of the separate Privacy Policy. All email, Google, and GitHub sign-in actions require
-the checkbox. Links and document versions come from `GET /api/auth/methods`, not a build-time URL.
+the checkbox. It sits once below every sign-in button, and the buttons stay enabled: pressing one
+unchecked shows an error at the checkbox and focuses it. Disabled buttons below the "or" divider
+read as broken, because nothing ties them to a checkbox inside the email form. Links and document versions come from `GET /api/auth/methods`, not a build-time URL.
 The accepted version pair travels with the sign-in flow and is saved on the authenticated account
 with a server timestamp when that flow is claimed.
 

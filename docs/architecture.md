@@ -434,7 +434,7 @@ One deliberate non-violation: `AgentFileExplorerState.directories`/`files` cache
 
 Each provider implements the `AgentClient` interface in `agent/agent-sdk-types.ts`. Provider implementations live in `agent/providers/`.
 
-The built-in, user-facing providers are Claude Code, Codex, Copilot, OpenCode, Pi, and OMP. Additional adapters exist in the same directory for ACP-compatible agents and internal use:
+The built-in providers are Claude Code, Codex, Copilot, OpenCode, Pi, and OMP. Agent Duel enables only OpenCode by default, because every chat runs on the Arena and the daemon probes each enabled provider by running its CLI. `agents.providers.<id>.enabled` in `config.json` turns one back on. Additional adapters exist in the same directory for ACP-compatible agents and internal use:
 
 | Provider           | Wraps                                | Session format                                     |
 | ------------------ | ------------------------------------ | -------------------------------------------------- |

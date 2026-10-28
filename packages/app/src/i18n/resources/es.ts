@@ -1648,6 +1648,33 @@ export const es: TranslationResources = {
   sidebarCallout: {
     dismiss: "Despedir",
   },
+  leaderboard: {
+    title: "Mi clasificación",
+    refresh: "Actualizar",
+    refreshing: "Actualizando...",
+    retry: "Reintentar",
+    connect: "Inicia sesión y conéctate para ver tu clasificación",
+    loading: "Calculando tu clasificación...",
+    error: "No se pudo cargar tu clasificación",
+    unlock: "Tu clasificación se desbloquea con {{minimum}} votos válidos",
+    progress: "Tienes {{count}} votos válidos · faltan {{remaining}}",
+    eligible:
+      "No cuentan las batallas con errores de un contendiente ni las que usaron subagentes en compilaciones afectadas",
+    filters: "Fallos de ejecución excluidos · Subagentes filtrados por commit",
+    summary: "{{count}} votos válidos · {{earlyVotes}} · Actualizado {{date}}",
+    excludeEarlyVotes: "Excluir votos anticipados",
+    earlyIncluded: "Votos anticipados incluidos",
+    earlyExcluded: "Votos anticipados excluidos",
+    disconnected:
+      "Algunos grupos de modelos aún no tienen comparaciones en común. Las puntuaciones entre esos grupos dependen de la distribución previa.",
+    noModels: "Los modelos activos aparecen cuando tienen 4 votos válidos cada uno",
+    chartLabel:
+      "Puntuaciones de tus modelos con intervalos creíbles del 95 %, velocidades medianas de inferencia y número de votos",
+    votes: "Votos",
+    axis: "Puntuación Bradley–Terry (escala Elo)",
+    medianSpeed: "{{speed}} tokens/s de mediana",
+    noSpeed: "Velocidad no disponible",
+  },
   feedback: {
     sidebarAction: "Enviar comentarios",
     sendError: "No se pudieron enviar los comentarios. Inténtalo de nuevo.",

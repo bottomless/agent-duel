@@ -9,6 +9,8 @@ import {
   retryableStreamError,
 } from "@agent-duel/arena-service/request-error"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
+import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
+import type { KeepAlive, Ping, PingResult } from "./keep-alive"
 
 export type Assignment = {
   readonly runID: string
@@ -56,6 +58,7 @@ export type ProxyOptions = {
   readonly fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
   readonly telemetry?: Telemetry
   readonly onDispatch?: (metadata: RequestMetadata) => void
+  readonly keepAlive?: KeepAlive
 }
 
 type StreamProgress = {
@@ -403,6 +406,7 @@ function sanitizeStream(
   telemetry?: Telemetry,
   signal?: AbortSignal,
   recovery?: StreamRecovery,
+  onEnd?: (complete: boolean) => void,
 ) {
   const normalize = normalizeToolCutoff(maxTokens)
   let reader = stream.getReader()
@@ -435,6 +439,7 @@ function sanitizeStream(
     message: string,
   ) => {
     settled = true
+    onEnd?.(false)
     tracked.failedAt = Date.now()
     tracked.failure = failure
     try {
@@ -513,6 +518,7 @@ function sanitizeStream(
             settled = true
             controller.close()
             tracked.closedAt = Date.now()
+            onEnd?.(true)
             return
           }
           const chunk = next.value
@@ -544,6 +550,7 @@ function sanitizeStream(
       } catch {
         if (settled) return
         settled = true
+        onEnd?.(false)
         tracked.failedAt = Date.now()
         tracked.failure = reading
           ? signal?.aborted
@@ -569,6 +576,7 @@ function sanitizeStream(
     async cancel(reason) {
       if (settled) return
       settled = true
+      onEnd?.(false)
       tracked.cancelledAt = Date.now()
       try {
         await reader.cancel(reason)
@@ -586,10 +594,44 @@ function upstreamPath(request: Request) {
   throw new Error(`Arena proxy endpoint is not supported: ${path}`)
 }
 
+// A cache read answers in seconds; a ping that lands on a cold provider writes the whole prompt.
+const PING_TIMEOUT_MS = 120_000
+
+// Re-sends a request that ended, with a one-token answer, so the provider reads its cached prompt
+// and keeps it (`keep-alive.ts`). It carries no generation ID, so the proxy records nothing, and
+// nothing here reaches telemetry or the stream progress the idle deadline reads.
+async function keepAlivePing(
+  execute: NonNullable<ProxyOptions["fetch"]>,
+  url: string,
+  assignment: Assignment,
+  body: Readonly<Record<string, unknown>>,
+): Promise<PingResult> {
+  try {
+    const response = await execute(url, {
+      method: "POST",
+      headers: {
+        "X-Arena-Assignment-ID": assignment.assignmentID,
+        "X-Arena-Scope-ID": assignment.scopeID,
+        [KEEP_ALIVE_HEADER]: "1",
+        "Content-Type": "application/json",
+        Accept: "text/event-stream, application/json",
+      },
+      body: JSON.stringify({ ...body, max_tokens: 1 }),
+      signal: AbortSignal.timeout(PING_TIMEOUT_MS),
+    })
+    await response.body?.cancel().catch(() => undefined)
+    if (!response.ok) return "failed"
+    return response.headers.get(KEEP_ALIVE_HEADER) === "1" ? "kept" : "unsupported"
+  } catch {
+    return "failed"
+  }
+}
+
 export async function proxy(request: Request, registry: AssignmentRegistry, options: ProxyOptions) {
   let metadata: RequestMetadata | undefined
   let telemetry: Telemetry | undefined
   let preHeaderTransportFailure = false
+  let endWait: ((ping?: Ping) => void) | undefined
   try {
     const { requestID, sessionID, parentSessionID } = sessionHeaders(request.headers)
     const assignment = registry.resolve(sessionID, parentSessionID)
@@ -613,6 +655,14 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
 
     const upstream = options.upstream.replace(/\/$/, "")
     const execute = options.fetch ?? fetch
+    const url = `${upstream}${upstreamPath(request)}`
+    const classification = request.headers.get("x-arena-generation-classification")
+    // A compaction ends the wait with no ping: the next call continues its summary, not this prompt.
+    if (classification === "generation" || classification === "compaction") {
+      endWait = options.keepAlive?.begin(sessionID)
+    }
+    const ping: Ping | undefined =
+      classification === "generation" ? () => keepAlivePing(execute, url, assignment, rewritten) : undefined
     const routing = {
       "X-Arena-Assignment-ID": assignment.assignmentID,
       "X-Arena-Scope-ID": assignment.scopeID,
@@ -623,7 +673,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const dispatch = new AbortController()
     if (request.signal.aborted) dispatch.abort(request.signal.reason)
     else request.signal.addEventListener("abort", () => dispatch.abort(request.signal.reason), { once: true })
-    const responsePromise = execute(`${upstream}${upstreamPath(request)}`, {
+    const responsePromise = execute(url, {
       method: "POST",
       headers: {
         ...routing,
@@ -666,6 +716,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
             ? networkUnavailableError()
             : { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
       if (body === undefined) await response.body?.cancel().catch(() => undefined)
+      endWait?.()
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
       await telemetry?.complete?.(metadata, new Date())
       headers.set("content-type", "application/json")
@@ -697,6 +748,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         telemetry,
         request.signal,
         recovery,
+        (complete) => endWait?.(complete ? ping : undefined),
       )
       return new Response(body, { status: response.status, headers })
     }
@@ -704,9 +756,11 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const payload = sanitizePayload(JSON.parse(await response.text()) as unknown, generationID)
     telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
     await telemetry?.complete?.(metadata, new Date())
+    endWait?.(ping)
     headers.set("content-type", "application/json")
     return Response.json(payload, { status: response.status, headers })
   } catch {
+    endWait?.()
     await telemetry?.error?.(metadata, new Error("Arena contestant request could not be routed"), new Date())
     return Response.json(
       {

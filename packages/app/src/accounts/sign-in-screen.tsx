@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { ChevronLeft, Mail } from "lucide-react-native";
@@ -16,6 +16,7 @@ import { useSignIn } from "./use-sign-in";
 import { isSignInBusy, type OAuthSignInMethod } from "./sign-in-state";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ACCEPTANCE_REQUIRED = "Agree to the Terms of Service to continue.";
 
 const styles = StyleSheet.create((theme) => ({
   root: {
@@ -150,6 +151,8 @@ export interface SignInScreenProps {
 
 export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps) {
   const [accepted, setAccepted] = useState(false);
+  const [acceptanceMissing, setAcceptanceMissing] = useState(false);
+  const checkboxRef = useRef<View>(null);
   const acceptance = useMemo<AcceptTermsRequest | null>(
     () =>
       accepted
@@ -170,11 +173,34 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
     [methods],
   );
   const busy = isSignInBusy(state);
-  const canSubmitEmail = EMAIL_PATTERN.test(email.trim()) && !busy && accepted;
+  const canSubmitEmail = EMAIL_PATTERN.test(email.trim()) && !busy;
+
+  const changeAccepted = useCallback((next: boolean) => {
+    setAccepted(next);
+    if (next) setAcceptanceMissing(false);
+  }, []);
+
+  // Sign-in buttons stay enabled without the agreement: a disabled button below the
+  // "or" divider reads as broken, so a press points the user at the checkbox instead.
+  const requireAcceptance = useCallback(() => {
+    if (accepted) return true;
+    setAcceptanceMissing(true);
+    checkboxRef.current?.focus();
+    return false;
+  }, [accepted]);
 
   const submitEmail = useCallback(() => {
+    if (!requireAcceptance()) return;
     startEmail(email.trim().toLowerCase());
-  }, [email, startEmail]);
+  }, [email, requireAcceptance, startEmail]);
+
+  const submitOAuth = useCallback(
+    (provider: OAuthSignInMethod) => {
+      if (!requireAcceptance()) return;
+      startOAuth(provider);
+    },
+    [requireAcceptance, startOAuth],
+  );
 
   if (state.kind === "awaiting-email") {
     return (
@@ -269,12 +295,6 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
                   returnKeyType="go"
                 />
               </Field>
-              <LegalCheckbox
-                documents={documents}
-                checked={accepted}
-                onChange={setAccepted}
-                disabled={busy}
-              />
               <Button
                 variant="default"
                 leftIcon={Mail}
@@ -298,24 +318,27 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
 
           {providers.length > 0 ? (
             <View style={styles.providers}>
-              {!emailEnabled ? (
-                <LegalCheckbox
-                  documents={documents}
-                  checked={accepted}
-                  onChange={setAccepted}
-                  disabled={busy}
-                />
-              ) : null}
               {providers.map((provider) => (
                 <ProviderButton
                   key={provider}
                   provider={provider}
-                  disabled={busy || !accepted}
+                  disabled={busy}
                   loading={state.kind === "opening" && state.method === provider}
-                  onPress={startOAuth}
+                  onPress={submitOAuth}
                 />
               ))}
             </View>
+          ) : null}
+
+          {methods.length > 0 ? (
+            <LegalCheckbox
+              ref={checkboxRef}
+              documents={documents}
+              checked={accepted}
+              onChange={changeAccepted}
+              disabled={busy}
+              error={acceptanceMissing ? ACCEPTANCE_REQUIRED : null}
+            />
           ) : null}
 
           {state.kind === "failed" ? (

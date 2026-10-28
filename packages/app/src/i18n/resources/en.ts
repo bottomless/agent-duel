@@ -1614,6 +1614,32 @@ export const en = {
   sidebarCallout: {
     dismiss: "Dismiss",
   },
+  leaderboard: {
+    title: "My leaderboard",
+    refresh: "Refresh",
+    refreshing: "Refreshing...",
+    retry: "Try again",
+    connect: "Sign in and connect to view your leaderboard",
+    loading: "Calculating your leaderboard...",
+    error: "Your leaderboard could not be loaded",
+    unlock: "Your leaderboard unlocks at {{minimum}} eligible votes",
+    progress: "You have {{count}} eligible votes · {{remaining}} more to go",
+    eligible: "Battles with contestant errors and subagents on affected builds do not count",
+    filters: "Run failures excluded · Subagents filtered by commit",
+    summary: "{{count}} eligible votes · {{earlyVotes}} · Updated {{date}}",
+    excludeEarlyVotes: "Exclude early votes",
+    earlyIncluded: "Early votes included",
+    earlyExcluded: "Early votes excluded",
+    disconnected:
+      "Some groups of models have no shared comparisons yet. Ratings between those groups depend on the prior.",
+    noModels: "Active models appear after 4 eligible votes each",
+    chartLabel:
+      "Your model ratings with 95% credible intervals, median inference speeds, and vote counts",
+    votes: "Votes",
+    axis: "Bradley–Terry rating (Elo scale)",
+    medianSpeed: "{{speed}} tokens/s median",
+    noSpeed: "Speed unavailable",
+  },
   feedback: {
     sidebarAction: "Send feedback",
     sendError: "Feedback couldn't be sent. Try again.",

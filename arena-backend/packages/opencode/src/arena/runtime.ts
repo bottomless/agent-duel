@@ -7,9 +7,13 @@ import { ResearchUploader } from "./research"
 import { arenaCredentials, type ArenaCredentials } from "./credentials"
 import { markInitialDispatch } from "./dispatch"
 import { createArenaBackend, type ArenaBackend } from "./backend"
+import { idleSession, KeepAlive } from "./keep-alive"
+import { GlobalBus } from "@/bus/global"
 
 export const providerID = "arena"
 export const registry = new AssignmentRegistry()
+export const keepAlive = new KeepAlive()
+let watchingIdle = false
 
 let persistence: Promise<Store> | undefined
 let telemetry: Telemetry | undefined
@@ -162,11 +166,20 @@ export async function contestantFetch(input: string | URL | Request, init?: Requ
       { status: 503 },
     )
   }
+  // A session's loop reports idle when its turn ends, by finishing, Stop, an error or the battle's end.
+  if (!watchingIdle) {
+    watchingIdle = true
+    GlobalBus.on("event", (event) => {
+      const sessionID = idleSession(event.payload)
+      if (sessionID) keepAlive.idle(sessionID)
+    })
+  }
   return proxy(new Request(input, init), registry, {
     upstream: `${target.url}/api/openrouter`,
     fetch: target.fetch,
     telemetry,
     onDispatch: (metadata) => markInitialDispatch(metadata.sessionID),
+    keepAlive,
   })
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { selectRelayStatus } from "./status.js";
+import { selectProviderBinariesToCheck, selectRelayStatus } from "./status.js";
 
 describe("selectRelayStatus", () => {
   const persisted = {
@@ -27,5 +27,18 @@ describe("selectRelayStatus", () => {
 
   test("falls back to persisted config when the daemon cannot report live state", () => {
     expect(selectRelayStatus({ persisted })).toBe("disabled");
+  });
+});
+
+describe("selectProviderBinariesToCheck", () => {
+  const binaries = (overrides?: Record<string, { enabled?: boolean }>) =>
+    selectProviderBinariesToCheck(overrides).map((entry) => entry.binary);
+
+  test("skips the local agents the manifest disables", () => {
+    expect(binaries()).toEqual(["opencode"]);
+  });
+
+  test("follows provider overrides from config", () => {
+    expect(binaries({ codex: { enabled: true }, opencode: { enabled: false } })).toEqual(["codex"]);
   });
 });

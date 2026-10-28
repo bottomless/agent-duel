@@ -10,7 +10,10 @@ A battle runs two blinded contestants against one prompt in isolated worktrees, 
 vote for becomes the chat's history. Read [docs/arena.md](docs/arena.md) before working on any of
 it — the engine lives outside the npm workspace and none of the inherited Paseo docs describe it.
 
-**Supported agents:** Claude Code, Codex, GitHub Copilot, OpenCode, and Pi.
+**Agents:** every chat and battle runs on OpenCode through the Arena. The inherited Claude Code,
+Codex, GitHub Copilot, Pi, and Oh My Pi adapters are off by default
+(`packages/protocol/src/provider-manifest.ts`), so neither the daemon nor `paseo daemon status`
+runs their CLIs.
 
 ## Repository map
 

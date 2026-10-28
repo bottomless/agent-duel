@@ -1615,6 +1615,32 @@ export const ko: TranslationResources = {
   sidebarCallout: {
     dismiss: "닫기",
   },
+  leaderboard: {
+    title: "내 순위표",
+    refresh: "새로고침",
+    refreshing: "새로고침 중...",
+    retry: "다시 시도",
+    connect: "순위표를 보려면 로그인하고 연결하세요",
+    loading: "순위표를 계산하는 중...",
+    error: "순위표를 불러오지 못했습니다",
+    unlock: "유효 투표가 {{minimum}}개가 되면 순위표가 열립니다",
+    progress: "유효 투표 {{count}}개 · {{remaining}}개 남음",
+    eligible:
+      "참가자 오류가 있는 배틀과 영향받은 빌드에서 서브에이전트를 쓴 배틀은 집계하지 않습니다",
+    filters: "실행 실패 제외 · 서브에이전트는 커밋 기준으로 제외",
+    summary: "유효 투표 {{count}}개 · {{earlyVotes}} · {{date}} 업데이트",
+    excludeEarlyVotes: "조기 투표 제외",
+    earlyIncluded: "조기 투표 포함",
+    earlyExcluded: "조기 투표 제외됨",
+    disconnected:
+      "일부 모델 그룹 사이에는 아직 공통 비교가 없습니다. 그 그룹 간 레이팅은 사전 분포에 따라 달라집니다.",
+    noModels: "활성 모델은 각각 유효 투표가 4개 이상이면 표시됩니다",
+    chartLabel: "95% 신용 구간, 추론 속도 중앙값, 투표 수가 포함된 모델 레이팅",
+    votes: "투표",
+    axis: "Bradley–Terry 레이팅(Elo 척도)",
+    medianSpeed: "중앙값 {{speed}} tokens/s",
+    noSpeed: "속도 정보 없음",
+  },
   feedback: {
     sidebarAction: "피드백 보내기",
     sendError: "피드백을 보내지 못했습니다. 다시 시도해 주세요.",

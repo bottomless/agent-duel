@@ -286,8 +286,25 @@ describe("ProviderCatalogSession", () => {
     });
   });
 
+  it("lists usage only for enabled providers", async () => {
+    const listUsage = vi.fn(async () => ({ fetchedAt: "2026-10-28T00:00:00.000Z", providers: [] }));
+    const { subsystem, emitted } = makeSubsystem({
+      snapshot: { listEnabledProviderIds: () => ["opencode"] },
+      usage: { listUsage },
+    });
+
+    await subsystem.handleProviderUsageListRequest({
+      type: "provider.usage.list.request",
+      requestId: "u0",
+    });
+
+    expect(listUsage).toHaveBeenCalledWith({ providerIds: ["opencode"] });
+    expect(findByType(emitted, "provider.usage.list.response")?.payload.providers).toEqual([]);
+  });
+
   it("surfaces a usage-list failure as an rpc_error envelope", async () => {
     const { subsystem, emitted } = makeSubsystem({
+      snapshot: { listEnabledProviderIds: () => [] },
       usage: {
         listUsage: async () => {
           throw new Error("quota service down");

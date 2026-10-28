@@ -203,6 +203,7 @@ describe("routeShowsAppChrome", () => {
   it("draws the chrome on the global new-chat and open-project screens", () => {
     expect(routeShowsAppChrome("/new", [])).toBe(true);
     expect(routeShowsAppChrome("/open-project", [])).toBe(true);
+    expect(routeShowsAppChrome("/leaderboard", [])).toBe(true);
   });
 
   it("draws the chrome on a known host's routes only", () => {
