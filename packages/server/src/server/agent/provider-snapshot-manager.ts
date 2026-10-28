@@ -292,6 +292,12 @@ export class ProviderSnapshotManager {
     return this.getProviderIds();
   }
 
+  listEnabledProviderIds(): AgentProvider[] {
+    return Object.entries(this.providerRegistry)
+      .filter(([, definition]) => definition.enabled)
+      .map(([provider]) => provider);
+  }
+
   getProviderLabel(provider: AgentProvider): string {
     return this.providerRegistry[provider]?.label ?? provider;
   }

@@ -172,6 +172,21 @@ describe("ProviderSnapshotManager public surface", () => {
     }
   });
 
+  test("listEnabledProviderIds leaves out disabled providers", () => {
+    const defaults = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const withCodex = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      providerOverrides: { codex: { enabled: true } },
+    });
+    try {
+      expect(defaults.listEnabledProviderIds()).toEqual(["opencode"]);
+      expect(withCodex.listEnabledProviderIds()).toEqual(["codex", "opencode"]);
+    } finally {
+      defaults.destroy();
+      withCodex.destroy();
+    }
+  });
+
   test("hasProvider reflects the built-in set and providerOverrides additions", () => {
     const manager = createManager({
       logger: createTestLogger(),

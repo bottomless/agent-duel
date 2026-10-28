@@ -258,6 +258,32 @@ describe("ProviderUsageService", () => {
     expect(refreshed.providers[0]?.windows[0]?.usedPct).toBe(2);
   });
 
+  it("runs only the listed providers' fetchers", async () => {
+    const calls: string[] = [];
+    const fetcher = (providerId: string): ProviderUsageFetcher => ({
+      providerId,
+      displayName: providerId,
+      fetchUsage: async () => {
+        calls.push(providerId);
+        return { providerId, displayName: providerId, status: "available", windows: [] };
+      },
+    });
+    const service = new ProviderUsageService({
+      logger: createLogger(),
+      now: () => Date.parse("2026-06-19T00:00:00.000Z"),
+      fetchers: [fetcher("claude"), fetcher("zai")],
+    });
+
+    const none = await service.listUsage({ providerIds: ["opencode"] });
+    const zai = await service.listUsage({ providerIds: ["opencode", "zai"] });
+    const all = await service.listUsage();
+
+    expect(none.providers).toEqual([]);
+    expect(zai.providers.map((usage) => usage.providerId)).toEqual(["zai"]);
+    expect(all.providers.map((usage) => usage.providerId)).toEqual(["claude", "zai"]);
+    expect(calls).toEqual(["zai", "claude", "zai"]);
+  });
+
   it("deduplicates concurrent cache misses", async () => {
     let calls = 0;
     let resolveUsage: ((usage: ProviderUsage) => void) | null = null;
