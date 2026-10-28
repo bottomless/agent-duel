@@ -11,6 +11,12 @@ export function diffRowHeight(theme: DiffTheme): number {
   return Math.max(20, diffTextHeight(theme) + 4);
 }
 
+// The space above and below a line in a row, for rows that grow with wrapped text and so cannot
+// centre it: the first line sits where a one-line row would put it.
+export function diffRowInset(theme: DiffTheme): number {
+  return (diffRowHeight(theme) - diffTextHeight(theme)) / 2;
+}
+
 // Default geometry is also the content-size threshold for choosing a conflict layout.
 export const ROW_HEIGHT = 20;
 

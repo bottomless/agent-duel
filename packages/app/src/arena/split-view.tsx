@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from "react";
-import { useArenaDiffWrap } from "./diff-wrap";
 import { Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { HighlightToken } from "@getpaseo/highlight";
@@ -115,7 +114,6 @@ function CellText({
   side: Side;
   tokens: HighlightToken[] | undefined;
 }) {
-  const { wrapStyle } = useArenaDiffWrap();
   if (cell.kind === "empty") return <Text style={styles.lineText}> </Text>;
   const textStyle = cell.kind === "removed" ? styles.removedText : styles.text;
   if (tokens) {
@@ -123,7 +121,7 @@ function CellText({
       <TokenText
         tokens={tokens}
         segments={cell.kind === "changed" ? cell.segments : undefined}
-        lineStyle={[styles.lineText, wrapStyle, cell.kind === "removed" && styles.struck]}
+        lineStyle={[styles.lineText, cell.kind === "removed" && styles.struck]}
         highlightStyle={highlightFor(side)}
       />
     );
@@ -138,7 +136,7 @@ function CellText({
     );
   }
   return (
-    <Text style={[styles.lineText, textStyle, wrapStyle, cell.kind === "removed" && styles.struck]}>
+    <Text style={[styles.lineText, textStyle, cell.kind === "removed" && styles.struck]}>
       {cell.content || " "}
     </Text>
   );
