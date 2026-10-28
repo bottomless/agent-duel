@@ -1,4 +1,4 @@
-import { en, type TranslationResources } from "./en";
+import type { TranslationResources } from "./en";
 
 export const ru: TranslationResources = {
   common: {
@@ -1637,7 +1637,32 @@ export const ru: TranslationResources = {
   sidebarCallout: {
     dismiss: "Увольнять",
   },
-  leaderboard: en.leaderboard,
+  leaderboard: {
+    title: "Мой рейтинг",
+    refresh: "Обновить",
+    refreshing: "Обновление...",
+    retry: "Повторить",
+    connect: "Войдите и подключитесь, чтобы увидеть свой рейтинг",
+    loading: "Считаем ваш рейтинг...",
+    error: "Не удалось загрузить ваш рейтинг",
+    unlock: "Рейтинг откроется после {{minimum}} засчитанных голосов",
+    progress: "Засчитано голосов: {{count}} · осталось: {{remaining}}",
+    eligible: "Не засчитываются битвы с ошибками участника и с субагентами в затронутых сборках",
+    filters: "Сбои запуска исключены · Субагенты отфильтрованы по коммиту",
+    summary: "Засчитано голосов: {{count}} · {{earlyVotes}} · Обновлено {{date}}",
+    excludeEarlyVotes: "Исключить ранние голоса",
+    earlyIncluded: "Ранние голоса учтены",
+    earlyExcluded: "Ранние голоса исключены",
+    disconnected:
+      "У некоторых групп моделей пока нет общих сравнений. Рейтинги между этими группами зависят от априорного распределения.",
+    noModels: "Активные модели появляются после 4 засчитанных голосов у каждой",
+    chartLabel:
+      "Рейтинги ваших моделей с 95% доверительными интервалами, медианной скоростью вывода и числом голосов",
+    votes: "Голоса",
+    axis: "Рейтинг Брэдли–Терри (шкала Эло)",
+    medianSpeed: "Медиана {{speed}} токенов/с",
+    noSpeed: "Скорость неизвестна",
+  },
   feedback: {
     sidebarAction: "Отправить отзыв",
     sendError: "Не удалось отправить отзыв. Повторите попытку.",

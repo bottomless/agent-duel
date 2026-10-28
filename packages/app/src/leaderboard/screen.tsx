@@ -1,5 +1,5 @@
 import { ScrollView, Text, View } from "react-native";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useFetchQuery } from "@/data/query";
 import type { Theme } from "@/styles/theme";
 import { useIsFocused } from "@react-navigation/native";
@@ -13,7 +13,8 @@ import { Alert } from "@/components/ui/alert";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Switch } from "@/components/ui/switch";
 import type { LeaderboardDataset } from "@getpaseo/protocol/leaderboard/schemas";
-import { fetchLeaderboard } from "./client";
+import { fetchLeaderboard, leaderboardErrorReason } from "./client";
+import { useLeaderboardPreferences } from "./preferences";
 import { LeaderboardChart } from "./chart";
 
 const ThemedSpinner = withUnistyles(LoadingSpinner);
@@ -24,7 +25,8 @@ export function LeaderboardScreen() {
   const session = useAccountSessionStore((s) => s.session);
   const endpoint = useAccountsEndpoint();
   const focused = useIsFocused();
-  const [excludeEarlyVotes, setExcludeEarlyVotes] = useState(false);
+  const excludeEarlyVotes = useLeaderboardPreferences((s) => s.excludeEarlyVotes);
+  const setExcludeEarlyVotes = useLeaderboardPreferences((s) => s.setExcludeEarlyVotes);
   const query = useFetchQuery({
     dataShape: "value",
     queryKey: ["my-leaderboard", endpoint?.baseUrl, session?.user.id],
@@ -76,7 +78,11 @@ export function LeaderboardScreen() {
           </View>
         ) : null}
         {query.isError ? (
-          <Alert variant="error" title={t("leaderboard.error")}>
+          <Alert
+            variant="error"
+            title={t("leaderboard.error")}
+            description={leaderboardErrorReason(query.error)}
+          >
             <Button variant="outline" size="sm" disabled={query.isFetching} onPress={refresh}>
               {t("leaderboard.retry")}
             </Button>

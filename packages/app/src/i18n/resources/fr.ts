@@ -1,4 +1,4 @@
-import { en, type TranslationResources } from "./en";
+import type { TranslationResources } from "./en";
 
 export const fr: TranslationResources = {
   common: {
@@ -1654,7 +1654,33 @@ export const fr: TranslationResources = {
   sidebarCallout: {
     dismiss: "Rejeter",
   },
-  leaderboard: en.leaderboard,
+  leaderboard: {
+    title: "Mon classement",
+    refresh: "Actualiser",
+    refreshing: "Actualisation...",
+    retry: "Réessayer",
+    connect: "Connectez-vous pour voir votre classement",
+    loading: "Calcul de votre classement...",
+    error: "Votre classement n’a pas pu être chargé",
+    unlock: "Votre classement se débloque à {{minimum}} votes valides",
+    progress: "Vous avez {{count}} votes valides · encore {{remaining}}",
+    eligible:
+      "Les duels où un concurrent a échoué et ceux avec des sous-agents sur les versions concernées ne comptent pas",
+    filters: "Échecs d’exécution exclus · Sous-agents filtrés par commit",
+    summary: "{{count}} votes valides · {{earlyVotes}} · Mis à jour le {{date}}",
+    excludeEarlyVotes: "Exclure les votes anticipés",
+    earlyIncluded: "Votes anticipés inclus",
+    earlyExcluded: "Votes anticipés exclus",
+    disconnected:
+      "Certains groupes de modèles n’ont encore aucune comparaison commune. Les scores entre ces groupes dépendent de la loi a priori.",
+    noModels: "Les modèles actifs apparaissent à partir de 4 votes valides chacun",
+    chartLabel:
+      "Scores de vos modèles avec intervalles de crédibilité à 95 %, vitesses d’inférence médianes et nombre de votes",
+    votes: "Votes",
+    axis: "Score Bradley–Terry (échelle Elo)",
+    medianSpeed: "{{speed}} tokens/s en médiane",
+    noSpeed: "Vitesse indisponible",
+  },
   feedback: {
     sidebarAction: "Envoyer un avis",
     sendError: "L’avis n’a pas pu être envoyé. Réessayez.",

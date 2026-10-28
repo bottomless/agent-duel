@@ -1,4 +1,4 @@
-import { en, type TranslationResources } from "./en";
+import type { TranslationResources } from "./en";
 
 export const zhCN: TranslationResources = {
   common: {
@@ -1582,7 +1582,30 @@ export const zhCN: TranslationResources = {
   sidebarCallout: {
     dismiss: "关闭",
   },
-  leaderboard: en.leaderboard,
+  leaderboard: {
+    title: "我的排行榜",
+    refresh: "刷新",
+    refreshing: "正在刷新...",
+    retry: "重试",
+    connect: "登录并连接后即可查看你的排行榜",
+    loading: "正在计算你的排行榜...",
+    error: "无法加载你的排行榜",
+    unlock: "有效投票达到 {{minimum}} 票后解锁排行榜",
+    progress: "你已有 {{count}} 票有效投票 · 还差 {{remaining}} 票",
+    eligible: "出现参赛方错误的对战，以及在受影响版本中使用子代理的对战不计入",
+    filters: "已排除运行失败 · 按提交过滤子代理",
+    summary: "{{count}} 票有效投票 · {{earlyVotes}} · 更新于 {{date}}",
+    excludeEarlyVotes: "排除提前投票",
+    earlyIncluded: "包含提前投票",
+    earlyExcluded: "已排除提前投票",
+    disconnected: "部分模型组之间还没有共同的比较。这些组之间的评分取决于先验分布。",
+    noModels: "活跃模型各有 4 票有效投票后显示",
+    chartLabel: "你的模型评分，含 95% 可信区间、推理速度中位数和投票数",
+    votes: "投票",
+    axis: "Bradley–Terry 评分（Elo 刻度）",
+    medianSpeed: "中位数 {{speed}} tokens/s",
+    noSpeed: "速度不可用",
+  },
   feedback: {
     sidebarAction: "发送反馈",
     sendError: "无法发送反馈，请重试。",

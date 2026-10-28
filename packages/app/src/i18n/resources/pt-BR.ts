@@ -1,4 +1,4 @@
-import { en, type TranslationResources } from "./en";
+import type { TranslationResources } from "./en";
 
 export const ptBR: TranslationResources = {
   common: {
@@ -1634,7 +1634,32 @@ export const ptBR: TranslationResources = {
   sidebarCallout: {
     dismiss: "Dispensar",
   },
-  leaderboard: en.leaderboard,
+  leaderboard: {
+    title: "Meu ranking",
+    refresh: "Atualizar",
+    refreshing: "Atualizando...",
+    retry: "Tentar novamente",
+    connect: "Entre e conecte-se para ver seu ranking",
+    loading: "Calculando seu ranking...",
+    error: "Não foi possível carregar seu ranking",
+    unlock: "Seu ranking é liberado com {{minimum}} votos válidos",
+    progress: "Você tem {{count}} votos válidos · faltam {{remaining}}",
+    eligible: "Batalhas com erros de um competidor e com subagentes em versões afetadas não contam",
+    filters: "Falhas de execução excluídas · Subagentes filtrados por commit",
+    summary: "{{count}} votos válidos · {{earlyVotes}} · Atualizado em {{date}}",
+    excludeEarlyVotes: "Excluir votos antecipados",
+    earlyIncluded: "Votos antecipados incluídos",
+    earlyExcluded: "Votos antecipados excluídos",
+    disconnected:
+      "Alguns grupos de modelos ainda não têm comparações em comum. As pontuações entre esses grupos dependem da distribuição a priori.",
+    noModels: "Modelos ativos aparecem com 4 votos válidos cada",
+    chartLabel:
+      "Pontuações dos seus modelos com intervalos de credibilidade de 95%, velocidades medianas de inferência e número de votos",
+    votes: "Votos",
+    axis: "Pontuação Bradley–Terry (escala Elo)",
+    medianSpeed: "Mediana de {{speed}} tokens/s",
+    noSpeed: "Velocidade indisponível",
+  },
   feedback: {
     sidebarAction: "Enviar feedback",
     sendError: "Não foi possível enviar o feedback. Tente novamente.",

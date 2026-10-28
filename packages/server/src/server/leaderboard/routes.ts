@@ -13,6 +13,21 @@ interface LeaderboardRouterOptions {
   appVersion: string;
 }
 
+const unavailable = "Your leaderboard could not be loaded. Please try again.";
+
+async function controlPlaneError(response: globalThis.Response) {
+  const payload: unknown = await response.json().catch(() => null);
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "error" in payload &&
+    typeof payload.error === "string"
+  ) {
+    return payload.error.slice(0, 512);
+  }
+  return unavailable;
+}
+
 function asyncRoute(handler: (req: Request, res: Response) => Promise<void>): RequestHandler {
   return async (req, res, next) => {
     try {
@@ -44,17 +59,19 @@ export function createLeaderboardRouter(options: LeaderboardRouterOptions) {
         signal: AbortSignal.timeout(240_000),
       });
       if (!response.ok) {
-        const status = response.status === 401 ? 401 : 503;
-        res
-          .status(status)
-          .json({ error: "Your leaderboard could not be loaded. Please try again." });
+        // 4xx carries the account's reason (terms, refused build); outages stay generic.
+        if (response.status < 500) {
+          res.status(response.status).json({ error: await controlPlaneError(response) });
+          return;
+        }
+        res.status(503).json({ error: unavailable });
         return;
       }
       const body = leaderboardResponseSchema.parse(await response.json());
       res.setHeader("Cache-Control", "no-store");
       res.json(body);
     } catch {
-      res.status(503).json({ error: "Your leaderboard could not be loaded. Please try again." });
+      res.status(503).json({ error: unavailable });
     }
   }
   router.get("/", asyncRoute(handleRequest));
