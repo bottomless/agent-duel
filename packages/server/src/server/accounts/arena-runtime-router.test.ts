@@ -286,6 +286,38 @@ describe("Arena runtime proxy", () => {
     );
   });
 
+  it("forwards a keep-alive ping and the header that says the control plane took it", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    upstream.mockResolvedValue(
+      new Response(null, { status: 204, headers: { "X-Arena-Keep-Alive": "1" } }),
+    );
+
+    const response = await fetch(
+      `${baseUrl}/api/arena-runtime/api/openrouter/api/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${runtime.token}`,
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "assignment-1",
+          "X-Arena-Scope-ID": "battle-1",
+          "X-Arena-Keep-Alive": "1",
+        },
+        body: JSON.stringify({ model: "contestant", stream: true, max_tokens: 1 }),
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("x-arena-keep-alive")).toBe("1");
+    const [, init] = upstream.mock.calls[0]!;
+    expect(new Headers(init?.headers).get("x-arena-keep-alive")).toBe("1");
+  });
+
   it("rejects routes outside the Arena allowlist", async () => {
     installArenaCredentials({
       mode: "hosted",
