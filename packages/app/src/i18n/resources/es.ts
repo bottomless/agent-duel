@@ -992,6 +992,12 @@ export const es: TranslationResources = {
         all: "Todos los hosts",
       },
     },
+    account: {
+      notSignedIn: "Sin iniciar sesión",
+      signIn: "Iniciar sesión",
+      requiredTitle: "Inicia sesión para continuar",
+      requiredDescription: "Ya usaste los prompts gratuitos en este equipo. Tus chats siguen aquí.",
+    },
     pinned: {
       title: "Anclados",
     },
@@ -1743,6 +1749,9 @@ export const es: TranslationResources = {
       signOut: "Cerrar sesión",
       signOutHint: "Tendrás que iniciar sesión de nuevo para usar Agent Duel.",
       signOutFailed: "No se pudo cerrar la sesión. Inténtalo de nuevo.",
+      notSignedIn: "Sin iniciar sesión",
+      notSignedInHint: "Inicia sesión para conservar tus duelos en tu cuenta.",
+      signIn: "Iniciar sesión",
     },
     editor: {
       title: "Editor",

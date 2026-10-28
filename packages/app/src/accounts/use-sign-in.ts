@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useReducer } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { getDesktopHost } from "@/desktop/host";
 import { openExternalUrl } from "@/utils/open-external-url";
-import { useAccountSessionStore } from "./session-store";
+import { useAccountSessionStore, type AccountSession } from "./session-store";
 import type { AcceptTermsRequest } from "@getpaseo/protocol/accounts/schemas";
 import {
   buildOAuthStartUrl,
   claimSignInFlow,
+  currentSessionQueryKey,
   openSignInFlow,
   sendMagicLink,
+  signOut,
   type AccountsEndpoint,
 } from "./client";
 import {
@@ -31,13 +34,19 @@ function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
 
+/** The anonymous session a sign-in upgrades, so its battles stay with the account. */
+function anonymousSessionToken(): string | null {
+  const session = useAccountSessionStore.getState().session;
+  return session?.method === "anonymous" ? session.token : null;
+}
+
 async function openAppSignInFlow(endpoint: AccountsEndpoint, acceptance: AcceptTermsRequest) {
   // Returning to the desktop is optional; a local listener failure must not
   // prevent signing in. Browser clients keep the manual return instruction.
   const desktopReturnUrl = await getDesktopHost()
     ?.accounts?.createReturnUrl?.()
     .catch(() => undefined);
-  return openSignInFlow(endpoint, { desktopReturnUrl, acceptance });
+  return openSignInFlow(endpoint, { desktopReturnUrl, acceptance }, anonymousSessionToken());
 }
 
 export function useSignIn(
@@ -45,7 +54,20 @@ export function useSignIn(
   acceptance: AcceptTermsRequest | null,
 ): SignInController {
   const [state, dispatch] = useReducer(signInReducer, initialSignInState);
-  const setSession = useAccountSessionStore((store) => store.setSession);
+  const storeSession = useAccountSessionStore((store) => store.setSession);
+  const queryClient = useQueryClient();
+  // The daemon verified the session it hands over, so the gate starts from it instead of checking it
+  // first; that check would swap the app for a spinner and lose the chat an anonymous user was in.
+  const setSession = useCallback(
+    (session: AccountSession) => {
+      queryClient.setQueryData(currentSessionQueryKey(endpoint.baseUrl, session.token), {
+        user: session.user,
+        method: session.method,
+      });
+      storeSession(session);
+    },
+    [endpoint.baseUrl, queryClient, storeSession],
+  );
 
   const startEmail = useCallback(
     (email: string) => {
@@ -108,7 +130,11 @@ export function useSignIn(
         return;
       }
       if (result.status === "signed-in") {
+        const upgraded = anonymousSessionToken();
         setSession({ token: result.sessionToken, user: result.user, method: result.method });
+        // The control plane already revoked the anonymous session; this makes the daemon forget it
+        // too, so it never forwards it to Arena again.
+        if (upgraded) void signOut(endpoint, upgraded).catch(() => undefined);
       }
     };
 

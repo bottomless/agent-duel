@@ -2,13 +2,13 @@ import { useSyncExternalStore } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import type { AccountUser, SignInMethod } from "@getpaseo/protocol/accounts/schemas";
+import type { AccountUser, SessionMethod } from "@getpaseo/protocol/accounts/schemas";
 import { getDesktopHost } from "@/desktop/host";
 
 export interface AccountSession {
   token: string;
   user: AccountUser;
-  method: SignInMethod;
+  method: SessionMethod;
 }
 
 interface AccountSessionState {

@@ -32,6 +32,7 @@ import {
   SIDEBAR_RESIZE_ACTIVATION_OFFSET,
   SIDEBAR_RESIZE_FAIL_OFFSET,
 } from "@/components/sidebar-resize-handle-layout";
+import { SidebarAccount } from "@/accounts/sidebar-account";
 import { SidebarArchivedChats } from "@/components/sidebar/archived-chats";
 import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/display-preferences/menu";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
@@ -429,6 +430,7 @@ function SidebarFooter({
 
   return (
     <View style={styles.sidebarFooter}>
+      <SidebarAccount />
       {handleFeedback ? (
         <Pressable
           style={footerFeedbackButtonStyle}

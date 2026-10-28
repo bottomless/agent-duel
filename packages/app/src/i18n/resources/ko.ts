@@ -967,6 +967,13 @@ export const ko: TranslationResources = {
         all: "모든 호스트",
       },
     },
+    account: {
+      notSignedIn: "로그인하지 않음",
+      signIn: "로그인",
+      requiredTitle: "계속하려면 로그인하세요",
+      requiredDescription:
+        "이 컴퓨터의 무료 프롬프트를 모두 사용했습니다. 채팅은 그대로 남아 있습니다.",
+    },
     pinned: {
       title: "고정됨",
     },
@@ -1709,6 +1716,9 @@ export const ko: TranslationResources = {
       signOut: "로그아웃",
       signOutHint: "Agent Duel을 사용하려면 다시 로그인해야 합니다.",
       signOutFailed: "로그아웃하지 못했습니다. 다시 시도하세요.",
+      notSignedIn: "로그인하지 않음",
+      notSignedInHint: "로그인하면 배틀이 계정에 저장됩니다.",
+      signIn: "로그인",
     },
     editor: {
       title: "편집기",

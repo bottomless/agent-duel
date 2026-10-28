@@ -5,7 +5,7 @@ import { resolveSessionPublicKey, verifySessionToken } from "./token.js";
 const keys = generateKeyPairSync("ed25519");
 const sessionPublicKey = keys.publicKey.export({ format: "der", type: "spki" }).toString("base64");
 
-function token(expiresAt: number) {
+function token(expiresAt: number, claims: Record<string, unknown> = {}) {
   const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url");
   const payload = Buffer.from(
     JSON.stringify({
@@ -18,6 +18,7 @@ function token(expiresAt: number) {
       method: "email",
       iat: 1_700_000_000,
       exp: expiresAt,
+      ...claims,
     }),
   ).toString("base64url");
   return `${header}.${payload}.${sign(null, Buffer.from(`${header}.${payload}`), keys.privateKey).toString("base64url")}`;
@@ -37,6 +38,17 @@ describe("desktop session verification", () => {
   it("accepts a valid control-plane token without a network lookup", () => {
     const expiresAt = Math.floor(now.getTime() / 1000) + 60;
     expect(verifySessionToken(token(expiresAt), publicKey, now)?.user.id).toBe("user-1");
+  });
+
+  it("accepts an anonymous session, which has no email", () => {
+    const expiresAt = Math.floor(now.getTime() / 1000) + 60;
+    const verified = verifySessionToken(
+      token(expiresAt, { email: null, method: "anonymous" }),
+      publicKey,
+      now,
+    );
+    expect(verified?.method).toBe("anonymous");
+    expect(verified?.user.email).toBeNull();
   });
 
   it("rejects expired and tampered tokens", () => {

@@ -958,6 +958,13 @@ export const ar: TranslationResources = {
         all: "كل المضيفين",
       },
     },
+    account: {
+      notSignedIn: "لم يتم تسجيل الدخول",
+      signIn: "تسجيل الدخول",
+      requiredTitle: "سجّل الدخول للمتابعة",
+      requiredDescription:
+        "لقد استخدمت المطالبات المجانية على هذا الكمبيوتر. تبقى محادثاتك كما هي.",
+    },
     pinned: {
       title: "المثبتة",
     },
@@ -1693,6 +1700,9 @@ export const ar: TranslationResources = {
       signOut: "تسجيل الخروج",
       signOutHint: "ستحتاج إلى تسجيل الدخول مرة أخرى لاستخدام Agent Duel.",
       signOutFailed: "تعذّر تسجيل الخروج. حاول مرة أخرى.",
+      notSignedIn: "لم يتم تسجيل الدخول",
+      notSignedInHint: "سجّل الدخول للاحتفاظ بمعاركك في حسابك.",
+      signIn: "تسجيل الدخول",
     },
     editor: {
       title: "المحرر",

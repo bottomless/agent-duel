@@ -1,4 +1,5 @@
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import { isSignInRequiredError, useSignInPromptStore } from "@/accounts/sign-in-prompt";
 import {
   SINGLE_AGENT_MODELS,
   singleAgentControlsLocked,
@@ -2462,7 +2463,11 @@ function ActiveAgentComposer({
           useSessionStore.getState().sessions[serverId]?.queuedMessages.get(queuedAgentId) ?? [],
         write: (update) => useSessionStore.getState().setQueuedMessages(serverId, update),
       },
-      submitMessage: ({ text, attachments }) => submitBattle({ text, attachments, cwd }),
+      submitMessage: ({ text, attachments }) =>
+        submitBattle({ text, attachments, cwd }).catch((error: unknown) => {
+          if (isSignInRequiredError(error)) useSignInPromptStore.getState().request("required");
+          throw error;
+        }),
       retainWhileSubmitting: true,
     }).then((result) => {
       if (result.status === "failed") {

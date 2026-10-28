@@ -26,6 +26,11 @@ export interface AccountsService {
   readonly sessions: SessionResolver;
   readonly logger: Logger;
   availableMethods(): ReturnType<AccountsBackend["methods"]>;
+  /**
+   * The control plane merged anonymous account `from` into `into` at sign-in. When `into`'s Arena
+   * credentials are installed next, they carry `from` so the engine moves its local records over.
+   */
+  adoptAccount(from: string, into: string): void;
   close(): Promise<void>;
 }
 
@@ -56,6 +61,11 @@ export function createAccountsService(options: CreateAccountsServiceOptions): Ac
   // expires, and another tab or window can still hold it. Forwarded again, it would fail every
   // Arena call. Kept until expiry, which bounds it.
   const signedOut = new Set<string>();
+  const pendingAdoptions = new Map<string, Set<string>>();
+  const researchPartition = (userId: string) =>
+    createHash("sha256")
+      .update(JSON.stringify([options.config.controlPlaneUrl, userId]))
+      .digest("hex");
   let credentialTransition = Promise.resolve();
   const shutdownArena = options.shutdownArena ?? (() => OpenCodeServerManager.restartInstance());
   function transitionCredentials(action: () => Promise<void>): Promise<void> {
@@ -67,7 +77,9 @@ export function createAccountsService(options: CreateAccountsServiceOptions): Ac
     async onAuthenticated(token, user) {
       await transitionCredentials(async () => {
         if (signedOut.has(token)) return;
-        if (account?.userId === user.id) {
+        const adopted = [...(pendingAdoptions.get(user.id) ?? [])];
+        pendingAdoptions.delete(user.id);
+        if (account?.userId === user.id && adopted.length === 0) {
           if (account.tokens.at(-1) === token) return;
           const others = account.tokens.filter((candidate) => candidate !== token);
           account = { userId: user.id, tokens: [...others, token].slice(-REMEMBERED_SESSIONS) };
@@ -80,9 +92,11 @@ export function createAccountsService(options: CreateAccountsServiceOptions): Ac
           token,
           controlPlaneUrl: options.config.controlPlaneUrl,
           researchAccountID: user.id,
-          researchPartition: createHash("sha256")
-            .update(JSON.stringify([options.config.controlPlaneUrl, user.id]))
-            .digest("hex"),
+          researchPartition: researchPartition(user.id),
+          adoptAccounts: adopted.map((accountID) => ({
+            accountID,
+            researchPartition: researchPartition(accountID),
+          })),
         });
         await shutdownArena();
       });
@@ -122,6 +136,11 @@ export function createAccountsService(options: CreateAccountsServiceOptions): Ac
     sessions,
     logger: options.logger,
     availableMethods: () => backend.methods(),
+    adoptAccount(from, into) {
+      const adopted = pendingAdoptions.get(into) ?? new Set<string>();
+      adopted.add(from);
+      pendingAdoptions.set(into, adopted);
+    },
     close: () => backend.close(),
   };
 }

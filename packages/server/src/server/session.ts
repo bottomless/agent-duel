@@ -14,6 +14,7 @@ import {
   withStreamImageRefs,
 } from "./arena/history-images.js";
 import { ArenaPayloadTooLargeError } from "./arena/payload-limit.js";
+import { ArenaSignInRequiredError } from "./arena/sign-in-required.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
 import { lstat, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
@@ -1863,11 +1864,15 @@ export class Session {
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.sessionLogger.error({ err }, "Error handling message");
-        // An Arena answer too large to send says so in its own words, without the generic prefix.
-        const tooLarge = err instanceof ArenaPayloadTooLargeError;
+        // An Arena answer too large to send, or a send that needs an account, says so in its own
+        // words and with its own code, without the generic prefix.
+        const coded =
+          err instanceof ArenaPayloadTooLargeError || err instanceof ArenaSignInRequiredError
+            ? err
+            : null;
         const failure = {
-          error: tooLarge ? err.message : `Request failed: ${err.message}`,
-          code: tooLarge ? err.code : "handler_error",
+          error: coded ? coded.message : `Request failed: ${err.message}`,
+          code: coded ? coded.code : "handler_error",
         };
         if (
           msg.type.startsWith("arena.stream.") &&

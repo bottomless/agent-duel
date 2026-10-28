@@ -31,6 +31,7 @@ const config: AccountsConfig = {
 };
 const user = { id: "user-1", email: "dev@example.com", name: "Dev", image: null };
 const otherUser = { id: "user-2", email: "other@example.com", name: "Other", image: null };
+const anonymousUser = { id: "anonymous-1", email: null, name: null, image: null };
 
 const acceptance: AcceptTermsRequest = {
   accepted: true,
@@ -47,6 +48,7 @@ interface TestSession {
   readonly account?: AccountUser;
   /** Signing is deterministic, so two sessions of one account need different claims. */
   readonly name?: string;
+  readonly method?: "email" | "anonymous";
 }
 
 function sessionToken(session: TestSession = {}) {
@@ -61,7 +63,7 @@ function sessionToken(session: TestSession = {}) {
       email: account.email,
       name: session.name ?? account.name,
       image: account.image,
-      method: "email",
+      method: session.method ?? "email",
       iat: now,
       exp: now + 60,
     }),
@@ -76,6 +78,8 @@ class StubBackend {
   claim: Awaited<ReturnType<AccountsBackend["claimFlow"]>> = { status: "pending" };
 
   accepted: { token: string; input: AcceptTermsRequest } | null = null;
+  openedWith: string | undefined = undefined;
+  anonymousToken = "";
 
   private guard() {
     if (this.unavailable) throw new AccountsBackendUnavailableError(new Error("offline"));
@@ -87,8 +91,9 @@ class StubBackend {
     return { enabled: true, methods: ["email" as const, "github" as const] };
   }
 
-  async openFlow(input: { desktopReturnUrl?: string }) {
+  async openFlow(input: { desktopReturnUrl?: string }, anonymousToken?: string) {
     this.guard();
+    this.openedWith = anonymousToken;
     return {
       flowId: input.desktopReturnUrl ?? "flow-1",
       secret: "secret-1",
@@ -99,6 +104,11 @@ class StubBackend {
   async claimFlow() {
     this.guard();
     return this.claim;
+  }
+
+  async startAnonymous() {
+    this.guard();
+    return { sessionToken: this.anonymousToken, method: "anonymous" as const, user: anonymousUser };
   }
 
   async sendMagicLink(input: { email: string; flowId: string }) {
@@ -160,6 +170,8 @@ beforeEach(() => {
   backend.sent = null;
   backend.accepted = null;
   backend.claim = { status: "pending" };
+  backend.openedWith = undefined;
+  backend.anonymousToken = "";
   shutdownCalls = 0;
   clearArenaCredentials();
   router = createAccountsRouter(
@@ -212,6 +224,7 @@ function arenaCredentials(token: string) {
         ]),
       )
       .digest("hex"),
+    adoptAccounts: [],
     token,
     controlPlaneUrl: config.controlPlaneUrl,
   };
@@ -305,6 +318,76 @@ describe("account routes", () => {
       headers: { "x-paseo-session": token },
     });
     expect(offline.status).toBe(503);
+  });
+
+  it("starts an anonymous session and installs its Arena credential", async () => {
+    backend.anonymousToken = sessionToken({ account: anonymousUser, method: "anonymous" });
+    const response = await fetch(`${baseUrl}/api/auth/anonymous`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ acceptance }),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()).user).toEqual(anonymousUser);
+    expect(readArenaCredentials()?.credentials).toMatchObject({
+      researchAccountID: anonymousUser.id,
+    });
+  });
+
+  it("passes the control plane's refusal code through", async () => {
+    backend.requestError = new AccountsRequestError(403, "Sign in to continue", "sign_in_required");
+    const response = await fetch(`${baseUrl}/api/auth/anonymous`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ acceptance }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: "Sign in to continue",
+      code: "sign_in_required",
+    });
+  });
+
+  it("upgrades only an anonymous session when opening a sign-in flow", async () => {
+    const open = (token: string) =>
+      fetch(`${baseUrl}/api/auth/flow`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-paseo-session": token },
+        body: JSON.stringify({ acceptance }),
+      });
+    const anonymous = sessionToken({ account: anonymousUser, method: "anonymous" });
+    expect((await open(anonymous)).status).toBe(200);
+    expect(backend.openedWith).toBe(anonymous);
+    expect((await open(sessionToken())).status).toBe(200);
+    expect(backend.openedWith).toBeUndefined();
+  });
+
+  it("hands a merged anonymous account to the signed-in account's Arena credential", async () => {
+    const token = sessionToken();
+    backend.claim = {
+      status: "signed-in",
+      sessionToken: token,
+      method: "email",
+      user,
+      mergedFrom: anonymousUser.id,
+    };
+    const response = await fetch(`${baseUrl}/api/auth/flow/claim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowId: "flow-1", secret: "secret-1" }),
+    });
+    expect(await response.json()).not.toHaveProperty("mergedFrom");
+    expect(readArenaCredentials()?.credentials).toMatchObject({
+      researchAccountID: user.id,
+      adoptAccounts: [
+        {
+          accountID: anonymousUser.id,
+          researchPartition: createHash("sha256")
+            .update(JSON.stringify([config.controlPlaneUrl, anonymousUser.id]))
+            .digest("hex"),
+        },
+      ],
+    });
   });
 
   it("does not restart Arena when the same token is resolved again", async () => {

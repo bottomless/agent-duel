@@ -982,6 +982,13 @@ export const ru: TranslationResources = {
         all: "Все хосты",
       },
     },
+    account: {
+      notSignedIn: "Вход не выполнен",
+      signIn: "Войти",
+      requiredTitle: "Войдите, чтобы продолжить",
+      requiredDescription:
+        "Вы использовали бесплатные запросы на этом компьютере. Ваши чаты остаются на месте.",
+    },
     pinned: {
       title: "Закреплённые",
     },
@@ -1731,6 +1738,9 @@ export const ru: TranslationResources = {
       signOut: "Выйти",
       signOutHint: "Чтобы пользоваться Agent Duel, потребуется войти снова.",
       signOutFailed: "Не удалось выйти. Попробуйте ещё раз.",
+      notSignedIn: "Вход не выполнен",
+      notSignedInHint: "Войдите, чтобы сохранить свои битвы в аккаунте.",
+      signIn: "Войти",
     },
     editor: {
       title: "Редактор",

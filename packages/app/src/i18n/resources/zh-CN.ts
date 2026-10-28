@@ -948,6 +948,12 @@ export const zhCN: TranslationResources = {
         all: "所有主机",
       },
     },
+    account: {
+      notSignedIn: "未登录",
+      signIn: "登录",
+      requiredTitle: "登录以继续",
+      requiredDescription: "你已用完这台电脑上的免费提示。你的聊天会保留。",
+    },
     pinned: {
       title: "已置顶",
     },
@@ -1675,6 +1681,9 @@ export const zhCN: TranslationResources = {
       signOut: "退出登录",
       signOutHint: "退出后需要重新登录才能使用 Agent Duel。",
       signOutFailed: "退出登录失败，请重试。",
+      notSignedIn: "未登录",
+      notSignedInHint: "登录后，你的对战将保存到你的账户。",
+      signIn: "登录",
     },
     editor: {
       title: "编辑器",
