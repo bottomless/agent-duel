@@ -125,6 +125,8 @@ import {
   ArenaDiffTooLargeError,
   ArenaPartTooLargeError,
 } from "../../arena/payload-limit.js";
+import { arenaErrorCode, ArenaSignInRequiredError } from "../../arena/sign-in-required.js";
+import { SIGN_IN_REQUIRED_CODE } from "@getpaseo/protocol/accounts/schemas";
 import {
   buildOpenCodePermissionRules,
   OpenCodeProviderOptionsSchema,
@@ -4206,7 +4208,12 @@ class OpenCodeAgentSession implements AgentSession {
     if (response.status === 404 && options?.allowNotFound) {
       return schema.parse(null);
     }
-    if (!response.ok) throw new Error(arenaErrorMessage(value, response.status));
+    if (!response.ok) {
+      const message = arenaErrorMessage(value, response.status);
+      if (arenaErrorCode(value) === SIGN_IN_REQUIRED_CODE)
+        throw new ArenaSignInRequiredError(message);
+      throw new Error(message);
+    }
     return schema.parse(value);
   }
 

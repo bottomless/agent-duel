@@ -69,8 +69,10 @@ through `turnID`, and `generations`, `events`, `rawEvents`, `sessionArchives`,
   session, and `adoptSessionRatings` claims the ones written before that chat
   existed.
 
-Ownership is claimed once and never transferred. This beta keeps the existing
-`userId` on local records, with no account partitioning or migrations. Research
+Ownership is claimed once and transferred only when an anonymous account is merged into an existing
+one at sign-in ([accounts](accounts.md#continue-without-an-account)); the engine then re-owns those
+records and research partitions at startup (`adoptResearchAccounts` in `arena/local-store.ts`).
+Otherwise local records keep their `userId`, with no account partitioning. Research
 snapshots use a server-authenticated account ID and a persistent local source ID;
 the local record's `userId` is omitted from the uploaded document. Local reads
 are served from the current signed-in daemon session.

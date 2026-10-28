@@ -1743,6 +1743,9 @@ export const es: TranslationResources = {
       signOut: "Cerrar sesión",
       signOutHint: "Tendrás que iniciar sesión de nuevo para usar Agent Duel.",
       signOutFailed: "No se pudo cerrar la sesión. Inténtalo de nuevo.",
+      notSignedIn: "Sin iniciar sesión",
+      notSignedInHint: "Inicia sesión para conservar tus duelos en tu cuenta.",
+      signIn: "Iniciar sesión",
     },
     editor: {
       title: "Editor",

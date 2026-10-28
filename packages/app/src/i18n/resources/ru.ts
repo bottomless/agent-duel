@@ -1731,6 +1731,9 @@ export const ru: TranslationResources = {
       signOut: "Выйти",
       signOutHint: "Чтобы пользоваться Agent Duel, потребуется войти снова.",
       signOutFailed: "Не удалось выйти. Попробуйте ещё раз.",
+      notSignedIn: "Вход не выполнен",
+      notSignedInHint: "Войдите, чтобы сохранить свои битвы в аккаунте.",
+      signIn: "Войти",
     },
     editor: {
       title: "Редактор",

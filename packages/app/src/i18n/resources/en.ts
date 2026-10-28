@@ -1708,6 +1708,9 @@ export const en = {
       signOut: "Sign out",
       signOutHint: "You'll need to sign in again to use Agent Duel.",
       signOutFailed: "Could not sign out. Try again.",
+      notSignedIn: "Not signed in",
+      notSignedInHint: "Sign in to keep your battles with your account.",
+      signIn: "Sign in",
     },
     editor: {
       title: "Editor",

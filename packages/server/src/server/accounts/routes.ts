@@ -4,6 +4,7 @@ import {
   acceptTermsRequestSchema,
   openSignInFlowRequestSchema,
   sendMagicLinkRequestSchema,
+  startAnonymousSessionRequestSchema,
   SESSION_HEADER,
 } from "@getpaseo/protocol/accounts/schemas";
 import type { AccountsService } from "./service.js";
@@ -29,7 +30,9 @@ function route(handler: AsyncRouteHandler): RequestHandler {
         return;
       }
       if (error instanceof AccountsRequestError) {
-        res.status(error.status).json({ error: error.message });
+        res
+          .status(error.status)
+          .json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
         return;
       }
       next(error);
@@ -60,7 +63,29 @@ export function createAccountsRouter(service: AccountsService): Router {
         res.status(400).json({ error: "Invalid sign-in request or missing terms acceptance" });
         return;
       }
-      res.json(await service.backend.openFlow(parsed.data));
+      // Signing in from an anonymous session upgrades that account rather than starting another.
+      const token = readSessionToken(req);
+      const anonymous =
+        token && service.sessions.verify(token)?.method === "anonymous" ? token : undefined;
+      res.json(await service.backend.openFlow(parsed.data, anonymous));
+    }),
+  );
+
+  router.post(
+    "/anonymous",
+    route(async (req, res) => {
+      const parsed = startAnonymousSessionRequestSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid request or missing terms acceptance" });
+        return;
+      }
+      const started = await service.backend.startAnonymous(parsed.data);
+      const resolved = await service.sessions.resolve(started.sessionToken);
+      if (resolved.kind !== "authenticated" || resolved.user.id !== started.user.id) {
+        res.status(503).json({ error: SERVICE_UNAVAILABLE });
+        return;
+      }
+      res.json(started);
     }),
   );
 
@@ -77,12 +102,15 @@ export function createAccountsRouter(service: AccountsService): Router {
         res.json(claimed);
         return;
       }
-      const resolved = await service.sessions.resolve(claimed.sessionToken);
-      if (resolved.kind !== "authenticated" || resolved.user.id !== claimed.user.id) {
+      const { mergedFrom, ...signedIn } = claimed;
+      // Before the session is resolved: resolving it installs the account's Arena credentials.
+      if (mergedFrom) service.adoptAccount(mergedFrom, signedIn.user.id);
+      const resolved = await service.sessions.resolve(signedIn.sessionToken);
+      if (resolved.kind !== "authenticated" || resolved.user.id !== signedIn.user.id) {
         res.json({ status: "expired" });
         return;
       }
-      res.json(claimed);
+      res.json(signedIn);
     }),
   );
 

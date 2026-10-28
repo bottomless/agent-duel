@@ -3,6 +3,16 @@ import { z } from "zod";
 export const signInMethodSchema = z.enum(["email", "google", "github"]);
 export type SignInMethod = z.infer<typeof signInMethodSchema>;
 
+/** How a session was opened: a sign-in method, or "Continue without an account". */
+export const sessionMethodSchema = z.enum([...signInMethodSchema.options, "anonymous"]);
+export type SessionMethod = z.infer<typeof sessionMethodSchema>;
+
+/**
+ * The code on a refused Arena send, and on `/api/auth/anonymous`, once an anonymous session has
+ * used its messages. The app answers it with the sign-in screen, without the option to skip.
+ */
+export const SIGN_IN_REQUIRED_CODE = "sign_in_required";
+
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 // A local control plane (agent-duel-cloud scripts/dev.sh) serves its policy pages over loopback HTTP.
@@ -48,7 +58,8 @@ export function hasAcceptedLegalDocuments(
 
 export const accountUserSchema = z.object({
   id: z.string(),
-  email: z.string(),
+  /** Null for an anonymous account. */
+  email: z.string().nullable(),
   name: z.string().nullable(),
   image: z.string().nullable(),
   // Existing persisted accounts and tokens predate acceptance records.
@@ -66,6 +77,11 @@ export const authMethodsResponseSchema = z.object({
    * Absent from a control plane that predates the check and from a daemon without accounts.
    */
   updateRequired: z.boolean().optional(),
+  /**
+   * Whether the control plane lets this device continue without an account. False once the device
+   * has used its anonymous messages. Absent from a control plane without anonymous sessions.
+   */
+  anonymous: z.boolean().optional(),
 });
 export type AuthMethodsResponse = z.infer<typeof authMethodsResponseSchema>;
 
@@ -107,6 +123,18 @@ export const claimSignInFlowResponseSchema = z.discriminatedUnion("status", [
 ]);
 export type ClaimSignInFlowResponse = z.infer<typeof claimSignInFlowResponseSchema>;
 
+export const startAnonymousSessionRequestSchema = z.object({
+  acceptance: acceptTermsRequestSchema,
+});
+export type StartAnonymousSessionRequest = z.infer<typeof startAnonymousSessionRequestSchema>;
+
+export const startAnonymousSessionResponseSchema = z.object({
+  sessionToken: z.string(),
+  method: z.literal("anonymous"),
+  user: accountUserSchema,
+});
+export type StartAnonymousSessionResponse = z.infer<typeof startAnonymousSessionResponseSchema>;
+
 export const sendMagicLinkRequestSchema = z.object({
   email: z.string(),
   flowId: z.string(),
@@ -115,7 +143,9 @@ export type SendMagicLinkRequest = z.infer<typeof sendMagicLinkRequestSchema>;
 
 export const currentSessionResponseSchema = z.object({
   user: accountUserSchema,
-  method: signInMethodSchema,
+  method: sessionMethodSchema,
+  /** An anonymous session that has used its messages; its next send needs an account. */
+  signInRequired: z.boolean().optional(),
 });
 export type CurrentSessionResponse = z.infer<typeof currentSessionResponseSchema>;
 

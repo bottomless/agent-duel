@@ -7,6 +7,11 @@ export interface HostedArenaCredentials {
   readonly controlPlaneUrl: string;
   readonly researchPartition: string;
   readonly researchAccountID: string;
+  /** Anonymous accounts merged into this one at sign-in; the engine moves their local records over. */
+  readonly adoptAccounts: readonly {
+    readonly accountID: string;
+    readonly researchPartition: string;
+  }[];
 }
 
 /** The user's own OpenRouter key, in a build without a control plane. */
@@ -123,6 +128,7 @@ export function issueArenaLaunchCredentials(
       mode: "hosted",
       researchPartition: current.researchPartition,
       researchAccountID: current.researchAccountID,
+      adoptAccounts: current.adoptAccounts,
       token,
       controlPlaneUrl: `${daemonBaseUrl.replace(/\/$/, "")}/api/arena-runtime`,
     },

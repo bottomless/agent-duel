@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clientHeaders, resolveArenaAccessConfig } from "./config.js";
+import { clientHeaders, parseWindowsMachineGuid, resolveArenaAccessConfig } from "./config.js";
 
 describe("resolveArenaAccessConfig", () => {
   it("leaves a daemon without Arena or a control plane alone", () => {
@@ -164,6 +164,7 @@ describe("clientHeaders", () => {
         "X-Agent-Duel-Arch",
         "X-Agent-Duel-CPU",
         "X-Agent-Duel-CPU-Cores",
+        "X-Agent-Duel-Device",
         "X-Agent-Duel-Memory-GB",
         "X-Agent-Duel-OS",
         "X-Agent-Duel-OS-Version",
@@ -171,6 +172,31 @@ describe("clientHeaders", () => {
         "X-Agent-Duel-Version",
       ].sort(),
     );
+  });
+
+  it("sends a stable hash of the device, never the hardware identifier", async () => {
+    const headers = clientHeaders("0.4.0-beta.14");
+    expect(headers["X-Agent-Duel-Device"]).toMatch(/^[a-f0-9]{64}$/);
+    const fresh = await import("./config.js");
+    expect(fresh.clientHeaders("0.4.0-beta.14")["X-Agent-Duel-Device"]).toBe(
+      headers["X-Agent-Duel-Device"],
+    );
+  });
+
+  it("reads the Windows machine GUID from reg.exe output", () => {
+    const output = [
+      "",
+      "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography",
+      "    MachineGuid    REG_SZ    3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+      "",
+    ].join("\r\n");
+    expect(parseWindowsMachineGuid(output)).toBe("3F2504E0-4F89-11D3-9A0C-0305E82C3301");
+    expect(
+      parseWindowsMachineGuid(
+        "ERROR: The system was unable to find the specified registry key or value.",
+      ),
+    ).toBeNull();
+    expect(parseWindowsMachineGuid("    MachineGuid    REG_SZ    not-a-guid")).toBeNull();
   });
 
   it("keeps a CPU name to printable ASCII so fetch accepts it", async () => {

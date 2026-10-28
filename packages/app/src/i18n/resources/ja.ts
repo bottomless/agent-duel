@@ -1712,6 +1712,9 @@ export const ja: TranslationResources = {
       signOut: "サインアウト",
       signOutHint: "Agent Duel を使うには再度サインインが必要です。",
       signOutFailed: "サインアウトできませんでした。もう一度お試しください。",
+      notSignedIn: "未サインイン",
+      notSignedInHint: "サインインすると、バトルがアカウントに保存されます。",
+      signIn: "サインイン",
     },
     editor: {
       title: "エディター",

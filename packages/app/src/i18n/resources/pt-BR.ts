@@ -1729,6 +1729,9 @@ export const ptBR: TranslationResources = {
       signOut: "Sair",
       signOutHint: "Você precisará entrar novamente para usar o Agent Duel.",
       signOutFailed: "Não foi possível sair. Tente novamente.",
+      notSignedIn: "Não conectado",
+      notSignedInHint: "Entre para manter suas batalhas na sua conta.",
+      signIn: "Entrar",
     },
     editor: {
       title: "Editor",
