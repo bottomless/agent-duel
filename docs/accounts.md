@@ -27,7 +27,9 @@ the Arena runtime when it resolves a session into a chat.
 
 The hosted sign-in screen starts with an unchecked agreement to the Terms of Service and an
 acknowledgment of the separate Privacy Policy. All email, Google, and GitHub sign-in actions require
-the checkbox. Links and document versions come from `GET /api/auth/methods`, not a build-time URL.
+the checkbox. It sits once below every sign-in button, and the buttons stay enabled: pressing one
+unchecked shows an error at the checkbox and focuses it. Disabled buttons below the "or" divider
+read as broken, because nothing ties them to a checkbox inside the email form. Links and document versions come from `GET /api/auth/methods`, not a build-time URL.
 The accepted version pair travels with the sign-in flow and is saved on the authenticated account
 with a server timestamp when that flow is claimed.
 

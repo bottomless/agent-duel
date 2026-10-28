@@ -18,7 +18,7 @@ const user: AccountUser = {
 // boundary is controlled: OAuth credentials and a live cloud database are not needed
 // to inject save failures or prove the UI's acceptance/retry behavior. Daemon proxy
 // behavior is covered separately by accounts/routes.test.ts over real HTTP.
-test("requires the unchecked agreement for email and both OAuth buttons", async ({
+test("points every sign-in button at the unchecked agreement", async ({
   page,
   context,
 }, testInfo) => {
@@ -30,7 +30,9 @@ test("requires the unchecked agreement for email and both OAuth buttons", async 
   await context.route("https://policies.example/**", (route) =>
     route.fulfill({ contentType: "text/html", body: "<h1>Policy fixture</h1>" }),
   );
+  let flowRequests = 0;
   await page.route("**/api/auth/flow", async (route) => {
+    flowRequests += 1;
     expect(route.request().postDataJSON().acceptance).toEqual({
       accepted: true,
       termsVersion: documents.termsVersion,
@@ -47,9 +49,15 @@ test("requires the unchecked agreement for email and both OAuth buttons", async 
   await page.goto("/");
   await page.getByTestId("sign-in-email-input").fill("terms@example.com");
   await expect(page.getByRole("checkbox")).not.toBeChecked();
-  await expect(page.getByTestId("sign-in-send-link")).toBeDisabled();
-  await expect(page.getByTestId("sign-in-google")).toBeDisabled();
-  await expect(page.getByTestId("sign-in-github")).toBeDisabled();
+  await expect(page.getByTestId("legal-checkbox-error")).toHaveCount(0);
+  for (const testId of ["sign-in-send-link", "sign-in-google", "sign-in-github"]) {
+    await page.getByTestId(testId).click();
+    await expect(page.getByTestId("legal-checkbox-error")).toHaveText(
+      "Agree to the Terms of Service to continue.",
+    );
+    await expect(page.getByRole("checkbox")).toBeFocused();
+  }
+  expect(flowRequests).toBe(0);
   const popupPromise = page.waitForEvent("popup");
   await page.getByRole("link", { name: "Terms of Service", exact: true }).click();
   const popup = await popupPromise;
@@ -58,8 +66,7 @@ test("requires the unchecked agreement for email and both OAuth buttons", async 
   await expect(page.getByRole("checkbox")).not.toBeChecked();
   await testInfo.attach("login", { body: await page.screenshot(), contentType: "image/png" });
   await page.getByRole("checkbox").click();
-  await expect(page.getByTestId("sign-in-google")).toBeEnabled();
-  await expect(page.getByTestId("sign-in-github")).toBeEnabled();
+  await expect(page.getByTestId("legal-checkbox-error")).toHaveCount(0);
   await page.getByTestId("sign-in-send-link").click();
   await expect(page.getByText("Check your inbox", { exact: true })).toBeVisible();
 });
