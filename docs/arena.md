@@ -1021,6 +1021,23 @@ field. Each layer has its own file:
   ships. A provider that slows down mid-turn keeps the conversation; OpenRouter leaves it only when
   that provider is unavailable.
   Resolution disables further routing without deleting the assignment.
+- **Keep-alive** (`opencode/src/arena/keep-alive.ts`) — Anthropic drops a cached prompt five minutes
+  after the last request that read it, and a long tool run, permission prompt, subagent or background
+  child often waits longer. While a session is busy and has no request in flight, the engine re-sends
+  its last generation request every four minutes with `max_tokens: 1` and the `x-arena-keep-alive`
+  header, for up to 30 minutes of waiting. The engine cannot tell which side is Claude, so it pings
+  every waiting side. The proxy forwards only `anthropic/` slugs on chat completions and answers every
+  ping with the same empty 204 (`arena-service/src/keep-alive.ts`), also when OpenRouter refused the
+  ping, so a failure names no model; it retries a refused ping once itself. A ping carries no
+  generation id, so it reaches no metrics, telemetry, transcript or stream progress. A side that
+  finished and waits for the user's reply is idle and gets no pings: in production about one finished
+  side in eleven got a reply before the vote, too few to pay for them. Never send `max_tokens: 0`;
+  OpenRouter ignores it and runs a full answer. A proxy from before pings answers without the header,
+  and the engine then stops pinging until it restarts, so bump the cloud's arena-service pin before
+  the desktop release that sends them. In hosted mode the daemon's runtime router
+  (`packages/server/src/server/accounts/arena-runtime-router.ts`) copies only listed headers each way;
+  `x-arena-keep-alive` must stay on both lists, and so must any new `x-arena-*` header. BYOK skips the
+  router, so a BYOK battle does not prove the hosted path.
 - **Response** (`arena-service/src/openrouter.ts`) — before bytes return to the desktop, the control
   plane strips model, provider, fingerprint, OpenRouter metadata, and cost, replaces the generation
   id, and collapses upstream failures to a generic error. The local proxy repeats the scrub as a

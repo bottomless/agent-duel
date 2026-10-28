@@ -19,6 +19,24 @@ const allowedRoutes = new Set([
 
 type Fetch = typeof fetch;
 
+// x-arena-keep-alive marks a cache ping; without it the control plane runs the ping as a full
+// contestant call (arena-service `keep-alive.ts`).
+const forwardedRequestHeaders = [
+  "x-arena-assignment-id",
+  "x-arena-scope-id",
+  "x-arena-generation-id",
+  "x-arena-keep-alive",
+];
+
+function forwardedHeaders(req: express.Request): Record<string, string> {
+  return Object.fromEntries(
+    forwardedRequestHeaders.flatMap((name) => {
+      const value = req.header(name);
+      return value ? [[name, value]] : [];
+    }),
+  );
+}
+
 // A contestant waits out an offline machine; every other failure answers 502.
 function sendFailure(res: express.Response, path: string, error: unknown): void {
   if (path.startsWith("/api/openrouter/") && isNetworkUnavailable(error)) {
@@ -69,26 +87,20 @@ export function createArenaRuntimeRouter(options: {
           Authorization: `Bearer ${credentials.token}`,
           "Content-Type": "application/json",
           ...clientHeaders(options.appVersion),
-          ...(req.header("x-arena-assignment-id")
-            ? { "X-Arena-Assignment-ID": req.header("x-arena-assignment-id")! }
-            : {}),
-          ...(req.header("x-arena-scope-id")
-            ? { "X-Arena-Scope-ID": req.header("x-arena-scope-id")! }
-            : {}),
-          ...(req.header("x-arena-generation-id")
-            ? { "X-Arena-Generation-ID": req.header("x-arena-generation-id")! }
-            : {}),
+          ...forwardedHeaders(req),
         },
         body: Uint8Array.from(req.body).buffer,
       });
       res.status(upstream.status);
       // x-arena-heartbeat-ms tells the engine the stream carries heartbeats it can time out on.
+      // x-arena-keep-alive tells it the control plane took a ping; without it the engine stops pinging.
       for (const name of [
         "content-type",
         "cache-control",
         "x-request-id",
         "retry-after",
         "x-arena-heartbeat-ms",
+        "x-arena-keep-alive",
       ]) {
         const value = upstream.headers.get(name);
         if (value) res.setHeader(name, value);
