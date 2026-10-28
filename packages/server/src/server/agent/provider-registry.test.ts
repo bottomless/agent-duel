@@ -653,6 +653,20 @@ test("a local CLI agent can be enabled with an override", () => {
   expect(registry.claude.enabled).toBe(false);
 });
 
+test("a profile starts with its base agent's default", () => {
+  const registry = buildProviderRegistry(logger, {
+    providerOverrides: {
+      zai: { extends: "claude", label: "ZAI" },
+      "qwen-codex": { extends: "codex", label: "Qwen Code", enabled: true },
+      "my-opencode": { extends: "opencode", label: "My OpenCode" },
+    },
+  });
+
+  expect(registry.zai.enabled).toBe(false);
+  expect(registry["qwen-codex"].enabled).toBe(true);
+  expect(registry["my-opencode"].enabled).toBe(true);
+});
+
 test("new provider extending claude appears in registry", () => {
   const registry = buildProviderRegistry(logger, {
     providerOverrides: {

@@ -60,6 +60,8 @@ Required fields for custom providers:
 - `extends` — which built-in provider to inherit from (or `"acp"`)
 - `label` — display name in the UI
 
+In Agent Duel a provider that extends `claude`, `codex`, `copilot`, `pi`, or `omp` starts disabled, like its base; add `"enabled": true` to use it. See [Disabling a provider](#disabling-a-provider).
+
 See [Codex with a custom OpenAI-compatible endpoint](#codex-with-a-custom-openai-compatible-endpoint) below for the dedicated Codex example.
 
 ---
@@ -429,7 +431,7 @@ Set `enabled: false` to hide a provider from the provider list. The provider wil
 }
 ```
 
-This works for both built-in and custom providers. To re-enable, set `enabled: true` or remove the `enabled` field entirely. Most providers are enabled by default; OMP is intentionally disabled by default and requires `enabled: true`.
+This works for both built-in and custom providers. To re-enable, set `enabled: true` or remove the `enabled` field entirely. In Agent Duel only OpenCode is enabled by default: Claude Code, Codex, Copilot, Pi, and OMP need `enabled: true`. A custom provider starts with its base provider's default, so one that extends `claude` or `codex` also needs `enabled: true`.
 
 ---
 
@@ -670,7 +672,7 @@ Every entry under `agents.providers` accepts these fields:
 | `models`           | `ProviderProfileModel[]`  | No                | Static model list (overrides runtime discovery)                    |
 | `additionalModels` | `ProviderProfileModel[]`  | No                | Static model additions (merged with runtime discovery or `models`) |
 | `disallowedTools`  | `string[]`                | No                | Tool names to disable for this provider (e.g. `["WebSearch"]`)     |
-| `enabled`          | `boolean`                 | No                | Set to `false` to hide the provider (default: `true`)              |
+| `enabled`          | `boolean`                 | No                | Show or hide the provider (default: the base provider's default)   |
 | `order`            | `number`                  | No                | Sort order in the provider list                                    |
 
 ### Model definition
