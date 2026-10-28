@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Text, View, type ViewStyle } from "react-native";
+import { Text, View, type TextStyle, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Maximize2, Minimize2 } from "lucide-react-native";
 import type { HighlightToken } from "@getpaseo/highlight";
@@ -144,9 +144,21 @@ function describeRow(row: ThreeWayRow, side: Side, aligned: boolean) {
 }
 
 type ShownRow = ReturnType<typeof describeRow>;
+type NumberStyle = ReturnType<typeof inlineUnistylesStyle>;
 
-function WrappedCode({ row, side, tokens }: { row: ThreeWayRow; side: Side; tokens: Tokens }) {
-  const { wrapStyle } = useArenaDiffWrap();
+// The wrapped rows take the wrap style and number width from their region rather than reading
+// them per row: a region can hold hundreds of rows on each side.
+function WrappedCode({
+  row,
+  side,
+  tokens,
+  wrapStyle,
+}: {
+  row: ThreeWayRow;
+  side: Side;
+  tokens: Tokens;
+  wrapStyle: TextStyle;
+}) {
   const cell = row[side];
   const removed = cell?.type === "remove";
   const source = removed ? tokens.base : tokens[side];
@@ -174,15 +186,16 @@ function WrappedLine({
   side,
   tokens,
   hasBoth,
-  numberWidth,
+  numberStyle,
+  wrapStyle,
 }: {
   shown: ShownRow;
   side: Side;
   tokens: Tokens;
   hasBoth: boolean;
-  numberWidth: number;
+  numberStyle: NumberStyle;
+  wrapStyle: TextStyle;
 }) {
-  const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
   const { row, cell, both, oldNumber, sharedLabel, dataSet } = shown;
   const tone = toneFor(cell?.type);
   return (
@@ -201,7 +214,7 @@ function WrappedLine({
           ) : null}
         </View>
       </View>
-      <WrappedCode row={row} side={side} tokens={tokens} />
+      <WrappedCode row={row} side={side} tokens={tokens} wrapStyle={wrapStyle} />
     </View>
   );
 }
@@ -218,6 +231,7 @@ function PairedRegion({
   hasBoth,
   numberWidth,
   showStatus,
+  wrapStyle,
 }: {
   rows: ThreeWayRow[];
   sides: readonly Side[];
@@ -226,7 +240,9 @@ function PairedRegion({
   hasBoth: boolean;
   numberWidth: number;
   showStatus: boolean;
+  wrapStyle: TextStyle;
 }) {
+  const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
   return (
     <>
       {showStatus ? (
@@ -247,7 +263,8 @@ function PairedRegion({
                 side={side}
                 tokens={tokens}
                 hasBoth={hasBoth}
-                numberWidth={numberWidth}
+                numberStyle={numberStyle}
+                wrapStyle={wrapStyle}
               />
             </View>
           ))}
@@ -266,6 +283,7 @@ function Column({
   numberWidth,
   stacked,
   showStatus,
+  wrapStyle,
 }: {
   rows: ThreeWayRow[];
   side: Side;
@@ -275,6 +293,7 @@ function Column({
   numberWidth: number;
   stacked: boolean;
   showStatus: boolean;
+  wrapStyle: TextStyle | null;
 }) {
   const changed = sideChanged(rows, side);
   const shownRows = useMemo(
@@ -286,7 +305,6 @@ function Column({
   );
   const columnData = SIDE_DATA[side];
   const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
-  const { wrapStyle } = useArenaDiffWrap();
   if (wrapStyle) {
     return (
       <View style={styles.column} dataSet={columnData}>
@@ -303,7 +321,8 @@ function Column({
               side={side}
               tokens={tokens}
               hasBoth={hasBoth}
-              numberWidth={numberWidth}
+              numberStyle={numberStyle}
+              wrapStyle={wrapStyle}
             />
           ))}
         </View>
@@ -533,6 +552,7 @@ function ReadyDiff({
             hasBoth={hasBoth}
             numberWidth={numberWidth}
             showStatus={showStatus}
+            wrapStyle={wrapStyle}
           />
         ) : null}
         {paired
@@ -566,6 +586,7 @@ function ReadyDiff({
                     numberWidth={numberWidth}
                     stacked={options.stackedRows}
                     showStatus={showStatus}
+                    wrapStyle={wrapStyle}
                   />
                 </View>
               ),
