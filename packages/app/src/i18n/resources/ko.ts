@@ -1357,6 +1357,14 @@ export const ko: TranslationResources = {
         description: "휴대폰을 이 데몬에 연결합니다",
       },
     },
+    recent: {
+      title: "이 컴퓨터의 최근 프로젝트",
+      loading: "프로젝트를 찾는 중...",
+      showAll: "모두 보기 ({{count}})",
+      openLabel: "{{name}}에서 채팅 시작",
+      notFound: "디렉터리를 찾을 수 없음",
+      openFailed: "프로젝트를 추가할 수 없음",
+    },
   },
   projectPicker: {
     placeholder: "검색할 내용을 입력하세요...",

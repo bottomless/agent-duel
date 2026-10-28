@@ -1361,6 +1361,14 @@ export const ja: TranslationResources = {
         description: "このデーモンにスマートフォンを接続",
       },
     },
+    recent: {
+      title: "このコンピューターの最近のプロジェクト",
+      loading: "プロジェクトを検索中...",
+      showAll: "すべて表示 ({{count}})",
+      openLabel: "{{name}} でチャットを開始",
+      notFound: "ディレクトリが見つかりません",
+      openFailed: "プロジェクトを追加できません",
+    },
   },
   projectPicker: {
     placeholder: "入力して検索...",

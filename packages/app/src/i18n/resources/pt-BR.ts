@@ -1376,6 +1376,14 @@ export const ptBR: TranslationResources = {
         description: "Conecte seu celular a este daemon",
       },
     },
+    recent: {
+      title: "Projetos recentes neste computador",
+      loading: "Procurando projetos...",
+      showAll: "Mostrar tudo ({{count}})",
+      openLabel: "Iniciar um chat em {{name}}",
+      notFound: "Diretório não encontrado",
+      openFailed: "Não foi possível adicionar o projeto",
+    },
   },
   projectPicker: {
     placeholder: "Digite para pesquisar...",

@@ -1344,6 +1344,14 @@ export const ar: TranslationResources = {
         description: "قم بتوصيل هاتفك بهذا البرنامج الخفي",
       },
     },
+    recent: {
+      title: "المشاريع الأخيرة على هذا الكمبيوتر",
+      loading: "جارٍ البحث عن المشاريع...",
+      showAll: "عرض الكل ({{count}})",
+      openLabel: "بدء محادثة في {{name}}",
+      notFound: "لم يتم العثور على المجلد",
+      openFailed: "تعذّرت إضافة المشروع",
+    },
   },
   projectPicker: {
     placeholder: "اكتب للبحث...",
