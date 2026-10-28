@@ -633,6 +633,26 @@ test("OMP can be enabled without custom provider boilerplate", () => {
   expect(registry.omp.enabled).toBe(true);
 });
 
+test("local CLI agents are disabled built-ins and OpenCode stays enabled", () => {
+  const registry = buildProviderRegistry(logger);
+
+  for (const provider of ["claude", "codex", "copilot", "pi"]) {
+    expect(registry[provider]).toMatchObject({ id: provider, enabled: false });
+  }
+  expect(registry.opencode.enabled).toBe(true);
+});
+
+test("a local CLI agent can be enabled with an override", () => {
+  const registry = buildProviderRegistry(logger, {
+    providerOverrides: {
+      codex: { enabled: true },
+    },
+  });
+
+  expect(registry.codex.enabled).toBe(true);
+  expect(registry.claude.enabled).toBe(false);
+});
+
 test("new provider extending claude appears in registry", () => {
   const registry = buildProviderRegistry(logger, {
     providerOverrides: {
@@ -940,7 +960,7 @@ test("enabled: false keeps provider metadata in registry", () => {
   expect(registry.claude.modes).toEqual(
     AGENT_PROVIDER_DEFINITIONS.find((definition) => definition.id === "claude")?.modes,
   );
-  expect(registry.codex.enabled).toBe(true);
+  expect(registry.opencode.enabled).toBe(true);
 });
 
 test("enabled: false still produces a client (enabled gate is enforced elsewhere)", () => {
