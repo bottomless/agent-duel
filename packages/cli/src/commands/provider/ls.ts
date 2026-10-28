@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import type { CommandOptions, ListResult, OutputSchema } from "../../output/index.js";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
 import { AGENT_PROVIDER_DEFINITIONS } from "@getpaseo/protocol/provider-manifest";
+import { loadConfig, resolvePaseoHome } from "@getpaseo/server";
 import { tryConnectToDaemon } from "../../utils/client.js";
 
 export interface ProviderListItem {
@@ -13,18 +14,29 @@ export interface ProviderListItem {
   modes: string;
 }
 
-/** Derive provider list from the manifest — single source of truth */
-const PROVIDERS: ProviderListItem[] = AGENT_PROVIDER_DEFINITIONS.map((def) => ({
-  provider: def.id,
-  label: def.label,
-  status: "available",
-  enabled: def.enabledByDefault === false ? "Disabled" : "Enabled",
-  defaultMode: def.defaultModeId ?? "-",
-  modes: def.modes.length > 0 ? def.modes.map((m) => m.label).join(", ") : "-",
-}));
+/** Derive provider list from the manifest and the local config's `enabled` overrides */
+export function getStaticProviders(
+  providerOverrides: Record<string, { enabled?: boolean }> | undefined,
+): ProviderListItem[] {
+  return AGENT_PROVIDER_DEFINITIONS.map((def) => ({
+    provider: def.id,
+    label: def.label,
+    status: "available",
+    enabled:
+      (providerOverrides?.[def.id]?.enabled ?? def.enabledByDefault ?? true)
+        ? "Enabled"
+        : "Disabled",
+    defaultMode: def.defaultModeId ?? "-",
+    modes: def.modes.length > 0 ? def.modes.map((m) => m.label).join(", ") : "-",
+  }));
+}
 
-function getStaticProviders(): ProviderListItem[] {
-  return PROVIDERS;
+function readLocalProviderOverrides(): Record<string, { enabled?: boolean }> | undefined {
+  try {
+    return loadConfig(resolvePaseoHome()).providerOverrides;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Schema for provider ls output */
@@ -64,7 +76,7 @@ export async function runLsCommand(
   if (!client) {
     return {
       type: "list",
-      data: getStaticProviders(),
+      data: getStaticProviders(readLocalProviderOverrides()),
       schema: providerLsSchema,
     };
   }
@@ -86,7 +98,7 @@ export async function runLsCommand(
   } catch {
     return {
       type: "list",
-      data: getStaticProviders(),
+      data: getStaticProviders(readLocalProviderOverrides()),
       schema: providerLsSchema,
     };
   } finally {

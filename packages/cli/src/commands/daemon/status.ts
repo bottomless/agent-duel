@@ -6,6 +6,7 @@ import {
   ACCOUNTS_UNAVAILABLE_REASON,
   SIGN_IN_REQUIRED_REASON,
 } from "@getpaseo/protocol/accounts/schemas";
+import { AGENT_PROVIDER_DEFINITIONS } from "@getpaseo/protocol/provider-manifest";
 import type { CommandOptions, ListResult, OutputSchema } from "../../output/index.js";
 import { resolveLocalDaemonState } from "./local-daemon.js";
 import { resolveNodePathFromPid } from "./runtime-toolchain.js";
@@ -197,9 +198,21 @@ async function checkProviderBinary(
   }
 }
 
-async function checkProviderBinaries(): Promise<ProviderBinaryStatus[]> {
+// The local fallback runs each binary, so it skips the agents the daemon would leave disabled.
+export function selectProviderBinariesToCheck(
+  providerOverrides: Record<string, { enabled?: boolean }> | undefined,
+): { label: string; binary: string }[] {
+  return PROVIDER_BINARIES.filter(({ binary }) => {
+    const definition = AGENT_PROVIDER_DEFINITIONS.find((entry) => entry.id === binary);
+    return providerOverrides?.[binary]?.enabled ?? definition?.enabledByDefault ?? true;
+  });
+}
+
+async function checkProviderBinaries(
+  providerOverrides: Record<string, { enabled?: boolean }> | undefined,
+): Promise<ProviderBinaryStatus[]> {
   const results = await Promise.all(
-    PROVIDER_BINARIES.map(async ({ label, binary }) => {
+    selectProviderBinariesToCheck(providerOverrides).map(async ({ label, binary }) => {
       const result = await checkProviderBinary(binary);
       return Object.assign({ label }, result);
     }),
@@ -468,7 +481,7 @@ export async function runStatusCommand(
     note = appendNote(note, serverIdResult.error);
   }
 
-  const providers = daemonProviders ?? (await checkProviderBinaries());
+  const providers = daemonProviders ?? (await checkProviderBinaries(state.providerOverrides));
 
   const daemonStatus: DaemonStatus = {
     serverId,

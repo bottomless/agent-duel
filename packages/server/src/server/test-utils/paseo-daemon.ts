@@ -60,6 +60,20 @@ export interface TestPaseoDaemon {
 
 const TEST_DAEMON_START_TIMEOUT_MS = 20_000;
 
+// The manifest disables the local CLI agents in Agent Duel; the inherited daemon suites still
+// drive them, so the test daemon turns them back on unless a test overrides that.
+const LOCAL_AGENT_PROVIDERS = ["claude", "codex", "copilot", "pi"] as const;
+
+function withLocalAgentsEnabled(
+  overrides: PaseoDaemonConfig["providerOverrides"],
+): PaseoDaemonConfig["providerOverrides"] {
+  const merged = { ...overrides };
+  for (const provider of LOCAL_AGENT_PROVIDERS) {
+    merged[provider] = { enabled: true, ...overrides?.[provider] };
+  }
+  return merged;
+}
+
 async function startDaemonWithTimeout(
   daemon: Awaited<ReturnType<typeof createPaseoDaemon>>,
   timeoutMs: number,
@@ -177,7 +191,7 @@ async function prepareTestDaemonConfig(
     mcpDebug: options.mcpDebug ?? false,
     isDev: options.isDev,
     agentClients: options.agentClients ?? createTestAgentClients(),
-    providerOverrides: options.providerOverrides,
+    providerOverrides: withLocalAgentsEnabled(options.providerOverrides),
     agentStoragePath: path.join(paseoHome, "agents"),
     relayEnabled: options.relayEnabled ?? false,
     relayEndpoint: options.relayEndpoint ?? "relay.paseo.sh:443",
