@@ -6,6 +6,7 @@ import {
   GitBranch,
   Home,
   MessageSquareText,
+  ChartNoAxesCombined,
   Search,
   Settings,
   X,
@@ -49,6 +50,7 @@ import {
 import { useSidebarModel } from "@/components/sidebar/sidebar-model";
 import type { PinnedSidebarGroups } from "@/hooks/use-sidebar-pins";
 import { RetainedPanelActivity } from "@/components/retained-panel";
+import { useAccountGateKind } from "@/accounts/gate-context";
 import { useFeedbackAvailable } from "@/feedback/availability";
 import { FeedbackSheet } from "@/feedback/feedback-sheet";
 import { resolveCurrentFeedbackChat } from "@/feedback/current-chat";
@@ -76,6 +78,7 @@ const ThemedArchive = withUnistyles(Archive);
 const ThemedArrowLeft = withUnistyles(ArrowLeft);
 const ThemedFolderPlus = withUnistyles(FolderPlus);
 const ThemedMessageSquareText = withUnistyles(MessageSquareText);
+const ThemedChart = withUnistyles(ChartNoAxesCombined);
 const ThemedSearch = withUnistyles(Search);
 const ThemedX = withUnistyles(X);
 
@@ -100,6 +103,7 @@ interface SidebarSharedProps {
   handleSettings: () => void;
   /** Null when this daemon takes no feedback, which hides the entry. */
   handleFeedback: (() => void) | null;
+  handleLeaderboard: (() => void) | null;
   labels: SidebarLabels;
 }
 
@@ -108,6 +112,7 @@ interface SidebarLabels {
   home: string;
   settings: string;
   feedback: string;
+  leaderboard: string;
   closeSidebar: string;
 }
 
@@ -130,6 +135,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
   const showMobileAgent = usePanelStore((state) => state.showMobileAgent);
   const pathname = usePathname();
   const feedbackAvailable = useFeedbackAvailable();
+  const leaderboardAvailable = useAccountGateKind() === "signed-in";
   const currentFeedbackChat = useWorkspaceLayoutStore(
     useShallow((state) =>
       resolveCurrentFeedbackChat({ pathname, layouts: state.layoutByWorkspace }),
@@ -190,6 +196,10 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     setFeedbackChat(currentFeedbackChat);
     setFeedbackVisible(true);
   }, [currentFeedbackChat]);
+  const handleLeaderboard = useCallback(() => {
+    showMobileAgent();
+    if (pathname !== "/leaderboard") router.push("/leaderboard");
+  }, [pathname, showMobileAgent]);
   const handleFeedbackClose = useCallback(() => setFeedbackVisible(false), []);
   const handleHomeMobile = useCallback(() => {
     showMobileAgent();
@@ -206,6 +216,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
       home: t("sidebar.actions.home"),
       settings: t("sidebar.actions.settings"),
       feedback: t("feedback.sidebarAction"),
+      leaderboard: t("leaderboard.title"),
       closeSidebar: t("sidebar.actions.closeSidebar"),
     }),
     [t],
@@ -226,6 +237,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     toggleProjectCollapsed,
     handleRefresh,
     handleFeedback: feedbackAvailable ? handleFeedback : null,
+    handleLeaderboard: leaderboardAvailable ? handleLeaderboard : null,
     labels,
   };
 
@@ -410,6 +422,7 @@ function SidebarFooter({
   handleHome,
   handleSettings,
   handleFeedback,
+  handleLeaderboard,
   labels,
 }: {
   theme: SidebarTheme;
@@ -417,13 +430,18 @@ function SidebarFooter({
   handleHome: () => void;
   handleSettings: () => void;
   handleFeedback: (() => void) | null;
+  handleLeaderboard: (() => void) | null;
   labels: {
     addProject: string;
     home: string;
     settings: string;
     feedback: string;
+    leaderboard: string;
   };
 }) {
+  const [leaderboardHovered, setLeaderboardHovered] = useState(false);
+  const enterLeaderboard = useCallback(() => setLeaderboardHovered(true), []);
+  const leaveLeaderboard = useCallback(() => setLeaderboardHovered(false), []);
   const newAgentKeys = useShortcutKeys("new-agent");
   const settingsKeys = useShortcutKeys("toggle-settings");
 
@@ -460,6 +478,41 @@ function SidebarFooter({
             );
           }}
         </Pressable>
+      ) : null}
+      {handleLeaderboard ? (
+        <View
+          style={styles.footerHoverTarget}
+          onPointerEnter={enterLeaderboard}
+          onPointerLeave={leaveLeaderboard}
+        >
+          <Pressable
+            style={[
+              styles.footerLabeledButton,
+              styles.footerFeedbackButton,
+              leaderboardHovered && styles.footerLabeledButtonHovered,
+            ]}
+            onPress={handleLeaderboard}
+            testID="sidebar-leaderboard"
+            nativeID="sidebar-leaderboard"
+            accessible
+            accessibilityLabel={labels.leaderboard}
+            accessibilityRole="button"
+          >
+            <ThemedChart
+              size={theme.iconSize.sm}
+              uniProps={leaderboardHovered ? foregroundColorMapping : foregroundMutedColorMapping}
+            />
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.footerLabeledButtonLabel,
+                leaderboardHovered && styles.footerLabeledButtonLabelHovered,
+              ]}
+            >
+              {labels.leaderboard}
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
       <View style={styles.footerMainRow}>
         <FooterAddProjectButton
@@ -508,6 +561,7 @@ function MobileSidebar({
   handleHome,
   handleSettings,
   handleFeedback,
+  handleLeaderboard,
   labels,
   insetsTop,
   insetsBottom,
@@ -597,6 +651,7 @@ function MobileSidebar({
           handleHome={handleHome}
           handleSettings={handleSettings}
           handleFeedback={handleFeedback}
+          handleLeaderboard={handleLeaderboard}
           labels={labels}
         />
       </View>
@@ -622,6 +677,7 @@ function DesktopSidebar({
   handleHome,
   handleSettings,
   handleFeedback,
+  handleLeaderboard,
   labels,
   insetsTop,
   active,
@@ -771,6 +827,7 @@ function DesktopSidebar({
           handleHome={handleHome}
           handleSettings={handleSettings}
           handleFeedback={handleFeedback}
+          handleLeaderboard={handleLeaderboard}
           labels={labels}
         />
 
@@ -1096,6 +1153,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[2],
     flexShrink: 0,
   },
+  footerHoverTarget: { position: "relative" },
   footerLabeledButton: {
     minWidth: 0,
     minHeight: 32,

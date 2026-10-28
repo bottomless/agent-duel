@@ -1619,6 +1619,32 @@ export const ja: TranslationResources = {
   sidebarCallout: {
     dismiss: "閉じる",
   },
+  leaderboard: {
+    title: "マイランキング",
+    refresh: "更新",
+    refreshing: "更新中...",
+    retry: "再試行",
+    connect: "ランキングを見るにはサインインして接続してください",
+    loading: "ランキングを計算中...",
+    error: "ランキングを読み込めませんでした",
+    unlock: "有効な投票が {{minimum}} 件になるとランキングが表示されます",
+    progress: "有効な投票 {{count}} 件 · あと {{remaining}} 件",
+    eligible:
+      "対戦者のエラーがあったバトルと、影響を受けたビルドでサブエージェントを使ったバトルは数えません",
+    filters: "実行失敗を除外 · サブエージェントはコミットで除外",
+    summary: "有効な投票 {{count}} 件 · {{earlyVotes}} · {{date}} に更新",
+    excludeEarlyVotes: "早期投票を除外",
+    earlyIncluded: "早期投票を含む",
+    earlyExcluded: "早期投票を除外済み",
+    disconnected:
+      "一部のモデルグループ間にはまだ共通の比較がありません。それらのグループ間のレーティングは事前分布に依存します。",
+    noModels: "稼働中のモデルは、それぞれ有効な投票が 4 件になると表示されます",
+    chartLabel: "95% 信用区間、推論速度の中央値、投票数を含むモデルのレーティング",
+    votes: "投票",
+    axis: "Bradley–Terry レーティング（Elo スケール）",
+    medianSpeed: "中央値 {{speed}} tokens/s",
+    noSpeed: "速度不明",
+  },
   feedback: {
     sidebarAction: "フィードバックを送信",
     sendError: "フィードバックを送信できませんでした。もう一度お試しください。",
