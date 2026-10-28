@@ -19,6 +19,7 @@ import {
   diffTextHeight,
 } from "./diff-metrics";
 import type { ArenaDiffLayout } from "./diff-layout";
+import { useArenaDiffWrap } from "./diff-wrap";
 import { PaneIconAction } from "./pane-icon-action";
 import {
   buildThreeWayBlocks,
@@ -161,6 +162,65 @@ function Column({
   );
   const columnData = useMemo(() => ({ comparisonSide: side }), [side]);
   const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
+  const { wrapStyle } = useArenaDiffWrap();
+  const codeFor = (row: ThreeWayRow, cell: (typeof shownRows)[number]["cell"]) => {
+    const removed = cell?.type === "remove";
+    const source = removed ? tokens.base : tokens[side];
+    const line = removed ? row.base?.lineNumber : cell?.lineNumber;
+    const matched =
+      cell && line != null ? tokensSpelling(source.get(line), cell.content) : undefined;
+    return cell && matched ? (
+      <TokenText
+        tokens={matched}
+        segments={cell.segments}
+        lineStyle={[styles.codeText, wrapStyle]}
+        highlightStyle={removed ? styles.removeHighlight : styles.addHighlight}
+      />
+    ) : (
+      <Text style={[styles.codeText, wrapStyle]}>{cell?.content || " "}</Text>
+    );
+  };
+  if (wrapStyle) {
+    // Wrapped lines grow their row, so each row carries its own gutter to keep numbers beside it.
+    return (
+      <View style={styles.column} dataSet={columnData}>
+        {showStatus ? (
+          <Text numberOfLines={1} style={styles.regionStatus}>
+            {changed ? " " : "No changes in this region"}
+          </Text>
+        ) : null}
+        <View style={styles.wrappedBody}>
+          {shownRows.map(({ row, cell, both, oldNumber, sharedLabel, dataSet }) => {
+            const tone = toneFor(cell?.type);
+            return (
+              <View key={row.key} style={[styles.wrappedRow, tone]} dataSet={dataSet}>
+                <View style={styles.wrappedGutterBg}>
+                  <View style={[styles.gutterRow, styles.wrappedGutter, tone]}>
+                    <Text style={[styles.number, numberStyle]}>{oldNumber}</Text>
+                    <Text style={[styles.number, numberStyle]}>{cell?.lineNumber ?? ""}</Text>
+                    <Text
+                      style={[
+                        styles.sign,
+                        cell?.type === "add" ? styles.addText : styles.removeText,
+                      ]}
+                    >
+                      {signFor(cell?.type)}
+                    </Text>
+                    {hasBoth ? (
+                      <Text style={styles.both} numberOfLines={1} accessibilityLabel={sharedLabel}>
+                        {both ? "Both" : ""}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+                <View style={styles.wrappedCode}>{codeFor(row, cell)}</View>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+    );
+  }
   return (
     <View style={styles.column} dataSet={columnData}>
       {showStatus ? (
@@ -651,6 +711,21 @@ const styles = StyleSheet.create((theme) => ({
     lineHeight: diffTextHeight(theme),
     color: theme.colors.foregroundMuted,
     textAlign: "center",
+  },
+  wrappedBody: { minWidth: 0, borderLeftWidth: 1, borderLeftColor: theme.colors.border },
+  wrappedRow: { flexDirection: "row", minHeight: diffRowHeight(theme) },
+  wrappedGutter: {
+    height: "auto",
+    minHeight: diffRowHeight(theme),
+    alignItems: "flex-start",
+    flexGrow: 1,
+  },
+  wrappedGutterBg: { backgroundColor: theme.colors.surface1 },
+  wrappedCode: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: "center",
+    paddingHorizontal: theme.spacing[1],
   },
   codeScroll: { flex: 1, minWidth: 0, ...(isWeb ? { overflowX: "auto" as const } : null) },
   codeRow: {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useArenaDiffWrap } from "./diff-wrap";
 import {
   Pressable,
   Text,
@@ -281,13 +282,14 @@ export function SegmentText({
 }
 
 function CandidateCellText({ cell, tokens }: { cell: ThreeWayCell; tokens?: HighlightToken[] }) {
+  const { wrapStyle } = useArenaDiffWrap();
   const textStyle = textStyleFor(cell.type);
   if (tokens) {
     return (
       <TokenText
         tokens={tokens}
         segments={cell.segments}
-        lineStyle={styles.lineText}
+        lineStyle={[styles.lineText, wrapStyle]}
         highlightStyle={cell.type === "add" ? styles.addHighlight : styles.removeHighlight}
       />
     );
@@ -301,7 +303,7 @@ function CandidateCellText({ cell, tokens }: { cell: ThreeWayCell; tokens?: High
       />
     );
   }
-  return <Text style={[styles.lineText, textStyle]}>{cell.content}</Text>;
+  return <Text style={[styles.lineText, textStyle, wrapStyle]}>{cell.content}</Text>;
 }
 
 // A plain overflow-scrolling View, not RN's ScrollView: ScrollView attaches its own

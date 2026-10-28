@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { useArenaDiffWrap } from "./diff-wrap";
 import { Text, View, type StyleProp, type TextStyle } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
@@ -121,12 +122,13 @@ function LineContent({
   tone: Tone;
   textStyle: StyleProp<TextStyle>;
 }) {
+  const { wrapStyle } = useArenaDiffWrap();
   if (line.tokens) {
     return (
       <TokenText
         tokens={line.tokens}
         segments={line.segments}
-        lineStyle={styles.lineText}
+        lineStyle={[styles.lineText, wrapStyle]}
         highlightStyle={highlightFor(tone)}
       />
     );
@@ -140,7 +142,7 @@ function LineContent({
       />
     );
   }
-  return <Text style={[styles.lineText, textStyle]}>{line.content || " "}</Text>;
+  return <Text style={[styles.lineText, textStyle, wrapStyle]}>{line.content || " "}</Text>;
 }
 
 function textStyleFor(change: Change, muted: boolean | undefined) {
