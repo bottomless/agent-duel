@@ -1332,6 +1332,14 @@ export const zhCN: TranslationResources = {
         description: "将手机连接到此 daemon",
       },
     },
+    recent: {
+      title: "此电脑上的最近项目",
+      loading: "正在查找项目...",
+      showAll: "显示全部（{{count}}）",
+      openLabel: "在 {{name}} 中开始对话",
+      notFound: "未找到目录",
+      openFailed: "无法添加项目",
+    },
   },
   projectPicker: {
     placeholder: "输入以搜索...",

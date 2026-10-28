@@ -278,6 +278,7 @@ import {
   ProjectDirectoryRequestError,
 } from "./project-directory-service.js";
 import { initializeProjectGit, inspectProjectGit } from "./project-git-service.js";
+import { discoverRecentProjects } from "./recent-projects.js";
 import { runGitCommand } from "../utils/run-git-command.js";
 import { CreateAgentLifecycleDispatch } from "./agent/create-agent-lifecycle-dispatch.js";
 import { resolveWorktreeSourceCwd } from "./workspace-source.js";
@@ -2463,6 +2464,8 @@ export class Session {
     switch (msg.type) {
       case "project.git.inspect.request":
         return this.handleProjectGitInspectRequest(msg);
+      case "project.recent.list.request":
+        return this.handleProjectRecentListRequest(msg);
       case "project.git.initialize.request":
         return this.handleProjectGitInitializeRequest(msg);
       default:
@@ -6636,6 +6639,28 @@ export class Session {
           cwd: request.cwd,
           state: null,
           error: error instanceof Error ? error.message : "Failed to inspect project Git",
+        },
+      });
+    }
+  }
+
+  private async handleProjectRecentListRequest(
+    request: Extract<SessionInboundMessage, { type: "project.recent.list.request" }>,
+  ): Promise<void> {
+    try {
+      const projects = await discoverRecentProjects();
+      this.emit({
+        type: "project.recent.list.response",
+        payload: { requestId: request.requestId, projects, error: null },
+      });
+    } catch (error) {
+      this.sessionLogger.error({ err: error }, "Failed to discover recent projects");
+      this.emit({
+        type: "project.recent.list.response",
+        payload: {
+          requestId: request.requestId,
+          projects: [],
+          error: error instanceof Error ? error.message : "Failed to discover recent projects",
         },
       });
     }

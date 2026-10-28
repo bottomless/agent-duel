@@ -1402,6 +1402,14 @@ export const fr: TranslationResources = {
         description: "Connectez votre téléphone à ce démon",
       },
     },
+    recent: {
+      title: "Projets récents sur cet ordinateur",
+      loading: "Recherche de projets...",
+      showAll: "Tout afficher ({{count}})",
+      openLabel: "Démarrer une discussion dans {{name}}",
+      notFound: "Dossier introuvable",
+      openFailed: "Impossible d'ajouter le projet",
+    },
   },
   projectPicker: {
     placeholder: "Tapez pour rechercher...",

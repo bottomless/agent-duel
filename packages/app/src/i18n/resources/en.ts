@@ -1363,6 +1363,14 @@ export const en = {
         description: "Connect your phone to this daemon",
       },
     },
+    recent: {
+      title: "Recent projects on this computer",
+      loading: "Looking for projects...",
+      showAll: "Show all ({{count}})",
+      openLabel: "Start a chat in {{name}}",
+      notFound: "Directory not found",
+      openFailed: "Unable to add project",
+    },
   },
   projectPicker: {
     placeholder: "Type to search...",

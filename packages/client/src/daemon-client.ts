@@ -93,6 +93,7 @@ import type {
   ProjectCreateDirectoryResponse,
   ProjectGitInitializeResponse,
   ProjectGitInspectResponse,
+  ProjectRecentListResponse,
   OpenProjectResponseMessage,
   WorkspaceGithubSearchRepositoriesResponse,
   ProjectGithubCloneProtocol,
@@ -717,6 +718,7 @@ type OpenProjectPayload = OpenProjectResponseMessage["payload"];
 type ProjectAddPayload = ProjectAddResponse["payload"];
 export type ProjectCreateDirectoryPayload = ProjectCreateDirectoryResponse["payload"];
 export type ProjectGitInspectPayload = ProjectGitInspectResponse["payload"];
+export type ProjectRecentListPayload = ProjectRecentListResponse["payload"];
 export type ProjectGitInitializePayload = ProjectGitInitializeResponse["payload"];
 export type WorkspaceGithubSearchRepositoriesPayload =
   WorkspaceGithubSearchRepositoriesResponse["payload"];
@@ -2527,6 +2529,14 @@ export class DaemonClient {
     return this.sendNamespacedCorrelatedSessionRequest<"project.git.inspect.response">({
       requestId,
       message: { type: "project.git.inspect.request", cwd },
+    });
+  }
+
+  /** Projects used recently in Claude Code, Codex or VS Code on the daemon's computer. */
+  async listRecentProjects(requestId?: string): Promise<ProjectRecentListPayload> {
+    return this.sendNamespacedCorrelatedSessionRequest<"project.recent.list.response">({
+      requestId,
+      message: { type: "project.recent.list.request" },
     });
   }
 

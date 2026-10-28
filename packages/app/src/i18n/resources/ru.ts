@@ -1384,6 +1384,14 @@ export const ru: TranslationResources = {
         description: "Подключите свой телефон к этому демону",
       },
     },
+    recent: {
+      title: "Недавние проекты на этом компьютере",
+      loading: "Поиск проектов...",
+      showAll: "Показать все ({{count}})",
+      openLabel: "Начать чат в {{name}}",
+      notFound: "Папка не найдена",
+      openFailed: "Не удалось добавить проект",
+    },
   },
   projectPicker: {
     placeholder: "Введите текст для поиска...",
