@@ -102,19 +102,16 @@ main {
 }
 .hero {
   width: 100%;
-  max-width: 760px;
+  max-width: 820px;
   text-align: center;
 }
 h1 {
-  font-size: clamp(36px, 5.6vw, 56px);
+  font-size: clamp(32px, 4.6vw, 48px);
   line-height: 1.1;
   font-weight: 700;
   letter-spacing: -0.025em;
   margin: 0 0 20px;
   text-wrap: balance;
-}
-h1 span {
-  white-space: nowrap;
 }
 .intro {
   max-width: 640px;
