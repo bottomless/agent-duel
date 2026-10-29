@@ -1603,7 +1603,7 @@ export class Store {
     if (existing) return existing
     // The transcript and its images are written when the run ends and are its record. The run budget
     // bounds the per-call artifacts written before them, which a long run can fill on its own.
-    const record = input.kind === "transcript" || input.kind === "image"
+    const record = input.kind === "transcript" || input.kind === "image" || input.kind === "generation_manifest"
     const totals =
       input.runID && !record
         ? (await this.artifacts.find({ runID: input.runID }, { projection: { storedSize: 1 } }).toArray()).reduce(
@@ -1615,8 +1615,7 @@ export class Store {
       data: input.data,
       runStoredBytes: totals,
       ...(record ? { artifactLimit: input.data.byteLength, runLimit: input.data.byteLength } : {}),
-      // A gzip stream or an image cut short does not decode.
-      whole: input.compression === "gzip" || input.kind === "image",
+      whole: input.compression === "gzip" || input.kind === "image" || input.kind === "generation_component",
     })
     return insertIdempotent(this.artifacts, {
       ...input,

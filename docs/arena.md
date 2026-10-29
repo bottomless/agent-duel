@@ -1051,9 +1051,20 @@ field. Each layer has its own file:
   request: a single-agent chat replays the previous message's envelopes under that message's new
   scope, and a running turn loses its sealed reasoning when the key rotates. Cloud instances must
   share that key. BYOK sealing provides no secrecy from the user who owns that key.
-  Runtime-only usage can continue through the transport, but the telemetry copy never persists
-  generation request bodies because system prompts and tool
-  schemas can fingerprint the provider. It drops per-side token counts, native finish reasons,
+  Runtime-only usage can continue through the transport. The telemetry copy stores each generation's
+  request as a component manifest (`arena/request-manifest.ts`): the body the proxy dispatched —
+  neutral `contestant` model, `provider` stripped, the engine's system prompt and tool schemas,
+  which the engine builds without knowing the model — split into content-addressed `params`,
+  `system`, `tools`, and message artifacts under `${runID}|component|${sha}`, listed by a
+  per-generation manifest under `${generationID}|manifest`. A run's later turns rewrite only their
+  deltas: a component the prompt already carried is written once per run. Inline images leave their
+  message as raw-byte components keyed by the image hash. Messages get the same scrub as responses
+  (tool-call ids, provider reasoning metadata); params, system, and tool schemas stay byte-exact,
+  because a tool parameter may be named `model`. A component is stored whole or not at all, so a
+  run past its artifact budget loses components rather than truncating them; manifests are exempt
+  from that budget so `loadRequest` can name what is missing. Captured after the local rewrite, the
+  manifest cannot name the draw, and like every non-transcript artifact it never uploads.
+  Single-agent chats, keep-alive pings, and the judge call are not captured this way. The telemetry copy drops per-side token counts, native finish reasons,
   provider-specific reasoning metadata, identity fields, and raw upstream errors from stored
   responses, and rewrites provider-shaped tool-call ids before saving response artifacts. The
   control plane holds generation usage, cost, and finish reason and returns them only with the

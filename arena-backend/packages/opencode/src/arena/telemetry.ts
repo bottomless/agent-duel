@@ -3,6 +3,7 @@ import type { Store } from "./mongo"
 import type { RequestMetadata, Telemetry } from "./proxy"
 import type { GenerationMetrics, UsageTotals } from "./records"
 import { ArenaPrivacy } from "./privacy"
+import { storeRequest } from "./request-manifest"
 
 type ActiveGeneration = {
   readonly id: string
@@ -130,6 +131,26 @@ export function sanitizeStoredResponse(raw: string) {
   }
 }
 
+function scrubRequestValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((child) => scrubRequestValue(child))
+  if (!record(value)) return value
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, child]) => {
+      const normalized = key.toLowerCase().replaceAll("_", "").replaceAll("-", "")
+      if (privateResponseKeys.has(normalized)) return []
+      return [[key, scrubRequestValue(child)]]
+    }),
+  )
+}
+
+export function sanitizeStoredRequest(body: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  if (!Array.isArray(body.messages)) return body
+  return {
+    ...body,
+    messages: body.messages.map((message) => ArenaPrivacy.toolCallIDs(scrubRequestValue(message))),
+  }
+}
+
 function payloads(raw: string) {
   const values: unknown[] = []
   for (const line of raw.split(/\r?\n/)) {
@@ -220,6 +241,7 @@ export function create(store: Store): Telemetry {
   const revealedMetrics = new Map<string, GenerationMetrics>()
   const queues = new Map<string, Promise<void>>()
   const counterSeeds = new Map<string, Promise<void>>()
+  const knownComponents = new Map<string, Set<string>>()
 
   // A run's numbering continues from its stored generations. A reply resumes a finished run after
   // an engine restart, and restarting at 0 breaks the unique (runID, callIndex) index, which fails
@@ -281,7 +303,7 @@ export function create(store: Store): Telemetry {
   }
 
   return {
-    async start(metadata, _body) {
+    async start(metadata, body) {
       const callIndex = await nextCallIndex(metadata.assignment.runID)
       const id = metadata.generationID
       const runAttempts = attempts.get(metadata.assignment.runID) ?? new Map<string, Attempt>()
@@ -303,6 +325,16 @@ export function create(store: Store): Telemetry {
         classification:
           metadata.classification ?? (metadata.sessionID === metadata.assignment.rootSessionID ? "root" : "subagent"),
         startedAt: metadata.startedAt,
+      })
+      const runID = metadata.assignment.runID
+      const known = knownComponents.get(runID) ?? new Set<string>()
+      knownComponents.set(runID, known)
+      await storeRequest(store, {
+        runID,
+        generationID: id,
+        body: sanitizeStoredRequest(body),
+        createdAt: metadata.startedAt,
+        known,
       })
       runAttempts.set(metadata.requestID, { generationID: id, attemptIndex })
       attempts.set(metadata.assignment.runID, runAttempts)
@@ -417,7 +449,10 @@ export function create(store: Store): Telemetry {
     },
     release(input) {
       const runIDs = new Set(input.runIDs)
-      runIDs.forEach((runID) => released.add(runID))
+      runIDs.forEach((runID) => {
+        released.add(runID)
+        knownComponents.delete(runID)
+      })
       for (const [generationID, metrics] of pending) {
         if (runIDs.has(metrics.runID)) pending.delete(generationID)
       }

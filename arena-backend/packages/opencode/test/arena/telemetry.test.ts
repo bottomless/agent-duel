@@ -2,8 +2,9 @@ import { createHash } from "crypto"
 import { describe, expect, test } from "bun:test"
 import { create } from "@/arena/telemetry"
 import { Store } from "@/arena/mongo"
-import type { GenerationDocument, GenerationRetry } from "@/arena/records"
+import type { ArtifactDocument, GenerationDocument, GenerationRetry } from "@/arena/records"
 import type { RequestMetadata } from "@/arena/proxy"
+import { loadRequest } from "@/arena/request-manifest"
 
 function store(value: object): Store {
   return Object.assign(Object.create(Store.prototype), value)
@@ -69,7 +70,10 @@ describe("ArenaTelemetry", () => {
     )
     await telemetry.complete?.(metadata, new Date())
 
-    expect(artifacts.map((item) => item.id)).toEqual([`${metadata.generationID}|response`])
+    const response = artifacts.find((item) => item.id === `${metadata.generationID}|response`)
+    expect(response).toBeDefined()
+    expect(artifacts.map((item) => item.id)).toContain(`${metadata.generationID}|manifest`)
+    expect(artifacts.filter((item) => item.id.includes("|component|"))).toHaveLength(2)
     expect(generation).toMatchObject({
       classification: "root",
       requestID: metadata.requestID,
@@ -85,14 +89,14 @@ describe("ArenaTelemetry", () => {
     expect(generation).not.toHaveProperty("usage")
     expect(generation).not.toHaveProperty("requestArtifactID")
     expect(generation?.payloadHashes).not.toHaveProperty("request")
-    expect(artifacts[0]?.data).toContain("domain-value")
-    expect(artifacts[0]?.data).not.toContain("hidden")
-    expect(artifacts[0]?.data).not.toContain("native_finish_reason")
-    expect(artifacts[0]?.data).not.toContain("anthropic-claude-v1")
-    expect(artifacts[0]?.data).not.toContain("prompt_tokens")
-    expect(artifacts[0]?.data).not.toContain("call-7529b035-5fd4-43dc-a17a-59c78f463f27-0")
-    expect(artifacts[0]?.data).not.toContain("call_0123456789abcdef01234567")
-    expect(artifacts[0]?.data).toContain("call_arena_")
+    expect(response?.data).toContain("domain-value")
+    expect(response?.data).not.toContain("hidden")
+    expect(response?.data).not.toContain("native_finish_reason")
+    expect(response?.data).not.toContain("anthropic-claude-v1")
+    expect(response?.data).not.toContain("prompt_tokens")
+    expect(response?.data).not.toContain("call-7529b035-5fd4-43dc-a17a-59c78f463f27-0")
+    expect(response?.data).not.toContain("call_0123456789abcdef01234567")
+    expect(response?.data).toContain("call_arena_")
     expect(generation?.firstTokenAt).toBeInstanceOf(Date)
 
     await telemetry.reveal?.({
@@ -317,8 +321,10 @@ describe("ArenaTelemetry", () => {
     telemetry.rawChunk?.(metadata, partial)
     await telemetry.error?.(metadata, new Error("stopped by user"), new Date())
 
-    expect(artifacts).toHaveLength(1)
-    expect(artifacts[0]).toEqual({ id: `${metadata.generationID}|response`, data: partial })
+    expect(artifacts).toHaveLength(3)
+    expect(artifacts[0]?.id).toMatch(/^run-b\|component\|[0-9a-f]{64}$/)
+    expect(artifacts[1]?.id).toBe(`${metadata.generationID}|manifest`)
+    expect(artifacts[2]).toEqual({ id: `${metadata.generationID}|response`, data: partial })
     expect(generation).toMatchObject({
       classification: "compaction",
       providerGenerationID: "partial-id",
@@ -394,12 +400,91 @@ describe("ArenaTelemetry", () => {
     ])
   })
 
+  test("stores the dispatched request blinded in its messages and exact everywhere else", async () => {
+    const artifacts = new Map<string, ArtifactDocument>()
+    const arena = store({
+      storeArtifact: async (input: ArtifactDocument) => {
+        const document = { ...input, data: Buffer.from(input.data), truncated: false }
+        if (!artifacts.has(input._id)) artifacts.set(input._id, document)
+        return document
+      },
+      artifact: async (id: string) => artifacts.get(id),
+      saveGeneration: async (input: GenerationDocument) => input,
+      generationsForRuns: async () => [],
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const metadata: RequestMetadata = {
+      assignment: {
+        runID: "run-request",
+        rootSessionID: "session-request",
+        scopeID: "turn-request",
+        assignmentID: "assignment-request",
+        telemetry: true,
+      },
+      generationID: "gen_00000000000000000000000000000005",
+      requestID: "00000000-0000-4000-8000-000000000005",
+      sessionID: "session-request",
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      startedAt: new Date(),
+    }
+    const tools = [
+      {
+        type: "function",
+        function: {
+          name: "configure",
+          parameters: { type: "object", properties: { model: { type: "string" }, provider: { type: "string" } } },
+        },
+      },
+    ]
+
+    await telemetry.start?.(metadata, {
+      model: "contestant",
+      reasoning: { effort: "high" },
+      tools,
+      messages: [
+        { role: "user", content: "use the configure tool" },
+        {
+          role: "assistant",
+          content: "",
+          reasoning_details: [{ type: "reasoning.encrypted", data: "sealed", format: "anthropic-claude-v1" }],
+          tool_calls: [
+            {
+              id: "call-7529b035-5fd4-43dc-a17a-59c78f463f27-0",
+              type: "function",
+              function: { name: "configure", arguments: '{"model":"domain-value"}' },
+            },
+          ],
+        },
+        { role: "tool", tool_call_id: "call-7529b035-5fd4-43dc-a17a-59c78f463f27-0", content: "configured" },
+      ],
+    })
+
+    const loaded = await loadRequest(arena, "run-request", metadata.generationID)
+    expect(loaded?.verified).toBe(true)
+    const serialized = JSON.stringify(loaded?.body)
+    expect(serialized).not.toContain("call-7529b035-5fd4-43dc-a17a-59c78f463f27-0")
+    expect(serialized).not.toContain("anthropic-claude-v1")
+    expect(serialized).not.toContain("reasoning_details")
+    expect(serialized).toContain("domain-value")
+    expect(serialized).toContain("configured")
+    expect(loaded?.body.tools).toEqual(tools)
+    expect(loaded?.body.reasoning).toEqual({ effort: "high" })
+    const [, assistant, tool] = loaded?.body.messages as Array<Record<string, unknown>>
+    const callID = (assistant?.tool_calls as Array<{ id: string }>)[0]?.id
+    expect(callID).toStartWith("call_arena_")
+    expect(tool?.tool_call_id).toBe(callID)
+  })
+
   test("continues a run's call numbering from its stored generations after an engine restart", async () => {
     const generations = [0, 1, 2].map(
       (callIndex) => ({ _id: `gen_stored_${callIndex}`, runID: "run-resumed", callIndex }) as GenerationDocument,
     )
     let reads = 0
     const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
       saveGeneration: async (input: GenerationDocument) => {
         generations.push(input)
         return input
