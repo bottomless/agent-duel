@@ -28,6 +28,12 @@ export interface FailedFirstSendDeps {
   /** Where to go once the workspace is gone; read before it is archived. */
   resolveNewChatRoute: (serverId: string, workspaceId: string) => Href;
   saveNewChatDraft: (draft: DraftInput) => void;
+  /**
+   * Stop remembering the workspace as the last one open. Startup restores it before the workspace
+   * list proves it gone, and so does leaving Settings, which opened an archived empty chat as
+   * "Workspace unavailable".
+   */
+  forgetWorkspace: (serverId: string, workspaceId: string) => void;
   navigate: (route: Href) => void;
   showError: (message: string) => void;
   archiveWorkspace: (serverId: string, workspaceId: string) => Promise<void>;
@@ -51,6 +57,8 @@ export function returnFailedFirstSendToNewChat(
 
   const route = deps.resolveNewChatRoute(input.serverId, input.workspaceId);
   deps.saveNewChatDraft(input.draft);
+  // Before navigating: the route can be the host root, which restores the remembered workspace.
+  deps.forgetWorkspace(input.serverId, input.workspaceId);
   deps.navigate(route);
   deps.showError(input.error instanceof Error ? input.error.message : String(input.error));
   void deps.archiveWorkspace(input.serverId, input.workspaceId).catch((error) => {
