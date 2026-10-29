@@ -26,6 +26,7 @@ function workspace(id: string, projectId: string, root: string): WorkspaceDescri
     workspaceKind: "local_checkout",
     name: "main",
     status: "done",
+    activityAt: null,
     statusEnteredAt: null,
     archivingAt: null,
     diffStat: null,

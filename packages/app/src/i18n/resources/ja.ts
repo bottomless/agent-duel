@@ -948,6 +948,13 @@ export const ja: TranslationResources = {
         label: "グループ化",
         project: "プロジェクト",
         status: "ステータス",
+        none: "なし",
+      },
+      sorting: {
+        groupLabel: "グループの並び順",
+        label: "並び順",
+        default: "デフォルト",
+        lastChat: "最新のチャット",
       },
       titleSource: {
         label: "タイトル",

@@ -125,6 +125,7 @@ export interface WorkspaceDescriptor {
   status: WorkspaceDescriptorPayload["status"];
   arenaActivity?: WorkspaceDescriptorPayload["arenaActivity"];
   statusEnteredAt: Date | null;
+  activityAt: string | null;
   archivingAt: string | null;
   diffStat: { additions: number; deletions: number } | null;
   scripts: WorkspaceDescriptorPayload["scripts"];
@@ -142,6 +143,8 @@ export function normalizeWorkspaceDescriptor(
     typeof statusEnteredAtRaw === "string" && statusEnteredAtRaw.length > 0
       ? new Date(statusEnteredAtRaw)
       : null;
+  const activityTime = payload.activityAt === null ? NaN : Date.parse(payload.activityAt);
+  const activityAt = Number.isFinite(activityTime) ? payload.activityAt : null;
   return {
     id: normalizeWorkspaceOpaqueId(payload.id) ?? payload.id,
     projectId: payload.projectId,
@@ -163,6 +166,7 @@ export function normalizeWorkspaceDescriptor(
     status: payload.status,
     arenaActivity: payload.arenaActivity,
     statusEnteredAt,
+    activityAt,
     archivingAt: payload.archivingAt ?? null,
     diffStat: payload.diffStat ?? null,
     scripts: (payload.scripts ?? []).map((s) => Object.assign({}, s)),

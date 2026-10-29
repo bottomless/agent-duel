@@ -944,6 +944,13 @@ export const en = {
         label: "Grouping",
         project: "Project",
         status: "Status",
+        none: "None",
+      },
+      sorting: {
+        groupLabel: "Group order",
+        label: "Sort",
+        default: "Default",
+        lastChat: "Last chat",
       },
       titleSource: {
         label: "Title",

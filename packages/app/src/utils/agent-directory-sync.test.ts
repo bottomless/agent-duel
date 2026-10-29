@@ -330,6 +330,7 @@ describe("replaceFetchedAgentDirectory", () => {
             workspaceKind: "worktree",
             name: "repo",
             status: "done",
+            activityAt: null,
             statusEnteredAt: null,
             archivingAt: null,
             diffStat: null,

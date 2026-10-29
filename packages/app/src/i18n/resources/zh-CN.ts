@@ -924,6 +924,13 @@ export const zhCN: TranslationResources = {
         label: "分组",
         project: "项目",
         status: "状态",
+        none: "无",
+      },
+      sorting: {
+        groupLabel: "分组顺序",
+        label: "排序",
+        default: "默认",
+        lastChat: "最近聊天",
       },
       titleSource: {
         label: "标题",

@@ -316,13 +316,21 @@ export class WorkspaceDirectory {
     for (const [workspaceId, descriptor] of descriptorsByWorkspaceId) {
       const contributingAgents = contributingAgentsByWorkspaceId.get(workspaceId) ?? [];
       const activityEntries = activityEntriesByWorkspaceId.get(workspaceId) ?? [];
+      const workspaceCreatedAt = activeRecordsByWorkspaceId.get(workspaceId)?.createdAt ?? null;
+      // Sidebar recency follows the chat even while a terminal masks its status.
+      descriptor.activityAt = contributingAgents.reduce<string | null>((latest, agent) => {
+        if (latest === null || Date.parse(agent.updatedAt) > Date.parse(latest)) {
+          return agent.updatedAt;
+        }
+        return latest;
+      }, workspaceCreatedAt);
       const result = this.resolveStatusEnteredAt({
         workspaceId,
         winningBucket: descriptor.status,
         contributingAgents,
         activityEntries,
         previous: this.bucketHistoryByWorkspaceId.get(workspaceId) ?? null,
-        workspaceCreatedAt: activeRecordsByWorkspaceId.get(workspaceId)?.createdAt ?? null,
+        workspaceCreatedAt,
         nowIso,
       });
       descriptor.statusEnteredAt = result.statusEnteredAt;

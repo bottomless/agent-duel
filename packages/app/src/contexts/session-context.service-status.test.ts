@@ -19,6 +19,7 @@ function workspace(input: {
     name: "main",
     status: "running",
     archivingAt: null,
+    activityAt: null,
     statusEnteredAt: null,
     diffStat: null,
     scripts: input.scripts ?? [],

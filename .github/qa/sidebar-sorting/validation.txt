@@ -1,0 +1,117 @@
+Sidebar sorting validation
+
+Targeted tests: 13 preference tests, 8 projection tests, 24 timestamp tests.
+The projection file was rerun after one additional test was added.
+Node 24 DOM tests use --no-experimental-webstorage.
+
+Sidebar preferences and projection
+$ NODE_OPTIONS=--no-experimental-webstorage npm exec --workspace=@getpaseo/app -- vitest run --project=unit src/stores/sidebar-view-store.test.ts src/components/sidebar/sidebar-projection.test.ts --bail=1
+RUN  v4.1.7 <checkout>/packages/app
+
+
+ Test Files  2 passed (2)
+      Tests  20 passed (20)
+   Start at  11:42:56
+   Duration  375ms (transform 222ms, setup 71ms, import 262ms, tests 14ms, environment 0ms)
+
+Projection after adding independent group ordering coverage
+$ NODE_OPTIONS=--no-experimental-webstorage npm exec --workspace=@getpaseo/app -- vitest run --project=unit src/components/sidebar/sidebar-projection.test.ts --bail=1
+RUN  v4.1.7 <checkout>/packages/app
+
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  11:43:52
+   Duration  441ms (transform 193ms, setup 35ms, import 252ms, tests 11ms, environment 0ms)
+
+Workspace activity timestamps
+$ npx vitest run packages/server/src/server/workspace-directory.test.ts --bail=1
+RUN  v4.1.7 <checkout>
+
+
+ Test Files  1 passed (1)
+      Tests  24 passed (24)
+   Start at  11:19:32
+   Duration  223ms (transform 66ms, setup 0ms, import 112ms, tests 12ms, environment 0ms)
+
+Typecheck
+$ npm run typecheck
+> paseo@0.4.0-beta.15 typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> @getpaseo/expo-two-way-audio@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/highlight@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/protocol@0.4.0-beta.15 pretypecheck
+> npm run generate:validators
+
+
+> @getpaseo/protocol@0.4.0-beta.15 generate:validators
+> node scripts/generate-validation-aot.mjs
+
+generated src/generated/validation/ws-outbound.aot.ts from codegen/ws-outbound.compile.ts (WSOutboundMessageSchema)
+
+> @getpaseo/protocol@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/client@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/server@0.4.0-beta.15 typecheck
+> tsgo -p tsconfig.server.typecheck.json --noEmit
+
+
+> @getpaseo/app@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/relay@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/desktop@0.4.0-beta.15 typecheck
+> tsgo --noEmit -p tsconfig.json
+
+
+> @getpaseo/cli@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+Lint
+$ npm run lint
+> paseo@0.4.0-beta.15 lint
+> oxlint --disable-nested-config
+
+Found 0 warnings and 0 errors.
+Finished in 812ms on 3526 files with 177 rules using 18 threads.
+
+Formatting
+$ npm run format:check
+> paseo@0.4.0-beta.15 format:check
+> oxfmt --check .
+
+Checking formatting...
+
+All matched files use the correct format.
+Finished in 552ms on 3676 files using 18 threads.
+
+UI verification (macOS, automated browser interaction by AI)
+
+Electron desktop stack:
+{"surface":"Electron","freshDefaults":{"grouping":"Grouping\nProject","sorting":"Sort\nLast chat","groups":"Group order\nDefault"},"groupOrderPreserved":true,"chatRowsSorted":true,"groupOrderToggleWorks":true,"persistence":true,"projectCount":5}
+
+Expo browser QA harness:
+{"surface":"browser","freshDefaults":{"grouping":"Grouping\nProject","sorting":"Sort\nLast chat","groups":"Group order\nDefault"},"groupOrderPreserved":true,"chatRowsSorted":true,"groupSortHiddenForFlatList":true,"pageErrors":[]}
+
+Compared all 19 visible workspace entries against daemon activity timestamps.
+Verified the flat view is newest first and decorative chat icons are absent.
+Screenshot: display-preferences.png (Electron display controls only).
+
+Not tested: Windows, Linux, or starting a new battle.

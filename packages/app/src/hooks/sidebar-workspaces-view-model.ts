@@ -36,6 +36,7 @@ export interface SidebarStatusWorkspacePlacement extends SidebarWorkspacePlaceme
 }
 
 export interface SidebarWorkspaceEntry extends SidebarStatusWorkspacePlacement {
+  activityAt: WorkspaceDescriptor["activityAt"];
   arenaActivity?: WorkspaceDescriptor["arenaActivity"];
   workspaceDirectory: string;
   workspaceDirectoryLabel: string;
@@ -189,6 +190,7 @@ export function createSidebarWorkspaceEntry(input: {
     statusBucket: effectiveStatus.status,
     arenaActivity: input.workspace.arenaActivity,
     statusEnteredAt: effectiveStatus.enteredAt,
+    activityAt: input.workspace.activityAt,
     archivingAt: input.workspace.archivingAt,
     diffStat: resolveSidebarWorkspaceDiffStat(input.workspace),
     prHint: selectPrHintFromStatus(
