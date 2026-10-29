@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Text, View, type TextStyle, type ViewStyle } from "react-native";
+import { Text, View, type LayoutChangeEvent, type TextStyle, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Maximize2, Minimize2 } from "lucide-react-native";
 import type { HighlightToken } from "@getpaseo/highlight";
@@ -20,7 +20,6 @@ import {
   diffTextHeight,
 } from "./diff-metrics";
 import type { ArenaDiffLayout } from "./diff-layout";
-import { useArenaDiffWrap } from "./diff-wrap";
 import { PaneIconAction } from "./pane-icon-action";
 import {
   buildThreeWayBlocks,
@@ -38,8 +37,12 @@ const SIDES: readonly Side[] = ["a", "b"];
 const HEADER_DATA = { diffHeader: "true" };
 const labelFor = (side: Side) => (side === "a" ? "Agent A" : "Agent B");
 const STICKY_STYLE = isWeb
-  ? ({ position: "sticky", top: 0, zIndex: 1 } as unknown as ViewStyle)
+  ? ({ position: "sticky", top: 0, zIndex: 2 } as unknown as ViewStyle)
   : null;
+// Stacked, a side's label pins under the header for as long as its rows are in view, so a tall
+// region scrolled inside the viewer still says whose version it is.
+const stickyLabelStyle = (top: number) =>
+  isWeb ? ({ position: "sticky", top, zIndex: 1 } as unknown as TextStyle) : null;
 
 function toneFor(type: string | undefined) {
   if (type === "add") return styles.add;
@@ -146,19 +149,7 @@ function describeRow(row: ThreeWayRow, side: Side, aligned: boolean) {
 type ShownRow = ReturnType<typeof describeRow>;
 type NumberStyle = ReturnType<typeof inlineUnistylesStyle>;
 
-// The wrapped rows take the wrap style and number width from their region rather than reading
-// them per row: a region can hold hundreds of rows on each side.
-function WrappedCode({
-  row,
-  side,
-  tokens,
-  wrapStyle,
-}: {
-  row: ThreeWayRow;
-  side: Side;
-  tokens: Tokens;
-  wrapStyle: TextStyle;
-}) {
+function WrappedCode({ row, side, tokens }: { row: ThreeWayRow; side: Side; tokens: Tokens }) {
   const cell = row[side];
   const removed = cell?.type === "remove";
   const source = removed ? tokens.base : tokens[side];
@@ -170,31 +161,32 @@ function WrappedCode({
         <TokenText
           tokens={matched}
           segments={cell.segments}
-          lineStyle={[styles.codeText, wrapStyle]}
+          lineStyle={styles.codeText}
           highlightStyle={removed ? styles.removeHighlight : styles.addHighlight}
         />
       ) : (
-        <Text style={[styles.codeText, wrapStyle]}>{cell?.content || " "}</Text>
+        <Text style={styles.codeText}>{cell?.content || " "}</Text>
       )}
     </View>
   );
 }
 
-/** One row while lines wrap: it grows with its line, so it carries its own gutter. */
+/**
+ * One row: it grows with its wrapped line, so it carries its own gutter. The number width comes
+ * from the region rather than each row, since a region can hold hundreds of rows on each side.
+ */
 function WrappedLine({
   shown,
   side,
   tokens,
   hasBoth,
   numberStyle,
-  wrapStyle,
 }: {
   shown: ShownRow;
   side: Side;
   tokens: Tokens;
   hasBoth: boolean;
   numberStyle: NumberStyle;
-  wrapStyle: TextStyle;
 }) {
   const { row, cell, both, oldNumber, sharedLabel, dataSet } = shown;
   const tone = toneFor(cell?.type);
@@ -214,13 +206,13 @@ function WrappedLine({
           ) : null}
         </View>
       </View>
-      <WrappedCode row={row} side={side} tokens={tokens} wrapStyle={wrapStyle} />
+      <WrappedCode row={row} side={side} tokens={tokens} />
     </View>
   );
 }
 
 /**
- * A and B side by side while lines wrap. Each row is drawn across both columns at once, so a line
+ * A and B side by side. Each row is drawn across both columns at once, so a line
  * that wraps further on one side grows the row on both and the sides stay level.
  */
 function PairedRegion({
@@ -231,7 +223,6 @@ function PairedRegion({
   hasBoth,
   numberWidth,
   showStatus,
-  wrapStyle,
 }: {
   rows: ThreeWayRow[];
   sides: readonly Side[];
@@ -240,7 +231,6 @@ function PairedRegion({
   hasBoth: boolean;
   numberWidth: number;
   showStatus: boolean;
-  wrapStyle: TextStyle;
 }) {
   const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
   return (
@@ -264,7 +254,6 @@ function PairedRegion({
                 tokens={tokens}
                 hasBoth={hasBoth}
                 numberStyle={numberStyle}
-                wrapStyle={wrapStyle}
               />
             </View>
           ))}
@@ -283,7 +272,6 @@ function Column({
   numberWidth,
   stacked,
   showStatus,
-  wrapStyle,
 }: {
   rows: ThreeWayRow[];
   side: Side;
@@ -293,7 +281,6 @@ function Column({
   numberWidth: number;
   stacked: boolean;
   showStatus: boolean;
-  wrapStyle: TextStyle | null;
 }) {
   const changed = sideChanged(rows, side);
   const shownRows = useMemo(
@@ -305,30 +292,6 @@ function Column({
   );
   const columnData = SIDE_DATA[side];
   const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
-  if (wrapStyle) {
-    return (
-      <View style={styles.column} dataSet={columnData}>
-        {showStatus ? (
-          <Text numberOfLines={1} style={styles.regionStatus}>
-            {changed ? " " : "No changes in this region"}
-          </Text>
-        ) : null}
-        <View style={styles.wrappedBody}>
-          {shownRows.map((shown) => (
-            <WrappedLine
-              key={shown.row.key}
-              shown={shown}
-              side={side}
-              tokens={tokens}
-              hasBoth={hasBoth}
-              numberStyle={numberStyle}
-              wrapStyle={wrapStyle}
-            />
-          ))}
-        </View>
-      </View>
-    );
-  }
   return (
     <View style={styles.column} dataSet={columnData}>
       {showStatus ? (
@@ -336,52 +299,17 @@ function Column({
           {changed ? " " : "No changes in this region"}
         </Text>
       ) : null}
-      <View style={styles.columnBody}>
-        <View style={styles.gutter}>
-          {shownRows.map(({ row, cell, both, oldNumber, sharedLabel }) => {
-            const tone = toneFor(cell?.type);
-            return (
-              <View key={row.key} style={[styles.gutterRow, tone]}>
-                <Text style={[styles.number, numberStyle]}>{oldNumber}</Text>
-                <Text style={[styles.number, numberStyle]}>{cell?.lineNumber ?? ""}</Text>
-                <Text
-                  style={[styles.sign, cell?.type === "add" ? styles.addText : styles.removeText]}
-                >
-                  {signFor(cell?.type)}
-                </Text>
-                {hasBoth ? (
-                  <Text style={styles.both} numberOfLines={1} accessibilityLabel={sharedLabel}>
-                    {both ? "Both" : ""}
-                  </Text>
-                ) : null}
-              </View>
-            );
-          })}
-        </View>
-        <View style={styles.codeScroll}>
-          {shownRows.map(({ row, cell, dataSet }) => {
-            const removed = cell?.type === "remove";
-            const source = removed ? tokens.base : tokens[side];
-            const line = removed ? row.base?.lineNumber : cell?.lineNumber;
-            const matched =
-              cell && line != null ? tokensSpelling(source.get(line), cell.content) : undefined;
-            const tone = toneFor(cell?.type);
-            return (
-              <View key={row.key} style={[styles.codeRow, tone]} dataSet={dataSet}>
-                {cell && matched ? (
-                  <TokenText
-                    tokens={matched}
-                    segments={cell.segments}
-                    lineStyle={styles.codeText}
-                    highlightStyle={removed ? styles.removeHighlight : styles.addHighlight}
-                  />
-                ) : (
-                  <Text style={styles.codeText}>{cell?.content || " "}</Text>
-                )}
-              </View>
-            );
-          })}
-        </View>
+      <View style={styles.wrappedBody}>
+        {shownRows.map((shown) => (
+          <WrappedLine
+            key={shown.row.key}
+            shown={shown}
+            side={side}
+            tokens={tokens}
+            hasBoth={hasBoth}
+            numberStyle={numberStyle}
+          />
+        ))}
       </View>
     </View>
   );
@@ -408,6 +336,7 @@ function ReadyDiff({
   const [full, setFull] = useState(false);
   const [revealed, setRevealed] = useState<ReadonlySet<number>>(() => new Set());
   const [seenLayout, setSeenLayout] = useState(layout);
+  const [headerHeight, setHeaderHeight] = useState(0);
   const saved = useRef<{ scrollTop: number; anchor: string | null; side: Side } | null>(null);
   if (seenLayout !== layout) {
     setSeenLayout(layout);
@@ -486,6 +415,10 @@ function ReadyDiff({
     [],
   );
   const showAll = useCallback(() => setFull(true), []);
+  const measureHeader = useCallback(
+    (event: LayoutChangeEvent) => setHeaderHeight(event.nativeEvent.layout.height),
+    [],
+  );
   const { blocks, truncated: previewLimited } = useMemo(() => {
     const all = buildThreeWayBlocks(diff.rows, revealed, "both", 3, diff.breaks);
     return full ? { blocks: all, truncated: false } : limitThreeWayBlocks(all, MAX_RENDERED_ROWS);
@@ -510,7 +443,7 @@ function ReadyDiff({
       );
     return Math.max(20, String(largest).length * 8);
   }, [diff]);
-  const { wrapStyle } = useArenaDiffWrap();
+  const labelSticky = stickyLabelStyle(headerHeight);
   const stacked = layout === "single" || mode !== null;
   const sides = mode ? [mode] : SIDES;
   const renderBlock = (
@@ -533,10 +466,7 @@ function ReadyDiff({
         !block.rows.some((row) => row[side] && row[side]?.type !== "context"),
     );
     const paired =
-      wrapStyle !== null &&
-      !options.stackedRows &&
-      !options.labels &&
-      !shown.some((side) => side === waitingFor);
+      !options.stackedRows && !options.labels && !shown.some((side) => side === waitingFor);
     return (
       <View
         key={block.key}
@@ -552,7 +482,6 @@ function ReadyDiff({
             hasBoth={hasBoth}
             numberWidth={numberWidth}
             showStatus={showStatus}
-            wrapStyle={wrapStyle}
           />
         ) : null}
         {paired
@@ -572,7 +501,11 @@ function ReadyDiff({
                 <View key={side} style={styles.column}>
                   {options.labels ? (
                     <Text
-                      style={[styles.regionLabel, side === "a" ? styles.agentA : styles.agentB]}
+                      style={[
+                        styles.regionLabel,
+                        side === "a" ? styles.agentA : styles.agentB,
+                        labelSticky,
+                      ]}
                     >
                       {labelFor(side)}
                     </Text>
@@ -586,7 +519,6 @@ function ReadyDiff({
                     numberWidth={numberWidth}
                     stacked={options.stackedRows}
                     showStatus={showStatus}
-                    wrapStyle={wrapStyle}
                   />
                 </View>
               ),
@@ -608,7 +540,7 @@ function ReadyDiff({
       testID="arena-inline-diff"
       dataSet={viewportData}
     >
-      <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA}>
+      <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA} onLayout={measureHeader}>
         <View style={styles.toolbar}>
           <Text style={styles.caption}>
             {mode ? `${labelFor(mode)} · Changes from original` : "Changes from original"}
@@ -807,13 +739,6 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface1,
   },
   stackedRegion: { minWidth: 0 },
-  columnBody: {
-    flexDirection: "row",
-    minWidth: 0,
-    borderLeftWidth: 1,
-    borderLeftColor: theme.colors.border,
-  },
-  gutter: { backgroundColor: theme.colors.surface1 },
   gutterRow: {
     height: diffRowHeight(theme),
     flexDirection: "row",
@@ -859,19 +784,13 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.spacing[1],
     paddingVertical: diffRowInset(theme),
   },
-  codeScroll: { flex: 1, minWidth: 0, ...(isWeb ? { overflowX: "auto" as const } : null) },
-  codeRow: {
-    height: diffRowHeight(theme),
-    minWidth: "100%",
-    justifyContent: "center",
-    paddingHorizontal: theme.spacing[1],
-  },
   codeText: {
     fontFamily: theme.fontFamily.mono,
     fontSize: theme.fontSize.code,
     lineHeight: diffTextHeight(theme),
     color: theme.colors.foreground,
-    ...(isWeb ? { whiteSpace: "pre" as const, overflowWrap: "normal" as const } : null),
+    // Lines always wrap, so nothing hides past the edge of a narrow column.
+    ...(isWeb ? { whiteSpace: "pre-wrap" as const, overflowWrap: "anywhere" as const } : null),
   },
   add: { backgroundColor: tint(theme.colors.diffAddition, 13) },
   remove: { backgroundColor: tint(theme.colors.diffDeletion, 13) },
