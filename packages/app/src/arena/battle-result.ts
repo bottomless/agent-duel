@@ -1,4 +1,24 @@
 import type { ArenaHistoryItem, ArenaRun, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
+import { arenaModelDisplayName } from "./side-label";
+
+export function battleChoiceLabel(item: ArenaHistoryItem): string {
+  if (item.gitApplication?.state === "discarded") return "Winning changes discarded";
+  if (item.vote === "tie") {
+    const side = item.appliedSide?.toUpperCase() ?? "A";
+    const model = item.appliedSide
+      ? arenaModelDisplayName(item.identities?.[item.appliedSide].name)
+      : "";
+    const applied = item.gitApplication?.state === "applied";
+    const verb = applied ? "applied" : "chosen";
+    return `Tie — ${side} ${verb}${model ? ` (${model})` : ""}`;
+  }
+  const side = item.appliedSide;
+  if (!side) {
+    if (item.resolution?.kind === "stopped") return "Battle discarded";
+    return "Battle resolved";
+  }
+  return `Chose ${arenaModelDisplayName(item.identities?.[side].name)} (Agent ${side.toUpperCase()})`;
+}
 
 export function battleWinnerSide(item: ArenaHistoryItem): ArenaSide | undefined {
   return item.vote === "a" || item.vote === "b" ? item.vote : undefined;

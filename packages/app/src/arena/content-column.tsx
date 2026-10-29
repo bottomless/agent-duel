@@ -7,19 +7,16 @@ import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
 // gutter, so the gutter is part of the width the card would take.
 const STREAM_GUTTER = 16;
 
-const ArenaBleedContext = createContext(false);
+const ArenaBleedContext = createContext<number | null>(null);
 
 /**
  * Whether the battle card runs edge to edge. True while the host is no wider than the card's
  * max width: the card then drops its side borders and corners, since they would sit on the
  * panel's edges. Past the max width the card is a centered, bordered card.
  */
-export function useArenaCardBleed(): boolean {
-  return useContext(ArenaBleedContext);
-}
-
-function bleedsAt(hostWidth: number): boolean {
-  return hostWidth <= ARENA_MAX_CONTENT_WIDTH;
+export function useArenaCardBleed(maxWidth = ARENA_MAX_CONTENT_WIDTH): boolean {
+  const hostWidth = useContext(ArenaBleedContext);
+  return hostWidth !== null && hostWidth <= maxWidth;
 }
 
 /**
@@ -45,16 +42,14 @@ export function ArenaContentColumn({
   children: ReactNode;
   fullBleed?: boolean;
 }) {
-  const [bleed, setBleed] = useState(() => fullBleed && bleedsAt(Dimensions.get("window").width));
-  const handleLayout = useCallback(
-    (event: LayoutChangeEvent) => {
-      const width = event.nativeEvent.layout.width;
-      if (width > 0) setBleed(fullBleed && bleedsAt(width + 2 * STREAM_GUTTER));
-    },
-    [fullBleed],
-  );
+  const [hostWidth, setHostWidth] = useState(() => Dimensions.get("window").width);
+  const bleed = fullBleed && hostWidth <= ARENA_MAX_CONTENT_WIDTH;
+  const handleLayout = useCallback((event: LayoutChangeEvent) => {
+    const width = event.nativeEvent.layout.width;
+    if (width > 0) setHostWidth(width + 2 * STREAM_GUTTER);
+  }, []);
   return (
-    <ArenaBleedContext.Provider value={bleed}>
+    <ArenaBleedContext.Provider value={bleed ? hostWidth : null}>
       <View style={styles.column} onLayout={fullBleed ? handleLayout : undefined}>
         <View style={bleed ? styles.bleed : styles.inset}>{children}</View>
       </View>

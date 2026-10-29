@@ -1,5 +1,13 @@
+import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { describe, expect, it } from "vitest";
 import { arenaResolutionStatus, arenaSetupStatus } from "./transition-progress";
+
+type Resolution = NonNullable<ArenaSnapshot["turn"]>["resolution"];
+
+const keptStopResolutions = [
+  { kind: "stopped", resolution: "apply_a", appliedSide: "a" },
+  { kind: "stopped", resolution: "apply_b", appliedSide: "b" },
+] satisfies Resolution[];
 
 describe("battle transition progress", () => {
   it("shows concurrent work in stable order, then only the work still active", () => {
@@ -36,6 +44,86 @@ describe("battle transition progress", () => {
       arenaResolutionStatus({ state: "applying", activeOperations: ["checking_workspace"] }),
     ).toBe("Checking workspace changes");
   });
+
+  it.each(keptStopResolutions)(
+    "shows active work after Keep $appliedSide is committed before applying",
+    (resolution) => {
+      expect(
+        arenaResolutionStatus({
+          state: "awaiting_stop_resolution",
+          resolution,
+          activeOperations: ["preserving_results"],
+        }),
+      ).toBe("Saving battle results");
+      expect(
+        arenaResolutionStatus({
+          state: "awaiting_stop_resolution",
+          resolution,
+          activeOperations: ["preserving_results", "checking_workspace"],
+        }),
+      ).toBe("Checking workspace changes · Saving battle results");
+    },
+  );
+
+  it.each(keptStopResolutions)(
+    "prepares the selected result after Keep $appliedSide when no operation is reported",
+    (resolution) => {
+      expect(arenaResolutionStatus({ state: "awaiting_stop_resolution", resolution })).toBe(
+        "Preparing the selected result",
+      );
+      expect(
+        arenaResolutionStatus({
+          state: "awaiting_stop_resolution",
+          resolution,
+          activeOperations: [],
+        }),
+      ).toBe("Preparing the selected result");
+    },
+  );
+
+  it.each([
+    undefined,
+    { kind: "stopped", resolution: "discard" },
+    { kind: "vote", vote: "a", appliedSide: "a" },
+    { kind: "early", vote: "b", appliedSide: "b" },
+    { kind: "aborted", reason: "Battle could not start" },
+  ] satisfies Resolution[])(
+    "suppresses stop-resolution progress without a committed kept side (%j)",
+    (resolution) => {
+      expect(arenaResolutionStatus({ state: "awaiting_stop_resolution", resolution })).toBeNull();
+      expect(
+        arenaResolutionStatus({
+          state: "awaiting_stop_resolution",
+          resolution,
+          activeOperations: ["preserving_results"],
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it.each(keptStopResolutions)(
+    "does not let Keep $appliedSide resolve unrelated, completed or failed states",
+    (resolution) => {
+      for (const state of [
+        "running",
+        "awaiting_vote",
+        "stopping",
+        "discarding",
+        "discarded",
+        "complete",
+        "creation_failed",
+        "finalization_failed",
+        "application_failed",
+        "canonicalization_failed",
+        "interrupted_recovery",
+      ] as const) {
+        expect(arenaResolutionStatus({ state, resolution })).toBeNull();
+        expect(
+          arenaResolutionStatus({ state, resolution, activeOperations: ["preserving_results"] }),
+        ).toBeNull();
+      }
+    },
+  );
 
   it("keeps environment copying visible when model requests have already started", () => {
     expect(arenaSetupStatus({ state: "running", activeOperations: ["copying_environment"] })).toBe(

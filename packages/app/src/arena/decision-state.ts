@@ -144,6 +144,7 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
     return { kind: "retry_resolution", detail: resolutionRetryDetail(turn.gitApplication) };
   }
   if (!turn) return transitional(PREPARING_WORKSPACES, true);
+  if (turn.resolution) return transitional("Resolving the battle", true);
   switch (turn.state) {
     case "creating":
     case "worktrees_ready":

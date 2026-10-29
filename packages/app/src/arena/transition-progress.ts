@@ -3,7 +3,7 @@ import { isResolvingBattleState } from "./battle-result";
 
 type Turn = NonNullable<ArenaSnapshot["turn"]>;
 export type ArenaOperation = NonNullable<Turn["activeOperations"]>[number];
-type ProgressTurn = Pick<Turn, "state" | "activeOperations">;
+type ProgressTurn = Pick<Turn, "state" | "activeOperations" | "resolution">;
 
 /**
  * What each engine step is called while it runs and once it is done. The status line and the
@@ -71,12 +71,18 @@ export function arenaSetupStatus(turn: ProgressTurn | undefined): string | null 
 }
 
 export function arenaResolutionStatus(turn: ProgressTurn | undefined): string | null {
-  if (!turn || !isResolvingBattleState(turn.state)) return null;
+  if (!turn) return null;
+  const resolvingStoppedResult =
+    turn.state === "awaiting_stop_resolution" &&
+    turn.resolution?.kind === "stopped" &&
+    turn.resolution.appliedSide !== undefined;
+  if (!isResolvingBattleState(turn.state) && !resolvingStoppedResult) return null;
   const active = operationStatus(turn.activeOperations ?? []);
   if (active) return active;
   switch (turn.state) {
     case "early_selected":
       return "Finishing the other agent's run";
+    case "awaiting_stop_resolution":
     case "applying":
       return "Preparing the selected result";
     case "canonicalizing":
