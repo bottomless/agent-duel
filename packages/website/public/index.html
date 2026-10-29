@@ -3,8 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#181b1a" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" />
     <meta
       name="description"
       content="Agent Duel runs two anonymous coding agents on the same task in your repo. Review both, keep the better one, then see which models you picked."
@@ -16,18 +15,29 @@
     />
     <link rel="canonical" href="https://agentduel.com/" />
     <link rel="icon" href="/logo.png" type="image/png" />
-    <link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/inter.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/landing.js" defer></script>
     <title>Agent Duel — Two agents. One prompt. You pick.</title>
   </head>
   <body>
-    <main>
-      <section class="hero" aria-labelledby="headline">
+    <div class="duel-bar" aria-hidden="true"></div>
+    <header class="site-header">
+      <div class="container">
         <a class="brand" href="/" aria-label="Agent Duel home">
-          <img src="/logo.png" width="40" height="40" alt="" />
+          <img src="/logo.png" width="24" height="24" alt="" />
           <span>Agent Duel</span>
         </a>
+        <nav class="site-nav" aria-label="Site">
+          <a href="/leaderboard">Leaderboard</a>
+          <a class="optional" href="/methodology">Methodology</a>
+          <a class="optional" href="https://github.com/bottomless/agent-duel">Source on GitHub</a>
+          <a href="https://github.com/bottomless/agent-duel/releases/latest">Get the app</a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <section class="hero" aria-labelledby="headline">
         <h1 id="headline">
           <span>Two agents.</span> <span>One prompt.</span> <span>You pick.</span>
         </h1>
@@ -48,15 +58,19 @@
             ></span>
             See a duel
           </button>
-          <button class="button leaderboard" type="button" aria-disabled="true">
+          <a class="button leaderboard" href="/leaderboard">
             <span class="icon" style="--icon: url(/icons/trophy.svg)" aria-hidden="true"></span>
-            Rankings
-            <span class="soon">Soon</span>
-          </button>
+            Leaderboard
+          </a>
         </nav>
       </section>
     </main>
-    <footer><a href="/remote">Remote access</a></footer>
+    <footer>
+      <div class="container">
+        <a href="/remote">Remote access</a>
+        <span>Agent Duel</span>
+      </div>
+    </footer>
     <dialog id="how-dialog" aria-labelledby="how-title">
       <header>
         <h2 id="how-title">How a duel works</h2>

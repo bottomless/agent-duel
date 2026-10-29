@@ -1,57 +1,37 @@
 @font-face {
-  font-family: "Geist";
-  src: url("/fonts/geist.woff2") format("woff2");
+  font-family: "Inter";
+  src: url("/fonts/inter.woff2") format("woff2");
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
-/* Tokens mirror packages/app/src/styles/theme.ts: lightSemanticColors and the default
-   dark theme (paseoDarkColors). The app follows the system theme, so this page does too. */
+/* Matches the leaderboard page: white, near-black text, hairline rules, and the two
+   contestant colors (Side A blue, Side B amber) only in the bar across the top. */
 :root {
-  color-scheme: light dark;
-  --surface0: #ffffff;
-  --surface1: #fafafa;
-  --surface2: #f4f4f5;
-  --surface3: #e4e4e7;
-  --surface4: #d4d4d8;
-  --foreground: #1a1a1e;
-  --foreground-muted: #71717a;
-  --foreground-extra-muted: #a1a1aa;
-  --border: #e4e4e7;
-  --primary: #18181b;
-  --primary-hover: #3f3f46;
-  --primary-foreground: #fafafa;
-  --ring: #18181b;
-  --backdrop: #18181b66;
-  --shadow: 0 8px 24px #00000014;
+  color-scheme: light;
+  --background: #ffffff;
+  --surface: #f6f6f4;
+  --foreground: #1e1e1e;
+  --foreground-nav: #3d3d3d;
+  --foreground-muted: #474747;
+  --rule: #e1e1e1;
+  --rule-strong: #d2d2d2;
+  --link: #22352f;
+  --link-underline: #3e4945;
+  --side-a: #41769e;
+  --side-a-hover: #35628a;
+  --side-b: #8f6c42;
+  --ring: #1e1e1e;
+  --backdrop: #1e1e1e66;
   --font-ui:
-    "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
 
   font-family: var(--font-ui);
   color: var(--foreground);
-  background: var(--surface0);
+  background: var(--background);
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --surface0: #181b1a;
-    --surface1: #1e2120;
-    --surface2: #272a29;
-    --surface3: #434645;
-    --surface4: #595b5b;
-    --foreground: #fafafa;
-    --foreground-muted: #a1a5a4;
-    --foreground-extra-muted: #717574;
-    --border: #252b2a;
-    --primary: #fafafa;
-    --primary-hover: #d4d4d8;
-    --primary-foreground: #181b1a;
-    --ring: #d4d4d8;
-    --backdrop: #000000a6;
-    --shadow: 0 8px 24px #00000066;
-  }
 }
 * {
   box-sizing: border-box;
@@ -62,52 +42,85 @@ body {
   min-height: 100svh;
   display: flex;
   flex-direction: column;
-  background: var(--surface0);
+  background: var(--background);
+}
+.container {
+  width: 100%;
+  max-width: 1088px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+.duel-bar {
+  height: 3px;
+  background: linear-gradient(90deg, var(--side-a) 0 50%, var(--side-b) 50% 100%);
+}
+.site-header {
+  border-bottom: 1px solid var(--rule-strong);
+}
+.site-header .container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  height: 60px;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--foreground);
+  text-decoration: none;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+.brand img {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  object-fit: contain;
+}
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 15px;
+}
+.site-nav a {
+  color: var(--foreground-nav);
+  text-decoration: none;
+  padding: 4px 0;
+}
+.site-nav a:hover {
+  color: var(--foreground);
 }
 main {
   flex: 1;
   display: grid;
   place-items: center;
-  padding: 96px 32px 48px;
+  padding: 72px 24px 56px;
 }
 .hero {
   width: 100%;
-  max-width: 720px;
+  max-width: 760px;
   text-align: center;
 }
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--foreground);
-  text-decoration: none;
-  font-size: 22px;
-  font-weight: 500;
-  line-height: 1.2;
-}
-.brand img {
-  width: 40px;
-  height: 40px;
-  border-radius: 9px;
-  object-fit: contain;
-}
 h1 {
-  font-size: clamp(36px, 6vw, 56px);
+  font-size: clamp(36px, 5.6vw, 56px);
   line-height: 1.1;
-  font-weight: 500;
-  letter-spacing: -0.04em;
-  margin: 40px 0 20px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin: 0 0 20px;
   text-wrap: balance;
 }
 h1 span {
   white-space: nowrap;
 }
 .intro {
-  max-width: 600px;
+  max-width: 640px;
   margin: 0 auto;
-  color: var(--foreground-muted);
-  font-size: clamp(18px, 2.4vw, 22px);
-  line-height: 1.5;
+  font-size: clamp(17px, 2.2vw, 20px);
+  line-height: 1.55;
   text-wrap: pretty;
 }
 .actions {
@@ -115,21 +128,21 @@ h1 span {
   grid-template-columns: repeat(2, auto);
   justify-content: center;
   gap: 12px;
-  margin: 44px auto 0;
+  margin: 40px auto 0;
 }
 .button {
   display: inline-flex;
   justify-content: center;
   align-items: center;
   gap: 10px;
-  min-height: 52px;
-  padding: 0 24px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: var(--surface3);
+  min-height: 48px;
+  padding: 0 22px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--background);
   color: var(--foreground);
   font: inherit;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 500;
   line-height: 1.3;
   text-decoration: none;
@@ -140,14 +153,17 @@ h1 span {
     color 0.15s;
 }
 .button:hover {
-  background: var(--surface4);
+  background: var(--surface);
+  border-color: var(--foreground-nav);
 }
 .button.primary {
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: var(--side-a);
+  border-color: var(--side-a);
+  color: #ffffff;
 }
 .button.primary:hover {
-  background: var(--primary-hover);
+  background: var(--side-a-hover);
+  border-color: var(--side-a-hover);
 }
 .icon {
   width: 18px;
@@ -160,21 +176,6 @@ h1 span {
 .leaderboard {
   grid-column: 1 / -1;
   justify-self: center;
-  background: transparent;
-  border-color: var(--border);
-  color: var(--foreground-extra-muted);
-  cursor: default;
-}
-.leaderboard:hover {
-  background: transparent;
-}
-.soon {
-  padding: 2px 8px;
-  border-radius: 9999px;
-  background: var(--surface2);
-  color: var(--foreground-muted);
-  font-size: 12px;
-  font-weight: 500;
 }
 a:focus-visible,
 button:focus-visible {
@@ -182,13 +183,23 @@ button:focus-visible {
   outline-offset: 3px;
 }
 footer {
-  text-align: center;
-  padding: 24px;
+  border-top: 1px solid var(--rule);
   font-size: 13px;
+  color: var(--foreground-muted);
+}
+footer .container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding-top: 16px;
+  padding-bottom: 16px;
 }
 footer a {
-  color: var(--foreground-muted);
-  text-decoration: none;
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-color: var(--link-underline);
+  text-underline-offset: 4px;
 }
 footer a:hover {
   color: var(--foreground);
@@ -197,12 +208,12 @@ dialog {
   max-width: 520px;
   width: calc(100% - 32px);
   max-height: calc(100svh - 48px);
-  padding: 28px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  padding: 24px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 8px;
   color: var(--foreground);
-  background: var(--surface0);
-  box-shadow: var(--shadow);
+  background: var(--background);
+  box-shadow: 0 12px 32px #0000001f;
 }
 dialog::backdrop {
   background: var(--backdrop);
@@ -212,21 +223,24 @@ dialog header {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
+  padding-bottom: 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--foreground);
 }
 h2 {
   font-size: 18px;
-  font-weight: 500;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   margin: 0;
 }
 .close {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 4px;
   background: transparent;
   color: var(--foreground-muted);
   font: inherit;
@@ -235,44 +249,36 @@ h2 {
   cursor: pointer;
 }
 .close:hover {
-  background: var(--surface2);
+  background: var(--surface);
   color: var(--foreground);
 }
 ol {
   list-style: none;
   counter-reset: step;
-  margin: 0 0 24px;
+  margin: 0 0 20px;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 12px;
 }
 li {
   counter-increment: step;
   display: grid;
-  grid-template-columns: 24px 1fr;
+  grid-template-columns: 28px 1fr;
   column-gap: 12px;
-  padding: 16px;
-}
-li + li {
-  border-top: 1px solid var(--border);
+  padding: 14px 0;
+  border-bottom: 1px solid var(--rule);
 }
 li::before {
   content: counter(step);
   grid-row: 1 / span 2;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 9999px;
-  background: var(--surface2);
   color: var(--foreground-muted);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 14px;
+  line-height: 22px;
+  text-align: right;
+  padding-right: 4px;
 }
 h3 {
   font-size: 15px;
-  font-weight: 500;
-  line-height: 24px;
+  font-weight: 700;
+  line-height: 22px;
   margin: 0 0 4px;
 }
 li p {
@@ -287,11 +293,15 @@ li p {
   font-size: 15px;
 }
 @media (max-width: 600px) {
-  main {
-    padding: 64px 24px 32px;
+  .site-nav {
+    gap: 16px;
+    font-size: 14px;
   }
-  h1 {
-    margin-top: 32px;
+  .site-nav .optional {
+    display: none;
+  }
+  main {
+    padding: 48px 24px 40px;
   }
   .actions {
     grid-template-columns: minmax(0, 340px);
@@ -302,6 +312,10 @@ li p {
   }
   .leaderboard {
     justify-self: stretch;
+  }
+  footer .container {
+    flex-direction: column;
+    align-items: flex-start;
   }
   dialog {
     padding: 20px;
