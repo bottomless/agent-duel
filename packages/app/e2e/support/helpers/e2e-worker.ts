@@ -141,7 +141,7 @@ async function applyMetadataFork(targetHome: string, providerIds: string[]): Pro
 
 export async function startE2EWorker(
   workerIndex: number,
-  options: { forkProviders?: string[] } = {},
+  options: { forkProviders?: string[]; environment?: Record<string, string> } = {},
 ): Promise<E2EWorker> {
   const requestedRoot = resolveOptionalHome(process.env.E2E_PASEO_HOME);
   const paseoHome = requestedRoot
@@ -158,6 +158,7 @@ export async function startE2EWorker(
       paseoHome,
       preserveHome,
       environment: {
+        ...options.environment,
         NODE_ENV: "development",
         PATH: `${fakeEditorBin}${path.delimiter}${process.env.PATH ?? ""}`,
         PASEO_E2E_EDITOR_RECORD_PATH: editorRecordPath,

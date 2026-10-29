@@ -12,6 +12,7 @@ import {
 } from "@/components/message";
 import { QuestionFormCard } from "@/components/question-form-card";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { ArenaAssistantMessage } from "./assistant-message";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { arenaThreadMessages } from "./run-thread-selection";
 import { arenaPendingQuestions, arenaQuestionResult, type ArenaPendingQuestion } from "./question";
@@ -116,6 +117,8 @@ function ArenaPart({
   value,
   cwd,
   runId,
+  occurrenceKey,
+  pending,
   question,
   permission,
   questionResponding,
@@ -126,6 +129,8 @@ function ArenaPart({
   value: unknown;
   cwd?: string;
   runId?: string;
+  occurrenceKey: string;
+  pending: boolean;
   question?: ArenaPendingQuestion;
   permission?: ArenaPendingPermission;
   questionResponding: boolean;
@@ -147,7 +152,14 @@ function ArenaPart({
   const type = typeof part.type === "string" ? part.type : "unknown";
   const text = typeof part.text === "string" ? part.text : "";
   if (type === "text" && text) {
-    return <MarkdownRenderer text={text} compact />;
+    return (
+      <ArenaAssistantMessage
+        text={text}
+        cwd={cwd}
+        occurrenceKey={occurrenceKey}
+        pending={pending}
+      />
+    );
   }
   if (type === "tool" && question && onQuestionResponse) {
     return (
@@ -341,6 +353,8 @@ function ArenaActivityPartView({
       value={entry.part}
       cwd={context.run.worktree}
       runId={context.run.id}
+      occurrenceKey={`${context.run.id}:${activityPartKey(entry)}`}
+      pending={context.run.runState === "pending"}
       question={question}
       permission={permission}
       questionResponding={question?.id === respondingQuestionId}
@@ -604,7 +618,7 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
   const isSubagent = context.sessionPath.length > 1;
   const chat = useContext(ArenaPartSourceContext);
   const imageSource = useMemo(
-    () => (chat ? { ...chat, runId: run.id } : undefined),
+    () => (chat ? { serverId: chat.serverId, agentId: chat.agentId, runId: run.id } : undefined),
     [chat, run.id],
   );
   const renderGroups = useMemo(

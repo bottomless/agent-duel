@@ -1584,7 +1584,10 @@ const AgentStreamSection = memo(function AgentStreamSection({
   );
   const arenaSession = useArenaSessionQuery(serverId, agentId ?? "");
   const arenaStatusError = useArenaStatusError(serverId, agentId, arenaSession.error);
-  const arenaPartSource = useMemo(() => ({ serverId, agentId: agent.id }), [agent.id, serverId]);
+  const arenaPartSource = useMemo(
+    () => ({ serverId, agentId: agent.id, onOpenWorkspaceFile, toast }),
+    [agent.id, serverId, onOpenWorkspaceFile, toast],
+  );
   const startingBattle = useStartingArenaBattle(serverId, agentId ?? "");
   // The collapsed summary arrives in the same frame the panes leave in.
   // A battle that has been sent counts as on screen from the moment it is sent.

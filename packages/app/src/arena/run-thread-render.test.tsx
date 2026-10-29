@@ -14,6 +14,7 @@ vi.mock("@/components/thinking-block", () => ({
 }));
 
 vi.mock("@/components/message", () => ({
+  AssistantMarkdown: ({ message }: { message: string }) => <p>{message}</p>,
   EXPANDABLE_BADGE_DETAIL_INSET: 13,
   ExpandableBadge: (props: {
     label: string;

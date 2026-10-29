@@ -95,6 +95,8 @@ import {
   type InlinePathTarget,
   useAssistantFileLinkActions,
   useAssistantLinkPress,
+  AssistantFileLinkResolverProvider,
+  type AssistantFileLinkResolverProviderProps,
 } from "@/assistant-file-links";
 import { getCompactionMarkerLabel } from "./message-compaction-label";
 import { useAssistantImage } from "@/assistant-image/use-assistant-image";
@@ -1540,16 +1542,22 @@ function MarkdownListView({
   );
 }
 
-export const AssistantMessage = memo(function AssistantMessage({
+interface AssistantMarkdownProps extends Pick<
+  AssistantMessageProps,
+  "occurrenceKey" | "message" | "workspaceRoot" | "serverId" | "client" | "phase"
+> {
+  compact?: boolean;
+  onOpenWorkspaceFile?: AssistantFileLinkResolverProviderProps["onOpenWorkspaceFile"];
+  toast?: AssistantFileLinkResolverProviderProps["toast"];
+}
+
+function useAssistantMarkdown({
   occurrenceKey,
-  message,
-  timestamp: _timestamp,
   workspaceRoot,
   serverId,
   client,
-  spacing = "default",
   phase,
-}: AssistantMessageProps) {
+}: AssistantMarkdownProps) {
   const markdownParser = useMemo(createAssistantMarkdownParser, []);
 
   const fileLinkActions = useAssistantFileLinkActions();
@@ -1989,6 +1997,44 @@ export const AssistantMessage = memo(function AssistantMessage({
     };
   }, [client, fileLinkActions, markdownParser, occurrenceKey, phase, serverId, workspaceRoot]);
 
+  return { markdownParser, markdownRules, handleMarkdownLinkPress };
+}
+
+/** The same file and image handling as chat prose, without the timeline's block layout. */
+export function AssistantMarkdown(props: AssistantMarkdownProps) {
+  return (
+    <AssistantFileLinkResolverProvider
+      client={props.client}
+      serverId={props.serverId}
+      workspaceRoot={props.workspaceRoot}
+      onOpenWorkspaceFile={props.onOpenWorkspaceFile}
+      toast={props.toast}
+    >
+      <AssistantMarkdownContent {...props} />
+    </AssistantFileLinkResolverProvider>
+  );
+}
+
+function AssistantMarkdownContent(props: AssistantMarkdownProps) {
+  const { markdownParser, markdownRules, handleMarkdownLinkPress } = useAssistantMarkdown(props);
+  return (
+    <MarkdownRenderer
+      text={props.message}
+      compact={props.compact}
+      rules={markdownRules}
+      markdownit={markdownParser}
+      onLinkPress={handleMarkdownLinkPress}
+      allowedImageHandlers={MARKDOWN_ALLOWED_IMAGE_HANDLERS}
+    />
+  );
+}
+
+export const AssistantMessage = memo(function AssistantMessage({
+  spacing = "default",
+  ...props
+}: AssistantMessageProps) {
+  const { message } = props;
+  const { markdownParser, markdownRules, handleMarkdownLinkPress } = useAssistantMarkdown(props);
   const blocks = useMemo(() => splitMarkdownBlocks(message), [message]);
   const keyedBlocks = useMemo(
     () => blocks.map((block, index) => ({ key: `block:${index}`, block })),
