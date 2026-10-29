@@ -946,6 +946,33 @@ describe("persistent contestant worktrees", () => {
     }
   }, 120_000)
 
+  test("runs a battle in a checkout whose folder holds only ignored files and an empty folder", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    await writeFile(path.join(root, ".git/info/exclude"), "\n.DS_Store\n", { flag: "a" })
+    await mkdir(path.join(root, "docs/notes/plans"), { recursive: true })
+    await writeFile(path.join(root, "docs/notes/.DS_Store"), "finder\n")
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      // The second turn resyncs the kept worktrees rather than seeding new ones.
+      for (const prompt of ["first", "second"]) {
+        const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt })
+        for (const run of await memory.store.runsForTurn(turn)) {
+          expect(await readFile(path.join(run.worktree, "docs/notes/.DS_Store"), "utf8")).toBe("finder\n")
+        }
+      }
+    } finally {
+      await archive?.()
+      router.restore()
+    }
+  }, 120_000)
+
   test("refreshes a warm pair when the checkout's stash changed", async () => {
     await using directory = await fixture()
     const root = directory.path

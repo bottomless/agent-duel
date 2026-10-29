@@ -28,13 +28,21 @@ export function warmSeed(warmDirectory: string, ignored: readonly string[]): rea
   return ignored.map((entry) => ({ source: path.join(warmDirectory, entry), target: entry }))
 }
 
-/** Collapse wholly ignored directories so a dependency tree is copied as one clone. */
+/**
+ * Collapse wholly ignored directories so a dependency tree is copied as one clone.
+ *
+ * An empty folder counts as untracked content and stops its parent from collapsing, but no
+ * worktree holds one, since git does not record it. Without `--no-empty-directory` a folder of
+ * `.DS_Store` files beside an empty folder is several roots in the checkout and one root in every
+ * contestant, and the contestant's check that it holds the checkout's roots fails every battle.
+ */
 export const IGNORED_PATHS_COMMAND = [
   "ls-files",
   "--others",
   "--ignored",
   "--exclude-standard",
   "--directory",
+  "--no-empty-directory",
   "-z",
 ] as const
 
