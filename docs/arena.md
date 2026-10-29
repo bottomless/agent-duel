@@ -248,7 +248,11 @@ runtime with contestants. A deadline or metadata limit must fail the comparison 
 presenting partial evidence as a complete result.
 
 While the contestants work, each pane reads its thread with the work summarized inline (PR #57's
-activity groups, behind the `toolCallDetailLevel` setting). The battle is one card
+activity groups, behind the `toolCallDetailLevel` setting). Once a contestant is done, everything
+in its thread before the final text folds into one collapsed row labeled with what it did, such as
+**Read 1 file · Ran 1 command** (`projectArenaActivityRows` in `work-summary.ts`), so the pane ends
+on the answer the vote is about; opening the row brings the updates and work back, and questions
+and subagents keep their own rows in place. The battle is one card
 (`packages/app/src/arena/battle-view.tsx`). Up to `ARENA_MAX_CONTENT_WIDTH`, twice the chat's
 reading column, it runs edge to edge, keeping only its top and bottom borders; a 14" MacBook Pro
 never exceeds that. On a wider panel each pane would outrun the reading column, so the battle is

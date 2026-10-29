@@ -2523,6 +2523,16 @@ interface ExpandableBadgeProps {
   bandWhenExpanded?: boolean;
   compactLabel?: boolean;
   /**
+   * Overrides the label's text style. For a row whose label carries the content, such as a
+   * collapsed summary of earlier work, this is how it steps up to the foreground color.
+   */
+  labelTextStyle?: StyleProp<TextStyle>;
+  /**
+   * Shows the chevron even when the row is collapsed and not hovered. For a row whose whole
+   * purpose is to expand, such as a battle's collapsed summary of earlier work.
+   */
+  alwaysShowChevron?: boolean;
+  /**
    * No vertical padding, so the row hugs its icon badge. For a work summary sitting in prose,
    * where the row's own padding would add to the prose rhythm; rows inside an expanded list
    * keep their padding so they stay readable as a list.
@@ -2784,6 +2794,20 @@ function iconSizeFor(compact: boolean, labelSized: boolean): number {
   return labelSized ? ICON_SIZE.md : 12;
 }
 
+function shouldShowExpandableBadgeChevron({
+  isInteractive,
+  alwaysShowChevron,
+  isHovered,
+  isExpanded,
+}: {
+  isInteractive: boolean;
+  alwaysShowChevron: boolean | undefined;
+  isHovered: boolean;
+  isExpanded: boolean;
+}): boolean {
+  return isInteractive && (alwaysShowChevron === true || isHovered || isExpanded);
+}
+
 function renderExpandableBadgeIconSlot({
   showChevron,
   chevronStyle,
@@ -2923,6 +2947,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   transparentWhenExpanded = false,
   bandWhenExpanded,
   compactLabel = false,
+  labelTextStyle,
+  alwaysShowChevron,
   flushRow,
   labelSizedIcon,
   testID,
@@ -3129,10 +3155,11 @@ export const ExpandableBadge = memo(function ExpandableBadge({
     () => [
       expandableBadgeStylesheet.label,
       isActive && expandableBadgeStylesheet.labelActive,
+      labelTextStyle,
       isLoading && expandableBadgeStylesheet.labelLoading,
       compactLabel && expandableBadgeStylesheet.labelCompact,
     ],
-    [isActive, isLoading, compactLabel],
+    [isActive, isLoading, compactLabel, labelTextStyle],
   );
 
   const secondaryLabelStyle = useMemo(
@@ -3185,7 +3212,12 @@ export const ExpandableBadge = memo(function ExpandableBadge({
     labelSized: labelSizedIcon === true,
   });
   const iconSlotNode = renderExpandableBadgeIconSlot({
-    showChevron: isInteractive && (isHovered || isExpanded),
+    showChevron: shouldShowExpandableBadgeChevron({
+      isInteractive,
+      alwaysShowChevron,
+      isHovered,
+      isExpanded,
+    }),
     chevronStyle,
     iconNode,
   });
@@ -3258,6 +3290,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
 function areExpandableBadgePropsEqual(previous: ExpandableBadgeProps, next: ExpandableBadgeProps) {
   if (previous.label !== next.label) return false;
   if (previous.secondaryLabel !== next.secondaryLabel) return false;
+  if (previous.labelTextStyle !== next.labelTextStyle) return false;
+  if (previous.alwaysShowChevron !== next.alwaysShowChevron) return false;
   if (previous.icon !== next.icon) return false;
   if (previous.isExpanded !== next.isExpanded) return false;
   if (previous.style !== next.style) return false;

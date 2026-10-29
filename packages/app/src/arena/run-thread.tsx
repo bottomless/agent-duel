@@ -14,7 +14,12 @@ import { QuestionFormCard } from "@/components/question-form-card";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { arenaThreadMessages } from "./run-thread-selection";
-import { arenaPendingQuestions, arenaQuestionResult, type ArenaPendingQuestion } from "./question";
+import {
+  arenaPendingQuestions,
+  arenaQuestionResult,
+  isArenaQuestionPart,
+  type ArenaPendingQuestion,
+} from "./question";
 import { ArenaQuestionResultView } from "./question-result";
 import {
   ArenaPermissionCard,
@@ -36,8 +41,11 @@ import {
   arenaPartIsWork,
   arenaRunIsAwaitingResponse,
   arenaRunIsResponding,
+  arenaWorkSummaryLabel,
   presentArenaWork,
+  projectArenaActivityRows,
   projectArenaActivitySegments,
+  summarizeArenaWork,
   type ArenaActivityPart,
   type ArenaActivitySegment,
 } from "./work-summary";
@@ -443,6 +451,71 @@ function ArenaActivitySegmentView({
   );
 }
 
+function segmentStandsAlone(
+  segment: ArenaActivitySegment,
+  context: AssistantPartsContext,
+): boolean {
+  if (!segment.content) return false;
+  return isArenaQuestionPart(segment.content.part) || context.subagents.has(segment.content.part);
+}
+
+function ArenaEarlierActivity({
+  segments,
+  context,
+}: {
+  segments: ArenaActivitySegment[];
+  context: AssistantPartsContext;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback(() => setExpanded((current) => !current), []);
+  const parts = useMemo(
+    () =>
+      segments.flatMap((segment) =>
+        [segment.content, ...segment.trailing]
+          .filter((entry) => entry !== null)
+          .map((entry) => entry.part),
+      ),
+    [segments],
+  );
+  const hasWork = parts.some(arenaPartIsWork);
+  const label = useMemo(
+    () => (hasWork ? arenaWorkSummaryLabel(summarizeArenaWork(parts), false) : "Earlier updates"),
+    [hasWork, parts],
+  );
+  const renderDetails = useCallback(
+    () => (
+      <View style={styles.historyDetails}>
+        {segments.map((segment) => (
+          <ArenaActivitySegmentView
+            key={segment.key}
+            segment={segment}
+            context={context}
+            isLatest={false}
+            awaitingResponse={false}
+          />
+        ))}
+      </View>
+    ),
+    [context, segments],
+  );
+  return (
+    <ExpandableBadge
+      testID="arena-earlier-activity"
+      label={label}
+      isExpanded={expanded}
+      onToggle={toggle}
+      renderDetails={renderDetails}
+      disableOuterSpacing
+      borderlessWhenExpanded
+      bandWhenExpanded
+      compactLabel
+      labelTextStyle={styles.earlierActivityLabel}
+      alwaysShowChevron
+      flushRow
+    />
+  );
+}
+
 function ArenaActivityGroup({
   messageIds,
   context,
@@ -464,15 +537,22 @@ function ArenaActivityGroup({
     segments.length === 0 && awaitingResponse
       ? [{ key: `${messageIds[0]}:activity`, content: null, trailing: [] }]
       : segments;
-  return visibleSegments.map((segment) => (
-    <ArenaActivitySegmentView
-      key={segment.key}
-      segment={segment}
-      context={context}
-      isLatest={isLatest && segment === visibleSegments.at(-1)}
-      awaitingResponse={awaitingResponse && segment === visibleSegments.at(-1)}
-    />
-  ));
+  const rows = projectArenaActivityRows(visibleSegments, context.run.runState, (segment) =>
+    segmentStandsAlone(segment, context),
+  );
+  return rows.map((row) =>
+    row.kind === "earlier" ? (
+      <ArenaEarlierActivity key={row.key} segments={row.segments} context={context} />
+    ) : (
+      <ArenaActivitySegmentView
+        key={row.key}
+        segment={row.segment}
+        context={context}
+        isLatest={isLatest && row.segment === visibleSegments.at(-1)}
+        awaitingResponse={awaitingResponse && row.segment === visibleSegments.at(-1)}
+      />
+    ),
+  );
 }
 
 function ArenaSubagent({
@@ -782,6 +862,14 @@ const styles = StyleSheet.create((theme) => ({
   workDetails: {
     paddingTop: theme.spacing[2],
     paddingHorizontal: EXPANDABLE_BADGE_DETAIL_INSET,
+  },
+  historyDetails: {
+    paddingTop: theme.spacing[2],
+    paddingHorizontal: EXPANDABLE_BADGE_DETAIL_INSET,
+    gap: theme.spacing[3],
+  },
+  earlierActivityLabel: {
+    color: theme.colors.foreground,
   },
   activitySegment: {
     gap: 0,

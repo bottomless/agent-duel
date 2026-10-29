@@ -95,6 +95,40 @@ export function projectArenaActivitySegments(
   return segments;
 }
 
+export type ArenaActivityRow =
+  | { kind: "earlier"; key: string; segments: ArenaActivitySegment[] }
+  | { kind: "segment"; key: string; segment: ArenaActivitySegment };
+
+export function projectArenaActivityRows(
+  segments: readonly ArenaActivitySegment[],
+  runState: ArenaRun["runState"],
+  isStandalone: (segment: ArenaActivitySegment) => boolean = () => false,
+): ArenaActivityRow[] {
+  const finalTextIndex =
+    runState === "pending"
+      ? -1
+      : segments.findLastIndex(
+          (segment) => segment.content !== null && partIsTextUpdate(segment.content.part),
+        );
+  const rows: ArenaActivityRow[] = [];
+  let earlier: ArenaActivitySegment[] = [];
+  const flushEarlier = () => {
+    if (earlier.length === 0) return;
+    rows.push({ kind: "earlier", key: `earlier:${earlier[0].key}`, segments: earlier });
+    earlier = [];
+  };
+  for (const [index, segment] of segments.entries()) {
+    if (finalTextIndex > 0 && index < finalTextIndex && !isStandalone(segment)) {
+      earlier.push(segment);
+      continue;
+    }
+    flushEarlier();
+    rows.push({ kind: "segment", key: segment.key, segment });
+  }
+  flushEarlier();
+  return rows;
+}
+
 /** Tool calls and thinking — everything in a turn that is not the answer itself. */
 export function arenaPartIsWork(part: unknown): boolean {
   const type = partType(part);
