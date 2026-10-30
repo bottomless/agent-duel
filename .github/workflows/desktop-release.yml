@@ -91,6 +91,28 @@ jobs:
           npm run format:check
           npm run lint
 
+      - name: Retry stapler when Apple drops the connection
+        run: |
+          # stapler fetches the ticket from Apple's CloudKit, and that connection sometimes drops
+          # (exit 68, "The network connection was lost"). This xcrun goes first on PATH, so stapler retries
+          # that exit both in electron-builder's build step and in the verify step. @electron/notarize's own
+          # staple retry never fires: it rejects without calling promise-retry's retry callback.
+          bin="$RUNNER_TEMP/xcrun-retry"
+          mkdir -p "$bin"
+          cat > "$bin/xcrun" <<'SH'
+          #!/bin/bash
+          [[ $1 == stapler ]] || exec /usr/bin/xcrun "$@"
+          for attempt in 1 2 3; do
+            /usr/bin/xcrun "$@" && exit 0
+            status=$?
+            if [[ $status -ne 68 || $attempt -eq 3 ]]; then exit "$status"; fi
+            echo "stapler $2 lost the connection to Apple (attempt $attempt of 3), retrying in $((attempt * 20)) s" >&2
+            sleep $((attempt * 20))
+          done
+          SH
+          chmod +x "$bin/xcrun"
+          echo "$bin" >> "$GITHUB_PATH"
+
       - name: Build, sign, and notarize Apple Silicon app
         env:
           NODE_OPTIONS: --max-old-space-size=4096
@@ -119,18 +141,6 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           AGENT_DUEL_BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          # stapler fetches the ticket from Apple's CloudKit, and that connection sometimes drops
-          # (exit 68, "The network connection was lost"). Retry those instead of failing the run.
-          retry_stapler() {
-            local attempt status
-            for attempt in 1 2 3; do
-              xcrun stapler "$@" && return 0
-              status=$?
-              if [[ $status -ne 68 || $attempt -eq 3 ]]; then return "$status"; fi
-              echo "stapler $1 lost the connection to Apple (attempt $attempt of 3), retrying in $((attempt * 20)) s" >&2
-              sleep $((attempt * 20))
-            done
-          }
           APP='packages/desktop/release/mac-arm64/Agent Duel.app'
           SHORT_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
           BUILD_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")
@@ -139,12 +149,12 @@ jobs:
           codesign --verify --deep --strict "$APP"
           codesign --display --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/signing.txt"
           grep -F 'Authority=Developer ID Application: Bottomless Supply Inc (LGVJP2HNM2)' "$RUNNER_TEMP/signing.txt"
-          retry_stapler validate "$APP"
+          xcrun stapler validate "$APP"
           spctl --assess --type execute --verbose=4 "$APP"
           DMG="packages/desktop/release/Agent-Duel-$RELEASE_VERSION-arm64.dmg"
           xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
-          retry_stapler staple "$DMG"
-          retry_stapler validate "$DMG"
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
           node <<'JS'
           const fs = require('node:fs');
           const path = require('node:path');
