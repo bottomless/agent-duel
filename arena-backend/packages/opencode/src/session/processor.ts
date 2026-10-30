@@ -19,7 +19,7 @@ import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { ModelIdleError } from "@/arena/model-idle"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
-import { ArenaRequestBudget } from "@/arena/request-budget"
+import { readCompactionRequired, requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
 import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
 import { Question } from "@/question"
@@ -739,10 +739,33 @@ const layer = Layer.effect(
                 }),
             ),
             Effect.catchIf(
-              (error) => arena && error instanceof ArenaRequestBudget.CompactionRequired,
+              (error) => {
+                if (!arena) return false
+                const parsed = parse(error)
+                const hasBody =
+                  SessionV1.APIError.isInstance(parsed) || SessionV1.ContextOverflowError.isInstance(parsed)
+                return hasBody && readCompactionRequired(parsed.data.responseBody)
+              },
               () =>
-                Effect.sync(() => {
-                  requestCompaction = true
+                Effect.gen(function* () {
+                  const automatic = (yield* config.get()).compaction?.auto !== false
+                  const summary = streamInput.agent.name === "compaction"
+                  const canCompact = automatic && streamInput.arenaRequestCompaction === true
+                  if (summary || canCompact) {
+                    requestCompaction = true
+                    return
+                  }
+                  // A first request or a post-summary retry may be irreducible. Do not loop on it.
+                  ctx.assistantMessage.error = new SessionV1.APIError({
+                    message: requestTooLargeMessage,
+                    isRetryable: false,
+                  }).toObject()
+                  ctx.assistantMessage.finish = "error"
+                  yield* events.publish(Session.Event.Error, {
+                    sessionID: ctx.sessionID,
+                    error: ctx.assistantMessage.error,
+                  })
+                  yield* status.set(ctx.sessionID, { type: "idle" })
                 }),
             ),
             Effect.retry(

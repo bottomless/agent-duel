@@ -40,6 +40,63 @@ function transportError(code: string) {
 }
 
 describe("ArenaProxy", () => {
+  test("preserves only the neutral backend compaction signal for a descendant", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const chunks: string[] = []
+    const response = await proxy(
+      new Request("http://arena.invalid/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-Id": "session-child",
+          "x-parent-session-id": "session-root",
+          "x-arena-request-id": requestID,
+        },
+        body: JSON.stringify({ model: "contestant", messages: [] }),
+      }),
+      registry,
+      {
+        upstream: "https://unit.invalid",
+        fetch: async () =>
+          Response.json(
+            {
+              error: {
+                type: "arena_compaction_required",
+                message: "private-model supports 65536 tokens",
+                limit: 65536,
+              },
+            },
+            { status: 413, headers: { "x-model-limit": "65536" } },
+          ),
+        telemetry: { rawChunk: (_metadata, chunk) => chunks.push(chunk) },
+      },
+    )
+    const expected = { error: { message: "Arena request needs compaction", type: "arena_compaction_required" } }
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual(expected)
+    expect(chunks).toEqual([JSON.stringify(expected)])
+    expect(response.headers.get("x-model-limit")).toBeNull()
+  })
+
+  test("forwards only the engine's compaction offer to the control plane", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const forwarded: (string | null)[] = []
+    for (const value of ["auto", "anything-else", undefined]) {
+      const sent = request()
+      if (value) sent.headers.set("x-arena-compaction", value)
+      await proxy(sent, registry, {
+        upstream: "https://unit.invalid",
+        fetch: async (_input, init) => {
+          forwarded.push(new Headers(init?.headers).get("x-arena-compaction"))
+          return Response.json({ choices: [] })
+        },
+      })
+    }
+    expect(forwarded).toEqual(["auto", null, null])
+  })
+
   test("preserves output exhaustion when OpenRouter labels an unfinished call as tool_calls", () => {
     for (const reason of ["length", "max_tokens", "max_output_tokens"]) {
       expect(
@@ -754,6 +811,7 @@ describe("ArenaProxy", () => {
               displayName: "Hidden Model",
               slug: "provider/hidden-model",
               canonicalSlug: "provider/hidden-model-version",
+              contextWindow: 1_000_000,
               routing: { sort: "throughput" },
             },
           },
@@ -865,6 +923,7 @@ describe("ArenaProxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },

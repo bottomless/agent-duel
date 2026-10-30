@@ -2,12 +2,15 @@ import { randomUUID } from "crypto"
 import { contestant } from "./model-profile"
 import type { GenerationMetrics } from "./records"
 import {
+  compactionRequiredError,
   networkUnavailableError,
   paymentError,
+  readCompactionRequired,
   readNetworkUnavailable,
   readPaymentError,
   retryableStreamError,
 } from "@agent-duel/arena-service/request-error"
+import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
 import type { KeepAlive, Ping, PingResult } from "./keep-alive"
@@ -679,6 +682,10 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         ...routing,
         Accept: request.headers.get("accept") || "text/event-stream, application/json",
         "X-OpenRouter-Metadata": "enabled",
+        // Lets the control plane compact this step at the hidden model's level.
+        ...(request.headers.get(COMPACTION_HEADER) === COMPACTION_OFFER
+          ? { [COMPACTION_HEADER]: COMPACTION_OFFER }
+          : {}),
       },
       body: JSON.stringify(rewritten),
       signal: dispatch.signal,
@@ -707,14 +714,13 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const generationID = metadata.generationID
     const type = response.headers.get("content-type") ?? ""
     if (!response.ok) {
-      // Only these two bodies carry a neutral code the engine acts on; every other body is dropped.
-      const body = response.status === 402 || response.status === 503 ? await response.text() : undefined
-      const payload =
-        response.status === 402
-          ? paymentError(readPaymentError(body) ?? "arena_payment_required")
-          : readNetworkUnavailable(body)
-            ? networkUnavailableError()
-            : { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
+      // Rebuild allowlisted control responses so upstream text and capability limits never escape.
+      const knownStatus = [402, 413, 503].includes(response.status)
+      const body = knownStatus ? await response.text() : undefined
+      let payload = { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
+      if (response.status === 402) payload = paymentError(readPaymentError(body) ?? "arena_payment_required")
+      if (response.status === 503 && readNetworkUnavailable(body)) payload = networkUnavailableError()
+      if (response.status === 413 && readCompactionRequired(body)) payload = compactionRequiredError()
       if (body === undefined) await response.body?.cancel().catch(() => undefined)
       endWait?.()
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))

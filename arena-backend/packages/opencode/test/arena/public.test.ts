@@ -1,4 +1,5 @@
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
 import { describe, expect, test } from "bun:test"
 import type { ArenaActiveOperation } from "../../src/arena/operation-tracker"
 import { jsonValue, parseSnapshot, project } from "../../src/arena/public"
@@ -219,6 +220,13 @@ describe("ArenaPublic", () => {
       expect(project(input).runs[0]?.error).toBe(ArenaResponseRecovery.IDLE_EXHAUSTED)
     },
   )
+
+  test.each([false, true])("asks the voter to shorten a request no model call can take, revealed=%s", (revealed) => {
+    const input = snapshot(revealed)
+    input.runs[0]!.runState = "error"
+    input.runs[0]!.error = JSON.stringify({ name: "APIError", data: { message: requestTooLargeMessage } })
+    expect(project(input).runs[0]?.error).toBe(requestTooLargeMessage)
+  })
 
   test.each([false, true])("hides billing details in payment errors, revealed=%s", (revealed) => {
     const input = snapshot(revealed)

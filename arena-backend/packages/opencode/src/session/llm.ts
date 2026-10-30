@@ -27,15 +27,20 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { ArenaRuntime } from "@/arena/runtime"
-import { ArenaRequestBudget } from "@/arena/request-budget"
-import { markInitialRequestDeferred } from "@/arena/dispatch"
 import { MODEL_IDLE_TIMEOUT_MS, timeoutModelIdle, type ModelIdleActivity } from "@/arena/model-idle"
 import { streamProgress } from "@/arena/proxy"
+import { readCompactionRequired } from "@agent-duel/arena-service/request-error"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
+
+function isCompactionSignal(event: unknown) {
+  const error = typeof event === "object" && event !== null && "error" in event ? event.error : event
+  if (typeof error !== "object" || error === null || !("responseBody" in error)) return false
+  return typeof error.responseBody === "string" && readCompactionRequired(error.responseBody)
+}
 
 // A contestant can reason for minutes in chunks that carry only OpenRouter `reasoning_details`,
 // which the AI SDK turns into no stream part. Raw chunks are then the only sign the model is still
@@ -116,6 +121,9 @@ const live: Layer.Layer<
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
       const prepared = yield* LLMRequestPrep.prepare({
         ...input,
+        // The control plane knows the model and decides when a request is too large. It asks for
+        // compaction only when the engine says it can summarize first.
+        arenaCompaction: input.arenaRequestCompaction === true && cfg.compaction?.auto !== false,
         provider: item,
         auth: info,
         plugin,
@@ -292,8 +300,10 @@ const live: Layer.Layer<
         toolNames: Object.keys(prepared.tools),
         result: streamText({
           onError(error) {
+            // The control plane's compaction signal is a normal step, not a failure.
+            const compaction = isCompactionSignal(error)
             bridge.fork(
-              Effect.logError("stream error", {
+              (compaction ? Effect.logInfo : Effect.logError)(compaction ? "compaction requested" : "stream error", {
                 providerID: input.model.providerID,
                 modelID: input.model.id,
                 "session.id": input.sessionID,
@@ -349,25 +359,6 @@ const live: Layer.Layer<
                       input.model,
                       prepared.messageTransformOptions,
                     )
-                    if (
-                      input.model.providerID === ArenaRuntime.providerID &&
-                      input.arenaRequestCompaction &&
-                      cfg.compaction?.auto !== false
-                    ) {
-                      try {
-                        ArenaRequestBudget.check({
-                          prompt: args.params.prompt,
-                          tools: args.params.tools,
-                          toolChoice: args.params.toolChoice,
-                          responseFormat: args.params.responseFormat,
-                        })
-                      } catch (error) {
-                        if (error instanceof ArenaRequestBudget.CompactionRequired) {
-                          markInitialRequestDeferred(input.sessionID)
-                        }
-                        throw error
-                      }
-                    }
                   }
                   return args.params
                 },

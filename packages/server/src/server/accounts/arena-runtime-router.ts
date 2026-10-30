@@ -20,12 +20,14 @@ const allowedRoutes = new Set([
 type Fetch = typeof fetch;
 
 // x-arena-keep-alive marks a cache ping; without it the control plane runs the ping as a full
-// contestant call (arena-service `keep-alive.ts`).
+// contestant call (arena-service `keep-alive.ts`). x-arena-compaction tells it the engine can
+// compact this step; the control plane decides whether it must.
 const forwardedRequestHeaders = [
   "x-arena-assignment-id",
   "x-arena-scope-id",
   "x-arena-generation-id",
   "x-arena-keep-alive",
+  "x-arena-compaction",
 ];
 
 function forwardedHeaders(req: express.Request): Record<string, string> {

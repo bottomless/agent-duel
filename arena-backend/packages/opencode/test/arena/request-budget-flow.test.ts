@@ -11,11 +11,10 @@ import { SessionProcessor } from "@/session/processor"
 import { SessionSummary } from "@/session/summary"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
-import { ArenaRequestBudget } from "@/arena/request-budget"
+import { Token } from "@/util/token"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { MessageID, PartID } from "@/session/schema"
-import { waitForInitialDispatch } from "@/arena/dispatch"
 import { ProviderTest } from "../fake/provider"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -30,55 +29,20 @@ const summary = Layer.succeed(
 )
 for (const scenario of [
   {
-    name: "requests compaction before a paid call",
+    name: "lets the control plane compact a step it can summarize",
     provider: "arena",
     compact: true,
     auto: true,
-    large: true,
-    result: "compact-request",
-    calls: 0,
+    header: "auto",
   },
-  {
-    name: "sends a compacted request even when it remains above the savings threshold",
-    provider: "arena",
-    compact: false,
-    auto: true,
-    large: true,
-    result: "continue",
-    calls: 1,
-  },
-  {
-    name: "sends a request under the full budget",
-    provider: "arena",
-    compact: true,
-    auto: true,
-    large: false,
-    result: "continue",
-    calls: 1,
-  },
-  {
-    name: "honors disabled automatic compaction",
-    provider: "arena",
-    compact: true,
-    auto: false,
-    large: true,
-    result: "continue",
-    calls: 1,
-  },
-  {
-    name: "leaves non-Arena requests unchanged",
-    provider: "test",
-    compact: true,
-    auto: true,
-    large: true,
-    result: "continue",
-    calls: 1,
-  },
+  { name: "sends no compaction offer for a request nothing can shrink", provider: "arena", compact: false, auto: true },
+  { name: "sends no compaction offer when automatic compaction is off", provider: "arena", compact: true, auto: false },
+  { name: "leaves non-Arena requests unchanged", provider: "test", compact: true, auto: true },
 ] as const) {
-  let calls = 0
+  const headers: (Record<string, string | undefined> | undefined)[] = []
   const language = new MockLanguageModelV3({
-    doStream: async () => {
-      calls++
+    doStream: async (request) => {
+      headers.push(request.headers)
       return {
         stream: new ReadableStream({
           start(controller) {
@@ -143,20 +107,21 @@ for (const scenario of [
           }
           yield* sessions.updateMessage(assistant)
           const handle = yield* processors.create({ assistantMessage: assistant, sessionID: session.id, model })
-          const dispatch = scenario.calls === 0 ? waitForInitialDispatch(session.id) : undefined
+          // The engine no longer measures the request itself: a large one goes out, and the
+          // control plane answers with the compaction signal when the hidden model needs it.
           const result = yield* handle.process({
             user,
             sessionID: session.id,
             model,
             agent: { name: "build", mode: "primary", prompt: "s".repeat(8_000 * 4), options: {}, permission: [] },
             system: ["s".repeat(8_000 * 4)],
-            messages: [{ role: "user", content: scenario.large ? "x".repeat(260_000 * 4) : "hello" }],
+            messages: [{ role: "user", content: "x".repeat(300_000 * 4) }],
             tools: {},
             arenaRequestCompaction: scenario.compact,
           })
-          expect(result).toBe(scenario.result)
-          expect(calls).toBe(scenario.calls)
-          if (dispatch) yield* Effect.promise(() => dispatch.promise).pipe(Effect.timeout("1 second"))
+          expect(result).toBe("continue")
+          expect(headers).toHaveLength(1)
+          expect(headers[0]?.["x-arena-compaction"]).toBe("header" in scenario ? scenario.header : undefined)
           expect(handle.message.error).toBeUndefined()
         }),
       { config: { compaction: { auto: scenario.auto } } },
@@ -165,9 +130,11 @@ for (const scenario of [
 }
 
 const summaryRequests: number[] = []
+const summaryHeaders: (string | undefined)[] = []
 const summaryLanguage = new MockLanguageModelV3({
   doStream: async (request) => {
-    summaryRequests.push(ArenaRequestBudget.estimate(request))
+    summaryRequests.push(Token.estimate(JSON.stringify(request.prompt)))
+    summaryHeaders.push(request.headers?.["x-arena-compaction"])
     return {
       stream: new ReadableStream({
         start(controller) {
@@ -244,7 +211,9 @@ compactionTest.live(
       })
       expect(result).toBe("continue")
       expect(summaryRequests).toHaveLength(1)
-      expect(summaryRequests[0]).toBeGreaterThan(ArenaRequestBudget.LIMIT)
+      expect(summaryRequests[0]).toBeGreaterThan(272_000)
+      // A summary may pass the savings level; only the model's window can refuse it.
+      expect(summaryHeaders).toEqual([undefined])
       const updated = yield* sessions.messages({ sessionID: session.id })
       const generated = updated.find((message) => message.info.role === "assistant" && message.info.summary)
       expect(generated?.info).toMatchObject({ finish: "stop", summary: true })

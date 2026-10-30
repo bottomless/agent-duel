@@ -1001,7 +1001,8 @@ field. Each layer has its own file:
 - **Assignment** (`arena-service/src/assignments.ts`) — in hosted mode the model pool and
   assignment mapping exist only on the server. The desktop cannot derive the private profile from
   an assignment id, and assignment creation accepts no client-directed model exclusion because
-  repeated exclusion draws form an identity oracle.
+  repeated exclusion draws form an identity oracle. Context and output limits stay with the private
+  profile too: their numeric combination can identify a contestant without its name.
 - **Request** (`arena-service/src/openrouter.ts`) — the desktop can request only the neutral
   `contestant` model. It sends the assignment id and owning scope id through the daemon's
   capability-gated Arena proxy; the Arena process never receives the account session. The control
@@ -1409,9 +1410,41 @@ not be mistaken for a silent model stream. When the runtime abandons a request, 
 proxy aborts its control-plane request too; otherwise the hosted function keeps streaming, and
 billing, until its own time limit.
 
-A request above the estimated savings threshold triggers compaction. Keep a new user message and
-its attachments intact while summarizing the earlier history. The summary request must be allowed
-to exceed the savings threshold; the provider's context window still applies.
+The control plane decides when a contestant compacts, because only it knows the model
+(`arena-service/src/openrouter.ts`). The engine marks a step it could summarize first with
+`X-Arena-Compaction: auto` (`session/llm/request.ts`); the daemon's runtime router forwards that
+header and nothing else new. Before sending a request upstream the service estimates the full body,
+scales the estimate by the input the provider measured for the assignment's previous call
+(`request-calibration.ts`), and answers 413 with the neutral `arena_compaction_required` when:
+
+- the request is marked and reaches the profile's `compactAt` (`modelLimits` in `pool.ts`), or
+- any request cannot fit the endpoint's context with its output cap.
+
+`compactAt` is the 272K savings level for a large window and 85% of the input room below that, so a
+65K endpoint with a 16K output cap compacts at about 42K. A pool profile names a smaller endpoint
+through its private `limits`; `contextWindow` stays the catalog's value, which the catalog check
+compares. A provider's own context refusal becomes the same signal; match only phrases about the
+context, since quota and output-cap errors mention tokens too. The answer never carries a
+number: the levels identify the model. The compaction timing still shows on screen, and with one
+small model in the pool it points at that model.
+
+Calibration samples live in `arenaRequestCalibration`, one per assignment. Only calls of at least a
+quarter of the model's `compactAt` leave one, so short chats cost no write. Each sample expires after
+30 days through a TTL index on `expiresAt`, which the control plane creates by migration.
+
+Nothing can shrink a chat's first message or the step right after a summary, so the engine leaves
+those unmarked: they go out at the provider's rates when they fit, and stop with a "too large" error
+when they do not. A summary request is unmarked too, since it must be allowed past the savings
+level. When a summary does not fit the endpoint, the runtime summarizes in batches and carries a
+rolling summary forward; only the final one replaces history. Keep a new user message and its
+attachments out of the summary and replay them after it. Disabling automatic compaction leaves every
+request unmarked.
+
+An engine that sends no header gets only the endpoint check, which is what it got from the provider
+before. The engine keeps its own 272K history check (`isOverflow` in `session/compaction.ts`) so
+chats still compact while an older control plane ignores the header; the service's level is never
+above it and counts the whole request, so it fires first. Keep a small endpoint away from desktops
+older than this release: they compact only at their own 272K estimate.
 
 A compaction summary that ends idle, at its output cap, or empty must never become the history. A
 finished summary hides everything before it, so the contestant continues with no memory of its task

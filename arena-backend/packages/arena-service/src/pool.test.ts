@@ -153,6 +153,13 @@ describe("Arena model pool", () => {
     ).toThrow("Arena contestant context window drifted: Qwen 3.8 Max")
   })
 
+  test("rejects invalid private endpoint limits during catalog validation", () => {
+    const invalid = { ...pool[0], limits: { output: pool[0].contextWindow } }
+    expect(() => validateCatalog([invalid], { data: [catalogModel(invalid)] })).toThrow(
+      "Arena model output limit is invalid",
+    )
+  })
+
   test("samples contestants from the injected pool", () => {
     expect(samplePair(pool, sequence(0, 0.999)).map((profile) => profile.displayName)).toEqual([
       "GLM 5.3 FlashX",

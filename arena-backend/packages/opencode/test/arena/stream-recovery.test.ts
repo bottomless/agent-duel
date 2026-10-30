@@ -27,6 +27,7 @@ const assignmentSet = {
         displayName: "Hidden Model",
         slug: "provider/hidden-model",
         canonicalSlug: "provider/hidden-model-version",
+        contextWindow: 1_000_000,
         routing: { sort: "throughput" },
       },
     },
