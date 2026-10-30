@@ -91,12 +91,12 @@ jobs:
           npm run format:check
           npm run lint
 
-      - name: Retry stapler when Apple drops the connection
+      - name: Add an xcrun wrapper that retries stapler
         run: |
           # stapler fetches the ticket from Apple's CloudKit, and that connection sometimes drops
           # (exit 68, "The network connection was lost"). This xcrun goes first on PATH, so stapler retries
-          # that exit both in electron-builder's build step and in the verify step. @electron/notarize's own
-          # staple retry never fires: it rejects without calling promise-retry's retry callback.
+          # that exit both in electron-builder's build step and in the verify step. The staple retry in
+          # @electron/notarize 2.5.0 never fires: it rejects without calling promise-retry's retry callback.
           bin="$RUNNER_TEMP/xcrun-retry"
           mkdir -p "$bin"
           cat > "$bin/xcrun" <<'SH'
