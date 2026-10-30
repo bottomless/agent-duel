@@ -12,7 +12,7 @@ const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
 const SIDEBAR_VIEW_STORE_VERSION = 3;
 const DEFAULT_GROUP_MODE: SidebarGroupMode = "project";
 const DEFAULT_SORT_MODE: SidebarSortMode = "lastChat";
-const DEFAULT_GROUP_SORT_MODE: SidebarSortMode = "default";
+const DEFAULT_GROUP_SORT_MODE: SidebarSortMode = "lastChat";
 
 interface SidebarViewStoreState {
   groupMode: SidebarGroupMode;
@@ -40,6 +40,10 @@ interface SidebarViewPersistedState {
 
 function isSidebarGroupMode(value: unknown): value is SidebarGroupMode {
   return value === "project" || value === "status" || value === "none";
+}
+
+function isSidebarSortMode(value: unknown): value is SidebarSortMode {
+  return value === "default" || value === "lastChat";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,12 +98,12 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
     groupMode: isSidebarGroupMode(persistedState.groupMode)
       ? persistedState.groupMode
       : DEFAULT_GROUP_MODE,
-    sortMode:
-      persistedState.sortMode === "default" || persistedState.sortMode === "lastChat"
-        ? persistedState.sortMode
-        : DEFAULT_SORT_MODE,
-    groupSortMode:
-      persistedState.groupSortMode === "lastChat" ? "lastChat" : DEFAULT_GROUP_SORT_MODE,
+    sortMode: isSidebarSortMode(persistedState.sortMode)
+      ? persistedState.sortMode
+      : DEFAULT_SORT_MODE,
+    groupSortMode: isSidebarSortMode(persistedState.groupSortMode)
+      ? persistedState.groupSortMode
+      : DEFAULT_GROUP_SORT_MODE,
     hostFilters: readHostFilters(persistedState),
   };
 }
