@@ -37,6 +37,7 @@ function contextTarget(feedback: FeedbackSubmission): FeedbackContextTarget | nu
   if (feedback.source === "chat") {
     return { agentId: feedback.agentId, workspaceId: feedback.workspaceId };
   }
+  if (feedback.source === "crash") return null;
   return feedback.contextTarget ?? null;
 }
 

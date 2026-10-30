@@ -6,6 +6,14 @@ import { resolvePaseoHome } from "./paseo-home.js";
 import { createRootLogger } from "./logger.js";
 import type { DaemonLifecycleIntent } from "./bootstrap.js";
 import { getProcessDiagnostics } from "./process-diagnostics.js";
+import { resolveDaemonVersion } from "./daemon-version.js";
+import { configureCrashReporting, reportCrash } from "./crash-reports/reporter.js";
+import {
+  claimRunningMarker,
+  describeError,
+  describeUncleanShutdown,
+  releaseRunningMarker,
+} from "./crash-reports/store.js";
 
 process.title = "Agent Duel Daemon";
 
@@ -109,8 +117,28 @@ function applyCliFlagOverrides(config: ReturnType<typeof loadConfig>): void {
   }
 }
 
+function startCrashReporting(paseoHome: string): void {
+  const version = resolveDaemonVersion();
+  configureCrashReporting({
+    home: paseoHome,
+    appVersion: version,
+    logPath: path.join(paseoHome, "daemon.log"),
+  });
+  const previous = claimRunningMarker({ home: paseoHome, name: "daemon", version });
+  // Every exit removes it, a fatal one included; only a run that never exited leaves it behind.
+  process.on("exit", () => releaseRunningMarker(paseoHome, "daemon"));
+  if (previous) {
+    reportCrash({
+      process: "daemon",
+      kind: "unclean_shutdown",
+      message: describeUncleanShutdown("The daemon", previous),
+    });
+  }
+}
+
 async function main() {
   const { paseoHome, logger, config } = bootstrapFromEnvironment();
+  startCrashReporting(paseoHome);
   let daemon: Awaited<ReturnType<typeof createPaseoDaemon>> | null = null;
   let shutdownPromise: Promise<number> | null = null;
   let exitHookInstalled = false;
@@ -317,11 +345,13 @@ async function main() {
 
   process.on("uncaughtException", (err) => {
     logger.fatal({ err }, "Uncaught exception — daemon crashing");
+    reportCrash({ process: "daemon", kind: "exception", message: describeError(err) });
     exitAfterPinoFlush();
   });
 
   process.on("unhandledRejection", (reason) => {
     logger.fatal({ err: reason }, "Unhandled promise rejection — daemon crashing");
+    reportCrash({ process: "daemon", kind: "exception", message: describeError(reason) });
     exitAfterPinoFlush();
   });
 }

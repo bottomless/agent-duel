@@ -2,6 +2,13 @@
 export { createPaseoDaemon, type PaseoDaemon, type PaseoDaemonConfig } from "./bootstrap.js";
 export { loadConfig, type CliConfigOverrides } from "./config.js";
 export { resolvePaseoHome } from "./paseo-home.js";
+export {
+  claimRunningMarker,
+  describeError,
+  describeUncleanShutdown,
+  recordCrashReport,
+  releaseRunningMarker,
+} from "./crash-reports/store.js";
 export { getOrCreateServerId } from "./server-id.js";
 export { createRootLogger, type LogLevel, type LogFormat } from "./logger.js";
 export {
