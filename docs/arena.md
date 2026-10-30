@@ -1051,6 +1051,11 @@ field. Each layer has its own file:
   request: a single-agent chat replays the previous message's envelopes under that message's new
   scope, and a running turn loses its sealed reasoning when the key rotates. Cloud instances must
   share that key. BYOK sealing provides no secrecy from the user who owns that key.
+  A reply that only thought, one that stalled or one a model ended without text, therefore reaches
+  the provider as an empty assistant message, and Moonshot rejects the request. Every contestant is
+  `arena/contestant`, so the engine takes another battle's reply for the model's own and keeps its
+  reasoning. `MessageV2.toModelMessages` leaves such a reply out of the request and keeps it in the
+  session, where a stalled one counts towards the idle-recovery limit.
   Runtime-only usage can continue through the transport, but the telemetry copy never persists
   generation request bodies because system prompts and tool
   schemas can fingerprint the provider. It drops per-side token counts, native finish reasons,
