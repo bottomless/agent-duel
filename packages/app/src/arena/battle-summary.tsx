@@ -376,6 +376,7 @@ function BattleThreads({
   const active = useRetainedPanelActive();
   if (!runA || !runB) return null;
   const winner = battleWinnerSide(item);
+  const appliedSide = item.gitApplication?.state === "discarded" ? undefined : item.appliedSide;
   return (
     <View style={styles.threads}>
       <View style={styles.threadPane}>
@@ -392,6 +393,7 @@ function BattleThreads({
         </View>
         <ArenaRunThread
           run={runA}
+          applied={appliedSide === "a"}
           stoppedByEarlyPick={isStoppedByEarlyPick({
             runState: runA?.runState,
             side: "a",
@@ -413,6 +415,7 @@ function BattleThreads({
         </View>
         <ArenaRunThread
           run={runB}
+          applied={appliedSide === "b"}
           stoppedByEarlyPick={isStoppedByEarlyPick({
             runState: runB?.runState,
             side: "b",

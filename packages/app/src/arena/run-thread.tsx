@@ -20,6 +20,8 @@ import {
 } from "@/components/message";
 import { QuestionFormCard } from "@/components/question-form-card";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { ArenaAssistantMessage } from "./assistant-message";
+import { arenaReplyFiles, type ArenaReplyFiles } from "./reply-files";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { isWeb } from "@/constants/platform";
 import { useHoldStreamPosition } from "@/agent-stream/hold-position";
@@ -134,6 +136,9 @@ function ArenaPart({
   value,
   cwd,
   runId,
+  occurrenceKey,
+  pending,
+  replyFiles,
   question,
   permission,
   questionResponding,
@@ -144,6 +149,9 @@ function ArenaPart({
   value: unknown;
   cwd?: string;
   runId?: string;
+  occurrenceKey: string;
+  pending: boolean;
+  replyFiles: ArenaReplyFiles;
   question?: ArenaPendingQuestion;
   permission?: ArenaPendingPermission;
   questionResponding: boolean;
@@ -165,7 +173,14 @@ function ArenaPart({
   const type = typeof part.type === "string" ? part.type : "unknown";
   const text = typeof part.text === "string" ? part.text : "";
   if (type === "text" && text) {
-    return <MarkdownRenderer text={text} compact />;
+    return (
+      <ArenaAssistantMessage
+        text={text}
+        files={replyFiles}
+        occurrenceKey={occurrenceKey}
+        pending={pending}
+      />
+    );
   }
   if (type === "tool" && question && onQuestionResponse) {
     return (
@@ -280,6 +295,7 @@ function buildRenderGroups(run: Pick<ArenaRun, "messages" | "parts" | "id">): Re
 
 interface AssistantPartsContext {
   run: ArenaRun;
+  replyFiles: ArenaReplyFiles;
   subagents: Map<unknown, ArenaSessionThread>;
   sessionPath: string[];
   pendingQuestions: ArenaPendingQuestion[];
@@ -359,6 +375,9 @@ function ArenaActivityPartView({
       value={entry.part}
       cwd={context.run.worktree}
       runId={context.run.id}
+      occurrenceKey={`${context.run.id}:${activityPartKey(entry)}`}
+      pending={context.run.runState === "pending"}
+      replyFiles={context.replyFiles}
       question={question}
       permission={permission}
       questionResponding={question?.id === respondingQuestionId}
@@ -710,7 +729,7 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
   const isSubagent = context.sessionPath.length > 1;
   const chat = useContext(ArenaPartSourceContext);
   const imageSource = useMemo(
-    () => (chat ? { ...chat, runId: run.id } : undefined),
+    () => (chat ? { serverId: chat.serverId, agentId: chat.agentId, runId: run.id } : undefined),
     [chat, run.id],
   );
   const renderGroups = useMemo(
@@ -782,6 +801,7 @@ const ACTIVITY_OMITTED_NOTE = "Earlier activity in this run is too large to show
 
 export function ArenaRunThread({
   run,
+  applied = false,
   stoppedByEarlyPick = false,
   queuedSteers,
   retry,
@@ -791,6 +811,8 @@ export function ArenaRunThread({
   onPermissionResponse,
 }: {
   run: ArenaRun;
+  /** This side's result was written to the chat's workspace. */
+  applied?: boolean;
   /** This side was cancelled by an early pick of the other, so its end is not a failure. */
   stoppedByEarlyPick?: boolean;
   /** Steers the model has not received yet; they show after everything the run has done. */
@@ -813,6 +835,10 @@ export function ArenaRunThread({
       return id === null || !queued.has(id);
     });
   }, [run]);
+  const replyFiles = useMemo(
+    () => arenaReplyFiles({ worktree: run.worktree, worktreeActive: run.worktreeActive }, applied),
+    [applied, run.worktree, run.worktreeActive],
+  );
   const pendingQuestions = useMemo(() => arenaPendingQuestions(run), [run]);
   const pendingPermissions = useMemo(() => arenaPendingPermissions(run), [run]);
   const pending = run.runState === "pending";
@@ -825,6 +851,7 @@ export function ArenaRunThread({
   const assistantPartsContext: AssistantPartsContext = useMemo(
     () => ({
       run: { ...run, messages: sessions.root.messages },
+      replyFiles,
       subagents: sessions.byTask,
       sessionPath: [sessions.root.id],
       pendingQuestions,
@@ -836,6 +863,7 @@ export function ArenaRunThread({
     }),
     [
       run,
+      replyFiles,
       sessions,
       pendingQuestions,
       pendingPermissions,

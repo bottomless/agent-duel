@@ -7,8 +7,14 @@ import {
   createAssistantImageFilePreviewAttachmentId,
 } from "./acquisition-cache";
 
+// Each rendered occurrence persists its own copy, and the client holds the whole file in memory
+// while it arrives, so a reply pointing at a huge file could stall the app.
+export const MAX_ASSISTANT_IMAGE_FILE_BYTES = 25 * 1024 * 1024;
+
 export interface AssistantImageFileAcquisitionPort {
   readFile(cwd: string, path: string): Promise<FileReadResult>;
+  /** The file's size, or null when it can't be told without reading the file. */
+  fileSize?(cwd: string, path: string): Promise<number | null>;
   persist(input: {
     id: string;
     bytes: Uint8Array;
@@ -44,7 +50,19 @@ export function createAssistantImageFileAcquisition(input: {
       if (!port) {
         throw new Error(input.unavailableMessage);
       }
-      const file = await port.readFile(resolution.cwd, resolution.path);
+      // A failed size lookup falls through to the read, which reports the real error.
+      const size = await port.fileSize?.(resolution.cwd, resolution.path).catch(() => null);
+      if (size != null && size > MAX_ASSISTANT_IMAGE_FILE_BYTES) {
+        throw new Error(input.unavailableMessage);
+      }
+      const file = await port.readFile(resolution.cwd, resolution.path).catch((error: unknown) => {
+        // A Node errno message ("ENOENT: no such file or directory, open '<path>'") names the
+        // full path and nothing the reader can act on.
+        if (error instanceof Error && /^E[A-Z]+:/.test(error.message)) {
+          throw new Error(input.unavailableMessage, { cause: error });
+        }
+        throw error;
+      });
       if (file.kind !== "image") {
         throw new Error(input.unavailableMessage);
       }
@@ -64,4 +82,10 @@ export function createAssistantImageFileAcquisition(input: {
       });
     },
   };
+}
+
+export function splitFilePath(path: string): { directory: string; name: string } {
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (index < 0) return { directory: ".", name: path };
+  return { directory: path.slice(0, index) || path.slice(0, 1), name: path.slice(index + 1) };
 }

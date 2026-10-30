@@ -42,13 +42,20 @@ const test = metroTest.extend<
     projectPickerFixture: TrackedProjectPickerFixture;
     withWorkspace: WithWorkspace;
   },
-  { e2eForkProviders: string[]; e2eWorker: void; e2eWorkerClient: SeedDaemonClient }
+  {
+    e2eForkProviders: string[];
+    e2eDaemonEnvironment: Record<string, string>;
+    e2eWorker: void;
+    e2eWorkerClient: SeedDaemonClient;
+  }
 >({
   e2eForkProviders: [[], { scope: "worker", option: true }],
+  e2eDaemonEnvironment: [{}, { scope: "worker", option: true }],
   e2eWorker: [
-    async ({ e2eForkProviders }, provide, workerInfo) => {
+    async ({ e2eForkProviders, e2eDaemonEnvironment }, provide, workerInfo) => {
       const worker = await startE2EWorker(workerInfo.workerIndex, {
         forkProviders: e2eForkProviders,
+        environment: e2eDaemonEnvironment,
       });
       try {
         await provide();

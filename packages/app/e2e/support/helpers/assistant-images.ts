@@ -25,7 +25,7 @@ export interface AssistantImageFixture {
 }
 
 export async function createSmallAssistantPng(
-  workspace: SeededWorkspace,
+  workspace: Pick<SeededWorkspace, "repoPath">,
   input: { alt: string; fileName: string },
 ): Promise<AssistantImageFixture> {
   await writeFile(path.join(workspace.repoPath, input.fileName), SMALL_PNG);
