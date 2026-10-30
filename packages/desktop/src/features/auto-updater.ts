@@ -234,10 +234,12 @@ export async function installAppUpdateOnQuit({
   currentVersion,
   releaseChannel,
   signal,
+  onBeforeQuit,
 }: {
   currentVersion: string;
   releaseChannel: AppReleaseChannel;
   signal: AbortSignal;
+  onBeforeQuit?: () => Promise<void>;
 }): Promise<boolean> {
   if (
     !shouldInstallAppUpdateOnQuit({
@@ -248,5 +250,10 @@ export async function installAppUpdateOnQuit({
     return false;
   }
 
-  return appUpdateService.installUpdateOnQuit({ currentVersion, releaseChannel, signal });
+  return appUpdateService.installUpdateOnQuit({
+    currentVersion,
+    releaseChannel,
+    signal,
+    onBeforeQuit,
+  });
 }

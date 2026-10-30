@@ -45,6 +45,16 @@ describe("passthrough CLI", () => {
     ).toBeNull();
   });
 
+  it("opens the app when the Windows installer relaunches it after an update", () => {
+    expect(
+      parsePassthroughCliArgs({
+        argv: ["C:\\Users\\me\\AppData\\Local\\Programs\\Agent Duel\\Agent Duel.exe", "--updated"],
+        isDefaultApp: false,
+        forceCli: false,
+      }),
+    ).toBeNull();
+  });
+
   it("ignores --no-sandbox injected by Linux wrapper", () => {
     expect(
       parsePassthroughCliArgs({

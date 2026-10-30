@@ -166,16 +166,141 @@ jobs:
             packages/desktop/release/*.blockmap
             packages/desktop/release/*-mac.yml
 
+  windows:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    environment: desktop-release
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Validate release version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { parseReleaseVersion } from './scripts/release-version-utils.mjs';
+          const version = process.env.RELEASE_VERSION;
+          parseReleaseVersion(version);
+          for (const file of ['package.json', 'packages/desktop/package.json']) {
+            if (JSON.parse(fs.readFileSync(file)).version !== version) throw new Error(`Commit the requested version in ${file} first`);
+          }
+          JS
+
+      - name: Install npm dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Install Arena dependencies
+        working-directory: arena-backend
+        run: bun install --frozen-lockfile
+
+      # Unsigned: without a certificate electron-builder writes no publisherName into
+      # app-update.yml, so the updater skips the signature check. Once builds are signed, every
+      # later build must be signed with the same publisher name.
+      - name: Build x64 installer
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          PASEO_WEB_PLATFORM: electron
+          # The published release is the update feed, so release builds check it.
+          PASEO_DESKTOP_UPDATES_ENABLED: "1"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          npm run build:app-deps:clean
+          (cd packages/app && npx expo export --platform web --max-workers 1)
+          npm run build --workspace=@getpaseo/desktop -- --publish never --win --x64
+
+      # latest.yml carries the installer's sha512, so nothing may rebuild or re-sign the exe after it.
+      - name: Verify installer and update metadata
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node <<'JS'
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const yaml = require('js-yaml');
+          const dir = 'packages/desktop/release';
+          const version = process.env.RELEASE_VERSION;
+          const name = `Agent-Duel-Setup-${version}-x64.exe`;
+          const file = path.join(dir, name);
+          const bytes = fs.readFileSync(file);
+          const sha512 = crypto.createHash('sha512').update(bytes).digest('base64');
+          const latest = yaml.load(fs.readFileSync(path.join(dir, 'latest.yml'), 'utf8'));
+          if (latest.version !== version) throw new Error(`latest.yml version ${latest.version} does not match ${version}`);
+          if (latest.path !== name) throw new Error(`latest.yml path ${latest.path} does not match ${name}`);
+          if (latest.sha512 !== sha512) throw new Error('latest.yml sha512 does not match the installer');
+          const entry = latest.files.find(entry => entry.url === name);
+          if (!entry || entry.sha512 !== sha512 || entry.size !== bytes.length) throw new Error(`latest.yml files entry does not match ${name}`);
+          if (!fs.existsSync(`${file}.blockmap`)) throw new Error(`Missing ${name}.blockmap`);
+          JS
+          EXE="packages/desktop/release/Agent-Duel-Setup-$RELEASE_VERSION-x64.exe"
+          EXE_VERSION=$(pwsh -NoProfile -Command "(Get-Item '$EXE').VersionInfo.ProductVersion" | tr -d '\r')
+          [[ "$EXE_VERSION" == "$RELEASE_VERSION" ]] || { echo "Installer version $EXE_VERSION does not match $RELEASE_VERSION" >&2; exit 1; }
+
+      - name: Save installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          if-no-files-found: error
+          path: |
+            packages/desktop/release/*.exe
+            packages/desktop/release/*.exe.blockmap
+            packages/desktop/release/latest.yml
+
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: desktop-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-macos-arm64
+          path: release/macos
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: release/windows
+
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           # Not a prerelease, even for betas: the app's default channel updates only to GitHub's
           # latest release, which skips prereleases.
           args=(--draft --target "$GITHUB_SHA" --title "Agent Duel $RELEASE_VERSION" --generate-notes)
-          files=(packages/desktop/release/*.dmg packages/desktop/release/*.zip)
-          for file in packages/desktop/release/*.blockmap packages/desktop/release/*-mac.yml; do
+          files=(release/macos/*.dmg release/macos/*.zip)
+          for file in release/macos/*.blockmap release/macos/*-mac.yml; do
             if [[ -f "$file" ]]; then files+=("$file"); fi
           done
+          # Windows reads latest.yml from the same release.
+          files+=(
+            "release/windows/Agent-Duel-Setup-$RELEASE_VERSION-x64.exe"
+            "release/windows/Agent-Duel-Setup-$RELEASE_VERSION-x64.exe.blockmap"
+            release/windows/latest.yml
+          )
           gh release create "v$RELEASE_VERSION" "${args[@]}" "${files[@]}"

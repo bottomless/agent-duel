@@ -16,6 +16,37 @@ npm install
 cd arena-backend && bun install
 ```
 
+### Windows
+
+- Install Bun with its official installer. An npm-installed Bun is a `bun.cmd` shim, which
+  `packages/desktop/scripts/build-arena-runtime.mjs` cannot spawn.
+- Keep the checkout path short, for example `C:\src\agent-duel`. Native modules in
+  `arena-backend` (tree-sitter grammars) fail to compile past the 260-character path limit.
+- Keep `PATH` short in the shell that builds. Nested `npm run` calls prepend `node_modules\.bin`
+  directories, and once `PATH` passes cmd.exe's 8191-character limit `node` is no longer found.
+- Without Developer Mode a process cannot create symlinks. The engine probes for that once
+  (`FSUtil.canSymlink`) and runs Git with `core.symlinks` set to the result, so a tracked link is a
+  plain file holding its target, as Git for Windows checks it out.
+- Contestants run their commands in Git Bash, which comes with the Git that Agent Duel requires.
+  PowerShell and cmd are fallbacks (`Shell.win` in `packages/core/src/shell.ts`).
+- The engine keeps the user's `core.autocrlf`. Git for Windows checks text out with CRLF, and
+  pinning autocrlf off, as the engine does elsewhere, would read every such file as edited.
+- Neither file watcher runs on Windows. Parcel's Windows backend crashes the process when a watch
+  is dropped while its directory is still being written to. Each send scans the copied roots on
+  both sides instead and copies again only the ones that changed (`treeDigest` in
+  `arena/copy-snapshot.ts`). Windows has no copy-on-write clone, so those copies go through
+  robocopy (`copyDirectory` in `util/copy-tree.ts`).
+- The Win32 API stands in for `ps` and `lsof` (`arena/windows-processes.ts`). A "process group" is
+  the tree under one command the engine started, and it keeps the pid of a parent that has exited.
+- Tests that create symlinks, set sub-millisecond times, `chmod`, run a fake `git` script, or
+  expect LF files under `core.autocrlf=true` fail on Windows; none of them is an engine failure.
+  To leave line endings out, point `GIT_CONFIG_GLOBAL` at a config with `core.autocrlf = false`.
+- Start the desktop stack with `npm run dev:win --workspace=@getpaseo/desktop -- --byok`. It runs
+  `dev.sh` under Git Bash (`scripts/dev-windows.mjs`), since npm starts scripts in cmd.exe and
+  `bash` on `PATH` may be WSL's. Stop it with Ctrl+C.
+- Build the installer with `npm run build:desktop -- --win --x64`. Only x64 is packaged: the engine
+  and its watcher binding are compiled for the host architecture.
+
 ## Running the dev server
 
 ```bash
