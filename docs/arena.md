@@ -218,7 +218,7 @@ the fold spent latency on prose the voter then had to unfold. The status is `git
 touched the file in different places; no client heuristic decides it. Review each contestant against the frozen original, with corresponding regions aligned across
 A and B. A change made by either contestant must stay visible in the comparison; fold only
 context that neither changed. Keep shared additions and removals visible even when the entire
-results match, and label them `Both`. The voter still needs to see what will be applied.
+results match. The voter still needs to see what will be applied.
 
 The comparison has two layouts, **Side by side** and **One column**, shared by the active card and
 archived battles (`inline-file-diff.tsx`). In one column, show A and then B for each region so an
