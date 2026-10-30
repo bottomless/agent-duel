@@ -318,6 +318,11 @@ const outputLimitSession = Effect.fn("test.outputLimitSession")(function* () {
 
 const idleIt = testEffect(makeHttp({ idle: true }))
 
+// The engine's callers name the model on every Arena prompt. A prompt without one falls back to the
+// session's stored model, which is persisted blinded as arena/contestant, and the proxy refuses that
+// for the medium assignment above.
+const arenaMedium = { providerID: ProviderV2.ID.make("arena"), modelID: ModelV2.ID.make("medium") }
+
 it.instance("Arena dispatch and cancellation do not wait for an unprepared worktree", () =>
   Effect.gen(function* () {
     const { chat, llm } = yield* outputLimitSession()
@@ -529,6 +534,7 @@ for (const hosted of [false, true]) {
         yield* prompt.prompt({
           sessionID: chat.id,
           noReply: true,
+          model: arenaMedium,
           parts: [{ type: "text", text: "Keep the changes small." }],
         })
         yield* waitForText("Steer received while children work.")
@@ -851,6 +857,7 @@ idleIt.instance("Arena bounds idle recovery at three retries and preserves exhau
     yield* llm.push(idleReply(), reply().text("Done").stop())
     const resumed = yield* prompt.prompt({
       sessionID: chat.id,
+      model: arenaMedium,
       parts: [{ type: "text", text: "Continue with a smaller request" }],
     })
     expect(resumed.info).toMatchObject({ finish: "stop" })
@@ -930,7 +937,11 @@ it.instance("Arena bounds output recovery and does not reset it when the loop re
     expect(restarted.info.id).toBe(result.info.id)
     expect(yield* llm.hits).toHaveLength(4)
     yield* llm.push(reply().text("New partial").length(), reply().text("done").stop())
-    const next = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "A new smaller task" }] })
+    const next = yield* prompt.prompt({
+      sessionID: chat.id,
+      model: arenaMedium,
+      parts: [{ type: "text", text: "A new smaller task" }],
+    })
     expect(next.info).toMatchObject({ finish: "stop" })
     expect(yield* llm.hits).toHaveLength(6)
   }),
@@ -1449,7 +1460,9 @@ const calling = (messages: readonly SessionV1.WithParts[]) => {
   return last?.role === "assistant" ? last : undefined
 }
 
-it.instance("Arena loop answers a large new prompt before any compaction", () =>
+// The whole request is budgeted, the new prompt included (`ArenaRequestBudget`): a chat with a
+// finished reply compacts before a prompt that takes the request over the limit, and keeps the prompt.
+it.instance("Arena loop compacts before a new prompt that takes the request over the budget", () =>
   Effect.gen(function* () {
     process.env.OPENCODE_ARENA = "1"
     yield* Effect.addFinalizer(() => Effect.sync(() => delete process.env.OPENCODE_ARENA))
@@ -1457,12 +1470,13 @@ it.instance("Arena loop answers a large new prompt before any compaction", () =>
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Pinned" })
     yield* arenaFinishedReply(chat.id, "hello")
-    yield* user(chat.id, arenaFiller)
+    const large = yield* user(chat.id, arenaFiller)
 
     const messages = yield* arenaFirstModelCall(chat.id)
 
-    expect(hasCompaction(messages)).toBe(false)
-    expect(calling(messages)?.summary).toBeUndefined()
+    expect(hasCompaction(messages)).toBe(true)
+    expect(calling(messages)?.summary).toBe(true)
+    expect(messages.some((message) => message.info.id === large.id)).toBe(true)
   }),
 )
 
