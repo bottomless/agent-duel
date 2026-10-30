@@ -1065,7 +1065,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         return (
           <>
             {streamItem}
-            {after ? <ArenaContentColumn>{after}</ArenaContentColumn> : null}
+            {after ? <ArenaContentColumn fullBleed>{after}</ArenaContentColumn> : null}
             {showForkBoundary ? (
               <View
                 accessibilityLabel={t("message.actions.forkedFromChat")}

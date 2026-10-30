@@ -797,8 +797,9 @@ const styles = StyleSheet.create((theme) => ({
   draftBattleListPadding: {
     flex: 1,
     paddingTop: STREAM_CONTENT_TOP_INSET,
+    // The web stream's gutter, so the battle does not shift when the stream takes over.
     paddingHorizontal: {
-      xs: theme.spacing[3],
+      xs: theme.spacing[2],
       md: theme.spacing[4],
     },
   },

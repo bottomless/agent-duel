@@ -12,6 +12,7 @@ import type {
   ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
+  battleChoiceLabel,
   battleFailedToStart,
   battleWinnerSide,
   divergenceFilesLabel,
@@ -425,6 +426,54 @@ describe("isArenaBattleOnScreen", () => {
     expect(isArenaBattleOnScreen(snapshot("cleanup_pending", true))).toBe(true);
   });
 
+  it.each(["a", "b"] as const)(
+    "keeps the stopped battle visible when Keep %s is acknowledged before application",
+    (side) => {
+      const stopped = snapshot("awaiting_stop_resolution", false);
+      const selected: ArenaHistoryItem = {
+        ...historyItem,
+        state: "awaiting_stop_resolution",
+        appliedSide: side,
+        resolution: {
+          kind: "stopped",
+          resolution: side === "a" ? "apply_a" : "apply_b",
+          appliedSide: side,
+        },
+        identities: { a: { name: "Model A" }, b: { name: "Model B" } },
+      };
+      const acknowledged = {
+        ...stopped,
+        turn: { ...stopped.turn!, ...selected },
+        history: [selected],
+      };
+
+      expect(isArenaBattleUnresolved(stopped)).toBe(true);
+      expect(isArenaBattleOnScreen(stopped)).toBe(true);
+      expect(isArenaBattleUnresolved(acknowledged)).toBe(false);
+      expect(isArenaBattleOnScreen(acknowledged)).toBe(true);
+      expect(partitionArenaSummaries(acknowledged.history, true)).toEqual({
+        inline: [],
+        live: null,
+      });
+      expect(battleChoiceLabel(selected)).toBe(
+        `Chose Model ${side.toUpperCase()} (Agent ${side.toUpperCase()})`,
+      );
+      expect(battleWinnerSide(selected)).toBeUndefined();
+
+      const applied: ArenaHistoryItem = { ...selected, state: "complete" };
+      expect(
+        isArenaBattleOnScreen({
+          ...acknowledged,
+          turn: { ...acknowledged.turn, ...applied },
+        }),
+      ).toBe(false);
+      expect(partitionArenaSummaries([applied], false)).toEqual({
+        inline: [],
+        live: applied,
+      });
+    },
+  );
+
   it("hands over once the turn completes", () => {
     expect(isArenaBattleOnScreen(snapshot("complete", true))).toBe(false);
     expect(isArenaBattleOnScreen(snapshot("complete", true, "ready"))).toBe(false);
@@ -658,6 +707,65 @@ describe("battleSummaryStatus", () => {
     expect(battleSummaryStatus(record("complete"), "complete").available).toBe(false);
     expect(battleSummaryStatus(undefined, "skipped").available).toBe(false);
     expect(battleSummaryStatus(record("running"), "skipped").available).toBe(false);
+  });
+});
+
+describe("battleChoiceLabel", () => {
+  const chosen: ArenaHistoryItem = {
+    ...historyItem,
+    state: "applying",
+    vote: "b",
+    appliedSide: "b",
+    resolution: { kind: "vote", vote: "b", appliedSide: "b" },
+    identities: { a: { name: "Model A" }, b: { name: "Model B" } },
+  };
+
+  it.each(["early_selected", "applying", "canonicalizing", "cleanup_pending"] as const)(
+    "names the durable choice while %s is still in progress",
+    (state) => {
+      expect(battleChoiceLabel({ ...chosen, state })).toBe("Chose Model B (Agent B)");
+    },
+  );
+
+  it("does not claim a tied result was applied before the write succeeds", () => {
+    const tie: ArenaHistoryItem = {
+      ...chosen,
+      vote: "tie",
+      appliedSide: "a",
+      resolution: { kind: "vote", vote: "tie", appliedSide: "a" },
+    };
+    expect(battleChoiceLabel(tie)).toBe("Tie — A chosen (Model A)");
+    expect(
+      battleChoiceLabel({
+        ...tie,
+        state: "application_failed",
+        gitApplication: { state: "failed" },
+      }),
+    ).toBe("Tie — A chosen (Model A)");
+    expect(battleChoiceLabel({ ...tie, gitApplication: { state: "applied" } })).toBe(
+      "Tie — A applied (Model A)",
+    );
+  });
+
+  it("keeps a stopped choice distinct from a discard", () => {
+    expect(
+      battleChoiceLabel({
+        ...chosen,
+        vote: undefined,
+        resolution: { kind: "stopped", resolution: "apply_b", appliedSide: "b" },
+      }),
+    ).toBe("Chose Model B (Agent B)");
+    expect(
+      battleChoiceLabel({
+        ...chosen,
+        vote: undefined,
+        appliedSide: undefined,
+        resolution: { kind: "stopped", resolution: "discard" },
+      }),
+    ).toBe("Battle discarded");
+    expect(battleChoiceLabel({ ...chosen, gitApplication: { state: "discarded" } })).toBe(
+      "Winning changes discarded",
+    );
   });
 });
 

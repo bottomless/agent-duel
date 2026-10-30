@@ -33,6 +33,7 @@ import { ArenaMessageAnchorProvider, ArenaRunTurnsMenu } from "./run-turns";
 import type { ArenaTurnAction } from "./use-arena-session";
 import { useArenaBattleActions } from "./use-battle-actions";
 import { arenaChangesRows } from "./changes-rows";
+import { ArenaBattleOutcome } from "./battle-summary";
 import { BattleReview } from "./battle-review";
 import { useArenaReviewTelemetry } from "./review-telemetry";
 import { isStoppedByEarlyPick } from "./battle-result";
@@ -864,6 +865,13 @@ export function ArenaBattleView({
               />
             </View>
           ) : null}
+          <View accessible accessibilityLiveRegion="polite">
+            {turn.resolution ? (
+              <View style={styles.reviewSection}>
+                <ArenaBattleOutcome item={turn} />
+              </View>
+            ) : null}
+          </View>
         </BattleCard>
       ) : null}
       {resolving ? (

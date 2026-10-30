@@ -43,6 +43,7 @@ import {
 } from "@/constants/layout";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import {
+  battleChoiceLabel,
   battleFailedToStart,
   battleWinnerSide,
   gitApplicationNotice,
@@ -65,6 +66,7 @@ import { ArenaRunMeta } from "./run-meta";
 import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
 import { ArenaTransitionRow } from "./transition-row";
+import { useArenaCardBleed } from "./content-column";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedChevronDown = withUnistyles(ChevronDown);
@@ -77,23 +79,6 @@ const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMut
 const successColorMapping = (theme: Theme) => ({ color: theme.colors.success });
 // The info accent shared with <Alert variant="info"> and info toasts.
 const infoColorMapping = (theme: Theme) => ({ color: theme.colors.palette.blue[300] });
-
-function chosenLabel(item: ArenaHistoryItem): string {
-  if (item.gitApplication?.state === "discarded") return "Winning changes discarded";
-  if (item.vote === "tie") {
-    const applied = item.appliedSide?.toUpperCase() ?? "A";
-    const model = item.appliedSide
-      ? arenaModelDisplayName(item.identities?.[item.appliedSide].name)
-      : "";
-    return `Tie — ${applied} applied${model ? ` (${model})` : ""}`;
-  }
-  const side = item.appliedSide;
-  if (!side) {
-    if (item.resolution?.kind === "stopped") return "Battle discarded";
-    return "Battle resolved";
-  }
-  return `Chose ${arenaModelDisplayName(item.identities?.[side].name)} (Agent ${side.toUpperCase()})`;
-}
 
 /**
  * The files an archived battle touched, each opening its diff under its row.
@@ -217,39 +202,17 @@ function RevealedIdentity({
       <Text style={styles.identities}>{side.toUpperCase()}:</Text>
       <ArenaModelVendorIcon model={model} size={ICON_SIZE.xs} tone="muted" />
       <Text style={styles.identities}>{arenaModelDisplayName(model)}</Text>
-      {winner ? <Text style={styles.identities}>{counted ? "(winner)" : "(applied)"}</Text> : null}
+      {winner ? <Text style={styles.identities}>{counted ? "(winner)" : "(chosen)"}</Text> : null}
     </View>
   );
 }
 
-function BattleSummaryHeader({
-  expanded,
-  item,
-  onToggle,
-}: {
-  expanded: boolean;
-  item: ArenaHistoryItem;
-  onToggle: () => void;
-}) {
-  const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
+function BattleOutcome({ item }: { item: ArenaHistoryItem }) {
   const winner = battleWinnerSide(item);
   const showOutcome = !winner || item.gitApplication?.state === "discarded";
   const gitNotice = gitApplicationNotice(item);
   return (
-    <Pressable
-      onPress={onToggle}
-      style={styles.cardHeader}
-      accessibilityRole="button"
-      accessibilityState={accessibilityState}
-      accessibilityLabel={`${expanded ? "Collapse" : "Expand"} battle summary. ${chosenLabel(item)}${
-        item.voteDiscardedReason ? ". Vote not counted because an agent failed" : ""
-      }`}
-    >
-      {expanded ? (
-        <ThemedChevronDown size={17} uniProps={mutedColorMapping} />
-      ) : (
-        <ThemedChevronRight size={17} uniProps={mutedColorMapping} />
-      )}
+    <>
       <View style={styles.headerText}>
         {item.identities ? (
           <View style={styles.identityRow}>
@@ -266,11 +229,12 @@ function BattleSummaryHeader({
               winner={winner === "b"}
               counted={!item.voteDiscardedReason}
             />
-            {showOutcome ? <Text style={styles.identities}>· {chosenLabel(item)}</Text> : null}
+            {showOutcome ? (
+              <Text style={styles.identities}>· {battleChoiceLabel(item)}</Text>
+            ) : null}
           </View>
         ) : (
-          // Discarded before either side showed anything, so the battle names nobody.
-          <Text style={styles.identities}>{chosenLabel(item)}</Text>
+          <Text style={styles.identities}>{battleChoiceLabel(item)}</Text>
         )}
       </View>
       {gitNotice && gitNotice.tone !== "info" ? (
@@ -278,6 +242,44 @@ function BattleSummaryHeader({
       ) : null}
       {item.selectedEarly ? <Text style={styles.mutedBadge}>Early decision</Text> : null}
       {item.voteDiscardedReason ? <Text style={styles.mutedBadge}>Vote not counted</Text> : null}
+    </>
+  );
+}
+
+export function ArenaBattleOutcome({ item }: { item: ArenaHistoryItem }) {
+  if (!item.resolution) return null;
+  return (
+    <View style={styles.cardHeader} testID={`arena-outcome-${item.id}`}>
+      <BattleOutcome item={item} />
+    </View>
+  );
+}
+
+function BattleSummaryHeader({
+  expanded,
+  item,
+  onToggle,
+}: {
+  expanded: boolean;
+  item: ArenaHistoryItem;
+  onToggle: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onToggle}
+      style={styles.cardHeader}
+      accessibilityRole="button"
+      aria-expanded={expanded}
+      accessibilityLabel={`${expanded ? "Collapse" : "Expand"} battle summary. ${battleChoiceLabel(item)}${
+        item.voteDiscardedReason ? ". Vote not counted because an agent failed" : ""
+      }`}
+    >
+      {expanded ? (
+        <ThemedChevronDown size={17} uniProps={mutedColorMapping} />
+      ) : (
+        <ThemedChevronRight size={17} uniProps={mutedColorMapping} />
+      )}
+      <BattleOutcome item={item} />
     </Pressable>
   );
 }
@@ -719,6 +721,7 @@ function DecidedBattleSummary({
   item: ArenaHistoryItem;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const bleed = useArenaCardBleed(expanded ? ARENA_MAX_CONTENT_WIDTH : MAX_CONTENT_WIDTH);
   const cardMaxWidth = useSharedValue(MAX_CONTENT_WIDTH);
   const handleToggle = useCallback(() => {
     setExpanded((value) => {
@@ -733,7 +736,10 @@ function DecidedBattleSummary({
   const cardAnimatedStyle = useAnimatedStyle(() => ({ maxWidth: cardMaxWidth.value }));
 
   return (
-    <Animated.View style={[styles.card, cardAnimatedStyle]} testID={`arena-summary-${item.id}`}>
+    <Animated.View
+      style={[styles.card, bleed && styles.cardBleed, cardAnimatedStyle]}
+      testID={`arena-summary-${item.id}`}
+    >
       <BattleSummaryHeader expanded={expanded} item={item} onToggle={handleToggle} />
       {expanded ? (
         <ExpandedBattleSummary
@@ -760,6 +766,11 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.lg,
     backgroundColor: theme.colors.surface1,
     overflow: "hidden",
+  },
+  cardBleed: {
+    borderLeftWidth: 0,
+    borderRightWidth: 0,
+    borderRadius: 0,
   },
   failedStart: {
     flexDirection: "row",

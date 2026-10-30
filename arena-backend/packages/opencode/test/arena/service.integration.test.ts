@@ -12,6 +12,7 @@ import * as CopySnapshot from "@/arena/copy-snapshot"
 import * as ArenaGit from "@/arena/git"
 import * as GitState from "@/worktree/git-state"
 import * as AssignmentClient from "@/arena/assignment-client"
+import { stoppedResolution } from "@/arena/domain"
 import { Store } from "@/arena/mongo"
 import { connectLocalStore } from "@/arena/local-store"
 import type { Frame } from "@/arena/stream"
@@ -6507,6 +6508,81 @@ describe("Arena service vertical slice", () => {
       expect(discarded.turn?.state).toBe("discarded")
       expect(discarded.turn?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
       expect(discarded.turn?.comparisonState).toBe("skipped")
+    } finally {
+      router.restore()
+    }
+  }, 30_000)
+
+  test("finishes a Keep a restart cut off before it left the stopped state", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure interrupted keep fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ delayedOrdinal: 2, delayMs: 750 })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Interrupted Keep",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Create results that will be stopped and kept." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted stopped turn")
+      await waitForTurn(memory.store, turnID, "running")
+      await json<PublicSnapshot>(await request(`/arena/turns/${turnID}/stop`, { method: "POST", headers }))
+      await waitForTurn(memory.store, turnID, "awaiting_stop_resolution")
+      const a = memory.runs.values.find((run) => run.turnID === turnID && run.side === "a")
+      if (!a?.finalCommit) throw new Error("Arena did not finalize the stopped A result")
+
+      // What Keep records before its background promotion moves the turn on; the process stops there.
+      const stopped = await memory.store.turn(turnID)
+      if (!stopped) throw new Error("Arena lost the stopped turn")
+      const revealed = await AssignmentClient.resolveAssignments("battle", turnID, "select:a")
+      const model = (side: "a" | "b") =>
+        revealed.assignments.find((item) => item.assignmentID === stopped.placement[side].assignmentID)!.model
+      const recorded = await memory.store.recordResolution({
+        turnID,
+        resolution: stoppedResolution("apply_a"),
+        appliedSide: "a",
+        models: { a: model("a"), b: model("b") },
+        expectedState: "awaiting_stop_resolution",
+        at: new Date(),
+      })
+      expect(recorded.recorded).toBe(true)
+      const refused = await request(`/arena/turns/${turnID}/stop-resolution`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ resolution: "apply_a" }),
+      })
+      expect((await json<PublicSnapshot>(refused)).turn?.state).toBe("awaiting_stop_resolution")
+
+      setStoreForTest(memory.restart())
+      const recovered = await json<PublicSnapshot>(await request(`/arena/chats/${attached.chat.id}`, { headers }))
+      expect(recovered.turn?.state).toBe("complete")
+      expect(recovered.chat.status).toBe("ready")
+      expect((await $`git rev-parse HEAD^{tree}`.cwd(directory.path).text()).trim()).toBe(a.finalTree)
     } finally {
       router.restore()
     }
