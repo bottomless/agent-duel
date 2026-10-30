@@ -934,6 +934,13 @@ export const ar: TranslationResources = {
         label: "التجميع",
         project: "المشروع",
         status: "الحالة",
+        none: "بدون",
+      },
+      sorting: {
+        groupLabel: "ترتيب المجموعات",
+        label: "ترتيب",
+        default: "الافتراضي",
+        lastChat: "آخر محادثة",
       },
       titleSource: {
         label: "العنوان",

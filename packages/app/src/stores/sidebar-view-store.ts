@@ -2,21 +2,29 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
-export type SidebarGroupMode = "project" | "status";
+export type SidebarGroupMode = "project" | "status" | "none";
+export type SidebarSortMode = "default" | "lastChat";
 /** Which list the sidebar shows: the active chats, or the archived ones in their place. */
 export type SidebarListView = "chats" | "archived";
 
 const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
 const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
-const SIDEBAR_VIEW_STORE_VERSION = 2;
+const SIDEBAR_VIEW_STORE_VERSION = 3;
+const DEFAULT_GROUP_MODE: SidebarGroupMode = "project";
+const DEFAULT_SORT_MODE: SidebarSortMode = "lastChat";
+const DEFAULT_GROUP_SORT_MODE: SidebarSortMode = "default";
 
 interface SidebarViewStoreState {
   groupMode: SidebarGroupMode;
+  sortMode: SidebarSortMode;
+  groupSortMode: SidebarSortMode;
   // Empty means "all hosts". A non-empty list pins the sidebar to those hosts.
   hostFilters: string[];
   // Not persisted: a relaunch opens on the active chats.
   listView: SidebarListView;
   setGroupMode: (mode: SidebarGroupMode) => void;
+  setSortMode: (mode: SidebarSortMode) => void;
+  setGroupSortMode: (mode: SidebarSortMode) => void;
   setListView: (view: SidebarListView) => void;
   toggleHostFilter: (serverId: string) => void;
   clearHostFilters: () => void;
@@ -25,11 +33,13 @@ interface SidebarViewStoreState {
 
 interface SidebarViewPersistedState {
   groupMode: SidebarGroupMode;
+  sortMode: SidebarSortMode;
+  groupSortMode: SidebarSortMode;
   hostFilters: string[];
 }
 
 function isSidebarGroupMode(value: unknown): value is SidebarGroupMode {
-  return value === "project" || value === "status";
+  return value === "project" || value === "status" || value === "none";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -62,16 +72,34 @@ function readHostFilters(persistedState: Record<string, unknown>): string[] {
 
 export function migrateSidebarViewState(persistedState: unknown): SidebarViewPersistedState {
   if (!isRecord(persistedState)) {
-    return { groupMode: "project", hostFilters: [] };
+    return {
+      groupMode: DEFAULT_GROUP_MODE,
+      sortMode: DEFAULT_SORT_MODE,
+      groupSortMode: DEFAULT_GROUP_SORT_MODE,
+      hostFilters: [],
+    };
   }
 
   const legacyGroupMode = readLegacyGroupMode(persistedState);
   if (legacyGroupMode) {
-    return { groupMode: legacyGroupMode, hostFilters: [] };
+    return {
+      groupMode: legacyGroupMode,
+      sortMode: DEFAULT_SORT_MODE,
+      groupSortMode: DEFAULT_GROUP_SORT_MODE,
+      hostFilters: [],
+    };
   }
 
   return {
-    groupMode: isSidebarGroupMode(persistedState.groupMode) ? persistedState.groupMode : "project",
+    groupMode: isSidebarGroupMode(persistedState.groupMode)
+      ? persistedState.groupMode
+      : DEFAULT_GROUP_MODE,
+    sortMode:
+      persistedState.sortMode === "default" || persistedState.sortMode === "lastChat"
+        ? persistedState.sortMode
+        : DEFAULT_SORT_MODE,
+    groupSortMode:
+      persistedState.groupSortMode === "lastChat" ? "lastChat" : DEFAULT_GROUP_SORT_MODE,
     hostFilters: readHostFilters(persistedState),
   };
 }
@@ -95,10 +123,14 @@ export function createSidebarViewStorage(
 export const useSidebarViewStore = create<SidebarViewStoreState>()(
   persist(
     (set) => ({
-      groupMode: "project",
+      groupMode: DEFAULT_GROUP_MODE,
+      sortMode: DEFAULT_SORT_MODE,
+      groupSortMode: DEFAULT_GROUP_SORT_MODE,
       hostFilters: [],
       listView: "chats",
       setGroupMode: (mode) => set({ groupMode: mode }),
+      setSortMode: (mode) => set({ sortMode: mode }),
+      setGroupSortMode: (mode) => set({ groupSortMode: mode }),
       setListView: (view) => set({ listView: view }),
       toggleHostFilter: (serverId) =>
         set((state) => ({
@@ -126,6 +158,8 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
       storage: createJSONStorage(createSidebarViewStorage),
       partialize: (state) => ({
         groupMode: state.groupMode,
+        sortMode: state.sortMode,
+        groupSortMode: state.groupSortMode,
         hostFilters: state.hostFilters,
       }),
       migrate: migrateSidebarViewState,

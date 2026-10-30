@@ -87,6 +87,7 @@ const DEV_BUILD_LABEL = process.env.EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL?.trim() ||
 interface SidebarSharedProps {
   theme: SidebarTheme;
   statusGroups: StatusGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   pinnedGroups: PinnedSidebarGroups;
   projects: SidebarProjectEntry[];
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
@@ -149,6 +150,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     isRevalidating,
     refreshAll,
     statusGroups,
+    flatWorkspaces,
     pinnedGroups,
     collapsedProjectKeys,
     toggleProjectCollapsed,
@@ -225,6 +227,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
   const sharedProps = {
     theme,
     statusGroups,
+    flatWorkspaces,
     pinnedGroups,
     projects,
     workspaceEntriesByKey,
@@ -546,6 +549,7 @@ function SidebarFooter({
 function MobileSidebar({
   theme,
   statusGroups,
+  flatWorkspaces,
   pinnedGroups,
   projects,
   workspaceEntriesByKey,
@@ -632,6 +636,7 @@ function MobileSidebar({
             shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
             groupMode={groupMode}
             statusGroups={statusGroups}
+            flatWorkspaces={flatWorkspaces}
             pinnedGroups={pinnedGroups}
             projects={projects}
             workspaceEntriesByKey={workspaceEntriesByKey}
@@ -662,6 +667,7 @@ function MobileSidebar({
 function DesktopSidebar({
   theme,
   statusGroups,
+  flatWorkspaces,
   pinnedGroups,
   projects,
   workspaceEntriesByKey,
@@ -809,6 +815,7 @@ function DesktopSidebar({
             shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
             groupMode={groupMode}
             statusGroups={statusGroups}
+            flatWorkspaces={flatWorkspaces}
             pinnedGroups={pinnedGroups}
             projects={projects}
             workspaceEntriesByKey={workspaceEntriesByKey}

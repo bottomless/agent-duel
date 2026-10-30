@@ -958,6 +958,13 @@ export const ptBR: TranslationResources = {
         label: "Agrupamento",
         project: "Projeto",
         status: "Status",
+        none: "Nenhum",
+      },
+      sorting: {
+        groupLabel: "Ordem dos grupos",
+        label: "Ordenar",
+        default: "Padrão",
+        lastChat: "Último chat",
       },
       titleSource: {
         label: "Título",

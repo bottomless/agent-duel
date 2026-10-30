@@ -958,6 +958,13 @@ export const ru: TranslationResources = {
         label: "Группировка",
         project: "Проект",
         status: "Статус",
+        none: "Нет",
+      },
+      sorting: {
+        groupLabel: "Порядок групп",
+        label: "Сортировка",
+        default: "По умолчанию",
+        lastChat: "Последний чат",
       },
       titleSource: {
         label: "Заголовок",

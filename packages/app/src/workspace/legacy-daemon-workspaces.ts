@@ -328,6 +328,7 @@ function createLegacyWorkspace(
     title: null,
     status,
     statusEnteredAt,
+    activityAt: entry.agent.updatedAt,
     archivingAt: null,
     diffStat: null,
     scripts: [],

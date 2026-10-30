@@ -32,7 +32,6 @@ import {
   SidebarWorkspaceTrailingActionSlot,
 } from "@/components/sidebar/sidebar-workspace-row-content";
 import { useOpenKebabMenuVisibility } from "@/components/sidebar/use-open-kebab-menu-visibility";
-import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop";
 import { selectWorkspaceServiceSummary } from "@/components/sidebar/workspace-meta-row";
 import {
   SidebarWorkspaceTrailingContent,
@@ -387,7 +386,6 @@ function WorkspaceRowBody({
               <SidebarWorkspaceRowContent
                 workspace={workspace}
                 serviceSummary={serviceSummary}
-                backdrop={getSidebarRowBackdrop({ isDragging, isPressed, selected, isHovered })}
                 isHovered={isHovered}
                 isLoading={isArchiving || isCreating}
                 isCreating={isCreating}

@@ -16,6 +16,7 @@ interface SidebarModel extends SidebarWorkspacesListResult {
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   groupMode: SidebarGroupMode;
   statusGroups: StatusGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   pinnedGroups: PinnedSidebarGroups;
   collapsedProjectKeys: ReadonlySet<string>;
   toggleProjectCollapsed: (projectViewKey: string) => void;
@@ -34,6 +35,8 @@ export function SidebarModelProvider({
 }) {
   const list = useSidebarWorkspacesList();
   const groupMode = useSidebarViewStore((state) => state.groupMode);
+  const sortMode = useSidebarViewStore((state) => state.sortMode);
+  const groupSortMode = useSidebarViewStore((state) => state.groupSortMode);
   const collapsedProjectKeys = useSidebarCollapsedSectionsStore(
     (state) => state.collapsedProjectKeys,
   );
@@ -44,12 +47,13 @@ export function SidebarModelProvider({
   const toggleProjectCollapsed = useSidebarCollapsedSectionsStore(
     (state) => state.toggleProjectCollapsed,
   );
-  const isStatusMode = groupMode === "status";
+  const needsActivity =
+    groupMode !== "project" || sortMode === "lastChat" || groupSortMode === "lastChat";
   const workspaceEntriesByKey = useSidebarWorkspaceEntries(
     list.workspacePlacements,
-    active !== false || isStatusMode,
+    active !== false || needsActivity,
   );
-  const projectionWorkspaceEntriesByKey = isStatusMode
+  const projectionWorkspaceEntriesByKey = needsActivity
     ? workspaceEntriesByKey
     : EMPTY_WORKSPACE_ENTRIES;
   const pinnedKeys = usePinnedSidebarKeys(list.projects);
@@ -61,6 +65,8 @@ export function SidebarModelProvider({
         workspaceEntriesByKey: projectionWorkspaceEntriesByKey,
         projectNamesByViewKey: list.projectNamesByViewKey,
         groupMode,
+        sortMode,
+        groupSortMode,
         pinnedCollapsed,
         collapsedProjectKeys,
         collapsedStatusGroupKeys,
@@ -69,6 +75,8 @@ export function SidebarModelProvider({
       collapsedProjectKeys,
       collapsedStatusGroupKeys,
       groupMode,
+      sortMode,
+      groupSortMode,
       list.projectNamesByViewKey,
       list.projects,
       pinnedCollapsed,
@@ -82,6 +90,7 @@ export function SidebarModelProvider({
       workspaceEntriesByKey,
       groupMode,
       statusGroups: projection.statusGroups,
+      flatWorkspaces: projection.flatWorkspaces,
       pinnedGroups: projection.pinnedGroups,
       collapsedProjectKeys,
       toggleProjectCollapsed,

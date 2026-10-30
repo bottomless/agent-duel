@@ -41,7 +41,6 @@ import {
   sidebarWorkspaceRowStyles,
 } from "@/components/sidebar/sidebar-workspace-row-content";
 import { useOpenKebabMenuVisibility } from "@/components/sidebar/use-open-kebab-menu-visibility";
-import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop";
 import { getStatusDotColor } from "@/utils/status-dot-color";
 import { selectWorkspaceServiceSummary } from "@/components/sidebar/workspace-meta-row";
 import {
@@ -86,8 +85,8 @@ const ThemedCircleDot = withUnistyles(CircleDot);
 const ThemedCircleX = withUnistyles(CircleX);
 interface StatusWorkspaceListProps {
   groups: StatusGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   pinnedWorkspaces: SidebarWorkspaceEntry[];
-  projectIconByProjectViewKey: ReadonlyMap<string, string | null>;
   shortcutIndexByWorkspaceKey: Map<string, number>;
   showShortcutBadges: boolean;
   onWorkspacePress?: () => void;
@@ -98,8 +97,8 @@ interface StatusWorkspaceListProps {
 
 export function SidebarStatusWorkspaceList({
   groups,
+  flatWorkspaces,
   pinnedWorkspaces,
-  projectIconByProjectViewKey,
   shortcutIndexByWorkspaceKey,
   showShortcutBadges,
   onWorkspacePress,
@@ -133,10 +132,7 @@ export function SidebarStatusWorkspaceList({
                 <StatusWorkspaceRow
                   key={workspace.workspaceKey}
                   workspace={workspace}
-                  {...buildStatusRowProjectPresentation({
-                    workspace,
-                    projectIconByProjectViewKey,
-                  })}
+                  projectName={workspace.projectName}
                   inStatusGroup={false}
                   shortcutNumber={statusShortcutIndex.get(workspace.workspaceKey) ?? null}
                   showShortcutBadge={showShortcutBadges}
@@ -157,10 +153,24 @@ export function SidebarStatusWorkspaceList({
         </View>
       ) : null}
       {listHeaderComponent}
+      <View testID="sidebar-flat-chat-list">
+        {flatWorkspaces.map((workspace) => (
+          <StatusWorkspaceRow
+            key={workspace.workspaceKey}
+            workspace={workspace}
+            projectName={workspace.projectName}
+            inStatusGroup={false}
+            shortcutNumber={statusShortcutIndex.get(workspace.workspaceKey) ?? null}
+            showShortcutBadge={showShortcutBadges}
+            canPin={supportsPinningByServerId.get(workspace.serverId) === true}
+            onToggleWorkspacePin={onToggleWorkspacePin}
+            onWorkspacePress={onWorkspacePress}
+          />
+        ))}
+      </View>
       <StatusGroupList
         groups={groups}
         collapsedStatusGroupKeys={collapsedStatusGroupKeys}
-        projectIconByProjectViewKey={projectIconByProjectViewKey}
         shortcutIndex={statusShortcutIndex}
         showShortcutBadges={showShortcutBadges}
         onWorkspacePress={onWorkspacePress}
@@ -198,7 +208,6 @@ export function SidebarStatusWorkspaceList({
 function StatusGroupList({
   groups,
   collapsedStatusGroupKeys,
-  projectIconByProjectViewKey,
   shortcutIndex,
   showShortcutBadges,
   onWorkspacePress,
@@ -207,7 +216,6 @@ function StatusGroupList({
 }: {
   groups: StatusGroup[];
   collapsedStatusGroupKeys: ReadonlySet<string>;
-  projectIconByProjectViewKey: ReadonlyMap<string, string | null>;
   shortcutIndex: Map<string, number>;
   showShortcutBadges: boolean;
   onWorkspacePress?: () => void;
@@ -221,7 +229,6 @@ function StatusGroupList({
           key={group.bucket}
           group={group}
           collapsed={collapsedStatusGroupKeys.has(group.bucket)}
-          projectIconByProjectViewKey={projectIconByProjectViewKey}
           shortcutIndex={shortcutIndex}
           showShortcutBadges={showShortcutBadges}
           onWorkspacePress={onWorkspacePress}
@@ -236,7 +243,6 @@ function StatusGroupList({
 function StatusGroupRows({
   group,
   collapsed,
-  projectIconByProjectViewKey,
   shortcutIndex,
   showShortcutBadges,
   onWorkspacePress,
@@ -245,7 +251,6 @@ function StatusGroupRows({
 }: {
   group: StatusGroup;
   collapsed: boolean;
-  projectIconByProjectViewKey: ReadonlyMap<string, string | null>;
   shortcutIndex: Map<string, number>;
   showShortcutBadges: boolean;
   onWorkspacePress?: () => void;
@@ -271,10 +276,7 @@ function StatusGroupRows({
             <StatusWorkspaceRow
               key={workspace.workspaceKey}
               workspace={workspace}
-              {...buildStatusRowProjectPresentation({
-                workspace,
-                projectIconByProjectViewKey,
-              })}
+              projectName={workspace.projectName}
               shortcutNumber={shortcutIndex.get(workspace.workspaceKey) ?? null}
               showShortcutBadge={showShortcutBadges}
               canPin={supportsPinningByServerId.get(workspace.serverId) === true}
@@ -294,24 +296,6 @@ function StatusGroupRows({
       ) : null}
     </View>
   );
-}
-
-interface StatusRowProjectPresentation {
-  projectName: string;
-  projectIconDataUri: string | null;
-}
-
-function buildStatusRowProjectPresentation({
-  workspace,
-  projectIconByProjectViewKey,
-}: {
-  workspace: SidebarWorkspaceEntry;
-  projectIconByProjectViewKey: ReadonlyMap<string, string | null>;
-}): StatusRowProjectPresentation {
-  return {
-    projectName: workspace.projectName,
-    projectIconDataUri: projectIconByProjectViewKey.get(workspace.projectViewKey) ?? null,
-  };
 }
 
 function StatusGroupHeader({ group, collapsed }: { group: StatusGroup; collapsed: boolean }) {
@@ -399,23 +383,19 @@ function StatusGroupIcon({ bucket }: { bucket: StatusGroup["bucket"] }) {
 const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
   workspace,
   projectName,
-  projectIconDataUri,
   shortcutNumber,
   showShortcutBadge,
   canPin,
   onToggleWorkspacePin,
-  reserveIdleStatusIndicatorSpace = true,
   inStatusGroup = true,
   onWorkspacePress,
 }: {
   workspace: SidebarWorkspaceEntry;
   projectName: string;
-  projectIconDataUri: string | null;
   shortcutNumber: number | null;
   showShortcutBadge: boolean;
   canPin: boolean;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
-  reserveIdleStatusIndicatorSpace?: boolean;
   /**
    * Whether the row sits under a status header, which is what it indents from. Pinned rows
    * are a flat list under their own header and sit flush.
@@ -438,13 +418,11 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
     <StatusWorkspaceRowWithMenu
       workspace={workspace}
       projectName={projectName}
-      projectIconDataUri={projectIconDataUri}
       selected={selected}
       shortcutNumber={shortcutNumber}
       showShortcutBadge={showShortcutBadge}
       canPin={canPin}
       onToggleWorkspacePin={onToggleWorkspacePin}
-      reserveIdleStatusIndicatorSpace={reserveIdleStatusIndicatorSpace}
       inStatusGroup={inStatusGroup}
       onPress={handlePress}
     />
@@ -454,25 +432,21 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
 function StatusWorkspaceRowWithMenu({
   workspace,
   projectName,
-  projectIconDataUri,
   selected,
   shortcutNumber,
   showShortcutBadge,
   canPin,
   onToggleWorkspacePin,
-  reserveIdleStatusIndicatorSpace = true,
   inStatusGroup = true,
   onPress,
 }: {
   workspace: SidebarWorkspaceEntry;
   projectName: string;
-  projectIconDataUri: string | null;
   selected: boolean;
   shortcutNumber: number | null;
   showShortcutBadge: boolean;
   canPin: boolean;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
-  reserveIdleStatusIndicatorSpace?: boolean;
   /**
    * Whether the row sits under a status header, which is what it indents from. Pinned rows
    * are a flat list under their own header and sit flush.
@@ -602,7 +576,6 @@ function StatusWorkspaceRowWithMenu({
       <StatusWorkspaceRowInner
         workspace={workspace}
         projectName={projectName}
-        projectIconDataUri={projectIconDataUri}
         selected={selected}
         shortcutNumber={shortcutNumber}
         showShortcutBadge={showShortcutBadge}
@@ -620,7 +593,6 @@ function StatusWorkspaceRowWithMenu({
         archiveShortcutKeys={selected ? archiveShortcutKeys : null}
         isPinned={isPinned}
         onTogglePin={onTogglePin}
-        reserveIdleStatusIndicatorSpace={reserveIdleStatusIndicatorSpace}
         inStatusGroup={inStatusGroup}
       />
       <AdaptiveRenameModal
@@ -650,7 +622,6 @@ function StatusWorkspaceRowWithMenu({
 function StatusWorkspaceRowInner({
   workspace,
   projectName,
-  projectIconDataUri,
   selected,
   shortcutNumber,
   showShortcutBadge,
@@ -668,12 +639,10 @@ function StatusWorkspaceRowInner({
   archiveShortcutKeys,
   isPinned,
   onTogglePin,
-  reserveIdleStatusIndicatorSpace = true,
   inStatusGroup = true,
 }: {
   workspace: SidebarWorkspaceEntry;
   projectName: string;
-  projectIconDataUri: string | null;
   selected: boolean;
   shortcutNumber: number | null;
   showShortcutBadge: boolean;
@@ -691,7 +660,6 @@ function StatusWorkspaceRowInner({
   archiveShortcutKeys?: ShortcutKey[][] | null;
   isPinned?: boolean;
   onTogglePin?: () => void;
-  reserveIdleStatusIndicatorSpace?: boolean;
   /**
    * Whether the row sits under a status header, which is what it indents from. Pinned rows
    * are a flat list under their own header and sit flush.
@@ -767,15 +735,12 @@ function StatusWorkspaceRowInner({
             >
               <SidebarWorkspaceRowContent
                 workspace={workspace}
-                leadingProjectName={projectName}
-                leadingProjectIconDataUri={projectIconDataUri}
                 serviceSummary={serviceSummary}
-                backdrop={getSidebarRowBackdrop({ isPressed, selected, isHovered })}
                 isHovered={isHovered}
                 isLoading={isArchiving}
                 shortcutNumber={shortcutNumber}
                 showShortcutBadge={showShortcutBadge}
-                reserveIdleStatusIndicatorSpace={reserveIdleStatusIndicatorSpace}
+                projectName={projectName}
               >
                 {renderSlot ? (
                   <StatusWorkspaceActionSlot

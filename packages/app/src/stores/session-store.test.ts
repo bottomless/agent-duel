@@ -27,6 +27,7 @@ function createWorkspace(
     workspaceKind: input.workspaceKind ?? "local_checkout",
     name: input.name ?? "main",
     status: input.status ?? "done",
+    activityAt: input.activityAt ?? null,
     statusEnteredAt: input.statusEnteredAt ?? null,
     archivingAt: input.archivingAt ?? null,
     diffStat: input.diffStat ?? null,
@@ -426,11 +427,12 @@ describe("normalizeWorkspaceDescriptor", () => {
       archivingAt: null,
       status: "running",
       statusEnteredAt: null,
-      activityAt: "not-a-date",
+      activityAt: "2026-10-29T12:00:00.000Z",
       diffStat: null,
       scripts,
     });
 
+    expect(workspace.activityAt).toBe("2026-10-29T12:00:00.000Z");
     expect(workspace.scripts).toEqual([
       {
         scriptName: "web",

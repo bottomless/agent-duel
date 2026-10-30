@@ -40,6 +40,7 @@ function workspaceDescriptor(input: {
     name: input.name ?? input.id,
     status: input.status ?? "done",
     archivingAt: null,
+    activityAt: null,
     statusEnteredAt: input.statusEnteredAt ?? null,
     diffStat: null,
     scripts: [],

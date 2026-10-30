@@ -40,6 +40,7 @@ function workspace(input?: Partial<WorkspaceDescriptor>): WorkspaceDescriptor {
     name: "workspace-1",
     status: "done",
     archivingAt: null,
+    activityAt: null,
     statusEnteredAt: null,
     diffStat: null,
     scripts: [],

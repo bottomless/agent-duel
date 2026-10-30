@@ -164,7 +164,9 @@ class WorkspaceStatus {
       type: "fetch_workspaces_request",
       requestId: "workspace-status",
     });
-    return entries.entries[0]?.status ?? "done";
+    return (
+      entries.entries.find((entry) => entry.id === this.workspace.workspaceId)?.status ?? "done"
+    );
   }
 
   async workspaceStatuses(): Promise<Record<string, WorkspaceDescriptorPayload["status"]>> {
@@ -233,7 +235,7 @@ class WorkspaceStatus {
       type: "fetch_workspaces_request",
       requestId: "workspace-descriptor",
     });
-    const entry = entries.entries[0];
+    const entry = entries.entries.find((workspace) => workspace.id === this.workspace.workspaceId);
     if (!entry) {
       throw new Error("No workspace descriptor found");
     }
@@ -247,6 +249,7 @@ interface AgentState {
   pendingPermissionCount?: number;
   requiresAttention?: boolean;
   attentionReason?: AgentSnapshotPayload["attentionReason"];
+  updatedAt?: string;
 }
 
 function createAgent(
@@ -262,7 +265,7 @@ function createAgent(
     thinkingOptionId: null,
     effectiveThinkingOptionId: null,
     createdAt: NOW,
-    updatedAt: NOW,
+    updatedAt: input.updatedAt ?? NOW,
     lastUserMessageAt: null,
     status: input.status,
     capabilities: {
@@ -296,6 +299,57 @@ function createAgent(
 }
 
 describe("WorkspaceDirectory", () => {
+  test("uses creation time for a workspace with no chat activity", async () => {
+    const workspace = new WorkspaceStatus();
+    expect((await workspace.workspaceDescriptor()).activityAt).toBe(NOW);
+  });
+
+  test("reports the latest chat timestamp independently of terminal and status activity", async () => {
+    const workspace = new WorkspaceStatus();
+    workspace.hasRootAgent({ id: "older", status: "idle", updatedAt: "2026-03-02T12:00:00.000Z" });
+    workspace.hasRootAgent({ id: "newer", status: "idle", updatedAt: "2026-03-03T12:00:00.000Z" });
+    workspace.hasWorkingTerminal(Date.parse("2027-01-01T00:00:00.000Z"));
+
+    expect((await workspace.workspaceDescriptor()).activityAt).toBe("2026-03-03T12:00:00.000Z");
+  });
+
+  test("counts a battle turn's send before the vote touches the chat", async () => {
+    const workspace = new WorkspaceStatus();
+    workspace.hasRootAgent({ id: "battle", status: "idle", updatedAt: "2026-03-02T12:00:00.000Z" });
+    workspace.arenaActivities.push({
+      agentId: "battle",
+      workspaceId: "workspace-1",
+      sessionID: "native",
+      chatID: "chat",
+      turnID: "turn",
+      title: "Battle",
+      state: "running",
+      resolved: false,
+      requiresDecision: false,
+      stale: false,
+      runs: [
+        {
+          id: "a",
+          side: "a",
+          runState: "pending",
+          startedAt: "2026-03-03T12:00:00.000Z",
+          completedAt: null,
+          needsInput: false,
+        },
+        {
+          id: "b",
+          side: "b",
+          runState: "pending",
+          startedAt: null,
+          completedAt: null,
+          needsInput: false,
+        },
+      ],
+    });
+
+    expect((await workspace.workspaceDescriptor()).activityAt).toBe("2026-03-03T12:00:00.000Z");
+  });
+
   test("uses root agent activity, not delegated child activity, for workspace status", async () => {
     const workspace = new WorkspaceStatus();
 

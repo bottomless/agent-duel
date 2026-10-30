@@ -4,7 +4,11 @@ import {
   type SidebarWorkspaceTrailing,
   type WorkspaceTitleSource,
 } from "@/hooks/use-settings";
-import { useSidebarViewStore, type SidebarGroupMode } from "@/stores/sidebar-view-store";
+import {
+  useSidebarViewStore,
+  type SidebarGroupMode,
+  type SidebarSortMode,
+} from "@/stores/sidebar-view-store";
 import { DEFAULT_SIDEBAR_CHECKS_DISPLAY, type SidebarChecksDisplay } from "./checks-display";
 import { DEFAULT_SIDEBAR_ROW_ITEMS, type SidebarRowItem, type SidebarRowItems } from "./row-items";
 
@@ -13,6 +17,10 @@ export type SidebarTrailingChoice = Exclude<SidebarWorkspaceTrailing, "none">;
 
 export interface SidebarDisplayPreferences {
   grouping: SidebarGroupMode;
+  sorting: SidebarSortMode;
+  setSorting: (mode: SidebarSortMode) => void;
+  groupSorting: SidebarSortMode;
+  setGroupSorting: (mode: SidebarSortMode) => void;
   setGrouping: (mode: SidebarGroupMode) => void;
   titleSource: WorkspaceTitleSource;
   setTitleSource: (source: WorkspaceTitleSource) => void;
@@ -37,6 +45,10 @@ export interface SidebarDisplayPreferences {
  * this for a value and set it; where it lands is this module's problem.
  */
 export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
+  const sorting = useSidebarViewStore((state) => state.sortMode);
+  const setSorting = useSidebarViewStore((state) => state.setSortMode);
+  const groupSorting = useSidebarViewStore((state) => state.groupSortMode);
+  const setGroupSorting = useSidebarViewStore((state) => state.setGroupSortMode);
   const grouping = useSidebarViewStore((state) => state.groupMode);
   const setGrouping = useSidebarViewStore((state) => state.setGroupMode);
   const hostFilters = useSidebarViewStore((state) => state.hostFilters);
@@ -88,6 +100,10 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
   return useMemo(
     () => ({
       grouping,
+      sorting,
+      setSorting,
+      groupSorting,
+      setGroupSorting,
       setGrouping,
       titleSource: workspaceTitleSource,
       setTitleSource,
@@ -103,6 +119,10 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
     }),
     [
       grouping,
+      sorting,
+      setSorting,
+      groupSorting,
+      setGroupSorting,
       setGrouping,
       workspaceTitleSource,
       setTitleSource,

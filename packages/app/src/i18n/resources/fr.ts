@@ -968,6 +968,13 @@ export const fr: TranslationResources = {
         label: "Regroupement",
         project: "Projet",
         status: "Statut",
+        none: "Aucun",
+      },
+      sorting: {
+        groupLabel: "Ordre des groupes",
+        label: "Trier",
+        default: "Par défaut",
+        lastChat: "Dernier chat",
       },
       titleSource: {
         label: "Titre",

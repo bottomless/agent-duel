@@ -943,6 +943,13 @@ export const ko: TranslationResources = {
         label: "그룹화",
         project: "프로젝트",
         status: "상태",
+        none: "없음",
+      },
+      sorting: {
+        groupLabel: "그룹 순서",
+        label: "정렬",
+        default: "기본값",
+        lastChat: "최근 채팅",
       },
       titleSource: {
         label: "제목",

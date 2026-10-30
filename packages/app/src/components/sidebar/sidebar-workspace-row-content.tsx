@@ -2,19 +2,10 @@ import { workspaceBattleStatus } from "@/components/sidebar/arena-status";
 import { useArenaActivityStore } from "@/arena/activity-store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { memo, useId, useMemo, useCallback, useState, type ReactNode } from "react";
-import { Text, View, type ViewStyle } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from "react-native-svg";
-import {
-  CircleAlert,
-  CircleCheck,
-  CircleHelp,
-  Folder,
-  FolderGit2,
-  Monitor,
-} from "lucide-react-native";
-import { ProjectStatusIndicator } from "@/components/sidebar/project-leading-visual";
-import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
+import { CircleAlert, CircleCheck, CircleHelp } from "lucide-react-native";
 import {
   WorkspaceMetaRow,
   type WorkspaceServiceSummary,
@@ -27,11 +18,9 @@ import {
 } from "@/components/sidebar/workspace-trailing";
 import { useAppSettings } from "@/hooks/use-settings";
 import type { Theme } from "@/styles/theme";
-import type { SidebarStateBucket } from "@/utils/sidebar-agent-state";
 import { getStatusDotColor } from "@/utils/status-dot-color";
 import {
   STATUS_INDICATOR_ALERT_SIZE,
-  STATUS_INDICATOR_DOT_SIZE,
   STATUS_INDICATOR_FILLED_DOT_SIZE,
 } from "@/utils/status-indicator-geometry";
 import { shouldRenderSyncedStatusLoader } from "@/utils/status-loader";
@@ -52,9 +41,6 @@ const needsInputColorMapping = (theme: Theme) => ({
 const ThemedCircleCheck = withUnistyles(CircleCheck);
 const ThemedCircleHelp = withUnistyles(CircleHelp);
 const ThemedCircleAlert = withUnistyles(CircleAlert);
-const ThemedMonitor = withUnistyles(Monitor);
-const ThemedFolder = withUnistyles(Folder);
-const ThemedFolderGit2 = withUnistyles(FolderGit2);
 
 /**
  * react-native-svg's extractGradient reads stopColor off the child elements structurally,
@@ -131,32 +117,24 @@ export function SidebarWorkspaceRowFrame({
 
 export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowContent({
   workspace,
-  leadingProjectName = null,
-  leadingProjectIconDataUri = null,
   serviceSummary = null,
-  backdrop,
   isHovered,
   isLoading,
   isCreating = false,
   shortcutNumber = null,
   showShortcutBadge = false,
-  reserveIdleStatusIndicatorSpace = true,
+  projectName = null,
   children,
 }: {
   workspace: SidebarWorkspaceEntry;
-  /** Hoisted rows use their project icon as the leading visual because no project row contains them. */
-  leadingProjectName?: string | null;
-  leadingProjectIconDataUri?: string | null;
   serviceSummary?: WorkspaceServiceSummary | null;
-  /** The row's current background, so the project status badge can knock out of it. */
-  backdrop: SidebarSurfaceBackdrop;
   isHovered: boolean;
   isLoading: boolean;
   isCreating?: boolean;
   shortcutNumber?: number | null;
   showShortcutBadge?: boolean;
-  /** Keep the empty leading slot when the workspace has no active status. */
-  reserveIdleStatusIndicatorSpace?: boolean;
+  /** Rows outside a project group name their project, since no header above them does. */
+  projectName?: string | null;
   children?: ReactNode;
 }) {
   const {
@@ -184,19 +162,21 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   return (
     <View style={styles.workspaceRowContent}>
       <View style={styles.workspaceRowMain}>
-        <SidebarWorkspaceLeadingVisual
-          workspace={activityWorkspace}
-          leadingProjectName={leadingProjectName}
-          leadingProjectIconDataUri={leadingProjectIconDataUri}
-          backdrop={backdrop}
-          loading={isLoading}
-          reserveIdleSpace={reserveIdleStatusIndicatorSpace}
-        />
+        <SidebarWorkspaceLeadingVisual workspace={activityWorkspace} loading={isLoading} />
         <View style={styles.workspaceContentColumn}>
           <View style={styles.workspaceTitleRow}>
             <Text style={workspaceBranchTextStyle} numberOfLines={1}>
               {workspaceLabel}
             </Text>
+            {projectName ? (
+              <Text
+                style={styles.workspaceProjectName}
+                numberOfLines={1}
+                testID={`sidebar-row-project-name-${workspace.workspaceKey}`}
+              >
+                {projectName}
+              </Text>
+            ) : null}
             <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
           </View>
           <WorkspaceMetaRow prHint={workspace.prHint} serviceSummary={serviceSummary} />
@@ -213,67 +193,35 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
 
 function SidebarWorkspaceLeadingVisual({
   workspace,
-  leadingProjectName,
-  leadingProjectIconDataUri,
-  backdrop,
   loading,
-  reserveIdleSpace,
 }: {
   workspace: SidebarWorkspaceEntry;
-  leadingProjectName: string | null;
-  leadingProjectIconDataUri: string | null;
-  backdrop: SidebarSurfaceBackdrop;
   loading: boolean;
-  reserveIdleSpace: boolean;
 }) {
   const status = workspaceBattleStatus(workspace);
-  if (leadingProjectName) {
-    const statusIcon =
-      status?.icon === "ready" || status?.icon === "unknown" ? status.icon : undefined;
-    const project = (
-      <ProjectStatusIndicator
-        iconDataUri={leadingProjectIconDataUri}
-        displayName={leadingProjectName}
-        projectViewKey={workspace.projectViewKey}
-        statusBucket={workspace.statusBucket}
-        statusIcon={statusIcon}
-        statusLabel={status?.label}
-        backdrop={backdrop}
-        loading={loading}
-        testID={`sidebar-row-project-icon-${workspace.workspaceKey}`}
-      />
-    );
-    if (status)
-      return (
-        <ArenaStatusIndicator workspace={workspace} loading={loading}>
-          {project}
-        </ArenaStatusIndicator>
-      );
-    return project;
-  }
-  if (status) return <ArenaStatusIndicator workspace={workspace} loading={loading} />;
+  // The slot keeps its width when it has nothing to show, so an idle row's title stays on the
+  // same rail as a row with a status icon instead of lining up with the project header.
   return (
-    <WorkspaceStatusIndicator
-      bucket={workspace.statusBucket}
-      workspaceKind={workspace.workspaceKind}
-      loading={loading}
-      reserveIdleSpace={reserveIdleSpace}
-    />
+    <View style={styles.workspaceStatusDot}>
+      {status ? (
+        <ArenaStatusIndicator workspace={workspace} loading={loading} />
+      ) : (
+        <WorkspaceStatusIndicator bucket={workspace.statusBucket} loading={loading} />
+      )}
+    </View>
   );
 }
 
 export function ArenaStatusIndicator({
   workspace,
   loading,
-  children,
 }: {
   workspace: SidebarWorkspaceEntry;
   loading: boolean;
-  children?: ReactNode;
 }) {
   const status = workspaceBattleStatus(workspace);
-  if (!status) return null;
-  let icon = <View style={styles.idleStatusDot} />;
+  if (!status || (status.icon === "idle" && !loading)) return null;
+  let icon: ReactNode = null;
   if (loading || status.icon === "running") icon = <StatusRing />;
   else if (status.icon === "ready")
     icon = (
@@ -299,7 +247,7 @@ export function ArenaStatusIndicator({
           tabIndex={0}
           testID={`arena-status-${status.icon}`}
         >
-          {children ?? icon}
+          {icon}
         </View>
       </TooltipTrigger>
       <TooltipContent side="right">
@@ -311,19 +259,12 @@ export function ArenaStatusIndicator({
 
 function WorkspaceStatusIndicator({
   bucket,
-  workspaceKind,
   loading = false,
-  reserveIdleSpace = true,
 }: {
   bucket: SidebarWorkspaceEntry["statusBucket"];
-  workspaceKind: SidebarWorkspaceEntry["workspaceKind"];
   loading?: boolean;
-  reserveIdleSpace?: boolean;
 }) {
-  // Busy is the only status that moves, and it is the ring rather than a dot for the same
-  // reason it is a dot elsewhere: every status in the sidebar sits in this one slot, so busy
-  // has to fill it without displacing anything. A row starting up and a row working are both
-  // busy, so they share the ring and differ only in testID.
+  // Starting and running share a ring; their test IDs distinguish the two states.
   if (loading) {
     return (
       <View style={styles.workspaceStatusDot} testID="workspace-status-indicator-loading">
@@ -356,49 +297,14 @@ function WorkspaceStatusIndicator({
     );
   }
 
-  if (bucket === "done") {
-    // An idle row still gets a dot rather than an empty slot. Nested rows are marked as
-    // workspaces by indentation alone, and with nothing in the leading slot the rail has no
-    // edge to read against — a workspace carrying its own glyph starts looking like a project
-    // header. The dot is muted to half opacity so it holds the rail without reporting status.
-    return reserveIdleSpace ? (
-      <View style={styles.workspaceStatusDot} testID="workspace-status-indicator-done">
-        <View style={styles.idleStatusDot} />
+  if (bucket === "failed") {
+    return (
+      <View style={styles.workspaceStatusDot} testID="workspace-status-indicator-failed">
+        <View style={[styles.standaloneStatusDot, styles.statusDotFailed]} />
       </View>
-    ) : null;
+    );
   }
-
-  let KindIcon: typeof ThemedMonitor;
-  if (workspaceKind === "local_checkout") KindIcon = ThemedMonitor;
-  else if (workspaceKind === "worktree") KindIcon = ThemedFolderGit2;
-  else KindIcon = ThemedFolder;
-
-  const dotColorStyle = getStatusDotColorStyle(bucket);
-  return (
-    <View style={styles.workspaceStatusDot} testID={`workspace-status-indicator-${bucket}`}>
-      <KindIcon size={14} uniProps={foregroundMutedColorMapping} />
-      {dotColorStyle ? <StatusDotOverlay dotColorStyle={dotColorStyle} /> : null}
-    </View>
-  );
-}
-
-function StatusDotOverlay({ dotColorStyle }: { dotColorStyle: ViewStyle }) {
-  return <View style={[styles.statusDotOverlay, dotColorStyle]} />;
-}
-
-function getStatusDotColorStyle(bucket: SidebarStateBucket) {
-  switch (bucket) {
-    case "needs_input":
-      return styles.statusDotNeedsInput;
-    case "failed":
-      return styles.statusDotFailed;
-    case "running":
-      return styles.statusDotRunning;
-    case "attention":
-      return styles.statusDotAttention;
-    case "done":
-      return null;
-  }
+  return null;
 }
 
 export const sidebarWorkspaceRowStyles = StyleSheet.create((theme) => ({
@@ -633,27 +539,11 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
   },
-  statusDotOverlay: {
-    position: "absolute",
-    right: 0,
-    bottom: 0,
-    width: STATUS_INDICATOR_DOT_SIZE,
-    height: STATUS_INDICATOR_DOT_SIZE,
-    borderRadius: theme.borderRadius.full,
-    borderWidth: 1,
-  },
   standaloneStatusDot: {
     width: STATUS_INDICATOR_FILLED_DOT_SIZE,
     height: STATUS_INDICATOR_FILLED_DOT_SIZE,
     borderRadius: theme.borderRadius.full,
     backgroundColor: getStatusDotColor({ theme, bucket: "attention" }) ?? undefined,
-  },
-  idleStatusDot: {
-    width: STATUS_INDICATOR_FILLED_DOT_SIZE,
-    height: STATUS_INDICATOR_FILLED_DOT_SIZE,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.foregroundExtraMuted,
-    opacity: 0.3,
   },
   // The title owns the first line outright now that the host, change request and CI moved
   // to the meta row, so it takes the full width the trailing slot leaves behind.
@@ -666,26 +556,21 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
   },
+  workspaceProjectName: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
+    lineHeight: 20,
+    flexShrink: 1,
+    maxWidth: "40%",
+  },
   workspaceBranchTextCreating: {
     opacity: 0.92,
   },
   workspaceBranchTextHovered: {
     opacity: 1,
   },
-  statusDotNeedsInput: {
-    backgroundColor: getStatusDotColor({ theme, bucket: "needs_input" }) ?? undefined,
-    borderColor: theme.colors.surface0,
-  },
   statusDotFailed: {
     backgroundColor: getStatusDotColor({ theme, bucket: "failed" }) ?? undefined,
-    borderColor: theme.colors.surface0,
-  },
-  statusDotRunning: {
-    backgroundColor: getStatusDotColor({ theme, bucket: "running" }) ?? undefined,
-    borderColor: theme.colors.surface0,
-  },
-  statusDotAttention: {
-    backgroundColor: getStatusDotColor({ theme, bucket: "attention" }) ?? undefined,
     borderColor: theme.colors.surface0,
   },
 }));

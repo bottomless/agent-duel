@@ -36,9 +36,42 @@ function createMemoryStorage(entries: Record<string, string | null>): MemoryStor
 }
 
 describe("sidebar view store", () => {
+  it("starts grouped by project with latest chats and saved group order", () => {
+    expect(useSidebarViewStore.getInitialState()).toMatchObject({
+      groupMode: "project",
+      sortMode: "lastChat",
+      groupSortMode: "default",
+    });
+  });
+
+  it.each([null, {}, { groupMode: "invalid", sortMode: "invalid" }])(
+    "uses the project and last-chat defaults for missing or invalid preferences: %j",
+    (preferences) => {
+      expect(migrateSidebarViewState(preferences)).toEqual({
+        groupMode: "project",
+        sortMode: "lastChat",
+        groupSortMode: "default",
+        hostFilters: [],
+      });
+    },
+  );
+
+  it("preserves ungrouped last-chat preferences during hydration", () => {
+    expect(
+      migrateSidebarViewState({ groupMode: "none", sortMode: "lastChat", hostFilters: ["host-a"] }),
+    ).toEqual({
+      groupMode: "none",
+      sortMode: "lastChat",
+      groupSortMode: "default",
+      hostFilters: ["host-a"],
+    });
+  });
+
   beforeEach(() => {
     useSidebarViewStore.setState({
       groupMode: "project",
+      sortMode: "lastChat",
+      groupSortMode: "default",
       hostFilters: [],
     });
   });
@@ -89,6 +122,8 @@ describe("sidebar view store", () => {
       }),
     ).toEqual({
       groupMode: "status",
+      sortMode: "lastChat",
+      groupSortMode: "default",
       hostFilters: [],
     });
   });
@@ -101,6 +136,8 @@ describe("sidebar view store", () => {
       }),
     ).toEqual({
       groupMode: "status",
+      sortMode: "lastChat",
+      groupSortMode: "default",
       hostFilters: ["host-a"],
     });
   });
@@ -109,10 +146,14 @@ describe("sidebar view store", () => {
     expect(
       migrateSidebarViewState({
         groupMode: "status",
+        sortMode: "default",
+        groupSortMode: "lastChat",
         hostFilters: ["host-a", "host-b"],
       }),
     ).toEqual({
       groupMode: "status",
+      sortMode: "default",
+      groupSortMode: "lastChat",
       hostFilters: ["host-a", "host-b"],
     });
   });

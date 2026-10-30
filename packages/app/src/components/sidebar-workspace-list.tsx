@@ -13,6 +13,7 @@ import { useMutation } from "@tanstack/react-query";
 import { AdaptiveRenameModal } from "@/components/rename-modal";
 import {
   memo,
+  Fragment,
   useCallback,
   useMemo,
   useState,
@@ -69,7 +70,7 @@ import {
   type SidebarWorkspacePlacement,
 } from "@/hooks/use-sidebar-workspaces-list";
 import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
-import { useSidebarViewStore } from "@/stores/sidebar-view-store";
+import { useSidebarViewStore, type SidebarGroupMode } from "@/stores/sidebar-view-store";
 import { useShowShortcutBadges } from "@/hooks/use-show-shortcut-badges";
 import {
   ContextMenu,
@@ -229,13 +230,14 @@ function selectionForSelectedWorkspace(
 
 interface SidebarWorkspaceListProps {
   statusGroups: StatusGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   pinnedGroups: PinnedSidebarGroups;
   projects: SidebarProjectEntry[];
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   collapsedProjectKeys: ReadonlySet<string>;
   onToggleProjectCollapsed: (projectViewKey: string) => void;
   shortcutIndexByWorkspaceKey: Map<string, number>;
-  groupMode: "project" | "status";
+  groupMode: SidebarGroupMode;
   isRefreshing?: boolean;
   onRefresh?: () => void;
   onWorkspacePress?: () => void;
@@ -275,7 +277,6 @@ interface ProjectHeaderRowProps {
 interface WorkspaceRowInnerProps {
   workspace: SidebarWorkspaceEntry;
   leadingProjectName?: string | null;
-  leadingProjectIconDataUri?: string | null;
   selected: boolean;
   shortcutNumber: number | null;
   showShortcutBadge: boolean;
@@ -297,7 +298,6 @@ interface WorkspaceRowInnerProps {
   archiveShortcutKeys?: ShortcutKey[][] | null;
   isPinned?: boolean;
   onTogglePin?: () => void;
-  reserveIdleStatusIndicatorSpace?: boolean;
 }
 
 export function PrBadge({ hint, style }: { hint: PrHint; style?: StyleProp<ViewStyle> }) {
@@ -1056,7 +1056,6 @@ function ProjectHeaderRow({
 function WorkspaceRowInner({
   workspace,
   leadingProjectName,
-  leadingProjectIconDataUri,
   selected,
   shortcutNumber,
   showShortcutBadge,
@@ -1077,7 +1076,6 @@ function WorkspaceRowInner({
   archiveShortcutKeys,
   isPinned,
   onTogglePin,
-  reserveIdleStatusIndicatorSpace = true,
 }: WorkspaceRowInnerProps) {
   const _isCompact = useIsCompactFormFactor();
   const [isPressed, setIsPressed] = useState(false);
@@ -1164,16 +1162,12 @@ function WorkspaceRowInner({
             >
               <SidebarWorkspaceRowContent
                 workspace={workspace}
-                leadingProjectName={leadingProjectName}
-                leadingProjectIconDataUri={leadingProjectIconDataUri}
                 serviceSummary={serviceSummary}
-                backdrop={getSidebarRowBackdrop({ isDragging, isPressed, selected, isHovered })}
                 isHovered={isHovered}
                 isLoading={isArchiving || isCreating}
                 isCreating={isCreating}
                 shortcutNumber={shortcutNumber}
                 showShortcutBadge={showShortcutBadge}
-                reserveIdleStatusIndicatorSpace={reserveIdleStatusIndicatorSpace}
               >
                 <WorkspaceRowRightGroup
                   workspace={workspace}
@@ -1205,7 +1199,6 @@ function WorkspaceRowInner({
 function WorkspaceRowWithMenu({
   workspace,
   leadingProjectName,
-  leadingProjectIconDataUri,
   selected,
   shortcutNumber,
   showShortcutBadge,
@@ -1216,12 +1209,10 @@ function WorkspaceRowWithMenu({
   canCopyBranchName,
   canPin,
   onToggleWorkspacePin,
-  reserveIdleStatusIndicatorSpace = true,
   isCreating = false,
 }: {
   workspace: SidebarWorkspaceEntry;
   leadingProjectName?: string | null;
-  leadingProjectIconDataUri?: string | null;
   selected: boolean;
   shortcutNumber: number | null;
   showShortcutBadge: boolean;
@@ -1232,7 +1223,6 @@ function WorkspaceRowWithMenu({
   canCopyBranchName: boolean;
   canPin: boolean;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
-  reserveIdleStatusIndicatorSpace?: boolean;
   isCreating?: boolean;
 }) {
   const { t } = useTranslation();
@@ -1350,7 +1340,6 @@ function WorkspaceRowWithMenu({
       <WorkspaceRowInner
         workspace={workspace}
         leadingProjectName={leadingProjectName}
-        leadingProjectIconDataUri={leadingProjectIconDataUri}
         selected={selected}
         shortcutNumber={shortcutNumber}
         showShortcutBadge={showShortcutBadge}
@@ -1372,7 +1361,6 @@ function WorkspaceRowWithMenu({
         archiveShortcutKeys={selected ? archiveShortcutKeys : null}
         isPinned={isPinned}
         onTogglePin={onTogglePin}
-        reserveIdleStatusIndicatorSpace={reserveIdleStatusIndicatorSpace}
       />
       <AdaptiveRenameModal
         visible={isRenameOpen}
@@ -1392,13 +1380,11 @@ interface WorkspaceRowItemProps {
   workspace: SidebarWorkspacePlacement;
   workspaceEntry: SidebarWorkspaceEntry | null;
   leadingProjectName?: string | null;
-  leadingProjectIconDataUri?: string | null;
   shortcutNumber: number | null;
   showShortcutBadge: boolean;
   canCopyBranchName: boolean;
   canPin: boolean;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
-  reserveIdleStatusIndicatorSpace?: boolean;
   isCreating?: boolean;
   selectionEnabled: boolean;
   activeWorkspaceSelection: ActiveWorkspaceSelection | null;
@@ -1412,13 +1398,11 @@ function WorkspaceRowItem({
   workspace,
   workspaceEntry,
   leadingProjectName,
-  leadingProjectIconDataUri,
   shortcutNumber,
   showShortcutBadge,
   canCopyBranchName,
   canPin,
   onToggleWorkspacePin,
-  reserveIdleStatusIndicatorSpace = true,
   isCreating = false,
   selectionEnabled,
   activeWorkspaceSelection,
@@ -1439,13 +1423,11 @@ function WorkspaceRowItem({
     <WorkspaceRow
       workspaceEntry={workspaceEntry}
       leadingProjectName={leadingProjectName}
-      leadingProjectIconDataUri={leadingProjectIconDataUri}
       shortcutNumber={shortcutNumber}
       showShortcutBadge={showShortcutBadge}
       canCopyBranchName={canCopyBranchName}
       canPin={canPin}
       onToggleWorkspacePin={onToggleWorkspacePin}
-      reserveIdleStatusIndicatorSpace={reserveIdleStatusIndicatorSpace}
       isCreating={isCreating}
       selected={isWorkspaceSelected({
         selection: activeWorkspaceSelection,
@@ -1481,13 +1463,11 @@ function areWorkspaceRowItemPropsEqual(
     previous.workspace === next.workspace &&
     previous.workspaceEntry === next.workspaceEntry &&
     previous.leadingProjectName === next.leadingProjectName &&
-    previous.leadingProjectIconDataUri === next.leadingProjectIconDataUri &&
     previous.shortcutNumber === next.shortcutNumber &&
     previous.showShortcutBadge === next.showShortcutBadge &&
     previous.canCopyBranchName === next.canCopyBranchName &&
     previous.canPin === next.canPin &&
     previous.onToggleWorkspacePin === next.onToggleWorkspacePin &&
-    previous.reserveIdleStatusIndicatorSpace === next.reserveIdleStatusIndicatorSpace &&
     previous.isCreating === next.isCreating &&
     previous.onWorkspacePress === next.onWorkspacePress &&
     previous.drag === next.drag &&
@@ -1502,7 +1482,6 @@ const MemoWorkspaceRowItem = memo(WorkspaceRowItem, areWorkspaceRowItemPropsEqua
 function WorkspaceRow({
   workspaceEntry,
   leadingProjectName,
-  leadingProjectIconDataUri,
   shortcutNumber,
   showShortcutBadge,
   onPress,
@@ -1512,13 +1491,11 @@ function WorkspaceRow({
   canCopyBranchName,
   canPin,
   onToggleWorkspacePin,
-  reserveIdleStatusIndicatorSpace = true,
   isCreating = false,
   selected,
 }: {
   workspaceEntry: SidebarWorkspaceEntry | null;
   leadingProjectName?: string | null;
-  leadingProjectIconDataUri?: string | null;
   shortcutNumber: number | null;
   showShortcutBadge: boolean;
   onPress: () => void;
@@ -1528,7 +1505,6 @@ function WorkspaceRow({
   canCopyBranchName: boolean;
   canPin: boolean;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
-  reserveIdleStatusIndicatorSpace?: boolean;
   isCreating?: boolean;
   selected: boolean;
 }) {
@@ -1540,7 +1516,6 @@ function WorkspaceRow({
     <WorkspaceRowWithMenu
       workspace={workspaceEntry}
       leadingProjectName={leadingProjectName}
-      leadingProjectIconDataUri={leadingProjectIconDataUri}
       selected={selected}
       shortcutNumber={shortcutNumber}
       showShortcutBadge={showShortcutBadge}
@@ -1551,7 +1526,6 @@ function WorkspaceRow({
       canCopyBranchName={canCopyBranchName}
       canPin={canPin}
       onToggleWorkspacePin={onToggleWorkspacePin}
-      reserveIdleStatusIndicatorSpace={reserveIdleStatusIndicatorSpace}
       isCreating={isCreating}
     />
   );
@@ -1606,6 +1580,7 @@ function ProjectBlock({
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
 }) {
+  const canReorder = useSidebarViewStore((state) => state.sortMode === "default");
   const {
     visibleItems: visibleWorkspaces,
     expanded: workspacesExpanded,
@@ -1765,20 +1740,31 @@ function ProjectBlock({
     if (project.workspaces.length > 0) {
       projectChildren = (
         <>
-          <DraggableList
-            testID={`sidebar-workspace-list-${project.viewKey}`}
-            data={visibleWorkspaces}
-            keyExtractor={workspaceKeyExtractor}
-            renderItem={renderWorkspace}
-            onDragEnd={handleWorkspaceDragEnd}
-            extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
-            scrollEnabled={false}
-            useDragHandle
-            nestable={useNestable}
-            simultaneousGestureRef={parentGestureRef}
-            gestureHostPresented={dragGestureHostPresented}
-            containerStyle={styles.workspaceListContainer}
-          />
+          {canReorder ? (
+            <DraggableList
+              testID={`sidebar-workspace-list-${project.viewKey}`}
+              data={visibleWorkspaces}
+              keyExtractor={workspaceKeyExtractor}
+              renderItem={renderWorkspace}
+              onDragEnd={handleWorkspaceDragEnd}
+              extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
+              scrollEnabled={false}
+              useDragHandle
+              nestable={useNestable}
+              simultaneousGestureRef={parentGestureRef}
+              gestureHostPresented={dragGestureHostPresented}
+              containerStyle={styles.workspaceListContainer}
+            />
+          ) : (
+            <View
+              testID={`sidebar-workspace-list-${project.viewKey}`}
+              style={styles.workspaceListContainer}
+            >
+              {visibleWorkspaces.map((workspace) => (
+                <Fragment key={workspace.workspaceKey}>{renderWorkspaceRow(workspace)}</Fragment>
+              ))}
+            </View>
+          )}
           {canToggleWorkspaces ? (
             <SidebarGroupToggleRow
               expanded={workspacesExpanded}
@@ -1895,6 +1881,7 @@ const MemoProjectBlock = memo(ProjectBlock, areProjectBlockPropsEqual);
 
 export function SidebarWorkspaceList({
   statusGroups,
+  flatWorkspaces,
   pinnedGroups,
   projects,
   workspaceEntriesByKey,
@@ -1917,24 +1904,13 @@ export function SidebarWorkspaceList({
   const supportsMultiplicityByServerId = useHostFeatureMap(serverIds, "workspaceMultiplicity");
   const supportsPinningByServerId = useHostFeatureMap(serverIds, "workspacePinning");
   const onToggleWorkspacePin = useSidebarWorkspacePinController();
-  // Status mode drops the project grouping, so its rows carry their own project
-  // icon. Project mode fetches the same icons inside ProjectModeList for its
-  // project headers, so only the active mode requests them.
-  const statusProjectIconTargets = useMemo(
-    () => (groupMode === "status" ? resolveSidebarProjectIconTargets(projects) : []),
-    [groupMode, projects],
-  );
-  const statusProjectIconByProjectViewKey = useProjectIcons({
-    projects: statusProjectIconTargets,
-  });
-
   const content =
-    groupMode === "status" ? (
+    groupMode !== "project" ? (
       <SidebarStatusModeWrapper
         statusGroups={statusGroups}
+        flatWorkspaces={flatWorkspaces}
         pinnedGroups={pinnedGroups}
         workspaceEntriesByKey={workspaceEntriesByKey}
-        projectIconByProjectViewKey={statusProjectIconByProjectViewKey}
         shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
         onWorkspacePress={onWorkspacePress}
         supportsPinningByServerId={supportsPinningByServerId}
@@ -1967,9 +1943,9 @@ export function SidebarWorkspaceList({
 
 function SidebarStatusModeWrapper({
   statusGroups,
+  flatWorkspaces,
   pinnedGroups,
   workspaceEntriesByKey,
-  projectIconByProjectViewKey,
   shortcutIndexByWorkspaceKey: _projectShortcutIndex,
   onWorkspacePress,
   supportsPinningByServerId,
@@ -1977,9 +1953,9 @@ function SidebarStatusModeWrapper({
   listHeaderComponent,
 }: {
   statusGroups: StatusGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   pinnedGroups: PinnedSidebarGroups;
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
-  projectIconByProjectViewKey: ReadonlyMap<string, string | null>;
   shortcutIndexByWorkspaceKey: Map<string, number>;
   onWorkspacePress?: () => void;
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
@@ -1991,11 +1967,11 @@ function SidebarStatusModeWrapper({
   return (
     <SidebarStatusWorkspaceList
       groups={statusGroups}
+      flatWorkspaces={flatWorkspaces}
       pinnedWorkspaces={pinnedGroups.pinnedChats.flatMap((workspace) => {
         const entry = workspaceEntriesByKey.get(workspace.workspaceKey);
         return entry ? [entry] : [];
       })}
-      projectIconByProjectViewKey={projectIconByProjectViewKey}
       shortcutIndexByWorkspaceKey={_projectShortcutIndex}
       showShortcutBadges={showShortcutBadges}
       onWorkspacePress={onWorkspacePress}
@@ -2023,12 +1999,16 @@ function ProjectModeList({
   supportsMultiplicityByServerId,
   supportsPinningByServerId,
   onToggleWorkspacePin,
-}: Omit<SidebarWorkspaceListProps, "statusGroups" | "groupMode" | "isRefreshing" | "onRefresh"> & {
+}: Omit<
+  SidebarWorkspaceListProps,
+  "statusGroups" | "flatWorkspaces" | "groupMode" | "isRefreshing" | "onRefresh"
+> & {
   pathname: string;
   supportsMultiplicityByServerId: ReadonlyMap<string, boolean>;
   supportsPinningByServerId: ReadonlyMap<string, boolean>;
   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
 }) {
+  const canReorder = useSidebarViewStore((state) => state.groupSortMode === "default");
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
   const { t } = useTranslation();
   const [creatingWorkspaceIds, setCreatingWorkspaceIds] = useState<Set<string>>(() => new Set());
@@ -2270,9 +2250,6 @@ function ProjectModeList({
           workspace={workspace}
           workspaceEntry={workspaceEntriesByKey.get(workspace.workspaceKey) ?? null}
           leadingProjectName={workspace.projectName}
-          leadingProjectIconDataUri={
-            projectIconByProjectViewKey.get(workspace.projectViewKey) ?? null
-          }
           shortcutNumber={shortcutIndexByWorkspaceKey.get(workspace.workspaceKey) ?? null}
           showShortcutBadge={showShortcutBadges}
           canCopyBranchName={workspace.projectKind === "git"}
@@ -2294,9 +2271,31 @@ function ProjectModeList({
       showShortcutBadges,
       supportsPinningByServerId,
       onToggleWorkspacePin,
-      projectIconByProjectViewKey,
       workspaceEntriesByKey,
     ],
+  );
+
+  const projectList = canReorder ? (
+    <DraggableList
+      testID="sidebar-project-list"
+      data={unpinnedProjects}
+      keyExtractor={projectViewKeyExtractor}
+      renderItem={renderProject}
+      onDragEnd={handleProjectDragEnd}
+      extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
+      scrollEnabled={false}
+      useDragHandle
+      nestable={platformIsNative}
+      simultaneousGestureRef={parentGestureRef}
+      gestureHostPresented={dragGestureHostPresented}
+      containerStyle={styles.projectListContainer}
+    />
+  ) : (
+    <View testID="sidebar-project-list" style={styles.projectListContainer}>
+      {unpinnedProjects.map((project) =>
+        renderProjectBlock(project, { drag: noop, isDragging: false }),
+      )}
+    </View>
   );
 
   const content = (
@@ -2330,20 +2329,7 @@ function ProjectModeList({
           </Button>
         </View>
       ) : (
-        <DraggableList
-          testID="sidebar-project-list"
-          data={unpinnedProjects}
-          keyExtractor={projectViewKeyExtractor}
-          renderItem={renderProject}
-          onDragEnd={handleProjectDragEnd}
-          extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
-          scrollEnabled={false}
-          useDragHandle
-          nestable={platformIsNative}
-          simultaneousGestureRef={parentGestureRef}
-          gestureHostPresented={dragGestureHostPresented}
-          containerStyle={styles.projectListContainer}
-        />
+        projectList
       )}
       {listFooterComponent}
     </>
