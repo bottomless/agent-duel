@@ -8,7 +8,9 @@ const base: ResolveAccountGateInput = {
   updateRequired: false,
   accountsEnabled: true,
   methods: ["email", "google", "github"],
+  anonymousAllowed: false,
   hasStoredSession: true,
+  signInPrompt: null,
   sessionPhase: "success",
   sessionIsValid: true,
   legalDocumentsAvailable: true,
@@ -47,11 +49,31 @@ describe("resolveAccountGate", () => {
     expect(resolveAccountGate({ ...base, hasStoredSession: false })).toEqual({
       kind: "signed-out",
       methods: base.methods,
+      allowAnonymous: false,
     });
     expect(resolveAccountGate({ ...base, sessionIsValid: false })).toEqual({
       kind: "signed-out",
       methods: base.methods,
+      allowAnonymous: false,
     });
+  });
+
+  it("offers to continue without an account only where the control plane allows it", () => {
+    expect(
+      resolveAccountGate({ ...base, hasStoredSession: false, anonymousAllowed: true }),
+    ).toEqual({ kind: "signed-out", methods: base.methods, allowAnonymous: true });
+  });
+
+  it("shows sign-in over an anonymous session that asked for it", () => {
+    expect(resolveAccountGate({ ...base, signInPrompt: "required" })).toEqual({
+      kind: "upgrade",
+      methods: base.methods,
+      prompt: "required",
+    });
+    // Offline, the sign-in screen cannot work; the session keeps the app open.
+    expect(
+      resolveAccountGate({ ...base, signInPrompt: "required", sessionPhase: "error" }),
+    ).toEqual({ kind: "signed-in" });
   });
 
   it("lets a valid session through", () => {

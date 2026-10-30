@@ -19,6 +19,7 @@ import type {
 } from "@agent-duel/arena-service/collection"
 import { Store } from "./mongo"
 import { ResearchQueue } from "./research-queue"
+import type { AdoptedAccount } from "./credentials"
 import { encode, decode } from "./local-value"
 
 const documentRecordSchema = z.object({ _id: z.string() }).passthrough()
@@ -619,16 +620,7 @@ class LocalDatabase implements ArenaDb, ArenaClient {
   async backfillResearch(accountID: string, signal: AbortSignal, options: ResearchBackfillOptions = {}) {
     if (!this.researchQueue || !this.researchPartition) return true
     const partition = this.researchPartition
-    this.database.run(`CREATE TABLE IF NOT EXISTS arena_research_backfill (
-      sequence INTEGER PRIMARY KEY AUTOINCREMENT, partition TEXT NOT NULL,
-      collection TEXT NOT NULL, record_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-      UNIQUE(partition, collection, record_id))`)
-    const columns = this.database.query<{ name: string }, []>("PRAGMA table_info(arena_research_backfill)").all()
-    if (!columns.some((column) => column.name === "attempts"))
-      this.database.run("ALTER TABLE arena_research_backfill ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
-    this.database.run(`CREATE TABLE IF NOT EXISTS arena_research_backfill_unavailable (
-      partition TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL,
-      PRIMARY KEY(partition, collection, record_id))`)
+    ensureBackfillTables(this.database)
     if (options.retryUnavailable)
       this.database.transaction(() => {
         this.database
@@ -738,10 +730,67 @@ class LocalDatabase implements ArenaDb, ArenaClient {
     return !this.database.query("SELECT 1 FROM arena_research_backfill WHERE partition = ? LIMIT 1").get(partition)
   }
 
+  /**
+   * Moves anonymous accounts the control plane merged into `accountID` onto it: the records they own,
+   * and the uploads and backfill still waiting in their research partitions. The control plane has
+   * already moved what they uploaded. Runs before the store serves anything, so nothing reads a
+   * half-moved record, and repeating it after a restart changes nothing.
+   */
+  adoptResearchAccounts(accountID: string, adopted: readonly AdoptedAccount[]) {
+    const partition = this.researchPartition
+    if (!this.researchQueue || !partition) return
+    ensureBackfillTables(this.database)
+    this.database.transaction(() => {
+      for (const account of adopted) {
+        if (account.accountID === accountID || account.researchPartition === partition) continue
+        this.database
+          .query(
+            `UPDATE arena_documents SET document = json_set(document, '$.userId', ?)
+            WHERE collection IN (${ownedCollections.map(() => "?").join(", ")}) AND json_extract(document, '$.userId') = ?`,
+          )
+          .run(accountID, ...ownedCollections, account.accountID)
+        for (const table of partitionedTables) {
+          // A row the account already holds for the same record wins; the adopted copy is dropped.
+          this.database
+            .query(`UPDATE OR IGNORE ${table} SET partition = ? WHERE partition = ?`)
+            .run(partition, account.researchPartition)
+          this.database.query(`DELETE FROM ${table} WHERE partition = ?`).run(account.researchPartition)
+        }
+        // Backoff belongs to the partition's own failures, which no longer apply.
+        this.database.query("DELETE FROM arena_research_retry WHERE partition = ?").run(account.researchPartition)
+        this.database.query("DELETE FROM arena_research_recovery WHERE partition = ?").run(account.researchPartition)
+      }
+    })()
+  }
+
   async close() {
     await this.onClose?.()
     this.database.close()
   }
+}
+
+/** Records that carry their owner's account; everything else belongs to one of them through its chat or run. */
+const ownedCollections = ["chats", "singleAgentRatings", "reviewEvents", "battleMetrics"] as const
+
+const partitionedTables = [
+  "arena_research_mutations",
+  "arena_research_queue",
+  "arena_research_rejected",
+  "arena_research_backfill",
+  "arena_research_backfill_unavailable",
+] as const
+
+function ensureBackfillTables(database: Database) {
+  database.run(`CREATE TABLE IF NOT EXISTS arena_research_backfill (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT, partition TEXT NOT NULL,
+      collection TEXT NOT NULL, record_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(partition, collection, record_id))`)
+  const columns = database.query<{ name: string }, []>("PRAGMA table_info(arena_research_backfill)").all()
+  if (!columns.some((column) => column.name === "attempts"))
+    database.run("ALTER TABLE arena_research_backfill ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+  database.run(`CREATE TABLE IF NOT EXISTS arena_research_backfill_unavailable (
+      partition TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL,
+      PRIMARY KEY(partition, collection, record_id))`)
 }
 
 class LocalCollection<T extends ArenaRecord> implements ArenaCollection<T> {
@@ -916,6 +965,8 @@ class LocalCollection<T extends ArenaRecord> implements ArenaCollection<T> {
 export type LocalStoreConfiguration = {
   readonly directory: string
   readonly researchPartition?: string
+  /** The account the partition belongs to and the anonymous accounts merged into it (`adoptResearchAccounts`). */
+  readonly adoption?: { readonly accountID: string; readonly accounts: readonly AdoptedAccount[] }
   readonly onMutation?: (mutation: ArenaMutation) => void | Promise<void>
   readonly onClose?: () => void | Promise<void>
 }
@@ -955,6 +1006,7 @@ export async function connectLocalStore(input: LocalStoreConfiguration): Promise
   await scrubLegacyBlindedTelemetry(database)
   await reclaimArtifactFilesIfPending(database, path.join(input.directory, "artifacts", "sha256"))
   const local = new LocalDatabase(database, input.directory, input.onMutation, input.onClose, input.researchPartition)
+  if (input.adoption?.accounts.length) local.adoptResearchAccounts(input.adoption.accountID, input.adoption.accounts)
   const store = Object.assign(new Store(local, local), {
     sourceID: local.sourceID,
     researchQueue: local.researchQueue,

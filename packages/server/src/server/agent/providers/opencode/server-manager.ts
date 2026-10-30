@@ -46,6 +46,7 @@ function arenaStdinPayload(credentials: ArenaCredentials, controlTokenHash: stri
         controlPlaneUrl: credentials.controlPlaneUrl,
         researchPartition: credentials.researchPartition,
         researchAccountID: credentials.researchAccountID,
+        adoptAccounts: credentials.adoptAccounts,
         controlTokenHash,
       });
     case "byok":

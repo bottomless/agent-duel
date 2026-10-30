@@ -120,6 +120,7 @@ describe("OpenCodeServerManager generations", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "session-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -137,6 +138,7 @@ describe("OpenCodeServerManager generations", () => {
     });
     const payload = readStdinPayload(runtime, 4081);
     expect(Object.keys(payload).toSorted()).toEqual([
+      "adoptAccounts",
       "controlPlaneUrl",
       "controlTokenHash",
       "mode",
@@ -173,6 +175,7 @@ describe("OpenCodeServerManager generations", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "session-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -355,6 +358,7 @@ describe("OpenCodeServerManager generations", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "old-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -369,6 +373,7 @@ describe("OpenCodeServerManager generations", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "new-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -383,6 +388,7 @@ describe("OpenCodeServerManager generations", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "session-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -400,6 +406,7 @@ describe("OpenCodeServerManager generations", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "session-token",
       controlPlaneUrl: "https://control.test",
     });
@@ -421,6 +428,7 @@ describe("OpenCodeServerManager generations", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "old-token",
       controlPlaneUrl: "https://control.test",
     });

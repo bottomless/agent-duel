@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +23,51 @@ function printable(value: string): string {
     .trim();
 }
 
+/** The `MachineGuid` value in `reg.exe query` output. */
+export function parseWindowsMachineGuid(output: string): string | null {
+  return (
+    /^\s*MachineGuid\s+REG_SZ\s+([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\s*$/im.exec(
+      output,
+    )?.[1] ?? null
+  );
+}
+
+/**
+ * The hardware UUID on macOS, the systemd machine ID on Linux, the machine GUID Windows creates at
+ * install time; null where none is readable. The firmware UUID would survive a Windows reinstall, but
+ * some boards ship placeholder values shared by thousands of machines, which would make strangers
+ * share one anonymous allowance.
+ */
+function readHardwareId(): string | null {
+  try {
+    if (process.platform === "darwin") {
+      const output = execFileSync("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], {
+        encoding: "utf8",
+        timeout: 2_000,
+      });
+      return /"IOPlatformUUID" = "([^"]+)"/.exec(output)?.[1] ?? null;
+    }
+    if (process.platform === "linux") {
+      for (const file of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
+        if (existsSync(file)) return readFileSync(file, "utf8").trim() || null;
+      }
+    }
+    if (process.platform === "win32") {
+      const reg = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "reg.exe");
+      // `/reg:64` reads the 64-bit registry view, where the value lives, from a 32-bit process too.
+      const output = execFileSync(
+        reg,
+        ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid", "/reg:64"],
+        { encoding: "utf8", timeout: 2_000, windowsHide: true },
+      );
+      return parseWindowsMachineGuid(output)?.toLowerCase() ?? null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function readMachineHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     "X-Agent-Duel-OS": process.platform,
@@ -31,6 +78,14 @@ function readMachineHeaders(): Record<string, string> {
   };
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (timezone) headers["X-Agent-Duel-Timezone"] = timezone;
+  // Hashed, so the control plane never receives the identifier itself. It keys an anonymous
+  // account's message allowance to the computer, so reinstalling does not reset it.
+  const hardwareId = readHardwareId();
+  if (hardwareId) {
+    headers["X-Agent-Duel-Device"] = createHash("sha256")
+      .update(`agent-duel-device:v1:${hardwareId}`)
+      .digest("hex");
+  }
   const cpus = os.cpus();
   const cpu = cpus[0] ? printable(cpus[0].model) : "";
   if (cpu) {
@@ -42,8 +97,9 @@ function readMachineHeaders(): Record<string, string> {
 
 /**
  * Sent on every control-plane request; the control plane keeps the latest values on the account and
- * turns away builds below its minimum version. Only coarse build and machine facts: never the
- * computer name, user name, paths, network addresses or device identifiers.
+ * turns away builds below its minimum version. Coarse build and machine facts, plus one hashed
+ * device identifier for anonymous accounts: never the computer name, user name, paths, network
+ * addresses or a raw hardware identifier.
  */
 export function clientHeaders(appVersion: string): Record<string, string> {
   machineHeaders ??= readMachineHeaders();

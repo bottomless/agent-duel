@@ -73,6 +73,11 @@ const styles = StyleSheet.create((theme) => ({
   backButton: {
     alignSelf: "center",
   },
+  skip: {
+    position: "absolute",
+    top: theme.spacing[3],
+    right: theme.spacing[4],
+  },
   emailForm: {
     gap: theme.spacing[3],
   },
@@ -143,13 +148,99 @@ function ProviderButton({ provider, disabled, loading, onPress }: ProviderButton
   );
 }
 
+interface BackToAppProps {
+  visible: boolean;
+  disabled: boolean;
+  onPress: (() => void) | undefined;
+}
+
+interface SkipForNowProps {
+  visible: boolean;
+  disabled: boolean;
+  loading: boolean;
+  onPress: () => void;
+}
+
+/**
+ * Continue without an account, in the screen's corner rather than the form, so skipping does not
+ * read as one more way to sign in. It still needs the agreement: the control plane refuses model
+ * requests from an account without it.
+ */
+function SkipForNow({ visible, disabled, loading, onPress }: SkipForNowProps) {
+  if (!visible) return null;
+  return (
+    <View style={styles.skip}>
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={disabled}
+        loading={loading}
+        onPress={onPress}
+        testID="sign-in-continue-anonymous"
+      >
+        Skip for now
+      </Button>
+    </View>
+  );
+}
+
+/** Leaves a sign-in the user opened from Settings. */
+function BackToApp({ visible, disabled, onPress }: BackToAppProps) {
+  if (!visible || !onPress) return null;
+  return (
+    <Button
+      variant="ghost"
+      leftIcon={ChevronLeft}
+      disabled={disabled}
+      onPress={onPress}
+      style={styles.backButton}
+      testID="sign-in-back-to-app"
+    >
+      Back
+    </Button>
+  );
+}
+
+/**
+ * `first-run` before any session, `requested` when an anonymous user chose Sign in in Settings and
+ * can go back, `required` once an anonymous session has used its messages.
+ */
+export type SignInScreenVariant = "first-run" | "requested" | "required";
+
+const HEADINGS: Record<SignInScreenVariant, { title: string; subtitle: string }> = {
+  "first-run": {
+    title: "Sign in to Agent Duel",
+    subtitle: "Two blinded agents answer every prompt. You decide which one wins.",
+  },
+  requested: {
+    title: "Sign in to Agent Duel",
+    subtitle: "Your battles so far move to your account.",
+  },
+  required: {
+    title: "Sign in to keep battling",
+    subtitle: "Your battles so far move to your account.",
+  },
+};
+
 export interface SignInScreenProps {
   endpoint: AccountsEndpoint;
   methods: readonly SignInMethod[];
   documents: LegalDocuments;
+  variant?: SignInScreenVariant;
+  /** The control plane lets this computer continue without an account. */
+  allowAnonymous?: boolean;
+  /** Leaves a `requested` sign-in. */
+  onBack?: () => void;
 }
 
-export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps) {
+export function SignInScreen({
+  endpoint,
+  methods,
+  documents,
+  variant = "first-run",
+  allowAnonymous = false,
+  onBack,
+}: SignInScreenProps) {
   const [accepted, setAccepted] = useState(false);
   const [acceptanceMissing, setAcceptanceMissing] = useState(false);
   const checkboxRef = useRef<View>(null);
@@ -164,7 +255,11 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
         : null,
     [accepted, documents],
   );
-  const { state, startEmail, startOAuth, goBack } = useSignIn(endpoint, acceptance);
+  const { state, startEmail, startOAuth, continueWithoutAccount, goBack, anonymousRefused } =
+    useSignIn(endpoint, acceptance);
+  const heading = HEADINGS[variant];
+  const showAnonymous =
+    variant === "first-run" && allowAnonymous && !anonymousRefused && methods.length > 0;
   const [email, setEmail] = useState("");
 
   const emailEnabled = methods.includes("email");
@@ -201,6 +296,11 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
     },
     [requireAcceptance, startOAuth],
   );
+
+  const submitAnonymous = useCallback(() => {
+    if (!requireAcceptance()) return;
+    continueWithoutAccount();
+  }, [continueWithoutAccount, requireAcceptance]);
 
   if (state.kind === "awaiting-email") {
     return (
@@ -265,10 +365,8 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.panel}>
           <View style={styles.heading}>
-            <Text style={styles.title}>Sign in to Agent Duel</Text>
-            <Text style={styles.subtitle}>
-              Two blinded agents answer every prompt. You decide which one wins.
-            </Text>
+            <Text style={styles.title}>{heading.title}</Text>
+            <Text style={styles.subtitle}>{heading.subtitle}</Text>
           </View>
 
           {methods.length === 0 ? (
@@ -346,8 +444,16 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
               {state.message}
             </Text>
           ) : null}
+
+          <BackToApp visible={variant === "requested"} disabled={busy} onPress={onBack} />
         </View>
       </ScrollView>
+      <SkipForNow
+        visible={showAnonymous}
+        disabled={busy}
+        loading={state.kind === "opening" && state.method === "anonymous"}
+        onPress={submitAnonymous}
+      />
     </View>
   );
 }

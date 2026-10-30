@@ -1395,6 +1395,14 @@ export const fr: TranslationResources = {
         description: "Connectez votre téléphone à ce démon",
       },
     },
+    recent: {
+      title: "Projets récents sur cet ordinateur",
+      loading: "Recherche de projets...",
+      showAll: "Tout afficher ({{count}})",
+      openLabel: "Démarrer une discussion dans {{name}}",
+      notFound: "Dossier introuvable",
+      openFailed: "Impossible d'ajouter le projet",
+    },
   },
   projectPicker: {
     placeholder: "Tapez pour rechercher...",
@@ -1775,6 +1783,9 @@ export const fr: TranslationResources = {
       signOut: "Se déconnecter",
       signOutHint: "Vous devrez vous reconnecter pour utiliser Agent Duel.",
       signOutFailed: "Impossible de se déconnecter. Réessayez.",
+      notSignedIn: "Non connecté",
+      notSignedInHint: "Connectez-vous pour conserver vos duels sur votre compte.",
+      signIn: "Se connecter",
     },
     editor: {
       title: "Éditeur",

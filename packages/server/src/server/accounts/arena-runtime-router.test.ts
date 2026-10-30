@@ -60,6 +60,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "account-session-token",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -111,6 +112,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "account-session-token",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -160,6 +162,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "account-session-token",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -190,6 +193,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "account-session-token",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -228,6 +232,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "account-session-token",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -252,6 +257,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "account-session-token",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -325,6 +331,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "account-session-token",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -348,6 +355,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "account-session-token",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -375,6 +383,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "old-account-session",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -383,6 +392,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "new-account-session",
       controlPlaneUrl: "https://control.agentduel.test",
     });
@@ -405,6 +415,7 @@ describe("Arena runtime proxy", () => {
       mode: "hosted",
       researchPartition: "test-research-partition",
       researchAccountID: "test-account",
+      adoptAccounts: [],
       token: "account-session-token",
       controlPlaneUrl: "https://control.agentduel.test",
     });

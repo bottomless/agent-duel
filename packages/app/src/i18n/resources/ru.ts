@@ -1377,6 +1377,14 @@ export const ru: TranslationResources = {
         description: "Подключите свой телефон к этому демону",
       },
     },
+    recent: {
+      title: "Недавние проекты на этом компьютере",
+      loading: "Поиск проектов...",
+      showAll: "Показать все ({{count}})",
+      openLabel: "Начать чат в {{name}}",
+      notFound: "Папка не найдена",
+      openFailed: "Не удалось добавить проект",
+    },
   },
   projectPicker: {
     placeholder: "Введите текст для поиска...",
@@ -1757,6 +1765,9 @@ export const ru: TranslationResources = {
       signOut: "Выйти",
       signOutHint: "Чтобы пользоваться Agent Duel, потребуется войти снова.",
       signOutFailed: "Не удалось выйти. Попробуйте ещё раз.",
+      notSignedIn: "Вход не выполнен",
+      notSignedInHint: "Войдите, чтобы сохранить свои битвы в аккаунте.",
+      signIn: "Войти",
     },
     editor: {
       title: "Редактор",

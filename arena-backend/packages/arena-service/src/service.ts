@@ -5,6 +5,7 @@ import { handleAssignmentsRequest } from "./assignments"
 import { handleComparisonRequest } from "./comparison"
 import { defaultMetadataRateLimit, handleMetadataRequest, type MetadataRateLimit } from "./metadata"
 import { handleOpenRouterRequest } from "./openrouter"
+import { handleMessagesRequest } from "./messages"
 import { mediumModel } from "./default-pool"
 
 export type ArenaServiceOptions = {
@@ -48,6 +49,8 @@ export type ArenaService = {
   readonly openrouter: (request: Request) => Promise<Response>
   readonly comparison: (request: Request) => Promise<Response>
   readonly metadata: (request: Request) => Promise<Response>
+  /** Admits every message; the hosted control plane serves its own version (`messages.ts`). */
+  readonly messages: (request: Request) => Promise<Response>
   /** Answers any of the routes above by path, or undefined when the path is not one of them. */
   readonly route: (request: Request) => Promise<Response | undefined>
 }
@@ -80,16 +83,19 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)
   const comparison = (request: Request) => handleComparisonRequest(request, context)
   const metadata = (request: Request) => handleMetadataRequest(request, context)
+  const messages = (request: Request) => handleMessagesRequest(request, context)
   return {
     assignments,
     openrouter,
     comparison,
     metadata,
+    messages,
     async route(request) {
       const path = new URL(request.url).pathname
       if (path === "/api/arena/assignments") return assignments(request)
       if (path === "/api/arena/comparison") return comparison(request)
       if (path === "/api/arena/metadata") return metadata(request)
+      if (path === "/api/arena/messages") return messages(request)
       if (path.startsWith("/api/openrouter/")) return openrouter(request)
       return undefined
     },

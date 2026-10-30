@@ -1,7 +1,8 @@
 # Accounts
 
 The official build requires an account. Nothing in the app renders until one is established, and the
-local daemon refuses unauthenticated WebSocket connections and API calls. A source build without a
+local daemon refuses unauthenticated WebSocket connections and API calls. An account can be anonymous
+for its first few messages; see [Continue without an account](#continue-without-an-account). A source build without a
 control plane has no accounts and runs battles on your own OpenRouter key; see
 [Bring your own key](#bring-your-own-key).
 
@@ -131,9 +132,12 @@ The daemon password and account session are separate credentials; a remote clien
   key.
 - Every daemon request to the control plane (accounts, the Arena runtime proxy, feedback) carries
   the headers from `clientHeaders` in `packages/server/src/server/accounts/config.ts`: the daemon's
-  package version, OS, OS release, CPU type, timezone, CPU model and core count, and memory in whole
-  gigabytes. Keep it to coarse build and machine facts; never add the computer name, user name,
-  paths, network addresses or device identifiers. The control plane keeps the latest values on the
+  package version, OS, OS release, CPU type, timezone, CPU model and core count, memory in whole
+  gigabytes, and `X-Agent-Duel-Device`, a SHA-256 of the hardware UUID (macOS), machine ID
+  (Linux) or `MachineGuid` (Windows). A Windows or Linux reinstall changes it. The device hash
+  exists only to count anonymous messages per computer. Keep everything else to coarse build and
+  machine facts; never add the computer name, user name, paths, network addresses or a raw
+  hardware identifier. The control plane keeps the latest values on the
   account; the private repository's `scripts/db/app-versions.ts` counts them. Builds before
   0.4.0-beta.14 send none.
 - The control plane can refuse builds below a minimum version or on a blocklist. It then answers
@@ -170,6 +174,41 @@ Arena process tree. They are not an operating-system sandbox: software running a
 user can inspect or manipulate that user's local processes and files. The remote control plane must
 therefore continue treating the local runtime as an untrusted client and enforce assignment, scope,
 lifecycle, and payload checks itself.
+
+## Continue without an account
+
+The sign-in screen offers **Skip for now** in its top-right corner, away from the form, so it does
+not read as another way to sign in. It still needs the Terms checkbox: the control plane refuses
+model requests from an account without acceptance. `POST /api/auth/anonymous` creates a real account
+with no email and returns an ordinary signed session with `method: "anonymous"`, so the daemon,
+engine and battle routes need no second path.
+
+- **The allowance.** Five messages to a model per computer, counted together: battle prompts,
+  replies and steers, and single-agent messages. The engine asks `POST /api/arena/messages` before
+  each one (`arena/message-admission.ts`), keyed so a retried request counts once. The control plane
+  counts on the device hash, not the account, so reinstalling or wiping `~/.paseo` does not reset it,
+  and caps an anonymous device's model requests so a client that skips the check cannot steer one
+  battle forever. A BYOK engine answers the route in process and admits everything.
+- **No counter in the UI.** `GET /api/auth/methods` reports `anonymous: false` once the device has
+  used its messages, which hides the skip. `GET /api/auth/session` reports `signInRequired` for an
+  anonymous session that has used them.
+- **When it runs out.** The send that uses the fifth message goes out, and its battle finishes and
+  can be voted on. The next send shows the sign-in screen without the skip and keeps the draft
+  (`useAnonymousSendGuard` in `packages/app/src/accounts/sign-in-prompt.ts`); so does every launch
+  after. A send the app did not hold is refused with `sign_in_required`, which reaches the app as
+  the RPC error code and opens the same screen. A single-agent message is refused after the daemon
+  has accepted it, so it fails as a turn rather than keeping the draft.
+- **Signing in.** Settings shows **Not signed in** with **Sign in**, which opens the same screen with
+  **Back**. Over an anonymous session the screen covers the app rather than replacing it, and the
+  claimed session seeds the gate's session query, so the user lands in the chat they left. The
+  daemon forwards the anonymous session when it opens the flow. With no session to forward, as after
+  the app's data was wiped, the control plane falls back to the device's anonymous account when both
+  the device hash and the network address match what that account last used. If no account has the
+  identity yet, the anonymous account takes it and keeps its ID, so nothing moves. Otherwise the control plane
+  moves its battles, research and feedback into the existing account and the claim reports
+  `mergedFrom`; the daemon then passes that ID in `adoptAccounts` on the hosted startup pipe, and
+  the engine re-owns its local records and pending uploads before research starts. The anonymous
+  sessions are revoked either way.
 
 ## Bring your own key
 
@@ -287,6 +326,10 @@ end-to-end encrypted relay does not provide.
 - `packages/app/src/byok/key.test.ts` covers where the app stores the key, handing it over on
   connect, saving and removing it, and the check before a battle starts;
   `packages/app/src/runtime/host-runtime.test.ts` checks that every connection hands it over again.
+- `routes.test.ts` also covers starting an anonymous session, upgrading only an anonymous session
+  when a flow opens, and handing a merged account to the Arena credential;
+  `arena-backend/packages/opencode/test/arena/research-backfill.test.ts` covers re-owning its local
+  records.
 - `packages/server/src/server/accounts/arena-runtime-router.test.ts` checks that a local capability
   reaches only the allowlisted Arena routes and that the daemon substitutes the account token.
 - `packages/server/src/server/agent/providers/opencode-server-manager.test.ts` covers private stdin

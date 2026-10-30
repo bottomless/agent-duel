@@ -1357,6 +1357,14 @@ export const ko: TranslationResources = {
         description: "휴대폰을 이 데몬에 연결합니다",
       },
     },
+    recent: {
+      title: "이 컴퓨터의 최근 프로젝트",
+      loading: "프로젝트를 찾는 중...",
+      showAll: "모두 보기 ({{count}})",
+      openLabel: "{{name}}에서 채팅 시작",
+      notFound: "디렉터리를 찾을 수 없음",
+      openFailed: "프로젝트를 추가할 수 없음",
+    },
   },
   projectPicker: {
     placeholder: "검색할 내용을 입력하세요...",
@@ -1735,6 +1743,9 @@ export const ko: TranslationResources = {
       signOut: "로그아웃",
       signOutHint: "Agent Duel을 사용하려면 다시 로그인해야 합니다.",
       signOutFailed: "로그아웃하지 못했습니다. 다시 시도하세요.",
+      notSignedIn: "로그인하지 않음",
+      notSignedInHint: "로그인하면 배틀이 계정에 저장됩니다.",
+      signIn: "로그인",
     },
     editor: {
       title: "편집기",

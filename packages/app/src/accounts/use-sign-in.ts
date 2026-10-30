@@ -1,13 +1,21 @@
-import { useCallback, useEffect, useReducer } from "react";
+import { useCallback, useEffect, useReducer, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { getDesktopHost } from "@/desktop/host";
 import { openExternalUrl } from "@/utils/open-external-url";
-import { useAccountSessionStore } from "./session-store";
-import type { AcceptTermsRequest } from "@getpaseo/protocol/accounts/schemas";
+import { useAccountSessionStore, type AccountSession } from "./session-store";
 import {
+  SIGN_IN_REQUIRED_CODE,
+  type AcceptTermsRequest,
+} from "@getpaseo/protocol/accounts/schemas";
+import {
+  AccountsRequestError,
   buildOAuthStartUrl,
   claimSignInFlow,
+  currentSessionQueryKey,
   openSignInFlow,
   sendMagicLink,
+  signOut,
+  startAnonymousSession,
   type AccountsEndpoint,
 } from "./client";
 import {
@@ -24,11 +32,20 @@ export interface SignInController {
   state: SignInState;
   startEmail: (email: string) => void;
   startOAuth: (provider: OAuthSignInMethod) => void;
+  continueWithoutAccount: () => void;
   goBack: () => void;
+  /** The control plane refused "Continue without an account" because this computer used it up. */
+  anonymousRefused: boolean;
 }
 
 function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
+}
+
+/** The anonymous session a sign-in upgrades, so its battles stay with the account. */
+function anonymousSessionToken(): string | null {
+  const session = useAccountSessionStore.getState().session;
+  return session?.method === "anonymous" ? session.token : null;
 }
 
 async function openAppSignInFlow(endpoint: AccountsEndpoint, acceptance: AcceptTermsRequest) {
@@ -37,7 +54,7 @@ async function openAppSignInFlow(endpoint: AccountsEndpoint, acceptance: AcceptT
   const desktopReturnUrl = await getDesktopHost()
     ?.accounts?.createReturnUrl?.()
     .catch(() => undefined);
-  return openSignInFlow(endpoint, { desktopReturnUrl, acceptance });
+  return openSignInFlow(endpoint, { desktopReturnUrl, acceptance }, anonymousSessionToken());
 }
 
 export function useSignIn(
@@ -45,7 +62,21 @@ export function useSignIn(
   acceptance: AcceptTermsRequest | null,
 ): SignInController {
   const [state, dispatch] = useReducer(signInReducer, initialSignInState);
-  const setSession = useAccountSessionStore((store) => store.setSession);
+  const [anonymousRefused, setAnonymousRefused] = useState(false);
+  const storeSession = useAccountSessionStore((store) => store.setSession);
+  const queryClient = useQueryClient();
+  // The daemon verified the session it hands over, so the gate starts from it instead of checking it
+  // first; that check would swap the app for a spinner and lose the chat an anonymous user was in.
+  const setSession = useCallback(
+    (session: AccountSession) => {
+      queryClient.setQueryData(currentSessionQueryKey(endpoint.baseUrl, session.token), {
+        user: session.user,
+        method: session.method,
+      });
+      storeSession(session);
+    },
+    [endpoint.baseUrl, queryClient, storeSession],
+  );
 
   const startEmail = useCallback(
     (email: string) => {
@@ -87,6 +118,27 @@ export function useSignIn(
     [endpoint, acceptance],
   );
 
+  const continueWithoutAccount = useCallback(() => {
+    if (!acceptance) return;
+    dispatch({ type: "start", method: "anonymous" });
+    void (async () => {
+      try {
+        const started = await startAnonymousSession(endpoint, acceptance);
+        setSession({ token: started.sessionToken, user: started.user, method: started.method });
+      } catch (error) {
+        const refused =
+          error instanceof AccountsRequestError && error.code === SIGN_IN_REQUIRED_CODE;
+        if (refused) setAnonymousRefused(true);
+        dispatch({
+          type: "failed",
+          message: refused
+            ? "This computer has already used Agent Duel without an account. Sign in to continue."
+            : messageFor(error, "Could not continue without an account."),
+        });
+      }
+    })();
+  }, [endpoint, acceptance, setSession]);
+
   const goBack = useCallback(() => {
     dispatch({ type: "back" });
   }, []);
@@ -108,7 +160,11 @@ export function useSignIn(
         return;
       }
       if (result.status === "signed-in") {
+        const upgraded = anonymousSessionToken();
         setSession({ token: result.sessionToken, user: result.user, method: result.method });
+        // The control plane already revoked the anonymous session; this makes the daemon forget it
+        // too, so it never forwards it to Arena again.
+        if (upgraded) void signOut(endpoint, upgraded).catch(() => undefined);
       }
     };
 
@@ -121,5 +177,5 @@ export function useSignIn(
     };
   }, [endpoint, flow, setSession]);
 
-  return { state, startEmail, startOAuth, goBack };
+  return { state, startEmail, startOAuth, continueWithoutAccount, goBack, anonymousRefused };
 }
