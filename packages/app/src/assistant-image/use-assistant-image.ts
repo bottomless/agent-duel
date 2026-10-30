@@ -29,6 +29,7 @@ import { resolveAssistantImageSource } from "@/utils/assistant-image-source";
 import { createAssistantImageAcquisitionCache } from "./acquisition-cache";
 import {
   createAssistantImageFileAcquisition,
+  splitFilePath,
   type AssistantImageAcquisition,
   type AssistantImageFileAcquisitionPort,
 } from "./file-acquisition";
@@ -388,6 +389,14 @@ export function useAssistantImage({
     const port: AssistantImageFileAcquisitionPort | null = client
       ? {
           readFile: async (cwd, path) => await client.readFile(cwd, path),
+          fileSize: async (cwd, path) => {
+            const { directory, name } = splitFilePath(path);
+            const listing = await client.listDirectory(cwd, directory);
+            const entry = listing.entries.find(
+              (item) => item.kind === "file" && item.name === name,
+            );
+            return entry?.size ?? null;
+          },
           persist: persistAttachmentFromBytes,
         }
       : null;
