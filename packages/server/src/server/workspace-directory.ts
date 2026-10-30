@@ -284,7 +284,8 @@ export class WorkspaceDirectory {
       activityEntriesByWorkspaceId,
     });
 
-    for (const activity of this.deps.listArenaActivity?.() ?? []) {
+    const arenaActivities = this.deps.listArenaActivity?.() ?? [];
+    for (const activity of arenaActivities) {
       const descriptor = descriptorsByWorkspaceId.get(activity.workspaceId);
       if (!descriptor) continue;
       const status = arenaActivityStatus(activity);
@@ -305,6 +306,7 @@ export class WorkspaceDirectory {
       activityEntriesByWorkspaceId.set(activity.workspaceId, entries);
     }
 
+    const arenaSentAtByWorkspaceId = latestArenaSendByWorkspaceId(arenaActivities);
     const contributingAgentsByWorkspaceId = groupAgentsByWorkspaceId(
       activeAgents,
       activeWorkspaceIds,
@@ -317,13 +319,11 @@ export class WorkspaceDirectory {
       const contributingAgents = contributingAgentsByWorkspaceId.get(workspaceId) ?? [];
       const activityEntries = activityEntriesByWorkspaceId.get(workspaceId) ?? [];
       const workspaceCreatedAt = activeRecordsByWorkspaceId.get(workspaceId)?.createdAt ?? null;
-      // Sidebar recency follows the chat even while a terminal masks its status.
-      descriptor.activityAt = contributingAgents.reduce<string | null>((latest, agent) => {
-        if (latest === null || Date.parse(agent.updatedAt) > Date.parse(latest)) {
-          return agent.updatedAt;
-        }
-        return latest;
-      }, workspaceCreatedAt);
+      descriptor.activityAt = resolveWorkspaceActivityAt({
+        workspaceCreatedAt,
+        contributingAgents,
+        arenaSentAt: arenaSentAtByWorkspaceId.get(workspaceId),
+      });
       const result = this.resolveStatusEnteredAt({
         workspaceId,
         winningBucket: descriptor.status,
@@ -712,6 +712,41 @@ export class WorkspaceDirectory {
       },
     };
   }
+}
+
+function latestTimestamp(current: string | null, candidate: string | null): string | null {
+  if (candidate === null) return current;
+  if (current === null || Date.parse(candidate) > Date.parse(current)) return candidate;
+  return current;
+}
+
+function latestArenaSendByWorkspaceId(activities: ArenaActivity[]): Map<string, string> {
+  const byWorkspaceId = new Map<string, string>();
+  for (const activity of activities) {
+    for (const run of activity.runs) {
+      const latest = latestTimestamp(
+        byWorkspaceId.get(activity.workspaceId) ?? null,
+        run.startedAt,
+      );
+      if (latest !== null) byWorkspaceId.set(activity.workspaceId, latest);
+    }
+  }
+  return byWorkspaceId;
+}
+
+/**
+ * Sidebar recency follows the chat even while a terminal masks its status. A battle turn leaves
+ * the chat agent untouched until the vote, so its runs' start times count as well.
+ */
+function resolveWorkspaceActivityAt(input: {
+  workspaceCreatedAt: string | null;
+  contributingAgents: AgentSnapshotPayload[];
+  arenaSentAt: string | undefined;
+}): string | null {
+  return input.contributingAgents.reduce<string | null>(
+    (latest, agent) => latestTimestamp(latest, agent.updatedAt),
+    latestTimestamp(input.workspaceCreatedAt, input.arenaSentAt ?? null),
+  );
 }
 
 function groupAgentsByWorkspaceId(

@@ -313,6 +313,43 @@ describe("WorkspaceDirectory", () => {
     expect((await workspace.workspaceDescriptor()).activityAt).toBe("2026-03-03T12:00:00.000Z");
   });
 
+  test("counts a battle turn's send before the vote touches the chat", async () => {
+    const workspace = new WorkspaceStatus();
+    workspace.hasRootAgent({ id: "battle", status: "idle", updatedAt: "2026-03-02T12:00:00.000Z" });
+    workspace.arenaActivities.push({
+      agentId: "battle",
+      workspaceId: "workspace-1",
+      sessionID: "native",
+      chatID: "chat",
+      turnID: "turn",
+      title: "Battle",
+      state: "running",
+      resolved: false,
+      requiresDecision: false,
+      stale: false,
+      runs: [
+        {
+          id: "a",
+          side: "a",
+          runState: "pending",
+          startedAt: "2026-03-03T12:00:00.000Z",
+          completedAt: null,
+          needsInput: false,
+        },
+        {
+          id: "b",
+          side: "b",
+          runState: "pending",
+          startedAt: null,
+          completedAt: null,
+          needsInput: false,
+        },
+      ],
+    });
+
+    expect((await workspace.workspaceDescriptor()).activityAt).toBe("2026-03-03T12:00:00.000Z");
+  });
+
   test("uses root agent activity, not delegated child activity, for workspace status", async () => {
     const workspace = new WorkspaceStatus();
 

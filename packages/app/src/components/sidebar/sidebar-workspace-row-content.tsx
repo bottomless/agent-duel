@@ -123,6 +123,7 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   isCreating = false,
   shortcutNumber = null,
   showShortcutBadge = false,
+  projectName = null,
   children,
 }: {
   workspace: SidebarWorkspaceEntry;
@@ -132,6 +133,8 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   isCreating?: boolean;
   shortcutNumber?: number | null;
   showShortcutBadge?: boolean;
+  /** Rows outside a project group name their project, since no header above them does. */
+  projectName?: string | null;
   children?: ReactNode;
 }) {
   const {
@@ -165,6 +168,15 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             <Text style={workspaceBranchTextStyle} numberOfLines={1}>
               {workspaceLabel}
             </Text>
+            {projectName ? (
+              <Text
+                style={styles.workspaceProjectName}
+                numberOfLines={1}
+                testID={`sidebar-row-project-name-${workspace.workspaceKey}`}
+              >
+                {projectName}
+              </Text>
+            ) : null}
             <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
           </View>
           <WorkspaceMetaRow prHint={workspace.prHint} serviceSummary={serviceSummary} />
@@ -187,8 +199,17 @@ function SidebarWorkspaceLeadingVisual({
   loading: boolean;
 }) {
   const status = workspaceBattleStatus(workspace);
-  if (status) return <ArenaStatusIndicator workspace={workspace} loading={loading} />;
-  return <WorkspaceStatusIndicator bucket={workspace.statusBucket} loading={loading} />;
+  // The slot keeps its width when it has nothing to show, so an idle row's title stays on the
+  // same rail as a row with a status icon instead of lining up with the project header.
+  return (
+    <View style={styles.workspaceStatusDot}>
+      {status ? (
+        <ArenaStatusIndicator workspace={workspace} loading={loading} />
+      ) : (
+        <WorkspaceStatusIndicator bucket={workspace.statusBucket} loading={loading} />
+      )}
+    </View>
+  );
 }
 
 export function ArenaStatusIndicator({
@@ -534,6 +555,13 @@ const styles = StyleSheet.create((theme) => ({
     opacity: 0.76,
     flex: 1,
     minWidth: 0,
+  },
+  workspaceProjectName: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.xs,
+    lineHeight: 20,
+    flexShrink: 1,
+    maxWidth: "40%",
   },
   workspaceBranchTextCreating: {
     opacity: 0.92,

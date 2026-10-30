@@ -740,6 +740,7 @@ function StatusWorkspaceRowInner({
                 isLoading={isArchiving}
                 shortcutNumber={shortcutNumber}
                 showShortcutBadge={showShortcutBadge}
+                projectName={projectName}
               >
                 {renderSlot ? (
                   <StatusWorkspaceActionSlot
