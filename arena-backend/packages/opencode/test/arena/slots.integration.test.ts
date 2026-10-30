@@ -689,6 +689,47 @@ describe("persistent contestant worktrees", () => {
     }
   }, 120_000)
 
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "runs battles in a checkout whose ignored content holds files this process cannot read",
+    async () => {
+      await using directory = await fixture()
+      const root = directory.path
+      // A root-owned file from a `sudo` run, or a folder a container wrote as another user.
+      await writeFile(path.join(root, ".git/info/exclude"), "\nsecret/\nvault/\nlocked/\nkey.pem\n", { flag: "a" })
+      for (const folder of ["secret", "vault", "locked"]) await mkdir(path.join(root, folder))
+      await writeFile(path.join(root, "secret/ok"), "ok\n")
+      for (const file of ["secret/key", "vault/key", "locked/key", "key.pem"]) {
+        await writeFile(path.join(root, file), "key\n")
+      }
+      for (const entry of ["secret/key", "vault/key", "locked", "key.pem"]) await chmod(path.join(root, entry), 0)
+      const memory = memoryStore()
+      const router = installOpenRouterStub()
+      process.env.OPENCODE_ARENA = "1"
+      setStoreForTest(memory.store)
+      let archive: (() => Promise<unknown>) | undefined
+      try {
+        const chat = await openChat(root)
+        archive = chat.archive
+        // The second turn resyncs the kept worktrees rather than seeding new ones.
+        for (const prompt of ["first", "second"]) {
+          const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt })
+          for (const run of await memory.store.runsForTurn(turn)) {
+            expect(await readFile(path.join(run.worktree, "secret/ok"), "utf8")).toBe("ok\n")
+            for (const entry of ["secret/key", "vault/key", "locked", "key.pem"]) {
+              expect(await exists(path.join(run.worktree, entry))).toBe(false)
+            }
+          }
+        }
+      } finally {
+        await archive?.()
+        router.restore()
+        // So the fixture can delete it.
+        await chmod(path.join(root, "locked"), 0o700)
+      }
+    },
+    120_000,
+  )
+
   test("refreshes changed ignored content before gated tools run and discards stale roots", async () => {
     await using directory = await fixture()
     const root = directory.path

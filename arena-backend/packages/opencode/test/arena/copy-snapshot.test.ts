@@ -1,6 +1,6 @@
 import { $ } from "bun"
 import { describe, expect, test } from "bun:test"
-import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "fs/promises"
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "fs/promises"
 import { tmpdir } from "os"
 import { join } from "path"
 import {
@@ -21,6 +21,8 @@ import {
 } from "@/arena/copy-snapshot"
 
 const canClone = process.platform === "darwin" || process.platform === "linux"
+/** File modes deny nothing to root, and Windows has none. */
+const cannotDenyReads = process.platform === "win32" || process.getuid?.() === 0
 
 async function repository(ignore = "ignored/\n*.secret\noutside-link\n") {
   const root = await mkdtemp(join(tmpdir(), "arena-copy-test-"))
@@ -242,6 +244,50 @@ describe("Arena ignored-content snapshot", () => {
     const cloned = await createIgnoredContentSnapshot({ canonical: root, policy })
     expect(cloned.entries.every((entry) => entry.state === "copied")).toBe(true)
     expect(cloned.entries.find((entry) => entry.relativePath === "ignored")?.logicalBytes).toBe(0)
+  })
+
+  test.skipIf(cannotDenyReads)("leaves out of both contestants alike what this process cannot read", async () => {
+    // A root-owned file from a `sudo` run, or a folder a container wrote as another user.
+    const root = await repository("secret/\nlocked/\n*.secret\n")
+    await mkdir(join(root, "secret", "nested"), { recursive: true })
+    await mkdir(join(root, "secret", "sealed"))
+    await mkdir(join(root, "locked"))
+    await writeFile(join(root, "secret", "ok.txt"), "ok\n")
+    await writeFile(join(root, "secret", "nested", "deep.txt"), "deep\n")
+    await writeFile(join(root, "secret", "key"), "key\n")
+    await writeFile(join(root, "secret", "sealed", "inner.txt"), "inner\n")
+    await writeFile(join(root, "locked", "data"), "data\n")
+    await writeFile(join(root, "config.secret"), "secret\n")
+    for (const path of ["secret/key", "secret/sealed", "locked", "config.secret"]) await chmod(join(root, path), 0)
+
+    for (const clone of canClone ? [undefined, async () => undefined] : [async () => undefined]) {
+      const manifest = await createIgnoredContentSnapshot({ canonical: root, clone })
+      expect(manifest.entries.filter((entry) => entry.state === "copied").map((entry) => entry.relativePath)).toEqual([
+        "secret",
+      ])
+      for (const path of ["config.secret", "locked"]) {
+        expect(manifest.entries.find((entry) => entry.relativePath === path)).toMatchObject({
+          state: "omitted",
+          omissionReason: "copy_failed",
+        })
+      }
+
+      for (const name of ["a", "b"]) {
+        const side = await contestant(name)
+        expect(await copyIgnoredSeed({ targetRoot: side, manifest, clone })).toMatchObject({ entries: 1 })
+        expect(await readFile(join(side, "secret", "ok.txt"), "utf8")).toBe("ok\n")
+        expect(await readFile(join(side, "secret", "nested", "deep.txt"), "utf8")).toBe("deep\n")
+        for (const path of ["secret/key", "secret/sealed", "locked", "config.secret"]) {
+          expect(await exists(join(side, path))).toBe(false)
+        }
+      }
+    }
+
+    // A root left out as unreadable stays left out while its own lstat holds.
+    const manifest = await createIgnoredContentSnapshot({ canonical: root })
+    expect(await matchesIgnoredContentSnapshot({ canonical: root, manifest })).toBe(true)
+    await chmod(join(root, "config.secret"), 0o644)
+    expect(await matchesIgnoredContentSnapshot({ canonical: root, manifest })).toBe(false)
   })
 
   test("recognizes an unchanged source and rejects a changed one", async () => {
@@ -1043,5 +1089,40 @@ describe("Arena ignored-content resync", () => {
     await writeFile(join(directory, "cache"), "not a tree\n")
     const records = await recordIgnoredSeed({ targetRoot: directory, manifest })
     expect(Array.from(records.keys())).toEqual(["config.secret"])
+  })
+
+  test.skipIf(cannotDenyReads)("keeps what this process cannot read out of a slot it patches", async () => {
+    const root = await repository("secret/\n")
+    await mkdir(join(root, "secret"), { recursive: true })
+    await writeFile(join(root, "secret", "ok.txt"), "ok v1\n")
+    await writeFile(join(root, "secret", "key"), "key\n")
+    await chmod(join(root, "secret", "key"), 0)
+    const manifest = await createIgnoredContentSnapshot({ canonical: root })
+    const directory = join(await mkdtemp(join(tmpdir(), "arena-slot-test-")), "slot")
+    await $`git clone -q ${root} ${directory}`
+    const seeded = await applyIgnoredResync({
+      targetRoot: directory,
+      manifest,
+      plan: await plan(directory, manifest, new Map()),
+    })
+    expect(seeded).toMatchObject({ recloned: 1 })
+    expect(await readFile(join(directory, "secret", "ok.txt"), "utf8")).toBe("ok v1\n")
+    expect(await exists(join(directory, "secret", "key"))).toBe(false)
+
+    // Untouched, the root is kept with its record as it stands.
+    const kept = await plan(directory, manifest, seeded.records)
+    expect(kept.keep).toEqual(["secret"])
+
+    // A patch writes only what the watches named, so what the copy left out stays left out.
+    await writeFile(join(root, "secret", "ok.txt"), "ok v2\n")
+    const next = await createIgnoredContentSnapshot({ canonical: root })
+    const decided = await plan(directory, next, seeded.records, {
+      canonical: { complete: true, changed: new Set(["secret"]), paths: new Map([["secret", new Set(["ok.txt"])]]) },
+    })
+    expect(decided.patch.get("secret")).toEqual(["ok.txt"])
+    const patched = await applyIgnoredResync({ targetRoot: directory, manifest: next, plan: decided })
+    expect(patched).toMatchObject({ patched: 1, recloned: 0 })
+    expect(await readFile(join(directory, "secret", "ok.txt"), "utf8")).toBe("ok v2\n")
+    expect(await exists(join(directory, "secret", "key"))).toBe(false)
   })
 })
