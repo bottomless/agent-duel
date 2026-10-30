@@ -11,6 +11,8 @@ type UnknownRecord = Record<string, unknown>;
 interface ArenaPartSource {
   serverId: string;
   agentId: string;
+  /** The chat's workspace, where the applied side's files are once its worktree is gone. */
+  workspaceRoot?: string;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   toast?: ToastApi;
 }

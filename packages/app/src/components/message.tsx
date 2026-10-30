@@ -100,6 +100,7 @@ import {
 } from "@/assistant-file-links";
 import { getCompactionMarkerLabel } from "./message-compaction-label";
 import { useAssistantImage } from "@/assistant-image/use-assistant-image";
+import { localFileSourceToPath } from "@/attachments/utils";
 import {
   AttachmentFrame,
   AttachmentLabel,
@@ -1984,7 +1985,7 @@ function useAssistantMarkdown({
         return (
           <AssistantMarkdownImage
             key={node.key}
-            source={String(node.attributes?.src ?? "")}
+            source={localFileSourceToPath(String(node.attributes?.src ?? ""), { decodeHref: true })}
             occurrenceKey={`${occurrenceKey}:${node.key}`}
             alt={typeof node.attributes?.alt === "string" ? node.attributes.alt : undefined}
             hasLeadingContent={hasLeadingContent}

@@ -44,7 +44,14 @@ export function createAssistantImageFileAcquisition(input: {
       if (!port) {
         throw new Error(input.unavailableMessage);
       }
-      const file = await port.readFile(resolution.cwd, resolution.path);
+      const file = await port.readFile(resolution.cwd, resolution.path).catch((error: unknown) => {
+        // A Node errno message ("ENOENT: no such file or directory, open '<path>'") names the
+        // full path and nothing the reader can act on.
+        if (error instanceof Error && /^E[A-Z]+:/.test(error.message)) {
+          throw new Error(input.unavailableMessage, { cause: error });
+        }
+        throw error;
+      });
       if (file.kind !== "image") {
         throw new Error(input.unavailableMessage);
       }

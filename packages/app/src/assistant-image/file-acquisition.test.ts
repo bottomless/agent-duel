@@ -50,4 +50,33 @@ describe("assistant image file acquisition", () => {
     await expect(connected?.locate()).resolves.toMatchObject({ mimeType: "image/png" });
     expect(connectedPort.reads).toEqual([{ cwd: "/workspace", path: "reconnect.png" }]);
   });
+
+  it("hides a filesystem error behind the unavailable message", async () => {
+    const failing = (message: string): AssistantImageFileAcquisitionPort => ({
+      readFile: async () => {
+        throw new Error(message);
+      },
+      persist: async () => {
+        throw new Error("not reached");
+      },
+    });
+    const common = {
+      resolution: { kind: "file_rpc" as const, cwd: "/workspace", path: "gone.png" },
+      serverId: "server",
+      occurrenceKey: "agent:message:gone-image",
+      unavailableMessage: "Image unavailable",
+    };
+
+    const missing = createAssistantImageFileAcquisition({
+      ...common,
+      port: failing("ENOENT: no such file or directory, open '/workspace/gone.png'"),
+    });
+    await expect(missing?.locate()).rejects.toThrow(/^Image unavailable$/);
+
+    const outside = createAssistantImageFileAcquisition({
+      ...common,
+      port: failing("Access outside of workspace is not allowed"),
+    });
+    await expect(outside?.locate()).rejects.toThrow("Access outside of workspace is not allowed");
+  });
 });
