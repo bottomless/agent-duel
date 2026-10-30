@@ -9,6 +9,8 @@ const allowedRoutes = new Set([
   "/api/arena/assignments",
   "/api/arena/comparison",
   "/api/arena/metadata",
+  // Asked before each message the user sends a model; refuses an anonymous account's once they run out.
+  "/api/arena/messages",
   "/api/research",
   "/api/openrouter/api/v1/chat/completions",
   "/api/openrouter/api/v1/responses",

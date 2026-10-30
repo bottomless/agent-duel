@@ -14,8 +14,9 @@ Arena state is canonical local data. The runtime stores it in SQLite at
 `$PASEO_HOME/arena/artifacts/sha256/`. The default home is `~/.paseo`; source development can
 override it with `PASEO_HOME`.
 
-The battle routes (assignments, the contestant OpenRouter proxy, the comparison, and commit, pull
-request and branch name text) live in `arena-backend/packages/arena-service`. Where they run depends on the build, and one build never
+The battle routes (assignments, the contestant OpenRouter proxy, the comparison, commit, pull
+request and branch name text, and the message admission an anonymous account is counted by; see
+[accounts](accounts.md#continue-without-an-account)) live in `arena-backend/packages/arena-service`. Where they run depends on the build, and one build never
 switches between the two:
 
 - **Hosted** is the official build, configured with `PASEO_CONTROL_PLANE_URL` and the session

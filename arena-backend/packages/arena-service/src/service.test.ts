@@ -210,6 +210,23 @@ describe("Arena service", () => {
     expect(resolved).toBe(3)
   })
 
+  test("admits every message for a signed-in caller", async () => {
+    const { service } = createService()
+    const request = (body: unknown, userId: string | null = "user-1") =>
+      new Request("https://control.test/api/arena/messages", {
+        method: "POST",
+        headers: { ...(userId ? { Authorization: `Bearer ${userId}` } : {}), "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+
+    const admitted = await send(service, request({ messageID: "battle:turn-1" }))
+    expect(admitted.status).toBe(200)
+    expect(await admitted.json()).toEqual({ ok: true })
+    expect((await send(service, request({ messageID: "" }))).status).toBe(400)
+    expect((await send(service, request({ messageID: "x".repeat(513) }))).status).toBe(400)
+    expect((await send(service, request({ messageID: "battle:turn-1" }, null))).status).toBe(401)
+  })
+
   test("runs a battle from assignment to resolution for one caller", async () => {
     const { service, upstream, validated } = createService()
 

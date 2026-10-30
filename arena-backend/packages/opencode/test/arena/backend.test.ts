@@ -170,6 +170,7 @@ describe("Arena backend", () => {
         mode: "hosted",
         researchPartition: "test-research-partition",
         researchAccountID: "test-account",
+        adoptAccounts: [],
         token: "test-session",
         controlPlaneUrl: "https://control.test",
         controlTokenHash: hashArenaControlToken("local-control-token"),

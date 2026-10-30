@@ -982,6 +982,13 @@ export const ptBR: TranslationResources = {
         all: "Todos os hosts",
       },
     },
+    account: {
+      notSignedIn: "Não conectado",
+      signIn: "Entrar",
+      requiredTitle: "Entre para continuar",
+      requiredDescription:
+        "Você usou os prompts gratuitos neste computador. Seus chats continuam aqui.",
+    },
     pinned: {
       title: "Fixados",
     },
@@ -1376,6 +1383,14 @@ export const ptBR: TranslationResources = {
         description: "Conecte seu celular a este daemon",
       },
     },
+    recent: {
+      title: "Projetos recentes neste computador",
+      loading: "Procurando projetos...",
+      showAll: "Mostrar tudo ({{count}})",
+      openLabel: "Iniciar um chat em {{name}}",
+      notFound: "Diretório não encontrado",
+      openFailed: "Não foi possível adicionar o projeto",
+    },
   },
   projectPicker: {
     placeholder: "Digite para pesquisar...",
@@ -1755,6 +1770,9 @@ export const ptBR: TranslationResources = {
       signOut: "Sair",
       signOutHint: "Você precisará entrar novamente para usar o Agent Duel.",
       signOutFailed: "Não foi possível sair. Tente novamente.",
+      notSignedIn: "Não conectado",
+      notSignedInHint: "Entre para manter suas batalhas na sua conta.",
+      signIn: "Entrar",
     },
     editor: {
       title: "Editor",

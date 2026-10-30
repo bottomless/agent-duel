@@ -1,9 +1,9 @@
 import type { KeyObject } from "node:crypto";
-import type { AccountUser, SignInMethod } from "./backend.js";
-import { verifySessionToken } from "./token.js";
+import type { AccountUser, SessionMethod } from "./backend.js";
+import { verifySessionToken, type VerifiedSessionToken } from "./token.js";
 
 export type SessionResolution =
-  | { kind: "authenticated"; user: AccountUser; method: SignInMethod }
+  | { kind: "authenticated"; user: AccountUser; method: SessionMethod }
   | { kind: "rejected" };
 
 export interface SessionResolverOptions {
@@ -23,6 +23,11 @@ export class SessionResolver {
     if (!verified) return { kind: "rejected" };
     await this.options.onAuthenticated?.(token, verified.user);
     return { kind: "authenticated", user: verified.user, method: verified.method };
+  }
+
+  /** Checks a token without treating it as the caller's session. */
+  verify(token: string): VerifiedSessionToken | null {
+    return verifySessionToken(token, this.publicKey);
   }
 
   async forget(token: string): Promise<void> {

@@ -52,6 +52,9 @@ async function openLocalStore() {
   const local = await connectLocalStore({
     directory,
     researchPartition: credentials?.mode === "hosted" ? credentials.researchPartition : undefined,
+    ...(credentials?.mode === "hosted"
+      ? { adoption: { accountID: credentials.researchAccountID, accounts: credentials.adoptAccounts } }
+      : {}),
     onMutation: () => uploader?.wake(),
     onClose: async () => {
       backfillController.abort()
