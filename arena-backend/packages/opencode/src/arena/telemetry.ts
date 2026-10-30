@@ -242,6 +242,13 @@ export function create(store: Store): Telemetry {
   const queues = new Map<string, Promise<void>>()
   const counterSeeds = new Map<string, Promise<void>>()
   const knownComponents = new Map<string, Set<string>>()
+  const requests = new Map<string, Promise<void>>()
+  // A generation's response artifact follows its request manifest, so a reader never sees a
+  // response without the request that produced it.
+  const requestStored = async (generationID: string) => {
+    await requests.get(generationID)
+    requests.delete(generationID)
+  }
 
   // A run's numbering continues from its stored generations. A reply resumes a finished run after
   // an engine restart, and restarting at 0 breaks the unique (runID, callIndex) index, which fails
@@ -329,13 +336,29 @@ export function create(store: Store): Telemetry {
       const runID = metadata.assignment.runID
       const known = knownComponents.get(runID) ?? new Set<string>()
       knownComponents.set(runID, known)
-      await storeRequest(store, {
-        runID,
-        generationID: id,
-        body: sanitizeStoredRequest(body),
-        createdAt: metadata.startedAt,
-        known,
-      })
+      // The manifest is written after the request leaves: a long history is hundreds of milliseconds
+      // of scrubbing, hashing, and synced writes, and losing a manifest must not fail the contestant.
+      requests.set(
+        id,
+        new Promise<void>((resolve) => setImmediate(resolve))
+          .then(() =>
+            storeRequest(store, {
+              runID,
+              generationID: id,
+              body: sanitizeStoredRequest(body),
+              createdAt: metadata.startedAt,
+              known,
+            }),
+          )
+          .then(
+            () => undefined,
+            (error) =>
+              console.warn(
+                "[arena] request manifest was not stored",
+                error instanceof Error ? error.message : String(error),
+              ),
+          ),
+      )
       runAttempts.set(metadata.requestID, { generationID: id, attemptIndex })
       attempts.set(metadata.assignment.runID, runAttempts)
       if (previous) {
@@ -373,6 +396,7 @@ export function create(store: Store): Telemetry {
       const generation = active.get(metadata)
       if (!generation) return
       active.delete(metadata)
+      await requestStored(generation.id)
       const raw = generation.chunks.join("")
       const response = sanitizeStoredResponse(raw)
       const responseArtifactID = `${generation.id}|response`
@@ -412,6 +436,7 @@ export function create(store: Store): Telemetry {
       const generation = active.get(metadata)
       if (!generation) return
       active.delete(metadata)
+      await requestStored(generation.id)
       const raw = generation.chunks.join("")
       const response = sanitizeStoredResponse(raw)
       const hasResponse = generation.responseAt !== undefined || response.length > 0

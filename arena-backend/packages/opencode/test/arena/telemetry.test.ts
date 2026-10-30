@@ -73,7 +73,7 @@ describe("ArenaTelemetry", () => {
     const response = artifacts.find((item) => item.id === `${metadata.generationID}|response`)
     expect(response).toBeDefined()
     expect(artifacts.map((item) => item.id)).toContain(`${metadata.generationID}|manifest`)
-    expect(artifacts.filter((item) => item.id.includes("|component|"))).toHaveLength(2)
+    expect(artifacts.filter((item) => item.id.startsWith("component|"))).toHaveLength(2)
     expect(generation).toMatchObject({
       classification: "root",
       requestID: metadata.requestID,
@@ -322,7 +322,7 @@ describe("ArenaTelemetry", () => {
     await telemetry.error?.(metadata, new Error("stopped by user"), new Date())
 
     expect(artifacts).toHaveLength(3)
-    expect(artifacts[0]?.id).toMatch(/^run-b\|component\|[0-9a-f]{64}$/)
+    expect(artifacts[0]?.id).toMatch(/^component\|[0-9a-f]{64}$/)
     expect(artifacts[1]?.id).toBe(`${metadata.generationID}|manifest`)
     expect(artifacts[2]).toEqual({ id: `${metadata.generationID}|response`, data: partial })
     expect(generation).toMatchObject({
@@ -410,6 +410,7 @@ describe("ArenaTelemetry", () => {
       },
       artifact: async (id: string) => artifacts.get(id),
       saveGeneration: async (input: GenerationDocument) => input,
+      updateGeneration: async () => undefined,
       generationsForRuns: async () => [],
       recordGenerationRetry: async () => undefined,
       addDescendant: async () => undefined,
@@ -462,7 +463,10 @@ describe("ArenaTelemetry", () => {
       ],
     })
 
-    const loaded = await loadRequest(arena, "run-request", metadata.generationID)
+    // Written after the request leaves, and in place before the generation's response.
+    expect(await loadRequest(arena, metadata.generationID)).toBeUndefined()
+    await telemetry.complete?.(metadata, new Date())
+    const loaded = await loadRequest(arena, metadata.generationID)
     expect(loaded?.verified).toBe(true)
     const serialized = JSON.stringify(loaded?.body)
     expect(serialized).not.toContain("call-7529b035-5fd4-43dc-a17a-59c78f463f27-0")

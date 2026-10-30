@@ -1,6 +1,5 @@
 import { createHash } from "crypto"
 import { gunzipSync, gzipSync } from "node:zlib"
-import { externalizeImages, inlineImages } from "@agent-duel/arena-service/research-protocol"
 import type { Store } from "./mongo"
 import type { ArtifactDocument } from "./records"
 
@@ -13,22 +12,25 @@ export type RequestComponent = {
   readonly bytes: number
 }
 
-export type RequestImage = {
+export type RequestMedia = {
   readonly sha256: string
   readonly mimeType: string
   readonly bytes: number
 }
 
 export type RequestManifest = {
-  readonly version: 1
+  readonly version: 2
   readonly generationID: string
+  /** SHA-256 of the stored body's JSON text, so a verified rebuild is byte-identical. */
   readonly bodyHash: string
+  /** The body's top-level keys in wire order. */
+  readonly keys: ReadonlyArray<string>
   readonly components: ReadonlyArray<RequestComponent>
-  readonly images: ReadonlyArray<RequestImage>
+  readonly media: ReadonlyArray<RequestMedia>
 }
 
-type SplitComponent = RequestComponent & { readonly value: unknown }
-type SplitImage = RequestImage & { readonly data: Buffer }
+type SplitComponent = RequestComponent & { readonly text: string }
+type SplitMedia = RequestMedia & { readonly data: Buffer }
 
 export type StoreRequestInput = {
   readonly runID: string
@@ -45,17 +47,9 @@ export type LoadedRequest = {
   readonly verified: boolean
 }
 
-export function stable(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map((child) => stable(child)).join(",")}]`
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, child]) => `${JSON.stringify(key)}:${stable(child)}`)
-    return `{${entries.join(",")}}`
-  }
-  return JSON.stringify(value ?? null)
-}
+// A base64 data URL anywhere in a message: pasted screenshots, images a tool read, PDFs as `file_data`.
+const DATA_URL = /^data:([^;,]+);base64,/
+const MEDIA_REFERENCE = "arena-media:sha256:"
 
 function sha256(value: string | Uint8Array) {
   return createHash("sha256").update(value).digest("hex")
@@ -69,59 +63,94 @@ function bytes(data: unknown) {
   throw new Error("Arena request artifact has an unsupported binary payload")
 }
 
-function decode(artifact: ArtifactDocument): unknown {
+function decodeText(artifact: ArtifactDocument) {
   const data = bytes(artifact.data)
-  return JSON.parse((artifact.compression === "gzip" ? gunzipSync(data) : data).toString("utf8")) as unknown
+  return (artifact.compression === "gzip" ? gunzipSync(data) : data).toString("utf8")
 }
 
-export function componentArtifactID(runID: string, sha256Digest: string) {
-  return `${runID}|component|${sha256Digest}`
+// Components and media are named by content alone: both sides and every later turn of a chat resend
+// the same system prompt, tools, history, and screenshots, and each is kept once.
+export function componentArtifactID(sha256Digest: string) {
+  return `component|${sha256Digest}`
+}
+
+export function mediaArtifactID(sha256Digest: string) {
+  return `media|${sha256Digest}`
 }
 
 export function manifestArtifactID(generationID: string) {
   return `${generationID}|manifest`
 }
 
+function mediaReference(id: string, mimeType: string) {
+  return `${MEDIA_REFERENCE}${id}:${mimeType}`
+}
+
+function walkStrings(value: unknown, replace: (text: string) => string | undefined): unknown {
+  if (typeof value === "string") return replace(value) ?? value
+  if (Array.isArray(value)) return value.map((item) => walkStrings(item, replace))
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, walkStrings(item, replace)]))
+}
+
+function externalizeMedia(value: unknown, media: Map<string, SplitMedia>) {
+  return walkStrings(value, (text) => {
+    const match = DATA_URL.exec(text)
+    const mimeType = match?.[1]
+    if (!match || !mimeType) return undefined
+    const payload = text.slice(match[0].length)
+    const data = Buffer.from(payload, "base64")
+    // Keep a payload Node would not re-encode to the same text inline, so the rebuild stays exact.
+    if (data.toString("base64") !== payload) return undefined
+    const id = sha256(data)
+    const key = `${id}:${mimeType}`
+    if (!media.has(key)) media.set(key, { sha256: id, mimeType, bytes: data.byteLength, data })
+    return mediaReference(id, mimeType)
+  })
+}
+
+function inlineMedia(value: unknown, media: ReadonlyMap<string, Buffer>) {
+  return walkStrings(value, (text) => {
+    if (!text.startsWith(MEDIA_REFERENCE)) return undefined
+    const separator = text.indexOf(":", MEDIA_REFERENCE.length)
+    if (separator < 0) return undefined
+    const id = text.slice(MEDIA_REFERENCE.length, separator)
+    const data = media.get(id)
+    return data ? `data:${text.slice(separator + 1)};base64,${data.toString("base64")}` : undefined
+  })
+}
+
 function componentOf(kind: RequestComponentKind, value: unknown, role?: string): SplitComponent {
-  const canonical = stable(value)
+  const text = JSON.stringify(value)
   return {
     kind,
     ...(role ? { role } : {}),
-    sha256: sha256(canonical),
-    bytes: Buffer.byteLength(canonical),
-    value,
+    sha256: sha256(text),
+    bytes: Buffer.byteLength(text),
+    text,
   }
 }
 
 export function splitRequest(body: Readonly<Record<string, unknown>>) {
   const params: Record<string, unknown> = {}
   const components: SplitComponent[] = []
-  const images = new Map<string, SplitImage>()
+  const media = new Map<string, SplitMedia>()
+  const messages = Array.isArray(body.messages) && body.messages.length > 0 ? body.messages : undefined
   for (const [key, value] of Object.entries(body)) {
-    if (key === "system" || key === "tools") continue
-    if (key === "messages" && Array.isArray(value) && value.length > 0) continue
+    if ((key === "system" || key === "tools") && value !== undefined) continue
+    if (key === "messages" && messages) continue
     params[key] = value
   }
   components.push(componentOf("params", params))
-  if ("system" in body) components.push(componentOf("system", body.system))
-  if ("tools" in body) components.push(componentOf("tools", body.tools))
-  if (Array.isArray(body.messages) && body.messages.length > 0) {
-    for (const message of body.messages) {
-      const externalized = externalizeImages(message)
-      for (const image of externalized.images) {
-        if (images.has(image.id)) continue
-        images.set(image.id, {
-          sha256: image.id,
-          mimeType: image.mimeType,
-          bytes: image.bytes.byteLength,
-          data: image.bytes,
-        })
-      }
-      const role = (message as { role?: unknown } | null)?.role
-      components.push(componentOf("message", externalized.value, typeof role === "string" ? role : undefined))
-    }
+  if (body.system !== undefined) components.push(componentOf("system", body.system))
+  if (body.tools !== undefined) components.push(componentOf("tools", body.tools))
+  for (const message of messages ?? []) {
+    const role = (message as { role?: unknown } | null)?.role
+    components.push(
+      componentOf("message", externalizeMedia(message, media), typeof role === "string" ? role : undefined),
+    )
   }
-  return { components, images: [...images.values()] }
+  return { components, media: [...media.values()] }
 }
 
 export async function storeRequest(store: Store, input: StoreRequestInput): Promise<RequestManifest> {
@@ -142,35 +171,37 @@ export async function storeRequest(store: Store, input: StoreRequestInput): Prom
     })
     input.known?.add(artifactID)
   }
-  for (const image of split.images) {
+  for (const item of split.media) {
     await write(
-      componentArtifactID(input.runID, image.sha256),
-      { mimeType: image.mimeType, encoding: "binary", compression: "none" },
-      () => image.data,
+      mediaArtifactID(item.sha256),
+      { mimeType: item.mimeType, encoding: "binary", compression: "none" },
+      () => item.data,
     )
   }
   for (const component of split.components) {
     await write(
-      componentArtifactID(input.runID, component.sha256),
+      componentArtifactID(component.sha256),
       { mimeType: "application/json", encoding: "json", compression: "gzip" },
-      () => gzipSync(Buffer.from(JSON.stringify(component.value)), { level: 6 }),
+      () => gzipSync(Buffer.from(component.text), { level: 6 }),
     )
   }
+  const seen = new Set<string>()
   const manifest: RequestManifest = {
-    version: 1,
+    version: 2,
     generationID: input.generationID,
-    bodyHash: sha256(stable(input.body)),
+    bodyHash: sha256(JSON.stringify(input.body)),
+    keys: Object.keys(input.body),
     components: split.components.map(({ kind, role, sha256: digest, bytes: size }) => ({
       kind,
       ...(role ? { role } : {}),
       sha256: digest,
       bytes: size,
     })),
-    images: split.images.map(({ sha256: digest, mimeType, bytes: size }) => ({
-      sha256: digest,
-      mimeType,
-      bytes: size,
-    })),
+    media: split.media.flatMap(({ sha256: digest, mimeType, bytes: size }) => {
+      if (seen.has(digest)) return []
+      seen.add(digest)
+      return [{ sha256: digest, mimeType, bytes: size }]
+    }),
   }
   await store.storeArtifact({
     _id: manifestArtifactID(input.generationID),
@@ -185,44 +216,46 @@ export async function storeRequest(store: Store, input: StoreRequestInput): Prom
   return manifest
 }
 
-export async function loadRequest(
-  store: Store,
-  runID: string,
-  generationID: string,
-): Promise<LoadedRequest | undefined> {
+export async function loadRequest(store: Store, generationID: string): Promise<LoadedRequest | undefined> {
   const stored = await store.artifact(manifestArtifactID(generationID))
   if (!stored || stored.truncated) return undefined
-  const decoded = decode(stored) as Partial<RequestManifest> | null
-  if (!decoded || !Array.isArray(decoded.components)) return undefined
-  const manifest = { ...decoded, images: decoded.images ?? [] } as RequestManifest
+  const manifest = JSON.parse(decodeText(stored)) as Partial<RequestManifest> | null
+  if (manifest?.version !== 2 || !Array.isArray(manifest.components) || !Array.isArray(manifest.keys)) return undefined
   const missing: string[] = []
-  const images = new Map<string, { readonly mimeType: string; readonly bytes: Buffer }>()
-  for (const image of manifest.images) {
-    const artifact = await store.artifact(componentArtifactID(runID, image.sha256))
+  const media = new Map<string, Buffer>()
+  for (const item of manifest.media ?? []) {
+    const artifact = await store.artifact(mediaArtifactID(item.sha256))
     const data = artifact && !artifact.truncated ? bytes(artifact.data) : undefined
-    if (!data || sha256(data) !== image.sha256) {
-      missing.push(image.sha256)
+    if (!data || sha256(data) !== item.sha256) {
+      missing.push(item.sha256)
       continue
     }
-    images.set(image.sha256, { mimeType: image.mimeType, bytes: data })
+    media.set(item.sha256, data)
   }
-  const body: Record<string, unknown> = {}
+  let params: Record<string, unknown> = {}
+  const parts: Record<string, unknown> = {}
   const messages: unknown[] = []
   for (const component of manifest.components) {
-    const artifact = await store.artifact(componentArtifactID(runID, component.sha256))
-    const value = artifact && !artifact.truncated ? decode(artifact) : undefined
-    if (value === undefined || sha256(stable(value)) !== component.sha256) {
+    const artifact = await store.artifact(componentArtifactID(component.sha256))
+    const text = artifact && !artifact.truncated ? decodeText(artifact) : undefined
+    if (text === undefined || sha256(text) !== component.sha256) {
       missing.push(component.sha256)
       continue
     }
-    if (component.kind === "message") messages.push(inlineImages(value, images))
-    else if (component.kind === "system") body.system = value
-    else if (component.kind === "tools") body.tools = value
-    else Object.assign(body, value as Record<string, unknown>)
+    const value = JSON.parse(text) as unknown
+    if (component.kind === "message") messages.push(inlineMedia(value, media))
+    else if (component.kind === "params") params = value as Record<string, unknown>
+    else parts[component.kind] = value
   }
-  if (manifest.components.some((component) => component.kind === "message")) body.messages = messages
-  const verified = missing.length === 0 && sha256(stable(body)) === manifest.bodyHash
-  return { manifest, body, missing, verified }
+  const hasMessages = manifest.components.some((component) => component.kind === "message")
+  const body: Record<string, unknown> = {}
+  for (const key of manifest.keys) {
+    if ((key === "system" || key === "tools") && key in parts) body[key] = parts[key]
+    else if (key === "messages" && hasMessages) body.messages = messages
+    else if (key in params) body[key] = params[key]
+  }
+  const verified = missing.length === 0 && sha256(JSON.stringify(body)) === manifest.bodyHash
+  return { manifest: manifest as RequestManifest, body, missing, verified }
 }
 
 export * as ArenaRequestManifest from "./request-manifest"
