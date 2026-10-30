@@ -37,7 +37,6 @@
     --panel: #141716;
     --shadow: rgba(0, 0, 0, 0.45);
     --backdrop: rgba(0, 0, 0, 0.6);
-    --side-a-hover: #4d86b2;
   }
 }
 @media (max-width: 899px) {
