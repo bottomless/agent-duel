@@ -1371,7 +1371,10 @@ request already in flight.
 
 An offline machine spends no retry. When a contestant request cannot reach the network at all (DNS
 fails or there is no route), the daemon's runtime proxy in a hosted build, or the in-process service
-in a BYOK build, answers 503 `arena_network_unavailable`. The contestant then waits with backoff
+in a BYOK build, answers 503 `arena_network_unavailable`. The hosted proxy also counts a connect
+timeout: on a link that is up but passes no traffic, DNS answers from cache and every request hangs
+for Node's 10-second connect timeout, so treating it as an ordinary failure spent each Retry's whole
+window inside the outage. The contestant then waits with backoff
 capped at 10 seconds for as long as the network is gone, shows **Waiting for network**, and the next
 real failure gets a fresh two-minute window. A closed lid is the common case: macOS wakes briefly for
 Power Nap before Wi-Fi reconnects, and the window's monotonic clock stops during sleep, so without

@@ -221,6 +221,42 @@ describe("Arena runtime proxy", () => {
     expect((await send("/api/arena/assignments")).status).toBe(502);
   });
 
+  it("tells a contestant the machine is offline when the connection to the control plane times out", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    const send = () =>
+      fetch(`${baseUrl}/api/arena-runtime/api/openrouter/api/v1/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${runtime.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "contestant" }),
+      });
+    // What Node's fetch throws when the network is up but packets go nowhere.
+    const connectTimeout = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("Connect Timeout Error (timeout: 10000ms)"), {
+        name: "ConnectTimeoutError",
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    const socketTimeout = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" }),
+    });
+
+    for (const error of [connectTimeout, socketTimeout]) {
+      upstream.mockRejectedValueOnce(error);
+      const response = await send();
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error: { message: "Arena network is unavailable", type: "arena_network_unavailable" },
+      });
+    }
+  });
+
   it("forwards commit message and pull request requests to the control plane's metadata route", async () => {
     installArenaCredentials({
       mode: "hosted",
