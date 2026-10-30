@@ -136,6 +136,12 @@ The daemon password and account session are separate credentials; a remote clien
   paths, network addresses or device identifiers. The control plane keeps the latest values on the
   account; the private repository's `scripts/db/app-versions.ts` counts them. Builds before
   0.4.0-beta.14 send none.
+- Crash reports travel without the app: the daemon sends them itself as feedback with
+  `source: "crash"` and the session the app installed for Arena (`readArenaCredentials`). Each one
+  waits in `$PASEO_HOME/crash-reports/`, where the desktop app writes its own crashes too, until a
+  session is installed and the control plane has it. A control plane that does not accept that
+  source answers 400 and the reports keep waiting, so deploy it before a release that sends them.
+  The code is in `packages/server/src/server/crash-reports/`.
 - The control plane can refuse builds below a minimum version or on a blocklist. It then answers
   `/api/auth/methods` with `updateRequired: true`, and the account gate shows the update screen
   (`packages/app/src/accounts/update-required.tsx`) in place of sign-in, terms and the app. The

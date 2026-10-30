@@ -87,6 +87,7 @@ import {
   stopDesktopManagedDaemonOnQuitIfNeeded,
 } from "./daemon/quit-lifecycle.js";
 import { runDesktopStartup } from "./desktop-startup.js";
+import { startCrashReporting } from "./crash-reports.js";
 import { autoUpdateInstalledSkills } from "./integrations/skills/index.js";
 import { registerBrowserAutomationIpc } from "./features/browser-automation/ipc.js";
 import { BrowserKeyboard } from "./features/browser-keyboard/index.js";
@@ -847,6 +848,7 @@ async function bootstrap(): Promise<void> {
   }
 
   await app.whenReady();
+  startCrashReporting();
 
   applicationIcon = loadDevelopmentApplicationIcon();
   if (applicationIcon) {

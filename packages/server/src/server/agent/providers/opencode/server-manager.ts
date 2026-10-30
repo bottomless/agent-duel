@@ -10,6 +10,7 @@ import { findExecutable } from "../../../../executable-resolution/executable-res
 import { spawnProcess, type SpawnProcessOptions } from "../../../../utils/spawn.js";
 import { terminateWithTreeKill, type ProcessTerminator } from "../../../../utils/tree-kill.js";
 import type { ManagedProcessRegistry } from "../../../managed-processes/managed-processes.js";
+import { reportCrash } from "../../../crash-reports/reporter.js";
 import {
   createProviderEnvSpec,
   resolveProviderLaunch,
@@ -81,6 +82,8 @@ export interface OpenCodeServerGeneration {
   managedProcessId?: string;
   managedProcessRecord?: Promise<{ id: string } | null>;
   arenaRuntimeToken?: string;
+  /** Set when the daemon stops this server, so its exit is not reported as a crash. */
+  stopping?: boolean;
 }
 
 export type OpenCodePortAllocator = () => Promise<number>;
@@ -641,7 +644,18 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
         failStartup(new Error(buildStartupErrorMessage(headline)));
       });
 
-      serverProcess.on("exit", (code) => {
+      serverProcess.on("exit", (code, signal) => {
+        if (!server.stopping) {
+          reportCrash({
+            process: "engine",
+            kind: "exit",
+            message: started
+              ? "The battle engine exited unexpectedly"
+              : "The battle engine exited before it was ready",
+            exitCode: code,
+            signal,
+          });
+        }
         if (server.arenaRuntimeToken) {
           revokeArenaRuntimeCredentials(server.arenaRuntimeToken);
           server.arenaRuntimeToken = undefined;
@@ -778,6 +792,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   private async killServer(server: OpenCodeServerGeneration): Promise<void> {
+    server.stopping = true;
     if (server.arenaRuntimeToken) {
       revokeArenaRuntimeCredentials(server.arenaRuntimeToken);
       server.arenaRuntimeToken = undefined;
