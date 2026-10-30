@@ -17,7 +17,7 @@ import {
   type CopyOmissionReason,
   type ResolvedArenaCopyPolicy,
 } from "./copy-policy"
-import { IGNORED_PATHS_COMMAND } from "./warm"
+import { ALL_IGNORED_PATHS_COMMAND, IGNORED_PATHS_COMMAND, withEmptyIgnoredFolders } from "./warm"
 
 const execFile = promisify(nodeExecFile)
 
@@ -287,11 +287,12 @@ export function parseIgnoredRoots(output: string): string[] {
 
 /** The ignored roots of a checkout or worktree, exactly as git names them. */
 export async function listIgnoredRoots(directory: string): Promise<string[]> {
-  const result = await execFile("git", [...IGNORED_PATHS_COMMAND, "--", "."], {
-    cwd: directory,
-    maxBuffer: 32 * 1024 * 1024,
-  })
-  return parseIgnoredRoots(result.stdout)
+  const list = (command: readonly string[]) =>
+    execFile("git", [...command, "--", "."], { cwd: directory, maxBuffer: 32 * 1024 * 1024 }).then((result) =>
+      parseIgnoredRoots(result.stdout),
+    )
+  const [roots, all] = await Promise.all([list(IGNORED_PATHS_COMMAND), list(ALL_IGNORED_PATHS_COMMAND)])
+  return withEmptyIgnoredFolders(roots, all)
 }
 
 /**

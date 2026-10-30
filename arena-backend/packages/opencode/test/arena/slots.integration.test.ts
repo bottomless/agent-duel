@@ -946,12 +946,13 @@ describe("persistent contestant worktrees", () => {
     }
   }, 120_000)
 
-  test("runs a battle in a checkout whose folder holds only ignored files and an empty folder", async () => {
+  test("runs a battle in a checkout with an empty folder beside ignored files, and an empty ignored folder", async () => {
     await using directory = await fixture()
     const root = directory.path
-    await writeFile(path.join(root, ".git/info/exclude"), "\n.DS_Store\n", { flag: "a" })
+    await writeFile(path.join(root, ".git/info/exclude"), "\n.DS_Store\nlogs/\n", { flag: "a" })
     await mkdir(path.join(root, "docs/notes/plans"), { recursive: true })
     await writeFile(path.join(root, "docs/notes/.DS_Store"), "finder\n")
+    await mkdir(path.join(root, "logs"))
     const memory = memoryStore()
     const router = installOpenRouterStub()
     process.env.OPENCODE_ARENA = "1"
@@ -965,6 +966,7 @@ describe("persistent contestant worktrees", () => {
         const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt })
         for (const run of await memory.store.runsForTurn(turn)) {
           expect(await readFile(path.join(run.worktree, "docs/notes/.DS_Store"), "utf8")).toBe("finder\n")
+          expect(await exists(path.join(run.worktree, "logs"))).toBe(true)
         }
       }
     } finally {

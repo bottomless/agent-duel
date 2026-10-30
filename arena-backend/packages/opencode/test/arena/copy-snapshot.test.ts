@@ -155,6 +155,24 @@ describe("Arena ignored-content snapshot", () => {
     expect(await exists(join(worktree, "docs", "notes", "plans"))).toBe(true)
   })
 
+  test("copies an ignored folder that holds no file", async () => {
+    const root = await repository(".DS_Store\nlogs/\ncache/\n")
+    await mkdir(join(root, "logs"), { recursive: true })
+    await mkdir(join(root, "cache", "a", "b"), { recursive: true })
+    await mkdir(join(root, "docs", "notes", "plans"), { recursive: true })
+    await writeFile(join(root, "docs", "notes", ".DS_Store"), "finder\n")
+
+    const manifest = await createIgnoredContentSnapshot({ canonical: root })
+    expect(manifest.entries.map((entry) => entry.relativePath).sort()).toEqual(["cache", "docs", "logs"])
+
+    const worktree = join(await mkdtemp(join(tmpdir(), "arena-empty-folder-test-")), "contestant")
+    await $`git -C ${root} worktree add -q --detach ${worktree}`
+    await copyIgnoredSeed({ targetRoot: worktree, manifest })
+    expect((await listIgnoredRoots(worktree)).sort()).toEqual(["cache", "docs", "logs"])
+    expect(await exists(join(worktree, "logs"))).toBe(true)
+    expect(await exists(join(worktree, "cache", "a", "b"))).toBe(true)
+  })
+
   test("omits ignored roots that contain registered Git worktrees", async () => {
     const root = await repository(".worktrees/\ncache/\n")
     const nested = join(root, ".worktrees", "secondary")
