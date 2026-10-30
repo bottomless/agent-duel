@@ -1,10 +1,23 @@
 # Deployment
 
-This repository produces one release artifact: the macOS desktop app. The hosted control plane it
-signs in to is deployed from a separate private repository.
+The macOS desktop app is the product. The hosted control plane it signs in to is deployed from a
+separate private repository.
 
-The browser renderer is a development and QA surface. Do not deploy
-`packages/app/dist` as a product.
+## Public website
+
+`agentduel.com` serves the landing page in `packages/website/public`. `/remote` serves the browser
+connection client for an existing daemon; it does not host a daemon or run coding agents.
+
+Run `npm run build:website`, then `npm run preview:website` to verify both surfaces locally.
+The website build gives Expo Router a `/remote` base path and packages its export with the landing
+page into `packages/website/dist`. Ordinary browser QA and Electron exports keep their root routes.
+Do not deploy `packages/app/dist` directly: it has no landing page or website routing configuration.
+
+Deploy this repository to the Bottomless Vercel project `agent-duel`. The root `vercel.json`
+builds the website, serves remote deep links through the client shell, and redirects old root-level
+client links, preserving query strings. Verify the landing page, download link, remote welcome,
+pairing dialog, settings, and direct reload of a remote route before assigning the production domain.
+The control-plane project `agent-duel-cloud` is separate.
 
 ## Runtime boundary
 

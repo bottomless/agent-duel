@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Pressable, Text, View, ScrollView } from "react-native";
 import { useRouter } from "expo-router";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ExternalLink, Settings } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getHostRuntimeStore, isHostRuntimeConnected, useHosts } from "@/runtime/host-runtime";
@@ -11,7 +11,16 @@ import { resolveAppVersion } from "@/utils/app-version";
 import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
 import { buildOpenProjectRoute } from "@/utils/host-routes";
 import { openExternalUrl } from "@/utils/open-external-url";
+import { RemoteConnectionActions } from "@/remote/connection-actions";
 import { isNative } from "@/constants/platform";
+
+import type { Theme } from "@/styles/theme";
+
+function externalLinkProps(theme: Theme) {
+  return { color: theme.colors.accent };
+}
+
+const ThemedExternalLink = withUnistyles(ExternalLink);
 
 const styles = StyleSheet.create((theme) => ({
   root: {
@@ -140,7 +149,6 @@ function useAnyHostOnline(serverIds: string[]): string | null {
 }
 
 export function WelcomeScreen() {
-  const { theme } = useUnistyles();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -163,8 +171,8 @@ export function WelcomeScreen() {
   }, [router]);
 
   const scrollContentContainerStyle = useMemo(
-    () => [styles.container, { paddingBottom: theme.spacing[6] + insets.bottom }],
-    [theme.spacing, insets.bottom],
+    () => [styles.container, { paddingBottom: 24 + insets.bottom }],
+    [insets.bottom],
   );
 
   return (
@@ -182,10 +190,12 @@ export function WelcomeScreen() {
             {isNative ? (
               <Pressable style={styles.setupLink} onPress={handleOpenProjectSite}>
                 <Text style={styles.setupLinkText}>Agent Duel on GitHub</Text>
-                <ExternalLink size={14} color={theme.colors.accent} />
+                <ThemedExternalLink size={14} uniProps={externalLinkProps} />
               </Pressable>
             ) : null}
           </View>
+
+          {process.env.EXPO_BASE_URL === "/remote" ? <RemoteConnectionActions /> : null}
 
           <Button
             variant="ghost"
