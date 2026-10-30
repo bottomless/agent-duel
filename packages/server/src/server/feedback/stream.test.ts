@@ -22,6 +22,28 @@ function context(texts: readonly string[]): FeedbackContext {
 }
 
 describe("feedback context stream", () => {
+  it("carries a crash report's log tail in the header", () => {
+    const prepared = prepareFeedbackContextStream({
+      feedbackId,
+      attempt: 1,
+      context: {
+        version: 1,
+        capturedAt: "2026-10-25T01:33:47.000Z",
+        agent: null,
+        git: null,
+        log: ["engine started", "engine failed"],
+        timeline: [],
+      },
+    });
+    const header: unknown = JSON.parse(new TextDecoder().decode(prepared.chunks[0]));
+
+    expect(prepared.chunks).toHaveLength(1);
+    expect(header).toMatchObject({
+      type: "context",
+      context: { agent: null, git: null, log: ["engine started", "engine failed"] },
+    });
+  });
+
   it("encodes complete context as newline-delimited JSON", () => {
     const prepared = prepareFeedbackContextStream({
       feedbackId,

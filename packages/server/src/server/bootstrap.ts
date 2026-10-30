@@ -208,8 +208,11 @@ import { createArenaByokService } from "./accounts/byok.js";
 import { createAccountsService, type AccountsService } from "./accounts/service.js";
 import { createAccountsRouter } from "./accounts/routes.js";
 import { createRequireSessionMiddleware } from "./accounts/middleware.js";
+import { readArenaCredentials } from "./accounts/credentials.js";
 import { createArenaRuntimeRouter } from "./accounts/arena-runtime-router.js";
 import { FeedbackBackend } from "./feedback/backend.js";
+import { CrashReportSender } from "./crash-reports/sender.js";
+import { onCrashReported } from "./crash-reports/reporter.js";
 import { createFeedbackContextCapture, type FeedbackContextCapture } from "./feedback/context.js";
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
 import { createLeaderboardRouter } from "./leaderboard/routes.js";
@@ -746,6 +749,7 @@ export async function createPaseoDaemon(
         })
       : null;
   let accounts: AccountsService | null = null;
+  let crashReports: CrashReportSender | null = null;
   if (accountsConfig) {
     accounts = createAccountsService({
       config: accountsConfig,
@@ -762,13 +766,25 @@ export async function createPaseoDaemon(
         appVersion: daemonVersion,
       }),
     );
+    const feedbackBackend = new FeedbackBackend(accountsConfig.controlPlaneUrl, {
+      logger,
+      appVersion: daemonVersion,
+    });
+    crashReports = new CrashReportSender({
+      home: config.paseoHome,
+      backend: feedbackBackend,
+      token: () => {
+        const installed = readArenaCredentials()?.credentials;
+        return installed?.mode === "hosted" ? installed.token : null;
+      },
+      logger,
+    });
+    onCrashReported(() => void crashReports?.flush());
+    crashReports.start();
     app.use(
       "/api/feedback",
       createFeedbackRouter({
-        backend: new FeedbackBackend(accountsConfig.controlPlaneUrl, {
-          logger,
-          appVersion: daemonVersion,
-        }),
+        backend: feedbackBackend,
         sessions: accounts.sessions,
         context: {
           capture: (feedback) => {
@@ -1572,6 +1588,8 @@ export async function createPaseoDaemon(
       await wsServer.close();
     }
     await serviceProxy.stopStandalone();
+    onCrashReported(undefined);
+    crashReports?.stop();
     await accounts?.close().catch(() => undefined);
     // Force-drop remaining sockets so httpServer.close() resolves promptly.
     // We've already closed wsServer (which sent ws-layer close frames) and

@@ -5,7 +5,10 @@ export const networkUnavailableBody = {
   error: { message: "Arena network is unavailable", type: "arena_network_unavailable" },
 } as const;
 
-// Failures that mean this machine has no route out, whatever the host.
+// Failures that mean this machine has no route out, whatever the host. A connection that times
+// out counts too: on a link that is up but passes no traffic, DNS still answers from cache and
+// every request hangs until Node's 10 s connect timeout. Answered as a 502, each Retry spent its
+// two-minute retry window inside the outage and the contestant failed before the network was back.
 const offlineCodes = new Set([
   "ENOTFOUND",
   "EAI_AGAIN",
@@ -13,6 +16,8 @@ const offlineCodes = new Set([
   "ENETDOWN",
   "EHOSTUNREACH",
   "EADDRNOTAVAIL",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ETIMEDOUT",
 ]);
 
 function code(value: unknown): string | undefined {

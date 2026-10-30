@@ -1012,6 +1012,50 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
+  test("leaves out an Arena reply that only thought", async () => {
+    // Every contestant runs as arena/contestant, so a past winner's reply reads as this model's own.
+    const contestant: Provider.Model = {
+      ...model,
+      id: ModelV2.ID.make("contestant"),
+      providerID: ProviderV2.ID.make("arena"),
+    }
+    const arena = { providerID: "arena", modelID: "contestant" }
+    const input: SessionV1.WithParts[] = [
+      {
+        info: { ...assistantInfo("m-stalled", "m-parent", undefined, arena), finish: "arena-idle" },
+        parts: [
+          { ...basePart("m-stalled", "s1"), type: "step-start" },
+          { ...basePart("m-stalled", "s2"), type: "reasoning", text: "[Thinking redacted]", time: { start: 0 } },
+        ] as SessionV1.Part[],
+      },
+      {
+        info: { ...assistantInfo("m-silent", "m-parent", undefined, arena), finish: "stop" },
+        parts: [
+          { ...basePart("m-silent", "q1"), type: "step-start" },
+          { ...basePart("m-silent", "q2"), type: "reasoning", text: "[Thinking redacted]", time: { start: 0 } },
+          { ...basePart("m-silent", "q3"), type: "text", text: "" },
+        ] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo("m-answered", "m-parent", undefined, arena),
+        parts: [
+          { ...basePart("m-answered", "r1"), type: "reasoning", text: "[Thinking redacted]", time: { start: 0 } },
+          { ...basePart("m-answered", "r2"), type: "text", text: "Done" },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, contestant)).toStrictEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "[Thinking redacted]", providerOptions: undefined },
+          { type: "text", text: "Done" },
+        ],
+      },
+    ])
+  })
+
   test("includes aborted assistant messages only when they have non-step-start/reasoning content", async () => {
     const assistantID1 = "m-assistant-1"
     const assistantID2 = "m-assistant-2"

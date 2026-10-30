@@ -123,6 +123,15 @@ function hydrate(db: Database.Interface["db"], rows: (typeof MessageTable.$infer
   })
 }
 
+/**
+ * Whether an assistant reply holds anything a model reads: text, or a tool call. An Arena reply
+ * that only thought holds the redaction marker, and the hosted proxy drops reasoning it cannot
+ * restore, so the reply reaches the provider as an empty assistant message. Moonshot rejects that.
+ */
+export function hasReply(parts: readonly Part[]) {
+  return parts.some((part) => part.type === "tool" || (part.type === "text" && part.text.trim().length > 0))
+}
+
 function providerMeta(metadata: Record<string, any> | undefined) {
   if (!metadata) return undefined
   const { providerExecuted: _, ...rest } = metadata
@@ -255,6 +264,10 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
       ) {
         continue
       }
+      // Every contestant is arena/contestant, so another battle's reply counts as this model's own
+      // and `differentModel` keeps its reasoning. The session keeps the reply: a stalled one is how
+      // `ArenaResponseRecovery.count` limits recovery attempts.
+      if (msg.info.providerID === "arena" && !hasReply(msg.parts)) continue
       const assistantMessage: UIMessage = {
         id: msg.info.id,
         role: "assistant",

@@ -1061,6 +1061,11 @@ field. Each layer has its own file:
   request: a single-agent chat replays the previous message's envelopes under that message's new
   scope, and a running turn loses its sealed reasoning when the key rotates. Cloud instances must
   share that key. BYOK sealing provides no secrecy from the user who owns that key.
+  A reply that only thought, one that stalled or one a model ended without text, therefore reaches
+  the provider as an empty assistant message, and Moonshot rejects the request. Every contestant is
+  `arena/contestant`, so the engine takes another battle's reply for the model's own and keeps its
+  reasoning. `MessageV2.toModelMessages` leaves such a reply out of the request and keeps it in the
+  session, where a stalled one counts towards the idle-recovery limit.
   Runtime-only usage can continue through the transport, but the telemetry copy never persists
   generation request bodies because system prompts and tool
   schemas can fingerprint the provider. It drops per-side token counts, native finish reasons,
@@ -1376,7 +1381,10 @@ request already in flight.
 
 An offline machine spends no retry. When a contestant request cannot reach the network at all (DNS
 fails or there is no route), the daemon's runtime proxy in a hosted build, or the in-process service
-in a BYOK build, answers 503 `arena_network_unavailable`. The contestant then waits with backoff
+in a BYOK build, answers 503 `arena_network_unavailable`. The hosted proxy also counts a connect
+timeout: on a link that is up but passes no traffic, DNS answers from cache and every request hangs
+for Node's 10-second connect timeout, so treating it as an ordinary failure spent each Retry's whole
+window inside the outage. The contestant then waits with backoff
 capped at 10 seconds for as long as the network is gone, shows **Waiting for network**, and the next
 real failure gets a fresh two-minute window. A closed lid is the common case: macOS wakes briefly for
 Power Nap before Wi-Fi reconnects, and the window's monotonic clock stops during sleep, so without

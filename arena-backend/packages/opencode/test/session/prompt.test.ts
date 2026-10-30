@@ -301,6 +301,8 @@ const outputLimitSession = Effect.fn("test.outputLimitSession")(function* () {
     rootSessionID: chat.id,
     scopeID: chat.id,
     assignmentID: chat.id,
+    // A chat outside a battle runs on the medium model, and the proxy refuses any other.
+    modelSize: "medium",
     telemetry: false,
   })
   yield* Effect.addFinalizer(() =>
@@ -315,6 +317,11 @@ const outputLimitSession = Effect.fn("test.outputLimitSession")(function* () {
 })
 
 const idleIt = testEffect(makeHttp({ idle: true }))
+
+// The engine's callers name the model on every Arena prompt. A prompt without one falls back to the
+// session's stored model, which is persisted blinded as arena/contestant, and the proxy refuses that
+// for the medium assignment above.
+const arenaMedium = { providerID: ProviderV2.ID.make("arena"), modelID: ModelV2.ID.make("medium") }
 
 it.instance("Arena dispatch and cancellation do not wait for an unprepared worktree", () =>
   Effect.gen(function* () {
@@ -527,6 +534,7 @@ for (const hosted of [false, true]) {
         yield* prompt.prompt({
           sessionID: chat.id,
           noReply: true,
+          model: arenaMedium,
           parts: [{ type: "text", text: "Keep the changes small." }],
         })
         yield* waitForText("Steer received while children work.")
@@ -687,6 +695,51 @@ idleIt.instance("Arena recovers model idle with smaller requests and preserves p
   }),
 )
 
+idleIt.instance("Arena restarts a reply that stalled before it wrote anything", () =>
+  Effect.gen(function* () {
+    const { chat, llm, session } = yield* outputLimitSession()
+    const prompt = yield* SessionPrompt.Service
+    yield* llm.push(
+      raw({
+        chunks: [
+          { choices: [{ index: 0, delta: { reasoning: "[Thinking redacted]" }, finish_reason: null }] },
+          { choices: [{ index: 0, delta: {}, finish_reason: "unknown" }] },
+        ],
+      }),
+      reply().text("Recovered.").stop(),
+    )
+    const result = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Create a large file" }] })
+    expect(result.info).toMatchObject({ finish: "stop" })
+    const messages = yield* session.messages({ sessionID: chat.id })
+    const stalled = messages.find((m) => m.info.role === "assistant" && m.info.finish === "arena-idle")!
+    expect(stalled.parts.some((part) => part.type === "reasoning")).toBe(true)
+    const next = (yield* llm.inputs)[1] as { messages: { role: string }[] }
+    expect(next.messages.filter((message) => message.role === "assistant")).toEqual([])
+    expect(JSON.stringify(next)).toContain("before it wrote anything")
+  }),
+)
+
+idleIt.instance("Arena bounds recovery of replies that stall before they write anything", () =>
+  Effect.gen(function* () {
+    const { chat, llm } = yield* outputLimitSession()
+    const prompt = yield* SessionPrompt.Service
+    const thinking = () =>
+      raw({
+        chunks: [
+          { choices: [{ index: 0, delta: { reasoning: "[Thinking redacted]" }, finish_reason: null }] },
+          { choices: [{ index: 0, delta: {}, finish_reason: "unknown" }] },
+        ],
+      })
+    yield* llm.push(thinking(), thinking(), thinking(), thinking())
+    const result = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Create a large file" }] })
+    expect(result.info).toMatchObject({
+      finish: "arena-idle",
+      error: { name: "APIError", data: { isRetryable: false, message: ArenaResponseRecovery.IDLE_EXHAUSTED } },
+    })
+    expect(yield* llm.hits).toHaveLength(4)
+  }),
+)
+
 function idleReply(tool?: { name: string; input: unknown }) {
   return raw({
     chunks: [
@@ -804,6 +857,7 @@ idleIt.instance("Arena bounds idle recovery at three retries and preserves exhau
     yield* llm.push(idleReply(), reply().text("Done").stop())
     const resumed = yield* prompt.prompt({
       sessionID: chat.id,
+      model: arenaMedium,
       parts: [{ type: "text", text: "Continue with a smaller request" }],
     })
     expect(resumed.info).toMatchObject({ finish: "stop" })
@@ -883,7 +937,11 @@ it.instance("Arena bounds output recovery and does not reset it when the loop re
     expect(restarted.info.id).toBe(result.info.id)
     expect(yield* llm.hits).toHaveLength(4)
     yield* llm.push(reply().text("New partial").length(), reply().text("done").stop())
-    const next = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "A new smaller task" }] })
+    const next = yield* prompt.prompt({
+      sessionID: chat.id,
+      model: arenaMedium,
+      parts: [{ type: "text", text: "A new smaller task" }],
+    })
     expect(next.info).toMatchObject({ finish: "stop" })
     expect(yield* llm.hits).toHaveLength(6)
   }),
@@ -1402,7 +1460,9 @@ const calling = (messages: readonly SessionV1.WithParts[]) => {
   return last?.role === "assistant" ? last : undefined
 }
 
-it.instance("Arena loop answers a large new prompt before any compaction", () =>
+// The whole request is budgeted, the new prompt included (`ArenaRequestBudget`): a chat with a
+// finished reply compacts before a prompt that takes the request over the limit, and keeps the prompt.
+it.instance("Arena loop compacts before a new prompt that takes the request over the budget", () =>
   Effect.gen(function* () {
     process.env.OPENCODE_ARENA = "1"
     yield* Effect.addFinalizer(() => Effect.sync(() => delete process.env.OPENCODE_ARENA))
@@ -1410,12 +1470,13 @@ it.instance("Arena loop answers a large new prompt before any compaction", () =>
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Pinned" })
     yield* arenaFinishedReply(chat.id, "hello")
-    yield* user(chat.id, arenaFiller)
+    const large = yield* user(chat.id, arenaFiller)
 
     const messages = yield* arenaFirstModelCall(chat.id)
 
-    expect(hasCompaction(messages)).toBe(false)
-    expect(calling(messages)?.summary).toBeUndefined()
+    expect(hasCompaction(messages)).toBe(true)
+    expect(calling(messages)?.summary).toBe(true)
+    expect(messages.some((message) => message.info.id === large.id)).toBe(true)
   }),
 )
 
