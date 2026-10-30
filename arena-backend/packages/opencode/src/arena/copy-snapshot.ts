@@ -1140,7 +1140,7 @@ export async function planIgnoredResync(input: IgnoredResyncPlanInput): Promise<
         record.sourceTree !== undefined &&
         record.targetTree !== undefined &&
         (await Promise.all([
-          sharedTreeDigest(join(input.manifest.canonicalRoot, entry.relativePath)),
+          sharedTreeDigest(join(input.manifest.canonicalRoot, entry.relativePath)).catch(unlessRefused),
           treeDigest(target),
         ]).then(([source, worktree]) => source === record.sourceTree && worktree === record.targetTree))
       return scanned ? undefined : reclone(unseen)
@@ -1446,8 +1446,11 @@ export async function applyIgnoredResync(input: IgnoredResyncApplyInput): Promis
     }
     // The manifest's digest was taken before any copy started, as this one would be. Should the
     // checkout have moved since, its change times did too, so the next scan reads it as changed.
+    // A tree with an entry this process cannot read has no digest, and is copied again each send.
     const sourceTree =
-      input.manifest.scan && entry.type === "directory" ? (entry.sourceTree ?? (await treeDigest(source))) : undefined
+      input.manifest.scan && entry.type === "directory"
+        ? (entry.sourceTree ?? (await treeDigest(source).catch(unlessRefused)))
+        : undefined
     await seedEntry(source, target, entry, clone, trash, input.signal)
     const stats = await lstat(target)
     if (entryType(stats) !== entry.type) throw new Error(`Copied-content type changed for ${entry.relativePath}`)

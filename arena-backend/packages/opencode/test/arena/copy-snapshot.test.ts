@@ -1167,4 +1167,46 @@ describe("Arena ignored-content resync", () => {
     expect(await readFile(join(directory, "secret", "ok.txt"), "utf8")).toBe("ok v2\n")
     expect(await exists(join(directory, "secret", "key"))).toBe(false)
   })
+
+  test.skipIf(process.platform !== "win32")("scans a root holding a folder this process cannot list", async () => {
+    // Windows has no file modes; an ACL that denies everyone listing the folder stands in for one.
+    const root = await repository("secret/\n")
+    await mkdir(join(root, "secret", "sealed"), { recursive: true })
+    await writeFile(join(root, "secret", "ok.txt"), "ok\n")
+    await writeFile(join(root, "secret", "sealed", "inner.txt"), "inner\n")
+    const sealed = join(root, "secret", "sealed")
+    const everyone = "*S-1-1-0"
+    const deny = () => $`icacls ${sealed} /deny ${`${everyone}:(RD)`}`.quiet()
+    const allow = () => $`icacls ${sealed} /remove:d ${everyone}`.quiet()
+    const directory = join(await mkdtemp(join(tmpdir(), "arena-slot-test-")), "slot")
+    await $`git clone -q ${root} ${directory}`
+    const unwatched: RootObservation = { complete: false, changed: new Set(), reason: "no filesystem watcher" }
+    const resync = async (manifest: CopyManifest, records?: ReadonlyMap<string, SlotRootRecord>) => {
+      const decided = await plan(directory, manifest, records ?? new Map(), { canonical: unwatched, slot: unwatched })
+      const applied = await applyIgnoredResync({ targetRoot: directory, manifest, plan: decided })
+      return { decided, records: applied.records }
+    }
+
+    await deny()
+    try {
+      // Unreadable from the start: the copy leaves the folder out, has no digest, and is made again.
+      const manifest = await createIgnoredContentSnapshot({ canonical: root, scan: true })
+      const seeded = await resync(manifest)
+      expect(seeded.records.get("secret")?.sourceTree).toBeUndefined()
+      expect(await readFile(join(directory, "secret", "ok.txt"), "utf8")).toBe("ok\n")
+      expect(await exists(join(directory, "secret", "sealed", "inner.txt"))).toBe(false)
+      expect((await resync(manifest, seeded.records)).decided.reclone).toEqual(["secret"])
+
+      // Readable when recorded, unreadable at the next send: the scan reads it as changed.
+      await allow()
+      const readable = await createIgnoredContentSnapshot({ canonical: root, scan: true })
+      const recorded = await resync(readable)
+      expect(recorded.records.get("secret")?.sourceTree).toBeDefined()
+      await deny()
+      expect((await resync(readable, recorded.records)).decided.reclone).toEqual(["secret"])
+      expect(await exists(join(directory, "secret", "sealed", "inner.txt"))).toBe(false)
+    } finally {
+      await allow()
+    }
+  })
 })
