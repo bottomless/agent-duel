@@ -4698,6 +4698,9 @@ class OpenCodeAgentSession implements AgentSession {
     await this.childHydrationPromise?.catch(() => undefined);
     // Detection reports a child once; the caller has dropped every child it reported.
     this.knownChildSessionIds.clear();
+    // Along with the title and description a linked task call gave it. Kept, the link would
+    // stop detection from publishing the session title again, and the child would have no label.
+    this.subagentPresentationByChildId.clear();
     this.childHydrationCompleted = false;
     this.startChildSessionHydration();
     await this.childHydrationPromise?.catch(() => undefined);
