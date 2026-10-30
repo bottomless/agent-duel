@@ -8926,6 +8926,12 @@ export const layer: Layer.Layer<
             }
 
             if (turn.state === "awaiting_stop_resolution") {
+              // A Keep is recorded before the turn leaves this state, and Keep refuses a turn that
+              // already holds a resolution, so a restart in between is finished here.
+              if (turn.resolution?.kind === "stopped" && turn.appliedSide) {
+                yield* promote(store, turn, turn.appliedSide, turn.resolution, undefined, true)
+                return
+              }
               yield* reopenParkedInterruptedTurn(store, turn)
               return
             }
