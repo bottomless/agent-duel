@@ -17,9 +17,8 @@ through the bundled engine. You only see which models they were after you vote.
   <img src="docs/images/battle.png" alt="A battle: two agents' results side by side, with Choose A, Tie and Choose B below">
 </p>
 
-The shipped product is the Electron desktop app. `packages/app` can run in a
-browser during development and automated QA, but there is no hosted browser
-product.
+The shipped product is the Electron desktop app. See [deployment](docs/deployment.md) for the
+public website, remote connection client, and desktop release boundary.
 
 ## Download
 
