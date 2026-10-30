@@ -20,12 +20,32 @@ class DelayedWorkspaceSelectionStorage implements LastWorkspaceSelectionStorage 
     this.saved = value;
   }
 
+  async remove(): Promise<void> {
+    this.saved = null;
+  }
+
   finishHydrationWith(selection: ActiveWorkspaceSelection | null) {
     this.finishRead(selection ? JSON.stringify(selection) : null);
   }
 
   getSavedSelection(): ActiveWorkspaceSelection | null {
     return this.saved ? (JSON.parse(this.saved) as ActiveWorkspaceSelection) : null;
+  }
+}
+
+class MemoryWorkspaceSelectionStorage implements LastWorkspaceSelectionStorage {
+  saved: string | null = null;
+
+  async read(): Promise<string | null> {
+    return this.saved;
+  }
+
+  async write(value: string): Promise<void> {
+    this.saved = value;
+  }
+
+  async remove(): Promise<void> {
+    this.saved = null;
   }
 }
 
@@ -62,5 +82,38 @@ describe("last workspace selection", () => {
       serverId: "server-new",
       workspaceId: "workspace-new",
     });
+  });
+
+  it("forgets a workspace for the next launch too", async () => {
+    const storage = new MemoryWorkspaceSelectionStorage();
+    const store = createLastWorkspaceSelectionStore(storage);
+    await store.hydrate();
+    store.remember({ serverId: "server-1", workspaceId: "workspace-empty" });
+
+    store.forget({ serverId: "server-1", workspaceId: "workspace-empty" });
+    await Promise.resolve();
+
+    expect(store.getSelection()).toBeNull();
+    const relaunched = createLastWorkspaceSelectionStore(storage);
+    await relaunched.hydrate();
+    expect(relaunched.getSelection()).toBeNull();
+  });
+
+  it("keeps the remembered workspace when asked to forget another one", async () => {
+    const storage = new MemoryWorkspaceSelectionStorage();
+    const store = createLastWorkspaceSelectionStore(storage);
+    await store.hydrate();
+    store.remember({ serverId: "server-1", workspaceId: "workspace-current" });
+
+    store.forget({ serverId: "server-1", workspaceId: "workspace-empty" });
+    await Promise.resolve();
+
+    expect(store.getSelection()).toEqual({
+      serverId: "server-1",
+      workspaceId: "workspace-current",
+    });
+    expect(storage.saved).toBe(
+      JSON.stringify({ serverId: "server-1", workspaceId: "workspace-current" }),
+    );
   });
 });

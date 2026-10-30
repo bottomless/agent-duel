@@ -8,6 +8,7 @@ export const LAST_WORKSPACE_SELECTION_STORAGE_KEY = "paseo:last-workspace-route-
 export interface LastWorkspaceSelectionStorage {
   read(): Promise<string | null>;
   write(value: string): Promise<void>;
+  remove(): Promise<void>;
 }
 
 function normalizeWorkspaceSelection(input: unknown): ActiveWorkspaceSelection | null {
@@ -65,6 +66,17 @@ export function createLastWorkspaceSelectionStore(storage: LastWorkspaceSelectio
     void storage.write(JSON.stringify(normalized)).catch(() => {});
   }
 
+  /** Stop restoring a workspace, unless something else has been remembered since. */
+  function forget(target: ActiveWorkspaceSelection) {
+    if (selection?.serverId !== target.serverId || selection.workspaceId !== target.workspaceId) {
+      return;
+    }
+    selection = null;
+    revision += 1;
+    notifyListeners();
+    void storage.remove().catch(() => {});
+  }
+
   function hydrate(): Promise<void> {
     if (hydrationPromise) {
       return hydrationPromise;
@@ -95,6 +107,7 @@ export function createLastWorkspaceSelectionStore(storage: LastWorkspaceSelectio
     hydrate,
     isHydrated: () => hydrated,
     remember,
+    forget,
     subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener);
       return () => {

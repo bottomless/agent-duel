@@ -25,6 +25,7 @@ export type { NavigateToWorkspaceInput } from "./navigation";
 const lastWorkspaceSelectionStorage: LastWorkspaceSelectionStorage = {
   read: () => AsyncStorage.getItem(LAST_WORKSPACE_SELECTION_STORAGE_KEY),
   write: (value) => AsyncStorage.setItem(LAST_WORKSPACE_SELECTION_STORAGE_KEY, value),
+  remove: () => AsyncStorage.removeItem(LAST_WORKSPACE_SELECTION_STORAGE_KEY),
 };
 
 const lastWorkspaceSelectionStore = createLastWorkspaceSelectionStore(
@@ -54,6 +55,10 @@ export function hydrateLastWorkspaceSelection(): Promise<void> {
 
 export function getLastWorkspaceSelection(): ActiveWorkspaceSelection | null {
   return lastWorkspaceSelectionStore.getSelection();
+}
+
+export function forgetLastWorkspaceSelection(selection: ActiveWorkspaceSelection): void {
+  lastWorkspaceSelectionStore.forget(selection);
 }
 
 export function getIsLastWorkspaceSelectionHydrated(): boolean {

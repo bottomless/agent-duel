@@ -31,7 +31,9 @@ import { encodeImages } from "@/utils/encode-images";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { shouldAutoFocusWorkspaceDraftComposer } from "@/screens/workspace/workspace-draft-pane-focus";
 import {
+  isReadyForPendingAutoSubmit,
   isStartingArenaBattle,
+  resolveDraftCreateFeatureValues,
   shouldAllowEmptyDraftText,
 } from "@/composer/draft/workspace-tab-core";
 import type { AgentCapabilityFlags } from "@getpaseo/protocol/agent-types";
@@ -82,6 +84,7 @@ import {
   type FailedFirstSendDeps,
 } from "@/composer/draft/failed-first-send";
 import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
+import { forgetLastWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 
 const EMPTY_PENDING_PERMISSIONS = new Map();
 const EMPTY_ONLINE_SERVER_IDS: string[] = [];
@@ -229,6 +232,8 @@ function failedFirstSendDeps(input: {
       }),
     saveNewChatDraft: (draft) =>
       useDraftStore.getState().saveDraftInput({ draftKey: buildNewWorkspaceDraftKey(), draft }),
+    forgetWorkspace: (serverId, workspaceId) =>
+      forgetLastWorkspaceSelection({ serverId, workspaceId }),
     navigate: (route) => router.replace(route),
     showError: input.showError,
     archiveWorkspace: (serverId, workspaceId) =>
@@ -513,7 +518,10 @@ export function WorkspaceDraftAgentTab({
         workspaceId: workspaceFields?.id ?? null,
         hostDisconnectedMessage: t("workspace.terminal.hostDisconnected"),
         arenaPreferenceKey,
-        featureValues: composerState.featureValues,
+        featureValues: resolveDraftCreateFeatureValues({
+          submitted: pendingAutoSubmit?.featureValues,
+          draft: composerState.featureValues,
+        }),
         createdPreferenceKey: (agentId) => arenaAgentPreferenceKey(serverId, agentId),
         handOffStartedBattle: (agentId, snapshot) => {
           queryClient.setQueryData(arenaSessionQueryKey(serverId, agentId), snapshot);
@@ -566,16 +574,15 @@ export function WorkspaceDraftAgentTab({
       },
     },
   });
-  const isReadyForPendingAutoSubmit = Boolean(
-    pendingAutoSubmit &&
-    draftInput.isHydrated &&
-    draftWorkingDirectory &&
-    client &&
-    !composerState.isModelLoading,
-  );
+  const isReadyForAutoSubmit = isReadyForPendingAutoSubmit({
+    hasPendingSubmission: pendingAutoSubmit !== null,
+    isHydrated: draftInput.isHydrated,
+    workingDirectory: draftWorkingDirectory,
+    hasClient: client !== null,
+  });
   const autoSubmitKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isReadyForPendingAutoSubmit) {
+    if (!isReadyForAutoSubmit) {
       return;
     }
     const submitKey = `${serverId}:${workspaceId}:${draftId}`;
@@ -627,7 +634,7 @@ export function WorkspaceDraftAgentTab({
     draftId,
     handleCreateFromInput,
     initialCreateAttempt,
-    isReadyForPendingAutoSubmit,
+    isReadyForAutoSubmit,
     client,
     serverId,
     setDraftAttachments,

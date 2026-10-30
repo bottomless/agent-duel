@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  isReadyForPendingAutoSubmit,
   isStartingArenaBattle,
+  resolveDraftCreateFeatureValues,
   shouldAllowEmptyDraftText,
   validateDraftSubmission,
 } from "./workspace-tab-core";
@@ -71,6 +73,48 @@ describe("workspace draft empty text readiness", () => {
         attachments: [],
       }),
     ).toBe(false);
+  });
+});
+
+describe("workspace draft first send from New chat", () => {
+  const ready = {
+    hasPendingSubmission: true,
+    isHydrated: true,
+    workingDirectory: "/tmp/project",
+    hasClient: true,
+  };
+
+  test("keeps the Auto Accept New chat showed while the draft's features are still loading", () => {
+    expect(
+      resolveDraftCreateFeatureValues({
+        submitted: { auto_accept: true },
+        draft: undefined,
+      }),
+    ).toEqual({ auto_accept: true });
+  });
+
+  test("prefers New chat's values over the draft's own", () => {
+    expect(
+      resolveDraftCreateFeatureValues({
+        submitted: { auto_accept: true },
+        draft: { auto_accept: false, web_search: true },
+      }),
+    ).toEqual({ auto_accept: true, web_search: true });
+  });
+
+  test("falls back to the draft's values for a message typed in the draft", () => {
+    expect(
+      resolveDraftCreateFeatureValues({ submitted: undefined, draft: { auto_accept: true } }),
+    ).toEqual({ auto_accept: true });
+    expect(resolveDraftCreateFeatureValues({ submitted: {}, draft: undefined })).toBeUndefined();
+  });
+
+  test("needs only the draft, its folder and the host, not the provider model list", () => {
+    expect(isReadyForPendingAutoSubmit(ready)).toBe(true);
+    expect(isReadyForPendingAutoSubmit({ ...ready, hasPendingSubmission: false })).toBe(false);
+    expect(isReadyForPendingAutoSubmit({ ...ready, isHydrated: false })).toBe(false);
+    expect(isReadyForPendingAutoSubmit({ ...ready, workingDirectory: null })).toBe(false);
+    expect(isReadyForPendingAutoSubmit({ ...ready, hasClient: false })).toBe(false);
   });
 });
 
