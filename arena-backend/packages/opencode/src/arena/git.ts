@@ -2868,6 +2868,15 @@ const stageEmbeddedRepositories = Effect.fnUntraced(function* (
   })
 })
 
+// A process the contestant left running, a scraper or a build, can delete a file between `add`
+// listing it and reading it, and Git then fails the whole snapshot. Stopping those processes first
+// would also stop the previews the voter opens, so the snapshot is taken again: the file is gone,
+// which is the state the result should record. `--ignore-errors` does not cover a vanished file.
+const VANISHED_FILE = /(?:unable to stat '.*'|open\(".*"\)): No such file or directory/
+const SNAPSHOT_ATTEMPTS = 3
+
+const vanishedFile = (error: unknown) => error instanceof OperationError && VANISHED_FILE.test(error.message)
+
 /**
  * The working tree as a tree object, and the untracked nested repositories in it. An embedded
  * repository's files are snapshotted as plain files; its `.git` never is. Whatever `add -A` still
@@ -2914,11 +2923,13 @@ const readWorkingTreeState = Effect.fn("ArenaGit.readWorkingTreeState")(function
     const tree = yield* read(git, root, "write_snapshot_tree", ["write-tree"], { env })
     return { tree, nestedRepositories }
   }).pipe(
+    // Each attempt seeds the index again, so a retry starts from no partial staging.
     Effect.ensuring(
       Effect.promise(() =>
         Promise.all([unlink(index).catch(() => undefined), unlink(`${index}.lock`).catch(() => undefined)]),
       ),
     ),
+    Effect.retry({ times: SNAPSHOT_ATTEMPTS - 1, while: vanishedFile }),
   )
 })
 
