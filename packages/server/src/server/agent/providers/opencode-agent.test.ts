@@ -5582,6 +5582,77 @@ describe("OpenCode provider subagent contract", () => {
     ]);
   });
 
+  test("reloads a child its task call already named with a label", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const openCodeClient = new TestOpenCodeClient();
+    openCodeClient.sessionCreateResponse = { data: { id: "ses_parent_reload" } };
+    const child = {
+      id: "ses_child_reload",
+      parentID: "ses_parent_reload",
+      title: "Write the parser (@general subagent)",
+    };
+    // Subscribe finds no children; the reload finds the child, then nothing beneath it.
+    openCodeClient.sessionChildrenResponses = [{ data: [] }, { data: [child] }];
+    runtime.enqueueClient(openCodeClient);
+    const client = new OpenCodeAgentClient(createTestLogger(), undefined, {
+      serverManager: runtime,
+      createClient: runtime.createClient,
+    });
+    const session = await client.createSession({ provider: "opencode", cwd: "/workspace/repo" });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await vi.waitFor(() => expect(openCodeClient.calls.sessionChildren).toHaveLength(1));
+
+    // An Arena graft creates the child, then copies the parent's task call that names it.
+    openCodeClient.emitEvent({ type: "session.created", properties: { info: child } });
+    openCodeClient.emitEvent({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "prt_task_reload",
+          sessionID: "ses_parent_reload",
+          messageID: "msg_parent_reload",
+          type: "tool",
+          tool: "task",
+          callID: "call_reload",
+          state: {
+            status: "completed",
+            input: { subagent_type: "general", description: "Write the parser" },
+            output: `<task id="ses_child_reload">Done.</task>`,
+            metadata: { sessionId: "ses_child_reload" },
+          },
+        },
+      },
+    });
+    await vi.waitFor(() =>
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event: expect.objectContaining({ id: "ses_child_reload", toolCallId: "call_reload" }),
+        }),
+      ),
+    );
+
+    // The caller drops every child it knew before reloading, so the reload has to name it again.
+    events.length = 0;
+    await session.reloadProviderSubagents?.();
+    await session.close();
+
+    expect(
+      events.filter((event) => event.type === "provider_subagent" && event.event.type === "upsert"),
+    ).toEqual([
+      {
+        type: "provider_subagent",
+        provider: "opencode",
+        event: {
+          type: "upsert",
+          id: "ses_child_reload",
+          description: "Write the parser (@general subagent)",
+          status: "completed",
+        },
+      },
+    ]);
+  });
+
   test("hydrates persisted child messages into the provider subagent timeline", async () => {
     const runtime = new TestOpenCodeHarness();
     const openCodeClient = new TestOpenCodeClient();
