@@ -113,6 +113,9 @@ h1 {
   margin: 0 0 20px;
   text-wrap: balance;
 }
+h1 span {
+  display: inline-block;
+}
 .intro {
   max-width: 640px;
   margin: 0 auto;
