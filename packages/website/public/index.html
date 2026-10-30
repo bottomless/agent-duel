@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#181b1a" media="(prefers-color-scheme: dark)" />
     <meta
       name="description"
       content="Frontier coding models, free. You just have to vote. Every prompt runs on two models at once, and you pick the better result without knowing which is which."
@@ -18,62 +19,86 @@
     />
     <link rel="canonical" href="https://agentduel.com/" />
     <link rel="icon" href="/logo.png" type="image/png" />
-    <link rel="preload" href="/fonts/inter.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/landing.js" defer></script>
     <title>Agent Duel — Frontier coding models, free. You just have to vote.</title>
   </head>
   <body>
-    <div class="duel-bar" aria-hidden="true"></div>
-    <header class="site-header">
-      <div class="container">
-        <a class="brand" href="/" aria-label="Agent Duel home">
-          <img src="/logo.png" width="24" height="24" alt="" />
-          <span>Agent Duel</span>
-        </a>
-        <nav class="site-nav" aria-label="Site">
-          <a href="/leaderboard">Leaderboard</a>
-          <a class="optional" href="/methodology">Methodology</a>
-          <a class="optional" href="https://github.com/bottomless/agent-duel">Source on GitHub</a>
-          <a href="https://github.com/bottomless/agent-duel/releases/latest">Get the app</a>
-        </nav>
-      </div>
-    </header>
-    <main>
-      <section class="hero" aria-labelledby="headline">
-        <h1 id="headline">
-          <span>Frontier coding models, free.</span> <span>You just have to vote.</span>
-        </h1>
-        <p class="intro">
-          Every prompt runs on two models at once, and you pick the better result without knowing
-          which is which.
-        </p>
-        <nav class="actions" aria-label="Get started">
-          <a class="button primary" href="https://github.com/bottomless/agent-duel/releases/latest">
-            <span class="icon" style="--icon: url(/icons/download.svg)" aria-hidden="true"></span>
-            Get the Mac app
-          </a>
-          <button class="button" id="how-it-works" type="button" aria-haspopup="dialog">
-            <span
-              class="icon"
-              style="--icon: url(/icons/flask-conical.svg)"
-              aria-hidden="true"
-            ></span>
-            See a duel
-          </button>
-          <a class="button leaderboard" href="/leaderboard">
-            <span class="icon" style="--icon: url(/icons/trophy.svg)" aria-hidden="true"></span>
-            Leaderboard
-          </a>
-        </nav>
-      </section>
-    </main>
-    <footer>
-      <div class="container">
-        <a href="/remote">Remote access</a>
-        <span>Agent Duel</span>
-      </div>
-    </footer>
+    <div class="page">
+      <div class="duel-bar" aria-hidden="true"></div>
+      <!-- Header and footer copy the leaderboard's shell (agent-duel-cloud,
+           packages/control-plane/src/leaderboard-page/layout.ts). Change both together. -->
+      <header class="site-header">
+        <div class="site-header-inner">
+          <a class="brand" href="/"
+            ><img src="/logo.png" alt="" width="36" height="36" /><span>Agent Duel</span></a
+          >
+          <nav class="site-nav" aria-label="Site">
+            <a href="/leaderboard">Leaderboard</a>
+            <a href="/leaderboard/methodology">Methodology</a>
+            <a class="external" href="https://github.com/bottomless/agent-duel"
+              ><span class="hide-compact">Source on GitHub</span
+              ><span class="hide-wide">GitHub</span></a
+            >
+            <a class="external" href="https://github.com/bottomless/agent-duel/releases"
+              >Get the app</a
+            >
+          </nav>
+        </div>
+      </header>
+      <main class="content">
+        <section class="hero" aria-labelledby="headline">
+          <h1 id="headline">
+            <span>Frontier coding models, free.</span> <span>You just have to vote.</span>
+          </h1>
+          <p class="dek">
+            Every prompt runs on two models at once, and you pick the better result without knowing
+            which is which.
+          </p>
+          <nav class="actions" aria-label="Get started">
+            <a
+              class="button primary"
+              href="https://github.com/bottomless/agent-duel/releases/latest"
+            >
+              <span class="icon" style="--icon: url(/icons/download.svg)" aria-hidden="true"></span>
+              Get the Mac app
+            </a>
+            <button class="button" id="how-it-works" type="button" aria-haspopup="dialog">
+              <span
+                class="icon"
+                style="--icon: url(/icons/flask-conical.svg)"
+                aria-hidden="true"
+              ></span>
+              See a duel
+            </button>
+            <a class="button leaderboard" href="/leaderboard">
+              <span class="icon" style="--icon: url(/icons/trophy.svg)" aria-hidden="true"></span>
+              Leaderboard
+            </a>
+          </nav>
+        </section>
+      </main>
+      <footer class="site-footer">
+        <div class="site-footer-inner">
+          <div class="footer-about">
+            <span class="footer-brand"
+              ><img src="/logo.png" alt="" width="22" height="22" /><span>Agent Duel</span></span
+            >
+            <span class="footer-text"
+              >Blind battles between coding agents. Ratings are published by the Agent Duel team and
+              computed from votes cast in the app.</span
+            >
+          </div>
+          <nav class="footer-nav" aria-label="Footer">
+            <a href="/leaderboard">Leaderboard</a>
+            <a href="/leaderboard/methodology">Methodology</a>
+            <a href="https://github.com/bottomless/agent-duel">Source on GitHub</a>
+            <a href="https://github.com/bottomless/agent-duel/releases">Get the app for macOS</a>
+            <a href="/remote">Remote access</a>
+          </nav>
+        </div>
+      </footer>
+    </div>
     <dialog id="how-dialog" aria-labelledby="how-title">
       <header>
         <h2 id="how-title">How a duel works</h2>

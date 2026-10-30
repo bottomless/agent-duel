@@ -1,126 +1,185 @@
-@font-face {
-  font-family: "Inter";
-  src: url("/fonts/inter.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-/* Matches the leaderboard page: white, near-black text, hairline rules, and the two
-   contestant colors (Side A blue, Side B amber) only in the bar across the top. */
+/* Tokens, header, footer and widths copy the leaderboard page (agent-duel-cloud,
+   packages/control-plane/src/leaderboard-page/styles.ts), which uses the app's light theme and
+   its default dark theme. The landing page adds two things of its own: the Side A / Side B bar
+   and the Side A blue download button. */
 :root {
-  color-scheme: light;
-  --background: #ffffff;
-  --surface: #f6f6f4;
-  --foreground: #1e1e1e;
-  --foreground-nav: #3d3d3d;
-  --foreground-muted: #474747;
-  --rule: #e1e1e1;
-  --rule-strong: #d2d2d2;
-  --link: #22352f;
-  --link-underline: #3e4945;
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --text: #1a1a1e;
+  --secondary: #3f3f46;
+  --muted: #62626b;
+  --faint: #75757e;
+  --strong: #1a1a1e;
+  --rule: #e4e4e7;
+  --row-rule: #ececef;
+  --hover: #f4f4f5;
+  --link: #20744a;
+  --panel: #f4f4f5;
+  --shadow: rgba(24, 24, 27, 0.08);
+  --backdrop: rgba(24, 24, 27, 0.4);
   --side-a: #41769e;
   --side-a-hover: #35628a;
   --side-b: #8f6c42;
-  --ring: #1e1e1e;
-  --backdrop: #1e1e1e66;
-  --font-ui:
-    "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
-
-  font-family: var(--font-ui);
-  color: var(--foreground);
-  background: var(--background);
-  font-synthesis: none;
-  -webkit-font-smoothing: antialiased;
+  --gutter: 32px;
 }
-* {
-  box-sizing: border-box;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181b1a;
+    --text: #ececec;
+    --secondary: #c9cdcb;
+    --muted: #a1a5a4;
+    --faint: #868c8a;
+    --strong: #d6d9d8;
+    --rule: #2f3534;
+    --row-rule: #252b2a;
+    --hover: #202423;
+    --link: #7ccba0;
+    --panel: #141716;
+    --shadow: rgba(0, 0, 0, 0.45);
+    --backdrop: rgba(0, 0, 0, 0.6);
+    --side-a-hover: #4d86b2;
+  }
+}
+@media (max-width: 899px) {
+  :root {
+    --gutter: 16px;
+  }
+  .hide-compact {
+    display: none !important;
+  }
+}
+@media (min-width: 900px) {
+  .hide-wide {
+    display: none !important;
+  }
 }
 body {
   margin: 0;
-  min-width: 320px;
-  min-height: 100svh;
+  background: var(--bg);
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.page {
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--background);
+  overflow-x: clip;
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
 }
-.container {
-  width: 100%;
-  max-width: 1088px;
-  margin: 0 auto;
-  padding: 0 24px;
+a,
+button {
+  outline: none;
 }
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
 .duel-bar {
   height: 3px;
   background: linear-gradient(90deg, var(--side-a) 0 50%, var(--side-b) 50% 100%);
 }
+
 .site-header {
-  border-bottom: 1px solid var(--rule-strong);
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
 }
-.site-header .container {
+.site-header-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 6px var(--gutter);
+  min-height: 58px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  height: 60px;
+  gap: 4px 24px;
+  flex-wrap: wrap;
 }
 .brand {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  color: var(--foreground);
+  min-height: 40px;
+  color: var(--text);
   text-decoration: none;
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1;
+  border-radius: 4px;
 }
 .brand img {
-  width: 24px;
-  height: 24px;
-  border-radius: 5px;
-  object-fit: contain;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+}
+.brand span {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
 }
 .site-nav {
   display: flex;
   align-items: center;
-  gap: 20px;
-  font-size: 15px;
+  gap: 2px 22px;
+  flex-wrap: wrap;
+  font-size: 14px;
 }
 .site-nav a {
-  color: var(--foreground-nav);
+  padding: 6px 0;
   text-decoration: none;
-  padding: 4px 0;
+  color: var(--muted);
 }
 .site-nav a:hover {
-  color: var(--foreground);
+  color: var(--text);
 }
-main {
-  flex: 1;
+.site-nav a.external {
+  border-radius: 2px;
+}
+
+.content {
+  flex: 1 0 auto;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+  box-sizing: border-box;
   display: grid;
   place-items: center;
-  padding: 72px 24px 56px;
 }
 .hero {
   width: 100%;
   max-width: 820px;
+  padding: 96px 0 24px;
   text-align: center;
 }
 h1 {
+  margin: 0;
   font-size: clamp(32px, 4.6vw, 48px);
-  line-height: 1.1;
+  line-height: 1.12;
   font-weight: 700;
-  letter-spacing: -0.025em;
-  margin: 0 0 20px;
+  letter-spacing: -0.02em;
   text-wrap: balance;
 }
 h1 span {
   display: inline-block;
 }
-.intro {
-  max-width: 640px;
-  margin: 0 auto;
-  font-size: clamp(17px, 2.2vw, 20px);
-  line-height: 1.55;
+.dek {
+  max-width: 620px;
+  margin: 16px auto 0;
+  font-size: 18px;
+  line-height: 1.5;
+  color: var(--secondary);
   text-wrap: pretty;
 }
 .actions {
@@ -128,7 +187,7 @@ h1 span {
   grid-template-columns: repeat(2, auto);
   justify-content: center;
   gap: 12px;
-  margin: 40px auto 0;
+  margin: 36px auto 0;
 }
 .button {
   display: inline-flex;
@@ -137,10 +196,11 @@ h1 span {
   gap: 10px;
   min-height: 48px;
   padding: 0 22px;
-  border: 1px solid var(--rule-strong);
+  box-sizing: border-box;
+  border: 1px solid var(--rule);
   border-radius: 6px;
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg);
+  color: var(--text);
   font: inherit;
   font-size: 15px;
   font-weight: 500;
@@ -149,12 +209,11 @@ h1 span {
   cursor: pointer;
   transition:
     background-color 0.15s,
-    border-color 0.15s,
-    color 0.15s;
+    border-color 0.15s;
 }
 .button:hover {
-  background: var(--surface);
-  border-color: var(--foreground-nav);
+  background: var(--hover);
+  border-color: var(--muted);
 }
 .button.primary {
   background: var(--side-a);
@@ -177,43 +236,75 @@ h1 span {
   grid-column: 1 / -1;
   justify-self: center;
 }
-a:focus-visible,
-button:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 3px;
-}
-footer {
+
+.site-footer {
+  margin-top: 72px;
+  background: var(--panel);
   border-top: 1px solid var(--rule);
-  font-size: 13px;
-  color: var(--foreground-muted);
 }
-footer .container {
+.site-footer-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px var(--gutter) 32px;
+  box-sizing: border-box;
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 18px 40px;
+  flex-wrap: wrap;
+}
+.footer-about {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 460px;
+}
+.footer-brand {
+  display: inline-flex;
   align-items: center;
-  gap: 16px;
-  padding-top: 16px;
-  padding-bottom: 16px;
+  gap: 10px;
 }
-footer a {
-  color: var(--link);
-  text-decoration: underline;
-  text-decoration-color: var(--link-underline);
-  text-underline-offset: 4px;
+.footer-brand img {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
 }
-footer a:hover {
-  color: var(--foreground);
+.footer-brand span {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
+.footer-text {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.footer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  font-size: 14px;
+}
+.footer-nav a {
+  color: var(--secondary);
+  text-decoration: none;
+}
+.footer-nav a:hover {
+  color: var(--text);
+}
+
 dialog {
   max-width: 520px;
   width: calc(100% - 32px);
   max-height: calc(100svh - 48px);
   padding: 24px;
-  border: 1px solid var(--rule-strong);
+  box-sizing: border-box;
+  border: 1px solid var(--rule);
   border-radius: 8px;
-  color: var(--foreground);
-  background: var(--background);
-  box-shadow: 0 12px 32px #0000001f;
+  color: var(--text);
+  background: var(--bg);
+  box-shadow: 0 4px 14px var(--shadow);
+  font-family: inherit;
 }
 dialog::backdrop {
   background: var(--backdrop);
@@ -224,14 +315,14 @@ dialog header {
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 12px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--foreground);
+  border-bottom: 1.5px solid var(--strong);
 }
 h2 {
-  font-size: 18px;
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.3;
   font-weight: 700;
   letter-spacing: -0.01em;
-  margin: 0;
 }
 .close {
   display: grid;
@@ -242,15 +333,15 @@ h2 {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--foreground-muted);
+  color: var(--muted);
   font: inherit;
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
 }
 .close:hover {
-  background: var(--surface);
-  color: var(--foreground);
+  background: var(--hover);
+  color: var(--text);
 }
 ol {
   list-style: none;
@@ -261,61 +352,54 @@ ol {
 li {
   counter-increment: step;
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: 24px 1fr;
   column-gap: 12px;
   padding: 14px 0;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--row-rule);
 }
 li::before {
   content: counter(step);
   grid-row: 1 / span 2;
-  color: var(--foreground-muted);
+  color: var(--faint);
   font-size: 14px;
   line-height: 22px;
   text-align: right;
-  padding-right: 4px;
 }
 h3 {
+  margin: 0 0 2px;
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 22px;
-  margin: 0 0 4px;
 }
 li p {
+  margin: 0;
   font-size: 14px;
   line-height: 1.55;
-  margin: 0;
-  color: var(--foreground-muted);
+  color: var(--muted);
 }
 .dialog-download {
   width: 100%;
   min-height: 44px;
-  font-size: 15px;
+}
+
+@media (max-width: 899px) {
+  .hero {
+    padding-top: 56px;
+  }
+  .dek {
+    font-size: 17px;
+  }
 }
 @media (max-width: 600px) {
-  .site-nav {
-    gap: 16px;
-    font-size: 14px;
-  }
-  .site-nav .optional {
-    display: none;
-  }
-  main {
-    padding: 48px 24px 40px;
-  }
   .actions {
     grid-template-columns: minmax(0, 340px);
-    margin-top: 32px;
+    margin-top: 28px;
   }
   .button {
     width: 100%;
   }
   .leaderboard {
     justify-self: stretch;
-  }
-  footer .container {
-    flex-direction: column;
-    align-items: flex-start;
   }
   dialog {
     padding: 20px;
