@@ -28,14 +28,35 @@ export function warmSeed(warmDirectory: string, ignored: readonly string[]): rea
   return ignored.map((entry) => ({ source: path.join(warmDirectory, entry), target: entry }))
 }
 
-/** Collapse wholly ignored directories so a dependency tree is copied as one clone. */
+/**
+ * Collapse wholly ignored directories so a dependency tree is copied as one clone.
+ *
+ * An empty folder counts as untracked content and stops its parent from collapsing, but no
+ * worktree holds one, since git does not record it. Without `--no-empty-directory` a folder of
+ * `.DS_Store` files beside an empty folder is several roots in the checkout and one root in every
+ * contestant, and the contestant's check that it holds the checkout's roots fails every battle.
+ * The flag also hides an ignored folder that holds no file; `withEmptyIgnoredFolders` adds it back.
+ */
 export const IGNORED_PATHS_COMMAND = [
   "ls-files",
   "--others",
   "--ignored",
   "--exclude-standard",
   "--directory",
+  "--no-empty-directory",
   "-z",
 ] as const
+
+/** The same listing with empty folders, for the ignored folders that hold no file. */
+export const ALL_IGNORED_PATHS_COMMAND = IGNORED_PATHS_COMMAND.filter((arg) => arg !== "--no-empty-directory")
+
+/**
+ * The roots of `IGNORED_PATHS_COMMAND` and every path of `ALL_IGNORED_PATHS_COMMAND` none of them
+ * holds, which is an ignored folder with no file in it, such as an empty `logs/` a program expects.
+ */
+export function withEmptyIgnoredFolders(roots: readonly string[], all: readonly string[]): string[] {
+  const held = (entry: string) => roots.some((root) => entry === root || entry.startsWith(`${root}/`))
+  return [...roots, ...all.filter((entry) => !held(entry))]
+}
 
 export * as ArenaWarm from "./warm"
