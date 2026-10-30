@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Text, View, type ViewStyle } from "react-native";
+import { Text, View, type LayoutChangeEvent, type TextStyle, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Maximize2, Minimize2 } from "lucide-react-native";
 import type { HighlightToken } from "@getpaseo/highlight";
@@ -16,6 +16,7 @@ import {
   CARD_DIFF_MAX_HEIGHT,
   MAX_RENDERED_ROWS,
   diffRowHeight,
+  diffRowInset,
   diffTextHeight,
 } from "./diff-metrics";
 import type { ArenaDiffLayout } from "./diff-layout";
@@ -36,8 +37,12 @@ const SIDES: readonly Side[] = ["a", "b"];
 const HEADER_DATA = { diffHeader: "true" };
 const labelFor = (side: Side) => (side === "a" ? "Agent A" : "Agent B");
 const STICKY_STYLE = isWeb
-  ? ({ position: "sticky", top: 0, zIndex: 1 } as unknown as ViewStyle)
+  ? ({ position: "sticky", top: 0, zIndex: 2 } as unknown as ViewStyle)
   : null;
+// Stacked, a side's label pins under the header for as long as its rows are in view, so a tall
+// region scrolled inside the viewer still says whose version it is.
+const stickyLabelStyle = (top: number) =>
+  isWeb ? ({ position: "sticky", top, zIndex: 1 } as unknown as TextStyle) : null;
 
 function toneFor(type: string | undefined) {
   if (type === "add") return styles.add;
@@ -121,6 +126,143 @@ function WaitingAction({ side }: { side: Side }) {
   );
 }
 
+const SIDE_DATA = { a: { comparisonSide: "a" }, b: { comparisonSide: "b" } };
+
+function sideChanged(rows: readonly ThreeWayRow[], side: Side) {
+  return rows.some((row) => row[side] && row[side]?.type !== "context");
+}
+
+function describeRow(row: ThreeWayRow, side: Side, aligned: boolean) {
+  const cell = row[side];
+  const both = bothChanged(row, aligned);
+  const sharedLabel = cell?.type === "remove" ? "Removed by both agents" : "Added by both agents";
+  return {
+    row,
+    cell,
+    both,
+    oldNumber: cell && cell.type !== "add" ? (row.base?.lineNumber ?? "") : "",
+    sharedLabel: both ? sharedLabel : undefined,
+    dataSet: { rowKey: row.key, change: cell?.type ?? "absent", both: String(both) },
+  };
+}
+
+type ShownRow = ReturnType<typeof describeRow>;
+type NumberStyle = ReturnType<typeof inlineUnistylesStyle>;
+
+function WrappedCode({ row, side, tokens }: { row: ThreeWayRow; side: Side; tokens: Tokens }) {
+  const cell = row[side];
+  const removed = cell?.type === "remove";
+  const source = removed ? tokens.base : tokens[side];
+  const line = removed ? row.base?.lineNumber : cell?.lineNumber;
+  const matched = cell && line != null ? tokensSpelling(source.get(line), cell.content) : undefined;
+  return (
+    <View style={styles.wrappedCode}>
+      {cell && matched ? (
+        <TokenText
+          tokens={matched}
+          segments={cell.segments}
+          lineStyle={styles.codeText}
+          highlightStyle={removed ? styles.removeHighlight : styles.addHighlight}
+        />
+      ) : (
+        <Text style={styles.codeText}>{cell?.content || " "}</Text>
+      )}
+    </View>
+  );
+}
+
+/**
+ * One row: it grows with its wrapped line, so it carries its own gutter. The number width comes
+ * from the region rather than each row, since a region can hold hundreds of rows on each side.
+ */
+function WrappedLine({
+  shown,
+  side,
+  tokens,
+  hasBoth,
+  numberStyle,
+}: {
+  shown: ShownRow;
+  side: Side;
+  tokens: Tokens;
+  hasBoth: boolean;
+  numberStyle: NumberStyle;
+}) {
+  const { row, cell, both, oldNumber, sharedLabel, dataSet } = shown;
+  const tone = toneFor(cell?.type);
+  return (
+    <View style={[styles.wrappedRow, tone]} dataSet={dataSet}>
+      <View style={styles.wrappedGutterBg}>
+        <View style={[styles.gutterRow, styles.wrappedGutter, tone]}>
+          <Text style={[styles.number, numberStyle]}>{oldNumber}</Text>
+          <Text style={[styles.number, numberStyle]}>{cell?.lineNumber ?? ""}</Text>
+          <Text style={[styles.sign, cell?.type === "add" ? styles.addText : styles.removeText]}>
+            {signFor(cell?.type)}
+          </Text>
+          {hasBoth ? (
+            <Text style={styles.both} numberOfLines={1} accessibilityLabel={sharedLabel}>
+              {both ? "Both" : ""}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+      <WrappedCode row={row} side={side} tokens={tokens} />
+    </View>
+  );
+}
+
+/**
+ * A and B side by side. Each row is drawn across both columns at once, so a line
+ * that wraps further on one side grows the row on both and the sides stay level.
+ */
+function PairedRegion({
+  rows,
+  sides,
+  tokens,
+  aligned,
+  hasBoth,
+  numberWidth,
+  showStatus,
+}: {
+  rows: ThreeWayRow[];
+  sides: readonly Side[];
+  tokens: Tokens;
+  aligned: boolean;
+  hasBoth: boolean;
+  numberWidth: number;
+  showStatus: boolean;
+}) {
+  const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
+  return (
+    <>
+      {showStatus ? (
+        <View style={styles.pair}>
+          {sides.map((side) => (
+            <Text key={side} numberOfLines={1} style={[styles.column, styles.regionStatus]}>
+              {sideChanged(rows, side) ? " " : "No changes in this region"}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+      {rows.map((row) => (
+        <View key={row.key} style={styles.pair}>
+          {sides.map((side) => (
+            <View key={side} style={[styles.column, styles.wrappedBody]} dataSet={SIDE_DATA[side]}>
+              <WrappedLine
+                shown={describeRow(row, side, aligned)}
+                side={side}
+                tokens={tokens}
+                hasBoth={hasBoth}
+                numberStyle={numberStyle}
+              />
+            </View>
+          ))}
+        </View>
+      ))}
+    </>
+  );
+}
+
 function Column({
   rows,
   side,
@@ -140,26 +282,15 @@ function Column({
   stacked: boolean;
   showStatus: boolean;
 }) {
-  const changed = rows.some((row) => row[side] && row[side]?.type !== "context");
+  const changed = sideChanged(rows, side);
   const shownRows = useMemo(
     () =>
-      (stacked ? rows.filter((row) => row[side] !== null) : rows).map((row) => {
-        const cell = row[side];
-        const both = bothChanged(row, aligned);
-        const sharedLabel =
-          cell?.type === "remove" ? "Removed by both agents" : "Added by both agents";
-        return {
-          row,
-          cell,
-          both,
-          oldNumber: cell && cell.type !== "add" ? (row.base?.lineNumber ?? "") : "",
-          sharedLabel: both ? sharedLabel : undefined,
-          dataSet: { rowKey: row.key, change: cell?.type ?? "absent", both: String(both) },
-        };
-      }),
+      (stacked ? rows.filter((row) => row[side] !== null) : rows).map((row) =>
+        describeRow(row, side, aligned),
+      ),
     [aligned, rows, side, stacked],
   );
-  const columnData = useMemo(() => ({ comparisonSide: side }), [side]);
+  const columnData = SIDE_DATA[side];
   const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
   return (
     <View style={styles.column} dataSet={columnData}>
@@ -168,52 +299,17 @@ function Column({
           {changed ? " " : "No changes in this region"}
         </Text>
       ) : null}
-      <View style={styles.columnBody}>
-        <View style={styles.gutter}>
-          {shownRows.map(({ row, cell, both, oldNumber, sharedLabel }) => {
-            const tone = toneFor(cell?.type);
-            return (
-              <View key={row.key} style={[styles.gutterRow, tone]}>
-                <Text style={[styles.number, numberStyle]}>{oldNumber}</Text>
-                <Text style={[styles.number, numberStyle]}>{cell?.lineNumber ?? ""}</Text>
-                <Text
-                  style={[styles.sign, cell?.type === "add" ? styles.addText : styles.removeText]}
-                >
-                  {signFor(cell?.type)}
-                </Text>
-                {hasBoth ? (
-                  <Text style={styles.both} numberOfLines={1} accessibilityLabel={sharedLabel}>
-                    {both ? "Both" : ""}
-                  </Text>
-                ) : null}
-              </View>
-            );
-          })}
-        </View>
-        <View style={styles.codeScroll}>
-          {shownRows.map(({ row, cell, dataSet }) => {
-            const removed = cell?.type === "remove";
-            const source = removed ? tokens.base : tokens[side];
-            const line = removed ? row.base?.lineNumber : cell?.lineNumber;
-            const matched =
-              cell && line != null ? tokensSpelling(source.get(line), cell.content) : undefined;
-            const tone = toneFor(cell?.type);
-            return (
-              <View key={row.key} style={[styles.codeRow, tone]} dataSet={dataSet}>
-                {cell && matched ? (
-                  <TokenText
-                    tokens={matched}
-                    segments={cell.segments}
-                    lineStyle={styles.codeText}
-                    highlightStyle={removed ? styles.removeHighlight : styles.addHighlight}
-                  />
-                ) : (
-                  <Text style={styles.codeText}>{cell?.content || " "}</Text>
-                )}
-              </View>
-            );
-          })}
-        </View>
+      <View style={styles.wrappedBody}>
+        {shownRows.map((shown) => (
+          <WrappedLine
+            key={shown.row.key}
+            shown={shown}
+            side={side}
+            tokens={tokens}
+            hasBoth={hasBoth}
+            numberStyle={numberStyle}
+          />
+        ))}
       </View>
     </View>
   );
@@ -240,6 +336,7 @@ function ReadyDiff({
   const [full, setFull] = useState(false);
   const [revealed, setRevealed] = useState<ReadonlySet<number>>(() => new Set());
   const [seenLayout, setSeenLayout] = useState(layout);
+  const [headerHeight, setHeaderHeight] = useState(0);
   const saved = useRef<{ scrollTop: number; anchor: string | null; side: Side } | null>(null);
   if (seenLayout !== layout) {
     setSeenLayout(layout);
@@ -318,6 +415,10 @@ function ReadyDiff({
     [],
   );
   const showAll = useCallback(() => setFull(true), []);
+  const measureHeader = useCallback(
+    (event: LayoutChangeEvent) => setHeaderHeight(event.nativeEvent.layout.height),
+    [],
+  );
   const { blocks, truncated: previewLimited } = useMemo(() => {
     const all = buildThreeWayBlocks(diff.rows, revealed, "both", 3, diff.breaks);
     return full ? { blocks: all, truncated: false } : limitThreeWayBlocks(all, MAX_RENDERED_ROWS);
@@ -342,6 +443,7 @@ function ReadyDiff({
       );
     return Math.max(20, String(largest).length * 8);
   }, [diff]);
+  const labelSticky = stickyLabelStyle(headerHeight);
   const stacked = layout === "single" || mode !== null;
   const sides = mode ? [mode] : SIDES;
   const renderBlock = (
@@ -363,43 +465,64 @@ function ReadyDiff({
         side !== waitingFor &&
         !block.rows.some((row) => row[side] && row[side]?.type !== "context"),
     );
+    const paired =
+      !options.stackedRows && !options.labels && !shown.some((side) => side === waitingFor);
     return (
       <View
         key={block.key}
-        style={options.stackedRows ? styles.stackedRegion : styles.pair}
+        style={options.stackedRows || paired ? styles.stackedRegion : styles.pair}
         testID={`arena-diff-region-${block.key}`}
       >
-        {shown.map((side) =>
-          side === waitingFor ? (
-            // Stacked, the working side's slot is one line per region.
-            <View key={side} style={styles.pendingLine} testID={`arena-diff-pending-${side}`}>
-              <Text style={[styles.pendingWho, side === "a" ? styles.agentA : styles.agentB]}>
-                {labelFor(side)}
-              </Text>
-              <Text style={styles.pendingText} numberOfLines={1}>
-                is still working · its version of this region appears here
-              </Text>
-            </View>
-          ) : (
-            <View key={side} style={styles.column}>
-              {options.labels ? (
-                <Text style={[styles.regionLabel, side === "a" ? styles.agentA : styles.agentB]}>
-                  {labelFor(side)}
-                </Text>
-              ) : null}
-              <Column
-                rows={block.rows}
-                side={side}
-                tokens={tokens}
-                aligned={diff.aligned}
-                hasBoth={hasBoth}
-                numberWidth={numberWidth}
-                stacked={options.stackedRows}
-                showStatus={showStatus}
-              />
-            </View>
-          ),
-        )}
+        {paired ? (
+          <PairedRegion
+            rows={block.rows}
+            sides={shown}
+            tokens={tokens}
+            aligned={diff.aligned}
+            hasBoth={hasBoth}
+            numberWidth={numberWidth}
+            showStatus={showStatus}
+          />
+        ) : null}
+        {paired
+          ? null
+          : shown.map((side) =>
+              side === waitingFor ? (
+                // Stacked, the working side's slot is one line per region.
+                <View key={side} style={styles.pendingLine} testID={`arena-diff-pending-${side}`}>
+                  <Text style={[styles.pendingWho, side === "a" ? styles.agentA : styles.agentB]}>
+                    {labelFor(side)}
+                  </Text>
+                  <Text style={styles.pendingText} numberOfLines={1}>
+                    is still working · its version of this region appears here
+                  </Text>
+                </View>
+              ) : (
+                <View key={side} style={styles.column}>
+                  {options.labels ? (
+                    <Text
+                      style={[
+                        styles.regionLabel,
+                        side === "a" ? styles.agentA : styles.agentB,
+                        labelSticky,
+                      ]}
+                    >
+                      {labelFor(side)}
+                    </Text>
+                  ) : null}
+                  <Column
+                    rows={block.rows}
+                    side={side}
+                    tokens={tokens}
+                    aligned={diff.aligned}
+                    hasBoth={hasBoth}
+                    numberWidth={numberWidth}
+                    stacked={options.stackedRows}
+                    showStatus={showStatus}
+                  />
+                </View>
+              ),
+            )}
       </View>
     );
   };
@@ -417,7 +540,7 @@ function ReadyDiff({
       testID="arena-inline-diff"
       dataSet={viewportData}
     >
-      <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA}>
+      <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA} onLayout={measureHeader}>
         <View style={styles.toolbar}>
           <Text style={styles.caption}>
             {mode ? `${labelFor(mode)} · Changes from original` : "Changes from original"}
@@ -616,13 +739,6 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface1,
   },
   stackedRegion: { minWidth: 0 },
-  columnBody: {
-    flexDirection: "row",
-    minWidth: 0,
-    borderLeftWidth: 1,
-    borderLeftColor: theme.colors.border,
-  },
-  gutter: { backgroundColor: theme.colors.surface1 },
   gutterRow: {
     height: diffRowHeight(theme),
     flexDirection: "row",
@@ -652,19 +768,29 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     textAlign: "center",
   },
-  codeScroll: { flex: 1, minWidth: 0, ...(isWeb ? { overflowX: "auto" as const } : null) },
-  codeRow: {
-    height: diffRowHeight(theme),
-    minWidth: "100%",
-    justifyContent: "center",
+  wrappedBody: { minWidth: 0, borderLeftWidth: 1, borderLeftColor: theme.colors.border },
+  wrappedRow: { flexDirection: "row", flexGrow: 1, minHeight: diffRowHeight(theme) },
+  wrappedGutter: {
+    height: "auto",
+    minHeight: diffRowHeight(theme),
+    alignItems: "flex-start",
+    paddingVertical: diffRowInset(theme),
+    flexGrow: 1,
+  },
+  wrappedGutterBg: { backgroundColor: theme.colors.surface1 },
+  wrappedCode: {
+    flex: 1,
+    minWidth: 0,
     paddingHorizontal: theme.spacing[1],
+    paddingVertical: diffRowInset(theme),
   },
   codeText: {
     fontFamily: theme.fontFamily.mono,
     fontSize: theme.fontSize.code,
     lineHeight: diffTextHeight(theme),
     color: theme.colors.foreground,
-    ...(isWeb ? { whiteSpace: "pre" as const, overflowWrap: "normal" as const } : null),
+    // Lines always wrap, so nothing hides past the edge of a narrow column.
+    ...(isWeb ? { whiteSpace: "pre-wrap" as const, overflowWrap: "anywhere" as const } : null),
   },
   add: { backgroundColor: tint(theme.colors.diffAddition, 13) },
   remove: { backgroundColor: tint(theme.colors.diffDeletion, 13) },
