@@ -77,6 +77,7 @@ body {
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
 }
 a,
 button {
@@ -88,12 +89,20 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* Laid over the header's top padding so the header sits exactly where it does on the
+   leaderboard page, which has no bar. */
 .duel-bar {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  right: 0;
   height: 3px;
   background: linear-gradient(90deg, var(--side-a) 0 50%, var(--side-b) 50% 100%);
 }
 
 .site-header {
+  position: relative;
   background: var(--bg);
   border-bottom: 1px solid var(--rule);
 }
@@ -235,6 +244,21 @@ h1 span {
 .leaderboard {
   grid-column: 1 / -1;
   justify-self: center;
+}
+.remote {
+  margin: 20px 0 0;
+  font-size: 14px;
+}
+.remote a {
+  color: var(--muted);
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.remote a:hover {
+  color: var(--text);
+  text-decoration-color: var(--text);
 }
 
 .site-footer {
