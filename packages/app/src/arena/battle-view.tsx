@@ -4,6 +4,7 @@ import {
   Text,
   View,
   useWindowDimensions,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from "react-native";
@@ -29,7 +30,11 @@ import { arenaSizeErrorOr, isArenaSizeError } from "./chat-too-large";
 import { ArenaRunTaskFooter } from "./task-progress-card";
 import { openArenaWorktreeChanges } from "./explorer-selection";
 import { ARENA_RUN_META_HEIGHT, ArenaRunMeta } from "./run-meta";
-import { ArenaMessageAnchorProvider, ArenaRunTurnsMenu } from "./run-turns";
+import {
+  ArenaMessageAnchorProvider,
+  ArenaPauseFollowProvider,
+  ArenaRunTurnsMenu,
+} from "./run-turns";
 import type { ArenaTurnAction } from "./use-arena-session";
 import { useArenaBattleActions } from "./use-battle-actions";
 import { arenaChangesRows } from "./changes-rows";
@@ -184,6 +189,7 @@ function BattlePane({
   const [awayFromLatest, setAwayFromLatest] = useState(false);
   const contentHeightRef = useRef(0);
   const scrollOffsetRef = useRef(0);
+  const viewportHeightRef = useRef(0);
   const threadAreaRef = useRef<View>(null);
   const messageAnchorsRef = useRef(new Map<string, View>());
   const registerMessageAnchor = useCallback((messageId: string, node: View | null) => {
@@ -202,12 +208,33 @@ function BattlePane({
     setAwayFromLatest(false);
     scrollToLatest();
   }, [run?.id, scrollToLatest]);
+  // Content or a pane that resizes while following is paused does not scroll, so no scroll event
+  // says where the reader now is. Closing history again can leave them at the bottom.
+  const resyncPausedFollow = useCallback(() => {
+    if (autoScrollEnabledRef.current) return;
+    const distanceFromBottom =
+      contentHeightRef.current - viewportHeightRef.current - scrollOffsetRef.current;
+    const atLatest = distanceFromBottom <= 24;
+    autoScrollEnabledRef.current = atLatest;
+    setAwayFromLatest(!atLatest);
+  }, []);
   const handleContentSizeChange = useCallback(
     (_width: number, height: number) => {
       contentHeightRef.current = height;
-      scrollToLatest();
+      if (autoScrollEnabledRef.current) scrollToLatest();
+      else resyncPausedFollow();
     },
-    [scrollToLatest],
+    [resyncPausedFollow, scrollToLatest],
+  );
+  const pauseFollow = useCallback(() => {
+    autoScrollEnabledRef.current = false;
+  }, []);
+  const handleThreadLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      viewportHeightRef.current = event.nativeEvent.layout.height;
+      resyncPausedFollow();
+    },
+    [resyncPausedFollow],
   );
   const handleScrollBeginDrag = useCallback(() => {
     userScrollActiveRef.current = true;
@@ -219,6 +246,7 @@ function BattlePane({
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
       scrollOffsetRef.current = contentOffset.y;
+      viewportHeightRef.current = layoutMeasurement.height;
       const contentChangedBeforeCallback = contentSize.height !== contentHeightRef.current;
       if (
         contentChangedBeforeCallback &&
@@ -280,16 +308,19 @@ function BattlePane({
     [onPermissionResponse, run],
   );
   // The pane height follows the window, so it is an inline pixel value rather than a
-  // registered style (docs/unistyles.md, dynamic pixel styles on web).
+  // registered style (docs/unistyles.md, dynamic pixel styles on web). A settled run folds its
+  // work above the answer, so its pane shrinks to fit: at the resting height the answer would
+  // sit high in an empty pane, out of view when the chat follows the review below it.
+  const settled = runIsFinal(run);
   const paneStyle = useMemo(
     () => [
       styles.pane,
       hidden && styles.paneHidden,
       stacked && styles.paneStacked,
       showDivider && (stacked ? styles.paneStackedDivider : styles.paneDivider),
-      inlineUnistylesStyle({ height: maxHeight }),
+      inlineUnistylesStyle(settled ? { maxHeight } : { height: maxHeight }),
     ],
-    [hidden, maxHeight, showDivider, stacked],
+    [hidden, maxHeight, settled, showDivider, stacked],
   );
   // The run exists from the moment its session is forked, which is before the worktrees are
   // ready and well before its prompt is dispatched. Treating that as started swaps the pane to
@@ -382,20 +413,23 @@ function BattlePane({
             onScrollBeginDrag={handleScrollBeginDrag}
             onScrollEndDrag={handleScrollEndDrag}
             onContentSizeChange={handleContentSizeChange}
+            onLayout={handleThreadLayout}
             testID={`arena-thread-${side}`}
           >
             {dispatched ? (
               <ArenaMessageAnchorProvider value={registerMessageAnchor}>
-                <ArenaRunThread
-                  run={dispatched}
-                  stoppedByEarlyPick={stoppedByEarlyPick}
-                  queuedSteers={queuedSteers}
-                  retry={retry}
-                  respondingQuestionId={respondingQuestionId}
-                  respondingPermissionId={respondingPermissionId}
-                  onQuestionResponse={handleQuestionResponse}
-                  onPermissionResponse={handlePermissionResponse}
-                />
+                <ArenaPauseFollowProvider value={pauseFollow}>
+                  <ArenaRunThread
+                    run={dispatched}
+                    stoppedByEarlyPick={stoppedByEarlyPick}
+                    queuedSteers={queuedSteers}
+                    retry={retry}
+                    respondingQuestionId={respondingQuestionId}
+                    respondingPermissionId={respondingPermissionId}
+                    onQuestionResponse={handleQuestionResponse}
+                    onPermissionResponse={handlePermissionResponse}
+                  />
+                </ArenaPauseFollowProvider>
               </ArenaMessageAnchorProvider>
             ) : null}
           </ScrollView>
@@ -530,6 +564,10 @@ function BattleJudging({
       retryingDiff={diffQuery.isFetching}
     />
   );
+}
+
+function runIsFinal(run: ArenaRun | undefined): boolean {
+  return run !== undefined && run.runState !== "pending";
 }
 
 function runsAreFinal(runA: ArenaRun | undefined, runB: ArenaRun | undefined): boolean {

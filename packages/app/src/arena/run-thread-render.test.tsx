@@ -64,6 +64,7 @@ vi.mock("@/arena/task-progress-card", () => ({ ArenaTaskProgressCard: () => null
 vi.mock("@/arena/prompt-attachment-pills", () => ({ arenaMessageAttachmentPills: () => [] }));
 vi.mock("./run-turns", () => ({
   ArenaMessageAnchor: ({ children }: { children: React.ReactNode }) => children,
+  useArenaPauseFollow: () => null,
 }));
 
 import { ArenaRunThread } from "./run-thread";

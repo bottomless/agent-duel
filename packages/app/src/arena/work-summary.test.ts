@@ -520,6 +520,32 @@ describe("projectArenaActivityRows", () => {
     expect(rows[3]).toMatchObject({ kind: "segment", segment: final });
   });
 
+  it("keeps an exchange a later message followed folded while the run answers it", () => {
+    const first = segment("first", text("First update"), [toolPart("read", { filePath: "a.ts" })]);
+    const answer = segment("answer", text("Answer"));
+
+    const rows = projectArenaActivityRows([first, answer], "pending", undefined, {
+      superseded: true,
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["earlier", "segment"]);
+    expect(rows[1]).toMatchObject({ kind: "segment", segment: answer });
+  });
+
+  it("keeps the last update and its work in view when a steer cut the exchange off", () => {
+    const first = segment("first", text("First update"));
+    const last = segment("last", text("Running a command"), [
+      toolPart("bash", { command: "sleep 25" }),
+    ]);
+
+    const rows = projectArenaActivityRows([first, last], "pending", undefined, {
+      superseded: true,
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["earlier", "segment"]);
+    expect(rows[1]).toMatchObject({ kind: "segment", segment: last });
+  });
+
   it("leaves a run with no final text, or only a final text, unfolded", () => {
     const workOnly = segment("work", null, [toolPart("bash", { command: "npm test" })]);
     expect(projectArenaActivityRows([workOnly], "error").map((row) => row.kind)).toEqual([

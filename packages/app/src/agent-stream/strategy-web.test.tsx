@@ -9,6 +9,7 @@ import { RetainedPanelActivity } from "@/components/retained-panel";
 import type { StreamItem } from "@/types/stream";
 import type { StreamRenderInput, StreamSegmentRenderers, StreamViewportHandle } from "./strategy";
 import { createWebStreamStrategy } from "./strategy-web";
+import { useHoldStreamPosition, type HoldStreamPosition } from "./hold-position";
 
 vi.hoisted(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -1315,5 +1316,90 @@ describe("createWebStreamStrategy", () => {
     });
     expect(container.querySelector('[data-testid="agent-chat-scroll"]')).toBe(scrollContainer);
     expect(scrollTo).toHaveBeenCalledWith({ top: 2200, behavior: "auto" });
+  });
+
+  it("holds a toggled row in place instead of following output", () => {
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      value: class ResizeObserver {
+        constructor(callback: ResizeObserverCallback) {
+          resizeCallbacks.push(callback);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    });
+    const scrollTo = vi.fn();
+    HTMLElement.prototype.scrollTo = scrollTo;
+    let hold: HoldStreamPosition | null = null;
+    function HoldProbe() {
+      hold = useHoldStreamPosition();
+      return <div data-testid="held-row" />;
+    }
+    const strategy = createWebStreamStrategy({ isMobileBreakpoint: false });
+    const onNearBottomChange = vi.fn();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    act(() => {
+      root?.render(
+        strategy.render({
+          agentId: "agent",
+          segments: { historyVirtualized: [], historyMounted: [userMessage(1)], liveHead: [] },
+          boundary: { hasVirtualizedHistory: false, hasMountedHistory: true, hasLiveHead: false },
+          renderers: { ...createRenderers(vi.fn()), renderHistoryMountedRow: () => <HoldProbe /> },
+          listEmptyComponent: null,
+          viewportRef: React.createRef<StreamViewportHandle>(),
+          routeBottomAnchorRequest: null,
+          isAuthoritativeHistoryReady: true,
+          onNearBottomChange,
+          onNearHistoryStart: vi.fn().mockReturnValue(true),
+          isLoadingOlderHistory: false,
+          hasOlderHistory: false,
+          olderHistoryProgressKey: null,
+          scrollEnabled: true,
+          listStyle: null,
+          baseListContentContainerStyle: null,
+          forwardListContentContainerStyle: null,
+        }),
+      );
+    });
+
+    const scrollContainer = container.querySelector('[data-testid="agent-chat-scroll"]');
+    const row = container.querySelector('[data-testid="held-row"]');
+    if (!(scrollContainer instanceof HTMLElement) || !(row instanceof HTMLElement)) {
+      throw new Error("Expected the scroll container and the probe row");
+    }
+    let scrollTop = 400;
+    Object.defineProperty(scrollContainer, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(scrollContainer, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(scrollContainer, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    let rowTop = 167;
+    vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => ({ top: rowTop }) as DOMRect);
+
+    act(() => {
+      hold?.(row);
+    });
+    // The row opened and the pane grew by 126px above the end the transcript was pinned to.
+    Object.defineProperty(scrollContainer, "scrollHeight", { configurable: true, value: 1126 });
+    rowTop = 41;
+    scrollTo.mockClear();
+    act(() => {
+      for (const callback of resizeCallbacks) {
+        callback([], {} as ResizeObserver);
+      }
+    });
+
+    expect(scrollTop).toBe(274);
+    expect(scrollTo).not.toHaveBeenCalled();
   });
 });

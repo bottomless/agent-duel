@@ -1,4 +1,12 @@
-import { Fragment, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Text, View } from "react-native";
 import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -13,6 +21,8 @@ import {
 import { QuestionFormCard } from "@/components/question-form-card";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
+import { isWeb } from "@/constants/platform";
+import { useHoldStreamPosition } from "@/agent-stream/hold-position";
 import { arenaThreadMessages } from "./run-thread-selection";
 import {
   arenaPendingQuestions,
@@ -32,7 +42,7 @@ import { arenaRunErrorToShow, STOPPED_BY_EARLY_PICK_NOTE } from "./battle-result
 import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
-import { ArenaMessageAnchor } from "./run-turns";
+import { ArenaMessageAnchor, useArenaPauseFollow } from "./run-turns";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
 import { arenaQueuedSteering, arenaToolOutput } from "./steering";
 import { ArenaPartSourceContext, arenaToolPartPreviewed, useFullToolPart } from "./full-tool-part";
@@ -467,7 +477,17 @@ function ArenaEarlierActivity({
   context: AssistantPartsContext;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const toggle = useCallback(() => setExpanded((current) => !current), []);
+  const rowRef = useRef<View>(null);
+  const pauseFollow = useArenaPauseFollow();
+  const holdStreamPosition = useHoldStreamPosition();
+  // A done pane is only as tall as its content, so opening the row grows the battle; the chat
+  // would follow its end and carry the row up from under the pointer.
+  const toggle = useCallback(() => {
+    pauseFollow?.();
+    const row = rowRef.current;
+    if (isWeb && row instanceof HTMLElement) holdStreamPosition?.(row);
+    setExpanded((current) => !current);
+  }, [holdStreamPosition, pauseFollow]);
   const parts = useMemo(
     () =>
       segments.flatMap((segment) =>
@@ -478,10 +498,11 @@ function ArenaEarlierActivity({
     [segments],
   );
   const hasWork = parts.some(arenaPartIsWork);
-  const label = useMemo(
-    () => (hasWork ? arenaWorkSummaryLabel(summarizeArenaWork(parts), false) : "Earlier updates"),
-    [hasWork, parts],
-  );
+  const label = useMemo(() => {
+    if (hasWork) return arenaWorkSummaryLabel(summarizeArenaWork(parts), false);
+    const updates = segments.filter((segment) => segment.content !== null).length;
+    return `${updates} earlier ${updates === 1 ? "update" : "updates"}`;
+  }, [hasWork, parts, segments]);
   const renderDetails = useCallback(
     () => (
       <View style={styles.historyDetails}>
@@ -499,20 +520,22 @@ function ArenaEarlierActivity({
     [context, segments],
   );
   return (
-    <ExpandableBadge
-      testID="arena-earlier-activity"
-      label={label}
-      isExpanded={expanded}
-      onToggle={toggle}
-      renderDetails={renderDetails}
-      disableOuterSpacing
-      borderlessWhenExpanded
-      bandWhenExpanded
-      compactLabel
-      labelTextStyle={styles.earlierActivityLabel}
-      alwaysShowChevron
-      flushRow
-    />
+    <View ref={rowRef} collapsable={false}>
+      <ExpandableBadge
+        testID="arena-earlier-activity"
+        label={label}
+        isExpanded={expanded}
+        onToggle={toggle}
+        renderDetails={renderDetails}
+        disableOuterSpacing
+        borderlessWhenExpanded
+        bandWhenExpanded
+        compactLabel
+        labelTextStyle={styles.earlierActivityLabel}
+        alwaysShowChevron
+        flushRow
+      />
+    </View>
   );
 }
 
@@ -537,8 +560,11 @@ function ArenaActivityGroup({
     segments.length === 0 && awaitingResponse
       ? [{ key: `${messageIds[0]}:activity`, content: null, trailing: [] }]
       : segments;
-  const rows = projectArenaActivityRows(visibleSegments, context.run.runState, (segment) =>
-    segmentStandsAlone(segment, context),
+  const rows = projectArenaActivityRows(
+    visibleSegments,
+    context.run.runState,
+    (segment) => segmentStandsAlone(segment, context),
+    { superseded: !isLatest },
   );
   return rows.map((row) =>
     row.kind === "earlier" ? (

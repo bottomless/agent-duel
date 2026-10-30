@@ -99,17 +99,22 @@ export type ArenaActivityRow =
   | { kind: "earlier"; key: string; segments: ArenaActivitySegment[] }
   | { kind: "segment"; key: string; segment: ArenaActivitySegment };
 
+/**
+ * A group a later message followed is settled even while the run answers that message, so a
+ * follow-up does not reopen the exchanges before it.
+ */
 export function projectArenaActivityRows(
   segments: readonly ArenaActivitySegment[],
   runState: ArenaRun["runState"],
   isStandalone: (segment: ArenaActivitySegment) => boolean = () => false,
+  options: { superseded?: boolean } = {},
 ): ArenaActivityRow[] {
-  const finalTextIndex =
-    runState === "pending"
-      ? -1
-      : segments.findLastIndex(
-          (segment) => segment.content !== null && partIsTextUpdate(segment.content.part),
-        );
+  const settled = options.superseded === true || runState !== "pending";
+  const foldBefore = settled
+    ? segments.findLastIndex(
+        (segment) => segment.content !== null && partIsTextUpdate(segment.content.part),
+      )
+    : -1;
   const rows: ArenaActivityRow[] = [];
   let earlier: ArenaActivitySegment[] = [];
   const flushEarlier = () => {
@@ -118,7 +123,7 @@ export function projectArenaActivityRows(
     earlier = [];
   };
   for (const [index, segment] of segments.entries()) {
-    if (finalTextIndex > 0 && index < finalTextIndex && !isStandalone(segment)) {
+    if (index < foldBefore && !isStandalone(segment)) {
       earlier.push(segment);
       continue;
     }
