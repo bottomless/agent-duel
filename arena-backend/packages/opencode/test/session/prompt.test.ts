@@ -301,6 +301,8 @@ const outputLimitSession = Effect.fn("test.outputLimitSession")(function* () {
     rootSessionID: chat.id,
     scopeID: chat.id,
     assignmentID: chat.id,
+    // A chat outside a battle runs on the medium model, and the proxy refuses any other.
+    modelSize: "medium",
     telemetry: false,
   })
   yield* Effect.addFinalizer(() =>
@@ -684,6 +686,51 @@ idleIt.instance("Arena recovers model idle with smaller requests and preserves p
     expect(next).toContain("Partial before timeout.")
     expect(next).toContain("at most 100 lines")
     expect(next).toContain("Do not repeat successful tool calls")
+  }),
+)
+
+idleIt.instance("Arena restarts a reply that stalled before it wrote anything", () =>
+  Effect.gen(function* () {
+    const { chat, llm, session } = yield* outputLimitSession()
+    const prompt = yield* SessionPrompt.Service
+    yield* llm.push(
+      raw({
+        chunks: [
+          { choices: [{ index: 0, delta: { reasoning: "[Thinking redacted]" }, finish_reason: null }] },
+          { choices: [{ index: 0, delta: {}, finish_reason: "unknown" }] },
+        ],
+      }),
+      reply().text("Recovered.").stop(),
+    )
+    const result = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Create a large file" }] })
+    expect(result.info).toMatchObject({ finish: "stop" })
+    const messages = yield* session.messages({ sessionID: chat.id })
+    const stalled = messages.find((m) => m.info.role === "assistant" && m.info.finish === "arena-idle")!
+    expect(stalled.parts.some((part) => part.type === "reasoning")).toBe(true)
+    const next = (yield* llm.inputs)[1] as { messages: { role: string }[] }
+    expect(next.messages.filter((message) => message.role === "assistant")).toEqual([])
+    expect(JSON.stringify(next)).toContain("before it wrote anything")
+  }),
+)
+
+idleIt.instance("Arena bounds recovery of replies that stall before they write anything", () =>
+  Effect.gen(function* () {
+    const { chat, llm } = yield* outputLimitSession()
+    const prompt = yield* SessionPrompt.Service
+    const thinking = () =>
+      raw({
+        chunks: [
+          { choices: [{ index: 0, delta: { reasoning: "[Thinking redacted]" }, finish_reason: null }] },
+          { choices: [{ index: 0, delta: {}, finish_reason: "unknown" }] },
+        ],
+      })
+    yield* llm.push(thinking(), thinking(), thinking(), thinking())
+    const result = yield* prompt.prompt({ sessionID: chat.id, parts: [{ type: "text", text: "Create a large file" }] })
+    expect(result.info).toMatchObject({
+      finish: "arena-idle",
+      error: { name: "APIError", data: { isRetryable: false, message: ArenaResponseRecovery.IDLE_EXHAUSTED } },
+    })
+    expect(yield* llm.hits).toHaveLength(4)
   }),
 )
 
