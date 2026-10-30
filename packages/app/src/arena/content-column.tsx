@@ -65,11 +65,12 @@ const styles = StyleSheet.create((theme) => ({
   inset: {
     paddingHorizontal: theme.spacing[2],
   },
-  // The stream list's gutter, undone: `listContentContainer` in agent-stream/view.tsx and the
-  // draft tab's `draftBattleListPadding` both inset by these amounts.
+  // The stream list's gutter, undone: the web stream's `contentContainerStyle`
+  // (agent-stream/strategy-web.tsx) and the draft tab's `draftBattleListPadding` both inset by
+  // these amounts, the smaller one below `md`, where the stream counts as compact.
   bleed: {
     marginHorizontal: {
-      xs: -theme.spacing[3],
+      xs: -theme.spacing[2],
       md: -theme.spacing[4],
     },
   },
