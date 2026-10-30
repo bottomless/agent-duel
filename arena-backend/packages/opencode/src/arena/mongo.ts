@@ -1603,11 +1603,19 @@ export class Store {
     if (existing) return existing
     // The transcript and its images are written when the run ends and are its record. The run budget
     // bounds the per-call artifacts written before them, which a long run can fill on its own.
-    const record = input.kind === "transcript" || input.kind === "image"
+    const record = input.kind === "transcript" || input.kind === "image" || input.kind === "generation_manifest"
+    // Request components are shared by content across runs, so no one run's budget owns them. They
+    // stay outside it, and the per-artifact limit still drops an oversized one whole.
+    const component = input.kind === "generation_component"
     const totals =
-      input.runID && !record
-        ? (await this.artifacts.find({ runID: input.runID }, { projection: { storedSize: 1 } }).toArray()).reduce(
-            (sum, artifact) => sum + artifact.storedSize,
+      input.runID && !record && !component
+        ? (
+            await this.artifacts.find({ runID: input.runID }, { projection: { storedSize: 1, kind: 1 } }).toArray()
+          ).reduce(
+            (sum, artifact) =>
+              artifact.kind === "generation_component" || artifact.kind === "generation_manifest"
+                ? sum
+                : sum + artifact.storedSize,
             0,
           )
         : 0
@@ -1615,8 +1623,8 @@ export class Store {
       data: input.data,
       runStoredBytes: totals,
       ...(record ? { artifactLimit: input.data.byteLength, runLimit: input.data.byteLength } : {}),
-      // A gzip stream or an image cut short does not decode.
-      whole: input.compression === "gzip" || input.kind === "image",
+      ...(component ? { runLimit: input.data.byteLength } : {}),
+      whole: input.compression === "gzip" || input.kind === "image" || input.kind === "generation_component",
     })
     return insertIdempotent(this.artifacts, {
       ...input,

@@ -78,12 +78,12 @@ are served from the current signed-in daemon session.
 The runtime schedules selected snapshots after local writes. Research snapshots
 include chats, turns, runs, generation metadata, structured events,
 comparisons, single-agent ratings, session archives, and transcript or patch
-artifacts. Raw events and per-call full request, response, tool-output, and
-other artifacts are excluded. Each upload request is at most 3 MiB and each
-record is at most 2 MiB. A record over the limit is logged and dropped; its
-local copy remains available. The uploader keeps bounded memory, allows one
-request at a time, and drops failures without a persistent queue, retry, or
-backfill.
+artifacts. Raw events and per-call full request (including request component
+manifests), response, tool-output, and other artifacts are excluded. Each upload
+request is at most 3 MiB and each record is at most 2 MiB. A record over the
+limit is logged and dropped; its local copy remains available. The uploader keeps
+bounded memory, allows one request at a time, and drops failures without a
+persistent queue, retry, or backfill.
 
 The Paseo daemon otherwise uses **file-based JSON persistence** instead of a traditional database. All data is validated at runtime with Zod schemas. Most stores write atomically (write to temp file, then rename); a few still use plain `writeFile` — see each section. There is no schema-versioning/migration framework — schemas rely on optional fields with defaults for forward compatibility, with a small amount of inline normalization in `persisted-config.ts` for legacy provider/speech entries.
 

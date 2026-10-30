@@ -678,6 +678,8 @@ export type ArtifactDocument = {
     | "tool_output"
     | "generation_request"
     | "generation_response"
+    | "generation_component"
+    | "generation_manifest"
     | "patch"
     | "transcript"
     | "image"

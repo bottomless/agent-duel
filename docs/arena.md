@@ -1052,9 +1052,26 @@ field. Each layer has its own file:
   request: a single-agent chat replays the previous message's envelopes under that message's new
   scope, and a running turn loses its sealed reasoning when the key rotates. Cloud instances must
   share that key. BYOK sealing provides no secrecy from the user who owns that key.
-  Runtime-only usage can continue through the transport, but the telemetry copy never persists
-  generation request bodies because system prompts and tool
-  schemas can fingerprint the provider. It drops per-side token counts, native finish reasons,
+  Runtime-only usage can continue through the transport. The telemetry copy stores each generation's
+  request as a component manifest (`arena/request-manifest.ts`): the body the proxy dispatched —
+  neutral `contestant` model, `provider` stripped, the engine's system prompt and tool schemas,
+  which the engine builds without knowing the model — split into `params`, `system`, `tools`, and
+  one artifact per message under `component|${sha}`, listed with the body's key order by a
+  per-generation manifest under `${generationID}|manifest`. Components are named by the SHA-256 of
+  their JSON text alone, so both sides and every later turn of a chat share the history they resend,
+  and `loadRequest` rebuilds the body byte for byte. Every base64 data URL in a message (pasted
+  screenshots, images and PDFs a tool read) leaves it as raw bytes under `media|${sha}`. Messages
+  get the same scrub as responses (tool-call ids, provider reasoning metadata), because both are
+  provider-shaped: a rebuild is the scrubbed body, not what OpenRouter received, which also carries
+  the drawn model, its routing, and the cache key the service adds. Params, system, and tool schemas
+  stay byte-exact, because a tool parameter may be named `model`. The manifest is written after the
+  request leaves and before its response artifact; a failed write is logged and the call goes on.
+  Components sit outside the run's artifact budget and its total, since no one run owns a shared
+  one; the per-artifact limit still drops an oversized one whole, and `loadRequest` names it as
+  missing. Captured after the local rewrite, the manifest cannot name the draw, and like every
+  non-transcript artifact it never uploads. Single-agent chats, keep-alive pings, and the service's
+  own calls (judge, chat title, commit text) are not captured this way.
+  The telemetry copy drops per-side token counts, native finish reasons,
   provider-specific reasoning metadata, identity fields, and raw upstream errors from stored
   responses, and rewrites provider-shaped tool-call ids before saving response artifacts. The
   control plane holds generation usage, cost, and finish reason and returns them only with the
