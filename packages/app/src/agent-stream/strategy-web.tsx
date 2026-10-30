@@ -20,6 +20,7 @@ import {
   STREAM_HISTORY_START_SLOT_HEIGHT,
 } from "./spacing";
 import { estimateStreamItemHeight } from "./web-virtualization";
+import { HoldStreamPositionProvider } from "./hold-position";
 import type { StreamRenderInput, StreamStrategy, StreamViewportHandle } from "./strategy";
 import { createStreamStrategy } from "./strategy";
 import {
@@ -427,6 +428,42 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     scrollContainer.scrollTop += viewportOffset - anchor.viewportOffset;
     lastKnownScrollTopRef.current = scrollContainer.scrollTop;
   });
+  const heldPositionRef = useRef<{ element: HTMLElement; viewportOffset: number } | null>(null);
+  const holdPosition = useStableEvent((element: HTMLElement) => {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) {
+      return;
+    }
+    cancelPendingStickToBottom();
+    if (followOutputRef.current) {
+      setFollowOutput(false);
+    }
+    heldPositionRef.current = {
+      element,
+      viewportOffset:
+        element.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top,
+    };
+  });
+  const applyHeldPosition = useStableEvent(() => {
+    const scrollContainer = scrollContainerRef.current;
+    const held = heldPositionRef.current;
+    if (!scrollContainer || !held) {
+      return;
+    }
+    if (!held.element.isConnected) {
+      heldPositionRef.current = null;
+      return;
+    }
+    const viewportOffset =
+      held.element.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top;
+    scrollContainer.scrollTop += viewportOffset - held.viewportOffset;
+    lastKnownScrollTopRef.current = scrollContainer.scrollTop;
+    // A row that closed again can leave the reader at the end, where the transcript follows.
+    if (isScrollContainerAtBottom(scrollContainer)) {
+      heldPositionRef.current = null;
+      setFollowOutput(true);
+    }
+  });
   const scheduleHistoryStartPrependSettle = useStableEvent(() => {
     let scheduler = historyStartSettleSchedulerRef.current;
     if (!scheduler) {
@@ -678,6 +715,9 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     }
 
     const currentScrollTop = scrollContainer.scrollTop;
+    if (Math.abs(currentScrollTop - lastKnownScrollTopRef.current) > USER_SCROLL_DELTA_EPSILON) {
+      heldPositionRef.current = null;
+    }
     const isAtBottom = isScrollContainerAtBottom(scrollContainer);
     const scrolledUp = currentScrollTop < lastKnownScrollTopRef.current - USER_SCROLL_DELTA_EPSILON;
     const scrolledDown =
@@ -813,6 +853,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
       if (historyStartPrependAnchorActiveRef.current) {
         applyHistoryStartPrependAnchor();
       }
+      applyHeldPosition();
       if (historyStartPaginationStateRef.current.status === "settling") {
         scheduleHistoryStartPrependSettle();
       }
@@ -831,6 +872,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
       observer.disconnect();
     };
   }, [
+    applyHeldPosition,
     applyHistoryStartPrependAnchor,
     evaluateHistoryStart,
     isActive,
@@ -1098,7 +1140,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     !boundary.hasLiveHead &&
     !liveAuxiliary;
 
-  return (
+  const viewport = (
     <div
       ref={handleScrollContainerRef}
       data-testid="agent-chat-scroll"
@@ -1134,6 +1176,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
       </div>
     </div>
   );
+  return <HoldStreamPositionProvider value={holdPosition}>{viewport}</HoldStreamPositionProvider>;
 }
 
 export function createWebStreamStrategy(input: CreateWebStreamStrategyInput): StreamStrategy {

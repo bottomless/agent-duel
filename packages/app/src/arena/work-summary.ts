@@ -95,6 +95,45 @@ export function projectArenaActivitySegments(
   return segments;
 }
 
+export type ArenaActivityRow =
+  | { kind: "earlier"; key: string; segments: ArenaActivitySegment[] }
+  | { kind: "segment"; key: string; segment: ArenaActivitySegment };
+
+/**
+ * A group a later message followed is settled even while the run answers that message, so a
+ * follow-up does not reopen the exchanges before it.
+ */
+export function projectArenaActivityRows(
+  segments: readonly ArenaActivitySegment[],
+  runState: ArenaRun["runState"],
+  isStandalone: (segment: ArenaActivitySegment) => boolean = () => false,
+  options: { superseded?: boolean } = {},
+): ArenaActivityRow[] {
+  const settled = options.superseded === true || runState !== "pending";
+  const foldBefore = settled
+    ? segments.findLastIndex(
+        (segment) => segment.content !== null && partIsTextUpdate(segment.content.part),
+      )
+    : -1;
+  const rows: ArenaActivityRow[] = [];
+  let earlier: ArenaActivitySegment[] = [];
+  const flushEarlier = () => {
+    if (earlier.length === 0) return;
+    rows.push({ kind: "earlier", key: `earlier:${earlier[0].key}`, segments: earlier });
+    earlier = [];
+  };
+  for (const [index, segment] of segments.entries()) {
+    if (index < foldBefore && !isStandalone(segment)) {
+      earlier.push(segment);
+      continue;
+    }
+    flushEarlier();
+    rows.push({ kind: "segment", key: segment.key, segment });
+  }
+  flushEarlier();
+  return rows;
+}
+
 /** Tool calls and thinking — everything in a turn that is not the answer itself. */
 export function arenaPartIsWork(part: unknown): boolean {
   const type = partType(part);

@@ -18,6 +18,8 @@ vi.mock("@/components/message", () => ({
   ExpandableBadge: (props: {
     label: string;
     secondaryLabel?: string;
+    labelTextStyle?: unknown;
+    alwaysShowChevron?: boolean;
     testID: string;
     isExpanded: boolean;
     isLoading: boolean;
@@ -25,7 +27,13 @@ vi.mock("@/components/message", () => ({
     onToggle?: () => void;
     renderDetails?: () => React.ReactNode;
   }) => (
-    <div data-testid={props.testID} data-loading={props.isLoading} data-error={props.isError}>
+    <div
+      data-testid={props.testID}
+      data-loading={props.isLoading}
+      data-error={props.isError}
+      data-label-style={props.labelTextStyle ? "custom" : undefined}
+      data-chevron={props.alwaysShowChevron ? "always" : undefined}
+    >
       <button type="button" onClick={props.onToggle}>
         {props.label}
       </button>
@@ -54,6 +62,10 @@ vi.mock("@/arena/permission", () => ({
 }));
 vi.mock("@/arena/task-progress-card", () => ({ ArenaTaskProgressCard: () => null }));
 vi.mock("@/arena/prompt-attachment-pills", () => ({ arenaMessageAttachmentPills: () => [] }));
+vi.mock("./run-turns", () => ({
+  ArenaMessageAnchor: ({ children }: { children: React.ReactNode }) => children,
+  useArenaPauseFollow: () => null,
+}));
 
 import { ArenaRunThread } from "./run-thread";
 
@@ -365,6 +377,50 @@ describe("ArenaRunThread", () => {
     expect(view.queryByText("Check `grid-template-columns`.")).toBeNull();
     expect(view.queryByText("Private thought")).toBeNull();
     expect(view.getByText("The file is ready.").textContent).toBe("The file is ready.");
+  });
+
+  it("collapses everything before the final text once the agent is done", () => {
+    const run: ArenaRun = {
+      ...PENDING_REASONING_RUN,
+      parts: {
+        assistant: [
+          { type: "text", text: "First update" },
+          {
+            type: "tool",
+            tool: "read",
+            state: { status: "completed", input: { filePath: "/root.md" }, output: "contents" },
+          },
+          { type: "text", text: "Second update" },
+          {
+            type: "tool",
+            tool: "edit",
+            state: { status: "completed", input: { filePath: "/root.md" }, output: "done" },
+          },
+          { type: "text", text: "Final answer" },
+        ],
+      },
+    };
+    const thread = (value: ArenaRun) => <ArenaRunThread run={value} />;
+    const completedRun: ArenaRun = { ...run, runState: "complete" };
+    const view = render(thread(run));
+    expect(view.getByText("First update")).toBeTruthy();
+    expect(view.getByText("Second update")).toBeTruthy();
+    expect(view.queryByTestId("arena-earlier-activity")).toBeNull();
+
+    view.rerender(thread(completedRun));
+    expect(view.queryByText("First update")).toBeNull();
+    expect(view.queryByText("Second update")).toBeNull();
+    expect(view.getByText("Final answer")).toBeTruthy();
+    const earlier = view.getByTestId("arena-earlier-activity");
+    expect(earlier.getAttribute("data-label-style")).toBe("custom");
+    expect(earlier.getAttribute("data-chevron")).toBe("always");
+    expect(earlier.textContent).not.toContain("Earlier activity");
+    expect(earlier.textContent).toContain("Read 1 file · Edited 1 file");
+
+    fireEvent.click(within(earlier).getByRole("button", { name: "Read 1 file · Edited 1 file" }));
+    expect(view.getByText("First update")).toBeTruthy();
+    expect(view.getByText("Second update")).toBeTruthy();
+    expect(view.getByText("Final answer")).toBeTruthy();
   });
 
   it("separates a subagent's latest tool from the parent and reveals its transcript", () => {

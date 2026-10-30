@@ -248,7 +248,11 @@ runtime with contestants. A deadline or metadata limit must fail the comparison 
 presenting partial evidence as a complete result.
 
 While the contestants work, each pane reads its thread with the work summarized inline (PR #57's
-activity groups, behind the `toolCallDetailLevel` setting). The battle is one card
+activity groups, behind the `toolCallDetailLevel` setting). Once a contestant is done, everything
+in its thread before the final text folds into one collapsed row labeled with what it did, such as
+**Read 1 file · Ran 1 command** (`projectArenaActivityRows` in `work-summary.ts`), so the pane ends
+on the answer the vote is about; opening the row brings the updates and work back, and questions
+and subagents keep their own rows in place. The battle is one card
 (`packages/app/src/arena/battle-view.tsx`). Up to `ARENA_MAX_CONTENT_WIDTH`, twice the chat's
 reading column, it runs edge to edge, keeping only its top and bottom borders; a 14" MacBook Pro
 never exceeds that. On a wider panel each pane would outrun the reading column, so the battle is
@@ -258,8 +262,13 @@ review — so the page has two widths: the chat's reading column for the prompt 
 composer, and the card for the battle. Inside the card, sections separate with
 one top border each, the way rows in a settings card do, and text starts on one rail. A and B each
 occupy half the card, split by a divider; below 520px of available card width, they stack.
-The panes keep a fixed resting height and their threads scroll internally. Scrolling away pauses
-following; reaching the bottom or choosing Jump to latest resumes it. Each agent header has an
+The panes keep a fixed resting height and their threads scroll internally. Once a run is done,
+its pane shrinks to fit, up to that height: with the work folded, a fixed pane left the answer high
+in an empty box and out of view when the chat followed the review below it. Scrolling away pauses
+following; reaching the bottom or choosing Jump to latest resumes it. Opening or closing folded
+activity pauses following too, in the pane and in the chat around it
+(`agent-stream/hold-position.ts`), so the row stays under the pointer while the pane grows or
+shrinks. Each agent header has an
 expand button beside its worktree control to give that thread the full card width; restore returns
 to the split. Both are
 pane chrome at the ghost `xs` tier, borderless and the same height. Headings have no status

@@ -27,6 +27,18 @@ const ArenaMessageAnchorContext = createContext<RegisterMessageAnchor | null>(nu
 
 export const ArenaMessageAnchorProvider = ArenaMessageAnchorContext.Provider;
 
+const ArenaPauseFollowContext = createContext<(() => void) | null>(null);
+
+/**
+ * Stops the pane following its latest output. A row that opens history in place calls it first,
+ * or the pane would scroll to the end and carry the row out of view.
+ */
+export const ArenaPauseFollowProvider = ArenaPauseFollowContext.Provider;
+
+export function useArenaPauseFollow(): (() => void) | null {
+  return useContext(ArenaPauseFollowContext);
+}
+
 /** Marks where a user message sits in its pane's thread, so the turns menu can scroll to it. */
 export function ArenaMessageAnchor({
   messageId,
