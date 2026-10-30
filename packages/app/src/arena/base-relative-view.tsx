@@ -179,19 +179,17 @@ function WrappedLine({
   shown,
   side,
   tokens,
-  hasBoth,
   numberStyle,
 }: {
   shown: ShownRow;
   side: Side;
   tokens: Tokens;
-  hasBoth: boolean;
   numberStyle: NumberStyle;
 }) {
-  const { row, cell, both, oldNumber, sharedLabel, dataSet } = shown;
+  const { row, cell, oldNumber, sharedLabel, dataSet } = shown;
   const tone = toneFor(cell?.type);
   return (
-    <View style={[styles.wrappedRow, tone]} dataSet={dataSet}>
+    <View style={[styles.wrappedRow, tone]} dataSet={dataSet} accessibilityLabel={sharedLabel}>
       <View style={styles.wrappedGutterBg}>
         <View style={[styles.gutterRow, styles.wrappedGutter, tone]}>
           <Text style={[styles.number, numberStyle]}>{oldNumber}</Text>
@@ -199,11 +197,6 @@ function WrappedLine({
           <Text style={[styles.sign, cell?.type === "add" ? styles.addText : styles.removeText]}>
             {signFor(cell?.type)}
           </Text>
-          {hasBoth ? (
-            <Text style={styles.both} numberOfLines={1} accessibilityLabel={sharedLabel}>
-              {both ? "Both" : ""}
-            </Text>
-          ) : null}
         </View>
       </View>
       <WrappedCode row={row} side={side} tokens={tokens} />
@@ -220,7 +213,6 @@ function PairedRegion({
   sides,
   tokens,
   aligned,
-  hasBoth,
   numberWidth,
   showStatus,
 }: {
@@ -228,7 +220,6 @@ function PairedRegion({
   sides: readonly Side[];
   tokens: Tokens;
   aligned: boolean;
-  hasBoth: boolean;
   numberWidth: number;
   showStatus: boolean;
 }) {
@@ -252,7 +243,6 @@ function PairedRegion({
                 shown={describeRow(row, side, aligned)}
                 side={side}
                 tokens={tokens}
-                hasBoth={hasBoth}
                 numberStyle={numberStyle}
               />
             </View>
@@ -268,7 +258,6 @@ function Column({
   side,
   tokens,
   aligned,
-  hasBoth,
   numberWidth,
   stacked,
   showStatus,
@@ -277,7 +266,6 @@ function Column({
   side: Side;
   tokens: Tokens;
   aligned: boolean;
-  hasBoth: boolean;
   numberWidth: number;
   stacked: boolean;
   showStatus: boolean;
@@ -306,7 +294,6 @@ function Column({
             shown={shown}
             side={side}
             tokens={tokens}
-            hasBoth={hasBoth}
             numberStyle={numberStyle}
           />
         ))}
@@ -431,7 +418,6 @@ function ReadyDiff({
     }),
     [file],
   );
-  const hasBoth = useMemo(() => diff.rows.some((row) => bothChanged(row, diff.aligned)), [diff]);
   const numberWidth = useMemo(() => {
     let largest = 1;
     for (const row of diff.rows)
@@ -479,7 +465,6 @@ function ReadyDiff({
             sides={shown}
             tokens={tokens}
             aligned={diff.aligned}
-            hasBoth={hasBoth}
             numberWidth={numberWidth}
             showStatus={showStatus}
           />
@@ -515,7 +500,6 @@ function ReadyDiff({
                     side={side}
                     tokens={tokens}
                     aligned={diff.aligned}
-                    hasBoth={hasBoth}
                     numberWidth={numberWidth}
                     stacked={options.stackedRows}
                     showStatus={showStatus}
@@ -590,7 +574,7 @@ function ReadyDiff({
       {!diff.aligned ? (
         <Text style={styles.warning}>
           Some regions were too large to align precisely. They are shown as replacements from the
-          original; shared-change labels are unavailable.
+          original.
         </Text>
       ) : null}
       {truncated ? (
@@ -759,14 +743,6 @@ const styles = StyleSheet.create((theme) => ({
     textAlign: "center",
     fontSize: theme.fontSize.xs,
     fontFamily: theme.fontFamily.mono,
-  },
-  both: {
-    width: Math.ceil(theme.fontSize.xs * 3.5),
-    flexShrink: 0,
-    fontSize: theme.fontSize.xs,
-    lineHeight: diffTextHeight(theme),
-    color: theme.colors.foregroundMuted,
-    textAlign: "center",
   },
   wrappedBody: { minWidth: 0, borderLeftWidth: 1, borderLeftColor: theme.colors.border },
   wrappedRow: { flexDirection: "row", flexGrow: 1, minHeight: diffRowHeight(theme) },

@@ -138,7 +138,7 @@ describe("InlineFileDiff", () => {
     expect(byTestId("arena-inline-diff-note")).toBeNull();
     expect(byTestId("arena-inline-diff")).not.toBeNull();
     expect(container.textContent).toContain("y = 2");
-    expect(container.textContent).toContain("Both");
+    expect(container.querySelector('[aria-label="Added by both agents"]')).not.toBeNull();
     act(() => {
       root.render(mainDiff(sameResult(), "split"));
     });
@@ -154,7 +154,7 @@ describe("InlineFileDiff", () => {
     expect(byTestId("arena-inline-diff")).not.toBeNull();
     expect(byTestId("arena-combined-base-note")).toBeNull();
     expect(container.textContent).toContain("line 0");
-    expect(container.textContent).toContain("Both");
+    expect(container.querySelector('[aria-label="Removed by both agents"]')).not.toBeNull();
   });
 
   it("says so when both produced the same file and there is no base to read it against", () => {

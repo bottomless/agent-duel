@@ -242,9 +242,9 @@ Identity badges — the project icon and the PR-panel participant avatar — do 
 A battle's diff (`base-relative-view.tsx`) uses `diffAddition` green for additions and
 `diffDeletion` red for removals, with visible `+` and `−` signs. Blue and amber identify Agent A
 and Agent B in the diff's column headings and tint that side's vote button
-(`decision-bar.tsx`); they do not colour changed code. An explicit `Both` label marks
-shared edits, using the same addition/removal colours as individual edits. Keep unchanged code
-neutral. Every tint uses `tint(token, percent)` so it follows the theme.
+(`decision-bar.tsx`); they do not colour changed code. Shared edits, ones both agents made the
+same way, look like any other edit and carry no visible label: a label column costs code width on
+every row. Keep unchanged code neutral. Every tint uses `tint(token, percent)` so it follows the theme.
 
 Keep the **Expand** action visible beside each agent heading, as the pane header's icon action; a
 heading label or a hover-only icon must not be its only affordance. Full-width inspection shows
