@@ -23,7 +23,7 @@ product.
 
 ## Download
 
-[Download for macOS (Apple silicon)](https://github.com/bottomless/agent-duel/releases)
+[Download for macOS (Apple silicon) or Linux (x64 AppImage or deb)](https://github.com/bottomless/agent-duel/releases)
 
 E-mail signup required for use. No cost for unlimited inference with frontier models.
 
