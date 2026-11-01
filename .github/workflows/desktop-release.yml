@@ -258,6 +258,7 @@ jobs:
           retention-days: 7
 
       # latest-linux.yml carries the AppImage's sha512, so nothing may rebuild the AppImage after it.
+      # electron-builder embeds the AppImage's blockmap in the file, so there is no .blockmap to ship.
       - name: Verify update metadata
         env:
           RELEASE_VERSION: ${{ inputs.version }}
@@ -277,7 +278,6 @@ jobs:
           if (latest.version !== version) throw new Error(`latest-linux.yml version ${latest.version} does not match ${version}`);
           const entry = latest.files.find(entry => entry.url === name);
           if (!entry || entry.sha512 !== sha512 || entry.size !== bytes.length) throw new Error(`latest-linux.yml files entry does not match ${name}`);
-          if (!fs.existsSync(`${file}.blockmap`)) throw new Error(`Missing ${name}.blockmap`);
           if (!fs.existsSync(path.join(dir, `Agent-Duel-${version}-amd64.deb`))) throw new Error('Missing amd64 deb');
           JS
 
@@ -288,7 +288,6 @@ jobs:
           if-no-files-found: error
           path: |
             packages/desktop/release/*.AppImage
-            packages/desktop/release/*.AppImage.blockmap
             packages/desktop/release/*.deb
             packages/desktop/release/latest-linux.yml
 
@@ -329,7 +328,6 @@ jobs:
           # Linux reads latest-linux.yml from the same release.
           files+=(
             release/linux/Agent-Duel-x86_64.AppImage
-            release/linux/Agent-Duel-x86_64.AppImage.blockmap
             "release/linux/Agent-Duel-$RELEASE_VERSION-amd64.deb"
             release/linux/latest-linux.yml
           )
