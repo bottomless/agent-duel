@@ -454,12 +454,20 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
 }
 
 // Windows never reaches this: its missing-Git message names the installer and asks for a restart.
+// Linux has no Command Line Tools or Homebrew by default, and no one package manager, so its hint
+// names the two that cover most desktops.
 function gitInstallHint() {
+  if (process.platform === "linux") return "sudo apt install git or sudo dnf install git"
   return "xcode-select --install"
 }
 
+// Ubuntu 22.04 ships a Git older than 2.39, so on apt systems a plain install is not enough; the
+// git-core PPA carries current Git for Ubuntu.
 function gitUpdateHint() {
   if (process.platform === "win32") return "git update-git-for-windows"
+  if (process.platform === "linux") {
+    return "sudo add-apt-repository ppa:git-core/ppa && sudo apt install git, or sudo dnf upgrade git"
+  }
   return "brew install git"
 }
 

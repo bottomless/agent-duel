@@ -22,7 +22,9 @@ async function explainMissingGit(cause: unknown, directory: string): Promise<unk
   const install =
     process.platform === "win32"
       ? "Install Git for Windows from git-scm.com, or with winget install Git.Git, then quit and reopen Agent Duel."
-      : "Install Git, for example with xcode-select --install, then retry.";
+      : process.platform === "linux"
+        ? "Install Git, for example with sudo apt install git or sudo dnf install git, then retry."
+        : "Install Git, for example with xcode-select --install, then retry.";
   return new Error(`Battles need Git, and Agent Duel couldn't find it. ${install}`);
 }
 
