@@ -80,6 +80,10 @@ linux:
     - target: deb
       arch:
         - x64
+# The 1.0.2 AppImage toolset uses the static type-2 runtime (no libfuse2, which Ubuntu 24.04 lacks)
+# and writes AppRun from app-builder-lib's template, which our patch makes pass --no-sandbox.
+toolsets:
+  appimage: "1.0.2"
 appImage:
   # Keep the AppImage filename stable across versions (no ${version}) so
   # electron-updater overwrites the file in place instead of renaming it to a new
