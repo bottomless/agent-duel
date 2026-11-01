@@ -241,12 +241,23 @@ jobs:
           PASEO_WEB_PLATFORM: electron
           # The published release is the update feed, so release builds check it.
           PASEO_DESKTOP_UPDATES_ENABLED: "1"
-          PASEO_DESKTOP_SMOKE: "1"
-          PASEO_DESKTOP_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/desktop-smoke
         run: |
           npm run build:app-deps:clean
           (cd packages/app && npx expo export --platform web --max-workers 1)
           npm run build --workspace=@getpaseo/desktop -- --publish never --linux --x64
+
+      # The packaged smoke drives the daemon without signing in, which the hosted build refuses
+      # ("Sign in to use Agent Duel"), so it runs on a bring-your-own-key package of the same tree,
+      # written to its own directory so the release files above stay as built.
+      - name: Smoke-test a BYOK package
+        working-directory: packages/desktop
+        env:
+          PASEO_BYOK_BUILD: "1"
+          PASEO_DESKTOP_SMOKE: "1"
+          PASEO_DESKTOP_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/desktop-smoke
+        run: |
+          npm run build:deployment-config
+          npx electron-builder --config electron-builder.yml --publish never --linux dir --x64 -c.directories.output=release-smoke
 
       - name: Save smoke diagnostics
         if: failure()
