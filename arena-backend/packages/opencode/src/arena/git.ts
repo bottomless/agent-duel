@@ -466,8 +466,10 @@ function gitInstallHint() {
   return "xcode-select --install"
 }
 
+// Ubuntu 22.04 ships a Git older than 2.39, so on apt systems a plain install is not enough; the
+// git-core PPA carries current Git for Ubuntu.
 function gitUpdateHint() {
-  if (process.platform === "linux") return "sudo apt install git or sudo dnf upgrade git"
+  if (process.platform === "linux") return "sudo add-apt-repository ppa:git-core/ppa && sudo apt install git, or sudo dnf upgrade git"
   return "brew install git"
 }
 
