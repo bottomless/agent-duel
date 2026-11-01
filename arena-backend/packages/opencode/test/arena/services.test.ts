@@ -5,6 +5,7 @@ import {
   parseProcessTerminals,
   sessionShellPids,
   persistedProxyRoutes,
+  reportMissingTool,
   serviceOwnerID,
   stopOwnedServices,
   terminalOpenUnder,
@@ -500,4 +501,15 @@ test("a terminal shell under a chat's worktrees counts as open; its servers and 
     ],
   }
   expect(await terminalOpenUnder(["/repo/.agent-duel/worktrees/chat"], withShell)).toBe(true)
+})
+
+test("warns once per missing tool and stays quiet about other spawn failures", () => {
+  const warnings: string[] = []
+  const warn = (message: string) => warnings.push(message)
+  const missing = Object.assign(new Error("spawn missing"), { code: "ENOENT" })
+  reportMissingTool("arena-test-missing-tool", missing, warn)
+  reportMissingTool("arena-test-missing-tool", missing, warn)
+  reportMissingTool("arena-test-denied-tool", Object.assign(new Error("spawn denied"), { code: "EACCES" }), warn)
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain("`arena-test-missing-tool` is not on PATH")
 })
