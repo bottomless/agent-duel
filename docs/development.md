@@ -32,6 +32,7 @@ cd arena-backend && bun install
   build; the packages land in `packages/desktop/release/`. Only x64 is packaged: the engine and its
   watcher binding are compiled for the host architecture. Control-plane and BYOK settings are the
   same as for the [macOS build](deployment.md#build-the-macos-desktop-application).
+
 - Set `PASEO_DESKTOP_SMOKE=1` to launch the unpacked app under `xvfb-run` after packing and fail
   the build if it does not start; install `xvfb` and `xauth` first. The smoke makes `chrome-sandbox`
   root-owned and setuid with `sudo -n`, so run it where sudo needs no password, such as CI or a
