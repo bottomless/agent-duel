@@ -914,17 +914,30 @@ The two sides are prepared **at once**, since each has its own host repository a
 the host repository is a copy-on-write clone of the checkout's git directory where the
 filesystem allows it. Both are then prompted concurrently, each in its own worktree.
 
-Contestant subagents run in the background by default and share their parent's worktree. Give
-independent children separate file scopes so they can work in parallel with the parent. A task
-can request `background=false` when its result is needed before the parent's next action.
-Ending the parent's response while children work does not finish the contestant: keep its owning
-prompt loop alive, accept queued replies, and feed each child result back before finalization.
-Stop, early selection, terminal parent failures, and Send now on a queued steer cancel
-outstanding children. Each cancelled child still leaves a cancelled result in the parent's
-history: the parent was told it would be notified, and Send now and Retry resume it. Save child
-results before marking their jobs complete; detached notifications can otherwise arrive after
-Arena has captured the final Git state. This behavior does not depend on the experimental
-background-subagent flag used by ordinary OpenCode sessions.
+Contestant subagents share their parent's worktree and run in the background when the call sets
+`background=true`. Give independent children separate file scopes so they can work in parallel
+with the parent.
+
+Ending the parent's response while children work does not finish the contestant. Core ends the
+parent's run there and wakes the parent in a new run for each child result, and nothing waits for
+those runs. So the side's prompt fiber follows them (`awaitChildren`), and the side ends when the
+parent is idle, no child works, and each result has reached the parent. It joins with
+`prompts.join`, never `prompts.loop`: `resume` on an idle session makes Core answer the last message
+again, which is a paid model request.
+
+Allow five hours for this wait. The limit exists only to end a truly hung child: on expiry, cancel
+the children as Stop does and fail the side with the reason in its stored error and the engine log,
+so the battle can reach the vote. Do not show a countdown.
+
+Stop, early selection, terminal parent failures, and Send now on a queued steer cancel outstanding
+children. Core has no such call (anomalyco/opencode#36423), so `cancelRun` interrupts each child and
+cancels its job. Each cancelled child still leaves a cancelled result in the parent's history: the
+parent was told it would be notified, and Send now and Retry resume it. Core wakes the parent for
+each result, which after a Stop would send a model request for a battle that is over, so `cancelRun`
+first holds the parent's wake (`SubagentJob.hold`) until its next `prompt` or `loop`. That hold
+survives engine restarts: recovered child results must not wake a stopped parent. A side that
+ended waits for its cancelled children before finalization (`settleChildren`); a late result would
+otherwise arrive after Arena has captured the final Git state.
 
 The contestant instruction (`contestantSystemInstruction`) rides on the user message as `system`,
 and each request builds its system prompt from the latest user message. The system text heads the

@@ -11,6 +11,7 @@ import {
 import { ARENA_SENT_AT } from "./session-runtime/projection"
 import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
 import { ArenaActivity } from "./activity"
+import { withChildWaitLimit } from "./child-wait"
 import { Stream } from "effect"
 import { createArenaStream, type Frame as ArenaStreamFrame } from "./stream"
 import { execFile as nodeExecFile } from "child_process"
@@ -705,6 +706,10 @@ const SLOT_PROCESS_RELIST_MS = 500
 
 /** The next pair plus the retained winner, which keeps its worktree until the next send. */
 const SLOT_POOL_TARGET = 3
+/** How often a contestant that waits for its child agents checks on them. */
+const CHILD_POLL_INTERVAL = Duration.millis(100)
+/** How long a side that ended waits for its cancelled child agents before it finalizes anyway. */
+const CHILD_SETTLE_TIMEOUT_MS = 15_000
 /** How long removing a chat's pool waits for background deletes into its trash to finish. */
 const POOL_EMPTY_WAIT_MS = 10_000
 
@@ -1358,6 +1363,9 @@ export const layer: Layer.Layer<
     // Core's inbox after the run's last delivery. The mark lasts until the run is finalized.
     const steerGates = KeyedMutex.makeUnsafe<string>()
     const closingRuns = new Set<string>()
+    // Runs being cancelled while their turn still reads as running, as when the other side's
+    // environment setup failed. A cancelled child's result must not count as new work for them.
+    const haltingRuns = new Set<string>()
     const withSteerGates = <A, E, R>(runIDs: readonly string[], effect: Effect.Effect<A, E, R>) =>
       [...new Set(runIDs)].sort().reduceRight((inner, runID) => steerGates.withLock(runID)(inner), effect)
     // Aborted by Stop, so a stopped battle resolves without waiting for the rest of its copy.
@@ -4380,7 +4388,7 @@ export const layer: Layer.Layer<
       return yield* steerGates.withLock(run.runID)(
         Effect.gen(function* () {
           const current = yield* promise(() => store.turn(run.turnID))
-          if (Exit.isSuccess(result) && current?.state === "running") {
+          if (Exit.isSuccess(result) && current?.state === "running" && !haltingRuns.has(run.runID)) {
             const status = yield* inDirectory(run.worktree.directory, statuses.get(run.sessionID)).pipe(
               Effect.catchCause(() => Effect.succeed({ type: "idle" as const })),
             )
@@ -4396,6 +4404,59 @@ export const layer: Layer.Layer<
           return false
         }),
       )
+    })
+
+    /**
+     * Core's parent run ends when the parent ends its response, and each child result wakes it again
+     * in a run nothing waits for. The contestant ends when the last of those runs ends and no child
+     * works. A run fails alone, so follow each one: a parent that fails stops the wait.
+     */
+    const awaitChildren = Effect.fn("Arena.awaitChildren")(function* (
+      store: Store,
+      run: SideRuntime,
+      result: Exit.Exit<Effect.Success<ReturnType<typeof prompts.join>>, Error>,
+    ) {
+      let latest = result
+      let waited = false
+      while (true) {
+        if (Exit.isFailure(latest) || promptFailed(latest) || interruptingSteers.has(run.runID)) return latest
+        const turn = yield* promise(() => store.turn(run.turnID))
+        if (turn?.state !== "running" || haltingRuns.has(run.runID)) return latest
+        const parent = yield* inDirectory(run.worktree.directory, statuses.get(run.sessionID))
+        if (parent.type !== "idle") {
+          waited = true
+          latest = yield* Effect.exit(inDirectory(run.worktree.directory, prompts.join({ sessionID: run.sessionID })))
+          continue
+        }
+        const children = yield* descendants(run.sessionID)
+        const working = yield* Effect.forEach(children, (id) => prompts.working(id))
+        if (!working.includes(true)) {
+          if (!waited) return latest
+          return yield* Effect.exit(inDirectory(run.worktree.directory, prompts.join({ sessionID: run.sessionID })))
+        }
+        waited = true
+        yield* Effect.sleep(CHILD_POLL_INTERVAL)
+      }
+    })
+
+    /**
+     * A side that ended with work left cancels it and waits for each cancelled result. Finalization
+     * captures Git and the transcript, so a late child would change the worktree after the capture
+     * and its result would miss the history.
+     */
+    const settleChildren = Effect.fn("Arena.settleChildren")(function* (run: SideRuntime) {
+      const deadline = Date.now() + CHILD_SETTLE_TIMEOUT_MS
+      while (true) {
+        const ids = [run.sessionID, ...(yield* descendants(run.sessionID))]
+        const working = yield* Effect.forEach(ids, (id) => prompts.working(id))
+        if (!working.includes(true)) return
+        if (Date.now() >= deadline) {
+          yield* Effect.logWarning("Arena child agents did not stop before finalization", { runID: run.runID })
+          return
+        }
+        yield* cancelRun(run.worktree.directory, run.sessionID)
+        yield* Effect.sleep(CHILD_POLL_INTERVAL)
+      }
     })
 
     const runPrompt = Effect.fn("Arena.runPrompt")(function* (
@@ -4458,6 +4519,19 @@ export const layer: Layer.Layer<
       while (true) {
         const steer = interruptingSteers.get(run.runID)
         if (!steer) {
+          // A read that fails here leaves the turn to close, and finalization checks every session.
+          const answered = result
+          result = yield* withChildWaitLimit(awaitChildren(store, run, answered), {
+            runID: run.runID,
+            cancel: cancelRun(run.worktree.directory, run.sessionID),
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Arena could not check a contestant's child agents", { runID: run.runID, cause }).pipe(
+                Effect.as(answered),
+              ),
+            ),
+          )
+          if (interruptingSteers.has(run.runID)) continue
           // The runner's last boundary check and its idle transition are not one step, so a steer can
           // arrive just as the answer ends. Close the turn only when no steer waits and no runner
           // works; otherwise answer the steer here, in the fiber that owns finalization, as 1.x's
@@ -4485,6 +4559,11 @@ export const layer: Layer.Layer<
         })
       }
       yield* promise(() => store.updateRun(run.runID, { completedAt: new Date() }))
+      yield* settleChildren(run).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Arena could not stop a contestant's child agents", { runID: run.runID, cause }),
+        ),
+      )
       ArenaPrivacy.clearDiscardedMessages(run.sessionID)
       return result
     })
@@ -4599,6 +4678,9 @@ export const layer: Layer.Layer<
     // silently does nothing, leaving the contestant running to completion.
     const cancelRun = Effect.fn("Arena.cancelRun")(function* (directory: string, sessionID: SessionID) {
       const children = yield* descendants(sessionID)
+      // Before the cancel, whose results would wake the parents. Whoever cancels decides what runs
+      // next: nothing after Stop and early selection, and the steer's own loop after Send now.
+      yield* prompts.holdChildResults([sessionID, ...children])
       yield* Effect.all(
         [
           inDirectory(directory, prompts.cancel(sessionID)),
@@ -4621,12 +4703,15 @@ export const layer: Layer.Layer<
       sessionID: SessionID,
       directory: string,
     ) {
-      while (true) {
-        const current = yield* promise(() => store.run(runID))
-        if (!current || current.runState !== "pending") return
-        yield* cancelRun(directory, sessionID)
-        yield* Effect.sleep(Duration.millis(25))
-      }
+      haltingRuns.add(runID)
+      yield* Effect.gen(function* () {
+        while (true) {
+          const current = yield* promise(() => store.run(runID))
+          if (!current || current.runState !== "pending") return
+          yield* cancelRun(directory, sessionID)
+          yield* Effect.sleep(Duration.millis(25))
+        }
+      }).pipe(Effect.ensuring(Effect.sync(() => haltingRuns.delete(runID))))
     })
 
     const interruptSteer = Effect.fn("Arena.interruptSteer")(function* (runID: string, expectedMessageID: string) {

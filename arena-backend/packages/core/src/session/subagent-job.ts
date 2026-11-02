@@ -5,6 +5,7 @@ import { Node } from "@opencode/util/effect/app-node"
 import type { LayerNode } from "@opencode/util/effect/layer-node"
 import { Job } from "../job.js"
 import { Session } from "../session.js"
+import type { SessionSchema } from "./schema.js"
 import { SubagentCompletion } from "./subagent-completion.js"
 
 type Recovery = Extract<Job.Recovery, { kind: "subagent" }>
@@ -13,6 +14,13 @@ export interface Interface {
   start: (recovery: Recovery) => Effect.Effect<Job.Info>
   background: (recovery: Recovery) => Effect.Effect<void>
   notify: (recovery: Recovery, startedAt: number) => Effect.Effect<void>
+  /**
+   * Stops child results from starting a run of this parent. A result still enters the parent's
+   * inbox, so the next run that the parent's owner starts delivers it.
+   */
+  hold: (parentSessionID: SessionSchema.ID) => Effect.Effect<void>
+  /** Lets child results start runs of this parent again. */
+  release: (parentSessionID: SessionSchema.ID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SubagentJob") {}
@@ -33,7 +41,13 @@ const make: Effect.Effect<Interface, never, Session.Service | Job.Service | Scop
     notifications.add(key)
     yield* Effect.gen(function* () {
       const info = (yield* jobs.wait({ id: recovery.childSessionID })).info
-      if (info) yield* SubagentCompletion.deliver(sessions, jobs, { ...info, recovery })
+      if (info)
+        yield* SubagentCompletion.deliver(sessions, jobs, {
+          ...info,
+          recovery,
+          // Consult the durable hold at delivery: Stop may land while this observer waits.
+          ...((yield* jobs.subagentResultsHeld(recovery.parentSessionID)) ? { resume: false } : {}),
+        })
     }).pipe(
       Effect.ensuring(Effect.sync(() => notifications.delete(key))),
       Effect.forkIn(scope, { startImmediately: true }),
@@ -66,6 +80,8 @@ const make: Effect.Effect<Interface, never, Session.Service | Job.Service | Scop
       if (info) yield* notify(recovery, info.started_at)
     }),
     notify,
+    hold: jobs.holdSubagentResults,
+    release: jobs.releaseSubagentResults,
   })
 })
 
