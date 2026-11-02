@@ -34,8 +34,10 @@ separate setup steps; this workflow does not provision them.
 2. Open GitHub → Actions → Desktop Release → Run workflow.
 3. Select main and enter the version produced by the command without a leading
    `v`. Root and desktop package versions must match the input.
-4. Approve the environment deployment if required. The workflow builds, signs,
-   notarizes, and verifies the app and DMG before creating a draft release.
+4. Approve the environment deployment if required. One approval starts both
+   builds; the job that creates the draft needs no second one. The workflow
+   builds, signs, notarizes, and verifies the app and DMG, and verifies the
+   Windows installer, before creating a draft release.
 5. Download the DMG from the run's `signed-macos-arm64` artifact and test it on a
    Mac as a fresh download, and the installer from `windows-x64` on Windows.
    Check launch, sign-in, and a normal battle.

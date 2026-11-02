@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 90
     environment: desktop-release
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -244,15 +244,17 @@ jobs:
           # The published release is the update feed, so release builds check it.
           PASEO_DESKTOP_UPDATES_ENABLED: "1"
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          AGENT_DUEL_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           npm run build:app-deps:clean
           (cd packages/app && npx expo export --platform web --max-workers 1)
-          npm run build --workspace=@getpaseo/desktop -- --publish never --win --x64
+          npm run build --workspace=@getpaseo/desktop -- --publish never --win --x64 -c.buildVersion="$AGENT_DUEL_BUILD_NUMBER"
 
       # latest.yml carries the installer's sha512, so nothing may rebuild or re-sign the exe after it.
       - name: Verify installer and update metadata
         env:
           RELEASE_VERSION: ${{ inputs.version }}
+          AGENT_DUEL_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           node <<'JS'
           const crypto = require('node:crypto');
@@ -275,7 +277,9 @@ jobs:
           JS
           EXE="packages/desktop/release/Agent-Duel-Setup-$RELEASE_VERSION-x64.exe"
           EXE_VERSION=$(pwsh -NoProfile -Command "(Get-Item '$EXE').VersionInfo.ProductVersion" | tr -d '\r')
+          FILE_VERSION=$(pwsh -NoProfile -Command "(Get-Item '$EXE').VersionInfo.FileVersion" | tr -d '\r')
           [[ "$EXE_VERSION" == "$RELEASE_VERSION" ]] || { echo "Installer version $EXE_VERSION does not match $RELEASE_VERSION" >&2; exit 1; }
+          [[ "$FILE_VERSION" == "$AGENT_DUEL_BUILD_NUMBER" ]] || { echo "Installer file version $FILE_VERSION does not match $AGENT_DUEL_BUILD_NUMBER" >&2; exit 1; }
 
       - name: Save installer
         uses: actions/upload-artifact@v4
@@ -292,7 +296,8 @@ jobs:
     needs: [macos, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: desktop-release
+    # No environment: the build jobs already passed its approval, and this job reads none of its
+    # secrets. Naming it here would hold the draft for a second approval.
     permissions:
       contents: write
     steps:
