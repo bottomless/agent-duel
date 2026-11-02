@@ -432,6 +432,7 @@ function mergeModelAdditions(
 type ForwardedAgentSession = { [K in keyof Required<AgentSession>]: AgentSession[K] };
 
 export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession): AgentSession {
+  const replaceHistory = inner.replaceHistory?.bind(inner);
   return {
     provider,
     get id() {
@@ -456,6 +457,12 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
         yield mapStreamEvent(provider, event);
       }
     },
+    replaceHistory: replaceHistory
+      ? (replace) =>
+          replaceHistory((history) =>
+            replace(Array.from(history, (event) => mapStreamEvent(provider, event))),
+          )
+      : undefined,
     getRuntimeInfo: async () => mapRuntimeInfo(provider, await inner.getRuntimeInfo()),
     get readOnly() {
       return inner.readOnly;

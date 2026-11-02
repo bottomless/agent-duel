@@ -737,6 +737,9 @@ export interface AgentSession {
   steerActiveTurn?(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult>;
   subscribe(callback: (event: AgentStreamEvent) => void): () => void;
   streamHistory(): AsyncGenerator<AgentStreamEvent>;
+  /** Replace the consumer's history and seed live cursors from the same snapshot,
+   * with native reconciliation excluded until replacement has finished. */
+  replaceHistory?(replace: (history: Iterable<AgentStreamEvent>) => Promise<void>): Promise<void>;
   getRuntimeInfo(): Promise<AgentRuntimeInfo>;
   getAvailableModes(): Promise<AgentMode[]>;
   getCurrentMode(): Promise<string | null>;

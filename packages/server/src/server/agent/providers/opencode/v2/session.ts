@@ -108,7 +108,8 @@ export class OpenCodeV2Session implements AgentSession {
   readonly provider = "opencode";
   readonly capabilities = V2_CAPABILITIES;
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
-  private readonly timeline = new V2Timeline();
+  private timeline = new V2Timeline();
+  private replacingHistory = false;
   private readonly abort = new AbortController();
   private readonly permissions: SessionPermissions;
   private readonly turns: SessionTurns;
@@ -409,6 +410,29 @@ export class OpenCodeV2Session implements AgentSession {
     await this.reconnectIfExited();
     const history = new V2Timeline(false);
     yield* history.messages(await messages(this.client, this.id));
+  }
+  async replaceHistory(replace: (history: Iterable<AgentStreamEvent>) => Promise<void>) {
+    await this.reconnectIfExited();
+    this.sync = this.sync
+      .catch(() => undefined)
+      .then(async () => {
+        this.replacingHistory = true;
+        try {
+          const snapshot = await messages(this.client, this.id);
+          const live = new V2Timeline();
+          live.messages(snapshot);
+          await replace(new V2Timeline(false).messages(snapshot));
+          this.timeline = live;
+          this.history = snapshot;
+          return undefined;
+        } finally {
+          this.replacingHistory = false;
+          // Snapshot reconciliation recovers output received during the replacement.
+          // Its volatile deltas have no offsets and cannot safely cross this boundary.
+          this.scheduleReconcile();
+        }
+      });
+    return this.sync;
   }
   async reloadProviderSubagents(): Promise<void> {
     await this.children.reload();
@@ -968,6 +992,7 @@ export class OpenCodeV2Session implements AgentSession {
     }
     if (!("sessionID" in event.data) || event.data.sessionID !== this.id) return;
     if (event.type === "session.text.started" || event.type === "session.reasoning.started") {
+      if (this.replacingHistory) return;
       if (event.type === "session.text.started" && this.turns.hasStructuredOutput) return;
       this.timeline.startPart({
         ...event.data,
@@ -976,6 +1001,7 @@ export class OpenCodeV2Session implements AgentSession {
       return;
     }
     if (event.type === "session.text.delta" || event.type === "session.reasoning.delta") {
+      if (this.replacingHistory) return;
       const isText = event.type === "session.text.delta";
       // A structured-output turn supplies its answer through a tool, so streamed
       // prose is not part of the result and must not reach the timeline.

@@ -128,9 +128,12 @@ Release upstream readers, queues and timers when the last subscriber leaves.
 The request/response pairs are `arena.stream.subscribe`, `unsubscribe` and
 `ack`; `arena.stream.update` carries the data. App and daemon ship this contract
 together. Canonical winner hydration belongs to the daemon and is shared across windows per
-active agent. Hydrate each applied winner once after the chat becomes ready; serialize
-different winners and leave failed hydration eligible for retry. A reconnect or another
-state packet must not rebuild an already hydrated winner.
+active agent. Hydrate each applied winner once after the chat becomes ready, keeping native live
+delivery synchronized with canonical history replacement. Apply the same boundary after a rewind.
+Grafts arrive without an ordinary provider turn, so migrated winners and surviving replies can
+otherwise replay into history already on screen. Serialize different winners and leave failed
+hydration eligible for retry. A reconnect or another state packet must not rebuild an already
+hydrated winner.
 
 ## What this is for
 

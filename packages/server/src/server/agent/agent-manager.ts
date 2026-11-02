@@ -4324,9 +4324,31 @@ export class AgentManager {
     broadcastTimeline: boolean,
     preserveArenaPrefix = false,
   ): Promise<void> {
+    const replace = (history: AsyncIterable<AgentStreamEvent> | Iterable<AgentStreamEvent>) =>
+      this.replaceTimelineFromLegacyProviderHistory(
+        agent,
+        broadcast,
+        broadcastTimeline,
+        preserveArenaPrefix,
+        history,
+      );
+    if (agent.session.replaceHistory) {
+      await agent.session.replaceHistory(replace);
+    } else {
+      await replace(agent.session.streamHistory());
+    }
+  }
+
+  private async replaceTimelineFromLegacyProviderHistory(
+    agent: ActiveManagedAgent,
+    broadcast: boolean,
+    broadcastTimeline: boolean,
+    preserveArenaPrefix: boolean,
+    history: AsyncIterable<AgentStreamEvent> | Iterable<AgentStreamEvent>,
+  ): Promise<void> {
     const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
     const providerSubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[] = [];
-    for await (const rawEvent of agent.session.streamHistory()) {
+    for await (const rawEvent of history) {
       const event = limitAgentStreamEventContent(rawEvent);
       if (event.type === "timeline") {
         for (const item of projectAgentMessages(event.item)) {
