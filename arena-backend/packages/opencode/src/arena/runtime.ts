@@ -1,6 +1,7 @@
 import { AssignmentRegistry, proxy, type Telemetry } from "./proxy"
 import type { Store } from "./mongo"
 import { isFinalState, isParkedPromotion } from "./domain"
+import { join } from "node:path"
 import { arenaDirectory } from "./database-upgrade"
 import { ResearchUploader } from "./research"
 import { arenaCredentials, type ArenaCredentials } from "./credentials"
@@ -36,13 +37,9 @@ export function recoverOnce(run: () => Promise<void>) {
   return recovery
 }
 
-function localDirectory() {
-  return join(process.env.PASEO_HOME?.trim() || join(homedir(), ".paseo"), "arena")
-}
-
 /** Per home, like the store: an engine with another home never reads this engine's shells. */
 export function shellLedgerDirectory() {
-  return join(localDirectory(), "engine-shells")
+  return join(arenaDirectory(), "engine-shells")
 }
 
 async function openLocalStore() {
