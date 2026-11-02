@@ -15,7 +15,6 @@ import { ArenaRequestBudget } from "@/arena/request-budget"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { MessageID, PartID } from "@/session/schema"
-import { waitForInitialDispatch } from "@/arena/dispatch"
 import { ProviderTest } from "../fake/provider"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -143,7 +142,6 @@ for (const scenario of [
           }
           yield* sessions.updateMessage(assistant)
           const handle = yield* processors.create({ assistantMessage: assistant, sessionID: session.id, model })
-          const dispatch = scenario.calls === 0 ? waitForInitialDispatch(session.id) : undefined
           const result = yield* handle.process({
             user,
             sessionID: session.id,
@@ -156,7 +154,6 @@ for (const scenario of [
           })
           expect(result).toBe(scenario.result)
           expect(calls).toBe(scenario.calls)
-          if (dispatch) yield* Effect.promise(() => dispatch.promise).pipe(Effect.timeout("1 second"))
           expect(handle.message.error).toBeUndefined()
         }),
       { config: { compaction: { auto: scenario.auto } } },

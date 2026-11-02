@@ -36,6 +36,17 @@ function opaqueModelID(value: unknown) {
   return value === "medium" ? "medium" : OPAQUE_MODEL
 }
 
+/** The parts of an error that the client never sees. */
+export interface HiddenError {
+  readonly message: string
+  readonly name?: string
+  readonly type?: string
+  readonly statusCode?: number
+}
+
+// Set only for the duration of one synchronous `sanitizeV2` call.
+let reportHidden: ((error: HiddenError) => void) | undefined
+
 function safeError(value: unknown) {
   const text =
     typeof value === "string" ? value : record(value) && typeof value.message === "string" ? value.message : ""
@@ -60,6 +71,15 @@ function safeError(value: unknown) {
           }
           return "The agent could not complete this run."
         })()
+  const original = text || (data && typeof data.message === "string" ? data.message : "")
+  if (original && original !== message && reportHidden) {
+    reportHidden({
+      message: original,
+      ...(record(value) && typeof value.name === "string" ? { name: value.name } : {}),
+      ...(record(value) && typeof value.type === "string" ? { type: value.type } : {}),
+      ...(statusCode !== undefined ? { statusCode } : {}),
+    })
+  }
   if (record(value)) {
     const output: Record<string, unknown> = {}
     if (typeof value.name === "string") output.name = value.name
@@ -229,9 +249,27 @@ function sanitize(value: unknown, parentKey = "", inTool = false): unknown {
   return output
 }
 
-/** Sanitize native OpenCode v2 history and event envelopes at the Arena client boundary. */
-export function sanitizeV2<T>(value: T): T {
-  return sanitize(value) as T
+/**
+ * Sanitize native OpenCode v2 history and event envelopes at the Arena client boundary.
+ * `onHiddenError` receives the original text of every error the client gets only generic text for.
+ */
+export function sanitizeV2<T>(value: T, onHiddenError?: (error: HiddenError) => void): T {
+  const previous = reportHidden
+  // A session error passes through `safeError` twice. Report each error once per call.
+  const reported = new Set<string>()
+  reportHidden = onHiddenError
+    ? (error) => {
+        const key = JSON.stringify(error)
+        if (reported.has(key)) return
+        reported.add(key)
+        onHiddenError(error)
+      }
+    : undefined
+  try {
+    return sanitize(value) as T
+  } finally {
+    reportHidden = previous
+  }
 }
 
 export { OPAQUE_MODEL, OPAQUE_PROVIDER }

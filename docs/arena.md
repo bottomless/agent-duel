@@ -574,24 +574,24 @@ copies once (config, hooks, `info`, and the stash, notes and replace refs the re
 both slots. Otherwise it adopts the same two slots again in place, which rebuilds their hosts and
 rewrites only the difference.
 
-A cold or refreshed side does not wait for its worktree before the model starts. Its path is known
+A cold or refreshed side waits for its base checkout before the model starts. Its path is known
 before staging (the planned slot, or the warm slot it refreshes in place), so the side forks its
-session there and sends the first request from the canonical checkout's instance, which is already
-loaded. Staging (claim or adopt, git sync, ref mirror) starts once the proxy reports that the request
-has left, so it cannot delay it. A slot that must be replaced is claimed again at the same path,
-because the request is already bound to it. The canonical instance finds the instruction files and
-project skills, so their paths are renamed into the contestant worktree before the request leaves;
-the model otherwise reads and edits the checkout by absolute path.
+session first and keeps it at the canonical checkout while the slot is an empty reservation.
+Staging (claim or adopt, git sync, ref mirror) then runs, the session moves into the staged
+worktree, and only then is the first prompt sent. OpenCode 2.0 binds a whole drain, every tool,
+the shell's working directory, and each child agent's location to the session's saved location,
+and applies a move only at a step boundary. A first request sent from the canonical checkout ran
+its whole first step there: `pwd` printed the checkout, and files and children landed in it. This
+applies after an engine restart too, when no pair is trusted and both sides take this path.
 
 Tools follow a two-phase guard (`session/tool-execution-gate.ts`). Before the base checkout exists,
 only tools with no filesystem dependency run: questions, task tracking, web access. Skills wait for
-the copy, since the canonical instance would otherwise report the checkout's skill paths. After it,
-reads of tracked files, searches outside pending roots, and a short read-only shell allowlist run
-while ignored content finishes syncing (Git listings of ignored files, such as `ls-files -i`, wait); calls that could touch a root being copied, replaced, or
-removed wait for the sync. Every filesystem tool, snapshot and diff runs in the contestant's own
-instance; the canonical instance hosts only the root request, so cancels and steers go to it
-(`promptHosts`). Nothing opens an instance at the path before the staged worktree is there: one
-opened on the empty reservation would treat it as a directory without git. A refreshed pair keeps
+the copy. After it, reads of tracked files, searches outside pending roots, and a short read-only
+shell allowlist run while ignored content finishes syncing (Git listings of ignored files, such as
+`ls-files -i`, wait); calls that could touch a root being copied, replaced, or removed wait for
+the sync. Every filesystem tool, snapshot and diff runs in the contestant's own instance. Nothing
+opens an instance at the path before the staged worktree is there: one opened on the empty
+reservation would treat it as a directory without git. A refreshed pair keeps
 both guards in place until its environments pass the pair comparison. Result finalization waits for
 preparation too, because it writes Git state even when the model used no tools. A fully matching
 warm pair needs no guard.
@@ -626,8 +626,8 @@ A background release that fails marks the run `cleanup_failed`, and the next sen
 OpenCode starts a directory's location services and takes its first snapshot on the first prompt
 there, and both took 1-3 s after the battle was already `running`. Arena starts them in the
 background when warm preparation finishes (`SessionPrompt.prepare`), so a warm send prompts
-contestants that are already booted. Cold and refreshed sides do this work in their first prompt,
-under the guards described above.
+contestants that are already booted. Cold and refreshed sides do this work when their session
+moves into the staged worktree, before their first prompt.
 
 Arena keeps snapshots for recovery but skips OpenCode's automatic per-step diff summaries.
 A branch switch can make a JavaScript diff block both contestants for minutes. Snapshot
@@ -855,15 +855,13 @@ reach research uploads.
 
 The two sides are prepared **at once**, since each has its own host repository and session, and
 the host repository is a copy-on-write clone of the checkout's git directory where the
-filesystem allows it. Both are then prompted concurrently; a cold or refreshed side is prompted
-before its staging, as described above.
+filesystem allows it. Both are then prompted concurrently, each in its own worktree.
 
 Contestant subagents run in the background by default and share their parent's worktree. Give
 independent children separate file scopes so they can work in parallel with the parent. A task
 can request `background=false` when its result is needed before the parent's next action.
 Ending the parent's response while children work does not finish the contestant: keep its owning
 prompt loop alive, accept queued replies, and feed each child result back before finalization.
-For staged requests hosted in the canonical checkout, track children in the contestant's instance.
 Stop, early selection, terminal parent failures, and Send now on a queued steer cancel
 outstanding children. Each cancelled child still leaves a cancelled result in the parent's
 history: the parent was told it would be notified, and Send now and Retry resume it. Save child

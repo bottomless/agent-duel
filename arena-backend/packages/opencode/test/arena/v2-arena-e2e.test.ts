@@ -156,6 +156,14 @@ describe("Arena v2 battle integration", () => {
       current = await snapshot()
     }
     expect(current.turn?.state).toBe("awaiting_vote")
+    // A first turn has no warm pair, so both sides are cold. Each must run its first step in its own
+    // worktree: Core gives tools, the shell, and child agents the session's location at that step.
+    const workingDirectories = completionRequests.flatMap((completion) =>
+      [...JSON.stringify(completion.messages).matchAll(/Working directory: ([^\\"]+)/g)].map((match) => match[1]),
+    )
+    expect(workingDirectories.length).toBeGreaterThanOrEqual(2)
+    for (const workingDirectory of workingDirectories)
+      expect(workingDirectory).toContain(`${path.sep}.agent-duel${path.sep}worktrees${path.sep}`)
     const contestantRuns = current.runs ?? []
     expect(contestantRuns.length).toBe(2)
     const responseByRun = new Map<string, string>()
