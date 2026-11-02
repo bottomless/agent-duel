@@ -31,6 +31,7 @@ export interface SearchDirectoryEntriesOptions {
   limit?: number;
   maxDepth?: number;
   maxEntriesScanned?: number;
+  onScanLimit?: (limit: number) => void;
   confidentResultScanThreshold?: number;
   respectGitIgnore?: boolean;
   // Absolute paths that discovery never walks into. A path the caller types explicitly still
@@ -275,6 +276,7 @@ function buildSearchInput(
     limit: normalizeLimit(options.limit),
     maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
     maxEntriesScanned: options.maxEntriesScanned ?? DEFAULT_MAX_ENTRIES_SCANNED,
+    onScanLimit: options.onScanLimit,
     confidentResultScanThreshold: options.confidentResultScanThreshold,
     gitIgnoredPaths,
     excludedDiscoveryPaths,
@@ -311,6 +313,7 @@ interface SearchInput {
   limit: number;
   maxDepth: number;
   maxEntriesScanned: number;
+  onScanLimit: SearchDirectoryEntriesOptions["onScanLimit"];
   confidentResultScanThreshold: number | undefined;
   gitIgnoredPaths: Set<string>;
   excludedDiscoveryPaths: Set<string>;
@@ -350,13 +353,16 @@ async function searchTree(
   let scanned = 0;
   const threshold = input.confidentResultScanThreshold;
   for await (const entry of roundRobin(branches)) {
+    if (scanned >= input.maxEntriesScanned) {
+      input.onScanLimit?.(input.maxEntriesScanned);
+      break;
+    }
     scanned += 1;
     if (shouldSuggest(entry, input)) ranked.push(rank(entry, input));
     if (
-      scanned >= input.maxEntriesScanned ||
-      (threshold &&
-        scanned >= threshold &&
-        hasConfidentResult(ranked, input.plan.normalizedQuery || input.plan.searchTerm))
+      threshold &&
+      scanned >= threshold &&
+      hasConfidentResult(ranked, input.plan.normalizedQuery || input.plan.searchTerm)
     )
       break;
   }

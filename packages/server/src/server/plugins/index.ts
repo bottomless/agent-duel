@@ -215,7 +215,8 @@ export class PluginService {
             running: running.has(id),
           }),
         };
-        const manifest = await readPluginManifest(path.resolve(source.path)).catch(() => null);
+        const directory = this.resolveDirectory(source.path);
+        const manifest = await readPluginManifest(directory).catch(() => null);
         if (manifest) {
           item.name = manifest.name;
           item.description = manifest.description;
@@ -223,10 +224,10 @@ export class PluginService {
           item.media = manifest.media;
         }
         item.installation = await this.managedSources
-          ?.describe(id, source.path)
+          ?.describe(id, directory)
           .catch(() => undefined);
         if (!this.managedSources)
-          item.installation = { identity: { kind: "directory", path: path.resolve(source.path) } };
+          item.installation = { identity: { kind: "directory", path: directory } };
         if (item.installation?.identity.kind === "git") {
           item.source = "git";
           item.remote = item.installation.identity.remote;
@@ -253,7 +254,7 @@ export class PluginService {
 
   async installDirectory(input: { path: string; id?: string }): Promise<PluginListItem> {
     return this.enqueue(async () => {
-      const directory = path.resolve(input.path);
+      const directory = this.resolveDirectory(input.path);
       const manifest = await readPluginManifest(directory);
       assertPluginCompatibility({ ...manifest, version: this.daemonVersion, runtime: "daemon" });
       const pluginId = PluginIdSchema.parse(input.id ?? manifest.id);
@@ -281,7 +282,7 @@ export class PluginService {
   }
 
   async inspectDirectory(configuredPath: string): Promise<{ id: string }> {
-    return readPluginManifest(path.resolve(configuredPath));
+    return readPluginManifest(this.resolveDirectory(configuredPath));
   }
 
   async installSource(input: {
@@ -294,7 +295,7 @@ export class PluginService {
     }
     const reference = parsePluginSourceReference(input.source);
     if (reference.kind === "directory") {
-      const directory = path.resolve(expandTilde(reference.source));
+      const directory = this.resolveDirectory(reference.source);
       const info = await stat(directory).catch(() => null);
       if (!info?.isDirectory()) throw new Error(`Plugin directory does not exist: ${directory}`);
       if (input.ref) throw new Error("Plugin --ref is only valid for Git sources");
@@ -539,6 +540,7 @@ export class PluginService {
   }
 
   private async startPlugin(pluginId: string, sourcePath: string): Promise<void> {
+    sourcePath = this.resolveDirectory(sourcePath);
     await this.runtime.startPlugin(pluginId, sourcePath, () => this.canPublish(pluginId));
     try {
       await this.publishProviderRegistrations(pluginId, sourcePath);
@@ -552,6 +554,10 @@ export class PluginService {
       }
       throw error;
     }
+  }
+
+  private resolveDirectory(configuredPath: string): string {
+    return path.resolve(this.configStore.paseoHome, expandTilde(configuredPath));
   }
 
   private stopPlugin(pluginId: string): Promise<boolean> {

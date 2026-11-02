@@ -818,6 +818,39 @@ it.effect("fails with a retryable transport error when response headers time out
   }),
 )
 
+it.effect("keeps the header timeout message through HTTP hook middleware", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = createOpenAICompatible({
+        ...event.options,
+        name: String(event.options.name),
+        baseURL: String(event.options.baseURL),
+      })
+    })
+    const resolved = yield* aisdk.model(
+      model("@ai-sdk/openai-compatible", {
+        apiKey: "test",
+        baseURL: "https://example.test/v1",
+        headerTimeout: 25,
+        fetch: (_input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+          new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true })
+          }),
+      }),
+    )
+    const error = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" }), {
+      http: (request, handler) => handler(request),
+    }).pipe(Effect.provide(client), Effect.flip)
+    expect(error.reason).toMatchObject({
+      _tag: "Transport",
+      operation: "request",
+      message: "Response headers timed out",
+    })
+    expect(SessionRunnerRetry.isRetryable(error)).toBeTrue()
+  }),
+)
+
 it.effect("emits malformed AI SDK tool input without executing it", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service

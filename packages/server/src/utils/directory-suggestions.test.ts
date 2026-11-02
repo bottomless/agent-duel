@@ -80,6 +80,27 @@ function initGitRepo(directory: string, ignorePatterns: string): void {
 }
 
 describe("searchDirectoryEntries", () => {
+  it("reports an incomplete search instead of claiming a file past the scan limit is absent", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "search-limit-"));
+    try {
+      for (const name of ["a.ts", "b.ts", "needle.ts"]) writeFileSync(path.join(root, name), "");
+      const search = (maxEntriesScanned: number) =>
+        searchDirectoryEntries({
+          root,
+          query: "needle",
+          pathFormat: "relative",
+          includeFiles: true,
+          maxEntriesScanned,
+          onScanLimit: (limit) => {
+            throw new Error(`Search stopped at the ${limit}-entry limit`);
+          },
+        });
+      await expect(search(2)).rejects.toThrow("Search stopped at the 2-entry limit");
+      await expect(search(3)).resolves.toEqual([{ path: "needle.ts", kind: "file" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   let configuredSearchRoot: string;
   let searchRoot: string;
 

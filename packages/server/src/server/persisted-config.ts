@@ -487,6 +487,30 @@ export function readPersistedConfig(
   return parseConfigFile(configPath, raw);
 }
 
+function discardInvalidConfigField(config: unknown, issuePath: readonly PropertyKey[]): boolean {
+  const parts = [...issuePath];
+  while (parts.length) {
+    const parent = parts
+      .slice(0, -1)
+      .reduce<unknown>(
+        (value, part) =>
+          value && typeof value === "object"
+            ? (value as Record<PropertyKey, unknown>)[part]
+            : undefined,
+        config,
+      );
+    const key = parts.at(-1)!;
+    if (parent && typeof parent === "object" && Object.hasOwn(parent, key)) {
+      if (Array.isArray(parent) && typeof key === "number") parent.splice(key, 1);
+      else delete (parent as Record<PropertyKey, unknown>)[key];
+      return true;
+    }
+    // A missing required field invalidates its containing entry, not the other settings.
+    parts.pop();
+  }
+  return false;
+}
+
 function parseConfigFile(configPath: string, raw: string): PersistedConfig {
   let parsed: unknown;
   try {
@@ -498,12 +522,21 @@ function parseConfigFile(configPath: string, raw: string): PersistedConfig {
     });
   }
 
-  const result = PersistedConfigSchema.safeParse(stripRemovedConfigFields(parsed));
-  if (!result.success) {
-    const issues = result.error.issues
-      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
-      .join("\n");
-    throw new Error(`[Config] Invalid config in ${configPath}:\n${issues}`);
+  const config = stripRemovedConfigFields(parsed);
+  let result = PersistedConfigSchema.safeParse(config);
+  while (!result.success) {
+    // Revalidate after each issue: removing an array entry changes later issue paths.
+    const issue = result.error.issues[0];
+    const paths =
+      issue.code === "unrecognized_keys"
+        ? issue.keys.map((key) => [...issue.path, key])
+        : [issue.path];
+    const removed = paths
+      .map((issuePath) => discardInvalidConfigField(config, issuePath))
+      .some(Boolean);
+    if (!removed)
+      throw new Error(`[Config] Invalid config in ${configPath}: expected a configuration object`);
+    result = PersistedConfigSchema.safeParse(config);
   }
   return result.data as PersistedConfig;
 }

@@ -23,6 +23,31 @@ import { timelineItemIdentity } from "@getpaseo/protocol/timeline-identity";
 
 type CanonicalToolStatus = "running" | "completed" | "failed" | "canceled";
 
+it("keeps repeated reasoning blocks unique across head flushes at the same timestamp", () => {
+  const timestamp = new Date(1234);
+  let tail: StreamItem[] = [];
+  let head: StreamItem[] = [];
+  for (const item of [
+    { type: "reasoning", text: "Thinking redacted" },
+    { type: "assistant_message", text: "First answer", messageId: "answer-1" },
+    { type: "reasoning", text: "Thinking redacted" },
+    { type: "assistant_message", text: "Second answer", messageId: "answer-2" },
+    { type: "reasoning", text: "Thinking redacted" },
+  ] as const) {
+    ({ tail, head } = applyStreamEvent({
+      tail,
+      head,
+      timestamp,
+      event: { type: "timeline", provider: "opencode", item },
+    }));
+    const ids = [...tail, ...head].map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  }
+  const thoughts = [...tail, ...head].filter((row) => row.kind === "thought");
+  expect(thoughts.map((row) => row.text)).toEqual(Array(3).fill("Thinking redacted"));
+  expect(thoughts).toHaveLength(3);
+});
+
 it("updates a resolved Claude plan at its proposal position across a follow-up", () => {
   const proposal = {
     type: "timeline",
