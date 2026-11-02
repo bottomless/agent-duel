@@ -202,7 +202,9 @@ function deriveOpencodeTaskDetail(
     return null;
   }
 
-  const subAgentType = normalizeSubAgentText(input.subagent_type ?? input.subAgentType);
+  const subAgentType = normalizeSubAgentText(
+    input.subagent_type ?? input.subAgentType ?? input.agent,
+  );
   const description = normalizeSubAgentText(input.description);
   if (!subAgentType && !description) {
     return null;
@@ -210,7 +212,8 @@ function deriveOpencodeTaskDetail(
 
   const log = [formatLogEntry(output), formatLogEntry(error)].filter((entry) => entry).join("\n");
   const childSessionId =
-    normalizeSubAgentText(metadata?.sessionId) ?? extractOpenCodeTaskSessionId(output);
+    normalizeSubAgentText(metadata?.sessionID ?? metadata?.sessionId) ??
+    extractOpenCodeTaskSessionId(output);
   return {
     type: "sub_agent",
     ...(subAgentType ? { subAgentType } : {}),
@@ -376,7 +379,8 @@ export function deriveOpencodeToolDetail(
   error: unknown = null,
   metadata?: Record<string, unknown>,
 ): ToolCallDetail {
-  if (toolName.trim().toLowerCase() === "task") {
+  const normalizedName = toolName.trim().toLowerCase();
+  if (normalizedName === "task" || normalizedName === "subagent") {
     const taskDetail = deriveOpencodeTaskDetail(input, output, error, metadata);
     if (taskDetail) {
       return taskDetail;

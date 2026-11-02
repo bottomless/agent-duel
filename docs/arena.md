@@ -901,12 +901,15 @@ again a side whose warm fork used another. The canonical session keeps every out
 history, its transcript hash, and single-agent turns, which continue one model whose cache does
 survive, are unchanged.
 
-Keep the winner's child transcripts available after a vote, including nested children. The run's
-own sessions are deleted with its worktree, so the graft copies its descendants under the chat and
-retargets their session references. Losing contestants and earlier turns have separate session
+Keep the winner's child transcripts available after a vote, including nested children. Open each
+child in the chat to read its task prompt, commands and result, even after the contestant releases
+its worktree. OpenCode 2.0's `subagent` calls use the same inline child view as 1.x's `task` calls.
+The graft copies descendants under the chat and retargets their session references; the run's own
+sessions are deleted on release. Losing contestants and earlier turns have separate session
 families. `canonicalSubagentSessionIDs` records the copies for an interrupted graft's cleanup.
 Rebuilding the chat's timeline drops the subagents the daemon knew of, so loading a winner reloads
-them from the session's children (`reloadProviderSubagents`). Do not infer that a child is disposable
+them from the session's children (`reloadProviderSubagents`), including unchanged children from
+earlier turns. Do not infer that a child is disposable
 from a missing tool call: commands can create children without one, and a committed rewind removes
 messages without deleting their children. Child sessions have no separate visible/internal
 classification; narrowing retention needs a rule for which of those transcripts the chat keeps.
