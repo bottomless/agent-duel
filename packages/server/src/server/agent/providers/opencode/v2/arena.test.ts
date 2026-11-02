@@ -118,3 +118,68 @@ test("refreshing an Arena project uses native location reload and accepts no con
   expect(received).toEqual(["POST /api/location/reload"]);
   expect(releases).toBe(1);
 });
+
+test("an Arena source keeps its engine between polls and follows a replacement", async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("[]");
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  // Mirrors OpenCodeServerManager: a generation stops when its last reference is released.
+  const generations: Array<{ token: string; refs: number; stopped: boolean }> = [];
+  let current: (typeof generations)[number] | null = null;
+  const acquire = (generation: (typeof generations)[number]) => {
+    generation.refs += 1;
+    let released = false;
+    return {
+      environment: {},
+      server: { port, url: `http://127.0.0.1:${port}`, controlToken: generation.token },
+      events: { ready: async () => undefined, subscribe: () => () => undefined },
+      release: async () => {
+        if (released) return;
+        released = true;
+        generation.refs -= 1;
+        if (generation.refs > 0) return;
+        generation.stopped = true;
+        if (current === generation) current = null;
+      },
+    };
+  };
+  const acquireCurrent = async () => {
+    if (!current) {
+      current = { token: `generation-${generations.length + 1}`, refs: 0, stopped: false };
+      generations.push(current);
+    }
+    return acquire(current);
+  };
+  const client = new OpenCodeV2AgentClient({
+    logger: createTestLogger(),
+    arenaMode: true,
+    serverManager: {
+      acquireCurrent,
+      acquireNew: acquireCurrent,
+      acquireDedicated: acquireCurrent,
+      acquireExisting: () => (current && !current.stopped ? acquire(current) : null),
+      shutdown: async () => undefined,
+    },
+  });
+  const source = await client.openArenaActivitySource("/tmp/arena-project");
+  if (!source) throw new Error("expected an Arena activity source");
+
+  for (let poll = 0; poll < 3; poll += 1) await expect(source.read(["ses_a"])).resolves.toEqual([]);
+  expect(generations).toEqual([{ token: "generation-1", refs: 1, stopped: false }]);
+
+  // A rotation retires the held generation; the next poll moves the hold to its replacement.
+  const retired = generations[0];
+  current = { token: "generation-2", refs: 0, stopped: false };
+  generations.push(current);
+  await source.read(["ses_a"]);
+  await expect.poll(() => retired.stopped).toBe(true);
+  expect(generations[1]).toEqual({ token: "generation-2", refs: 1, stopped: false });
+
+  await source.close();
+  expect(generations[1]).toEqual({ token: "generation-2", refs: 0, stopped: true });
+  expect(generations).toHaveLength(2);
+});

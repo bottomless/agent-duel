@@ -50,7 +50,11 @@ import { modelRef, modesFromV2, modelsFromV2 } from "./mapping.js";
 import { ArenaEnvironmentTrimSchema } from "@getpaseo/protocol/arena/rpc-schemas";
 import { ArenaSessionActivitySchema } from "@getpaseo/protocol/arena/activity";
 import { z } from "zod";
-import { OpenCodeServerManager, type OpenCodeServerManagerLike } from "../server-manager.js";
+import {
+  OpenCodeServerManager,
+  type OpenCodeServerAcquisition,
+  type OpenCodeServerManagerLike,
+} from "../server-manager.js";
 
 interface V2AgentOptions {
   logger: Logger;
@@ -61,6 +65,11 @@ interface V2AgentOptions {
   arenaMode?: boolean;
   serverManager?: OpenCodeServerManagerLike;
   getArenaPreviewBaseUrl?: () => string | null;
+}
+
+interface ArenaEngineHold {
+  follow(current: OpenCodeServerAcquisition): void;
+  close(): Promise<void>;
 }
 
 export class OpenCodeV2AgentClient implements AgentClient {
@@ -95,12 +104,56 @@ export class OpenCodeV2AgentClient implements AgentClient {
       throw new Error("OpenCode Arena runtime is unavailable");
     return this.serverManager;
   }
+  /**
+   * Keeps the engine an Arena source last used alive until the source closes. The manager stops a
+   * generation when its last reference goes, so per-request references alone restarted the engine
+   * on every activity poll. Moving the reference to each request's generation lets a retired
+   * generation stop once its replacement serves the source.
+   */
+  private holdArenaEngine(): ArenaEngineHold {
+    const manager = this.requireArenaManager();
+    const logger = this.options.logger;
+    let held: OpenCodeServerAcquisition | null = null;
+    let closed = false;
+    const drop = (acquisition: OpenCodeServerAcquisition | null) =>
+      acquisition?.release().catch((error: unknown) => {
+        logger.warn({ error: String(error) }, "Failed to release Arena engine reference");
+      });
+    return {
+      // Runs while the request still holds `current`, so the generation cannot stop in between.
+      follow: (current) => {
+        if (closed) return;
+        if (
+          held?.server.url === current.server.url &&
+          held.server.controlToken === current.server.controlToken
+        )
+          return;
+        const next = manager.acquireExisting(current.server.url);
+        if (!next) return;
+        const previous = held;
+        held = next;
+        void drop(previous);
+      },
+      close: async () => {
+        closed = true;
+        const previous = held;
+        held = null;
+        await drop(previous);
+      },
+    };
+  }
   private async arenaRequest(
     path: string,
     directory: string,
-    options: { method?: "POST"; body?: unknown; signal?: AbortSignal } = {},
+    options: {
+      method?: "POST";
+      body?: unknown;
+      signal?: AbortSignal;
+      hold?: ArenaEngineHold;
+    } = {},
   ): Promise<Response> {
     const acquisition = await this.requireArenaManager().acquireCurrent(options.signal);
+    options.hold?.follow(acquisition);
     try {
       const response = await fetch(new URL(path, `${acquisition.server.url.replace(/\/$/, "")}/`), {
         method: options.method ?? "GET",
@@ -125,26 +178,30 @@ export class OpenCodeV2AgentClient implements AgentClient {
   }
   async openArenaActivitySource(cwd: string): Promise<ArenaActivitySource | null> {
     if (!this.arenaMode) return null;
+    const hold = this.holdArenaEngine();
     return {
       read: async (sessionIDs) => {
         const response = await this.arenaRequest("/arena/activity", cwd, {
           method: "POST",
           body: { sessionIDs },
+          hold,
         });
         if (!response.ok) throw new Error(`Arena activity request failed: ${response.status}`);
         return ArenaSessionActivitySchema.array().parse(await response.json());
       },
-      close: async () => undefined,
+      close: () => hold.close(),
     };
   }
   async openArenaCheckoutCleanupSource(
     sourceRepoRoot: string,
   ): Promise<ArenaCheckoutCleanupSource | null> {
     if (!this.arenaMode) return null;
+    const hold = this.holdArenaEngine();
     const request = async (operation: "inspect" | "prepare" | "release", root: string) => {
       const response = await this.arenaRequest(`/arena/checkout/${operation}`, sourceRepoRoot, {
         method: "POST",
         body: { root },
+        hold,
       });
       if (!response.ok) throw new Error(`Arena checkout ${operation} failed: ${response.status}`);
       if (operation !== "inspect") return undefined;
@@ -169,11 +226,12 @@ export class OpenCodeV2AgentClient implements AgentClient {
         const response = await this.arenaRequest("/arena/environments/trim", sourceRepoRoot, {
           method: "POST",
           body: { keep, volumeOf },
+          hold,
         });
         if (!response.ok) throw new Error(`Arena environment trim failed: ${response.status}`);
         return ArenaEnvironmentTrimSchema.parse(await response.json());
       },
-      close: async () => undefined,
+      close: () => hold.close(),
     };
   }
   async seedWorktreeIgnoredContent(input: { sourceCwd: string; worktreePath: string }) {
