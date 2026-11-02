@@ -116,6 +116,10 @@ immediately, and resubscribe whether that action succeeds or fails.
 
 Keep history caches within active subscriptions and rebuild them on reconnect;
 turn mutations and writes through another SQLite connection invalidate the cached history.
+When a rewind removes a battle's canonical prompt, hide that battle's summary and keep its turn,
+vote, and metric records for research. Recover missed rewind notifications at startup and when
+an idle chat opens, before serving its history. A surviving prompt keeps its summary; an active
+battle's graft must settle before checking which prompts remain.
 
 A subscriber acknowledges each delivered packet before receiving the next.
 Keep the initial snapshot outside its pending change buffer. More than 256
