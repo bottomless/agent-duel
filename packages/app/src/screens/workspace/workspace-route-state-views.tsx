@@ -32,6 +32,7 @@ interface WorkspaceRouteStateActions {
 export function renderWorkspaceRouteGate(input: {
   state: WorkspaceRouteState;
   archivedChat?: { serverId: string; agentId: string } | null;
+  isRouteFocused: boolean;
   actions: WorkspaceRouteStateActions;
 }): React.ReactNode {
   switch (input.state.kind) {
@@ -51,6 +52,7 @@ export function renderWorkspaceRouteGate(input: {
         <ArchivedWorkspaceRecovery
           state={input.state}
           archivedChat={input.archivedChat}
+          isRouteFocused={input.isRouteFocused}
           onRecover={input.actions.onRecoverWorkspace}
         />
       );
@@ -194,10 +196,12 @@ function WorkspaceConnecting({ hostName }: { hostName: string }) {
 function ArchivedWorkspaceRecovery({
   state,
   archivedChat,
+  isRouteFocused,
   onRecover,
 }: {
   state: Extract<WorkspaceRouteState, { kind: "archived" }>;
   archivedChat?: { serverId: string; agentId: string } | null;
+  isRouteFocused: boolean;
   onRecover: () => void;
 }) {
   const { t } = useTranslation();
@@ -247,6 +251,7 @@ function ArchivedWorkspaceRecovery({
       <ArchivedTranscript
         key={`${archivedChat.serverId}:${archivedChat.agentId}`}
         {...archivedChat}
+        isWorkspaceFocused={isRouteFocused}
         onClose={closeTranscript}
       />
     );

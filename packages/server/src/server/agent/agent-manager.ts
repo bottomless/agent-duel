@@ -1321,7 +1321,8 @@ export class AgentManager {
   }
 
   async getTimelineRows(id: string): Promise<AgentTimelineRow[]> {
-    this.requireAgent(id);
+    const agent = this.requireAgent(id);
+    if (agent.session?.readOnly) return this.timelineStore.getRows(id);
     if (this.durableTimelineStore) {
       return projectTimelineRows({
         rows: await this.durableTimelineStore.getCommittedRows(id),
@@ -1899,6 +1900,14 @@ export class AgentManager {
     return close;
   }
 
+  closeReadOnlyAgent(agentId: string): Promise<void> {
+    return this.runLifecycleMutation(agentId, async () => {
+      const agent = this.agents.get(agentId);
+      // Restore can have replaced the reader before its view's cleanup reaches us.
+      if (agent?.session?.readOnly) await this.closeAgentRuntime(agentId);
+    });
+  }
+
   private async closeAgentRuntime(agentId: string): Promise<void> {
     const agent = this.requireAgent(agentId);
     this.logger.trace(
@@ -1919,14 +1928,15 @@ export class AgentManager {
     await agent.session.close();
     this.cancelRunningProviderSubagents(agentId);
     const closedAgent = this.prepareAgentForClosure(agent, "agent closed");
+    if (agent.session.readOnly) this.timelineStore.delete(agentId);
 
     let persistError: unknown;
     try {
-      await this.persistSnapshot(closedAgent);
+      if (!agent.session.readOnly) await this.persistSnapshot(closedAgent);
     } catch (error) {
       persistError = error;
     }
-    this.emitClosedAgent(closedAgent, { persist: false });
+    if (!agent.session.readOnly) this.emitClosedAgent(closedAgent, { persist: false });
     this.logger.trace(
       {
         agentId,
@@ -3776,6 +3786,15 @@ export class AgentManager {
         options,
       });
 
+      if (session.readOnly) {
+        // Reading an archived Arena chat is not a lifecycle change in its durable record.
+        managed.lifecycle = "idle";
+        managed.historyPrimed = false;
+        this.agents.set(resolvedAgentId, managed);
+        registered = true;
+        return { ...managed };
+      }
+
       // Read history before publishing the agent: a provider failure must leave the
       // session unregistered so the registration catch closes it.
       const startupHistory: AgentStreamEvent[] = [];
@@ -4190,7 +4209,7 @@ export class AgentManager {
       return;
     }
     // Don't persist internal agents - they're ephemeral system tasks
-    if (agent.internal) {
+    if (agent.internal || agent.session?.readOnly) {
       return;
     }
     await this.registry.applySnapshot(agent, options);
@@ -4276,6 +4295,11 @@ export class AgentManager {
     options?: HydrateTimelineOptions,
   ): Promise<void> {
     if (agent.historyPrimed && !options?.force) {
+      return;
+    }
+
+    if (agent.session.readOnly) {
+      await this.primeTimelineFromLegacyProviderHistory(agent, false);
       return;
     }
 
@@ -4390,6 +4414,19 @@ export class AgentManager {
     } catch (error) {
       this.logger.warn({ err: error, agentId: agent.id }, "Failed to hydrate provider history");
       throw error;
+    }
+
+    if (agent.session.readOnly) {
+      this.timelineStore.initialize(agent.id, {
+        epoch: this.timelineStore.getEpoch(agent.id),
+        rows: historyEvents.map((event, index) => ({
+          seq: index + 1,
+          timestamp: event.timestamp ?? agent.createdAt.toISOString(),
+          item: event.item,
+        })),
+      });
+      agent.historyPrimed = true;
+      return;
     }
 
     // The replay is the timeline, so drop the rows a previous hydration committed.

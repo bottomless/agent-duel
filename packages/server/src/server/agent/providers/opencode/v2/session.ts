@@ -104,6 +104,7 @@ async function bounded<T>(
 }
 
 export class OpenCodeV2Session implements AgentSession {
+  readOnly = false;
   readonly provider = "opencode";
   readonly capabilities = V2_CAPABILITIES;
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
@@ -274,6 +275,11 @@ export class OpenCodeV2Session implements AgentSession {
     this.timeline.messages(await messages(this.client, this.id));
     await this.startStream();
     await this.children.reconcile(this.id);
+  }
+  /** Load the transcript only: no plugins, modes, event stream, or location-scoped routes. */
+  async initializeReadOnly() {
+    this.readOnly = true;
+    this.timeline.messages(await messages(this.client, this.id));
   }
   private watchExit(connection: V2Connection) {
     void connection.exited.then((error) => {

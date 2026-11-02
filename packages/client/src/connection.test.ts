@@ -135,6 +135,42 @@ function connection(
   };
 }
 
+test("closing an archived transcript reader correlates its reply and reports a release failure (R26)", async () => {
+  const h = connection();
+  try {
+    const ready = h.client.connect();
+    h.open();
+    await ready;
+    const close = h.client.closeAgentHistory("archived-agent");
+    await expect.poll(() => h.sent.length).toBe(2);
+    const request = h.sent.at(-1)?.message;
+    expect(request).toMatchObject({
+      type: "agent.history.close.request",
+      agentId: "archived-agent",
+    });
+    h.receive({
+      type: "agent.history.close.response",
+      payload: { requestId: request?.requestId, agentId: "archived-agent", error: null },
+    });
+    await expect(close).resolves.toBeUndefined();
+
+    const failedClose = h.client.closeAgentHistory("archived-agent");
+    const failed = expect(failedClose).rejects.toThrow("Engine close failed");
+    await expect.poll(() => h.sent.length).toBe(3);
+    h.receive({
+      type: "agent.history.close.response",
+      payload: {
+        requestId: h.sent.at(-1)?.message?.requestId,
+        agentId: "archived-agent",
+        error: "Engine close failed",
+      },
+    });
+    await failed;
+  } finally {
+    await h.client.close();
+  }
+});
+
 test("a plain client advertises every protocol capability and no browser host", async () => {
   const h = connection();
   try {

@@ -722,6 +722,8 @@ export interface AgentUsageSession {
 }
 
 export interface AgentSession {
+  /** An Arena transcript reader: never persist runtime state or retain it after reading. */
+  readonly readOnly?: boolean;
   usageSession?(): AgentUsageSession | null;
   readonly provider: AgentProvider;
   readonly id: string | null;

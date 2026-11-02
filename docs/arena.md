@@ -724,6 +724,12 @@ no UI, so only the daemon log says why ("Worktree code could not be saved during
 `removedDirectory: false` on the auto-archive line). The archive dialog says the work is saved for these
 workspaces (`archiveKeepsWork` on the workspace descriptor).
 
+Read transcript works after the archived chat's worktree is gone. Reading leaves the archived
+agent record and saved history unchanged, and leaving the transcript releases its engine reference.
+Restore opens an interactive session. Find searches loaded messages only; load earlier messages
+to include them. The transcript owns its pages separately from the live chat store, which can
+still hold that chat's epoch and last turn from before archive.
+
 A snapshot is released (refs and manifest) once Restore files has brought it back, when its project
 is removed (a project added again gets a new id, so nothing could restore it), and when its
 workspace record is removed. Project removal also deletes the archived records it released, their

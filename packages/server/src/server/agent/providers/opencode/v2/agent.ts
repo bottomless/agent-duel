@@ -22,6 +22,7 @@ import type {
   AgentCreateSessionOptions,
   AgentFeature,
   AgentLaunchContext,
+  AgentResumeSessionOptions,
   AgentPersistenceHandle,
   AgentSession,
   AgentSessionConfig,
@@ -414,6 +415,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
     handle: AgentPersistenceHandle,
     overrides?: Partial<AgentSessionConfig>,
     launch?: AgentLaunchContext,
+    options?: AgentResumeSessionOptions,
   ): Promise<AgentSession> {
     const cwd = overrides?.cwd ?? handle.metadata?.cwd;
     if (typeof cwd !== "string")
@@ -433,6 +435,11 @@ export class OpenCodeV2AgentClient implements AgentClient {
       const info = await connection.client.session.get({
         sessionID: handle.nativeHandle ?? handle.sessionId,
       });
+      // Archiving an Arena chat removes its worktree, and the engine refuses location-scoped routes
+      // for a missing directory once it has no cached instance for it. Read transcript changes
+      // nothing in the chat, so a history load stays on the session-scoped routes.
+      if (this.arenaMode && options?.purpose === "history")
+        return await this.attach(connection, info, config, launch, true, undefined, true);
       const deferred = await applyResumeOverrides(
         connection.client,
         info,
@@ -457,6 +464,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
     launch: AgentLaunchContext | undefined,
     persist: boolean,
     deferred?: DeferredSelection,
+    readOnly = false,
   ) {
     const acquire = () =>
       this.runtime.acquire(
@@ -506,6 +514,10 @@ export class OpenCodeV2AgentClient implements AgentClient {
     );
     if (deferred) session.defer(deferred);
     try {
+      if (readOnly) {
+        await session.initializeReadOnly();
+        return session;
+      }
       if (this.options.bridge) {
         const location = { directory: config.cwd };
         await awaitPaseoPlugin({ client: connection.client, location });

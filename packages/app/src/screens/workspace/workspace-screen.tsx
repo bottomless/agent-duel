@@ -3032,6 +3032,7 @@ function WorkspaceScreenContent({
     archivedChat: workspaceRecovery.agentId
       ? { serverId: normalizedServerId, agentId: workspaceRecovery.agentId }
       : null,
+    isRouteFocused,
     actions: {
       onRetryHost: handleRetryHost,
       onManageHost: handleManageHost,

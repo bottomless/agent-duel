@@ -1,16 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { useFetchQuery } from "@/data/query";
 import { StyleSheet } from "react-native-unistyles";
-import type { FetchAgentTimelinePayload } from "@getpaseo/client/internal/daemon-client";
+import type {
+  DaemonClient,
+  FetchAgentTimelinePayload,
+} from "@getpaseo/client/internal/daemon-client";
 import { AgentStreamView } from "@/agent-stream/view";
 import { Button } from "@/components/ui/button";
+import { createPaneFocusContextValue, PaneFocusProvider } from "@/panels/pane-context";
 import { useSessionStore } from "@/stores/session-store";
-import { hydrateStreamState } from "@/types/stream";
+import { hydrateStreamState, type StreamItem } from "@/types/stream";
 import type { PendingPermission } from "@/types/shared";
 import { toErrorMessage } from "@/utils/error-messages";
+import { TranscriptReader, transcriptFindHistory } from "./transcript-history";
 
 const EMPTY_PERMISSIONS = new Map<string, PendingPermission>();
+// The session store can still hold this chat's last live head, which the fetched pages also contain.
+const EMPTY_STREAM_HEAD: StreamItem[] = [];
 const IDLE_TURN = { isActive: false, isCancelling: false, startedAt: null, turnId: null };
 type Cursor = FetchAgentTimelinePayload["startCursor"];
 
@@ -18,27 +25,46 @@ type Cursor = FetchAgentTimelinePayload["startCursor"];
 export function ArchivedTranscript({
   serverId,
   agentId,
+  isWorkspaceFocused,
   onClose,
 }: {
   serverId: string;
   agentId: string;
+  isWorkspaceFocused: boolean;
   onClose: () => void;
 }) {
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const [cursor, setCursor] = useState<Cursor>(null);
   const [pages, setPages] = useState<FetchAgentTimelinePayload[]>([]);
+  const reader = useRef<TranscriptReader | null>(null);
+  useEffect(() => {
+    if (!client || !isWorkspaceFocused) return;
+    const activeReader = new TranscriptReader(() => client.closeAgentHistory(agentId));
+    reader.current = activeReader;
+    return () => {
+      reader.current = null;
+      void activeReader.close().catch((error: unknown) => {
+        console.error("Failed to close archived transcript reader", error);
+      });
+    };
+  }, [client, agentId, isWorkspaceFocused]);
   const query = useFetchQuery({
     queryKey: ["archived-transcript", serverId, agentId, cursor],
     dataShape: "value",
-    staleTimeMs: 30_000,
+    // Leaving closes the reader; re-entry needs the new reader's epoch even inside 30 seconds.
+    staleTimeMs: 0,
+    enabled: Boolean(client) && isWorkspaceFocused,
     queryFn: () => {
       if (!client) throw new Error("Connect to the host to read this transcript");
-      return client.fetchAgentTimeline(agentId, {
-        direction: cursor ? "before" : "tail",
-        ...(cursor ? { cursor } : {}),
-        projection: "projected",
-        limit: 100,
-      });
+      if (!reader.current) throw new Error("Transcript is not active");
+      return reader.current.read(() =>
+        client.fetchAgentTimeline(agentId, {
+          direction: cursor ? "before" : "tail",
+          ...(cursor ? { cursor } : {}),
+          projection: "projected",
+          limit: 100,
+        }),
+      );
     },
     retry: false,
   });
@@ -54,6 +80,19 @@ export function ArchivedTranscript({
     });
   }, [query.data]);
   const oldest = pages.at(-1);
+  const historyClient = useMemo<Pick<DaemonClient, "searchAgentTimeline"> | null>(() => {
+    if (!client) return null;
+    return {
+      searchAgentTimeline(input) {
+        if (!reader.current) return Promise.reject(new Error("Transcript is not active"));
+        return reader.current.read(() => client.searchAgentTimeline(input));
+      },
+    };
+  }, [client]);
+  const findHistory = useMemo(
+    () => transcriptFindHistory(pages, historyClient, agentId),
+    [pages, historyClient, agentId],
+  );
   const agent = pages?.[0]?.agent;
   const context = useMemo(
     () => ({
@@ -78,6 +117,11 @@ export function ArchivedTranscript({
       ),
     [pages],
   );
+  // The gate replaces the workspace panes, so the transcript is the one pane on this route.
+  const paneFocus = useMemo(
+    () => createPaneFocusContextValue({ isWorkspaceFocused, isPaneFocused: true }),
+    [isWorkspaceFocused],
+  );
   const { refetch } = query;
   const loadOlder = useCallback(() => {
     if (oldest?.startCursor) setCursor(oldest.startCursor);
@@ -94,6 +138,9 @@ export function ArchivedTranscript({
           Back
         </Button>
       </View>
+      <Text style={styles.status}>
+        Find searches loaded messages only. Load earlier messages to search more.
+      </Text>
       {query.error ? (
         <View style={styles.header} accessibilityRole="alert">
           <Text style={styles.error}>{toErrorMessage(query.error)}</Text>
@@ -112,16 +159,20 @@ export function ArchivedTranscript({
         <Text style={styles.status}>No saved messages in this archived chat.</Text>
       ) : null}
       {pages.length > 0 && stream.length > 0 ? (
-        <AgentStreamView
-          agentId={agentId}
-          serverId={serverId}
-          context={context}
-          streamItems={stream}
-          pendingPermissions={EMPTY_PERMISSIONS}
-          turnPresentation={IDLE_TURN}
-          isAuthoritativeHistoryReady
-          readOnly
-        />
+        <PaneFocusProvider value={paneFocus}>
+          <AgentStreamView
+            agentId={agentId}
+            serverId={serverId}
+            context={context}
+            streamItems={stream}
+            streamHead={EMPTY_STREAM_HEAD}
+            findHistory={findHistory}
+            pendingPermissions={EMPTY_PERMISSIONS}
+            turnPresentation={IDLE_TURN}
+            isAuthoritativeHistoryReady
+            readOnly
+          />
+        </PaneFocusProvider>
       ) : null}
     </View>
   );
