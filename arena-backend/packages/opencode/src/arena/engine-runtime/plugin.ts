@@ -23,6 +23,7 @@ import {
   readSessionRejected,
   SESSION_REJECTED_RETRY_MESSAGE,
 } from "@agent-duel/arena-service/request-error"
+import { withHeldToolCalls } from "./tool-stream"
 import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
 import { ArenaResponseRecovery } from "../response-recovery"
 import { idleBudgetFetch, idleExhausted, idleTimeout, resetIdleBudget } from "./idle"
@@ -205,6 +206,16 @@ function install(context: Context, options: InstalledOptions) {
             },
           )
           event.sdk = createOpenRouter({ ...event.options, apiKey: PROXY_KEY })
+        }),
+      { providerID: String(PROVIDER_ID) },
+    )
+
+    yield* context.aisdk.hook(
+      "language",
+      (event) =>
+        Effect.sync(() => {
+          if (!arenaModel(event.model)) return
+          event.language = withHeldToolCalls(event.sdk.languageModel(event.model.modelID ?? event.model.id))
         }),
       { providerID: String(PROVIDER_ID) },
     )
