@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
+import path from "node:path"
 import { Context as EffectContext, Effect, Stream } from "effect"
 import type { SystemPart } from "@opencode/ai"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
@@ -18,6 +19,7 @@ import { classification, promptCacheKey, requestHeaders, requestNeedsCompaction,
 import { ArenaEngineSandbox, previewEnvironment } from "./sandbox"
 import type { ToolExecutionGate } from "./gate"
 import { getArenaAutoAccept } from "./auto-accept"
+import { askOutsideProject, isTrusted, shellOutsideDirectories } from "./outside-project"
 import {
   readNetworkUnavailable,
   readSessionRejected,
@@ -62,6 +64,11 @@ const CurrentToolSession = EffectContext.Reference<string | undefined>("agent-du
   defaultValue: () => undefined,
 })
 
+// Only the matching shell call has already checked cwd, cd and writes as one request.
+const CheckedShell = EffectContext.Reference<string | undefined>("agent-duel/CheckedShell", {
+  defaultValue: () => undefined,
+})
+
 const defaultOptions: Required<Pick<ArenaEngineRuntimeOptions, "assignments" | "contestantFetch">> = {
   assignments: ArenaRuntime.registry,
   contestantFetch: ArenaRuntime.contestantFetch,
@@ -89,10 +96,7 @@ function arenaNetworkUnavailable(error: {
 
 // The control plane refused the user's session. Only a new sign-in fixes it, and the daemon then
 // forwards the new session, so the contestant waits as it does for the network.
-function arenaSessionRejected(error: {
-  readonly status?: number
-  readonly response?: { readonly body: string }
-}) {
+function arenaSessionRejected(error: { readonly status?: number; readonly response?: { readonly body: string } }) {
   return error.status === 401 && readSessionRejected(error.response?.body)
 }
 
@@ -374,8 +378,24 @@ function install(context: Context, options: InstalledOptions) {
       ),
     )
 
+    yield* context.agent.transform((editor) => {
+      for (const agent of editor.list()) editor.update(agent.id, (item) => askOutsideProject(item.permissions))
+    })
+
     yield* context.permission.hook("evaluate", (event) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        if (event.action === "external_directory" && event.effect === "ask") {
+          const checked = yield* CheckedShell
+          if (event.source?.type === "tool" && checked === `${event.sessionID}:${event.source.id}`) {
+            event.effect = "allow"
+            return
+          }
+          const skills = yield* context.skill.list().pipe(
+            Effect.map((result) => result.data.map((skill) => String(skill.path))),
+            Effect.orElseSucceed((): string[] => []),
+          )
+          if (isTrusted(event.resources, skills)) event.effect = "allow"
+        }
         if (!autoAccept(options, String(event.sessionID)) || !arenaSession(options, String(event.sessionID))) return
         if (event.effect === "deny") return
         if (/^question(?:$|[.:/])/.test(event.action)) return
@@ -418,6 +438,38 @@ function install(context: Context, options: InstalledOptions) {
       }),
       Effect.forkScoped({ startImmediately: true }),
     )
+
+    // Check the whole shell call before execution. Core's independent cd scan resolves every cd
+    // from the initial cwd, so its duplicate asks are suppressed only within this executor.
+    yield* context.tool.transform((editor) => {
+      if (!editor.get("shell")) return
+      editor.update("shell", (tool) => {
+        const execute = tool.execute
+        tool.execute = (input, call) => {
+          if (options.assignments?.assignments.get(String(call.sessionID))?.telemetry) return execute(input, call)
+          const params = input as { readonly command?: unknown; readonly workdir?: unknown }
+          if (typeof params.command !== "string") return execute(input, call)
+          const command = params.command
+          return Effect.gen(function* () {
+            const { directory, project } = context.location
+            const cwd = path.resolve(directory, typeof params.workdir === "string" ? params.workdir : ".")
+            const resources = yield* Effect.promise(() =>
+              shellOutsideDirectories(command, cwd, [directory, project.directory]),
+            )
+            if (resources.length)
+              yield* context.permission.assert({
+                action: "external_directory",
+                resources,
+                save: resources,
+                sessionID: call.sessionID,
+                agent: call.agent,
+                source: { type: "tool", messageID: call.messageID, id: call.id },
+              })
+            return yield* execute(input, call).pipe(Effect.provideService(CheckedShell, `${call.sessionID}:${call.id}`))
+          })
+        }
+      })
+    })
 
     yield* context.tool.hook("execute.before", (event) => {
       if (!arenaSession(options, String(event.sessionID))) return Effect.void

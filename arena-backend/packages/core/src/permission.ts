@@ -1,5 +1,8 @@
 export * as Permission from "./permission.js"
 
+import path from "node:path"
+import { realpathSync } from "node:fs"
+import { Global } from "@opencode/util/global"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { Context, Deferred, Effect, Layer, Schema } from "effect"
 import { Permission } from "@opencode/schema/permission"
@@ -100,6 +103,50 @@ export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
   return rulesets.flat()
 }
 
+/**
+ * Agent Duel: one Always allow must not end every later `external_directory` ask for the project.
+ * Refuse the root, the home directory, and any directory above home, whichever tool asked. A row
+ * stored by an older build stays listed, so the user can remove it, but has no effect.
+ */
+export function tooWideToSave(action: string, resource: string) {
+  if (action !== "external_directory") return false
+  const directory = resource.replace(/(?:[\\/]\*+|^\*+)$/, "")
+  if (directory === "" || /[*?\[]/.test(directory)) return true
+  const folded = (value: string) => path.resolve(value).toLowerCase()
+  const ancestor = (parent: string, child: string) => {
+    const relative = path.relative(parent, child)
+    return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  }
+  const lexical = folded(directory)
+  const home = folded(Global.Path.home)
+  if (ancestor(lexical, home)) return true
+  try {
+    const resolved = folded(realpathSync(directory))
+    const resolvedHome = folded(realpathSync(Global.Path.home))
+    return ancestor(resolved, resolvedHome)
+  } catch {
+    // Nonexistent narrow directories can be saved. Unresolved platform aliases to a volume root
+    // or a home ancestor cannot: their spelling alone is enough to know the grant is too wide.
+    if (/^\/(?:users|home)$/.test(lexical) || /^\/volumes(?:\/[^/]+)?$/.test(lexical)) return true
+    const data = lexical.replace(/^\/system\/volumes\/data(?=\/|$)/, "") || "/"
+    if (ancestor(data, home)) return true
+    // Resolve the longest existing prefix too, so a missing suffix cannot hide a home/root alias.
+    let prefix = path.resolve(directory)
+    const suffix: string[] = []
+    while (path.dirname(prefix) !== prefix) {
+      suffix.unshift(path.basename(prefix))
+      prefix = path.dirname(prefix)
+      try {
+        const resolved = folded(path.join(realpathSync(prefix), ...suffix))
+        return ancestor(resolved, home)
+      } catch {
+        /* Continue to the next existing ancestor. */
+      }
+    }
+    return false
+  }
+}
+
 export interface Interface {
   readonly close: Effect.Effect<void>
   readonly ask: (input: AssertInput) => Effect.Effect<AskResult, SessionErrors.NotFoundError>
@@ -146,13 +193,15 @@ const layer = Layer.effect(
     yield* Effect.addFinalizer(() => close)
 
     const savedRules = Effect.fnUntraced(function* () {
-      return (yield* saved.list({ projectID: location.project.id })).map(
-        (item): Permission.Rule => ({
-          action: item.action,
-          resource: item.resource,
-          effect: "allow",
-        }),
-      )
+      return (yield* saved.list({ projectID: location.project.id }))
+        .filter((item) => !tooWideToSave(item.action, item.resource))
+        .map(
+          (item): Permission.Rule => ({
+            action: item.action,
+            resource: item.resource,
+            effect: "allow",
+          }),
+        )
     })
 
     const configured = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, agentID?: Agent.ID) {
@@ -194,7 +243,7 @@ const layer = Layer.effect(
         sessionID: input.sessionID,
         action: input.action,
         resources: input.resources,
-        save: input.save,
+        save: input.save?.filter((resource) => !tooWideToSave(input.action, resource)),
         metadata: input.metadata,
         source: input.source,
         message,

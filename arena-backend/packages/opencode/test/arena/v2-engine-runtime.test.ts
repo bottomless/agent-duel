@@ -273,6 +273,7 @@ describe("Arena v2 engine runtime", () => {
       const aisdk = yield* AISDK.Service
       const context: any = {
         provider: { transform: noOp },
+        agent: { transform: noOp },
         aisdk: {
           hook: (name: string, callback: any, options?: { providerID?: string }) =>
             name === "sdk"
@@ -540,6 +541,7 @@ describe("Arena v2 engine runtime", () => {
       const aisdk = yield* AISDK.Service
       const context: any = {
         provider: { transform: noOp },
+        agent: { transform: noOp },
         aisdk: {
           hook: (name: string, callback: any) => (name === "sdk" ? aisdk.hook.sdk(callback) : noOp()),
         },

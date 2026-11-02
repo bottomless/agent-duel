@@ -1,3 +1,7 @@
+import { mkdtempSync, symlinkSync, rmSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { Global } from "@opencode/util/global"
 import { describe, expect, test } from "bun:test"
 import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
 import { Agent } from "@opencode/core/agent"
@@ -343,6 +347,48 @@ describe("Permission", () => {
       yield* service.assert(assertion({ id: Permission.ID.create("per_next"), resources: ["src/next.ts"] }))
       yield* saved.remove(id)
       expect(yield* saved.list()).toEqual([])
+    }),
+  )
+
+  it.effect("refuses to save an external_directory pattern as wide as the root", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* Permission.Service
+      const asked = yield* Deferred.make<Permission.Request>()
+      const bus = yield* Bus.Service
+      const unsubscribe = yield* bus.listen((event) =>
+        event.type === Permission.Event.Asked.type
+          ? Deferred.succeed(asked, event.data as Permission.Request).pipe(Effect.asVoid)
+          : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const fiber = yield* service
+        .assert(
+          assertion({
+            action: "external_directory",
+            resources: ["/*", "/outside/*"],
+            save: ["/*", "/outside/*"],
+          }),
+        )
+        .pipe(Effect.forkScoped)
+      const request = yield* Deferred.await(asked)
+      expect(request.save).toEqual(["/outside/*"])
+      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* Fiber.join(fiber)
+      const saved = yield* PermissionSaved.Service
+      expect((yield* saved.list()).map((item) => item.resource)).toEqual(["/outside/*"])
+    }),
+  )
+
+  it.effect("ignores a root pattern an older build saved", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* Permission.Service
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ projectID: Project.ID.global, action: "external_directory", resources: ["/*"] })
+      const result = yield* service.ask(assertion({ action: "external_directory", resources: ["/elsewhere/*"] }))
+      expect(result.effect).toBe("ask")
+      yield* service.reply({ requestID: result.id, reply: "reject" })
     }),
   )
 
@@ -714,4 +760,31 @@ describe("shell scanner permission impact", () => {
       )
     }
   }
+})
+
+describe("Agent Duel wide directory saves (round 3)", () => {
+  test.each(["/*/*", "/Users/*/*", "/?/*", "/U*/*", "/*/*/*", "/a/[xy]/*"])(
+    "rejects a wildcard before the last segment: %s",
+    (resource) => {
+      expect(Permission.tooWideToSave("external_directory", resource)).toBe(true)
+    },
+  )
+  test("compares resolved, case-folded paths and refuses unresolved wide aliases", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "r09-wide-"))
+    try {
+      symlinkSync(Global.Path.home, path.join(dir, "home"))
+      symlinkSync("/", path.join(dir, "root"))
+      for (const resource of [
+        path.join(dir, "home", "*"),
+        path.join(dir, "root", "*"),
+        Global.Path.home.toUpperCase() + "/*",
+        "/USERS/*",
+        "/Volumes/Macintosh HD/*",
+      ])
+        expect(Permission.tooWideToSave("external_directory", resource)).toBe(true)
+      expect(Permission.tooWideToSave("external_directory", path.join(dir, "narrow", "*"))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

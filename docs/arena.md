@@ -307,6 +307,31 @@ contestants during a battle, and becomes the default for new chats; other chats 
 carry-over is intended, so the menu says so. Its descriptions also explain that enabling Auto
 Accept accepts pending requests; explicit deny rules still apply.
 
+`Ask before tools` does not ask about work inside the project: OpenCode's agents allow it. It asks when
+a tool leaves the project through `external_directory`. OpenCode documents ask as its default, but
+upstream's rules allow it (upstream #54524). Agent Duel restores the documented default in
+`schema/src/agent.ts` and the built-in agent rules (`arena/engine-runtime/outside-project.ts`). Keep
+this rule on the agent so existing chats, subagents, and agents defined in user config all get it.
+A user's configured rule and a contestant's sandbox come later and win. Directories the agent's own
+work fills never ask: long tool output, background command output, plans, skills, and uploads.
+
+OpenCode's shell tool checks only `cd` and its working directory (upstream #56288), so the plugin
+checks the shell call outside a battle. Literal writes outside the project ask through command
+wrappers and symlinks too, including files that do not exist yet. After a conditional directory
+change, a write asks if any possible location puts it outside the project. Ordinary project writes
+stay quiet. The short reader list is unchanged. Temp never asks: `/tmp`, `/var/tmp`, and the system
+temp directory are allowed, including their real paths.
+
+A path held in a variable or computed by a command, such as `$(echo /x)`, gets no card. Scripts and
+code piped into an interpreter are outside this check too. Inline shell commands such as `sh -c`
+are checked; inline interpreter text can still produce a false card. Do not treat Ask mode as a
+boundary. Asking for every shell command would also ask about work inside the project.
+
+Always allow cannot save a glob in a directory path, the root, home, or a directory above home,
+including aliases through symlinks or case (`tooWideToSave` in `core/src/permission.ts`, an Agent Duel
+edit to vendored core). Unresolved paths that look that wide are refused too. A card with nothing
+savable offers only Allow once and Deny. One false match must not end every later ask for the project.
+
 The vote lives in a centered sticky pill above the composer: `Choose A`, `Tie`, and `Choose B`.
 Anchor it over the transcript above the composer, with a gray surface inside the pill and a
 transparent, click-through area around it. It stays reachable while reviewing either thread or

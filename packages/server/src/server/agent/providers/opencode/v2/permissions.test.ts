@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 
 import { createTestLogger } from "../../../../../test-utils/test-logger.js";
+import { SessionPermissions } from "./permissions.js";
+import type { AgentStreamEvent } from "../../../agent-sdk-types.js";
+import type { AgentPermissionRequest } from "../../../agent-sdk-types.js";
 import type { V2Api } from "./api.js";
 import { OpenCodeV2AgentClient } from "./agent.js";
 import { V2Harness } from "../test-utils/v2-harness.js";
@@ -282,5 +285,149 @@ describe("OpenCode v2 permission routing", () => {
     } finally {
       await session.close();
     }
+  });
+
+  test("clears an approval the engine dropped without a reply, as Stop does", async () => {
+    const harness = new V2Harness();
+    harness.api.permission.list = async () => [
+      { id: "approval", sessionID: "session", action: "write", resources: ["/outside/*"] },
+    ];
+    const client = new OpenCodeV2AgentClient({
+      logger: createTestLogger(),
+      runtime: harness.runtime,
+    });
+    const session = await client.createSession({ provider: "opencode", cwd: "/tmp/project" });
+    try {
+      expect(session.getPendingPermissions()).toHaveLength(1);
+      harness.api.permission.list = async () => [];
+      await session.interrupt();
+      await expect.poll(() => session.getPendingPermissions()).toEqual([]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("offers Always allow only when the engine can save the approval", async () => {
+    const harness = new V2Harness();
+    harness.api.permission.list = async () => [
+      {
+        id: "wide",
+        sessionID: "session",
+        action: "external_directory",
+        resources: ["/*"],
+        save: [],
+      },
+      {
+        id: "narrow",
+        sessionID: "session",
+        action: "external_directory",
+        resources: ["/outside/*"],
+        save: ["/outside/*"],
+      },
+    ];
+    const client = new OpenCodeV2AgentClient({
+      logger: createTestLogger(),
+      runtime: harness.runtime,
+    });
+    const session = await client.createSession({ provider: "opencode", cwd: "/tmp/project" });
+    try {
+      const [wide, narrow] = session.getPendingPermissions();
+      const ids = (request: AgentPermissionRequest) => request.actions?.map((action) => action.id);
+      expect(ids(wide)).toEqual(["once", "reject"]);
+      expect(ids(narrow)).toEqual(["once", "always", "reject"]);
+    } finally {
+      await session.close();
+    }
+  });
+});
+
+describe("OpenCode v2 settled replies (round 3)", () => {
+  test.each([false, true])(
+    "a settled once reply wins a missing-list race, auto accept=%s",
+    async (autoAccept) => {
+      const harness = new V2Harness();
+      const events: AgentStreamEvent[] = [];
+      const permissions = new SessionPermissions(
+        () => harness.api,
+        "session",
+        {
+          provider: "opencode",
+          cwd: "/tmp/project",
+          featureValues: { auto_accept: autoAccept },
+        },
+        (event) => events.push(event),
+      );
+      const request = {
+        id: "approval",
+        sessionID: "child",
+        action: "external_directory",
+        resources: ["/out/*"],
+      };
+      harness.api.permission.list = async () => [request];
+      const replies: string[] = [];
+      harness.api.permission.reply = async ({ decision }) => {
+        replies.push(decision);
+        // Core deletes the request before publishing permission.replied. A concurrent child
+        // reconciliation can observe the gap while the HTTP reply is still outstanding.
+        harness.api.permission.list = async () => [];
+        await permissions.reconcile("child");
+      };
+      await permissions.reconcile("child");
+      if (!autoAccept)
+        await permissions.respondToPermission("approval", {
+          behavior: "allow",
+          selectedActionId: "once",
+        });
+      permissions.observe({
+        id: "replied",
+        created: 1,
+        type: "permission.replied",
+        data: { sessionID: "child", requestID: "approval", reply: "once" },
+      });
+      expect(replies).toEqual(["once"]);
+      expect(events.filter((event) => event.type === "permission_resolved")).toEqual([
+        {
+          type: "permission_resolved",
+          provider: "opencode",
+          requestId: "approval",
+          resolution: { behavior: "allow", ...(!autoAccept ? { selectedActionId: "once" } : {}) },
+        },
+      ]);
+      expect(permissions.list()).toEqual([]);
+    },
+  );
+
+  test("a stale concurrent list cannot resurrect a settled reply", async () => {
+    const harness = new V2Harness();
+    const events: AgentStreamEvent[] = [];
+    const permissions = new SessionPermissions(
+      () => harness.api,
+      "session",
+      { provider: "opencode", cwd: "/tmp/project" },
+      (event) => events.push(event),
+    );
+    const request = {
+      id: "approval",
+      sessionID: "session",
+      action: "external_directory",
+      resources: ["/out/*"],
+    };
+    harness.api.permission.list = async () => [request];
+    await permissions.reconcile("session");
+    let release!: (requests: (typeof request)[]) => void;
+    harness.api.permission.list = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    const stale = permissions.reconcile("session");
+    harness.api.permission.reply = async () => {};
+    await permissions.respondToPermission("approval", { behavior: "allow" });
+    release([request]);
+    await stale;
+    expect(permissions.list()).toEqual([]);
+    expect(events.map((event) => event.type)).toEqual([
+      "permission_requested",
+      "permission_resolved",
+    ]);
   });
 });
