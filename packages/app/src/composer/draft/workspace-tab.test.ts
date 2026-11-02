@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   isStartingArenaBattle,
+  resolveDraftFeatureValues,
   shouldAllowEmptyDraftText,
   validateDraftSubmission,
 } from "./workspace-tab-core";
@@ -99,5 +100,35 @@ describe("workspace draft input slot", () => {
 
   test("an ordinary chat keeps its composer through the send", () => {
     expect(isStartingArenaBattle({ battleMode: false, isCreating: true })).toBe(false);
+  });
+});
+
+describe("resolveDraftFeatureValues", () => {
+  test("keeps the new-chat choice while this tab's feature query is cold", () => {
+    expect(
+      resolveDraftFeatureValues({ pending: { auto_accept: true }, composer: undefined }),
+    ).toEqual({ auto_accept: true });
+  });
+
+  test("keeps Ask before tools when this tab still holds an older default", () => {
+    expect(
+      resolveDraftFeatureValues({
+        pending: { auto_accept: false },
+        composer: { auto_accept: true },
+      }),
+    ).toEqual({ auto_accept: false });
+  });
+
+  test("falls back to this tab's values when the new-chat composer knew none", () => {
+    expect(resolveDraftFeatureValues({ pending: {}, composer: { auto_accept: true } })).toEqual({
+      auto_accept: true,
+    });
+  });
+
+  test("uses this tab's values for a send it started itself", () => {
+    expect(
+      resolveDraftFeatureValues({ pending: undefined, composer: { auto_accept: true } }),
+    ).toEqual({ auto_accept: true });
+    expect(resolveDraftFeatureValues({ pending: undefined, composer: undefined })).toBeUndefined();
   });
 });

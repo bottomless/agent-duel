@@ -32,6 +32,7 @@ import { shouldAutoFocusWorkspaceDraftComposer } from "@/screens/workspace/works
 import {
   isStartingArenaBattle,
   shouldAllowEmptyDraftText,
+  resolveDraftFeatureValues,
 } from "@/composer/draft/workspace-tab-core";
 import type { AgentCapabilityFlags } from "@getpaseo/protocol/agent-types";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
@@ -498,7 +499,10 @@ export function WorkspaceDraftAgentTab({
         workspaceId: workspaceFields?.id ?? null,
         hostDisconnectedMessage: t("workspace.terminal.hostDisconnected"),
         arenaPreferenceKey,
-        featureValues: composerState.featureValues,
+        featureValues: resolveDraftFeatureValues({
+          pending: pendingAutoSubmit?.featureValues,
+          composer: composerState.featureValues,
+        }),
         createdPreferenceKey: (agentId) => arenaAgentPreferenceKey(serverId, agentId),
         handOffStartedBattle: (agentId, snapshot) => {
           queryClient.setQueryData(arenaSessionQueryKey(serverId, agentId), snapshot);
