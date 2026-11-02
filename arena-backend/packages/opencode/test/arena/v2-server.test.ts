@@ -377,16 +377,16 @@ describe("Arena OpenCode v2 native boundary", () => {
       headers: { ...headers(), "x-opencode-directory": directory },
       body: JSON.stringify({ providerID: "arena", modelID: "medium" }),
     })
-    expect(mutation.status).toBe(409)
+    expect(mutation.status).toBe(400)
     const environment = await fetch(new URL(`/api/session/${sessionID}/environment`, listener.url), {
       method: "PUT",
       headers: { ...headers(), "x-opencode-directory": directory },
       body: JSON.stringify({ variables: { ARENA_SYNC: "contestant" } }),
     })
-    expect(environment.status).toBe(409)
+    expect(environment.status).toBe(400)
   })
 
-  test("allows canonical environment synchronization during an active battle while guarding model changes", async () => {
+  test("allows canonical environment synchronization and unchanged selections during an active battle while refusing changes", async () => {
     home = await mkdtemp(path.join(os.tmpdir(), "agent-duel-v2-canonical-environment-"))
     process.env.PASEO_HOME = home
     process.env.OPENCODE_DB = path.join(home, "opencode-local.db")
@@ -399,33 +399,69 @@ describe("Arena OpenCode v2 native boundary", () => {
     listener = await Server.listen({ hostname: "127.0.0.1", port: 0, fs: { filewatcher: false } })
 
     const directory = await mkdtemp(path.join(home, "workspace-"))
+    const request = (suffix: string, init: { method: string; body?: unknown }) =>
+      fetch(new URL(`/api/session/${sessionID}${suffix}`, listener!.url), {
+        method: init.method,
+        headers: { ...headers(), "x-opencode-directory": directory },
+        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      })
     const created = await fetch(new URL("/api/session", listener.url), {
       method: "POST",
       headers: { ...headers(), "x-opencode-directory": directory },
-      body: JSON.stringify({ location: { directory }, model: { providerID: "arena", id: "contestant" } }),
+      body: JSON.stringify({
+        location: { directory },
+        agent: "build",
+        model: { providerID: "arena", id: "medium", variant: "xhigh" },
+      }),
     })
     expect(created.status).toBe(200)
     const sessionID = ((await created.json()).data as { id: string }).id
+    const messages = async () => (await (await request("/message", { method: "GET" })).json()).data as unknown[]
+    const before = await messages()
 
     const store = await ArenaRuntime.store()
     await store.createChat(activeBattleChat(sessionID, directory))
 
-    const environment = await fetch(new URL(`/api/session/${sessionID}/environment`, listener.url), {
+    const environment = await request("/environment", {
       method: "PUT",
-      headers: { ...headers(), "x-opencode-directory": directory },
-      body: JSON.stringify({ variables: { ARENA_SYNC: "canonical" } }),
+      body: { variables: { ARENA_SYNC: "canonical" } },
     })
     const environmentResult = { status: environment.status, body: await environment.text() }
 
-    const mutation = await fetch(new URL(`/api/session/${sessionID}/model`, listener.url), {
+    // The daemon reapplies the stored agent and model on every resume.
+    const sameAgent = await request("/agent", { method: "POST", body: { agent: "build" } })
+    const sameModel = await request("/model", {
       method: "POST",
-      headers: { ...headers(), "x-opencode-directory": directory },
-      body: JSON.stringify({ providerID: "arena", modelID: "medium" }),
+      body: { model: { providerID: "arena", id: "medium", variant: "xhigh" } },
     })
-    const mutationResult = { status: mutation.status, body: await mutation.text() }
+    const otherAgent = await request("/agent", { method: "POST", body: { agent: "plan" } })
+    const otherModel = await request("/model", {
+      method: "POST",
+      body: { model: { providerID: "arena", id: "contestant", variant: "high" } },
+    })
+    const otherVariant = await request("/model", {
+      method: "POST",
+      body: { model: { providerID: "arena", id: "medium" } },
+    })
 
-    expect(mutationResult.status).toBe(409)
     expect(environmentResult).toEqual({ status: 204, body: "" })
+    expect(sameAgent.status).toBe(204)
+    expect(sameModel.status).toBe(204)
+    // 400 is a status every session route declares, so the generated client throws `message`.
+    for (const refused of [otherAgent, otherModel, otherVariant]) {
+      expect(refused.status).toBe(400)
+      expect(await refused.json()).toEqual({
+        _tag: "ArenaRefusal",
+        message: expect.stringContaining("unresolved battle"),
+      })
+    }
+    const session = (await (await request("", { method: "GET" })).json()).data as {
+      agent?: string
+      model?: unknown
+    }
+    expect(session.agent).toBe("build")
+    expect(session.model).toEqual({ providerID: "arena", id: "medium", variant: "xhigh" })
+    expect(await messages()).toEqual(before)
   })
 
   test("retains native sessions across a server restart using a persistent database", async () => {

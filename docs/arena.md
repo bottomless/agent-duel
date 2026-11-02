@@ -897,6 +897,24 @@ unresolved contestant or an active canonical battle session are rejected even wh
 from the authenticated daemon. The authoritative route policy and public exception are documented
 in [Security](../SECURITY.md#agent-duel-control-plane).
 
+The same guard (`protectedSessionMutation` in `server/server.ts`) refuses every other change to
+those sessions, including an agent or model switch. The daemon reapplies the stored agent and model
+on every resume, so reopening a chat whose battle waits for its vote sends both. The guard answers a
+switch that names the current value with 204 and does not forward it, because upstream's agent
+route appends an `agent-switched` row even when nothing changes. A stored value can still differ
+from the session's: a chat migrated from 1.x has no model on its session, since 1.x passed it per
+prompt. Resume then keeps the session's value and the chat opens for the vote; the daemon session
+holds the refused selection and applies it before its next agent, model, or prompt action, which
+the guard lets through once the battle is resolved (`DeferredSelection` in `v2/configuration.ts`).
+An explicit agent or model choice drops the matching deferred part when it is called, and selection
+writes run in call order ([Battle off](#battle-off)), so a deferred value never lands after the
+user's choice. The dropped part comes back when the newest choice for it fails, also when several
+choices overlap and Arena refuses them all.
+Filling a missing model is a change like any other here: the transcript projection gives user rows
+the session's model, so a fill moves the canonical transcript hash. The guard refuses with 400 and a
+`message`: the generated client keeps an error body only for a status the route declares, every
+session route declares 400, and a 409 reached the app as a bare `UnexpectedStatus: 409`.
+
 **Finalize** (`arena/service.ts:1705`). Each side settles on its own: terminal state and the actual
 Git state are recorded under the generation's private battle refs, numstat is stored, and
 applicability is set to `applicable` only when the frozen base is an ancestor of the result. A
@@ -1191,6 +1209,23 @@ keeps a battle and an ordinary turn from racing for the same session. The shared
 assignment route accepts `modelSize` for single-agent turns; deploy that contract in the hosted
 control plane before shipping a desktop build that sends it. A request without `modelSize` gets a
 frontier assignment, because released desktop builds send none and route as `contestant`.
+
+The size lives on the canonical session as its model, `arena/medium` or `arena/contestant`.
+`beginNormalTurn` reads it at each prompt and sets the variant from the size, so a variant has no
+meaning of its own in Arena. The app still sends a model change and a variant change together, and
+in 2.0 each one is a separate `switchModel` on the session. So in Arena mode the daemon's
+`setThinkingOption` writes nothing to the engine, and agent, model, and variant calls run one at a
+time in call order (`serializeSelection` in `v2/session.ts`). A variant call that wrote the model it
+had cached put the old size back, and the next turn ran Medium after a switch to frontier. A queued
+write that takes longer than `SELECTION_TIMEOUT_MS` is aborted, so a hung engine call cannot hold
+later changes or a prompt. The job then reads the session back and counts the write as applied when
+the engine holds it, because an aborted request can still have landed. A session read that a
+selection write overlaps keeps the cached agent and model and reads again once the queue settles:
+it can return the size from before the write. A size chosen while a turn runs waits until that turn ends
+(`DeferredSelection`): each step of the running turn reads the session model, and its assignment is
+for the size it started on, so a switch mid-turn failed the next step with an Arena routing error.
+The daemon reports the held size and its variant at once, and the next turn runs it. A held size
+that the turn already ran sends no switch.
 
 ## States and failure
 

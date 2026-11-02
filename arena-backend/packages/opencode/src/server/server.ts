@@ -77,20 +77,83 @@ function databaseOptions(options: ServerOptions): ServerOptions {
   return { ...options, database: { path: filename } }
 }
 
-async function protectedSessionMutation(request: Request, pathname: string) {
-  if (!ArenaRuntime.enabled() || request.method === "GET" || request.method === "HEAD") return false
+async function protectedSessionMutation(
+  request: Request,
+  pathname: string,
+  context: Context.Context<never>,
+): Promise<"refuse" | "unchanged" | undefined> {
+  if (!ArenaRuntime.enabled() || request.method === "GET" || request.method === "HEAD") return undefined
   const match = /^\/api\/session\/([^/]+)/.exec(pathname)
-  if (!match) return false
+  if (!match) return undefined
   // Waiting is a read-side synchronization primitive. It may block while a
   // battle is active, so keep it available for canonical-session observers.
   const suffix = pathname.slice(match[0].length)
-  if (suffix === "/wait") return false
+  if (suffix === "/wait") return undefined
   const sessionID = decodeURIComponent(match[1])
-  if (await ArenaRuntime.isUnresolvedContestantSession(sessionID)) return true
+  if (await ArenaRuntime.isUnresolvedContestantSession(sessionID)) return "refuse"
   // The daemon reapplies canonical launch variables after an SSE reconnect.
   // Keep this process-local sync available while Arena owns the conversation.
-  if (request.method === "PUT" && suffix === "/environment") return false
-  return ArenaRuntime.isBattleActiveCanonicalSession(sessionID)
+  if (request.method === "PUT" && suffix === "/environment") return undefined
+  if (!(await ArenaRuntime.isBattleActiveCanonicalSession(sessionID))) return undefined
+  return (await unchangedSelection(request, sessionID, suffix, context)) ? "unchanged" : "refuse"
+}
+
+/**
+ * Does this agent or model switch name the canonical session's current value?
+ *
+ * The daemon reapplies the chat's stored agent and model every time it resumes the canonical
+ * session, so reopening a chat whose battle waits for its vote sends both. The boundary answers
+ * such a request itself instead of forwarding it: upstream's agent route appends an
+ * `agent-switched` row even when nothing changes, and the canonical session must stay untouched
+ * until the winner is grafted. A switch to a different value is still refused.
+ */
+async function unchangedSelection(
+  request: Request,
+  sessionID: string,
+  suffix: string,
+  context: Context.Context<never>,
+) {
+  if (request.method !== "POST" || (suffix !== "/agent" && suffix !== "/model")) return false
+  let body: unknown
+  try {
+    body = await request.clone().json()
+  } catch {
+    return false
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false
+  let current: { readonly agent?: string; readonly model?: CoreModel.Ref }
+  try {
+    const sessions = Context.getUnsafe(context, CoreSession.Service)
+    current = await Effect.runPromise(Effect.provideContext(sessions.get(sessionID as CoreSession.ID), context))
+  } catch {
+    return false
+  }
+  if (suffix === "/agent") {
+    const agent = (body as { readonly agent?: unknown }).agent
+    return typeof agent === "string" && agent === current.agent
+  }
+  const model = (body as { readonly model?: unknown }).model
+  if (!model || typeof model !== "object" || !current.model) return false
+  const requested = model as { readonly providerID?: unknown; readonly id?: unknown; readonly variant?: unknown }
+  // Upstream `Session.switchModel` compares the same way: a missing variant means "default".
+  return (
+    requested.providerID === current.model.providerID &&
+    requested.id === current.model.id &&
+    (requested.variant ?? "default") === (current.model.variant ?? "default")
+  )
+}
+
+/**
+ * An Arena refusal the daemon can show. The generated client reads an error body only for a
+ * status the route declares, and reports any other status as a bare `UnexpectedStatus`. Every
+ * session route declares 400, so the session guard uses it; the prompt route declares 409, so
+ * prompt admission keeps it. The client turns `message` into the thrown error's text.
+ */
+function arenaRefusal(message: string, status: 400 | 409) {
+  return new Response(JSON.stringify({ _tag: "ArenaRefusal", message }), {
+    status,
+    headers: { "content-type": "application/json" },
+  })
 }
 
 function copyHeaders(source: Response) {
@@ -301,10 +364,7 @@ async function prepareNativePrompt(
         // The refusal remains generic; Arena's reconciliation logs the detailed cause.
       }
     }
-    return new Response(JSON.stringify({ error: arenaRefusalMessage(cause) }), {
-      status: 409,
-      headers: { "content-type": "application/json" },
-    })
+    return arenaRefusal(arenaRefusalMessage(cause), 409)
   }
   return {
     request: new Request(request, { body: JSON.stringify(body) }),
@@ -326,11 +386,13 @@ async function boundary(
   if ((requestPath === "/doc" || requestPath === "/openapi.json") && process.env.OPENCODE_ARENA_ENABLE_DOCS !== "1") {
     return unauthorized()
   }
-  if (await protectedSessionMutation(request, requestPath)) {
-    return new Response(JSON.stringify({ error: "Session is controlled by an unresolved Arena battle" }), {
-      status: 409,
-      headers: { "content-type": "application/json" },
-    })
+  const guard = await protectedSessionMutation(request, requestPath, context)
+  if (guard === "unchanged") return new Response(null, { status: 204 })
+  if (guard === "refuse") {
+    return arenaRefusal(
+      "This chat has an unresolved battle. Wait for it to finish, then vote or discard it before you change the agent, the model, or the conversation.",
+      400,
+    )
   }
   const prepared = await prepareNativePrompt(request, context)
   if (prepared instanceof Response) return prepared
