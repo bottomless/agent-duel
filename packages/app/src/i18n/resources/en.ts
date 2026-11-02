@@ -1395,6 +1395,10 @@ export const en = {
   arenaByok: {
     keyMissing: "Add your OpenRouter key in Settings to start a battle.",
   },
+  arenaSteer: {
+    sideClosing: "Agent {{side}} is finishing its turn. Send your message again.",
+    sideClosingBoth: "An agent is finishing its turn. Send your message again.",
+  },
   battleRepository: {
     title: "Agent Duel needs a commit",
     notGitMessage: "Create a Git repository with an empty first commit?",

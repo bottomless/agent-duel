@@ -1,4 +1,6 @@
 import { Session, SessionPrompt, SessionStatus, Permission, Question, MoveSessionService } from "./session-runtime"
+import { ARENA_SENT_AT } from "./session-runtime/projection"
+import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
 import { ArenaActivity } from "./activity"
 import { Stream } from "effect"
 import { createArenaStream, type Frame as ArenaStreamFrame } from "./stream"
@@ -306,6 +308,18 @@ export function contestantSystemInstruction(
 }
 function error(value: unknown) {
   return value instanceof Error ? value : new Error(String(value))
+}
+
+/**
+ * A steer refused because a side is closing its turn. The app words it from `code`, so the
+ * refusal reads the same in every language and carries no request details.
+ */
+export class ArenaSideClosingError extends Error {
+  readonly code = "arena_side_closing"
+  constructor(side: string) {
+    super(`Agent ${side.toUpperCase()} is finishing its turn. Send your message again.`)
+    this.name = "ArenaSideClosingError"
+  }
 }
 
 /** An apply that wrote part of the winner into the checkout and could not take it back out. */
@@ -1299,6 +1313,13 @@ export const layer: Layer.Layer<
     // let the original settleSide finalize the run while the replacement is still starting.
     const interruptingSteers = new Map<string, { readonly messageID: string }>()
     const discardingSteers = new Set<string>()
+    // A run's prompt fiber closes its turn under the run's gate once no steer waits and its runner is
+    // idle; a steer is admitted under the same gate. A closing run takes no steer, so none is left in
+    // Core's inbox after the run's last delivery. The mark lasts until the run is finalized.
+    const steerGates = KeyedMutex.makeUnsafe<string>()
+    const closingRuns = new Set<string>()
+    const withSteerGates = <A, E, R>(runIDs: readonly string[], effect: Effect.Effect<A, E, R>) =>
+      [...new Set(runIDs)].sort().reduceRight((inner, runID) => steerGates.withLock(runID)(inner), effect)
     // Aborted by Stop, so a stopped battle resolves without waiting for the rest of its copy.
     const environmentCopyStops = new Map<string, AbortController>()
     const trustedWarmPairs = new WeakMap<Store, Set<string>>()
@@ -1635,6 +1656,13 @@ export const layer: Layer.Layer<
      * Service discovery stays in `projectSnapshot`: a mutation should not wait for discovery, and
      * a mutation has no reason to probe services it is often about to stop.
      */
+    // A steer waits in Core's inbox until a step boundary delivers it, so the transcript alone
+    // never holds a queued one. Pending input follows the delivered messages, as it will on delivery.
+    const steerTranscript = (sessionID: SessionID) =>
+      Effect.all([sessions.messages({ sessionID }), sessions.pending({ sessionID })]).pipe(
+        Effect.map(([messages, pending]) => [...messages, ...pending]),
+      )
+
     const hydrateRuns = Effect.fn("Arena.hydrateRuns")(function* (
       projected: ReturnType<typeof project>,
       snapshot: Awaited<ReturnType<Store["snapshot"]>>,
@@ -1706,9 +1734,15 @@ export const layer: Layer.Layer<
                 messages: controlsOnly
                   ? Effect.succeed({ available: false as const })
                   : bestEffort(
-                      Effect.forEach([...sessionIDs], (id) => sessions.messages({ sessionID: SessionID.make(id) }), {
-                        concurrency: 4,
-                      }).pipe(
+                      Effect.forEach(
+                        [...sessionIDs],
+                        // The root's queued steers show at the end of its thread.
+                        (id) =>
+                          id === run.rootSessionID
+                            ? steerTranscript(sessionID)
+                            : sessions.messages({ sessionID: SessionID.make(id) }),
+                        { concurrency: 4 },
+                      ).pipe(
                         Effect.map((transcripts) =>
                           ArenaTranscript.withinBudget(
                             ArenaTranscript.fromPrompt(
@@ -3523,7 +3557,11 @@ export const layer: Layer.Layer<
       for (const id of ids) {
         const [info, messages] = yield* Effect.all([
           sessions.get(id).pipe(Effect.mapError(error)),
-          sessions.messages({ sessionID: id }).pipe(Effect.mapError(error)),
+          // A steer still in Core's inbox, such as one queued when the engine stopped, stays in
+          // the archived thread; resuming the run delivers it.
+          (id === run.sessionID ? steerTranscript(id) : sessions.messages({ sessionID: id })).pipe(
+            Effect.mapError(error),
+          ),
         ])
         const blindedMessages = ArenaPrivacy.messages(messages)
         archived.push({
@@ -4264,6 +4302,40 @@ export const layer: Layer.Layer<
       }
     })
 
+    /**
+     * Mark the run as closing, under its steer gate, unless a steer still waits in Core's inbox or a
+     * runner still works on the session. Returns whether the run has more to answer.
+     * A stopped battle and a failed request close at once: Stop delivers the queued steers as
+     * unanswered messages, and Retry answers them. So does a steer a loop already left waiting
+     * (`tried`), so a runner that will not deliver it cannot keep the run open.
+     */
+    const closeTurn = Effect.fnUntraced(function* (
+      store: Store,
+      run: SideRuntime,
+      result: Exit.Exit<unknown, unknown>,
+      tried: Set<string>,
+    ) {
+      return yield* steerGates.withLock(run.runID)(
+        Effect.gen(function* () {
+          const current = yield* promise(() => store.turn(run.turnID))
+          if (Exit.isSuccess(result) && current?.state === "running") {
+            const status = yield* inDirectory(run.worktree.directory, statuses.get(run.sessionID)).pipe(
+              Effect.catchCause(() => Effect.succeed({ type: "idle" as const })),
+            )
+            if (status.type !== "idle") return true
+            const waiting = yield* inDirectory(run.worktree.directory, sessions.pending({ sessionID: run.sessionID })).pipe(
+              Effect.catchCause(() => Effect.succeed([])),
+            )
+            const fresh = waiting.filter((entry) => entry.info.role === "user" && !tried.has(entry.info.id))
+            for (const entry of fresh) tried.add(entry.info.id)
+            if (fresh.length > 0) return true
+          }
+          closingRuns.add(run.runID)
+          return false
+        }),
+      )
+    })
+
     const runPrompt = Effect.fn("Arena.runPrompt")(function* (
       store: Store,
       run: SideRuntime,
@@ -4274,6 +4346,8 @@ export const layer: Layer.Layer<
     ) {
       const turn = yield* promise(() => store.turn(run.turnID))
       if (turn?.state === "stopping" || turn?.state === "early_selected") return Exit.void
+      // A new loop for this run opens its turn to steers again.
+      closingRuns.delete(run.runID)
       const storedRun = yield* promise(() => store.run(run.runID))
       yield* inDirectory(
         run.worktree.directory,
@@ -4315,9 +4389,19 @@ export const layer: Layer.Layer<
               prompts.loop({ sessionID: run.sessionID }),
         ),
       )
+      const triedSteers = new Set<string>()
       while (true) {
         const steer = interruptingSteers.get(run.runID)
-        if (!steer) break
+        if (!steer) {
+          // The runner's last boundary check and its idle transition are not one step, so a steer can
+          // arrive just as the answer ends. Close the turn only when no steer waits and no runner
+          // works; otherwise answer the steer here, in the fiber that owns finalization, as 1.x's
+          // loop answered a user message written before it ended.
+          const late = yield* closeTurn(store, run, result, triedSteers)
+          if (!late) break
+          result = yield* Effect.exit(inDirectory(run.worktree.directory, prompts.loop({ sessionID: run.sessionID })))
+          continue
+        }
         interruptingSteers.delete(run.runID)
         const current = yield* promise(() => store.turn(run.turnID))
         // Stop and early vote own cancellation. Let the normal stopped-side path settle instead of
@@ -4368,7 +4452,24 @@ export const layer: Layer.Layer<
       yield* environmentSettled
       const current = yield* promise(() => store.turn(turn._id))
       const stopped = current?.state === "stopping" || current?.state === "early_selected" || stoppedBySibling()
+      // A steer still queued when the run was cut off stays in the thread as an unanswered message,
+      // as in 1.x, and goes with this side's history if it is kept. Left in Core's inbox it would
+      // vanish from the thread, and the next resume of this session would deliver it. A finished
+      // run closed its turn with none waiting, so for it this only keeps the thread and the kept
+      // history in step. A failed run keeps its queue for Retry.
+      if (stopped || Exit.isSuccess(promptExit)) {
+        yield* inDirectory(run.worktree.directory, sessions.deliverPending(run.sessionID)).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena could not keep a contestant's queued steers", {
+              runID: run.runID,
+              cause,
+            }),
+          ),
+        )
+      }
       const outcome = yield* Effect.exit(finalizeSide(store, turn, run, promptExit, stopped))
+      // The run's state now routes a reply, so the closing mark has done its job.
+      closingRuns.delete(run.runID)
       if (Exit.isSuccess(outcome)) {
         const settled = yield* promise(() => store.run(run.runID))
         const selectable =
@@ -4468,7 +4569,7 @@ export const layer: Layer.Layer<
       if (status.type === "idle") {
         return yield* Effect.fail(new Error("Arena contestant is no longer running"))
       }
-      const messages = yield* inDirectory(run.worktree, sessions.messages({ sessionID }))
+      const messages = yield* inDirectory(run.worktree, steerTranscript(sessionID))
       const expectedIndex = messages.findIndex(
         (message) => message.info.id === expectedMessageID && message.info.role === "user",
       )
@@ -4540,7 +4641,7 @@ export const layer: Layer.Layer<
         if (status.type === "idle") {
           return yield* Effect.fail(new Error("Arena contestant is no longer running"))
         }
-        const messages = yield* inDirectory(run.worktree, sessions.messages({ sessionID }))
+        const messages = yield* inDirectory(run.worktree, steerTranscript(sessionID))
         const boundaryIndex = run.promptMessageID
           ? messages.findIndex((message) => message.info.id === run.promptMessageID)
           : -1
@@ -4567,11 +4668,12 @@ export const layer: Layer.Layer<
             return yield* Effect.fail(new Error("Arena pending steer was already consumed"))
           }
         }
-        yield* Effect.forEach(
-          expectedMessageIDs,
-          (messageID) =>
-            inDirectory(run.worktree, sessions.removeMessage({ sessionID, messageID: MessageID.make(messageID) })),
-          { discard: true },
+        // Only a steer still in Core's inbox can be withdrawn, and the messages go together or not
+        // at all. Cancelling fails once the runner has delivered one, instead of deleting a message
+        // the model already read.
+        yield* inDirectory(
+          run.worktree,
+          sessions.cancelPending({ sessionID, messageIDs: expectedMessageIDs.map((id) => MessageID.make(id)) }),
         )
         return yield* respond(store, turn.chatID)
       }).pipe(
@@ -6189,59 +6291,72 @@ export const layer: Layer.Layer<
       if (working.some((run) => interruptingSteers.has(run._id) || discardingSteers.has(run._id))) {
         return yield* Effect.fail(new Error("Arena steer mutation is already in progress"))
       }
-      const finishedSides = finished.map((run) => run.side)
-      const claimed =
-        finished.length === 0
-          ? undefined
-          : yield* promise(() =>
-              turn.state === "awaiting_vote"
-                ? store.claimReplyContinuation(turn._id, finishedSides)
-                : store.claimRunningReplyContinuation(turn._id, finishedSides),
-            )
-      // Nothing goes to either side when the resume cannot be claimed, so both always get the same
-      // message, and the reply fails so the app keeps it rather than clearing it as sent.
-      if (claimed && !claimed.claimed) {
-        return yield* Effect.fail(new Error("The battle changed before your reply was delivered. Send it again."))
-      }
-      // Counted once the reply is certain to go out, whether it resumes a finished contestant or
-      // redirects a working one.
-      yield* promise(() => store.countSteer(turn._id))
-      if (claimed) {
-        yield* resumeSettledRuns(store, turn, chat.repository.root, finished, {
-          comparisonID: claimed.comparisonID,
-          prompt,
-          agent,
-          reset: (run) => promise(() => store.resetRunForReply(run._id)),
-          failure: { message: "Arena completed-result reply failed", target },
-        })
-      }
-      if (working.length === 0) return yield* respond(store, turn.chatID)
-      const dispatch = Effect.forEach(
-        working,
-        (run) => {
-          return allowReading(run.worktree, SessionID.make(run.rootSessionID), prompt.readable).pipe(
-            Effect.andThen(startedSystem(run.worktree, SessionID.make(run.rootSessionID), run.promptMessageID)),
-            Effect.flatMap((system) =>
-              inDirectory(
-                run.worktree,
-                prompts.prompt({
-                  sessionID: SessionID.make(run.rootSessionID),
-                  model: {
-                    providerID: ProviderV2.ID.make("arena"),
-                    modelID: ModelV2.ID.make(contestant.id),
-                  },
-                  agent,
-                  variant: "high",
-                  system: system ?? contestantSystemInstruction(run.worktree),
-                  parts: prompt.parts,
-                }),
+      // A working side's gate is held from this check to its steer's admission, so the side cannot
+      // close its turn in between and leave the steer in Core's inbox with no runner to deliver it.
+      yield* withSteerGates(
+        working.map((run) => run._id),
+        Effect.gen(function* () {
+          const closing = working.find((run) => closingRuns.has(run._id))
+          if (closing) {
+            return yield* Effect.fail(new ArenaSideClosingError(closing.side))
+          }
+          const finishedSides = finished.map((run) => run.side)
+          const claimed =
+            finished.length === 0
+              ? undefined
+              : yield* promise(() =>
+                  turn.state === "awaiting_vote"
+                    ? store.claimReplyContinuation(turn._id, finishedSides)
+                    : store.claimRunningReplyContinuation(turn._id, finishedSides),
+                )
+          // Nothing goes to either side when the resume cannot be claimed, so both always get the
+          // same message, and the reply fails so the app keeps it rather than clearing it as sent.
+          if (claimed && !claimed.claimed) {
+            return yield* Effect.fail(new Error("The battle changed before your reply was delivered. Send it again."))
+          }
+          // Counted once the reply is certain to go out, whether it resumes a finished contestant or
+          // redirects a working one.
+          yield* promise(() => store.countSteer(turn._id))
+          if (claimed) {
+            yield* resumeSettledRuns(store, turn, chat.repository.root, finished, {
+              comparisonID: claimed.comparisonID,
+              prompt,
+              agent,
+              reset: (run) => promise(() => store.resetRunForReply(run._id)),
+              failure: { message: "Arena completed-result reply failed", target },
+            })
+          }
+          // One send time for both sides; the inbox stamps delivery, which differs per side.
+          const sentAt = Date.now()
+          yield* Effect.forEach(
+            working,
+            (run) =>
+              allowReading(run.worktree, SessionID.make(run.rootSessionID), prompt.readable).pipe(
+                Effect.andThen(startedSystem(run.worktree, SessionID.make(run.rootSessionID), run.promptMessageID)),
+                Effect.flatMap((system) =>
+                  inDirectory(
+                    run.worktree,
+                    prompts.steer({
+                      sessionID: SessionID.make(run.rootSessionID),
+                      model: {
+                        providerID: ProviderV2.ID.make("arena"),
+                        modelID: ModelV2.ID.make(contestant.id),
+                      },
+                      agent,
+                      variant: "high",
+                      system: system ?? contestantSystemInstruction(run.worktree),
+                      parts: prompt.parts,
+                      metadata: { [ARENA_SENT_AT]: sentAt },
+                    }),
+                  ),
+                ),
               ),
-            ),
+            { concurrency: 2, discard: true },
+          ).pipe(
+            Effect.catchCause((cause) => Effect.logError("Arena reply failed", { turnID: turn._id, target, cause })),
           )
-        },
-        { concurrency: 2, discard: true },
-      ).pipe(Effect.catchCause((cause) => Effect.logError("Arena reply failed", { turnID: turn._id, target, cause })))
-      yield* dispatch.pipe(Effect.forkIn(scope))
+        }),
+      )
       return yield* respond(store, turn.chatID)
     })
 

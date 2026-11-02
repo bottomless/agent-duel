@@ -1,6 +1,7 @@
 import * as Prompt from "@opencode/schema/prompt"
 import { Session } from "@opencode/schema/session"
 import type { SessionMessage } from "@opencode/schema/session-message"
+import type { SessionInbox } from "@opencode/schema/session-inbox"
 import type { Tool } from "@opencode/schema/tool"
 import { Model } from "@opencode/schema/model"
 import { Agent } from "@opencode/schema/agent"
@@ -171,6 +172,18 @@ const canonicalPart = (
   return result
 }
 
+/**
+ * Metadata key for when the user sent a steer. Core stamps a delivered message with the delivery
+ * time, which lags the send by up to a tool call and differs per side; Arena shows the send time,
+ * as 1.x did, and `lastTurnStart` reads it to tell a steer from a new prompt.
+ */
+export const ARENA_SENT_AT = "arenaSentAt"
+
+const sentAt = (message: SessionMessage.User | SessionMessage.Synthetic) => {
+  const value = message.metadata?.[ARENA_SENT_AT]
+  return typeof value === "number" && Number.isFinite(value) ? value : DateTime.toEpochMillis(message.time.created)
+}
+
 const userEntry = (
   sessionID: Session.ID,
   message: SessionMessage.User | SessionMessage.Synthetic,
@@ -189,7 +202,7 @@ const userEntry = (
     id: wireMessageID(message.id),
     sessionID: wireSessionID(sessionID),
     role: "user",
-    time: { created: DateTime.toEpochMillis(message.time.created) },
+    time: { created: sentAt(message) },
     agent: agent ?? Agent.ID.make("build"),
     model: wireModel,
     ...(message.type === "user" &&
@@ -253,6 +266,34 @@ const assistantEntry = (
     canonicalPart(sessionID, message.id, item, index, DateTime.toEpochMillis(message.time.created)),
   ),
 })
+
+/**
+ * The message an inbox item becomes once Core delivers it: same ID and content, so a queued steer
+ * keeps its identity when it moves from the inbox into the transcript. Controls are not messages.
+ */
+export function pendingMessage(item: SessionInbox.Info): SessionMessage.User | SessionMessage.Synthetic | undefined {
+  if (item.type === "user")
+    return {
+      id: item.id,
+      type: "user",
+      metadata: item.payload.metadata,
+      text: item.payload.text,
+      files: item.payload.files,
+      agents: item.payload.agents,
+      skills: item.payload.skills,
+      time: item.time,
+    }
+  if (item.type === "synthetic")
+    return {
+      id: item.id,
+      type: "synthetic",
+      text: item.payload.text,
+      description: item.payload.description,
+      metadata: item.payload.metadata,
+      time: item.time,
+    }
+  return undefined
+}
 
 /** Convert canonical V2 rows into the stable Arena `info + parts` transcript. */
 export function project(

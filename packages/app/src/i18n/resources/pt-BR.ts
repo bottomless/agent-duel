@@ -1415,6 +1415,10 @@ export const ptBR: TranslationResources = {
   arenaByok: {
     keyMissing: "Adicione sua chave do OpenRouter em Configurações para iniciar uma batalha.",
   },
+  arenaSteer: {
+    sideClosing: "Agent {{side}} está terminando a vez dele. Envie sua mensagem novamente.",
+    sideClosingBoth: "Um agente está terminando a vez dele. Envie sua mensagem novamente.",
+  },
   battleRepository: {
     title: "O Agent Duel precisa de um commit",
     notGitMessage: "Criar um repositório Git com um primeiro commit vazio?",

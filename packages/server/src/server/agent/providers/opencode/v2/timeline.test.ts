@@ -132,3 +132,22 @@ test.each(["delta", "snapshot"] as const)(
     expect(retainedBytesAfterStreaming(mode, chunks)).toBeLessThan(textBytes * 32);
   },
 );
+
+test("a battle steer is dated when the user sent it, not when the runner delivered it", () => {
+  const sent = Date.UTC(2026, 9, 30, 14, 10, 1, 174);
+  const delivered = Date.UTC(2026, 9, 30, 14, 10, 50, 522);
+  const events = new V2Timeline().messages([
+    {
+      id: "steer",
+      type: "user",
+      text: "STEER-ONE",
+      metadata: { arenaSentAt: sent },
+      time: { created: delivered },
+    },
+    { id: "prompt", type: "user", text: "plain", time: { created: delivered } },
+  ]);
+  expect(events.map((event) => event.type === "timeline" && event.timestamp)).toEqual([
+    new Date(sent).toISOString(),
+    new Date(delivered).toISOString(),
+  ]);
+});

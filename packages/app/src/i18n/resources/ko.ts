@@ -1396,6 +1396,10 @@ export const ko: TranslationResources = {
   arenaByok: {
     keyMissing: "배틀을 시작하려면 설정에서 OpenRouter 키를 추가하세요.",
   },
+  arenaSteer: {
+    sideClosing: "Agent {{side}}가 차례를 마치는 중입니다. 메시지를 다시 보내세요.",
+    sideClosingBoth: "에이전트가 차례를 마치는 중입니다. 메시지를 다시 보내세요.",
+  },
   battleRepository: {
     title: "Agent Duel에는 커밋이 필요합니다",
     notGitMessage: "빈 첫 커밋으로 Git 저장소를 만들까요?",

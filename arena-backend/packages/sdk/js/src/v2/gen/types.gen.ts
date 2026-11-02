@@ -2033,6 +2033,7 @@ export type ArenaApiError = {
   name: "ArenaApiError"
   data: {
     message: string
+    code?: string
   }
 }
 

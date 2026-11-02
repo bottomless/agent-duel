@@ -18,7 +18,10 @@ function map<A, R>(effect: Effect.Effect<A, Error, R>) {
       (error) =>
         new ArenaApiError({
           name: "ArenaApiError",
-          data: { message: error.message },
+          data:
+            "code" in error && typeof error.code === "string"
+              ? { message: error.message, code: error.code }
+              : { message: error.message },
         }),
     ),
   )

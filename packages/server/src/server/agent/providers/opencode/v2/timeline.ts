@@ -8,6 +8,16 @@ import { STRUCTURED_OUTPUT_TOOL } from "./structured-output.js";
 import type { SessionMessageInfo } from "@opencode/client";
 import type { AgentStreamEvent, AgentTimelineItem } from "../../../agent-sdk-types.js";
 
+// Arena stamps a battle steer with the moment the user sent it (`ARENA_SENT_AT` in
+// arena-backend's session-runtime/projection.ts). Core dates the row when the runner delivers the
+// steer, up to a tool call later; a kept battle's history shows the send time, as the battle thread does.
+const ARENA_SENT_AT = "arenaSentAt";
+
+function messageTime(message: SessionMessageInfo): number {
+  const sentAt = message.type === "user" ? message.metadata?.[ARENA_SENT_AT] : undefined;
+  return typeof sentAt === "number" && Number.isFinite(sentAt) ? sentAt : message.time.created;
+}
+
 function textPartKey(messageID: string, part: "text" | "reasoning", ordinal: number): string {
   return `${messageID}:${part}:${ordinal}`;
 }
@@ -59,7 +69,7 @@ export class V2Timeline {
     const events: AgentStreamEvent[] = [];
     const state: TimelineState = { structured: false, accepted: false };
     for (const message of messages) {
-      const timestamp = new Date(message.time.created).toISOString();
+      const timestamp = new Date(messageTime(message)).toISOString();
       const push = (item: AgentTimelineItem) =>
         events.push({ type: "timeline", provider: "opencode", item, timestamp });
       if (message.type === "user") this.userMessage(message, state, push);

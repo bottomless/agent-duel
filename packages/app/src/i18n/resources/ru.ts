@@ -1408,6 +1408,10 @@ export const ru: TranslationResources = {
   arenaByok: {
     keyMissing: "Добавьте ключ OpenRouter в настройках, чтобы начать битву.",
   },
+  arenaSteer: {
+    sideClosing: "Agent {{side}} завершает свой ход. Отправьте сообщение ещё раз.",
+    sideClosingBoth: "Один из агентов завершает свой ход. Отправьте сообщение ещё раз.",
+  },
   battleRepository: {
     title: "Agent Duel нужен коммит",
     notGitMessage: "Создать репозиторий Git с пустым первым коммитом?",

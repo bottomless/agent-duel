@@ -9,6 +9,7 @@ import { LocationServiceMap } from "@opencode/core/location-service-map"
 import { Session as CoreSession } from "@opencode/core/session"
 import { InstructionEntry } from "@opencode/core/session/instruction-entry"
 import { SessionMove } from "@opencode/core/session/move"
+import { SessionInbox } from "@opencode/core/session/inbox"
 import { SessionMessageTable } from "@opencode/core/session/sql"
 import { SessionMessage } from "@opencode/schema/session-message"
 import { Session as SessionSchema } from "@opencode/schema/session"
@@ -26,7 +27,7 @@ import * as SessionV1 from "@opencode/schema/v1/session"
 import { AbsolutePath } from "@opencode/schema/schema"
 import { makeGlobalNode, tags } from "@opencode/util/effect/app-node"
 import { LayerNode } from "@opencode/util/effect/layer-node"
-import { project, projectSession, partID } from "./projection"
+import { pendingMessage, project, projectSession, partID } from "./projection"
 import { CurrentDirectory } from "@/project/instance-context"
 import { getArenaAutoAccept, setArenaAutoAccept } from "@/arena/engine-runtime"
 import { EXTERNAL_WRITE } from "@/arena/contestant"
@@ -72,6 +73,25 @@ export interface SessionInterface {
   readonly children: (parentID: SessionSchema.ID) => Effect.Effect<SessionV1.SessionInfo[], Error>
   readonly messages: (input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<ArenaTranscript, Error>
   readonly canonicalMessages: (sessionID: SessionSchema.ID) => Effect.Effect<readonly SessionMessage.Info[], Error>
+  /**
+   * Input Core holds in the session inbox until the runner promotes it at a step boundary, such as
+   * a steer sent while the contestant works, projected as the messages it becomes on delivery.
+   * `messages` reads the transcript only, so a queued steer is visible only here.
+   */
+  readonly pending: (input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<ArenaTranscript, Error>
+  /**
+   * Withdraw pending inputs, all or none. Fails, and withdraws nothing, when the runner already
+   * delivered any of them.
+   */
+  readonly cancelPending: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly messageIDs: readonly SessionV1.MessageID[]
+  }) => Effect.Effect<void, Error>
+  /**
+   * Move pending messages into the transcript without a model request, the way a 1.x steer stayed
+   * as an unanswered message when its run was cut off. Returns how many moved.
+   */
+  readonly deliverPending: (sessionID: SessionSchema.ID) => Effect.Effect<number, Error>
   readonly getPart: (input: {
     readonly sessionID: SessionSchema.ID
     readonly messageID: SessionV1.MessageID
@@ -120,6 +140,11 @@ export interface PromptInterface {
   readonly loop: (input: {
     readonly sessionID: SessionSchema.ID
   }) => Effect.Effect<import("./schema").WithParts | undefined, Error>
+  /**
+   * Admit input into a session that may be working and wake its runner, without waiting for the
+   * answer. The runner that owns the turn delivers it at its next step boundary.
+   */
+  readonly steer: (input: ArenaPromptInput) => Effect.Effect<void, Error>
   readonly cancel: (sessionID: SessionSchema.ID) => Effect.Effect<void, Error>
   readonly prepare: () => Effect.Effect<void, Error>
 }
@@ -379,6 +404,68 @@ const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service 
         return project(canonical, input.sessionID, info.model, info.agent)
       })
 
+      const pending = Effect.fn("ArenaSession.pending")(function* (input: { readonly sessionID: SessionSchema.ID }) {
+        const items = yield* sessions.inbox(input.sessionID)
+        const queued = items.flatMap((item) => {
+          const message = pendingMessage(item)
+          return message ? [message] : []
+        })
+        if (queued.length === 0) return []
+        const info = yield* sessions.get(input.sessionID)
+        return project(queued, input.sessionID, info.model, info.agent)
+      })
+
+      // Core's cancel takes one item and its own lock, so several in a row could stop halfway once the
+      // runner delivers one. Check and cancel them all under the lock promotion takes instead.
+      const cancelPending = Effect.fn("ArenaSession.cancelPending")(function* (input: {
+        readonly sessionID: SessionSchema.ID
+        readonly messageIDs: readonly SessionV1.MessageID[]
+      }) {
+        const ids = input.messageIDs.map(currentMessageID)
+        yield* SessionInbox.serialized(
+          input.sessionID,
+          Effect.gen(function* () {
+            const pending = new Set(
+              (yield* sessions.inbox(input.sessionID))
+                .filter((item) => pendingMessage(item) !== undefined)
+                .map((item) => item.id),
+            )
+            if (ids.some((id) => !pending.has(id)))
+              return yield* Effect.fail(new Error("Arena pending steer was already consumed"))
+            yield* Effect.forEach(
+              ids,
+              (inboxID) => bus.publish(SessionEvent.InboxCancelled, { sessionID: input.sessionID, inboxID }),
+              { discard: true },
+            )
+          }),
+        )
+      })
+
+      // Core's own promotion step, without the model request that follows it: the delivered event
+      // writes the message under the inbox ID. Serialized with the runner's promotion, so an item
+      // it delivered first is skipped rather than written twice.
+      const deliverPending = Effect.fn("ArenaSession.deliverPending")(function* (sessionID: SessionSchema.ID) {
+        return yield* SessionInbox.serialized(
+          sessionID,
+          Effect.gen(function* () {
+            const items = (yield* sessions.inbox(sessionID)).filter((item) => pendingMessage(item) !== undefined)
+            yield* Effect.forEach(
+              items,
+              (item) =>
+                bus
+                  .publish(SessionEvent.InboxDelivered, { sessionID, inboxID: item.id })
+                  .pipe(
+                    Effect.catchDefect((defect) =>
+                      defect instanceof SessionInbox.LifecycleConflict ? Effect.void : Effect.die(defect),
+                    ),
+                  ),
+              { discard: true },
+            )
+            return items.length
+          }),
+        )
+      })
+
       const getCanonical = (sessionID: SessionSchema.ID, messageID: SessionMessage.ID) =>
         sessions
           .message({ sessionID, messageID })
@@ -548,6 +635,9 @@ const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service 
           normalizeError(sessions.list({ parentID }).pipe(Effect.map((result) => result.data.map(projectSession)))),
         messages: (input) => normalizeError(messages(input)),
         canonicalMessages: (sessionID) => normalizeError(sessions.messages({ sessionID, order: "asc" })),
+        pending: (input) => normalizeError(pending(input)),
+        cancelPending: (input) => normalizeError(cancelPending(input)),
+        deliverPending: (sessionID) => normalizeError(deliverPending(sessionID)),
         getPart: (input) =>
           normalizeError(
             Effect.gen(function* () {
@@ -632,59 +722,63 @@ const promptLayer: Layer.Layer<SessionPrompt, never, CoreSession.Service | Sessi
       const transcript = yield* arena.messages({ sessionID: input.sessionID })
       return transcript.findLast((entry) => entry.info.role === "assistant")
     })
+    // Admission is durable once it returns. `wake` starts the runner, or rings the doorbell of the
+    // one already running so it drains again before it goes idle.
+    const admit = Effect.fn("ArenaSessionPrompt.admit")(function* (input: ArenaPromptInput, wake: boolean) {
+      const metadata = {
+        ...(input.metadata ?? {}),
+        ...(input.system !== undefined ? { arenaSystem: input.system } : {}),
+      }
+      const location = yield* directory.ref()
+      yield* directory.provide(
+        location,
+        Effect.gen(function* () {
+          const entries = yield* InstructionEntry.Service
+          if (input.system === undefined) {
+            yield* entries.remove({ sessionID: input.sessionID, key: InstructionEntry.Key.make("arena") })
+          } else {
+            yield* entries.put({
+              sessionID: input.sessionID,
+              key: InstructionEntry.Key.make("arena"),
+              value: input.system,
+            })
+          }
+        }),
+      )
+      if (input.agent) yield* sessions.switchAgent({ sessionID: input.sessionID, agent: Agent.ID.make(input.agent) })
+      if (input.model) {
+        yield* sessions.switchModel({
+          sessionID: input.sessionID,
+          model: modelRef({
+            ...input.model,
+            ...(input.variant ? { variant: Model.VariantID.make(input.variant) } : {}),
+          }),
+        })
+      }
+      yield* sessions.prompt({
+        sessionID: input.sessionID,
+        id: input.messageID ? currentMessageID(input.messageID) : undefined,
+        text: promptText(input),
+        files: [...(promptFiles(input.files) ?? []), ...(partFiles(input.parts) ?? [])],
+        agents: input.agents,
+        skills: input.skills,
+        metadata,
+        delivery: input.delivery,
+        resume: wake,
+      })
+    })
     return SessionPrompt.of({
       prompt: (input) =>
         normalizeError(
           Effect.gen(function* () {
-            const metadata = {
-              ...(input.metadata ?? {}),
-              ...(input.system !== undefined ? { arenaSystem: input.system } : {}),
-            }
-            const location = yield* directory.ref()
-            yield* directory.provide(
-              location,
-              Effect.gen(function* () {
-                const entries = yield* InstructionEntry.Service
-                if (input.system === undefined) {
-                  yield* entries.remove({ sessionID: input.sessionID, key: InstructionEntry.Key.make("arena") })
-                } else {
-                  yield* entries.put({
-                    sessionID: input.sessionID,
-                    key: InstructionEntry.Key.make("arena"),
-                    value: input.system,
-                  })
-                }
-              }),
-            )
-            if (input.agent)
-              yield* sessions.switchAgent({ sessionID: input.sessionID, agent: Agent.ID.make(input.agent) })
-            if (input.model) {
-              yield* sessions.switchModel({
-                sessionID: input.sessionID,
-                model: modelRef({
-                  ...input.model,
-                  ...(input.variant ? { variant: Model.VariantID.make(input.variant) } : {}),
-                }),
-              })
-            }
-            const admitted = yield* sessions.prompt({
-              sessionID: input.sessionID,
-              id: input.messageID ? currentMessageID(input.messageID) : undefined,
-              text: promptText(input),
-              files: [...(promptFiles(input.files) ?? []), ...(partFiles(input.parts) ?? [])],
-              agents: input.agents,
-              skills: input.skills,
-              metadata,
-              delivery: input.delivery,
-              resume: input.noReply === true ? false : true,
-            })
+            yield* admit(input, input.noReply !== true)
             if (input.noReply === true) return undefined
             // Core prompt admission is durable; waiting here ensures callers receive the terminal
             // assistant projection rather than a cached or fabricated transcript.
-            void admitted
             return yield* loop({ sessionID: input.sessionID })
           }),
         ),
+      steer: (input) => normalizeError(admit(input, true)),
       loop: (input) => normalizeError(loop(input)),
       cancel: (sessionID) => normalizeError(sessions.interrupt(sessionID, { resume: false })),
       prepare: () => Effect.void,

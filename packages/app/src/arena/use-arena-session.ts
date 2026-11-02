@@ -24,6 +24,7 @@ import type { ComposerAttachment } from "@/attachments/types";
 import { resolveAndStartArenaTurn } from "./start";
 import { ArenaChatTooLargeError, arenaSizeErrorOr } from "./chat-too-large";
 import { encodeArenaPromptAttachments } from "./prompt-attachments";
+import { arenaSteerRefusalOr } from "./steer-refusal";
 import { startingPromptImages } from "./prompt-images";
 import type { UserMessageImageAttachment } from "@/types/stream";
 
@@ -270,7 +271,8 @@ export function useArenaTurnMutation(serverId: string, agentId: string) {
       try {
         return await runArenaTurnAction(client, agentId, action);
       } catch (error) {
-        throw arenaSizeErrorOr(error);
+        const sized = arenaSizeErrorOr(error);
+        throw action.kind === "reply" ? arenaSteerRefusalOr(sized, action.target) : sized;
       }
     },
     onSuccess: (snapshot) =>
