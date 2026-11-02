@@ -738,3 +738,12 @@ test("keeps a trimmed run's count of left-out messages through the public snapsh
   expect(projected.runs.length).toBeGreaterThan(0)
   expect(parsed.runs.map((run) => run.activityOmitted)).toEqual(projected.runs.map(() => 7))
 })
+
+test("exposes only canonical stopped-command windows, without contestant session details", () => {
+  const stored = snapshot(false)
+  stored.chat.shellStops = [
+    { id: "sh_chat", sessionID: "canonical", startedAt: 20, stoppedAt: 40 },
+    { id: "sh_side", sessionID: "side-a", startedAt: 21, stoppedAt: 40 },
+  ]
+  expect(project(stored).chat.shellStops).toEqual([{ startedAt: 20, stoppedAt: 40 }])
+})

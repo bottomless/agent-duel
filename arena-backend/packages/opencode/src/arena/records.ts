@@ -206,6 +206,13 @@ export type ConfigurationHashes = {
  * fields and carry the legacy `opencodeCommit`, `opencodeVersion: "local"` and `arenaVersion`
  * instead; code that reads stored chats must handle both shapes.
  */
+export interface ShellStop {
+  readonly id: string
+  readonly sessionID: string
+  readonly startedAt: number
+  readonly stoppedAt: number
+}
+
 export type ChatDocument = BuildMetadata & {
   readonly _id: Identifier
   /**
@@ -248,6 +255,7 @@ export type ChatDocument = BuildMetadata & {
   readonly initialCanonicalSHA: string
   currentCanonicalSHA: string
   canonicalSessionID: string
+  shellStops?: readonly ShellStop[]
   canonicalTranscriptVersion: number
   canonicalTranscriptHash: string
   turnCount: number

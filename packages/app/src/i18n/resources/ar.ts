@@ -16,6 +16,7 @@ export const ar: TranslationResources = {
     lessSecond: "<1ث",
   },
   arena: {
+    engineRestartedCommandStopped: "أُعيد تشغيل المحرك، وتوقف أمر كان قيد التشغيل.",
     chooseMessageTarget: "اختر من تريد مراسلته",
     steerContestants: "وجّه كلا المتنافسين",
     steerAgent: "وجّه الوكيل {{side}}",

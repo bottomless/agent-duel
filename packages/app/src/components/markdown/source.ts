@@ -20,7 +20,7 @@ const FILE_EXTENSIONS = [...ASSISTANT_FILE_EXTENSIONS]
 const PATH_PREFIX = String.raw`(?:[A-Za-z]:[\\/]|\.{0,2}\/|~\/)`;
 const HAS_PATH_LETTER = String.raw`(?=${PATH_CHARACTER}*(?:[\\/]${PATH_CHARACTER}*)*${PATH_LETTER})`;
 const SEPARATED_PATH = String.raw`${PATH_SEGMENT}(?:[\\/]${PATH_SEGMENT})+`;
-const FILE_NAME = String.raw`${PATH_SEGMENT}\.(?:${FILE_EXTENSIONS})`;
+const FILE_NAME = String.raw`(?:${PATH_SEGMENT}\.(?:${FILE_EXTENSIONS})|Makefile)`;
 // Bare prose paths need a known extension, a line suffix, or at least two separators.
 const PROSE_PATH = String.raw`(?:${PATH_PREFIX}${HAS_PATH_LETTER}${SEPARATED_PATH}|${HAS_PATH_LETTER}(?:${PATH_SEGMENT}(?:[\\/]${PATH_SEGMENT})*[\\/]${FILE_NAME}|${PATH_SEGMENT}(?:[\\/]${PATH_SEGMENT}){2,}|${SEPARATED_PATH}(?=:)))`;
 

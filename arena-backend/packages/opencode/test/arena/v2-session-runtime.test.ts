@@ -1069,3 +1069,39 @@ describe("Arena V2 session status", () => {
     expect(await read(Session.ID.make("ses_arena_stopped"))).toEqual({ type: "idle" })
   })
 })
+
+describe("shell stop notice on Resume", () => {
+  it.effect(
+    "admits the same neutral model note for either affected side, once, and nothing for an unaffected side",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* CoreSession.Service
+        const prompt = yield* ArenaPrompt
+        const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-shell-restart-test") })
+        const a = yield* sessions.create({ location })
+        const b = yield* sessions.create({ location })
+        const untouched = yield* sessions.create({ location })
+        yield* prompt.loop({ sessionID: a.id, stoppedShellIDs: ["sh_a"] })
+        yield* prompt.loop({ sessionID: b.id, stoppedShellIDs: ["sh_b", "sh_child"] })
+        yield* prompt.loop({ sessionID: a.id, stoppedShellIDs: ["sh_a"] })
+        yield* prompt.loop({ sessionID: untouched.id, stoppedShellIDs: [] })
+        const aInbox = yield* sessions.inbox(a.id)
+        const bInbox = yield* sessions.inbox(b.id)
+        expect(aInbox).toHaveLength(1)
+        expect(bInbox).toHaveLength(1)
+        const note = "The engine restarted, and your background shell stopped. Start it again if it is still needed."
+        expect(aInbox[0]).toMatchObject({ type: "synthetic", payload: { text: note } })
+        expect(bInbox[0]).toMatchObject({ type: "synthetic", payload: { text: note } })
+        expect(yield* sessions.inbox(untouched.id)).toEqual([])
+        expect(yield* sessions.messages({ sessionID: untouched.id })).toEqual([])
+        yield* (yield* ArenaSession).deliverPending(a.id)
+        const history = yield* sessions.messages({ sessionID: a.id })
+        const model = { providerID: Provider.ID.make("arena"), id: Model.ID.make("contestant") }
+        expect(toLLMMessages(history, model).map(({ role, content }) => ({ role, content }))).toEqual([
+          { role: "user", content: [{ type: "text", text: note }] },
+        ])
+        yield* prompt.loop({ sessionID: a.id, stoppedShellIDs: ["sh_a"] })
+        expect(yield* sessions.inbox(a.id)).toEqual([])
+      }),
+  )
+})

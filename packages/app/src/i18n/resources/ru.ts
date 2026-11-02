@@ -16,6 +16,7 @@ export const ru: TranslationResources = {
     lessSecond: "<1с",
   },
   arena: {
+    engineRestartedCommandStopped: "Движок перезапустился, и выполнявшаяся команда остановилась.",
     chooseMessageTarget: "Выберите, кому написать",
     steerContestants: "Направить обоих участников",
     steerAgent: "Направить агента {{side}}",
