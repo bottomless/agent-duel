@@ -2,28 +2,34 @@ import { describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "fs/promises"
 import { tmpdir } from "os"
 import { join } from "path"
-import { identicalNumberedCopies, syncConflictOriginal } from "@/arena/sync-conflict-copy"
+import { identicalNumberedCopies, syncConflictOriginals } from "@/arena/sync-conflict-copy"
 
-describe("syncConflictOriginal", () => {
-  test("names the original a numbered copy was made from", () => {
-    expect(syncConflictOriginal(".env 2")).toBe(".env")
-    expect(syncConflictOriginal(".env 2.save")).toBe(".env.save")
-    expect(syncConflictOriginal("config 12.json")).toBe("config.json")
-    expect(syncConflictOriginal("app/.env.local 3")).toBe("app/.env.local")
-    expect(syncConflictOriginal("dir with space/report 2.pdf")).toBe("dir with space/report.pdf")
-    expect(syncConflictOriginal("a 1 2")).toBe("a 1")
+describe("syncConflictOriginals", () => {
+  test("names both possible originals when the copy has a suffix", () => {
+    expect(syncConflictOriginals(".env 2")).toEqual([".env"])
+    expect(syncConflictOriginals(".env 2.save")).toEqual([".env.save", ".env"])
+    expect(syncConflictOriginals("config 12.json")).toEqual(["config.json", "config"])
+    expect(syncConflictOriginals("name 2.ext")).toEqual(["name.ext", "name"])
+    expect(syncConflictOriginals("name 2.save")).toEqual(["name.save", "name"])
+    expect(syncConflictOriginals("app/.env.local 3")).toEqual(["app/.env.local"])
+    expect(syncConflictOriginals("app/.env 2.save")).toEqual(["app/.env.save", "app/.env"])
+    expect(syncConflictOriginals("dir with space/report 2.pdf")).toEqual([
+      "dir with space/report.pdf",
+      "dir with space/report",
+    ])
+    expect(syncConflictOriginals("a 1 2")).toEqual(["a 1"])
   })
 
   test("leaves every other name alone", () => {
-    expect(syncConflictOriginal(".env")).toBeUndefined()
-    expect(syncConflictOriginal("report2.pdf")).toBeUndefined()
-    expect(syncConflictOriginal("report 2a.pdf")).toBeUndefined()
-    expect(syncConflictOriginal("report  .pdf")).toBeUndefined()
-    expect(syncConflictOriginal(" 2")).toBeUndefined()
-    expect(syncConflictOriginal("notes 2.")).toBeUndefined()
-    expect(syncConflictOriginal("archive 2.tar.gz")).toBeUndefined()
-    expect(syncConflictOriginal("generation 2/file")).toBeUndefined()
-    expect(syncConflictOriginal("copy (2).txt")).toBeUndefined()
+    expect(syncConflictOriginals(".env")).toEqual([])
+    expect(syncConflictOriginals("report2.pdf")).toEqual([])
+    expect(syncConflictOriginals("report 2a.pdf")).toEqual([])
+    expect(syncConflictOriginals("report  .pdf")).toEqual([])
+    expect(syncConflictOriginals(" 2")).toEqual([])
+    expect(syncConflictOriginals("notes 2.")).toEqual([])
+    expect(syncConflictOriginals("archive 2.tar.gz")).toEqual([])
+    expect(syncConflictOriginals("generation 2/file")).toEqual([])
+    expect(syncConflictOriginals("copy (2).txt")).toEqual([])
   })
 })
 
@@ -34,6 +40,7 @@ describe("identicalNumberedCopies", () => {
       await mkdir(join(root, "app"))
       await writeFile(join(root, ".env"), "SECRET=1\n")
       await writeFile(join(root, ".env 2"), "SECRET=1\n")
+      await writeFile(join(root, ".env 2.save"), "SECRET=1\n")
       await writeFile(join(root, ".env 3"), "SECRET=2\n")
       await writeFile(join(root, "app", "config.json"), "{}\n")
       await writeFile(join(root, "app", "config 2.json"), "{}\n")
@@ -46,6 +53,7 @@ describe("identicalNumberedCopies", () => {
 
       const found = await identicalNumberedCopies(root, [
         ".env 2",
+        ".env 2.save",
         ".env 3",
         "app/config 2.json",
         "orphan 2.txt",
@@ -55,6 +63,7 @@ describe("identicalNumberedCopies", () => {
       ])
       expect(found).toEqual([
         { copy: ".env 2", original: ".env" },
+        { copy: ".env 2.save", original: ".env" },
         { copy: "app/config 2.json", original: "app/config.json" },
       ])
     } finally {
