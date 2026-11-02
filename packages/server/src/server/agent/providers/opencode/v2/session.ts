@@ -42,6 +42,7 @@ import { messages } from "./history.js";
 import { SessionPermissions } from "./permissions.js";
 import { SessionUsage } from "./usage.js";
 import { createArenaSessionApi } from "./arena.js";
+import { uploadDirectoriesForPrompt } from "../../opencode-agent.js";
 
 /** The longest one agent, model, or variant write may hold the selection queue. */
 export const SELECTION_TIMEOUT_MS = 60_000;
@@ -152,6 +153,7 @@ export class OpenCodeV2Session implements AgentSession {
     bindChild?: (id: string) => void,
     private readonly acquire?: () => Promise<V2Connection>,
     private readonly moved?: (connection: V2Connection) => void,
+    private readonly uploadsRoot?: string,
   ) {
     this.arenaEnabled = Boolean(connection.arena);
     this.permissions = new SessionPermissions(
@@ -883,10 +885,42 @@ export class OpenCodeV2Session implements AgentSession {
   async startTurn(prompt: AgentPromptInput, options?: AgentRunOptions) {
     await this.reconnectIfExited();
     await this.applyDeferred();
+    await this.allowReadingUploads(prompt);
     return this.turns.startTurn(prompt, options);
   }
-  steerActiveTurn(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult> {
+  async steerActiveTurn(
+    prompt: AgentPromptInput,
+    options: SteerActiveTurnOptions,
+  ): Promise<SteerResult> {
+    await this.allowReadingUploads(prompt);
     return this.turns.steerActiveTurn(prompt, options);
+  }
+  private async allowReadingUploads(prompt: AgentPromptInput): Promise<void> {
+    const directories = uploadDirectoriesForPrompt(prompt, this.uploadsRoot);
+    if (directories.length === 0) return;
+    try {
+      const current = await this.client.session.get({ sessionID: this.id });
+      const permissions = [...(current.permissions ?? [])];
+      for (const directory of directories) {
+        const resource = `${directory}/*`;
+        if (
+          permissions.some(
+            (rule) =>
+              rule.action === "external_directory" &&
+              rule.resource === resource &&
+              rule.effect === "allow",
+          )
+        )
+          continue;
+        permissions.push({ action: "external_directory", resource, effect: "allow" });
+      }
+      await this.client.session.update({ sessionID: this.id, permissions });
+    } catch (error) {
+      this.logger.warn(
+        { error: toDiagnosticErrorMessage(error), sessionId: this.id },
+        "OpenCode did not open uploaded files to the session",
+      );
+    }
   }
   interrupt() {
     return this.turns.interrupt();

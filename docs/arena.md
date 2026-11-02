@@ -350,7 +350,8 @@ can, both sides failed: `Discard` takes Tie's place and `Choose A` and `Choose B
 under `Both agents failed · retry or discard` while a side can still be retried and `Both agents
 failed` once neither can. When one side failed, the other can still be chosen under `Agent B failed
 · choosing A won't count as a vote`, and the resolved battle's header says `Vote not counted`.
-Choosing early stops the other side, so it confirms first. Discarding a battle also requires
+Choosing early stops the other side, so it confirms first. The confirmation belongs to that turn's
+running state; close it when the turn changes so it cannot cover the normal vote. Discarding a battle also requires
 confirmation. Action failures remain on the battle until another attempt; the normal
 action controls provide the retry so a destructive operation is never retried automatically.
 `Choose A` and `Choose B` carry their side's colour as a tint, the blue and amber of the diff's
@@ -826,9 +827,10 @@ reply takes the same attachments as a chat message, and both contestants get ide
   file of any type travels as Paseo sends it to a single agent: a note with its path under
   `$PASEO_HOME/uploads/<id>/`, for the contestant to open with its own tools. The daemon resolves
   that path from the upload id, never from the client's path. Before each prompt and reply the engine
-  adds an `external_directory` allow for each upload's directory to the contestant session
-  (`allowReading`). It comes after the sandbox's rules (see **Setup**), so an upload stays
-  readable wherever `$PASEO_HOME` sits. Both sides get the same path.
+  opens each upload's directory to the contestant session (`allowReading`). Battle off opens the
+  same directories before sending a prompt or steer, including in a resumed chat. Uploads need no
+  approval card. Contestant grants come after the sandbox's rules (see **Setup**), so an upload
+  stays readable wherever `$PASEO_HOME` sits. Both sides get the same path.
 - Contestants take PDFs. OpenRouter passes one natively to a model that reads PDFs and parses it
   with mistral-ocr for one that does not, so the two sides can read different renderings of the
   same file.
