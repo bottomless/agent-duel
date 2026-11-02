@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { arenaSubscription } from "./stream-subscription";
 import { arenaSizeErrorOr } from "./chat-too-large";
 import { ArenaStreamStatus } from "./stream-status";
@@ -78,20 +80,23 @@ const successColorMapping = (theme: Theme) => ({ color: theme.colors.success });
 const infoColorMapping = (theme: Theme) => ({ color: theme.colors.palette.blue[300] });
 
 function chosenLabel(item: ArenaHistoryItem): string {
-  if (item.gitApplication?.state === "discarded") return "Winning changes discarded";
+  if (item.gitApplication?.state === "discarded") return i18n.t("arena.winningDiscarded");
   if (item.vote === "tie") {
     const applied = item.appliedSide?.toUpperCase() ?? "A";
     const model = item.appliedSide
       ? arenaModelDisplayName(item.identities?.[item.appliedSide].name)
       : "";
-    return `Tie — ${applied} applied${model ? ` (${model})` : ""}`;
+    return i18n.t(model ? "arena.tieAppliedModel" : "arena.tieApplied", { side: applied, model });
   }
   const side = item.appliedSide;
   if (!side) {
-    if (item.resolution?.kind === "stopped") return "Battle discarded";
-    return "Battle resolved";
+    if (item.resolution?.kind === "stopped") return i18n.t("arena.battleDiscarded");
+    return i18n.t("arena.battleResolved");
   }
-  return `Chose ${arenaModelDisplayName(item.identities?.[side].name)} (Agent ${side.toUpperCase()})`;
+  return i18n.t("arena.choseModel", {
+    model: arenaModelDisplayName(item.identities?.[side].name),
+    side: side.toUpperCase(),
+  });
 }
 
 /**
@@ -108,6 +113,7 @@ function ArchivedChanges({
   turnId: string;
   diff: ArenaComparisonDiff;
 }) {
+  const { t } = useTranslation();
   const rows = useMemo(() => arenaChangesRows(diff), [diff]);
   const { onLayout, width } = useContainerWidth();
   const measured = width > 0 ? width : null;
@@ -136,7 +142,7 @@ function ArchivedChanges({
     <View style={styles.section} onLayout={onLayout}>
       <View style={styles.sectionHeader}>
         <ThemedGitCompareArrows size={16} uniProps={mutedColorMapping} />
-        <Text style={styles.sectionTitle}>Changes from base</Text>
+        <Text style={styles.sectionTitle}>{t("arena.baseChanges")}</Text>
         <Text style={styles.muted}>{arenaChangesCountLabel(rows.length)}</Text>
         <View style={styles.sectionSpacer} />
         <DiffLayoutControl agentId={agentId} width={measured} />
@@ -153,6 +159,7 @@ function ArchivedChanges({
 
 // Keep evidence coverage visible above the verdict, including when its prose folds.
 export function SummaryOmissionNotice({ comparison }: { comparison: ArenaSnapshot["comparison"] }) {
+  useTranslation();
   const described = describeSummaryOmissions(comparison?.omittedArtifacts, comparison?.truncated);
   if (!described) return null;
   return (
@@ -164,10 +171,11 @@ export function SummaryOmissionNotice({ comparison }: { comparison: ArenaSnapsho
 }
 
 export function IdenticalBattleResult({ hasChanges = false }: { hasChanges?: boolean }) {
+  const { t } = useTranslation();
   if (hasChanges) {
     return (
       <Text style={styles.muted} testID="arena-identical-results">
-        Both agents made the same changes. Showing changes from the original.
+        {t("arena.sameChanges")}{" "}
       </Text>
     );
   }
@@ -175,8 +183,8 @@ export function IdenticalBattleResult({ hasChanges = false }: { hasChanges?: boo
     <View style={styles.identicalResult} testID="arena-identical-results">
       <ThemedGitCompareArrows size={16} uniProps={successColorMapping} />
       <View style={styles.identicalCopy}>
-        <Text style={styles.sectionTitle}>File results are identical</Text>
-        <Text style={styles.muted}>Neither agent changed any files from the original.</Text>
+        <Text style={styles.sectionTitle}>{t("arena.identicalFiles")}</Text>
+        <Text style={styles.muted}>{t("arena.neitherChanged")}</Text>
       </View>
     </View>
   );
@@ -188,10 +196,18 @@ function runsAreFinal(runA: ArenaRun | undefined, runB: ArenaRun | undefined): b
 
 /** A thread's title: the side, and its model once the battle has named it. */
 function ThreadTitle({ side, model }: { side: "a" | "b"; model: string | undefined }) {
-  if (!model) return <Text style={styles.threadTitle}>Agent {side.toUpperCase()}</Text>;
+  const { t } = useTranslation();
+  if (!model)
+    return (
+      <Text style={styles.threadTitle}>
+        {t("arena.agent")} {side.toUpperCase()}
+      </Text>
+    );
   return (
     <View style={styles.threadTitleGroup}>
-      <Text style={styles.threadTitle}>Agent {side.toUpperCase()} ·</Text>
+      <Text style={styles.threadTitle}>
+        {t("arena.agent")} {side.toUpperCase()} ·
+      </Text>
       <ArenaModelVendorIcon model={model} size={ICON_SIZE.sm} />
       <Text style={styles.threadTitle}>{arenaModelDisplayName(model)}</Text>
     </View>
@@ -211,6 +227,7 @@ function RevealedIdentity({
   /** False when a side failed: the chosen side applied, but nobody won the vote. */
   counted: boolean;
 }) {
+  useTranslation();
   return (
     <View style={styles.identity}>
       <Text style={styles.identities}>{side.toUpperCase()}:</Text>
@@ -230,6 +247,7 @@ function BattleSummaryHeader({
   item: ArenaHistoryItem;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation();
   const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
   const winner = battleWinnerSide(item);
   const showOutcome = !winner || item.gitApplication?.state === "discarded";
@@ -240,9 +258,10 @@ function BattleSummaryHeader({
       style={styles.cardHeader}
       accessibilityRole="button"
       accessibilityState={accessibilityState}
-      accessibilityLabel={`${expanded ? "Collapse" : "Expand"} battle summary. ${chosenLabel(item)}${
-        item.voteDiscardedReason ? ". Vote not counted because an agent failed" : ""
-      }`}
+      accessibilityLabel={t(expanded ? "arena.collapseSummary" : "arena.expandSummary", {
+        outcome: chosenLabel(item),
+        reason: item.voteDiscardedReason ? t("arena.voteFailedReason") : "",
+      })}
     >
       {expanded ? (
         <ThemedChevronDown size={17} uniProps={mutedColorMapping} />
@@ -275,8 +294,12 @@ function BattleSummaryHeader({
       {gitNotice && gitNotice.tone !== "info" ? (
         <Text style={styles.conflictBadge}>{gitNotice.title}</Text>
       ) : null}
-      {item.selectedEarly ? <Text style={styles.mutedBadge}>Early decision</Text> : null}
-      {item.voteDiscardedReason ? <Text style={styles.mutedBadge}>Vote not counted</Text> : null}
+      {item.selectedEarly ? (
+        <Text style={styles.mutedBadge}>{t("arena.earlyDecision")}</Text>
+      ) : null}
+      {item.voteDiscardedReason ? (
+        <Text style={styles.mutedBadge}>{t("arena.voteNotCounted")}</Text>
+      ) : null}
     </PressHighlight>
   );
 }
@@ -290,6 +313,7 @@ function CollapsedGitConflicts({
   workspaceId: string;
   item: ArenaHistoryItem;
 }) {
+  useTranslation();
   const notice = gitApplicationNotice(item);
   if (!notice || notice.tone !== "danger") return null;
   return (
@@ -308,8 +332,9 @@ function GitApplicationCallout({
   workspaceId: string;
   item: ArenaHistoryItem;
 }) {
+  const { t } = useTranslation();
   const cwd = useWorkspaceDirectory(serverId, workspaceId);
-  const notice = useMemo(() => gitApplicationNotice(item), [item]);
+  const notice = gitApplicationNotice(item);
   const description = useMemo(
     () =>
       notice ? (
@@ -354,7 +379,7 @@ function GitApplicationCallout({
           serverId={serverId}
           cwd={cwd}
           activeFile={conflictFile}
-          buttonLabel="Open in editor"
+          buttonLabel={t("arena.openEditor")}
         />
       ) : null}
     </Alert>
@@ -370,6 +395,7 @@ function BattleThreads({
   runB: ArenaRun | undefined;
   item: ArenaHistoryItem;
 }) {
+  const { t } = useTranslation();
   const active = useRetainedPanelActive();
   if (!runA || !runB) return null;
   const winner = battleWinnerSide(item);
@@ -380,7 +406,7 @@ function BattleThreads({
           <View style={styles.threadTitleRow}>
             <ThreadTitle side="a" model={item.identities?.a.name} />
             {winner === "a" ? (
-              <View accessible accessibilityLabel="Agent A winner">
+              <View accessible accessibilityLabel={t("arena.agentWinner", { side: "A" })}>
                 <ThemedCheckSquare size={16} uniProps={successColorMapping} />
               </View>
             ) : null}
@@ -401,7 +427,7 @@ function BattleThreads({
           <View style={styles.threadTitleRow}>
             <ThreadTitle side="b" model={item.identities?.b.name} />
             {winner === "b" ? (
-              <View accessible accessibilityLabel="Agent B winner">
+              <View accessible accessibilityLabel={t("arena.agentWinner", { side: "B" })}>
                 <ThemedCheckSquare size={16} uniProps={successColorMapping} />
               </View>
             ) : null}
@@ -446,12 +472,11 @@ function ArchivedBattleComparison({
   diff: ArenaComparisonDiff | undefined;
   diffError: Error | null;
 }) {
+  const { t } = useTranslation();
   if (!bothComplete) {
     return (
       <Text style={styles.muted}>
-        {selectedEarly
-          ? "Comparison unavailable because this battle was decided early."
-          : "Comparison unavailable because both agents did not finish successfully."}
+        {selectedEarly ? t("arena.earlyUnavailable") : t("arena.failedUnavailable")}
       </Text>
     );
   }
@@ -469,7 +494,7 @@ function ArchivedBattleComparison({
     return (
       <View style={styles.loadingRow}>
         <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />
-        <Text style={styles.muted}>Loading changes from base…</Text>
+        <Text style={styles.muted}>{t("arena.loadingBaseChanges")}</Text>
       </View>
     );
   }
@@ -479,21 +504,21 @@ function ArchivedBattleComparison({
       {summaryPending ? (
         <View style={styles.loadingRow}>
           <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />
-          <Text style={styles.muted}>Generating difference summary…</Text>
+          <Text style={styles.muted}>{t("arena.generatingSummary")}</Text>
         </View>
       ) : null}
       {comparison?.output ? (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Difference summary</Text>
+          <Text style={styles.sectionTitle}>{t("arena.summary")}</Text>
           <SummaryOmissionNotice comparison={comparison} />
           <VerdictBody turnId={turnId} output={comparison.output} />
         </View>
       ) : null}
       {comparison?.state === "failed" ? (
         <View style={styles.loadingRow}>
-          <Text style={styles.warning}>The difference summary failed to generate.</Text>
+          <Text style={styles.warning}>{t("arena.summaryFailed")}</Text>
           <Button size="xs" variant="outline" loading={retrying} onPress={onRetry}>
-            Retry summary
+            {t("arena.retrySummary")}{" "}
           </Button>
         </View>
       ) : null}
@@ -516,6 +541,7 @@ function ExpandedBattleSummary({
   agentId: string;
   item: ArenaHistoryItem;
 }) {
+  const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
@@ -540,7 +566,7 @@ function ExpandedBattleSummary({
     },
     onSettled: (_data, _error, _variables, resume) => resume?.(),
     mutationFn: async () => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
+      if (!client) throw new Error(t("arena.connectionUnavailable"));
       return client
         .arenaRetryComparison(agentId, item.id)
         .catch((error: unknown) => Promise.reject(noticeAccountSessionRejection(error)));
@@ -561,7 +587,7 @@ function ExpandedBattleSummary({
     dataShape: "value",
     staleTimeMs: 0,
     queryFn: async () => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
+      if (!client) throw new Error(t("arena.connectionUnavailable"));
       try {
         return await client.arenaDiff(agentId, item.id);
       } catch (error) {
@@ -580,7 +606,7 @@ function ExpandedBattleSummary({
       {turnQuery.isLoading ? (
         <View style={styles.loadingRow}>
           <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />
-          <Text style={styles.muted}>Loading archived battle…</Text>
+          <Text style={styles.muted}>{t("arena.loadingArchive")}</Text>
         </View>
       ) : null}
       <ArenaStreamStatus error={turnQuery.error} retry={turnQuery.refetch} />
@@ -623,6 +649,7 @@ function FailedBattleStart({
   item: ArenaHistoryItem;
   canStartAgain: boolean;
 }) {
+  const { t } = useTranslation();
   const toast = useToast();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const { mutateAsync: startArena } = useArenaStartMutation(serverId, agentId);
@@ -635,12 +662,12 @@ function FailedBattleStart({
     startingRef.current = true;
     setStarting(true);
     const run = async () => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
+      if (!client) throw new Error(t("arena.connectionUnavailable"));
       const turn = (await client.arenaTurn(agentId, item.id)).turn;
-      if (!turn?.prompt) throw new Error("This battle's prompt is no longer available.");
+      if (!turn?.prompt) throw new Error(t("arena.promptUnavailable"));
       // The turn keeps attachment labels, not their bytes, so only the composer can send them again.
       if (turn.attachments?.length) {
-        throw new Error("This prompt had attachments. Send it again from the composer with them.");
+        throw new Error(t("arena.promptAttachments"));
       }
       await startArena({ prompt: turn.prompt });
     };
@@ -650,14 +677,12 @@ function FailedBattleStart({
         startingRef.current = false;
         setStarting(false);
       });
-  }, [agentId, client, item.id, startArena, toast]);
+  }, [agentId, client, item.id, startArena, toast, t]);
   return (
     <View style={[styles.card, styles.failedStart]} testID={`arena-summary-${item.id}`}>
       <View style={styles.headerText}>
-        <Text style={styles.gitNoticeTitle}>{"Battle couldn't start"}</Text>
-        <Text style={styles.gitNoticeDetail}>
-          Neither agent ran, so both stay hidden. Your project is unchanged.
-        </Text>
+        <Text style={styles.gitNoticeTitle}>{t("arena.couldntStart")}</Text>
+        <Text style={styles.gitNoticeDetail}>{t("arena.neitherRan")} </Text>
       </View>
       {canStartAgain ? (
         <Button
@@ -667,7 +692,7 @@ function FailedBattleStart({
           onPress={handleStartAgain}
           testID="arena-failed-start-retry"
         >
-          Try again
+          {t("arena.tryAgain")}{" "}
         </Button>
       ) : null}
     </View>

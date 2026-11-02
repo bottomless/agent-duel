@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Text, type StyleProp, type TextStyle, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -190,6 +191,7 @@ function ColumnLabel({
   soloed: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation();
   const accessibilityState = useMemo(() => ({ selected: soloed }), [soloed]);
   // The render-prop form, so the cell styles itself on hover without any state
   // leaving it -- see docs/hover.md on why hover state never drives a sibling here.
@@ -206,7 +208,7 @@ function ColumnLabel({
       onPress={onToggle}
       accessibilityRole="button"
       accessibilityState={accessibilityState}
-      accessibilityLabel={soloed ? "Show both agents" : `Show only ${label}, against base`}
+      accessibilityLabel={soloed ? t("arena.showBoth") : t("arena.showOnly", { agent: label })}
       style={cellStyle}
     >
       {model ? <ArenaModelVendorIcon model={model} size={ICON_SIZE.xs} /> : null}
@@ -426,13 +428,15 @@ function BaseColumn({
 // looking for a change the summary named: it says the lines are not here and that nothing
 // in them changed, instead of letting the two sides of the break read as neighbours.
 function OmittedBand({ block }: { block: ThreeWayOmittedBlock }) {
+  const { t } = useTranslation();
+
   return (
     <View style={[styles.band, styles.omittedBand]}>
       <View style={styles.bandMain}>
         <Text style={styles.omittedBandText}>
           {block.lines > 0
-            ? `⋯ ${block.lines.toLocaleString()} lines not sent — unchanged on both sides, and the file was too large to send whole`
-            : "⋯ lines not sent — the file was too large to send whole"}
+            ? t("arena.sameLinesNotSent", { total: block.lines.toLocaleString() })
+            : t("arena.linesNotSent")}
         </Text>
       </View>
     </View>
@@ -446,6 +450,8 @@ export function ExpandBand({
   gap: ThreeWayGapBlock;
   onReveal: (start: number, end: number) => void;
 }) {
+  const { t } = useTranslation();
+
   const { start, end, count } = gap;
   const revealAll = useCallback(() => onReveal(start, end), [end, onReveal, start]);
   const revealFromTop = useCallback(
@@ -465,7 +471,7 @@ export function ExpandBand({
           onPress={revealFromTop}
           style={styles.bandStep}
           accessibilityRole="button"
-          accessibilityLabel={`Show ${EXPAND_STEP} more lines after the change above`}
+          accessibilityLabel={t("arena.moreAfter", { total: EXPAND_STEP })}
         >
           <ChevronDown size={13} />
         </PressHighlight>
@@ -474,16 +480,16 @@ export function ExpandBand({
         onPress={revealAll}
         style={styles.bandMain}
         accessibilityRole="button"
-        accessibilityLabel={`Show all ${count} unchanged lines`}
+        accessibilityLabel={t("arena.allUnchanged", { total: count })}
       >
-        <Text style={styles.bandText}>{`⋯ ${count} unchanged lines — show all`}</Text>
+        <Text style={styles.bandText}>{t("arena.unchangedShowAll", { total: count })}</Text>
       </PressHighlight>
       {stepped ? (
         <PressHighlight
           onPress={revealFromBottom}
           style={styles.bandStep}
           accessibilityRole="button"
-          accessibilityLabel={`Show ${EXPAND_STEP} more lines before the change below`}
+          accessibilityLabel={t("arena.moreBefore", { total: EXPAND_STEP })}
         >
           <ChevronUp size={13} />
         </PressHighlight>
@@ -502,18 +508,15 @@ function FileLimitNotices({
   aligned: boolean;
   contentTruncated: boolean;
 }) {
+  const { t } = useTranslation();
+
   return (
     <>
       {aligned ? null : (
-        <Text style={[styles.warning, styles.filePad]}>
-          This file was too large to align line by line; it is shown as the base replaced in full.
-        </Text>
+        <Text style={[styles.warning, styles.filePad]}>{t("arena.baseReplaced")} </Text>
       )}
       {contentTruncated ? (
-        <Text style={[styles.warning, styles.filePad]}>
-          This file was too large to send in full, and the windows above ran out of room before the
-          end of it. Later changes are missing.
-        </Text>
+        <Text style={[styles.warning, styles.filePad]}>{t("arena.missingLater")} </Text>
       ) : null}
     </>
   );
@@ -534,6 +537,7 @@ function ThreeWayFileSection({
   // Set when the viewer was opened at this file; a new id opens it again.
   focusRequestId: number | null;
 }) {
+  const { t } = useTranslation();
   const sectionRef = useRef<View>(null);
   const [open, setOpen] = useState(focusRequestId !== null);
   const [full, setFull] = useState(false);
@@ -635,18 +639,16 @@ function ThreeWayFileSection({
       {open ? (
         <View>
           {file.binary ? (
-            <Text style={[styles.muted, styles.filePad]}>Binary file changed.</Text>
+            <Text style={[styles.muted, styles.filePad]}>{t("arena.binaryChanged")}</Text>
           ) : null}
           {!file.binary && rows.length === 0 ? (
-            <Text style={[styles.muted, styles.filePad]}>
-              No textual content was retained for this file.
-            </Text>
+            <Text style={[styles.muted, styles.filePad]}>{t("arena.noRetainedText")} </Text>
           ) : null}
           {!file.binary && rows.length > 0 ? (
             <>
               {unchangedForMode && shownAgentLabel ? (
                 <Text style={[styles.muted, styles.filePad]}>
-                  {`${shownAgentLabel} left this file alone — the changes here are the other agent's.`}
+                  {t("arena.leftAlone", { agent: shownAgentLabel })}
                 </Text>
               ) : null}
               {/* No scroller and no frame of its own: the viewer owns both, so rows run
@@ -694,8 +696,8 @@ function ThreeWayFileSection({
                 <View style={styles.filePad}>
                   <Button size="xs" variant="ghost" onPress={handleFullToggle}>
                     {full
-                      ? "Collapse to bounded preview"
-                      : `This file changed too much to show at once — show all ${rows.length} rows`}
+                      ? t("arena.boundedPreview")
+                      : t("arena.showAllRows", { total: rows.length })}
                   </Button>
                 </View>
               ) : null}
@@ -740,6 +742,7 @@ export function ThreeWayDiffViewer({
   focusPath?: string;
   focusRequestId?: number;
 }) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<ThreeWayMode>("both");
   const showA = showsSide(mode, "a");
   const showB = showsSide(mode, "b");
@@ -754,7 +757,7 @@ export function ThreeWayDiffViewer({
           <ColumnLabel label={labelA} model={modelA} soloed={mode === "a"} onToggle={toggleA} />
         ) : null}
         <Text numberOfLines={1} style={styles.baseColumnLabel}>
-          Base
+          {t("arena.baseTitle")}{" "}
         </Text>
         {showB ? (
           <ColumnLabel label={labelB} model={modelB} soloed={mode === "b"} onToggle={toggleB} />

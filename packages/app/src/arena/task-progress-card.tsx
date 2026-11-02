@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { memo, useCallback, useMemo, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { Check, CheckSquare, Circle, CircleDot, CircleSlash } from "lucide-react-native";
@@ -17,10 +19,18 @@ const activeIcon = (theme: Theme) => ({ color: theme.colors.statusWarning });
 const completedIcon = (theme: Theme) => ({ color: theme.colors.statusSuccess });
 
 const STATUS_LABELS = {
-  pending: "Pending",
-  in_progress: "In progress",
-  completed: "Completed",
-  cancelled: "Cancelled",
+  get pending() {
+    return i18n.t("arena.pending");
+  },
+  get in_progress() {
+    return i18n.t("arena.inProgress");
+  },
+  get completed() {
+    return i18n.t("arena.completed");
+  },
+  get cancelled() {
+    return i18n.t("arena.cancelled");
+  },
 } satisfies Record<ArenaTask["status"], string>;
 
 interface TaskProgressProps {
@@ -64,6 +74,7 @@ function TaskStatusIcon({ status, active }: { status: ArenaTask["status"]; activ
 }
 
 function TaskRow({ task, active }: { task: ArenaTask; active: boolean }) {
+  useTranslation();
   const settled = task.status === "completed" || task.status === "cancelled";
   const label = STATUS_LABELS[task.status];
   return (
@@ -82,6 +93,7 @@ export const ArenaTaskProgressCard = memo(function ArenaTaskProgressCard({
   state,
   detailsMaxHeight = 200,
 }: TaskProgressProps) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => setExpanded((value) => !value), []);
   const detailsStyle = useMemo(
@@ -94,13 +106,16 @@ export const ArenaTaskProgressCard = memo(function ArenaTaskProgressCard({
   const endedWithUnfinishedTasks = state === "ended" && hasUnfinishedTasks;
   const active = state === "running";
   const current = active ? tasks.find((task) => task.status === "in_progress") : undefined;
-  const label = tasks.length === 0 ? "Tasks cleared" : `${completed}/${tasks.length} tasks`;
+  const label =
+    tasks.length === 0
+      ? t("arena.tasksCleared")
+      : t("arena.taskCount", { completed: completed, total: tasks.length });
   const secondaryLabel = useMemo(() => {
     if (current) return current.content;
-    if (endedWithUnfinishedTasks) return "Run ended";
-    if (cancelled > 0) return `${cancelled} cancelled`;
+    if (endedWithUnfinishedTasks) return t("arena.runEnded");
+    if (cancelled > 0) return t("arena.cancelledTasks", { total: cancelled });
     return undefined;
-  }, [cancelled, current, endedWithUnfinishedTasks]);
+  }, [cancelled, current, endedWithUnfinishedTasks, t]);
   const renderDetails = useCallback(() => {
     const occurrences = new Map<string, number>();
     const rows = tasks.map((task) => {
@@ -113,9 +128,9 @@ export const ArenaTaskProgressCard = memo(function ArenaTaskProgressCard({
       <View style={styles.list}>
         {rows}
         {endedWithUnfinishedTasks ? (
-          <Text style={styles.note}>The run ended with unfinished tasks.</Text>
+          <Text style={styles.note}>{t("arena.unfinishedTasks")}</Text>
         ) : null}
-        {tasks.length === 0 ? <Text style={styles.note}>No tasks.</Text> : null}
+        {tasks.length === 0 ? <Text style={styles.note}>{t("arena.noTasks")}</Text> : null}
       </View>
     );
     if (!active) return details;
@@ -124,7 +139,7 @@ export const ArenaTaskProgressCard = memo(function ArenaTaskProgressCard({
         {details}
       </ScrollView>
     );
-  }, [active, detailsStyle, endedWithUnfinishedTasks, tasks]);
+  }, [active, detailsStyle, endedWithUnfinishedTasks, tasks, t]);
 
   return (
     <ExpandableBadge

@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { i18n } from "@/i18n/i18next";
 import { memo, useCallback, useEffect, type ReactNode } from "react";
 import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -16,11 +18,36 @@ export interface ArenaChatSubagentTimeline {
 const EMPTY_TIMELINE: ArenaChatSubagentTimeline = { tail: [], head: [] };
 
 const STATUS: Record<string, { label: string; done: boolean }> = {
-  executing: { label: "Working", done: false },
-  running: { label: "Working", done: false },
-  completed: { label: "Completed", done: true },
-  failed: { label: "Failed", done: true },
-  canceled: { label: "Stopped", done: true },
+  executing: {
+    get label() {
+      return i18n.t("arena.workingStatus");
+    },
+    done: false,
+  },
+  running: {
+    get label() {
+      return i18n.t("arena.workingStatus");
+    },
+    done: false,
+  },
+  completed: {
+    get label() {
+      return i18n.t("arena.completed");
+    },
+    done: true,
+  },
+  failed: {
+    get label() {
+      return i18n.t("arena.failed");
+    },
+    done: true,
+  },
+  canceled: {
+    get label() {
+      return i18n.t("arena.stopped");
+    },
+    done: true,
+  },
 };
 
 /**
@@ -42,6 +69,7 @@ export const ArenaChatTaskPrompt = memo(function ArenaChatTaskPrompt({
   expanded: boolean;
   onExpandedChange: (itemId: string, expanded: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const toggle = useCallback(
     () => onExpandedChange(itemId, !expanded),
     [expanded, itemId, onExpandedChange],
@@ -57,7 +85,7 @@ export const ArenaChatTaskPrompt = memo(function ArenaChatTaskPrompt({
   return (
     <ExpandableBadge
       testID="arena-chat-subagent-prompt"
-      label="Task prompt"
+      label={t("arena.taskPrompt")}
       icon={FileText}
       isExpanded={expanded}
       onToggle={toggle}
@@ -93,6 +121,7 @@ export const ArenaChatSubagent = memo(function ArenaChatSubagent({
   /** Changes when a row inside the transcript opens or closes, so the transcript draws again. */
   transcriptRevision?: unknown;
 }) {
+  const { t } = useTranslation();
   const toggle = useCallback(
     () => onExpandedChange(callId, !expanded),
     [callId, expanded, onExpandedChange],
@@ -123,7 +152,7 @@ export const ArenaChatSubagent = memo(function ArenaChatSubagent({
     <View testID="arena-chat-subagent">
       <ExpandableBadge
         testID="arena-chat-subagent-heading"
-        label={`Subagent · ${description}`}
+        label={t("arena.subagent", { name: description })}
         icon={Users}
         isExpanded={expanded}
         onToggle={toggle}

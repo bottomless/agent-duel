@@ -1,26 +1,31 @@
+import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaQuestionResult } from "./question";
 
 export function ArenaQuestionResultView({ result }: { result: ArenaQuestionResult }) {
+  const { t } = useTranslation();
   const answered = result.questions.filter((question) => question.answers.length > 0).length;
   return (
     <View style={styles.exchange} testID="arena-question-result">
       <Text style={styles.heading}>
-        Questions{" "}
+        {t("arena.questions")}{" "}
         <Text style={styles.muted}>
-          {answered}/{result.questions.length} answered{result.interrupted ? " (interrupted)" : ""}
+          {t("arena.answered", { answered, total: result.questions.length })}
+          {result.interrupted ? t("arena.interruptedNote") : ""}
         </Text>
       </Text>
       {result.questions.map((question, index) => (
         <View key={JSON.stringify([question.question, index])} style={styles.question}>
           <Text selectable style={styles.prompt}>
             {question.question}
-            {question.answers.length === 0 ? <Text style={styles.muted}> (unanswered)</Text> : null}
+            {question.answers.length === 0 ? (
+              <Text style={styles.muted}> {t("arena.unansweredNote")}</Text>
+            ) : null}
           </Text>
           {question.answers.map((answer, answerIndex) => (
             <Text key={JSON.stringify([answer, answerIndex])} selectable style={styles.answer}>
-              <Text style={styles.muted}>answer: </Text>
+              <Text style={styles.muted}>{t("arena.answer")} </Text>
               {answer}
             </Text>
           ))}

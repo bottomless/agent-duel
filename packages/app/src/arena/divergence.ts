@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type {
   ArenaDivergenceFile,
   ArenaDivergenceStatus,
@@ -39,16 +40,16 @@ export function mergedContent(
 export function divergenceStatusLabel(status: ArenaDivergenceStatus): string {
   switch (status) {
     case "identical":
-      return "same result";
+      return i18n.t("arena.sameResult");
     case "diverging":
-      return "diverging";
+      return i18n.t("arena.diverging");
     case "compatible":
-      return "compatible";
+      return i18n.t("arena.compatible");
     case "only_a":
-      return "A only";
+      return i18n.t("arena.aOnly");
     case "only_b":
-      return "B only";
+      return i18n.t("arena.bOnly");
     case "binary":
-      return "binary";
+      return i18n.t("arena.binary");
   }
 }

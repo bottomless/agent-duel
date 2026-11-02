@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
 export type SingleAgentModelSize = NonNullable<ArenaSnapshot["singleAgent"]>["modelSize"];
@@ -7,7 +8,9 @@ export const SINGLE_AGENT_MODELS = {
   frontier: {
     model: "arena/contestant",
     thinking: "high",
-    label: "Model hidden · Rating required",
+    get label() {
+      return i18n.t("arena.hiddenRating");
+    },
   },
 } as const;
 

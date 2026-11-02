@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 
 type ArenaWorktreeTerminalClient = Pick<DaemonClient, "createTerminal">;
@@ -13,7 +14,7 @@ export async function createArenaWorktreeTerminal(input: {
     workspaceId: input.workspaceId,
   });
   if (!payload.terminal) {
-    throw new Error(payload.error ?? "Unable to open worktree terminal");
+    throw new Error(payload.error ?? i18n.t("arena.terminalFailed"));
   }
   return payload.terminal;
 }

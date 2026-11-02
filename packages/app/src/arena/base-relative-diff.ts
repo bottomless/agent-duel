@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaFileContent, ArenaThreeWayFile } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   buildWindowedThreeWayDiff,
@@ -18,18 +19,18 @@ function knownEmpty(side: ArenaFileContent): boolean {
 
 // A missing path is a known empty version; an absent payload is unknown. Do not
 // feed unknown content into a diff as if the agent deleted it.
-export function buildBaseRelativeDiff(file: ArenaThreeWayFile): BaseRelativeDiff {
-  if (file.binary) return { kind: "unavailable", message: "Binary file changed." };
+export function buildBaseRelativeDiff(file: ArenaThreeWayFile, t = i18n.t): BaseRelativeDiff {
+  if (file.binary) return { kind: "unavailable", message: t("arena.binaryChanged") };
   if (!file.base) {
     return {
       kind: "unavailable",
-      message: "The original was not sent, so changes from the original cannot be shown.",
+      message: t("arena.originalNotSent"),
     };
   }
   if (!file.a || !file.b) {
     return {
       kind: "unavailable",
-      message: "An agent's file content was not sent, so this comparison is unavailable.",
+      message: t("arena.agentFileNotSent"),
     };
   }
   const sides = [file.base, file.a, file.b];
@@ -50,8 +51,7 @@ export function buildBaseRelativeDiff(file: ArenaThreeWayFile): BaseRelativeDiff
   ) {
     return {
       kind: "unavailable",
-      message:
-        "The retained file regions cannot be matched reliably. Changes from the original are unavailable for this file.",
+      message: t("arena.regionsUnmatched"),
     };
   }
   const normalize = (side: ArenaFileContent) => (side.missing ? { content: "" } : side);

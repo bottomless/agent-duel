@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 import { subscribeToRelativeTimeTick, type TickResolution } from "@/utils/relative-time-ticker";
 import { describeCompactTimeAgo, describeTimeAgo, type RelativeTimeLabel } from "@/utils/time";
@@ -31,6 +32,8 @@ function useRelativeTimeLabel(
   date: Date | null,
   describe: (date: Date) => RelativeTimeLabel,
 ): string {
+  const { i18n } = useTranslation();
+  const language = i18n.resolvedLanguage;
   const [label, setLabel] = useState(() => (date ? describe(date).label : ""));
 
   // Keyed on the instant, not the Date object: the store parses a fresh Date on every payload, so
@@ -74,7 +77,7 @@ function useRelativeTimeLabel(
     return () => {
       unsubscribe?.();
     };
-  }, [time, describe]);
+  }, [time, describe, language]);
 
   return label;
 }

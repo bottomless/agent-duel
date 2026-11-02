@@ -132,7 +132,9 @@ state packet must not rebuild an already hydrated winner.
 
 One prompt, two agents, one worktree each, and a vote. The winner's work becomes the chat's real
 history and the loser's is discarded. Battle mode is on by default; the single-agent path is the
-escape hatch for when you already know what you want done.
+escape hatch for when you already know what you want done. Render client-owned battle copy,
+including accessibility labels, in the selected app language. Keep contestant letters, model
+names, code, and agent output intact; [i18n.md](i18n.md) owns the translation boundary.
 
 The voter is a developer getting work done who happens to get two attempts to choose between, not a
 benchmark operator scoring models. Optimize the UI for deciding quickly and moving on: the two

@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import {
   applyArenaChanges,
   type ArenaStreamPacket,
@@ -74,7 +75,7 @@ export class ArenaSubscription {
         this.offConnection = this.client.subscribeConnectionStatus((state) => {
           if (state.status === "connected") {
             if (!this.id && !this.timer) this.connect();
-          } else if (!this.timer) this.recover(new Error("Arena connection interrupted"));
+          } else if (!this.timer) this.recover(new Error(i18n.t("arena.connectionInterrupted")));
         });
         return;
       }
@@ -157,13 +158,13 @@ export class ArenaSubscription {
       return;
     }
     if (!this.client.isConnected) {
-      this.recover(new Error("Arena daemon connection is unavailable"));
+      this.recover(new Error(i18n.t("arena.connectionUnavailable")));
       return;
     }
     const id = globalThis.crypto.randomUUID();
     this.id = id;
     this.baselineTimeout = setTimeout(() => {
-      if (this.id === id) this.recover(new Error("Arena snapshot timed out"));
+      if (this.id === id) this.recover(new Error(i18n.t("arena.snapshotTimeout")));
     }, 30_000);
     void this.client.arenaStreamSubscribe(this.agentId, id, this.target).catch((error: unknown) => {
       if (this.id === id) this.recover(error instanceof Error ? error : new Error(String(error)));
@@ -206,11 +207,11 @@ export class ArenaSubscription {
         this.generation !== null &&
         (packet.generation !== this.generation || packet.sequence !== this.sequence + 1)
       )
-        throw new Error("Arena update sequence changed");
+        throw new Error(i18n.t("arena.sequenceChanged"));
       if (packet.frame.kind === "snapshot") this.snapshot = packet.frame.snapshot;
       else {
         if (!this.snapshot || this.generation === null)
-          throw new Error("Arena update arrived before its snapshot");
+          throw new Error(i18n.t("arena.updateBeforeSnapshot"));
         this.snapshot = applyArenaChanges(this.snapshot, packet.frame.changes);
       }
       if (this.baselineTimeout) clearTimeout(this.baselineTimeout);

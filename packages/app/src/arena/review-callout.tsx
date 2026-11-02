@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { type ReactNode, useCallback, useState } from "react";
 import { Text, View } from "react-native";
 import { GitBranch } from "lucide-react-native";
@@ -21,8 +22,10 @@ const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMut
 
 /** Branch rows in the shape of the labeled file list: name in mono, what happened muted behind it. */
 function BranchList({ rows }: { rows: readonly ReviewRow[] }) {
+  const { t } = useTranslation();
+
   const hidden = rows.length - PATH_LIST_LIMIT;
-  const label = `Branches (${rows.length})`;
+  const label = t("arena.branchesCount", { total: rows.length });
   return (
     <View style={styles.list} accessibilityLabel={label}>
       <Text style={styles.label}>{label}</Text>
@@ -37,7 +40,7 @@ function BranchList({ rows }: { rows: readonly ReviewRow[] }) {
       ))}
       {hidden > 0 ? (
         <Text style={styles.note}>
-          and {hidden} more {hidden === 1 ? "branch" : "branches"}
+          {t(hidden === 1 ? "arena.moreOneBranch" : "arena.moreManyBranches", { total: hidden })}
         </Text>
       ) : null}
     </View>
@@ -103,6 +106,7 @@ export function ArenaReviewCallouts({
   askingAgent: boolean;
   pending: "apply" | "discard" | null;
 }) {
+  const { t } = useTranslation();
   const [pressed, setPressed] = useState<ReviewMode | null>(null);
   const busy = items.find((item) => item.kind === "busy");
   const locked = pending !== null || askingAgent;
@@ -120,7 +124,7 @@ export function ArenaReviewCallouts({
     const copy = busyCallout(busy);
     const actions: ArenaCalloutAction[] = [
       {
-        label: "Check again",
+        label: t("arena.checkAgain"),
         onPress: onCheckAgain,
         loading: pending === "apply",
         disabled: locked,
@@ -129,7 +133,7 @@ export function ArenaReviewCallouts({
     ];
     if (onAskAgent) {
       actions.push({
-        label: "Let an agent resolve",
+        label: t("arena.letResolve"),
         onPress: () => onAskAgent(copy.prompt),
         loading: askingAgent,
         disabled: locked,
@@ -163,7 +167,7 @@ export function ArenaReviewCallouts({
     );
   if (canDiscard) {
     actions.push({
-      label: "Discard winning changes",
+      label: t("arena.discardWinning"),
       onPress: onDiscard,
       loading: pending === "discard",
       disabled: locked,

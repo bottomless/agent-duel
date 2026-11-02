@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -34,6 +35,7 @@ export function VerdictBody({
   output: string;
   children?: ReactNode;
 }) {
+  const { t } = useTranslation();
   const setVerdictExpanded = useArenaReviewStore((state) => state.setVerdictExpanded);
   const setVerdictFolded = useArenaReviewStore((state) => state.setVerdictFolded);
   const full = useArenaReviewState(turnId).verdictExpanded === true;
@@ -66,7 +68,7 @@ export function VerdictBody({
       {folded ? (
         <View style={styles.more}>
           <Button size="xs" variant="ghost" onPress={showAll} testID="arena-verdict-more">
-            Show full summary
+            {t("arena.fullSummary")}{" "}
           </Button>
         </View>
       ) : null}

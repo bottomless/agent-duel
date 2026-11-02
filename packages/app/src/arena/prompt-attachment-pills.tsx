@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import { FileText, Image as ImageIcon } from "lucide-react-native";
 import { withUnistyles } from "react-native-unistyles";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
@@ -49,6 +50,6 @@ export function arenaMessageAttachmentPills(
 }
 
 function subtitle(attachment: PromptAttachment): string {
-  if (attachment.kind === "image") return "Image";
+  if (attachment.kind === "image") return i18n.t("arena.image");
   return labeledAttachmentSubtitle({ label: attachment.label, kind: attachment.kind });
 }

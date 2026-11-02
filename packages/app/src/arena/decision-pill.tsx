@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -103,17 +105,18 @@ function BattleStopDecision({
   phase: Extract<ArenaDecisionPhase, { kind: "running" }>;
   actions: ArenaBattleActions;
 }) {
+  const { t } = useTranslation();
   const handleStop = useCallback(() => {
     void actions.stop();
   }, [actions]);
   return (
     <ArenaRunningPillButton
       hoverSide={null}
-      label="Stop"
+      label={t("arena.stop")}
       loading={actions.pendingAction?.kind === "stop"}
       disabled={actions.pending || !phase.canStop}
       onPress={handleStop}
-      accessibilityLabel="Stop battle"
+      accessibilityLabel={t("arena.stopBattle")}
       testID="arena-stop-battle"
     />
   );
@@ -122,15 +125,15 @@ function BattleStopDecision({
 /** The line above the pill that says why the usual choices changed, if they did. */
 function decisionHint(phase: ArenaDecisionPhase): string | null {
   if (phase.kind === "running") return arenaRunningDecisionHint(phase);
-  if (phase.kind === "awaiting_stop_resolution") return "Battle stopped · choose what to keep";
+  if (phase.kind === "awaiting_stop_resolution") return i18n.t("arena.stoppedChoose");
   if (phase.kind !== "awaiting_vote") return null;
-  if (phase.canResume) return "Agent Duel closed during the battle · resume or discard";
+  if (phase.canResume) return i18n.t("arena.closedBattle");
   if (phase.failedSide) {
     const other = phase.failedSide === "a" ? "B" : "A";
-    return `Agent ${phase.failedSide.toUpperCase()} failed · choosing ${other} won't count as a vote`;
+    return i18n.t("arena.failedSide", { side: phase.failedSide.toUpperCase(), other: other });
   }
   if (!phase.canDiscard) return null;
-  return phase.canRetry ? "Both agents failed · retry or discard" : "Both agents failed";
+  return phase.canRetry ? i18n.t("arena.bothFailedRetry") : i18n.t("arena.bothFailed");
 }
 
 /** Lives outside the transcript scroller so the decision stays above the composer. */
@@ -145,6 +148,7 @@ export function ArenaDecisionPill({
   snapshot: ArenaSnapshot;
   onHeightChange: (height: number) => void;
 }) {
+  useTranslation();
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const phase = arenaDecisionPhase(snapshot);
   const stopped = phase.kind === "awaiting_stop_resolution";

@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
@@ -23,7 +25,7 @@ import {
   type ArenaPermissionReply,
 } from "./permission";
 import { deriveArenaToolCallDetail, normalizeArenaToolCallStatus } from "./tool-call-detail";
-import { arenaRunErrorToShow, STOPPED_BY_EARLY_PICK_NOTE } from "./battle-result";
+import { arenaRunErrorToShow, stoppedByEarlyPickNote } from "./battle-result";
 import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
@@ -215,14 +217,14 @@ function isCompactionSummary(message: unknown): boolean {
 
 function compactionPresentation(group: CompactionGroup, runState: ArenaRun["runState"]) {
   if (group.summary?.error)
-    return { label: "Context compaction failed", active: false, failed: true };
+    return { label: i18n.t("arena.compactionFailed"), active: false, failed: true };
   if (numberField(group.summary?.time, "completed") !== null) {
-    return { label: "Context compacted", active: false, failed: false };
+    return { label: i18n.t("arena.compacted"), active: false, failed: false };
   }
   if (runState !== "pending") {
-    return { label: "Context compaction interrupted", active: false, failed: false };
+    return { label: i18n.t("arena.compactionInterrupted"), active: false, failed: false };
   }
-  return { label: "Compacting context…", active: true, failed: false };
+  return { label: i18n.t("arena.compacting"), active: true, failed: false };
 }
 
 function buildRenderGroups(run: Pick<ArenaRun, "messages" | "parts" | "id">): RenderGroup[] {
@@ -385,6 +387,7 @@ function ArenaActivitySegmentView({
   isLatest: boolean;
   awaitingResponse: boolean;
 }) {
+  useTranslation();
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => setExpanded((current) => !current), []);
   const workEntries = segment.trailing.filter((entry) => arenaPartShouldFold(entry.part, context));
@@ -482,6 +485,7 @@ function ArenaSubagent({
   session: ArenaSessionThread;
   context: AssistantPartsContext;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => setExpanded((current) => !current), []);
   const childContext = useMemo(
@@ -517,11 +521,11 @@ function ArenaSubagent({
     cwd: childContext.run.worktree,
   });
   const statusLabels = {
-    pending: "Working",
-    complete: "Completed",
-    stopped: "Stopped",
-    interrupted: "Interrupted",
-    error: "Failed",
+    pending: t("arena.workingStatus"),
+    complete: t("arena.completed"),
+    stopped: t("arena.stopped"),
+    interrupted: t("arena.interrupted"),
+    error: t("arena.failed"),
   };
   const status = statusLabels[childContext.run.runState];
   const pending = childContext.run.runState === "pending";
@@ -542,7 +546,7 @@ function ArenaSubagent({
     <View testID="arena-subagent">
       <ExpandableBadge
         testID="arena-subagent-heading"
-        label={`Subagent · ${session.name}`}
+        label={t("arena.subagent", { name: session.name })}
         icon={Users}
         isExpanded={expanded || needsInput}
         onToggle={toggle}
@@ -573,6 +577,7 @@ function ArenaSubagent({
 
 /** A delegation prompt is written for the model, not by the user, so it opens on request. */
 function ArenaTaskPrompt({ text }: { text: string }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => setExpanded((current) => !current), []);
   const renderDetails = useCallback(
@@ -586,7 +591,7 @@ function ArenaTaskPrompt({ text }: { text: string }) {
   return (
     <ExpandableBadge
       testID="arena-subagent-prompt"
-      label="Task prompt"
+      label={t("arena.taskPrompt")}
       icon={FileText}
       isExpanded={expanded}
       onToggle={toggle}
@@ -600,6 +605,7 @@ function ArenaTaskPrompt({ text }: { text: string }) {
 }
 
 function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
+  useTranslation();
   const { run } = context;
   const isSubagent = context.sessionPath.length > 1;
   const chat = useContext(ArenaPartSourceContext);
@@ -665,10 +671,6 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
   });
 }
 
-// The engine leaves out a run's oldest messages when the battle grows past what a window can load
-// (engine `withinBudget`), so voting and replying keep working.
-const ACTIVITY_OMITTED_NOTE = "Earlier activity in this run is too large to show.";
-
 export function ArenaRunThread({
   run,
   stoppedByEarlyPick = false,
@@ -694,6 +696,7 @@ export function ArenaRunThread({
     response: ArenaPermissionReply,
   ) => void;
 }) {
+  const { t } = useTranslation();
   // A steer the model has not received yet shows as queued at the end, not as sent.
   const visibleMessages = useMemo(() => {
     const queued = new Set(arenaQueuedSteering(run).map((message) => message.id));
@@ -708,8 +711,8 @@ export function ArenaRunThread({
   const tasks = useMemo(() => (pending ? [] : arenaRunTasks(run)), [pending, run]);
   const errorToShow = arenaRunErrorToShow({ error: run.error, stoppedByEarlyPick });
   const sessions = useMemo(
-    () => projectArenaSessions({ ...run, messages: visibleMessages }),
-    [visibleMessages, run],
+    () => projectArenaSessions({ ...run, messages: visibleMessages }, t),
+    [visibleMessages, run, t],
   );
   const assistantPartsContext: AssistantPartsContext = useMemo(
     () => ({
@@ -739,7 +742,7 @@ export function ArenaRunThread({
     <View style={styles.thread}>
       {run.activityOmitted ? (
         <Text style={styles.muted} testID="arena-run-activity-omitted">
-          {ACTIVITY_OMITTED_NOTE}
+          {t("arena.earlierTooLarge")}
         </Text>
       ) : null}
       <ArenaSessionMessages context={assistantPartsContext} />
@@ -752,7 +755,7 @@ export function ArenaRunThread({
           under it. */}
       {stoppedByEarlyPick ? (
         <Text style={styles.stoppedNote} testID="arena-run-stopped-by-early-pick">
-          {STOPPED_BY_EARLY_PICK_NOTE}
+          {stoppedByEarlyPickNote()}
         </Text>
       ) : null}
       {errorToShow ? <Text style={styles.error}>{errorToShow}</Text> : null}

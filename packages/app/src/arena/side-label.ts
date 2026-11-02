@@ -1,8 +1,9 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaHistoryItem, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 
 /** The pool's display names, for identities the reveal spells out as slugs. */
 export function arenaModelDisplayName(raw: string | undefined): string {
-  if (!raw) return "Unknown model";
+  if (!raw) return i18n.t("arena.unknownModel");
   const value = raw.toLowerCase();
   if (value.includes("glm-5.2")) return "GLM 5.2";
   if (value.includes("qwen3.8-max")) return "Qwen 3.8 Max";
@@ -16,7 +17,7 @@ export function arenaContestantLabel(
   side: ArenaSide,
   identities: ArenaHistoryItem["identities"] | undefined,
 ): string {
-  const label = `Agent ${side.toUpperCase()}`;
+  const label = i18n.t("arena.agentSide", { side: side.toUpperCase() });
   if (!identities) return label;
   return `${label} · ${arenaModelDisplayName(identities[side].name)}`;
 }

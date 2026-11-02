@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type {
   ArenaComparisonDiff,
   ArenaDivergenceStatus,
@@ -53,5 +54,5 @@ export function arenaChangesRows(diff: ArenaComparisonDiff | undefined): ArenaCh
 }
 
 export function arenaChangesCountLabel(count: number): string {
-  return count === 1 ? "1 file" : `${count} files`;
+  return count === 1 ? i18n.t("arena.oneFile") : i18n.t("arena.fileCount", { total: count });
 }

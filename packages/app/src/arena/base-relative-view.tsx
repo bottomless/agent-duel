@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Text, View, type ViewStyle } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -34,7 +36,7 @@ type Side = "a" | "b";
 type Tokens = Record<"base" | Side, Map<number, HighlightToken[]>>;
 const SIDES: readonly Side[] = ["a", "b"];
 const HEADER_DATA = { diffHeader: "true" };
-const labelFor = (side: Side) => (side === "a" ? "Agent A" : "Agent B");
+const labelFor = (side: Side) => i18n.t("arena.agentSide", { side: side.toUpperCase() });
 const STICKY_STYLE = isWeb
   ? ({ position: "sticky", top: 0, zIndex: 1 } as unknown as ViewStyle)
   : null;
@@ -140,14 +142,14 @@ function Column({
   stacked: boolean;
   showStatus: boolean;
 }) {
+  const { t } = useTranslation();
   const changed = rows.some((row) => row[side] && row[side]?.type !== "context");
   const shownRows = useMemo(
     () =>
       (stacked ? rows.filter((row) => row[side] !== null) : rows).map((row) => {
         const cell = row[side];
         const both = bothChanged(row, aligned);
-        const sharedLabel =
-          cell?.type === "remove" ? "Removed by both agents" : "Added by both agents";
+        const sharedLabel = cell?.type === "remove" ? t("arena.removedBoth") : t("arena.addedBoth");
         return {
           row,
           cell,
@@ -157,7 +159,7 @@ function Column({
           dataSet: { rowKey: row.key, change: cell?.type ?? "absent", both: String(both) },
         };
       }),
-    [aligned, rows, side, stacked],
+    [aligned, rows, side, stacked, t],
   );
   const columnData = useMemo(() => ({ comparisonSide: side }), [side]);
   const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
@@ -165,7 +167,7 @@ function Column({
     <View style={styles.column} dataSet={columnData}>
       {showStatus ? (
         <Text numberOfLines={1} style={styles.regionStatus}>
-          {changed ? " " : "No changes in this region"}
+          {changed ? " " : t("arena.noRegionChanges")}
         </Text>
       ) : null}
       <View style={styles.columnBody}>
@@ -183,7 +185,7 @@ function Column({
                 </Text>
                 {hasBoth ? (
                   <Text style={styles.both} numberOfLines={1} accessibilityLabel={sharedLabel}>
-                    {both ? "Both" : ""}
+                    {both ? t("arena.both") : ""}
                   </Text>
                 ) : null}
               </View>
@@ -235,6 +237,7 @@ function ReadyDiff({
   waitingFor: Side | undefined;
   embedded: boolean;
 }) {
+  const { t } = useTranslation();
   const viewportRef = useRef<View>(null);
   const [mode, setMode] = useState<Side | null>(null);
   const [full, setFull] = useState(false);
@@ -286,12 +289,12 @@ function ReadyDiff({
           node.getBoundingClientRect().top -
           (header?.offsetHeight ?? 0);
       node
-        .querySelector<HTMLElement>('[aria-label="Back to comparison"]')
+        .querySelector<HTMLElement>('[data-testid="arena-diff-back"]')
         ?.focus({ preventScroll: true });
     } else {
       node.scrollTop = previous.scrollTop;
       node
-        .querySelector<HTMLElement>(`[aria-label="Expand ${labelFor(previous.side)}"]`)
+        .querySelector<HTMLElement>(`[data-testid="arena-diff-expand-${previous.side}"]`)
         ?.focus({ preventScroll: true });
       saved.current = null;
     }
@@ -354,8 +357,8 @@ function ReadyDiff({
       return (
         <Text key={block.key} style={styles.notice}>
           {truncated
-            ? "Lines not sent. This comparison is incomplete; later changes may be missing."
-            : `${block.lines.toLocaleString()} unchanged lines not sent with this file.`}
+            ? t("arena.incompleteLines")
+            : t("arena.omittedLines", { total: block.lines.toLocaleString() })}
         </Text>
       );
     const showStatus = shown.some(
@@ -377,7 +380,7 @@ function ReadyDiff({
                 {labelFor(side)}
               </Text>
               <Text style={styles.pendingText} numberOfLines={1}>
-                is still working · its version of this region appears here
+                {t("arena.workingRegion")}{" "}
               </Text>
             </View>
           ) : (
@@ -420,10 +423,17 @@ function ReadyDiff({
       <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA}>
         <View style={styles.toolbar}>
           <Text style={styles.caption}>
-            {mode ? `${labelFor(mode)} · Changes from original` : "Changes from original"}
+            {mode
+              ? t("arena.sideOriginalChanges", { agent: labelFor(mode) })
+              : t("arena.originalChanges")}
           </Text>
           {mode ? (
-            <Action label="Back to comparison" onPress={back} back testID="arena-diff-back" />
+            <Action
+              label={t("arena.backComparison")}
+              onPress={back}
+              back
+              testID="arena-diff-back"
+            />
           ) : null}
           {!mode && layout === "single" ? (
             <View style={styles.actions}>
@@ -433,7 +443,7 @@ function ReadyDiff({
                 ) : (
                   <Action
                     key={side}
-                    label={`Expand ${labelFor(side)}`}
+                    label={t("arena.expandLabel", { agent: labelFor(side) })}
                     onPress={side === "a" ? expandA : expandB}
                     side={side}
                     testID={`arena-diff-expand-${side}`}
@@ -454,7 +464,7 @@ function ReadyDiff({
                   <WaitingAction side={side} />
                 ) : (
                   <Action
-                    label={`Expand ${labelFor(side)}`}
+                    label={t("arena.expandLabel", { agent: labelFor(side) })}
                     onPress={side === "a" ? expandA : expandB}
                     testID={`arena-diff-expand-${side}`}
                   />
@@ -464,17 +474,8 @@ function ReadyDiff({
           </View>
         ) : null}
       </View>
-      {!diff.aligned ? (
-        <Text style={styles.warning}>
-          Some regions were too large to align precisely. They are shown as replacements from the
-          original; shared-change labels are unavailable.
-        </Text>
-      ) : null}
-      {truncated ? (
-        <Text style={styles.warning}>
-          This file was not sent in full. Later changes may be missing.
-        </Text>
-      ) : null}
+      {!diff.aligned ? <Text style={styles.warning}>{t("arena.regionsReplaced")} </Text> : null}
+      {truncated ? <Text style={styles.warning}>{t("arena.notFullFile")} </Text> : null}
       {waitingFor && !stacked ? (
         // The working side's column is one placeholder for the whole file, the slot its diff
         // will fill, beside the finished side's regions.
@@ -487,10 +488,10 @@ function ReadyDiff({
                 testID={`arena-diff-pending-${side}`}
               >
                 <View style={styles.pendingMessage}>
-                  <Text style={styles.pendingTitle}>{labelFor(side)} is still working</Text>
-                  <Text style={styles.pendingHint}>
-                    Its version of this file appears here when it finishes.
+                  <Text style={styles.pendingTitle}>
+                    {labelFor(side)} {t("arena.workingStill")}
                   </Text>
+                  <Text style={styles.pendingHint}>{t("arena.workingVersion")} </Text>
                 </View>
               </View>
             ) : (
@@ -506,12 +507,12 @@ function ReadyDiff({
         )
       )}
       {diff.rows.length === 0 ? (
-        <Text style={styles.notice}>No textual changes from the original.</Text>
+        <Text style={styles.notice}>{t("arena.noOriginalChanges")}</Text>
       ) : null}
       {previewLimited ? (
         <View style={styles.pad}>
           <Button size="xs" variant="ghost" onPress={showAll}>
-            Show full diff
+            {t("arena.fullDiff")}{" "}
           </Button>
         </View>
       ) : null}
@@ -532,7 +533,8 @@ export function BaseRelativeFileView({
   /** Drawn under its row in the Changes list, which supplies the edges around it. */
   embedded?: boolean;
 }) {
-  const comparison = useMemo<BaseRelativeDiff>(() => buildBaseRelativeDiff(file), [file]);
+  const { t } = useTranslation();
+  const comparison = useMemo<BaseRelativeDiff>(() => buildBaseRelativeDiff(file, t), [file, t]);
   if (comparison.kind === "unavailable")
     return (
       <View style={styles.pad} testID="arena-inline-diff-note">

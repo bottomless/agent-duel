@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import {
@@ -172,6 +173,7 @@ export function useStartingArenaBattle(
 }
 
 export function useArenaStartMutation(serverId: string, agentId: string) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const cwd = useSessionStore(
@@ -188,7 +190,7 @@ export function useArenaStartMutation(serverId: string, agentId: string) {
       prompt: string;
       attachments?: readonly ComposerAttachment[];
     }) => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
+      if (!client) throw new Error(t("arena.connectionUnavailable"));
       await arenaByokKey.ensure(client);
       // A chat that began as a single agent can sit in a folder with no commit yet.
       if (cwd) await ensureBattleRepository({ client, cwd });
@@ -275,6 +277,7 @@ export function useArenaTurnPending(serverId: string, agentId: string): boolean 
 }
 
 export function useArenaTurnMutation(serverId: string, agentId: string) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   return useMutation({
@@ -282,7 +285,7 @@ export function useArenaTurnMutation(serverId: string, agentId: string) {
     onMutate: () => (client ? pauseArena(queryClient, client, serverId, agentId) : undefined),
     onSettled: (_data, _error, _variables, resume) => resume?.(),
     mutationFn: async (action: ArenaTurnAction) => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
+      if (!client) throw new Error(t("arena.connectionUnavailable"));
       try {
         return await runArenaTurnAction(client, agentId, action);
       } catch (error) {

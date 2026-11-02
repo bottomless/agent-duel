@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type {
   ArenaHistoryItem,
   ArenaRun,
@@ -25,16 +26,21 @@ export interface LifecycleServiceEntry {
 }
 
 export function agentLabel(side: ArenaSide): string {
-  return `Agent ${side.toUpperCase()}`;
+  return i18n.t("arena.agentSide", { side: side.toUpperCase() });
 }
 
 export function branchLabel(branch: string | undefined): string {
   const value = branch?.trim();
-  return value || "Detached HEAD";
+  return value || i18n.t("arena.detachedHead");
 }
 
-function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : pluralForm}`;
+function plural(count: number, kind: "service" | "process" | "path"): string {
+  const keys = {
+    service: ["arena.serviceOne", "arena.serviceMany"],
+    process: ["arena.processOne", "arena.processMany"],
+    path: ["arena.pathOne", "arena.pathMany"],
+  } as const;
+  return i18n.t(count === 1 ? keys[kind][0] : keys[kind][1], { total: count });
 }
 
 /** Resolve the persisted short name first; old runs safely fall back to a path basename. */
@@ -46,7 +52,7 @@ export function shortWorktreeName(name: string | undefined, path: string | undef
     .split(/[\\/]/)
     .at(-1)
     ?.trim();
-  return value || "Unknown worktree";
+  return value || i18n.t("arena.unknownWorktree");
 }
 
 /**
@@ -66,11 +72,11 @@ export function contestantWorktreeDisplayPath(
 
 /** The alias is the only durable, human-sized name a captured process carries. */
 export function serviceDisplayName(alias: string | undefined, command: string | undefined): string {
-  if (alias === "PASEO_PORT") return "Preview";
-  if (alias) return alias.replace(/^PASEO_PORT/, "Port ").trim();
+  if (alias === "PASEO_PORT") return i18n.t("arena.preview");
+  if (alias) return alias.replace(/^PASEO_PORT/, i18n.t("arena.port")).trim();
   const executable = command?.trim().split(/\s+/)[0];
   const basename = executable?.split(/[\\/]/).at(-1);
-  return basename || "Service";
+  return basename || i18n.t("arena.service");
 }
 
 export function lifecycleServiceEntries(run: Pick<ArenaRun, "services">): LifecycleServiceEntry[] {
@@ -109,9 +115,15 @@ export function summarizeServices(
   if (entries.length === 0) return null;
   const live = entries.filter((entry) => entry.live).length;
   if (live === entries.length) {
-    return { state: "live", label: `${plural(live, "service")} running` };
+    return {
+      state: "live",
+      label: i18n.t("arena.runningServices", { services: plural(live, "service") }),
+    };
   }
-  return { state: "starting", label: `${live} of ${entries.length} services running` };
+  return {
+    state: "starting",
+    label: i18n.t("arena.someServices", { live: live, total: entries.length }),
+  };
 }
 
 export function environmentTransitionCounts(transition: ArenaTransitionInput) {
@@ -140,7 +152,7 @@ export function transitionListenerLabels(
   command: Pick<ArenaTransitionCommand, "listeners">,
 ): string[] {
   return (command.listeners ?? []).map(
-    (listener, index) => listener.alias?.trim() || `Listener ${index + 1}`,
+    (listener, index) => listener.alias?.trim() || i18n.t("arena.listener", { number: index + 1 }),
   );
 }
 
@@ -149,13 +161,11 @@ export function transitionSummaryLabel(transition: ArenaTransitionInput): string
   const parts: string[] = [];
   // A process that had already exited on its own is not news; only what Arena did is.
   if (counts.stopped > 0) {
-    parts.push(
-      `Stopped ${plural(counts.stopped, "process", "processes")} from the last winner before starting`,
-    );
+    parts.push(i18n.t("arena.stoppedProcesses", { processes: plural(counts.stopped, "process") }));
   }
-  if (counts.failures > 0) parts.push(`${counts.failures} failed to stop`);
+  if (counts.failures > 0) parts.push(i18n.t("arena.failedStops", { total: counts.failures }));
   if (counts.omitted > 0) {
-    parts.push(`${plural(counts.omitted, "path")} skipped when copying the environment`);
+    parts.push(i18n.t("arena.skippedPaths", { paths: plural(counts.omitted, "path") }));
   }
   return parts.length > 0 ? parts.join(" · ") : null;
 }
@@ -184,26 +194,38 @@ export function readinessSummary(
     const preview = retainedEntries.find((entry) => entry.preview && entry.live && entry.url);
     const anyLive = retainedEntries.some((entry) => entry.live);
     if (retained.state === "cleanup_failed") {
-      readiness.retained = { text: `Cleaning up ${agent}'s environment failed`, tone: "danger" };
+      readiness.retained = {
+        text: i18n.t("arena.cleanupFailed", { agent: agent }),
+        tone: "danger",
+      };
     } else if (retained.state === "stopping") {
-      readiness.retained = { text: `Stopping ${agent}'s services`, tone: "busy" };
+      readiness.retained = {
+        text: i18n.t("arena.stoppingServices", { agent: agent }),
+        tone: "busy",
+      };
     } else if (preview) {
       readiness.retained = {
-        text: `${agent}'s preview running`,
+        text: i18n.t("arena.previewRunning", { agent: agent }),
         tone: "live",
         previewUrl: preview.url,
       };
     } else if (anyLive) {
-      readiness.retained = { text: `${agent}'s services running`, tone: "live" };
+      readiness.retained = {
+        text: i18n.t("arena.servicesRunning", { agent: agent }),
+        tone: "live",
+      };
     } else {
-      readiness.retained = { text: `${agent}'s environment kept`, tone: "muted" };
+      readiness.retained = {
+        text: i18n.t("arena.environmentKept", { agent: agent }),
+        tone: "muted",
+      };
     }
   }
   // The next battle's environments prepare themselves after a vote and the developer's next
   // prompt queues straight through them, so their progress is not status worth carrying. Only a
   // failure is, because it takes the next battle with it.
   if (warm?.state === "failed") {
-    readiness.next = { text: "Next battle preparation failed", tone: "danger" };
+    readiness.next = { text: i18n.t("arena.nextFailed"), tone: "danger" };
   }
   return readiness;
 }

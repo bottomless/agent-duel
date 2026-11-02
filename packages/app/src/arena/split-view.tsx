@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useMemo, useState } from "react";
 import { Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -155,6 +156,7 @@ function Column({
   side: Side;
   tokens: SideTokens;
 }) {
+  const { t } = useTranslation();
   return (
     <View style={[styles.column, side === "b" && styles.columnB]}>
       <View style={styles.gutterColumn}>
@@ -163,7 +165,7 @@ function Column({
           const both =
             cell.kind === "both" || (row.a.kind === "removed" && row.b.kind === "removed");
           const sharedLabel =
-            cell.kind === "removed" ? "Removed by both agents" : "Added by both agents";
+            cell.kind === "removed" ? t("arena.removedBoth") : t("arena.addedBoth");
           return (
             <View key={row.key} style={[styles.gutterCell, cellStyle(cell, side)]}>
               <Text style={styles.gutterNumber}>{gutterLabel(cell)}</Text>
@@ -172,7 +174,7 @@ function Column({
                 numberOfLines={1}
                 accessibilityLabel={both ? sharedLabel : undefined}
               >
-                {both ? "Both" : ""}
+                {both ? t("arena.both") : ""}
               </Text>
             </View>
           );
@@ -214,6 +216,8 @@ export function SplitFileView({
   maxHeight?: number;
   testID?: string;
 }) {
+  const { t } = useTranslation();
+
   const capStyle = useMemo(
     () => (maxHeight ? inlineUnistylesStyle({ maxHeight }) : null),
     [maxHeight],
@@ -240,7 +244,7 @@ export function SplitFileView({
     <View style={[styles.viewer, capStyle]} testID={testID}>
       {diff.mode === "direct" ? (
         <Text style={[styles.note, styles.pad]} testID="arena-combined-direct-note">
-          {`Both rewrote this file, so it reads as ${labelA} against ${labelB}; the original is not in this view.`}
+          {t("arena.rewrittenView", { agentA: labelA, agentB: labelB })}
         </Text>
       ) : null}
       {baseNote ? (
@@ -273,14 +277,12 @@ export function SplitFileView({
       {truncated ? (
         <View style={styles.pad}>
           <Button size="xs" variant="ghost" onPress={showAll}>
-            {`This file changed too much to show at once — show all ${rows.length} rows`}
+            {t("arena.showAllRows", { total: rows.length })}
           </Button>
         </View>
       ) : null}
       {diff.aligned ? null : (
-        <Text style={[styles.warning, styles.pad]}>
-          This file was too large to align line by line; it is shown as one side replaced in full.
-        </Text>
+        <Text style={[styles.warning, styles.pad]}>{t("arena.sideReplaced")} </Text>
       )}
     </View>
   );

@@ -795,3 +795,27 @@ describe("translation resources", () => {
     expect(en.startup.logs.loadFailed).toBe("Unable to load daemon logs: {{message}}");
   });
 });
+
+describe("R63 labels", () => {
+  it("keeps the named English labels and provides translations in all eight other languages", () => {
+    expect(en.arena.battle).toBe("Battle");
+    expect(en.arena.battleMode).toBe("Battle mode");
+    expect(en.settings.searchPlaceholder).toBe("Search settings");
+    for (const resource of [ar, es, fr, ja, ko, ptBR, ru, zhCN]) {
+      expect(resource.arena.battle).not.toBe(en.arena.battle);
+      expect(resource.arena.battleMode).not.toBe(en.arena.battleMode);
+      expect(resource.settings.searchPlaceholder).not.toBe(en.settings.searchPlaceholder);
+      expect(resource.arena.stopBattle).not.toBe(en.arena.stopBattle);
+      expect(resource.time.justNow).not.toBe(en.time.justNow);
+    }
+  });
+
+  it("routes the Battle toggle and both settings search labels through i18n", () => {
+    const controls = readFileSync(join(appSourceRoot, "composer/agent-controls/index.tsx"), "utf8");
+    const settings = readFileSync(join(appSourceRoot, "screens/settings-screen.tsx"), "utf8");
+    expect(controls).toContain('>{t("arena.battle")}</Text>');
+    expect(controls).toContain('accessibilityLabel={t("arena.battleMode")}');
+    expect(settings).toContain('placeholder={t("settings.searchPlaceholder")}');
+    expect(settings).toContain('accessibilityLabel={t("settings.searchPlaceholder")}');
+  });
+});

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useMemo } from "react";
 import { View } from "react-native";
 import { Copy, FolderOpen, SquareTerminal } from "lucide-react-native";
@@ -37,6 +38,7 @@ function OpenTerminalItem({
   side: ArenaSide;
   onSelect: () => void;
 }) {
+  const { t } = useTranslation();
   const leading = useMemo(
     () => <ThemedSquareTerminal size={16} uniProps={mutedColorMapping} />,
     [],
@@ -48,7 +50,7 @@ function OpenTerminalItem({
       onSelect={onSelect}
       testID={`arena-open-terminal-${side}`}
     >
-      Open terminal here
+      {t("arena.terminalHere")}{" "}
     </DropdownMenuItem>
   );
 }
@@ -72,6 +74,7 @@ export function ArenaWorktreeMenuButton({
   worktree: string;
   worktreeName?: string;
 }) {
+  const { t } = useTranslation();
   const toast = useToast();
   const openWorkspaceTab = useWorkspaceLayoutStore((state) => state.openTab);
   const sideLabel = side.toUpperCase();
@@ -92,15 +95,15 @@ export function ArenaWorktreeMenuButton({
 
   const copyPath = useCallback(() => {
     void copyToClipboard(worktree)
-      .then(() => toast.copied(`Agent ${sideLabel} worktree path copied`))
+      .then(() => toast.copied(t("arena.worktreeCopied", { side: sideLabel })))
       .catch((error) => toast.error(toErrorMessage(error)));
-  }, [sideLabel, toast, worktree]);
+  }, [sideLabel, toast, worktree, t]);
   const copyIcon = useMemo(() => <ThemedCopy size={16} uniProps={mutedColorMapping} />, []);
 
   return (
     <DropdownMenu compactMode="sheet">
       <DropdownMenuTrigger
-        accessibilityLabel={`Agent ${sideLabel} worktree`}
+        accessibilityLabel={t("arena.agentWorktree", { side: sideLabel })}
         accessibilityRole="button"
         style={paneIconMenuTriggerStyle}
         testID={`arena-open-worktree-${side}`}
@@ -110,10 +113,10 @@ export function ArenaWorktreeMenuButton({
       <DropdownMenuContent
         align="end"
         width={280}
-        sheetTitle={`Agent ${sideLabel} worktree`}
+        sheetTitle={t("arena.agentWorktree", { side: sideLabel })}
         testID={`arena-open-worktree-${side}-content`}
       >
-        <DropdownMenuLabel>{`Agent ${sideLabel}'s worktree`}</DropdownMenuLabel>
+        <DropdownMenuLabel>{t("arena.agentWorktreeTitle", { side: sideLabel })}</DropdownMenuLabel>
         <View style={styles.pathContainer}>
           <WrappedPath
             path={displayPath}
@@ -128,7 +131,7 @@ export function ArenaWorktreeMenuButton({
           onSelect={copyPath}
           testID={`arena-copy-worktree-${side}`}
         >
-          Copy path
+          {t("arena.copyPath")}{" "}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

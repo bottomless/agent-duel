@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { describeWorkspaceFilePath } from "@/command-center/workspace-file-search-model";
@@ -17,6 +18,7 @@ export const PATH_LIST_LIMIT = 5;
  * A labeled conflict list has one count heading followed by compact file rows.
  */
 export function ArenaPathList({ paths, label }: { paths: readonly string[]; label?: string }) {
+  const { t } = useTranslation();
   const hidden = paths.length - PATH_LIST_LIMIT;
   return (
     <View style={[styles.list, label ? styles.conflictList : undefined]} accessibilityLabel={label}>
@@ -43,7 +45,7 @@ export function ArenaPathList({ paths, label }: { paths: readonly string[]; labe
       })}
       {hidden > 0 ? (
         <Text style={styles.directory}>
-          and {hidden} more {hidden === 1 ? "file" : "files"}
+          {t(hidden === 1 ? "arena.moreOneFile" : "arena.moreManyFiles", { total: hidden })}
         </Text>
       ) : null}
     </View>

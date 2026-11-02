@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type {
   CheckoutPrStatusResponse,
   PullRequestTimelineResponse,
@@ -165,29 +166,33 @@ export function formatAge(createdAtMs: number, nowMs = Date.now()): string {
   const elapsedSeconds = Math.floor(elapsedMs / 1000);
 
   if (elapsedSeconds < 60) {
-    return "just now";
+    return i18n.t("time.justNow");
   }
 
   const elapsedMinutes = Math.floor(elapsedSeconds / 60);
   if (elapsedMinutes < 60) {
-    return `${elapsedMinutes}m ago`;
+    return i18n.t("time.ago", { time: i18n.t("time.minutesCompact", { total: elapsedMinutes }) });
   }
 
   const elapsedHours = Math.floor(elapsedMinutes / 60);
   if (elapsedHours < 24) {
-    return `${elapsedHours}h ago`;
+    return i18n.t("time.ago", { time: i18n.t("time.hoursCompact", { total: elapsedHours }) });
   }
 
   const elapsedDays = Math.floor(elapsedHours / 24);
   if (elapsedDays < 30) {
-    return `${elapsedDays}d ago`;
+    return i18n.t("time.ago", { time: i18n.t("time.daysCompact", { total: elapsedDays }) });
   }
 
   if (elapsedDays < 365) {
-    return `${Math.floor(elapsedDays / 30)}mo ago`;
+    return i18n.t("time.ago", {
+      time: i18n.t("time.monthsCompact", { total: Math.floor(elapsedDays / 30) }),
+    });
   }
 
-  return `${Math.floor(elapsedDays / 365)}y ago`;
+  return i18n.t("time.ago", {
+    time: i18n.t("time.yearsCompact", { total: Math.floor(elapsedDays / 365) }),
+  });
 }
 
 function derivePrState(status: NonNullable<CheckoutPrStatus>): PrState {

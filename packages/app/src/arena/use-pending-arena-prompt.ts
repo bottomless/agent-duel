@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useMemo, useState } from "react";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { useRetainedPanelActive } from "@/components/retained-panel";
@@ -23,6 +24,7 @@ export function usePendingArenaPrompt({
   streamHead,
   hasAppliedAuthoritativeHistory,
 }: PendingArenaPromptOptions) {
+  const { t } = useTranslation();
   const [pendingTurnId, setPendingTurnId] = useState<string | null>(null);
   const timelineRange = useSessionStore((state) =>
     state.sessions[serverId]?.agentTimelineCursor.get(agentId),
@@ -46,7 +48,7 @@ export function usePendingArenaPrompt({
     staleTimeMs: 0,
     enabled: needsPromptPosition && Boolean(client && agentId),
     queryFn: async () => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
+      if (!client) throw new Error(t("arena.connectionUnavailable"));
       return client.listAgentTimelinePrompts(agentId);
     },
     // The durable index may lag the live timeline broadcast. Stop when the handoff clears.

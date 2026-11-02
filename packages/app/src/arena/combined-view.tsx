@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { useCallback, useMemo, useState } from "react";
 import { Text, View, type StyleProp, type TextStyle } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -53,11 +55,12 @@ function limitBlocks(blocks: readonly CombinedBlockWithTokens[], maxRows: number
 function sideLabel(tone: Tone): string {
   if (tone === "a") return "A";
   if (tone === "b") return "B";
-  if (tone === "both") return "Both";
+  if (tone === "both") return i18n.t("arena.both");
   return "";
 }
 
 function Gutter({ line, change, tone }: { line: CombinedLine; change: Change; tone: Tone }) {
+  useTranslation();
   const label = sideLabel(tone);
   return (
     <View style={[styles.gutter, gutterChangeStyle(change, tone)]}>
@@ -179,10 +182,11 @@ function ConflictRow({
   labelA: string;
   labelB: string;
 }) {
+  const { t } = useTranslation();
   return (
     <View style={styles.conflict} testID="arena-combined-conflict">
       <View style={[styles.caption, styles.captionA]}>
-        <Text style={styles.captionText}>{`${labelA}'s version`}</Text>
+        <Text style={styles.captionText}>{t("arena.version", { agent: labelA })}</Text>
       </View>
       {row.a.length === 0 ? <EmptyVersion /> : null}
       {row.a.map((line) => (
@@ -191,7 +195,7 @@ function ConflictRow({
       {row.base.length > 0 ? (
         <>
           <View style={[styles.caption, styles.captionBase]}>
-            <Text style={styles.captionMutedText}>base</Text>
+            <Text style={styles.captionMutedText}>{t("arena.base")}</Text>
           </View>
           {row.base.map((line) => (
             <LineRow key={line.key} line={line} tone="base" change="none" muted />
@@ -199,7 +203,7 @@ function ConflictRow({
         </>
       ) : null}
       <View style={[styles.caption, styles.captionB]}>
-        <Text style={styles.captionText}>{`${labelB}'s version`}</Text>
+        <Text style={styles.captionText}>{t("arena.version", { agent: labelB })}</Text>
       </View>
       {row.b.length === 0 ? <EmptyVersion /> : null}
       {row.b.map((line) => (
@@ -210,9 +214,12 @@ function ConflictRow({
 }
 
 function EmptyVersion() {
+  const { t } = useTranslation();
   return (
     <View style={styles.row}>
-      <Text style={[styles.lineText, styles.mutedText, styles.emptyVersion]}>(removed)</Text>
+      <Text style={[styles.lineText, styles.mutedText, styles.emptyVersion]}>
+        {t("arena.removedNote")}
+      </Text>
     </View>
   );
 }
@@ -256,6 +263,8 @@ export function CombinedFileView({
   maxHeight?: number;
   testID?: string;
 }) {
+  const { t } = useTranslation();
+
   const capStyle = useMemo(
     () => (maxHeight ? inlineUnistylesStyle({ maxHeight }) : null),
     [maxHeight],
@@ -289,7 +298,7 @@ export function CombinedFileView({
     <View style={[styles.viewer, capStyle]} testID={testID}>
       {diff.mode === "direct" ? (
         <Text style={[styles.mutedText, styles.pad]} testID="arena-combined-direct-note">
-          {`Both rewrote this file, so it reads as ${labelA} against ${labelB}; the original is not in this view.`}
+          {t("arena.rewrittenView", { agentA: labelA, agentB: labelB })}
         </Text>
       ) : null}
       {baseNote ? (
@@ -313,14 +322,12 @@ export function CombinedFileView({
       {truncated ? (
         <View style={styles.pad}>
           <Button size="xs" variant="ghost" onPress={showAll}>
-            {`This file changed too much to show at once — show all ${diff.rows.length} rows`}
+            {t("arena.showAllRows", { total: diff.rows.length })}
           </Button>
         </View>
       ) : null}
       {diff.aligned ? null : (
-        <Text style={[styles.warning, styles.pad]}>
-          This file was too large to align line by line; it is shown as one side replaced in full.
-        </Text>
+        <Text style={[styles.warning, styles.pad]}>{t("arena.sideReplaced")} </Text>
       )}
     </View>
   );
