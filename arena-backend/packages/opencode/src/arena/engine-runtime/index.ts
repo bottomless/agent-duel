@@ -25,6 +25,7 @@ export {
   provider,
 } from "./models.js"
 export { ArenaEngineGate, makeToolExecutionGate } from "./gate.js"
+export { ArenaEngineIdle, idleRecovery, resetIdleBudget, resetIdleRun } from "./idle.js"
 export {
   clearArenaAutoAccept,
   clearArenaAutoAcceptRegistry,

@@ -118,22 +118,14 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   })
 }
 
-function prepareOptions(model: RuntimeInfo, pkg: string) {
-  const projected = mapBodyToProviderOptions(model, pkg)
-  const options: Record<string, any> = {
-    name: model.canonical ?? model.providerID,
-    ...(model.settings ?? {}),
-    headers: model.headers,
-    body: projected.body,
-  }
-
-  const customFetch = options.fetch
-  const timeouts = Provider.timeouts(options)
-  delete options.headerTimeout
-  delete options.chunkTimeout
-  delete options.compaction
-  delete options.transport
-  options.fetch = async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+/**
+ * Core's provider fetch around `send`: HTTP hook middleware, the model body overlay, and the header, whole-request
+ * and heartbeat-safe SSE chunk timeouts from the model settings. An SDK hook that needs its own transport passes it
+ * here; assigning it to `options.fetch` directly drops every timeout.
+ */
+export function providerFetch(model: RuntimeInfo, custom?: Fetch) {
+  const timeouts = Provider.timeouts(model.settings ?? {})
+  return async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const opts = { ...(init ?? {}) }
     // A plain AbortSignal.timeout would keep running into the body stream, so the header limit uses
     // a timer that is cleared once headers arrive. The whole-request limit is meant to span the body.
@@ -159,7 +151,7 @@ function prepareOptions(model: RuntimeInfo, pkg: string) {
       }
     }
 
-    const send: Fetch = typeof customFetch === "function" ? customFetch : fetch
+    const send: Fetch = custom ?? fetch
     const middleware = httpMiddleware.getStore()
     const res = await (
       middleware
@@ -169,6 +161,23 @@ function prepareOptions(model: RuntimeInfo, pkg: string) {
     if (timeouts.chunkTimeout === false) return res
     return wrapSSE(res, timeouts.chunkTimeout, chunks)
   }
+}
+
+function prepareOptions(model: RuntimeInfo, pkg: string) {
+  const projected = mapBodyToProviderOptions(model, pkg)
+  const options: Record<string, any> = {
+    name: model.canonical ?? model.providerID,
+    ...(model.settings ?? {}),
+    headers: model.headers,
+    body: projected.body,
+  }
+
+  const customFetch = options.fetch
+  delete options.headerTimeout
+  delete options.chunkTimeout
+  delete options.compaction
+  delete options.transport
+  options.fetch = providerFetch(model, typeof customFetch === "function" ? customFetch : undefined)
 
   return options
 }

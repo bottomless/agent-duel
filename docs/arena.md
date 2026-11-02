@@ -1342,17 +1342,28 @@ again once both have settled, as after a reply. Each run gets two retries
 by the other side or a new prompt. `canRetryRun` in `arena/domain.ts` is the one rule; the service
 refuses what it refuses, and the app shows the button from it.
 
-An Arena model response that sends no provider chunk for 150 seconds cancels its request and
-continues from its partial response with instructions to use smaller writes. Idle failures and
-output cutoffs share the three-attempt recovery budget above, so alternating failures cannot
-reset it. Completed tools stay in history; unfinished calls are marked interrupted. Exhaustion
-ends the run with a neutral explanation and preserves completed work. Arena streams request raw chunks (`session/llm.ts`) because some models reason for minutes in
-chunks that carry only OpenRouter `reasoning_details`, which produce no AI SDK part; counting only
-parts kills those streams mid-thought. Keep-alive comments are not chunks, so a stalled model still
-times out. The deadline pauses while a local tool runs or waits for approval; a long tool call must
-not be mistaken for a silent model stream. When the runtime abandons a request, the daemon's Arena
-proxy aborts its control-plane request too; otherwise the hosted function keeps streaming, and
-billing, until its own time limit.
+An Arena model request that gets no response headers, or no SSE event, for 150 seconds fails with
+`Response headers timed out` or `SSE read timed out`. Core restarts the request when it had no
+output, or keeps the partial response and asks the model to continue. The pane shows **Continuing
+after model timeout** until that recovery request's stream ends. As in 1.x, three timeouts in a row
+are recovered; the fourth fails the run with only the neutral `IDLE_EXHAUSTED` text, and completed
+work stays. The label stays until the run settles, so the pane goes straight to Failed. Only the
+contestant's own model requests count; title and compaction requests neither count nor end a
+recovery. A new prompt, the end of the run, or a response whose SSE finish reason is `stop` or
+`tool_calls` starts the count again. A `length` cutoff or an error event inside the stream does not.
+1.x also kept counting after a complete step with a failed tool; the fetch layer cannot see tool
+results, so that step resets the count here. The count lives in memory. An engine restart marks the
+running turn interrupted, and only a new prompt continues it, which starts the count again in 1.x too.
+
+The chunk deadline is Core's, inside `AISDK.providerFetch`. It moves on every parsed SSE event, so
+chunks that carry only OpenRouter `reasoning_details` keep a long thought alive, and keep-alive
+comments do not, so a stalled model still times out. The engine plugin wraps the Arena fetch with
+`providerFetch` (`engine-runtime/plugin.ts`). Assigning the Arena fetch to the SDK options directly
+drops every timeout, and a stalled stream then waits forever. The header deadline and the budget
+are ours (`engine-runtime/idle.ts`), and Core's header timeout is off for contestants: Core's HTTP
+hook middleware turns its header abort into "All fibers interrupted without error", which hides
+the timeout. When the runtime abandons a request, the daemon's Arena proxy aborts its control-plane
+request too; otherwise the hosted function keeps streaming, and billing, until its own time limit.
 
 A request above the estimated savings threshold triggers compaction. Keep a new user message and
 its attachments intact while summarizing the earlier history. The summary request must be allowed

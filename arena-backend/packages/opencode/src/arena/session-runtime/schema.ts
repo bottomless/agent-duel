@@ -4,6 +4,7 @@ import * as Prompt from "@opencode/schema/prompt"
 import * as PromptInput from "@opencode/schema/prompt-input"
 import type { Session } from "@opencode/schema/session"
 import type { SessionMessage } from "@opencode/schema/session-message"
+import type { SessionStatusEvent } from "@opencode/schema/session-status-event"
 import type * as SessionV1 from "@opencode/schema/v1/session"
 
 /**
@@ -79,7 +80,7 @@ export type ArenaPromptInput = {
   readonly noReply?: boolean
 }
 
-export type ArenaStatus = { readonly type: "idle" | "busy" }
+export type ArenaStatus = SessionStatusEvent.Info
 
 export type ArenaPermissionReply = {
   readonly requestID: string

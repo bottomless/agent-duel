@@ -51,6 +51,7 @@ import { Git } from "@/git"
 import { Image } from "@/image/image"
 import { SessionRetry } from "@/session/retry"
 import { ArenaResponseRecovery } from "./response-recovery"
+import { withIdleCleanup } from "./engine-runtime/idle"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { clearToolExecutionEnvironment, gateToolExecution, isToolExecutionGated } from "@/session/tool-execution-gate"
 import { Form } from "@opencode/schema/form"
@@ -4043,7 +4044,7 @@ export const layer: Layer.Layer<
       return yield* projectSnapshot(yield* promise(() => store.snapshot(chat._id)), -1)
     })
 
-    const finalizeSide = Effect.fn("Arena.finalizeSide")(function* (
+    const finalizeSettled = Effect.fn("Arena.finalizeSide")(function* (
       store: Store,
       turn: TurnDocument,
       run: SideRuntime,
@@ -4088,6 +4089,10 @@ export const layer: Layer.Layer<
       // override keeps its reason.
       if (Exit.isFailure(promptExit) && (!stopped || runStateOverride !== undefined))
         unsettled.push(Cause.pretty(promptExit.cause))
+      // A spent model-timeout budget explains the whole failure. The other lines only echo it, and the
+      // session can still read as active for a moment after the failed request settles.
+      if (!stopped && unsettled.some((line) => line.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)))
+        unsettled.splice(0, unsettled.length, ArenaResponseRecovery.IDLE_EXHAUSTED)
       const runState: RunDocument["runState"] =
         runStateOverride ?? (stopped ? "stopped" : unsettled.length === 0 ? "complete" : "error")
       const runError = unsettled.length ? unsettled.join("\n") : undefined
@@ -4233,6 +4238,9 @@ export const layer: Layer.Layer<
       const archived = yield* archive(store, turn, run, runState, runError)
       return { result, ...archived }
     })
+    // The run is over, so are its sessions' model-timeout sequences, whether or not finalizing succeeds.
+    const finalizeSide = (...args: Parameters<typeof finalizeSettled>) =>
+      withIdleCleanup(args[2].sessionID, finalizeSettled(...args))
 
     /**
      * Let a contestant open the uploads its prompt names. A contestant may not read outside its
@@ -4460,7 +4468,7 @@ export const layer: Layer.Layer<
       return yield* settlePromptExit(store, turn, run, promptExit, environmentSettled, stoppedBySibling)
     })
 
-    const settlePromptExit = Effect.fn("Arena.settlePromptExit")(function* (
+    const settleExit = Effect.fn("Arena.settlePromptExit")(function* (
       store: Store,
       turn: TurnDocument,
       run: SideRuntime,
@@ -4547,6 +4555,9 @@ export const layer: Layer.Layer<
       }
       return outcome
     })
+    // Every settle path drops the run's model-timeout state, even when a read before finalizing fails.
+    const settlePromptExit = (...args: Parameters<typeof settleExit>) =>
+      withIdleCleanup(args[2].sessionID, settleExit(...args))
 
     // A session runner is registered against the instance that dispatched its prompt, which is
     // always the contestant's worktree. Cancelling from any other instance finds no runner and
