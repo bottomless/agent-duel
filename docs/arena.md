@@ -914,47 +914,40 @@ from a missing tool call: commands can create children without one, and a commit
 messages without deleting their children. Child sessions have no separate visible/internal
 classification; narrowing retention needs a rule for which of those transcripts the chat keeps.
 
-The sandbox (`arena/contestant.ts`) lets a contestant's own tools read the main checkout but not
-write to it, and keeps them out of the checkout's `.agent-duel`, which holds every Arena worktree:
-the other side's and every earlier turn's. The shared temp directories (`/tmp`, `/var/tmp` and the
-system temp directory) are readable but not writable, and every side's temp directory but its own is
-denied. Everything else is open, the home directory and skill directories included. The rules are
-the inherited permissions, then an `external_directory` allow for everything, then an
-`external_directory_write` deny for the shared temp directories, an `external_directory` deny for
-the parent of every side's temp directory, the same two for the checkout and `.agent-duel`, then
-read and write allows for the side's own worktree, host repository and temp directory. Rules match
-last first. The allow overrides the agent's
-own `ask`: never let a contestant ask, since a prompt the user answers for one side and not the
-other makes the sides unequal. Every path is listed in both its spelling and its real path, so
-`/private/tmp/...` cannot route around `/tmp/...`. Subagents inherit the rules.
+A contestant can read the main checkout but write only in its own worktree, host repository and
+side temp directory. File tools and literal shell targets follow the same rule. Direct targets in the
+checkout's `.agent-duel` and other sides' temp directories are closed to reads too. The shared temp directories
+(`/tmp`, `/var/tmp` and the system temp directory) stay readable but not writable. Children inherit
+the side's rules and share its temp directory, even if a child was created before the parent moved.
+These restrictions apply with either permission mode; a blocked filesystem request returns a denial
+to the model without waiting for a permission card. Battle off keeps its own permission behavior.
 
 The checkout's `.git` is readable too. A side's result is imported into it under `refs/battles/`
-as soon as the side finishes, before the vote. File tools see only ref names and commit ids there,
-since objects are compressed; `git` in the shell is not checked and reads them either way.
+as soon as the side finishes, before the vote. Git objects can contain other contestants' work;
+these tool checks do not filter object contents.
 
-The check sees only where a tool starts, so glob and grep leave `.agent-duel` out of a search that
-starts above it, from the checkout or `~/code` for example (`excludedBelow`,
-`tool/external-directory.ts`). Such a search skips the side's own worktree too; a search from inside
-it is unaffected. The shell checks
-only the path arguments of its file commands (`cd`, `rm`, `cp`, `mv`, `mkdir`, `touch`, `chmod`,
-`chown`, `cat`) and, for a contestant, the files it redirects output into and `tee`'s arguments;
-other programs reach anything the user can.
+The shell check shares the parsed-tree walker with [Battle off](#battle-off), but distinguishes
+reads from writes so a checkout file can be a copy source. It checks literal command operands,
+redirects and inline shell code, and follows existing symlinks, including parents of new files.
+This is tool policy, not an operating-system sandbox: computed paths, scripts on disk and programs'
+internal file operations remain outside the scan. Searches from an ancestor can still enumerate
+restricted descendants. Do not claim that it confines arbitrary code.
 
-Each side has a temp directory, `$TMPDIR/opencode/arena/<session id>`. The shell exports it as
-`TMPDIR`, the shell tool's description names it, and truncated tool output is saved under it, so
-the hint to read that file works. It is removed when the run gives up its worktree: released for the
+Each side has a temp directory under the system temp directory, `opencode/arena/<root session id>`.
+Shells in the side and its children export it as `TMPDIR`, `TMP` and `TEMP`. It is removed when the
+run gives up its worktree: released for the
 next pair (`releaseRunSlot`) or removed by archive, eviction or an environment release
 (`removeStoppedRun`).
 
 Both sides run at once and `/tmp` is one shared folder, so a side that writes where a task says can
 overwrite or read the other side's file. Every model in the production pool writes `/tmp/word.txt`
 when a task names it. Keep the rule out of the system prompt: a contestant learns it from the
-denial, which names the side's own directory to use instead.
+denial, which directs it to `$TMPDIR`.
 
-A contestant denied `.agent-duel`, another side's temp directory, or a write into the checkout or a
-shared temp directory, gets one sentence that says so, not the generic list of matching
-rules, which holds dozens of home-directory paths that contestants copy into their answers and that
-reach research uploads.
+A contestant denied a write gets a short instruction to use its own worktree or `$TMPDIR`.
+A denied read says that other Arena worktrees and other sides' temp directories are closed. Keep
+absolute rule lists out of these messages; they expose home-directory paths to the transcript and
+research uploads.
 
 The two sides are prepared **at once**, since each has its own host repository and session, and
 the host repository is a copy-on-write clone of the checkout's git directory where the

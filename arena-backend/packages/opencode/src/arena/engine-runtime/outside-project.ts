@@ -40,7 +40,7 @@ function spellings(directory: string) {
   }
 }
 
-function resolveExistingPrefix(target: string): string {
+export function resolveExistingPrefix(target: string): string {
   const parent = path.dirname(target)
   // fs.realpath normalizes `..` before following links. Resolve its parent first instead.
   if (target.split(path.sep).includes("..")) return path.resolve(resolveExistingPrefix(parent), path.basename(target))
@@ -327,11 +327,12 @@ function after(flow: DirectoryFlow) {
 }
 
 /** Walk shell scopes and redirects, without running code or resolving computed path values. */
-export async function shellPaths(command: string, cwd: string) {
+export async function shellPaths(command: string, cwd: string, access: "all" | "read" | "write" = "all") {
   const tree = (await parser()).parse(command + "\n")
   if (!tree) return ["/"]
-  const paths = new Set<string>([cwd + "/"])
-  const add = (word: string, base: string, directory = false) => {
+  const paths = new Set<string>(access === "write" ? [] : [cwd + "/"])
+  const add = (word: string, base: string, directory = false, operation: "read" | "write" = "write") => {
+    if (access !== "all" && access !== operation) return
     const expanded = expandHome(word)
     // Variables and computed path values are intentionally outside this policy.
     if (expanded.includes("$") || expanded.includes("`")) return
@@ -346,16 +347,21 @@ export async function shellPaths(command: string, cwd: string) {
   }
   const redirects = (nodes: readonly Node[], base: string) => {
     for (const node of nodes) {
-      const operator = node.children.find((child) => child && /^(?:[&]?>>?|>\||>&|<>)$/.test(child.text))?.text
+      const operator = node.children.find((child) => child && /^(?:[&]?>>?|>\||>&|<>|<|<&)$/.test(child.text))?.text
       if (!operator) continue
+      const input = operator === "<" || operator === "<&"
+      if (input && access === "all") continue
       const targets = node.childrenForFieldName("destination").filter((child): child is Node => child !== null)
       if (!targets.length) {
         unreadable()
         continue
       }
       for (const target of targets) {
-        if (operator === ">&" && /^(?:\d+|-)$/.test(target.text)) continue
-        for (const word of read(target)) add(word, base)
+        if ((operator === ">&" || operator === "<&") && /^(?:\d+|-)$/.test(target.text)) continue
+        for (const word of read(target)) {
+          add(word, base, false, input ? "read" : "write")
+          if (operator === "<>") add(word, base, false, "read")
+        }
       }
     }
   }
@@ -463,11 +469,41 @@ export async function shellPaths(command: string, cwd: string) {
         const target = targets[0] ?? Global.Path.home
         if (!/[$`]/.test(target)) {
           const bases = initial.map((base) => path.resolve(base, expandHome(target)))
-          for (const base of bases) add(base, base, true)
+          for (const base of bases) add(base, base, true, "read")
           flow = { success: [...new Set(bases)], failure: [] }
         }
       } else {
-        if (!READS.has(name)) for (const word of wordPaths(words)) for (const base of initial) add(word, base)
+        if (access === "all") {
+          if (!READS.has(name)) for (const word of wordPaths(words)) for (const base of initial) add(word, base)
+        } else {
+          const executable = executableWords(words)
+          const program = path.basename(executable[0] ?? "")
+          const operands = wordPaths(executable)
+          const copy = program === "cp" || program === "ln" || program === "install"
+          const targetFlag = executable.findIndex((word) => word === "-t" || word === "--target-directory")
+          const attachedTarget = executable.find((word) => word.startsWith("--target-directory=") || /^-t.+/.test(word))
+          let destination = operands.at(-1)
+          if (attachedTarget) destination = attachedTarget.replace(/^(?:--target-directory=|-t)/, "")
+          if (targetFlag >= 0) destination = executable[targetFlag + 1]
+          const findWrites =
+            program === "find" &&
+            executable.some((word) =>
+              ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf"].includes(word),
+            )
+          const reader = READS.has(program) || (program === "find" && !findWrites)
+          for (const word of operands) {
+            const operation = reader || (copy && word !== destination) ? "read" : "write"
+            for (const base of initial) add(word, base, false, operation)
+          }
+          // find passes its nested command as arguments, so it has no command node of its own.
+          if (program === "find") {
+            const exec = executable.findIndex((word) => ["-exec", "-execdir", "-ok", "-okdir"].includes(word))
+            const nested = executable.slice(exec + 1)
+            const flag = nested.findIndex((word) => /^-[A-Za-z]*c/.test(word))
+            if (exec >= 0 && SHELLS.has(path.basename(nested[0] ?? "")) && flag >= 0 && nested[flag + 1])
+              for (const base of initial) scanCode(nested[flag + 1], base)
+          }
+        }
         const wrapped = ["sudo", "env", "command", "builtin", "exec"].includes(name)
         let shellIndex = -1
         if (SHELLS.has(name)) shellIndex = 0
