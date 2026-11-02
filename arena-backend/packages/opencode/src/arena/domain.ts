@@ -242,6 +242,24 @@ export function isStopAbort(input: {
 }
 
 /**
+ * Did a side's prompt fail on its own before a stop (or an early pick) took effect? Its side then
+ * shows that failure, not "Stopped". A stream that dies while the stop tears it down ends after the
+ * stop, and that side is stopped.
+ */
+export function failedBeforeHalt(input: {
+  readonly failed: boolean
+  readonly haltedAt?: Date
+  readonly endedAt?: Date
+}): boolean {
+  return (
+    input.failed &&
+    input.haltedAt !== undefined &&
+    input.endedAt !== undefined &&
+    input.endedAt.getTime() < input.haltedAt.getTime()
+  )
+}
+
+/**
  * How many times the voter may retry one failed contestant run. Each retry spends on the model
  * again, and a failure that keeps repeating is better answered by picking the other side or
  * sending the prompt again.

@@ -1317,13 +1317,26 @@ Never restart once the attempt has started a local tool: the resent request does
 call, and the model can repeat its side effect. That failure ends the step instead, and the next
 step continues from the stored tool call and result (`session/processor.ts`).
 
+Core continues a stream cut after output has started instead of restarting it. The half answer stays
+with its error, and a note after it tells the model to go on (`CONTINUE_AFTER_INCOMPLETE_STREAM` in
+`core/src/session/runner/llm.ts`). When that side wins, the graft copies its half answers, the notes
+and the continuation as written and in order (`messagesToGraft` in
+`arena/session-runtime/projection.ts`), so the next turn's model reads what the winner's model read.
+The chat shows each piece as its own block and can repeat text, because models often begin a line or
+a block again after a cut. The notes do not show: the timeline renders no synthetic row. Do not join,
+edit or deduplicate the pieces. Text rules that tried lost content at 64–76% of cut points for a
+re-opened JSON, HTML or SQL block in an offline simulation. To make the pieces read as one answer,
+change the display and leave the rows as they are.
+
 A run that fails after the budget can be retried by hand. A failed run cannot be chosen or tied, so
 without a retry the voter is left with the other side alone, or with Discard when both failed (see
 [Resolving](#resolving)). When the failure is one the policy above would
 have retried (`errorRetryable`, set in `finalizeSide`), the pane shows **Retry** under its error.
 Retry continues the same session on the same assignment from its last finished step, adding no
-message (`prompts.loop`), so the battle stays blind. It removes the failed step's message first, for
-the same reason a restart drops its parts. The other side keeps working, and the turn finalizes
+message (`prompts.loop`), so the battle stays blind. It first removes the run's half answers and the
+notes after them (`abandonedAttempts`), because the new answer starts over and none of them is part
+of it. A half answer that ran a tool stays, because the tool's work is in the worktree. The other side
+keeps working, and the turn finalizes
 again once both have settled, as after a reply. Each run gets two retries
 (`MAX_MANUAL_RUN_RETRIES`): every retry is paid for, and a failure that keeps repeating is answered
 by the other side or a new prompt. `canRetryRun` in `arena/domain.ts` is the one rule; the service

@@ -19,6 +19,7 @@ import {
   turnID,
   isParkedPromotion,
   isStopAbort,
+  failedBeforeHalt,
   MAX_MANUAL_RUN_RETRIES,
   SLOT_PATH_PATTERN,
   spareName,
@@ -126,6 +127,23 @@ describe("isParkedPromotion", () => {
     expect(isParkedPromotion({ state: "application_failed" })).toBe(false)
     expect(isParkedPromotion({ state: "running", gitApplication: { state: "conflicted" } })).toBe(false)
     expect(isParkedPromotion({ state: "canonicalization_failed", gitApplication: { state: "conflicted" } })).toBe(false)
+  })
+})
+
+describe("failedBeforeHalt", () => {
+  const haltedAt = new Date(1_700_000_010_000)
+  test("keeps a failure that ended before the stop took effect", () => {
+    expect(failedBeforeHalt({ failed: true, haltedAt, endedAt: new Date(1_700_000_009_000) })).toBe(true)
+  })
+
+  test("treats a failure that ends while the stop tears the run down as the stop", () => {
+    expect(failedBeforeHalt({ failed: true, haltedAt, endedAt: new Date(1_700_000_011_000) })).toBe(false)
+  })
+
+  test("never turns a run that did not fail into a failure", () => {
+    expect(failedBeforeHalt({ failed: false, haltedAt, endedAt: new Date(1_700_000_009_000) })).toBe(false)
+    expect(failedBeforeHalt({ failed: true, endedAt: new Date(1_700_000_009_000) })).toBe(false)
+    expect(failedBeforeHalt({ failed: true, haltedAt })).toBe(false)
   })
 })
 

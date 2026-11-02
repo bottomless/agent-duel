@@ -1,5 +1,6 @@
 import { and, desc, eq } from "drizzle-orm"
-import { Context, DateTime, Effect, Layer, Schema } from "effect"
+import { AIError } from "@opencode/ai"
+import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect"
 import { Bus } from "@opencode/core/bus"
 import { Database } from "@opencode/core/database/database"
 import { Form } from "@opencode/core/form"
@@ -11,6 +12,8 @@ import { InstructionEntry } from "@opencode/core/session/instruction-entry"
 import { SessionMove } from "@opencode/core/session/move"
 import { SessionInbox } from "@opencode/core/session/inbox"
 import { SessionMessageTable } from "@opencode/core/session/sql"
+import { StepFailedError } from "@opencode/core/session/error"
+import { toSessionError } from "@opencode/core/session/to-session-error"
 import { SessionMessage } from "@opencode/schema/session-message"
 import { Session as SessionSchema } from "@opencode/schema/session"
 import { Model } from "@opencode/schema/model"
@@ -27,7 +30,7 @@ import * as SessionV1 from "@opencode/schema/v1/session"
 import { AbsolutePath } from "@opencode/schema/schema"
 import { makeGlobalNode, tags } from "@opencode/util/effect/app-node"
 import { LayerNode } from "@opencode/util/effect/layer-node"
-import { pendingMessage, project, projectSession, partID } from "./projection"
+import { failedAnswer, pendingMessage, project, projectSession, partID } from "./projection"
 import { CurrentDirectory } from "@/project/instance-context"
 import { getArenaAutoAccept, setArenaAutoAccept } from "@/arena/engine-runtime"
 import { EXTERNAL_WRITE } from "@/arena/contestant"
@@ -52,6 +55,7 @@ export * as PermissionV1 from "@opencode/schema/v1/permission"
 export { MessageID } from "@opencode/schema/v1/session"
 export { ID as SessionID } from "@opencode/schema/session"
 export { partID }
+export { abandonedAttempts, messagesToGraft } from "./projection"
 export const PartID = {
   make: (messageID: SessionMessage.ID, index: number) => partID(messageID, index),
 }
@@ -220,6 +224,18 @@ const currentError = (value: NonNullable<SessionV1.Assistant["error"]>): Session
 
 const arenaError = (error: string) => ({ type: "arena", message: error })
 const CLEARED = "[Old tool result content cleared]"
+
+/**
+ * A stream that ended before the provider finished it, which the engine retries on its own and which
+ * Arena offers Retry for. Core stores it as `provider.invalid-output` like malformed output, which is
+ * not retried, so tell the two apart from the failure itself. A malformed-output AIError fails the
+ * drain as that AIError. A `StepFailedError` of that type comes from a stream that succeeded without
+ * a finish (`runner/step.ts`, unknown finish reason, `incomplete-stream`) or from a compaction.
+ */
+const incompleteStream = (failure: unknown) =>
+  failure instanceof AIError
+    ? failure.reason._tag === "InvalidProviderOutput" && failure.reason.classification === "incomplete-stream"
+    : failure instanceof StepFailedError && failure.error.type === "provider.invalid-output"
 
 const normalizeError = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, Error, R> =>
   effect.pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))))
@@ -716,11 +732,30 @@ const promptLayer: Layer.Layer<SessionPrompt, never, CoreSession.Service | Sessi
     const sessions = yield* CoreSession.Service
     const arena = yield* Session
     const directory = yield* Directory
-    const loop = Effect.fn("ArenaSessionPrompt.loop")(function* (input: { readonly sessionID: SessionSchema.ID }) {
-      yield* sessions.resume(input.sessionID)
+    const loop = Effect.fn("ArenaSessionPrompt.loop")(function* (
+      input: { readonly sessionID: SessionSchema.ID },
+      /** When this run's work was admitted; a prompt admits it before the loop joins. */
+      admittedAt?: number,
+    ) {
+      // A failed drain comes back as an error, not as the errored assistant that 1.x returned.
+      // Settle on that assistant instead, so the run fails the way Arena classifies (and offers
+      // Retry for). Interruption is not an error here and still ends the loop.
+      const started = admittedAt ?? (yield* Clock.currentTimeMillis)
+      const failure = yield* sessions.resume(input.sessionID).pipe(
+        Effect.as(undefined),
+        Effect.catch((cause) => Effect.succeed(cause)),
+      )
       yield* sessions.wait(input.sessionID)
       const transcript = yield* arena.messages({ sessionID: input.sessionID })
-      return transcript.findLast((entry) => entry.info.role === "assistant")
+      if (failure === undefined) return transcript.findLast((entry) => entry.info.role === "assistant")
+      const answer = failedAnswer(
+        transcript,
+        toSessionError(failure),
+        { started, now: yield* Clock.currentTimeMillis },
+        incompleteStream(failure),
+      )
+      if (!answer) return yield* Effect.fail(failure)
+      return answer
     })
     // Admission is durable once it returns. `wake` starts the runner, or rings the doorbell of the
     // one already running so it drains again before it goes idle.
@@ -755,6 +790,7 @@ const promptLayer: Layer.Layer<SessionPrompt, never, CoreSession.Service | Sessi
           }),
         })
       }
+      const admittedAt = yield* Clock.currentTimeMillis
       yield* sessions.prompt({
         sessionID: input.sessionID,
         id: input.messageID ? currentMessageID(input.messageID) : undefined,
@@ -766,19 +802,20 @@ const promptLayer: Layer.Layer<SessionPrompt, never, CoreSession.Service | Sessi
         delivery: input.delivery,
         resume: wake,
       })
+      return admittedAt
     })
     return SessionPrompt.of({
       prompt: (input) =>
         normalizeError(
           Effect.gen(function* () {
-            yield* admit(input, input.noReply !== true)
+            const admittedAt = yield* admit(input, input.noReply !== true)
             if (input.noReply === true) return undefined
             // Core prompt admission is durable; waiting here ensures callers receive the terminal
             // assistant projection rather than a cached or fabricated transcript.
-            return yield* loop({ sessionID: input.sessionID })
+            return yield* loop({ sessionID: input.sessionID }, admittedAt)
           }),
         ),
-      steer: (input) => normalizeError(admit(input, true)),
+      steer: (input) => normalizeError(admit(input, true).pipe(Effect.asVoid)),
       loop: (input) => normalizeError(loop(input)),
       cancel: (sessionID) => normalizeError(sessions.interrupt(sessionID, { resume: false })),
       prepare: () => Effect.void,

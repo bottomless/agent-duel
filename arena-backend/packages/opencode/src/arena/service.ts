@@ -1,4 +1,13 @@
-import { Session, SessionPrompt, SessionStatus, Permission, Question, MoveSessionService } from "./session-runtime"
+import {
+  Session,
+  SessionPrompt,
+  SessionStatus,
+  Permission,
+  Question,
+  MoveSessionService,
+  abandonedAttempts,
+  messagesToGraft,
+} from "./session-runtime"
 import { ARENA_SENT_AT } from "./session-runtime/projection"
 import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
 import { ArenaActivity } from "./activity"
@@ -73,6 +82,7 @@ import {
   isFinalState,
   isParkedPromotion,
   isStopAbort,
+  failedBeforeHalt,
   operationID,
   spareName,
   stoppedResolution,
@@ -1237,6 +1247,13 @@ export function normalTurnReservations() {
       return (counts.get(sessionID) ?? 0) > 0
     },
   }
+}
+
+/** Whether a contestant prompt ended in a failure of its own: an error or defect, or an errored answer. */
+function promptFailed(promptExit: Exit.Exit<SessionV1.WithParts | void, unknown>) {
+  if (Exit.isFailure(promptExit)) return !Cause.hasInterruptsOnly(promptExit.cause)
+  const answer = promptExit.value?.info
+  return answer?.role === "assistant" && answer.error !== undefined && answer.error.name !== "MessageAbortedError"
 }
 
 export const layer: Layer.Layer<
@@ -4065,7 +4082,12 @@ export const layer: Layer.Layer<
             : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
         )
       }
-      if (Exit.isFailure(promptExit)) unsettled.push(Cause.pretty(promptExit.cause))
+      // On 2.0 a Stop interrupts the prompt instead of returning an aborted assistant, and a stream
+      // torn down by it can die on the way out. A side settles as stopped only when its prompt ends
+      // during the stop, so that failure is the stop too, as with the checks above. A restart's
+      // override keeps its reason.
+      if (Exit.isFailure(promptExit) && (!stopped || runStateOverride !== undefined))
+        unsettled.push(Cause.pretty(promptExit.cause))
       const runState: RunDocument["runState"] =
         runStateOverride ?? (stopped ? "stopped" : unsettled.length === 0 ? "complete" : "error")
       const runError = unsettled.length ? unsettled.join("\n") : undefined
@@ -4451,13 +4473,24 @@ export const layer: Layer.Layer<
       // verification has finished observing the frozen tree.
       yield* environmentSettled
       const current = yield* promise(() => store.turn(turn._id))
-      const stopped = current?.state === "stopping" || current?.state === "early_selected" || stoppedBySibling()
+      const halted = current?.state === "stopping" || current?.state === "early_selected"
+      // A prompt that failed before the stop took effect failed on its own: the side shows that
+      // failure, not "Stopped". A stream that dies while the stop tears it down ends after it.
+      const failedFirst =
+        halted &&
+        failedBeforeHalt({
+          failed: promptFailed(promptExit),
+          haltedAt: current.transitionTimestamps?.[current.state],
+          endedAt: (yield* promise(() => store.run(run.runID)))?.completedAt,
+        })
+      const stopped = (halted && !failedFirst) || stoppedBySibling()
       // A steer still queued when the run was cut off stays in the thread as an unanswered message,
       // as in 1.x, and goes with this side's history if it is kept. Left in Core's inbox it would
       // vanish from the thread, and the next resume of this session would deliver it. A finished
       // run closed its turn with none waiting, so for it this only keeps the thread and the kept
-      // history in step. A failed run keeps its queue for Retry.
-      if (stopped || Exit.isSuccess(promptExit)) {
+      // history in step. A failed run keeps its queue for Retry, unless the battle halted: it then
+      // has no Retry, also when it failed before the stop.
+      if (stopped || halted || Exit.isSuccess(promptExit)) {
         yield* inDirectory(run.worktree.directory, sessions.deliverPending(run.sessionID)).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("Arena could not keep a contestant's queued steers", {
@@ -6392,15 +6425,24 @@ export const layer: Layer.Layer<
         agent: source.agent ?? "build",
         reset: (failed) =>
           Effect.gen(function* () {
-            if (failed.terminalAssistantMessageID) {
-              yield* inDirectory(
-                failed.worktree,
-                sessions.removeMessage({
-                  sessionID: SessionID.make(failed.rootSessionID),
-                  messageID: MessageID.make(failed.terminalAssistantMessageID),
-                }),
-              )
-            }
+            // 2.0 continues a cut step instead of failing it, so a failed run can hold one half
+            // answer and one continuation note per attempt, not only its last answer.
+            const root = SessionID.make(failed.rootSessionID)
+            const abandoned = failed.promptMessageID
+              ? abandonedAttempts(yield* sessions.canonicalMessages(root), failed.promptMessageID)
+              : new Set<string>()
+            const removed = new Set([
+              ...abandoned,
+              ...(failed.terminalAssistantMessageID ? [failed.terminalAssistantMessageID] : []),
+            ])
+            yield* inDirectory(
+              failed.worktree,
+              Effect.forEach(
+                removed,
+                (messageID) => sessions.removeMessage({ sessionID: root, messageID: MessageID.make(messageID) }),
+                { discard: true },
+              ),
+            )
             yield* promise(() => store.resetRunForReply(failed._id))
             return yield* promise(() => store.updateRun(failed._id, { manualRetries: (failed.manualRetries ?? 0) + 1 }))
           }),
@@ -9217,13 +9259,12 @@ export const layer: Layer.Layer<
       }
       const canonicalize = <T>(value: T, role?: string, options?: { readonly subagent?: boolean }) =>
         promise(() => canonicalizeTranscriptPaths(retargetSessions(value), paths, role, options))
+      // A winner that recovered from a cut stream keeps its half answers and Core's notes as written,
+      // in order, because the next turn's model must read what this one read. Do not join the pieces:
+      // text rules lost content at 64-76% of cut points for a re-opened JSON, HTML or SQL block in an
+      // offline simulation (docs/arena.md).
       let last: MessageID | undefined
-      for (const message of source) {
-        // Contestant-only instruction entries are materialized by Core as native system rows.
-        // They describe the temporary worktree and must never become canonical chat policy; the
-        // canonical runner reads its own current instruction context after the winner is grafted.
-        if (message.type === "system") continue
-        if (String(message.id) < boundary) continue
+      for (const message of messagesToGraft(source, boundary)) {
         const id = MessageID.ascending()
         last = id
         const cloned = yield* sessions.copyMessage({
