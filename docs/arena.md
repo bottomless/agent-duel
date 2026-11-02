@@ -1316,17 +1316,20 @@ contestant from the battle pool and hides its identity until a thumbs-up or thum
 The question-mark control explains this before the user sends a prompt.
 
 A frontier turn locks the chat composer and its settings until its completed result is rated.
-Keep Stop and tool permission responses available while the agent works. When it finishes, show
+Keep Stop and tool permission responses available while the agent works. When it finishes successfully, show
 an in-stream rating dialog below the response, with both thumbs and no dismiss action. The disabled
 composer’s tooltip points to that dialog. A failed save stays in the dialog and leaves the gate
 closed for retry. The gate belongs to the persisted result, so changing the local preference,
 reconnecting, or starting a battle cannot bypass it. If an older frontier result still needs a
 rating, surface that result first.
 
-A turn the user stops is the exception: its rating is optional. The engine reads Stop from the
-response's `MessageAbortedError`, sets `stoppedAt` on the rating, and leaves the gate open. The
-dialog offers Skip, and the next turn replaces it. Keep `stoppedAt` on the record so analysis can
-separate votes on stopped turns from votes on finished ones.
+A failed or incomplete response asks for no rating and leaves the composer and its settings
+usable, including after an engine restart. Keep the failure and any partial work in the chat;
+the contestant's identity stays hidden. Previously saved failures must not keep the gate closed.
+
+A turn the user stops has an optional rating. The dialog offers Skip, and the next turn replaces
+it. Keep `stoppedAt` on the record so analysis can separate votes on stopped turns from votes on
+finished ones.
 
 Both sizes use the assignment boundary, and `reconcileNormalTurn` (`arena/service.ts`) folds the
 resulting Git and transcript state back into the canonical spine. A process-local reservation
