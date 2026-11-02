@@ -762,7 +762,8 @@ Read transcript works after the archived chat's worktree is gone. Reading leaves
 agent record and saved history unchanged, and leaving the transcript releases its engine reference.
 Restore opens an interactive session. Find searches loaded messages only; load earlier messages
 to include them. The transcript owns its pages separately from the live chat store, which can
-still hold that chat's epoch and last turn from before archive.
+still hold that chat's epoch and last turn from before archive. Keep an open Archived list current
+when another window removes a chat, including one absent from that window's active chat directory.
 
 A snapshot is released (refs and manifest) once Restore files has brought it back, when its project
 is removed (a project added again gets a new id, so nothing could restore it), and when its
@@ -1494,9 +1495,9 @@ chunks that carry only OpenRouter `reasoning_details` keep a long thought alive,
 comments do not, so a stalled model still times out. The engine plugin wraps the Arena fetch with
 `providerFetch` (`engine-runtime/plugin.ts`). Assigning the Arena fetch to the SDK options directly
 drops every timeout, and a stalled stream then waits forever. The header deadline and the budget
-are ours (`engine-runtime/idle.ts`), and Core's header timeout is off for contestants: Core's HTTP
-hook middleware turns its header abort into "All fibers interrupted without error", which hides
-the timeout. When the runtime abandons a request, the daemon's Arena proxy aborts its control-plane
+are ours (`engine-runtime/idle.ts`), and Core's header timeout stays off for contestants so Arena
+owns that deadline and its recovery budget. Core's own header deadline reports `Response headers
+timed out` through HTTP hooks too. When the runtime abandons a request, the daemon's Arena proxy aborts its control-plane
 request too; otherwise the hosted function keeps streaming, and billing, until its own time limit.
 
 A request above the estimated savings threshold triggers compaction. Keep a new user message and

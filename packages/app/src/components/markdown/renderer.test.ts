@@ -14,6 +14,44 @@ import { prepareMarkdownSource, PENDING_MARKDOWN_IMAGE } from "./source";
 import { normalizeMarkdownHtml } from "./html";
 
 describe("shared Markdown source adaptation", () => {
+  it("links complete code paths with spaces and Makefiles in answers", async () => {
+    const prepared = prepareMarkdownSource(
+      "Open `src/ünï code/app file.ts:3`, [child](<docs/child file.md>), [Makefile](Makefile), then Makefile.",
+      "/repo",
+    );
+    const tree = recognizeTextLinks(
+      await parseMarkdown(prepared.render(), { latexMath: false }),
+      prepared.linkRecognition.text,
+      prepared.linkRecognition.inlineCode,
+    );
+    const links: string[] = [];
+    function collect(node: ASTNode) {
+      if (node.type === "Link") links.push(String(node.attributes?.url));
+      node.children?.forEach(collect);
+    }
+    collect(tree);
+    expect(links).toEqual([
+      "src/ünï code/app file.ts:3",
+      "docs/child file.md",
+      "Makefile",
+      "Makefile",
+    ]);
+    expect(classifyAssistantFileLink(links[0], { workspaceRoot: "/repo" })).toMatchObject({
+      target: { path: "/repo/src/ünï code/app file.ts", lineStart: 3 },
+    });
+    expect(classifyAssistantFileLink("Makefile", { workspaceRoot: "/repo" })).toMatchObject({
+      target: { path: "/repo/Makefile" },
+    });
+    expect(
+      classifyAssistantFileLink(links[1], {
+        workspaceRoot: "/repo",
+        decodeHref: true,
+        explicitLink: true,
+      }),
+    ).toMatchObject({
+      target: { path: "/repo/docs/child file.md" },
+    });
+  });
   it("keeps paragraphs, fences and quotes together for the library", () => {
     const source = "First paragraph.\n\nSecond paragraph.\n\n```ts\nconst n = 1;\n```\n\n> Quote";
     expect(prepareMarkdownSource(source).render()).toBe(source);
@@ -166,6 +204,7 @@ it("preserves stable inline-code file classification through the library parser"
     "README.md",
     "./scripts/run",
     "src/file.ts(10,2)",
+    "src/file.ts lines 10-20",
     "/tmp/[route].tsx",
     "file:///tmp/file.ts#L10-L20",
   ]);
