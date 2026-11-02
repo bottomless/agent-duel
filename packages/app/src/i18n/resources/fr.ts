@@ -16,6 +16,8 @@ export const fr: TranslationResources = {
     lessSecond: "<1s",
   },
   arena: {
+    engineRestartedCommandStopped:
+      "Le moteur a redémarré et une commande en cours d’exécution s’est arrêtée.",
     chooseMessageTarget: "Choisissez à qui écrire",
     steerContestants: "Guider les deux participants",
     steerAgent: "Guider l’agent {{side}}",

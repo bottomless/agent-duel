@@ -229,9 +229,11 @@ export function classifyAssistantFileLink(
     };
   }
 
-  if (/\s/.test(trimmed)) {
+  if (/[\r\n]/.test(trimmed)) {
     return null;
   }
+  // A code span with command options and path arguments is not one inferred file path.
+  if (!options.explicitLink && /\s--?(?:[\w-]+)?(?:\s|=|$)/.test(trimmed)) return null;
 
   const target = parseAssistantFileLink(trimmed, options);
   if (!target) {
@@ -632,6 +634,7 @@ function isPlausibleAssistantFileName(fileName: string | undefined): boolean {
   if (!fileName) {
     return false;
   }
+  if (fileName === "Makefile") return true;
 
   if (fileName.startsWith(".") && fileName.length > 1) {
     return true;

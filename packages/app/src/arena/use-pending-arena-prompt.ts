@@ -6,6 +6,7 @@ import { useFetchQuery } from "@/data/query";
 import { useSessionStore } from "@/stores/session-store";
 import type { StreamItem } from "@/types/stream";
 import { pendingArenaPrompt, projectPendingArenaPrompt } from "./summary-anchor";
+import { replaceShellRestartErrors } from "./shell-restart";
 
 interface PendingArenaPromptOptions {
   serverId: string;
@@ -67,8 +68,11 @@ export function usePendingArenaPrompt({
   if (nextPendingTurnId !== pendingTurnId) {
     setPendingTurnId(nextPendingTurnId);
   }
-  return useMemo(
-    () => projectPendingArenaPrompt({ tail: streamItems, head: streamHead }, pendingPrompt),
-    [streamItems, streamHead, pendingPrompt],
-  );
+  return useMemo(() => {
+    const notice = t("arena.engineRestartedCommandStopped");
+    const stops = snapshot?.chat.shellStops;
+    const tail = replaceShellRestartErrors(streamItems, stops, notice);
+    const head = replaceShellRestartErrors(streamHead, stops, notice);
+    return projectPendingArenaPrompt({ tail, head }, pendingPrompt);
+  }, [streamItems, streamHead, pendingPrompt, snapshot?.chat.shellStops, t]);
 }

@@ -16,6 +16,7 @@ export const zhCN: TranslationResources = {
     lessSecond: "<1秒",
   },
   arena: {
+    engineRestartedCommandStopped: "引擎已重启，一条正在运行的命令已停止。",
     chooseMessageTarget: "选择消息接收方",
     steerContestants: "引导两位参赛者",
     steerAgent: "引导代理 {{side}}",

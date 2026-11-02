@@ -103,6 +103,12 @@ export class AgentDirectoryReplica {
     if (delta.kind === "remove") {
       this.members.delete(delta.agentId);
       this.advance(delta.agentId);
+      // An archived row need not be a member of the active directory in this window.
+      void queryClient.invalidateQueries({
+        predicate: ({ queryKey }) =>
+          (queryKey[0] === "agentHistory" && queryKey[1] === this.serverId) ||
+          (queryKey[0] === "allAgentHistory" && queryKey.includes(this.serverId)),
+      });
     } else {
       this.members.add(delta.agent.id);
       if (!before) this.advance(delta.agent.id);

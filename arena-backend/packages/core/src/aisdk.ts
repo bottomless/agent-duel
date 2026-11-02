@@ -157,7 +157,13 @@ export function providerFetch(model: RuntimeInfo, custom?: Fetch) {
       middleware
         ? throughMiddleware(middleware, send, input, { ...opts, timeout: false })
         : send(input, { ...opts, timeout: false })
-    ).finally(() => clearTimeout(headerTimer))
+    )
+      .catch((error) => {
+        // runPromise represents an aborted middleware fiber as an interruption, losing the fetch reason.
+        if (headers.signal.aborted) throw headers.signal.reason
+        throw error
+      })
+      .finally(() => clearTimeout(headerTimer))
     if (timeouts.chunkTimeout === false) return res
     return wrapSSE(res, timeouts.chunkTimeout, chunks)
   }

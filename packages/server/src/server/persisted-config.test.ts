@@ -805,15 +805,13 @@ describe("readPersistedConfig with an unreadable config.json", () => {
     }
   });
 
-  test("names the file and the field when it does not match the schema", () => {
+  test("ignores an invalid field while keeping the valid settings", () => {
     const home = createTempHome();
     const configPath = path.join(home, "config.json");
     try {
-      writeFileSync(configPath, '{"daemon":{"listen":5}}');
+      writeFileSync(configPath, '{"daemon":{"listen":5,"relay":{"enabled":false}}}');
 
-      expect(() => readPersistedConfig(home)).toThrow(
-        `[Config] Invalid config in ${configPath}:\n  - daemon.listen: `,
-      );
+      expect(readPersistedConfig(home)).toEqual({ daemon: { relay: { enabled: false } } });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

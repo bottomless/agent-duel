@@ -6133,6 +6133,11 @@ export class Session {
         confidentResultScanThreshold: searchesWorkspace ? undefined : 5_000,
         respectGitIgnore: searchesWorkspace,
         excludedDiscoveryPaths,
+        onScanLimit: (scanLimit) => {
+          throw new Error(
+            `Search stopped at the ${scanLimit.toLocaleString("en-US")}-entry limit; this search is incomplete.`,
+          );
+        },
         includeFiles,
         includeDirectories,
         matchMode,

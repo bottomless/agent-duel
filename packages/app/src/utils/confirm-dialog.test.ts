@@ -75,6 +75,32 @@ describe("confirmDialog", () => {
     await expect(answer).resolves.toBe(false);
   });
 
+  it("cancels an obsolete early pick without answering another dialog", async () => {
+    mountHost();
+    const turn = new AbortController();
+    const early = confirmDialog({ title: "Choose A early", message: "B is working" }, turn.signal);
+    const earlyId = activeRequest()!.id;
+    const other = confirmDialog({ title: "Other action", message: "Unrelated" });
+
+    turn.abort();
+    await expect(early).resolves.toBe(false);
+    expect(activeRequest()?.title).toBe("Other action");
+    answerConfirmDialog(earlyId, true);
+    expect(activeRequest()?.title).toBe("Other action");
+    answerConfirmDialog(activeRequest()!.id, true);
+    await expect(other).resolves.toBe(true);
+  });
+
+  it("does not queue a confirmation for an already obsolete turn", async () => {
+    mountHost();
+    const turn = new AbortController();
+    turn.abort();
+    await expect(
+      confirmDialog({ title: "Early pick", message: "Old turn" }, turn.signal),
+    ).resolves.toBe(false);
+    expect(activeRequest()).toBeNull();
+  });
+
   it("cancels whatever is waiting when the last host unmounts", async () => {
     const unregisterFirst = mountHost();
     const unregisterSecond = mountHost();

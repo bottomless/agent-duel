@@ -21,6 +21,7 @@ export interface ProcessRow {
 export interface ShellRecord {
   readonly id: string
   readonly pid: number
+  readonly sessionID?: string
   /** When Core began the spawn and when the ledger heard of it. The process started between them. */
   readonly spawnedAfter: number
   readonly spawnedBefore: number
@@ -52,6 +53,7 @@ export function parseRecord(text: string): ShellRecord | undefined {
   }
   if (typeof value !== "object" || value === null) return undefined
   const record = value as { [K in keyof ShellRecord]?: unknown }
+  if (record.sessionID !== undefined && typeof record.sessionID !== "string") return undefined
   if (typeof record.id !== "string" || !isSafeProcessGroup(record.pid)) return undefined
   if (!Number.isFinite(record.spawnedAfter) || !Number.isFinite(record.spawnedBefore)) return undefined
   if (typeof record.owner !== "object" || record.owner === null) return undefined
@@ -94,7 +96,8 @@ function isRecordedShell(record: ShellRecord, table: readonly ProcessRow[]) {
   const leader = table.find((row) => row.pid === record.pid)
   if (!leader || leader.zombie || leader.pgid !== record.pid) return false
   return (
-    leader.startedAt >= record.spawnedAfter - START_SLACK_MS && leader.startedAt <= record.spawnedBefore + START_SLACK_MS
+    leader.startedAt >= record.spawnedAfter - START_SLACK_MS &&
+    leader.startedAt <= record.spawnedBefore + START_SLACK_MS
   )
 }
 
@@ -195,7 +198,12 @@ export function engineOwner() {
 
 export async function recordShell(
   directory: string,
-  shell: { readonly id: string; readonly pid?: number; readonly time: { readonly started: number } },
+  shell: {
+    readonly id: string
+    readonly pid?: number
+    readonly time: { readonly started: number }
+    readonly metadata?: Readonly<Record<string, unknown>>
+  },
 ) {
   if (shell.pid === undefined) return
   const spawnedBefore = Date.now()
@@ -205,6 +213,7 @@ export async function recordShell(
   const record: ShellRecord = {
     id: shell.id,
     pid: shell.pid,
+    ...(typeof shell.metadata?.sessionID === "string" ? { sessionID: shell.metadata.sessionID } : {}),
     spawnedAfter: shell.time.started,
     spawnedBefore,
     owner: identity,

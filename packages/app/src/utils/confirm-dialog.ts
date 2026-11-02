@@ -41,14 +41,21 @@ export function selectActiveConfirmDialog(
  * `ConfirmDialogHost` renders the modal; Escape, the backdrop and Cancel all
  * answer `false`.
  */
-export function confirmDialog(input: ConfirmDialogInput): Promise<boolean> {
+export function confirmDialog(input: ConfirmDialogInput, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
   if (useConfirmDialogStore.getState().hostCount === 0) {
     return Promise.reject(new Error("[ConfirmDialog] No confirm dialog host is mounted."));
   }
   return new Promise<boolean>((resolve) => {
     const request: ConfirmDialogRequest = { ...input, id: nextRequestId++ };
+    const cancel = () => answerConfirmDialog(request.id, false);
+    signal?.addEventListener("abort", cancel, { once: true });
+    const answer = (confirmed: boolean) => {
+      signal?.removeEventListener("abort", cancel);
+      resolve(confirmed);
+    };
     useConfirmDialogStore.setState((state) => ({
-      pending: [...state.pending, { request, resolve }],
+      pending: [...state.pending, { request, resolve: answer }],
     }));
   });
 }
