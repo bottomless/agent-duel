@@ -608,6 +608,8 @@ export const ar: TranslationResources = {
     },
     errors: {
       error: "خطأ",
+      firstSendDiskFull: "تم حفظ رسالتك. وفّر مساحة على القرص، ثم أرسلها مرة أخرى.",
+      firstSendRetry: "تم حفظ رسالتك. عالج الخطأ أعلاه، ثم أرسلها مرة أخرى.",
       unableToSave: "غير قادر على الحفظ",
       unableToCopy: "تعذر النسخ",
       nameRequired: "الاسم مطلوب",

@@ -618,6 +618,9 @@ export const ru: TranslationResources = {
     },
     errors: {
       error: "Ошибка",
+      firstSendDiskFull:
+        "Ваше сообщение сохранено. Освободите место на диске и отправьте его снова.",
+      firstSendRetry: "Ваше сообщение сохранено. Устраните ошибку выше и отправьте его снова.",
       unableToSave: "Не удалось сохранить",
       unableToCopy: "Не удалось скопировать",
       nameRequired: "Требуется имя",

@@ -796,7 +796,9 @@ APFS a slot's clones share blocks with the checkout until something writes to th
 ## A turn
 
 **Start** (`arena/service.ts:2432`). Refuses unless the chat is `ready`, no turn is active, and no
-ordinary turn is in flight. Freezes canonical `HEAD` together with the exact staged, unstaged, and
+ordinary turn is in flight. A failed first send returns the saved message to New chat. Keep its
+error and retry instruction in the scrolling setup area until dismissed, so a long startup error
+cannot cover the composer. Freezes canonical `HEAD` together with the exact staged, unstaged, and
 nonignored-untracked state in `refs/battles/<chat>/turn-<n>/base`, then draws a pair. Both agents
 work from that frozen state, so later canonical movement cannot shift the ground under a running
 battle.
@@ -981,9 +983,9 @@ children. Core has no such call (anomalyco/opencode#36423), so `cancelRun` inter
 cancels its job. Each cancelled child still leaves a cancelled result in the parent's history: the
 parent was told it would be notified, and Send now and Retry resume it. Core wakes the parent for
 each result, which after a Stop would send a model request for a battle that is over, so `cancelRun`
-first holds the parent's wake (`SubagentJob.hold`) until its next `prompt` or `loop`. That hold
-survives engine restarts: recovered child results must not wake a stopped parent. A side that
-ended waits for its cancelled children before finalization (`settleChildren`); a late result would
+first holds the parent's wake in memory (`SubagentJob.hold`) until its next `prompt` or `loop`.
+A child that runs during a crash does not continue after restart, as on main: the desktop engine
+does not call Core restart recovery. A side that ended waits for its cancelled children before finalization (`settleChildren`); a late result would
 otherwise arrive after Arena has captured the final Git state.
 
 The contestant instruction (`contestantSystemInstruction`) rides on the user message as `system`,
@@ -1107,7 +1109,8 @@ field. Each layer has its own file:
   transcript projections. Remove provider state and identity metadata, redact reasoning, zero usage
   and cost, flatten provider errors, and rehash tool-call IDs to `call_arena_<hash>`. Never run the
   native sanitizer over `/arena` responses: resolved battles deliberately reveal identities and
-  costs. The event bridge uses the same part IDs as snapshots and preserves UTF-16 delta offsets.
+  costs. Stable streamed part IDs and UTF-16 delta offsets let clients assemble live updates;
+  native exports do not define those stream IDs.
 - **System prompt** (`arena/engine-runtime/plugin.ts`) — every `arena` session, contestant or
   single-agent, gets a fixed identity instruction. Replace upstream model branding before a request
   leaves Core. The text is static because assignment-derived instructions would differ between sides.
@@ -1424,12 +1427,13 @@ Tools therefore start when the model's response ends, not when their arguments e
 before then leaves the call unexecuted, with the provider or cancellation error. Complete arguments
 stay in the failed call's history, so the model can see what it tried to send.
 
-Other retryable Arena failures share an eight-retry, two-minute budget per execution. A missing or
-malformed retry hint uses bounded backoff so a persistent 5xx cannot spin indefinitely. A known
-connection failure before response headers becomes a retryable upstream error; cancellation and
-permanent errors stay terminal. A broken response stream or transient OpenRouter error after output
-restarts the request under the same retry budget. The budget stops scheduling new retries, not a
-request already in flight.
+Other retryable Arena failures use Core's ten-retry allowance per logical step: eleven attempts
+including the first. There is no two-minute wall-clock limit. Request time is additional to the
+backoff, so repeated broken streams can take five minutes or longer. Provider retry hints can
+lengthen the waits, up to fifteen minutes per hint. Cancellation and permanent errors stay
+terminal. A failure before output retries the request; after output, Core keeps the partial
+response and asks the model to continue, under the same allowance. A completed step starts a new
+allowance. Model timeouts have the separate, smaller limit below.
 
 An offline machine spends no retry. When a contestant request cannot reach the network at all (DNS
 fails or there is no route), the daemon's runtime proxy in a hosted build, or the in-process service
@@ -1441,16 +1445,15 @@ socket, or a TLS handshake drop. The control plane can have started the model ca
 would start another. Node reports a reset just after connect the same way as one after the request
 (`read ECONNRESET`). An HTTP error from the control plane passes through. On a 503 the contestant
 waits with backoff capped at 10 seconds for as long as the network is gone, shows **Waiting for
-network**, and the next real failure gets a fresh two-minute window. A closed lid is the common
+network**. These persistent waits have no wall-clock limit. A closed lid is the common
 case: macOS wakes briefly for Power Nap before Wi-Fi reconnects, and the window's monotonic clock
 stops during sleep, so without this each wake spent one retry until the run failed. The control
 plane never sends this answer; its own outbound failures are not the user's network.
 
 A stream that ends without a finish reason or `[DONE]` is broken too (`endsResponse` in
 `arena/proxy.ts`). The control plane's function time limit ends a response cleanly, mid-thought;
-accepted as a finish, the step has no tool call and the run completes with no answer. The retried
-request's own time counts toward the two-minute window, so a response cut at the limit gets one
-retry, and a second cut fails the run visibly.
+accepted as a finish, the step has no tool call and the run completes with no answer. Each cut
+spends one of the step's ten retries; request duration does not reduce the count.
 
 A restart resends the request the failed attempt started from, so it removes that attempt's parts
 before the retry wait; otherwise the pane and the transcript show a half answer above the new one.
@@ -1544,8 +1547,8 @@ sees why. It logs `[arena-service] OpenRouter refused a contestant request` with
 line is in the control plane's Vercel runtime logs, which keep about a day:
 `vercel logs --query '"<battleID>"' --since 1d`. A BYOK build writes it to the engine log.
 
-`No recent activity` means the run has emitted no event for 90 seconds; it is not proof of a
-stalled process. Explicit retry and user-input waits take precedence. A tool call that is still
+`No recent activity` means the run has had no event or model argument bytes for 90 seconds; it is
+not proof of a stalled process. Explicit retry and user-input waits take precedence. A tool call that is still
 running reads `Running a command` or `Running a tool` instead: a long command emits nothing until it
 ends, the same reason the engine's deadline pauses for it. Time that label from the call's own
 start as well as from the run's last event (`run-liveness.ts`): queuing or deleting a steer is a run
@@ -1591,7 +1594,9 @@ The following moves the current files into a new `pre-recovery` directory, prese
 and SHM beside each database under matching names, then copies the backup into place. It stops
 if `pre-recovery` already exists; preserve that directory before choosing another unused name.
 Never delete the moved-aside WAL: after a crash, it can hold committed 2.0 tables and turns that
-have not reached the main file.
+have not reached the main file. The backup does not include `arena/artifacts/`. Keep that directory
+in the affected home: its content-addressed files belong to both the restored and newer records.
+If recovering into another home, copy `arena/artifacts/` there separately before opening the chat.
 
 ```sh
 set -e

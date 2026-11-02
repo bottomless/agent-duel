@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { Href } from "expo-router";
 import type { DraftInput } from "@/stores/draft-store";
 import {
   FirstSendError,
   returnFailedFirstSendToNewChat,
+  useFailedFirstSendNotice,
   type FailedFirstSendDeps,
 } from "./failed-first-send";
 
@@ -18,7 +19,11 @@ function createDeps(agentIds: string[]) {
       calls.push("save");
     },
     navigate: (route) => calls.push(`navigate ${String(route)}`),
-    showError: (message) => calls.push(`error ${message}`),
+    showError: (message) => {
+      calls.push(`error ${message}`);
+    },
+    retryMessage: "Your message is saved. Resolve the error above, then send it again.",
+    diskFullMessage: "Your message is saved. Free disk space, then send it again.",
     archiveWorkspace: async (_serverId, workspaceId) => {
       calls.push(`archive ${workspaceId}`);
     },
@@ -30,6 +35,17 @@ const draft: DraftInput = { text: "describe this", attachments: [] };
 const failed = (error: unknown) => ({ serverId: "srv", workspaceId: "wks", error, draft });
 
 describe("returnFailedFirstSendToNewChat", () => {
+  afterEach(() => useFailedFirstSendNotice.getState().dismiss());
+
+  it("keeps the failure across navigation and dismisses it without clearing the restored draft", () => {
+    const { deps, savedDrafts } = createDeps([]);
+    deps.showError = useFailedFirstSendNotice.getState().show;
+    returnFailedFirstSendToNewChat(failed(new Error("backup failed")), deps);
+    expect(useFailedFirstSendNotice.getState().message).toContain("backup failed");
+    useFailedFirstSendNotice.getState().dismiss();
+    expect(useFailedFirstSendNotice.getState().message).toBeNull();
+    expect(savedDrafts).toEqual([draft]);
+  });
   it("puts the message back in New chat and archives the chat its agent went into", () => {
     const { deps, calls, savedDrafts } = createDeps(["agent-1"]);
     const error = new FirstSendError(
@@ -43,7 +59,7 @@ describe("returnFailedFirstSendToNewChat", () => {
     expect(calls).toEqual([
       "save",
       "navigate /new?serverId=srv",
-      "error Battles cannot include image/bmp images",
+      "error Battles cannot include image/bmp images\n\nYour message is saved. Resolve the error above, then send it again.",
       "archive wks",
     ]);
   });
@@ -53,6 +69,16 @@ describe("returnFailedFirstSendToNewChat", () => {
 
     expect(returnFailedFirstSendToNewChat(failed(new Error("refused")), deps)).toBe(true);
     expect(calls).toContain("archive wks");
+  });
+
+  it("keeps a disk-full failure visible and names the next step", () => {
+    const { deps, calls } = createDeps([]);
+    expect(returnFailedFirstSendToNewChat(failed(new Error("ENOSPC: backup failed")), deps)).toBe(
+      true,
+    );
+    expect(calls).toContain(
+      "error ENOSPC: backup failed\n\nYour message is saved. Free disk space, then send it again.",
+    );
   });
 
   it("leaves a chat that holds another agent alone", () => {

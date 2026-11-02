@@ -14,6 +14,16 @@ import {
 } from "@/utils/confirm-dialog";
 import { useArenaBattleActions } from "./use-battle-actions";
 
+vi.mock("react-native", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("react-native")>()),
+  ToastAndroid: {
+    SHORT: 0,
+    LONG: 1,
+    TOP: 49,
+    showWithGravity: vi.fn(),
+  },
+}));
+
 type Turn = NonNullable<ArenaSnapshot["turn"]>;
 
 const toast: ToastApi = {

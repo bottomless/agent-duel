@@ -151,10 +151,7 @@ export const layer = (options?: Options) =>
             ...result,
             recovery,
             notificationID: background.notificationID,
-            resume:
-              suspended.has(recovery.parentSessionID) || (yield* jobs.subagentResultsHeld(recovery.parentSessionID))
-                ? false
-                : undefined,
+            resume: suspended.has(recovery.parentSessionID) ? false : undefined,
           }).pipe(Effect.orDie)
         })
 

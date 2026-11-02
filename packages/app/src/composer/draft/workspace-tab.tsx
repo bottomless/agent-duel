@@ -70,7 +70,6 @@ import { ArenaContentColumn } from "@/arena/content-column";
 import { ensureBattleRepository } from "@/arena/battle-repository";
 import { arenaByokKey } from "@/byok/key";
 import { router } from "expo-router";
-import { useToast } from "@/contexts/toast-context";
 import { useDraftStore } from "@/stores/draft-store";
 import { buildNewWorkspaceDraftKey } from "@/stores/draft-keys";
 import { useSessionStore } from "@/stores/session-store";
@@ -79,6 +78,7 @@ import { archiveWorkspaceOptimistically } from "@/workspace/workspace-archive";
 import {
   FirstSendError,
   returnFailedFirstSendToNewChat,
+  useFailedFirstSendNotice,
   type FailedFirstSendDeps,
 } from "@/composer/draft/failed-first-send";
 import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
@@ -222,7 +222,9 @@ async function startDraftBattle(input: {
 
 function failedFirstSendDeps(input: {
   client: DaemonClient;
-  showError: (message: string) => void;
+  showError: FailedFirstSendDeps["showError"];
+  retryMessage: string;
+  diskFullMessage: string;
 }): FailedFirstSendDeps {
   return {
     readWorkspaceAgentIds: (serverId, workspaceId) =>
@@ -239,6 +241,8 @@ function failedFirstSendDeps(input: {
       useDraftStore.getState().saveDraftInput({ draftKey: buildNewWorkspaceDraftKey(), draft }),
     navigate: (route) => router.replace(route),
     showError: input.showError,
+    retryMessage: input.retryMessage,
+    diskFullMessage: input.diskFullMessage,
     archiveWorkspace: async (serverId, workspaceId) => {
       await archiveWorkspaceOptimistically({
         client: input.client,
@@ -330,7 +334,6 @@ export function WorkspaceDraftAgentTab({
 }: WorkspaceDraftAgentTabProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const toast = useToast();
   const client = useHostRuntimeClient(serverId);
   const arenaPreferenceKey = arenaDraftPreferenceKey(serverId, draftId);
   const arenaPreferences = useArenaPreferences(arenaPreferenceKey);
@@ -602,7 +605,12 @@ export function WorkspaceDraftAgentTab({
         client &&
         returnFailedFirstSendToNewChat(
           { serverId, workspaceId, error, draft },
-          failedFirstSendDeps({ client, showError: toast.error }),
+          failedFirstSendDeps({
+            client,
+            showError: useFailedFirstSendNotice.getState().show,
+            retryMessage: t("common.errors.firstSendRetry"),
+            diskFullMessage: t("common.errors.firstSendDiskFull"),
+          }),
         )
       ) {
         return;
@@ -622,7 +630,7 @@ export function WorkspaceDraftAgentTab({
     serverId,
     setDraftAttachments,
     replaceDraftText,
-    toast.error,
+    t,
     workspaceId,
   ]);
 

@@ -295,6 +295,9 @@ describe("Arena OpenCode v2 native boundary", () => {
       .filter((event) => event.type === "message.part.updated")
       .map((event) => event.properties?.part)
       .filter((part): part is Record<string, unknown> => part !== undefined && typeof part === "object")
+      .filter((part) =>
+        history.messages?.some((message) => message.type === "assistant" && message.id === part.messageID),
+      )
     expect(parts.length).toBeGreaterThan(0)
     const idsByType = new Map<string, Set<unknown>>()
     for (const part of parts) {
@@ -305,30 +308,39 @@ describe("Arena OpenCode v2 native boundary", () => {
     expect([...idsByType.keys()].sort()).toEqual(["reasoning", "text", "tool"])
     const idsByContent = new Map<string, Set<unknown>>()
     for (const part of parts) {
-      const contentKey = `${String(part.type)}:${part.type === "tool" ? String(part.callID) : String(part.text)}`
+      const contentKey = `${String(part.messageID)}:${String(part.type)}:${part.type === "tool" ? String(part.callID) : String(part.text)}`
       const ids = idsByContent.get(contentKey) ?? new Set<unknown>()
       ids.add(part.id)
       idsByContent.set(contentKey, ids)
     }
     expect([...idsByContent.values()].every((ids) => ids.size === 1)).toBe(true)
-    const canonicalParts = new Map(
-      history.messages?.flatMap((message) =>
-        message.type === "assistant"
-          ? (message.content ?? []).map((part, index) => [`prt_${message.id.slice(4)}_${index}`, part.type] as const)
-          : [],
-      ),
-    )
-    for (const part of parts) expect(canonicalParts.get(String(part.id))).toBe(part.type)
-    expect(new Set(parts.map((part) => part.id)).size).toBe(canonicalParts.size)
-    expect(canonicalParts.size).toBe(4)
-    expect(new Set(parts.filter((part) => part.type === "text").map((part) => part.id)).size).toBe(2)
-    expect(parts.some((part) => part.type === "text" && part.text === "before 😀")).toBe(true)
-    expect(parts.some((part) => part.type === "text" && part.text === "native completion after tool")).toBe(true)
+    // Stream IDs follow event allocation order, not the final exported content indices.
+    const finalParts = [...new Map(parts.map((part) => [String(part.id), part])).values()]
+    expect(finalParts.every((part) => part.sessionID === session.id)).toBe(true)
+    expect(finalParts.map((part) => part.type).sort()).toEqual(["reasoning", "text", "text", "tool"])
+    expect(
+      finalParts
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .sort(),
+    ).toEqual(["before 😀", "native completion after tool"])
     const deltas = bridged
       .filter((event) => event.type === "message.part.delta")
       .map((event) => event.properties)
       .filter((properties): properties is Record<string, unknown> => properties !== undefined)
-    expect(deltas.some((delta) => delta.delta === "before 😀" && delta.offset === 0)).toBe(true)
+    const textByID = new Map<string, string>()
+    for (const delta of deltas) {
+      const id = String(delta.partID)
+      const part = finalParts.find((part) => part.id === id)
+      expect(["text", "reasoning"]).toContain(part?.type)
+      expect(delta.messageID).toBe(part?.messageID)
+      if (part?.type !== "text") continue
+      const previous = textByID.get(id) ?? ""
+      expect(delta.offset).toBe(previous.length)
+      textByID.set(id, previous + String(delta.delta))
+    }
+    expect(textByID.size).toBe(2)
+    for (const [id, text] of textByID) expect(finalParts.find((part) => part.id === id)?.text).toBe(text)
     const tool = parts.findLast(
       (part) => part.type === "tool" && (part.state as Record<string, unknown> | undefined)?.status === "completed",
     )

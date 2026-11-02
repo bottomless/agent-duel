@@ -200,7 +200,7 @@ describe("contestant stream recovery", () => {
       })
       const text = await response.text()
       expect(text).toContain("Hel")
-      expect(text).toContain('"message":"Arena contestant stream failed"')
+      expect(text).toContain('"message":"Provider response stream failed"')
       expect(text).toContain('"code":"server_error"')
       expect(streamProgress("session-root")?.failure).toMatch(/^(stalled|replay-unavailable)$/)
     }

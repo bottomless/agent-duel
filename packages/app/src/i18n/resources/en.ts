@@ -614,6 +614,8 @@ export const en = {
     },
     errors: {
       error: "Error",
+      firstSendDiskFull: "Your message is saved. Free disk space, then send it again.",
+      firstSendRetry: "Your message is saved. Resolve the error above, then send it again.",
       unableToSave: "Unable to save",
       unableToCopy: "Unable to copy",
       nameRequired: "Name is required",

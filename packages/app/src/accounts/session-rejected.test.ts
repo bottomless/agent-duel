@@ -7,6 +7,14 @@ import {
 } from "./session-rejected";
 import { useAccountSessionStore } from "./session-store";
 
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: vi.fn(async () => null),
+    setItem: vi.fn(async () => {}),
+    removeItem: vi.fn(async () => {}),
+  },
+}));
+
 function rpcError(code: string) {
   return Object.assign(
     new Error(`Request refused requestType=arena.turn.start.request code=${code}`),
@@ -16,7 +24,7 @@ function rpcError(code: string) {
 
 describe("noticeAccountSessionRejection", () => {
   beforeEach(() => {
-    useAccountSessionStore.setState({ checkRequest: 0 });
+    useAccountSessionStore.setState({ checkRequest: 0, expired: false, session: null });
   });
 
   it("asks the account gate to recheck the session and words the refusal for the app", () => {

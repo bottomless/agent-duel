@@ -2,13 +2,15 @@ import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Text, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useIsFocused } from "expo-router/react-navigation";
 import { createNameId } from "mnemonic-id";
 import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Composer } from "@/composer";
 import { ComposerDock } from "@/composer/dock";
+import { FailedFirstSendNotice } from "@/composer/draft/failed-first-send-notice";
+import { useFailedFirstSendNotice } from "@/composer/draft/failed-first-send";
 import { useComposerEditingSession, useComposerFullscreen } from "@/composer/editing-session";
 import { AdaptiveRenameModal } from "@/components/rename-modal";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
@@ -1640,7 +1642,12 @@ export function NewWorkspaceScreen({
       <NewWorkspaceLayout
         isCompact={isCompact}
         fullscreen={isComposerFullscreen}
-        formStack={formStack}
+        formStack={
+          <>
+            <FailedFirstSendNotice />
+            {formStack}
+          </>
+        }
       >
         <Composer
           editingSession={composerEditing.chat}
@@ -1711,16 +1718,20 @@ function NewWorkspaceLayout({
   formStack: ReactNode;
   children: ReactNode;
 }) {
+  const hasFirstSendFailure = useFailedFirstSendNotice((state) => state.message !== null);
   // No title: the fields name themselves and sit against the composer they set up. On compact
   // the free space above pushes them down onto the composer, where the thumb is.
-  const setupFields = isCompact ? (
-    <>
-      <View style={styles.compactSetupSpace} pointerEvents="none" />
-      {formStack}
-    </>
-  ) : (
-    formStack
-  );
+  let setupFields = formStack;
+  if (isCompact && hasFirstSendFailure) {
+    setupFields = <ScrollView style={styles.failureSetup}>{formStack}</ScrollView>;
+  } else if (isCompact) {
+    setupFields = (
+      <>
+        <View style={styles.compactSetupSpace} pointerEvents="none" />
+        {formStack}
+      </>
+    );
+  }
   return (
     <>
       {fullscreen ? null : <MenuHeader borderless />}
@@ -1747,6 +1758,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   compactSetupSpace: {
     flex: 1,
+  },
+  failureSetup: {
+    flex: 1,
+    minHeight: 0,
   },
   errorText: {
     fontSize: theme.fontSize.base,

@@ -760,7 +760,13 @@ export class ProviderSnapshotManager {
   private async getReadyProvider(
     input: ProviderSnapshotProviderOptions,
   ): Promise<ProviderSnapshotEntry> {
-    const entry = await this.getProvider(input);
+    let entry = await this.getProvider(input);
+    // A failed Arena engine start can be repaired without restarting the daemon. Do not
+    // force a healthy engine's catalogue: forcing it replaces the running engine.
+    if (entry.provider === "opencode" && entry.enabled && entry.status === "error" && input.wait) {
+      await this.refreshProviders(resolveProviderSnapshotTarget(input.cwd), [input.provider]);
+      entry = await this.getProvider({ ...input, wait: false });
+    }
     if (!entry.enabled) {
       throw new Error(`Provider '${entry.provider}' is disabled`);
     }

@@ -592,6 +592,8 @@ export const zhCN: TranslationResources = {
     },
     errors: {
       error: "错误",
+      firstSendDiskFull: "消息已保存。请释放磁盘空间，然后重新发送。",
+      firstSendRetry: "消息已保存。请解决上述错误，然后重新发送。",
       unableToSave: "无法保存",
       unableToCopy: "无法复制",
       nameRequired: "名称必填",

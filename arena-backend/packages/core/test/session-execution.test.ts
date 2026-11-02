@@ -390,14 +390,10 @@ describe("SessionRestart background recovery", () => {
     it.effect(`a new child observer ${release ? "wakes a released" : "does not wake a held"} parent`, () =>
       Effect.gen(function* () {
         const database = yield* Database.Service
-        const subagents = yield* SubagentJob.Service
         const parent = Session.ID.make("ses_held_observer_parent")
         const child = Session.ID.make("ses_held_observer_child")
         yield* seedSessions(database, [parent])
         yield* seedSessions(database, [child], { parent_id: parent })
-        // Stop can arrive before any child has registered its background notification.
-        yield* subagents.hold(parent)
-
         const scope = yield* Scope.make()
         yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
         const registry = yield* Job.make.pipe(Effect.provideService(Scope.Scope, scope))
@@ -422,17 +418,18 @@ describe("SessionRestart background recovery", () => {
           scope,
         )
         const observer = Context.get(services, SubagentJob.Service)
+        yield* observer.hold(parent)
         const recovery = {
           kind: "subagent" as const,
           parentSessionID: parent,
           childSessionID: child,
           agent: "explore",
-          description: "Inspection after restart",
+          description: "Inspection while held",
         }
         const complete = yield* Deferred.make<string>()
         yield* restarted.start({ id: child, type: "subagent", recovery, run: Deferred.await(complete) })
         yield* observer.background(recovery)
-        // Release must affect observers already waiting, and must survive another registry rebuild.
+        // Release must affect observers already waiting.
         if (release) yield* observer.release(parent)
         yield* Deferred.succeed(complete, "Inspection complete")
         yield* Deferred.await(acknowledged)
@@ -442,84 +439,6 @@ describe("SessionRestart background recovery", () => {
           { payload: { metadata: { source: "subagent", childID: child, state: "completed" } } },
         ])
         expect(yield* restarted.pendingBackground).toEqual([])
-        const rebuilt = yield* Job.make.pipe(Effect.provideService(Scope.Scope, scope))
-        expect(yield* rebuilt.subagentResultsHeld(parent)).toBe(!release)
-      }),
-    )
-  }
-
-  for (const status of ["running", "cancelled", "completed"] as const) {
-    it.effect(`keeps a held parent idle after restart with a ${status} child`, () =>
-      Effect.gen(function* () {
-        const database = yield* Database.Service
-        const jobs = yield* Job.Service
-        const subagents = yield* SubagentJob.Service
-        const bus = yield* Bus.Service
-        const store = yield* SessionStore.Service
-        const parent = Session.ID.make("ses_held_recovery_parent")
-        const child = Session.ID.make("ses_held_recovery_child")
-        yield* seedSessions(database, [parent])
-        yield* seedSessions(database, [child], { parent_id: parent, time_suspended: Date.now() })
-        const complete = yield* Deferred.make<string>()
-        yield* jobs.start({
-          id: child,
-          type: "subagent",
-          recovery: {
-            kind: "subagent",
-            parentSessionID: parent,
-            childSessionID: child,
-            agent: "explore",
-            description: "Held inspection",
-          },
-          run: Deferred.await(complete),
-        })
-        yield* jobs.background(child)
-        yield* subagents.hold(parent)
-        if (status === "cancelled") yield* jobs.cancel(child)
-        if (status === "completed") {
-          yield* Deferred.succeed(complete, "Inspection complete")
-          yield* jobs.wait({ id: child })
-        }
-
-        // A new registry and execution graph share only the stored job records with the old engine.
-        const scope = yield* Scope.make()
-        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-        const registry = yield* Job.make.pipe(Effect.provideService(Scope.Scope, scope))
-        const acknowledged = yield* Deferred.make<void>()
-        const restarted = Job.Service.of({
-          ...registry,
-          completeBackground: (id) =>
-            registry.completeBackground(id).pipe(Effect.tap(() => Deferred.succeed(acknowledged, undefined))),
-        })
-        const drained: Session.ID[] = []
-        const context = yield* buildExecution(
-          scope,
-          ({ sessionID }) => Effect.sync(() => void drained.push(sessionID)),
-          undefined,
-          restarted,
-        )
-        const restart = Context.get(context, SessionRestart.Service)
-        const execution = Context.get(context, SessionExecution.Service)
-        yield* restart.resumeSuspendedSessions
-        yield* Deferred.await(acknowledged)
-        yield* Effect.forEach([parent, child], execution.awaitIdle, { discard: true })
-        expect(drained).toEqual(status === "running" ? [child] : [])
-        expect(yield* SessionInbox.list(database.db, parent)).toMatchObject([
-          {
-            payload: {
-              metadata: {
-                source: "subagent",
-                childID: child,
-                state: status === "cancelled" ? "cancelled" : "completed",
-              },
-            },
-          },
-        ])
-        expect(yield* restarted.pendingBackground).toEqual([])
-        yield* restart.resumeSuspendedSessions
-        yield* SessionInbox.promote(database.db, bus, parent, "steer")
-        expect((yield* store.context(parent)).filter((message) => message.type === "synthetic")).toHaveLength(1)
-        expect(drained).toEqual(status === "running" ? [child] : [])
       }),
     )
   }

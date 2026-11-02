@@ -150,6 +150,7 @@ import { renderWorkspaceRouteGate } from "@/screens/workspace/workspace-route-st
 import { resolveWorkspaceEmptyState } from "@/screens/workspace/workspace-empty-state";
 import { WorkspaceFilesUnavailableState } from "@/screens/workspace/workspace-files-unavailable-state";
 import { useWorkspaceRecovery } from "@/workspace-recovery/use-workspace-recovery";
+import { canUseWorkspaceLayoutShortcuts } from "@/keyboard/keyboard-shortcut-routing";
 import type { WorkspaceRecoveryModel } from "@/workspace-recovery/model";
 import {
   buildWorkspaceTabSnapshot,
@@ -2629,7 +2630,9 @@ function WorkspaceScreenContent({
 
   // Shared by every handler below: these actions only exist on a focused workspace route.
   const workspaceActionsEnabled = Boolean(
-    isRouteFocused && normalizedServerId && normalizedWorkspaceId,
+    normalizedServerId &&
+    normalizedWorkspaceId &&
+    canUseWorkspaceLayoutShortcuts(isRouteFocused, workspaceRouteState),
   );
 
   useKeyboardActionHandler({

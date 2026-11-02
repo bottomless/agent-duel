@@ -630,6 +630,8 @@ export const ptBR: TranslationResources = {
     },
     errors: {
       error: "Erro",
+      firstSendDiskFull: "Sua mensagem está salva. Libere espaço em disco e envie-a novamente.",
+      firstSendRetry: "Sua mensagem está salva. Resolva o erro acima e envie-a novamente.",
       unableToSave: "Não foi possível salvar",
       unableToCopy: "Não foi possível copiar",
       nameRequired: "O nome é obrigatório",

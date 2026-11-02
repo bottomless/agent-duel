@@ -619,6 +619,10 @@ export const ja: TranslationResources = {
     },
     errors: {
       error: "エラー",
+      firstSendDiskFull:
+        "メッセージは保存されています。ディスクの空き容量を増やしてから、もう一度送信してください。",
+      firstSendRetry:
+        "メッセージは保存されています。上のエラーを解決してから、もう一度送信してください。",
       unableToSave: "保存できません",
       unableToCopy: "コピーできません",
       nameRequired: "名前は必須です",

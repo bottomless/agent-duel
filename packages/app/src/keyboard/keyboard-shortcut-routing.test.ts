@@ -1,6 +1,32 @@
 import { describe, expect, it } from "vitest";
 
-import { canToggleFileExplorerShortcut } from "./keyboard-shortcut-routing";
+import {
+  canToggleFileExplorerShortcut,
+  canUseWorkspaceLayoutShortcuts,
+} from "./keyboard-shortcut-routing";
+import type { WorkspaceRouteState } from "@/screens/workspace/workspace-route-state";
+
+it("blocks Files and pane layout shortcuts while the archived workspace is hidden", () => {
+  const archived: WorkspaceRouteState = {
+    kind: "archived",
+    hostName: "Local",
+    recovery: {
+      kind: "recoverable",
+      phase: "ready",
+      error: null,
+      recovery: {
+        kind: "recoverable",
+        action: "unarchive",
+        workspaceId: "archived",
+        workspaceName: "Archived",
+        branch: "main",
+      },
+    },
+  };
+  expect(canUseWorkspaceLayoutShortcuts(true, archived)).toBe(false);
+  expect(canUseWorkspaceLayoutShortcuts(true, { kind: "ready" })).toBe(true);
+  expect(canUseWorkspaceLayoutShortcuts(false, { kind: "ready" })).toBe(false);
+});
 
 describe("keyboard-shortcut-routing", () => {
   describe("canToggleFileExplorerShortcut", () => {
