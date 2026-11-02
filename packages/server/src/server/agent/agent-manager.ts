@@ -87,6 +87,7 @@ import {
 
 const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
 const INTERRUPT_SESSION_TIMEOUT_MS = 2_000;
+const ARENA_WINNER_HYDRATION_WAIT_MS = 10_000;
 const STORED_AGENT_CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: false,
   supportsSessionPersistence: true,
@@ -258,6 +259,23 @@ export interface ProviderAvailability {
 interface AgentManagerRescueTimeouts {
   reloadSessionCloseMs?: number;
   interruptSessionMs?: number;
+  arenaWinnerHydrationMs?: number;
+}
+
+interface ArenaWinnerHydrationProgress {
+  step: "history" | "subagents";
+  startedAt: number;
+  stalled: boolean;
+}
+
+function resolveRescueTimeouts(
+  timeouts: AgentManagerRescueTimeouts | undefined,
+): Required<AgentManagerRescueTimeouts> {
+  return {
+    reloadSessionCloseMs: timeouts?.reloadSessionCloseMs ?? RELOAD_SESSION_CLOSE_TIMEOUT_MS,
+    interruptSessionMs: timeouts?.interruptSessionMs ?? INTERRUPT_SESSION_TIMEOUT_MS,
+    arenaWinnerHydrationMs: timeouts?.arenaWinnerHydrationMs ?? ARENA_WINNER_HYDRATION_WAIT_MS,
+  };
 }
 
 interface ProviderEnabledFlag {
@@ -696,6 +714,11 @@ export class AgentManager {
   private onWorkspaceStateMayHaveChanged?: (params: { cwd: string }) => void;
   private logger: Logger;
   private readonly rescueTimeouts: Required<AgentManagerRescueTimeouts>;
+  // Same-key callers share one winner hydration run, so its progress lives on the agent.
+  private readonly arenaWinnerHydrations = new WeakMap<
+    ActiveManagedAgent,
+    ArenaWinnerHydrationProgress
+  >();
   private acceptingAgentRegistrations = true;
 
   constructor(options: AgentManagerOptions) {
@@ -712,12 +735,7 @@ export class AgentManager {
       module: "agent",
       component: "agent-manager",
     });
-    this.rescueTimeouts = {
-      reloadSessionCloseMs:
-        options.rescueTimeouts?.reloadSessionCloseMs ?? RELOAD_SESSION_CLOSE_TIMEOUT_MS,
-      interruptSessionMs:
-        options.rescueTimeouts?.interruptSessionMs ?? INTERRUPT_SESSION_TIMEOUT_MS,
-    };
+    this.rescueTimeouts = resolveRescueTimeouts(options.rescueTimeouts);
     this.agentStreamCoalescer = new AgentStreamCoalescer({
       windowMs: options.agentStreamCoalesceWindowMs ?? AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS,
       timers: { setTimeout, clearTimeout },
@@ -2762,12 +2780,67 @@ export class AgentManager {
 
   async hydrateArenaWinner(agentId: string, snapshot: ArenaSnapshot): Promise<void> {
     const agent = this.requireSessionAgent(agentId);
-    await hydrateArenaWinner(agent, snapshot, async () => {
-      await this.forceHydrateTimelineFromLegacyProviderHistory(agent, true, true);
+    const timeoutMs = this.rescueTimeouts.arenaWinnerHydrationMs;
+    const hydration = hydrateArenaWinner(
+      agent,
+      snapshot,
+      (signal) => this.runArenaWinnerHydration(agent, signal),
+      timeoutMs,
+    );
+    // Opening a chat and sending its next battle wait for the winner so they read a current
+    // timeline. A hydration that never settles must not hold them; it broadcasts when it lands.
+    const result = await this.waitWithTimeout({ operation: hydration, timeoutMs });
+    if (result === "timed_out") {
+      // Every request and stream frame of the chat waits on the same run: warn once per stall,
+      // naming the step it is stuck in.
+      const progress = this.arenaWinnerHydrations.get(agent);
+      if (progress?.stalled) return;
+      if (progress) progress.stalled = true;
+      this.logger.warn(
+        { agentId, timeoutMs, step: progress?.step },
+        "Timed out waiting for Arena winner hydration",
+      );
+    }
+  }
+
+  private async runArenaWinnerHydration(
+    agent: ActiveManagedAgent,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const progress: ArenaWinnerHydrationProgress = {
+      step: "history",
+      startedAt: Date.now(),
+      stalled: false,
+    };
+    this.arenaWinnerHydrations.set(agent, progress);
+    let failure: unknown;
+    try {
+      await this.forceHydrateTimelineFromLegacyProviderHistory(agent, true, true, signal);
+      if (signal.aborted) return;
+      progress.step = "subagents";
       // Rebuilding drops the chat's subagents, and OpenCode history carries none: the winner's,
       // copied under the chat's session at the vote, come back from the provider.
       await agent.session.reloadProviderSubagents?.();
-    });
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      if (this.arenaWinnerHydrations.get(agent) === progress) {
+        this.arenaWinnerHydrations.delete(agent);
+      }
+      if (progress.stalled) {
+        this.logger.info(
+          {
+            agentId: agent.id,
+            step: progress.step,
+            aborted: signal.aborted,
+            elapsedMs: Date.now() - progress.startedAt,
+            ...(failure === undefined ? {} : { err: failure }),
+          },
+          "Arena winner hydration settled after timeout",
+        );
+      }
+    }
   }
 
   /**
@@ -3610,19 +3683,11 @@ export class AgentManager {
     agent: ActiveManagedAgent,
     broadcast: boolean,
     preserveArenaPrefix = false,
+    signal?: AbortSignal,
   ): Promise<void> {
-    const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
-    const providerSubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[] = [];
-    for await (const event of agent.session.streamHistory()) {
-      if (event.type === "timeline") {
-        if (event.item.type === "user_message" && isSystemInjectedEnvelope(event.item.text)) {
-          continue;
-        }
-        historyEvents.push(event);
-      } else if (event.type === "provider_subagent") {
-        providerSubagentEvents.push(event);
-      }
-    }
+    const { historyEvents, providerSubagentEvents } = await this.readLegacyProviderHistory(agent);
+    // A newer winner took over while this history was read; its rebuild must stand.
+    if (signal?.aborted) return;
 
     this.agentStreamCoalescer.flushAndDiscard(agent.id);
     // Read after the provider has finished and live buffers have flushed. Arena grafts
@@ -3668,6 +3733,25 @@ export class AgentManager {
     }
     this.touchUpdatedAt(agent);
     this.emitState(agent);
+  }
+
+  private async readLegacyProviderHistory(agent: ActiveManagedAgent): Promise<{
+    historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[];
+    providerSubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[];
+  }> {
+    const historyEvents: Extract<AgentStreamEvent, { type: "timeline" }>[] = [];
+    const providerSubagentEvents: Extract<AgentStreamEvent, { type: "provider_subagent" }>[] = [];
+    for await (const event of agent.session.streamHistory()) {
+      if (event.type === "timeline") {
+        if (event.item.type === "user_message" && isSystemInjectedEnvelope(event.item.text)) {
+          continue;
+        }
+        historyEvents.push(event);
+      } else if (event.type === "provider_subagent") {
+        providerSubagentEvents.push(event);
+      }
+    }
+    return { historyEvents, providerSubagentEvents };
   }
 
   private async primeTimelineFromLegacyProviderHistory(

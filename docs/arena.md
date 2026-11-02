@@ -135,7 +135,10 @@ The request/response pairs are `arena.stream.subscribe`, `unsubscribe` and
 together. Canonical winner hydration belongs to the daemon and is shared across windows per
 active agent. Hydrate each applied winner once after the chat becomes ready; serialize
 different winners and leave failed hydration eligible for retry. A reconnect or another
-state packet must not rebuild an already hydrated winner.
+state packet must not rebuild an already hydrated winner. Requests that wait for the winner,
+such as the resolve before every send, wait 10 seconds at most: a hydration that never settles
+must not block the next battle. Past the same wait a newer winner takes over from a stuck one,
+whose late result is dropped, since the newer history already contains it.
 
 ## What this is for
 
