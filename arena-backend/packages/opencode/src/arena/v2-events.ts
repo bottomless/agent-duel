@@ -276,6 +276,10 @@ const layer: Layer.Layer<Service, never, Bus.Service | CoreSession.Service> = La
               .pipe(Effect.catch(() => Effect.void))
           }
         }
+        // The projection has deleted the reverted messages by the time subscribers see the event.
+        if (event.type === SessionEvent.RevertEvent.Committed.type && arena) {
+          yield* arena.recordRevert(id as SessionID)
+        }
         if (event.type === SessionEvent.Created.type) {
           emit(event, "session.created", { info: context.info ?? data, session: context.info ?? data }, context)
           return
