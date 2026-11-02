@@ -16,6 +16,8 @@ export const ptBR: TranslationResources = {
     lessSecond: "<1s",
   },
   arena: {
+    engineRestartedCommandStopped:
+      "O mecanismo foi reiniciado e um comando em execução foi interrompido.",
     chooseMessageTarget: "Escolha para quem enviar a mensagem",
     steerContestants: "Orientar os dois participantes",
     steerAgent: "Orientar o agente {{side}}",

@@ -389,6 +389,7 @@ export const ArenaSnapshotSchema = z
         status: z.enum(["ready", "battle_active", "blocked", "failed", "archived"]),
         canonicalSessionID: z.string(),
         canonicalSHA: z.string(),
+        shellStops: z.array(z.object({ startedAt: z.number(), stoppedAt: z.number() })).optional(),
         activeTurnID: z.string().optional(),
         blockedReason: z.string().optional(),
         trunkConflicts: z.array(z.string()).optional(),

@@ -16,6 +16,7 @@ export const ko: TranslationResources = {
     lessSecond: "1초 미만",
   },
   arena: {
+    engineRestartedCommandStopped: "엔진이 다시 시작되어 실행 중이던 명령이 중지되었습니다.",
     chooseMessageTarget: "메시지를 보낼 대상을 선택하세요",
     steerContestants: "두 참가자 모두에게 지시",
     steerAgent: "에이전트 {{side}}에게 지시",

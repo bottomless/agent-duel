@@ -16,6 +16,8 @@ export const es: TranslationResources = {
     lessSecond: "<1s",
   },
   arena: {
+    engineRestartedCommandStopped:
+      "El motor se reinició y se detuvo un comando que estaba en ejecución.",
     chooseMessageTarget: "Elige a quién enviar un mensaje",
     steerContestants: "Orientar a ambos participantes",
     steerAgent: "Orientar al agente {{side}}",

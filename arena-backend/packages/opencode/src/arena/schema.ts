@@ -299,6 +299,7 @@ export const Snapshot = Schema.Struct({
     status: Schema.Literals(["ready", "battle_active", "blocked", "failed", "archived"]),
     canonicalSessionID: Schema.String,
     canonicalSHA: Schema.String,
+    shellStops: Schema.optional(Schema.Array(Schema.Struct({ startedAt: Schema.Number, stoppedAt: Schema.Number }))),
     activeTurnID: Schema.optional(Schema.String),
     blockedReason: Schema.optional(Schema.String),
     trunkConflicts: Schema.optional(Schema.Array(Schema.String)),

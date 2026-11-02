@@ -1382,8 +1382,11 @@ worktree (`arena/engine-runtime/shell-ledger.ts`). Stop only what that list name
 home, so another home's engine is out of reach, and an entry whose engine still runs stays. An entry
 names the PID and when it started, since the system reuses PIDs; a group whose leader has gone is
 left alone, since nothing proves whose it is. Do not identify shells by an environment variable:
-macOS hides another process's environment. A contestant whose background shell was stopped gets no
-notice of it; the ones in the test found out by checking, and started it again.
+macOS hides another process's environment. After Resume, each affected side gets the same neutral
+note that its background shell stopped and can be started again. A side with no stopped shell gets
+no note. With Battle off, the matching engine-exit error stays in its place in the chat and reads
+“The engine restarted, and a running command stopped.” in the app's language. Other exits keep their
+existing text.
 
 Payment failures belong to the service account, not the voter's account; in a BYOK build that
 account is the user's own OpenRouter key. Only a classified
