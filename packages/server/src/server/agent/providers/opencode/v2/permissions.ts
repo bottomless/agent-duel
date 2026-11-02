@@ -12,6 +12,8 @@ import { splitMultiSelectAnswer } from "../../question-card-answer.js";
 export class SessionPermissions {
   private readonly pending = new Map<string, AgentPermissionRequest>();
   private readonly permissionOwners = new Map<string, string>();
+  private readonly replying = new Set<string>();
+  private readonly settled = new Set<string>();
   private readonly forms = new Map<string, FormInfo>();
   constructor(
     private readonly getClient: () => V2Api,
@@ -44,7 +46,10 @@ export class SessionPermissions {
     const form = this.forms.get(requestId);
     if (form) {
       if (response.behavior === "deny")
-        await this.getClient().session.form.cancel({ sessionID: form.sessionID, formID: form.id });
+        await this.getClient().session.form.cancel({
+          sessionID: form.sessionID,
+          formID: form.id,
+        });
       else {
         const raw = response.updatedInput?.answers;
         const answer: Record<string, FormValue> = {};
@@ -64,21 +69,38 @@ export class SessionPermissions {
       }
       this.forms.delete(requestId);
     } else {
-      await this.getClient().permission.reply({
-        sessionID: this.permissionOwners.get(requestId) ?? this.id,
-        requestID: requestId,
-        decision: permissionReply(response),
-      });
+      if (this.settled.has(requestId) || this.replying.has(requestId)) return;
+      this.replying.add(requestId);
+      try {
+        await this.getClient().permission.reply({
+          sessionID: this.permissionOwners.get(requestId) ?? this.id,
+          requestID: requestId,
+          decision: permissionReply(response),
+        });
+        this.resolvePending(requestId, response);
+      } finally {
+        this.replying.delete(requestId);
+      }
+      return;
     }
     this.resolvePending(requestId, response);
   }
   async reconcile(sessionID: string) {
+    const known = [...this.permissionOwners].filter(([, owner]) => owner === sessionID);
     const [permissions, forms] = await Promise.all([
       this.getClient().permission.list({ sessionID }),
       this.getClient().session.form.list({ sessionID }),
     ]);
+    // The engine reports no reply when Stop interrupts the tool that was asking. Without this the
+    // card comes back with the next turn, and its answer fails because the request is gone.
+    // A reply deletes the engine request before its HTTP response or SSE event. Let our in-flight
+    // answer settle first, and ignore stale list snapshots once a request has settled.
+    const listed = new Set(permissions.map((request) => String(request.id)));
+    for (const [requestId] of known)
+      if (!listed.has(requestId) && !this.replying.has(requestId))
+        this.resolvePending(requestId, { behavior: "deny" });
     for (const request of permissions) {
-      if (this.pending.has(request.id)) continue;
+      if (this.pending.has(request.id) || this.settled.has(request.id)) continue;
       const pending: AgentPermissionRequest = {
         id: request.id,
         provider: "opencode",
@@ -87,7 +109,10 @@ export class SessionPermissions {
         description: request.message ?? request.resources.join("\n"),
         actions: [
           { id: "once", label: "Allow once", behavior: "allow" },
-          { id: "always", label: "Always allow", behavior: "allow" },
+          // The engine refuses to save an approval as wide as the root, so do not offer it.
+          ...(request.save?.length
+            ? [{ id: "always", label: "Always allow", behavior: "allow" as const }]
+            : []),
           { id: "reject", label: "Deny", behavior: "deny" },
         ],
       };
@@ -121,6 +146,7 @@ export class SessionPermissions {
     }
   }
   resolvePending(requestId: string, resolution: AgentPermissionResponse) {
+    if (!this.forms.has(requestId)) this.settled.add(requestId);
     if (!this.pending.delete(requestId)) return;
     this.forms.delete(requestId);
     this.permissionOwners.delete(requestId);
