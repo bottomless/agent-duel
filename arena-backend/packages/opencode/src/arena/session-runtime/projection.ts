@@ -31,15 +31,35 @@ const textFromContent = (content: readonly Tool.Content[] | undefined) =>
     .map((item) => item.text)
     .join("") ?? ""
 
-const projectError = (value: SessionMessage.Assistant["error"]): NonNullable<SessionV1.Assistant["error"]> => {
+/**
+ * Core error classes for a request that may succeed when sent again. 1.x marked the same failures
+ * retryable: 429, 408/409/5xx and the proxy's `server_error` stream marker (`provider.internal`),
+ * dropped connections (`provider.transport`) and timeouts. Arena offers the voter Retry from this.
+ */
+const RETRYABLE_ERRORS = new Set(["provider.rate-limit", "provider.internal", "provider.transport", "provider.timeout"])
+
+const retryableError = (value: NonNullable<SessionMessage.Assistant["error"]>) =>
+  RETRYABLE_ERRORS.has(value.type) ||
+  (value.status !== undefined &&
+    (value.status === 408 || value.status === 409 || value.status === 429 || value.status >= 500))
+
+/**
+ * `retryable` adds what the stored error cannot say: Core keeps an incomplete stream as
+ * `provider.invalid-output` without its classification, while malformed output shares that type.
+ */
+const projectError = (
+  value: SessionMessage.Assistant["error"],
+  retryable = false,
+): NonNullable<SessionV1.Assistant["error"]> => {
   if (!value) return { name: "UnknownError", data: { message: "Unknown assistant error" } }
   if (value.type === "aborted") return { name: "MessageAbortedError", data: { message: value.message } }
-  if (value.status !== undefined || value.response !== undefined)
+  const isRetryable = retryable || retryableError(value)
+  if (isRetryable || value.status !== undefined || value.response !== undefined)
     return {
       name: "APIError",
       data: {
         message: value.message,
-        isRetryable: false,
+        isRetryable,
         ...(value.status === undefined ? {} : { statusCode: value.status }),
         ...(value.response === undefined ? {} : { responseBody: value.response.body }),
       },
@@ -253,6 +273,114 @@ const assistantEntry = (
     canonicalPart(sessionID, message.id, item, index, DateTime.toEpochMillis(message.time.created)),
   ),
 })
+
+/**
+ * The answer a contestant run that failed settles with. Core 2.0 reports a failed drain as an error
+ * from `resume`, and records that error on the step's assistant when the step got that far. 1.x
+ * returned that assistant, and Arena decides from its error whether the voter may retry the run.
+ * When no step recorded the failure, build an unsaved assistant from it: its ID matches no stored
+ * row, so a retry that removes the failed answer removes nothing that holds work. `retryable`
+ * carries a retry class that the failure itself knew and the stored error lost (an incomplete stream).
+ */
+export function failedAnswer(
+  transcript: ArenaTranscript,
+  error: SessionMessage.Assistant["error"],
+  time: { readonly started: number; readonly now: number },
+  retryable = false,
+): ArenaTranscriptEntry | undefined {
+  const now = time.now
+  const failure = projectError(error, retryable)
+  const last = transcript.at(-1)
+  // Only the step that failed the run counts: an earlier answer that was stopped, or a step that
+  // failed and was continued, also carries an error.
+  if (
+    last?.info.role === "assistant" &&
+    last.info.error !== undefined &&
+    JSON.stringify(last.info.error) === JSON.stringify(projectError(error)) &&
+    (last.info.time.completed ?? 0) >= time.started
+  )
+    return { ...last, info: { ...last.info, error: failure } }
+  const user = transcript.findLast(
+    (entry): entry is ArenaTranscriptEntry & { readonly info: SessionV1.User } => entry.info.role === "user",
+  )
+  if (!user) return undefined
+  const info: SessionV1.Assistant = {
+    id: SessionV1.MessageID.ascending(),
+    sessionID: user.info.sessionID,
+    role: "assistant",
+    parentID: user.info.id,
+    time: { created: now, completed: now },
+    error: failure,
+    modelID: user.info.model.modelID,
+    providerID: user.info.model.providerID,
+    mode: "build",
+    agent: user.info.agent,
+    path: { cwd: user.info.sessionID, root: user.info.sessionID },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    finish: "error",
+    ...(user.info.model.variant ? { variant: user.info.model.variant } : {}),
+  }
+  return { info, parts: [] }
+}
+
+/**
+ * The note Core adds after a cut answer so the next step continues it
+ * (`CONTINUE_AFTER_INCOMPLETE_STREAM` in `core/src/session/runner/llm.ts`, not exported there).
+ */
+export const CONTINUE_AFTER_INCOMPLETE_STREAM =
+  "The previous response was interrupted. Continue from where you left off without repeating completed content."
+
+const continuationNote = (message: CanonicalMessage) =>
+  message.type === "synthetic" && message.text === CONTINUE_AFTER_INCOMPLETE_STREAM
+
+/**
+ * A half answer: an assistant whose model request failed (not a stop or steer) before any tool ran.
+ * An assistant that ran a tool is not one, because the tool's work is in the worktree.
+ */
+const halfAnswer = (message: CanonicalMessage) =>
+  message.type === "assistant" &&
+  message.error !== undefined &&
+  message.error.type !== "aborted" &&
+  !message.content.some((item) => item.type === "tool" && item.time.ran !== undefined)
+
+/**
+ * What Retry removes from a failed run after `boundary` (the run's prompt message): each half answer
+ * and the continuation note right after it. 2.0 continues a cut step, so a failed run holds one such
+ * pair per attempt. Retry answers the prompt again, so none of them is part of the new answer.
+ */
+export function abandonedAttempts(messages: readonly CanonicalMessage[], boundary: string): ReadonlySet<string> {
+  const dropped = new Set<string>()
+  let afterHalf = false
+  for (const message of messages) {
+    if (String(message.id) <= boundary) continue
+    if (halfAnswer(message)) {
+      dropped.add(String(message.id))
+      afterHalf = true
+      continue
+    }
+    if (afterHalf && continuationNote(message)) dropped.add(String(message.id))
+    if (message.type === "assistant" || message.type === "user" || message.type === "synthetic") afterHalf = false
+  }
+  return dropped
+}
+
+/**
+ * The rows of a winner's session that the vote copies into the chat, from `boundary` (its prompt) on,
+ * unchanged and in order. Half answers and Core's continuation notes stay, because they are what the
+ * winner's model read. Two kinds of row stay out:
+ * - `system` rows, which describe the temporary worktree and must never become chat policy. The
+ *   canonical runner reads its own instructions after the graft.
+ * - `idle` rows with an error, which record a failure from before a Retry. Core does not send `idle`
+ *   rows to a model, and the run went on after this one.
+ */
+export function messagesToGraft(messages: readonly CanonicalMessage[], boundary: string): readonly CanonicalMessage[] {
+  return messages.filter((message) => {
+    if (message.type === "system") return false
+    if (message.type === "idle" && message.error !== undefined) return false
+    return String(message.id) >= boundary
+  })
+}
 
 /** Convert canonical V2 rows into the stable Arena `info + parts` transcript. */
 export function project(

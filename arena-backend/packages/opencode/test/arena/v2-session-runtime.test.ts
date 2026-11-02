@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
+import { AIError, HttpContext, InvalidProviderOutputError, ProviderInternalError } from "@opencode/ai"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { Database } from "@opencode/core/database/database"
 import { Bus } from "@opencode/core/bus"
@@ -28,10 +29,25 @@ import {
   promptNode,
   sessionNode,
 } from "../../src/arena/session-runtime"
-import { project } from "../../src/arena/session-runtime/projection"
+import {
+  CONTINUE_AFTER_INCOMPLETE_STREAM,
+  abandonedAttempts,
+  messagesToGraft,
+  project,
+} from "../../src/arena/session-runtime/projection"
+import { SessionRetry } from "../../src/session/retry"
+import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message"
+import { toSessionError } from "@opencode/core/session/to-session-error"
+import { StepFailedError } from "@opencode/core/session/error"
 import { globalProjectNode } from "../../../core/test/lib/project"
 import { promptLocationNode } from "../../../core/test/fixture/prompt-location"
 import { offlineModels } from "../../../core/test/fixture/models"
+
+/** What the next `resume` does; a test that fails a run sets it and the hook below resets it. */
+let resume: (sessionID: Session.ID) => Effect.Effect<void, AIError | StepFailedError> = () => Effect.void
+afterEach(() => {
+  resume = () => Effect.void
+})
 
 const arenaLayer = AppNodeBuilder.build(
   LayerNode.group([
@@ -49,7 +65,15 @@ const arenaLayer = AppNodeBuilder.build(
     Project.node.replace(globalProjectNode),
     LocationServiceMap.node.replace(promptLocationNode),
     locationServiceMapNode.replace(promptLocationNode),
-    SessionExecution.node.replace(SessionExecution.noopLayer),
+    SessionExecution.node.replace(
+      Layer.effect(
+        SessionExecution.Service,
+        Effect.gen(function* () {
+          const noop = yield* SessionExecution.Service
+          return SessionExecution.Service.of({ ...noop, resume: (sessionID) => resume(sessionID) })
+        }),
+      ).pipe(Layer.provide(SessionExecution.noopLayer)),
+    ),
     offlineModels,
   ],
 )
@@ -341,4 +365,425 @@ describe("Arena V2 native session storage", () => {
       expect(cancelled.some((item) => item.id === pending.id)).toBe(false)
     }),
   )
+})
+
+describe("Arena V2 failed contestant run", () => {
+  const providerFailure = new AIError({
+    reason: new ProviderInternalError({
+      message: "Internal Server Error",
+      body: '{"error":{"message":"Internal Server Error"}}',
+      http: new HttpContext({ url: "https://arena.invalid/chat/completions", status: 500, headers: {} }),
+    }),
+  })
+
+  const insert = (database: Database.Interface, sessionID: Session.ID, message: SessionMessage.Info, seq: number) =>
+    Effect.gen(function* () {
+      const { id, type, ...data } = Schema.encodeSync(SessionMessage.Info)(message)
+      yield* database.db
+        .insert(SessionMessageTable)
+        .values({
+          id,
+          session_id: sessionID,
+          type,
+          seq,
+          time_created: DateTime.toEpochMillis(message.time.created),
+          time_updated: DateTime.toEpochMillis(message.time.created),
+          data,
+        })
+        .run()
+    })
+
+  const user = (id: string, created: DateTime.Utc): SessionMessage.User => ({
+    id: SessionMessage.ID.make(id),
+    type: "user",
+    text: "write the file",
+    time: { created },
+  })
+
+  const failedAssistant = (
+    id: string,
+    created: DateTime.Utc,
+    error: NonNullable<SessionMessage.Assistant["error"]>,
+  ): SessionMessage.Assistant => ({
+    id: SessionMessage.ID.make(id),
+    type: "assistant",
+    agent: Agent.ID.make("build"),
+    model: { providerID: Provider.ID.make("arena"), id: Model.ID.make("contestant") },
+    content: [],
+    error,
+    finish: "error",
+    time: { created, completed: created },
+  })
+
+  const session = (name: string) =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      return yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(`/arena-${name}`) }) })
+    })
+
+  it.effect("settles on the assistant the failed step recorded, so the run can be retried", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const { id } = yield* session("failed-step")
+      yield* insert(database, id, user("msg_failed_step_user", at), 0)
+      resume = (sessionID) =>
+        insert(
+          database,
+          sessionID,
+          failedAssistant("msg_failed_step_answer", DateTime.makeUnsafe(Date.now()), toSessionError(providerFailure)),
+          1,
+        ).pipe(Effect.orDie, Effect.andThen(Effect.fail(providerFailure)))
+
+      const answer = yield* (yield* ArenaPrompt).loop({ sessionID: id })
+
+      expect(answer?.info).toMatchObject({
+        id: "msg_failed_step_answer",
+        role: "assistant",
+        error: { name: "APIError", data: { statusCode: 500 } },
+      })
+      if (answer?.info.role !== "assistant" || !answer.info.error) throw new Error("errored assistant missing")
+      expect(SessionRetry.retryable(answer.info.error, "arena")).toBeDefined()
+    }),
+  )
+
+  it.effect("builds an unsaved assistant from the error when no step recorded it", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const { id } = yield* session("no-step")
+      yield* insert(database, id, user("msg_no_step_user", at), 0)
+      // An earlier answer that the voter stopped carries an error too; it is not this run's.
+      yield* insert(
+        database,
+        id,
+        failedAssistant("msg_no_step_stopped", at, { type: "aborted", message: "Step interrupted" }),
+        1,
+      )
+      resume = () => Effect.fail(providerFailure)
+
+      const answer = yield* (yield* ArenaPrompt).loop({ sessionID: id })
+
+      expect(answer?.parts).toEqual([])
+      expect(answer?.info).toMatchObject({
+        role: "assistant",
+        parentID: "msg_no_step_user",
+        providerID: "arena",
+        error: {
+          name: "APIError",
+          data: { statusCode: 500, responseBody: '{"error":{"message":"Internal Server Error"}}' },
+        },
+      })
+      expect(answer?.info.id).not.toBe("msg_no_step_stopped")
+      if (answer?.info.role !== "assistant" || !answer.info.error) throw new Error("built assistant missing")
+      expect(answer.info.time.completed).toBeDefined()
+      expect(SessionRetry.retryable(answer.info.error, "arena")).toBeDefined()
+      const stored = yield* (yield* ArenaSession).canonicalMessages(id)
+      expect(stored.some((message) => message.id === answer.info.id)).toBe(false)
+    }),
+  )
+
+  it.effect("does not settle on a continued step's error that is not the run's failure", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const { id } = yield* session("continued-step")
+      yield* insert(database, id, user("msg_continued_user", at), 0)
+      resume = (sessionID) =>
+        insert(
+          database,
+          sessionID,
+          failedAssistant("msg_continued_answer", DateTime.makeUnsafe(Date.now()), {
+            type: "provider.transport",
+            message: "socket closed",
+          }),
+          1,
+        ).pipe(Effect.orDie, Effect.andThen(Effect.fail(providerFailure)))
+
+      const answer = yield* (yield* ArenaPrompt).loop({ sessionID: id })
+
+      expect(answer?.info.id).not.toBe("msg_continued_answer")
+      expect(answer?.info).toMatchObject({ error: { name: "APIError", data: { statusCode: 500 } } })
+    }),
+  )
+
+  test("projects the failures 1.x retried as retryable, and engine defects as not", () => {
+    const projectedError = (error: NonNullable<SessionMessage.Assistant["error"]>) => {
+      const entry = project(
+        [user("msg_class_user", at), failedAssistant("msg_class_answer", at, error)],
+        Session.ID.make("ses_error_class"),
+      ).at(-1)
+      if (entry?.info.role !== "assistant" || !entry.info.error) throw new Error("errored assistant missing")
+      return entry.info.error
+    }
+    const retryable = (error: NonNullable<SessionMessage.Assistant["error"]>) =>
+      SessionRetry.retryable(projectedError(error), "arena") !== undefined
+
+    // The engine proxy ends a cut stream with a server_error event; Core records it with no status.
+    expect(
+      retryable({
+        type: "provider.internal",
+        message: "Provider request failed",
+        response: {
+          body: '{"message":"Arena contestant stream failed","type":"error","error":{"code":"server_error"}}',
+        },
+      }),
+    ).toBe(true)
+    expect(retryable({ type: "provider.rate-limit", message: "Too many requests", status: 429 })).toBe(true)
+    expect(retryable({ type: "provider.internal", message: "Bad gateway", status: 502 })).toBe(true)
+    expect(retryable({ type: "provider.transport", message: "Connection reset by server" })).toBe(true)
+    expect(retryable({ type: "provider.timeout", message: "Request timed out" })).toBe(true)
+
+    expect(retryable({ type: "unknown", message: "Tool input delta after end: call_1" })).toBe(false)
+    expect(retryable({ type: "provider.invalid-request", message: "Bad request", status: 400 })).toBe(false)
+    expect(retryable({ type: "provider.auth", message: "Unauthorized", status: 401 })).toBe(false)
+    expect(retryable({ type: "provider.quota", message: "Quota exceeded" })).toBe(false)
+    expect(retryable({ type: "aborted", message: "Step interrupted" })).toBe(false)
+  })
+
+  it.effect("offers Retry for a stream that ended unfinished, as 1.x did, but not for malformed output", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const settle = (name: string, failure: AIError | StepFailedError) =>
+        Effect.gen(function* () {
+          const { id } = yield* session(name)
+          yield* insert(database, id, user(`msg_${name}_user`, at), 0)
+          resume = (sessionID) =>
+            insert(
+              database,
+              sessionID,
+              failedAssistant(
+                `msg_${name}_answer`,
+                DateTime.makeUnsafe(Date.now()),
+                failure instanceof StepFailedError ? failure.error : toSessionError(failure),
+              ),
+              1,
+            ).pipe(Effect.orDie, Effect.andThen(Effect.fail(failure)))
+          const answer = yield* (yield* ArenaPrompt).loop({ sessionID: id })
+          if (answer?.info.role !== "assistant" || !answer.info.error) throw new Error("errored assistant missing")
+          // The recorded step is the answer, so Retry removes it before the run starts again.
+          expect(answer.info.id).toBe(`msg_${name}_answer`)
+          return SessionRetry.retryable(answer.info.error, "arena") !== undefined
+        })
+
+      const unfinished = new AIError({
+        reason: new InvalidProviderOutputError({
+          message: "OpenAI Chat stream ended without finish_reason",
+          classification: "incomplete-stream",
+        }),
+      })
+      const malformed = new AIError({
+        reason: new InvalidProviderOutputError({ message: "Provider sent a tool call without an id" }),
+      })
+      expect(toSessionError(unfinished).type).toBe("provider.invalid-output")
+      expect(toSessionError(malformed).type).toBe("provider.invalid-output")
+      // A stream that succeeds without a finish fails the step, not the stream (`runner/step.ts`).
+      const unknownFinish = new StepFailedError({
+        error: toSessionError(
+          new AIError({
+            reason: new InvalidProviderOutputError({
+              message: "The provider response ended with an unknown finish reason.",
+              classification: "incomplete-stream",
+            }),
+          }),
+        ),
+      })
+      expect(yield* settle("unfinished", unfinished)).toBe(true)
+      expect(yield* settle("unknown-finish", unknownFinish)).toBe(true)
+      expect(yield* settle("malformed", malformed)).toBe(false)
+    }),
+  )
+
+  it.effect("returns the last assistant when the run succeeds", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const { id } = yield* session("succeeded")
+      yield* insert(database, id, user("msg_succeeded_user", at), 0)
+      const answer = yield* (yield* ArenaPrompt).loop({ sessionID: id })
+      expect(answer).toBeUndefined()
+    }),
+  )
+})
+
+describe("Arena V2 abandoned attempts", () => {
+  const model = { providerID: Provider.ID.make("arena"), id: Model.ID.make("contestant") }
+  const cut = { type: "provider.internal", message: "Provider request failed" }
+  const time = (ms: number) => DateTime.makeUnsafe(1_700_000_000_000 + ms)
+  const user = (id: string): SessionMessage.User => ({
+    id: SessionMessage.ID.make(id),
+    type: "user",
+    text: "write it",
+    time: { created: time(0) },
+  })
+  const assistant = (id: string, extra: Partial<SessionMessage.Assistant> = {}): SessionMessage.Assistant => ({
+    id: SessionMessage.ID.make(id),
+    type: "assistant",
+    agent: Agent.ID.make("build"),
+    model,
+    content: [{ type: "text", text: "[" }],
+    time: { created: time(1), completed: time(2) },
+    ...extra,
+  })
+  const continuation = (id: string): SessionMessage.Synthetic => ({
+    id: SessionMessage.ID.make(id),
+    type: "synthetic",
+    text: CONTINUE_AFTER_INCOMPLETE_STREAM,
+    time: { created: time(3) },
+  })
+  const otherNote = (id: string): SessionMessage.Synthetic => ({
+    id: SessionMessage.ID.make(id),
+    type: "synthetic",
+    text: "Subagent finished.",
+    time: { created: time(3) },
+  })
+  const idle = (id: string, failed: boolean): SessionMessage.Idle => ({
+    id: SessionMessage.ID.make(id),
+    type: "idle",
+    outcome: failed ? "failed" : "succeeded",
+    ...(failed ? { error: cut } : {}),
+    time: { created: time(4) },
+  })
+  const text = (value: string) => ({ type: "text" as const, text: value })
+
+  test("finds every half answer and its continuation note after the run's prompt, and nothing else", () => {
+    const ranTool: SessionMessage.Assistant["content"][number] = {
+      type: "tool",
+      id: "call_write",
+      name: "write",
+      state: { status: "completed", input: { filePath: "a.md" }, content: [{ type: "text", text: "ok" }] },
+      time: { created: time(1), ran: time(1), completed: time(2) },
+    }
+    const messages: SessionMessage.Info[] = [
+      assistant("msg_a_earlier_failed", { error: cut }),
+      user("msg_b_prompt"),
+      assistant("msg_c_cut", { error: cut }),
+      continuation("msg_d_note"),
+      assistant("msg_e_cut", { error: cut }),
+      continuation("msg_f_note"),
+      assistant("msg_g_tools", { finish: "tool-calls", content: [ranTool] }),
+      assistant("msg_h_cut_after_tool", { error: cut, content: [ranTool] }),
+      continuation("msg_i_note"),
+      assistant("msg_j_stopped", { error: { type: "aborted", message: "Step interrupted" } }),
+      user("msg_k_steer"),
+      continuation("msg_l_other_note"),
+      assistant("msg_m_failed", { error: cut }),
+    ]
+    expect([...abandonedAttempts(messages, "msg_b_prompt")].sort()).toEqual([
+      "msg_c_cut",
+      "msg_d_note",
+      "msg_e_cut",
+      "msg_f_note",
+      "msg_m_failed",
+    ])
+  })
+
+  test("removes only Core's continuation note, not another note that follows a half answer", () => {
+    const messages: SessionMessage.Info[] = [
+      user("msg_a_prompt"),
+      assistant("msg_b_cut", { error: cut }),
+      otherNote("msg_c_subagent"),
+    ]
+    expect([...abandonedAttempts(messages, "msg_a_prompt")]).toEqual(["msg_b_cut"])
+  })
+
+  test("keeps Core's note text in step with Arena's copy", async () => {
+    const source = await Bun.file(new URL("../../../core/src/session/runner/llm.ts", import.meta.url)).text()
+    expect(source).toContain(JSON.stringify(CONTINUE_AFTER_INCOMPLETE_STREAM))
+  })
+
+  // A winner that recovered without Retry: the shape of the fourth and ninth live tests
+  // (`r11-retry.fix.md`), where GLM began a code block again after a cut.
+  const thought = {
+    type: "reasoning" as const,
+    text: "[Thinking redacted]",
+    state: { envelope: "abc" },
+    time: { created: time(1), completed: time(2) },
+  }
+  const ranTool: SessionMessage.AssistantTool = {
+    type: "tool",
+    id: "call_ran",
+    name: "write",
+    state: { status: "completed", input: { filePath: "a.md" }, content: [{ type: "text", text: "ok" }] },
+    time: { created: time(1), ran: time(1), completed: time(2) },
+  }
+  const unranTool: SessionMessage.AssistantTool = {
+    type: "tool",
+    id: "call_cut",
+    name: "write",
+    state: { status: "error", input: {}, error: { type: "aborted", message: "Tool execution interrupted" } },
+    time: { created: time(1), completed: time(2) },
+  }
+  const recovered: SessionMessage.Info[] = [
+    assistant("msg_a_old_answer", { finish: "stop", content: [text("before")] }),
+    user("msg_b_prompt"),
+    {
+      id: SessionMessage.ID.make("msg_c_system"),
+      type: "system",
+      text: "worktree policy",
+      time: { created: time(0) },
+    },
+    assistant("msg_d_half", { error: cut, content: [thought, text("1. Sleep well. 2. Drink wa")] }),
+    continuation("msg_e_note"),
+    idle("msg_f_idle_failed", true),
+    assistant("msg_g_half", { error: cut, content: [thought, text("```py\nprint("), unranTool] }),
+    continuation("msg_h_note"),
+    assistant("msg_i_tools", { finish: "tool-calls", content: [ranTool] }),
+    assistant("msg_j_half_no_text", { error: cut, content: [] }),
+    continuation("msg_k_note"),
+    assistant("msg_l_answer", { finish: "stop", content: [text("ter often. 3. Walk daily.")] }),
+    idle("msg_m_idle_ok", false),
+  ]
+
+  test("copies a recovered winner's half answers, notes and answer unchanged and in order", () => {
+    const copied = messagesToGraft(recovered, "msg_b_prompt")
+    expect(copied.map((message) => String(message.id))).toEqual([
+      "msg_b_prompt",
+      "msg_d_half",
+      "msg_e_note",
+      "msg_g_half",
+      "msg_h_note",
+      "msg_i_tools",
+      "msg_j_half_no_text",
+      "msg_k_note",
+      "msg_l_answer",
+      "msg_m_idle_ok",
+    ])
+    // The same objects: the graft edits no text, part or error.
+    for (const message of copied) expect(recovered).toContain(message)
+  })
+
+  test("Retry removes every piece that a recovered winner's graft keeps", () => {
+    const failed = recovered.slice(0, -2)
+    expect([...abandonedAttempts(failed, "msg_b_prompt")].sort()).toEqual([
+      "msg_d_half",
+      "msg_e_note",
+      "msg_g_half",
+      "msg_h_note",
+      "msg_j_half_no_text",
+      "msg_k_note",
+    ])
+  })
+
+  for (const [label, target] of [
+    ["the winner's model", model],
+    ["another model", { providerID: Provider.ID.make("arena"), id: Model.ID.make("other") }],
+  ] as const) {
+    test(`gives ${label} valid next-turn input from a recovered winner's history`, () => {
+      const lowered = toLLMMessages(messagesToGraft(recovered, "msg_b_prompt"), target)
+      const roles = lowered.map((message) => message.role)
+      expect(roles).not.toContain("system")
+      for (const [index, role] of roles.entries()) {
+        if (role === "assistant") expect(roles[index + 1]).not.toBe("assistant")
+      }
+      const parts = lowered.flatMap((message) => (typeof message.content === "string" ? [] : [...message.content]))
+      const calls = parts.flatMap((part) => (part.type === "tool-call" ? [part.id] : []))
+      const results = parts.flatMap((part) => (part.type === "tool-result" ? [part.id] : []))
+      expect(calls.sort()).toEqual(["call_cut", "call_ran"])
+      expect(results.sort()).toEqual(calls)
+      // No text is lost, and the error fields of the rows do not reach the model.
+      const written = JSON.stringify(lowered)
+      for (const piece of ["1. Sleep well. 2. Drink wa", "print(", "ter often. 3. Walk daily."]) {
+        expect(written).toContain(JSON.stringify(piece).slice(1, -1))
+      }
+      expect(written.split(CONTINUE_AFTER_INCOMPLETE_STREAM).length - 1).toBe(3)
+      expect(written).not.toContain("Provider request failed")
+    })
+  }
 })
