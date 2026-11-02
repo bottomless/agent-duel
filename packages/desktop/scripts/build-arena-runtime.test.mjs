@@ -1,5 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -87,16 +96,28 @@ test("the compiled engine starts with its native assets outside the checkout", a
       [path.join(root, "packages/desktop/scripts/build-arena-runtime.mjs")],
       { cwd: root, stdio: "pipe" },
     );
-    const assets = [
-      executableName,
-      "watcher.node",
-      ...(process.platform === "win32" ? [] : ["opencode-pty"]),
-    ];
-    for (const asset of assets)
-      copyFileSync(
-        path.join(root, "packages/desktop/dist/arena", asset),
-        path.join(directory, asset),
+    // Ship the directory as the app does: the executable and every native file beside it.
+    const arena = path.join(root, "packages/desktop/dist/arena");
+    const assets = readdirSync(arena);
+    if (process.platform === "darwin") {
+      expect(assets).toEqual(
+        expect.arrayContaining([
+          executableName,
+          "watcher.node",
+          "opencode-pty",
+          "libfff_c.dylib",
+          process.arch === "arm64" ? "librust_pty_arm64.dylib" : "librust_pty.dylib",
+        ]),
       );
+    }
+    for (const asset of assets) copyFileSync(path.join(arena, asset), path.join(directory, asset));
+    // Bun extracts a native file it embedded into TMPDIR; the hardened runtime refuses that copy.
+    const temp = path.join(directory, "tmp");
+    mkdirSync(temp);
+    const project = path.join(directory, "project");
+    mkdirSync(path.join(project, "src"), { recursive: true });
+    writeFileSync(path.join(project, "src", "needle-file.ts"), "export {}\n");
+    execFileSync("git", ["init", "-q"], { cwd: project });
     const token = "packaged-engine-test";
     child = spawn(
       executable,
@@ -113,6 +134,7 @@ test("the compiled engine starts with its native assets outside the checkout", a
           XDG_STATE_HOME: path.join(directory, "state"),
           OPENCODE_TEST_HOME: path.join(directory, "home"),
           OPENCODE_TEST_MANAGED_CONFIG_DIR: path.join(directory, "managed"),
+          TMPDIR: `${temp}/`,
         },
       },
     );
@@ -123,8 +145,8 @@ test("the compiled engine starts with its native assets outside the checkout", a
         controlTokenHash: createHash("sha256").update(token).digest("hex"),
       }),
     );
+    let output = "";
     const url = await new Promise((resolve, reject) => {
-      let output = "";
       const timeout = setTimeout(
         () => reject(new Error(`Engine startup timed out: ${output}`)),
         20_000,
@@ -161,6 +183,67 @@ test("the compiled engine starts with its native assets outside the checkout", a
       }),
     });
     expect(session.status).toBe(200);
+    if (process.platform !== "win32") {
+      // The persistent-PTY binding must name the opencode-pty shipped beside the executable.
+      const { data } = await session.json();
+      const terminal = await fetch(new URL(`/api/experimental/session/${data.id}/terminal`, url), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-paseo-control-token": token },
+        body: JSON.stringify({
+          command: "/bin/sh",
+          args: ["-c", "tty > pty-probe.txt; sleep 5"],
+          cwd: directory,
+          title: "probe",
+          env: {},
+        }),
+      });
+      expect(terminal.status).toBe(200);
+      const probe = path.join(directory, "pty-probe.txt");
+      const deadline = Date.now() + 5_000;
+      while (!existsSync(probe) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(readFileSync(probe, "utf8")).toMatch(/^\/dev\/tty/);
+      await fetch(new URL("/api/experimental/persistent-pty/shutdown", url), {
+        method: "POST",
+        headers: { "x-paseo-control-token": token },
+      });
+
+      const at = (route) => {
+        const target = new URL(route, url);
+        target.searchParams.set("location[directory]", project);
+        return target;
+      };
+      // fff file search.
+      const find = await fetch(at("/api/fs/find?query=needle"), {
+        headers: { "x-paseo-control-token": token },
+        signal: AbortSignal.timeout(10_000),
+      });
+      expect(find.status).toBe(200);
+      expect((await find.json()).data).toContainEqual({ path: "src/needle-file.ts", type: "file" });
+      // bun-pty terminal.
+      const pty = await fetch(at("/api/pty"), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-paseo-control-token": token },
+        body: JSON.stringify({
+          command: "/bin/sh",
+          args: ["-c", "tty > bun-pty-probe.txt; sleep 5"],
+          cwd: directory,
+          title: "probe",
+        }),
+      });
+      expect(pty.status).toBe(200);
+      const bunPtyProbe = path.join(directory, "bun-pty-probe.txt");
+      const ptyDeadline = Date.now() + 5_000;
+      while (!existsSync(bunPtyProbe) && Date.now() < ptyDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(readFileSync(bunPtyProbe, "utf8")).toMatch(/^\/dev\/tty/);
+
+      expect(readdirSync(temp).filter((name) => name.startsWith(".bun-"))).toEqual([]);
+      expect(output).not.toContain("watcher backend not supported");
+      expect(output).not.toContain("Arena filesystem watcher unavailable");
+    }
   } finally {
     if (child && child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve));
@@ -169,4 +252,4 @@ test("the compiled engine starts with its native assets outside the checkout", a
     }
     rmSync(directory, { recursive: true, force: true });
   }
-}, 30_000);
+}, 60_000);

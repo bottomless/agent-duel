@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, mkdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +29,8 @@ export function resolveArenaBuildDefines(env) {
 
 function buildArenaRuntime() {
   const defines = resolveArenaBuildDefines(process.env);
+  // build-desktop.ts writes the executable and every native file it loads; drop files an older build left.
+  rmSync(outputDir, { recursive: true, force: true });
   mkdirSync(outputDir, { recursive: true });
   const result = spawnSync(
     "bun",
@@ -47,22 +48,6 @@ function buildArenaRuntime() {
       `${executable} was compiled without ${binding}; run bun install in arena-backend`,
     );
     process.exit(1);
-  }
-  // The compiled copy is extracted to an unsigned temp file at run time, which the hardened runtime
-  // refuses to load. Ship the binding beside the executable, where the app's signature covers it.
-  const engineRequire = createRequire(path.join(arenaDir, "packages/opencode/package.json"));
-  copyFileSync(
-    engineRequire.resolve(`${binding}/watcher.node`),
-    path.join(outputDir, "watcher.node"),
-  );
-  if (process.platform !== "win32") {
-    const coreRequire = createRequire(path.join(arenaDir, "packages/core/package.json"));
-    const ptyRequire = createRequire(coreRequire.resolve("@opencode-ai/pty/package.json"));
-    const libc = process.platform === "linux" ? "-gnu" : "";
-    const pty = `@opencode-ai/pty-${process.platform}-${process.arch}${libc}`;
-    const destination = path.join(outputDir, "opencode-pty");
-    copyFileSync(ptyRequire.resolve(`${pty}/bin/opencode-pty`), destination);
-    chmodSync(destination, 0o755);
   }
 }
 
