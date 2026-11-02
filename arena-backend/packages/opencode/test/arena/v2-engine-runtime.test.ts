@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import { existsSync } from "node:fs"
 import { AISDK } from "@opencode/core/aisdk"
-import { LLM, LLMClient } from "@opencode/ai"
+import { LLM, LLMClient, Media, Message } from "@opencode/ai"
 import { RequestExecutor } from "@opencode/ai/route"
 import { FetchHttpClient } from "effect/http"
 import { Context, Effect, Exit, Layer, Scope, Stream } from "effect"
@@ -9,6 +9,7 @@ import { HttpServer } from "effect/http"
 import { createRoutes } from "@opencode/server/routes"
 import { SdkPlugins } from "@opencode/core/plugin/sdk"
 import { Session as CoreSession } from "@opencode/core/session"
+import { ReadTool } from "@opencode/core/tool/plugin/read"
 import { AssignmentRegistry } from "@/arena/proxy"
 import { clearToolExecutionEnvironment, gateToolExecution } from "@/session/tool-execution-gate"
 import { SessionID } from "@/session/schema"
@@ -45,6 +46,49 @@ describe("Arena v2 engine runtime", () => {
     }
     expect(requestTokenEstimate(imageRequest)).toBeLessThan(10_000)
     expect(requestNeedsCompaction({ messages: [{ role: "user", content: "x".repeat(1_100_000) }] })).toBe(true)
+  })
+
+  it("charges OpenCode 2 image shapes a fixed allowance instead of their base64 size", () => {
+    // About a 1.4 MB PNG; at four characters per token its base64 alone is about 470k tokens.
+    const png = Buffer.alloc(1_400_000, 7)
+    const base64 = png.toString("base64")
+    const request = {
+      system: [{ type: "text", text: "You are a contestant." }],
+      messages: [
+        Message.user([
+          Message.text("Look at screenshot.png and describe it."),
+          Message.media(Media.base64(base64, "image/png"), { filename: "pasted.png" }),
+          Message.media(Media.bytes(new Uint8Array(png), "image/png"), { filename: "bytes.png" }),
+        ]),
+        Message.assistant([{ type: "tool-call", id: "call_1", name: "read", input: { filePath: "screenshot.png" } }]),
+        Message.tool({
+          id: "call_1",
+          name: "read",
+          result: {
+            type: "content",
+            value: ReadTool.toModelContent("screenshot.png", undefined, {
+              type: "file",
+              encoding: "base64",
+              mime: "image/png",
+              content: base64,
+            }),
+          },
+        }),
+      ],
+    }
+    // Two user media parts and one read result image, each charged once.
+    const estimate = requestTokenEstimate(request)
+    expect(estimate).toBeGreaterThanOrEqual(12_000)
+    expect(estimate).toBeLessThan(13_000)
+    expect(requestNeedsCompaction(request)).toBe(false)
+    // The JSON form of the same request, as hooks and logs serialize it.
+    const encoded = JSON.parse(JSON.stringify(request))
+    expect(JSON.stringify(encoded).length).toBeGreaterThan(5_000_000)
+    expect(requestTokenEstimate(encoded)).toBe(estimate)
+    // A stray inline data URI elsewhere still counts as one image.
+    expect(requestTokenEstimate({ text: `data:image/png;base64,${base64}` })).toBeLessThan(4_100)
+    // Text of the same size still needs compaction.
+    expect(requestNeedsCompaction({ messages: [Message.user(base64)] })).toBe(true)
   })
 
   it("adds blinded request identity and stable cache lineage headers", () => {
