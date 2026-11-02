@@ -1989,6 +1989,12 @@ export const AgentTimelineSearchRequestMessageSchema = z.object({
   cursor: z.number().int().nonnegative().optional(),
 });
 
+export const AgentHistoryCloseRequestMessageSchema = z.object({
+  type: z.literal("agent.history.close.request"),
+  agentId: z.string(),
+  requestId: z.string(),
+});
+
 export const AgentTimelineListPromptsRequestMessageSchema = z.object({
   type: z.literal("agent.timeline.list_prompts.request"),
   agentId: z.string(),
@@ -3464,6 +3470,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   DaemonUpdateRequestMessageSchema,
   FetchAgentTimelineRequestMessageSchema,
   AgentTimelineSearchRequestMessageSchema,
+  AgentHistoryCloseRequestMessageSchema,
   AgentTimelineListPromptsRequestMessageSchema,
   ProviderSubagentListRequestMessageSchema,
   ProviderSubagentTimelineRequestMessageSchema,
@@ -4923,6 +4930,15 @@ export const AgentTimelineSearchResponseMessageSchema = z.object({
       }),
     ),
     nextCursor: z.number().int().nonnegative().nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
+export const AgentHistoryCloseResponseMessageSchema = z.object({
+  type: z.literal("agent.history.close.response"),
+  payload: z.object({
+    requestId: z.string(),
+    agentId: z.string(),
     error: z.string().nullable(),
   }),
 });
@@ -7129,6 +7145,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   FetchAgentTimelineResponseMessageSchema,
   AgentTimelineReplacementMessageSchema,
   AgentTimelineSearchResponseMessageSchema,
+  AgentHistoryCloseResponseMessageSchema,
   AgentTimelineListPromptsResponseMessageSchema,
   ProviderSubagentListResponseMessageSchema,
   ProviderSubagentTimelineResponseMessageSchema,

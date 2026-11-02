@@ -2920,6 +2920,8 @@ export class Session {
         return this.handleAgentTimelineAppendRequest(msg);
       case "agent.timeline.search.request":
         return this.handleAgentTimelineSearchRequest(msg, source);
+      case "agent.history.close.request":
+        return this.handleAgentHistoryCloseRequest(msg, source);
       case "agent.timeline.list_prompts.request":
         return this.handleAgentTimelineListPromptsRequest(msg, source);
       case "agent.provider_subagents.list.request":
@@ -9005,6 +9007,25 @@ export class Session {
       type: "agent.timeline.append.response",
       payload: { requestId: msg.requestId, seq, epoch },
     });
+  }
+
+  private async handleAgentHistoryCloseRequest(
+    msg: Extract<SessionInboundMessage, { type: "agent.history.close.request" }>,
+    source?: object,
+  ): Promise<void> {
+    let error: string | null = null;
+    try {
+      await this.agentManager.closeReadOnlyAgent(msg.agentId);
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+    }
+    this.emitForSource(
+      {
+        type: "agent.history.close.response",
+        payload: { agentId: msg.agentId, requestId: msg.requestId, error },
+      },
+      source,
+    );
   }
 
   private async handleAgentTimelineSearchRequest(

@@ -457,6 +457,9 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
       }
     },
     getRuntimeInfo: async () => mapRuntimeInfo(provider, await inner.getRuntimeInfo()),
+    get readOnly() {
+      return inner.readOnly;
+    },
     getAvailableModes: () => inner.getAvailableModes(),
     getCurrentMode: () => inner.getCurrentMode(),
     setMode: (modeId) => inner.setMode(modeId),

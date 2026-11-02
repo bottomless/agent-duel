@@ -1631,3 +1631,78 @@ describe("a size change in an Arena chat (R19)", () => {
     }
   });
 });
+
+describe("reading an archived Arena chat whose worktree was removed (R26)", () => {
+  const handle = {
+    provider: "opencode",
+    sessionId: "session",
+    nativeHandle: "session",
+    metadata: { cwd: "/tmp/removed-worktree" },
+  } as const;
+  const stored = { modeId: "build", model: "arena/medium", thinkingOptionId: "xhigh" };
+
+  // The engine answers session-scoped reads and refuses every location-scoped route, as it does
+  // once the directory is gone and it holds no cached instance for it.
+  function removedWorktreeChat(arenaMode: boolean) {
+    const harness = new V2Harness();
+    harness.history.push({
+      id: "answer",
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "arena", id: "medium" },
+      time: { created: 2 },
+      content: [{ type: "text", text: "kept after archive" }],
+    });
+    const missing = async () => {
+      throw Object.assign(new Error("Location not found: /tmp/removed-worktree"), {
+        name: "LocationNotFoundError",
+      });
+    };
+    harness.api.session.switchAgent = missing;
+    harness.api.session.switchModel = missing;
+    harness.api.agent.list = missing;
+    harness.api.plugin.list = missing;
+    const unavailable = async () => {
+      throw new Error("Arena server manager is not used by this test");
+    };
+    return new OpenCodeV2AgentClient({
+      logger: createTestLogger(),
+      runtime: harness.runtime,
+      arenaMode,
+      serverManager: {
+        acquireCurrent: unavailable,
+        acquireNew: unavailable,
+        acquireDedicated: unavailable,
+        acquireExisting: () => undefined,
+        shutdown: async () => undefined,
+      },
+    } as ConstructorParameters<typeof OpenCodeV2AgentClient>[0]);
+  }
+
+  test("a history load reads the transcript without touching the location", async () => {
+    const session = await removedWorktreeChat(true).resumeSession(handle, stored, undefined, {
+      purpose: "history",
+    });
+    try {
+      const history: AgentStreamEvent[] = [];
+      for await (const event of session.streamHistory!()) history.push(event);
+      expect(JSON.stringify(history)).toContain("kept after archive");
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("an interactive resume still needs the location", async () => {
+    await expect(
+      removedWorktreeChat(true).resumeSession(handle, stored, undefined, {
+        purpose: "interactive",
+      }),
+    ).rejects.toThrow("Location not found");
+  });
+
+  test("a chat outside Arena keeps the shared Paseo behaviour", async () => {
+    await expect(
+      removedWorktreeChat(false).resumeSession(handle, stored, undefined, { purpose: "history" }),
+    ).rejects.toThrow("Location not found");
+  });
+});

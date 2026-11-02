@@ -1,4 +1,5 @@
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
+import type { ChatFindHistory } from "@/agent-stream/chat-find/types";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import React, {
   forwardRef,
@@ -291,6 +292,7 @@ export interface AgentStreamViewHandle {
 }
 
 export interface AgentStreamViewProps {
+  findHistory?: ChatFindHistory;
   agentId: string;
   serverId?: string;
   context: AgentScreenAgent;
@@ -476,6 +478,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       readOnly = false,
       arenaChat,
       historyPagination,
+      findHistory,
     },
     ref,
   ) {
@@ -1390,6 +1393,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         agentId={agentId}
         serverId={resolvedServerId}
         epoch={timelineEpoch}
+        history={findHistory}
         items={findItems}
         viewportRef={viewportRef}
         revealLoadedMessage={revealLoadedHistory}
@@ -1564,6 +1568,7 @@ function agentStreamViewPropsEqual(
   reasons.push(...collectAgentScreenAgentDiffs(left.context, right.context));
   if (left.streamItems !== right.streamItems) reasons.push("streamItems");
   if (left.streamHead !== right.streamHead) reasons.push("streamHead");
+  if (left.findHistory !== right.findHistory) reasons.push("findHistory");
   if (left.pendingPermissions !== right.pendingPermissions) reasons.push("pendingPermissions");
   if (left.pendingMessageSubmissions !== right.pendingMessageSubmissions) {
     reasons.push("pendingMessageSubmissions");

@@ -4003,6 +4003,17 @@ export class DaemonClient {
     return { seq: payload.seq, epoch: payload.epoch };
   }
 
+  /** Release an archived Arena transcript reader; an interactive session is never closed. */
+  async closeAgentHistory(agentId: string): Promise<void> {
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "agent.history.close.request", requestId, agentId },
+      responseType: "agent.history.close.response",
+    });
+    if (payload.error) throw new Error(payload.error);
+  }
+
   async searchAgentTimeline({
     agentId,
     query,

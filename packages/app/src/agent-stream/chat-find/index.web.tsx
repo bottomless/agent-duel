@@ -56,6 +56,7 @@ export function ChatFind({
   agentId,
   serverId,
   epoch,
+  history,
   items,
   viewportRef,
   revealLoadedMessage,
@@ -65,8 +66,8 @@ export function ChatFind({
   const { t } = useTranslation();
   const widget = useRef<PaneFindHandle>(null);
   const root = useRef<HTMLDivElement>(null);
-  const bindings = useRef({ viewportRef, revealLoadedMessage, visibleMessageIds });
-  bindings.current = { viewportRef, revealLoadedMessage, visibleMessageIds };
+  const bindings = useRef({ viewportRef, revealLoadedMessage, visibleMessageIds, history });
+  bindings.current = { viewportRef, revealLoadedMessage, visibleMessageIds, history };
   const [highlightName] = useState(() => `paseo-chat-find-${++nextHighlightId}`);
   const { isInteractive } = usePaneFocus();
   const active = useRetainedPanelActive();
@@ -74,11 +75,13 @@ export function ChatFind({
     () =>
       new ChatFindModel({
         search(query, cursor) {
+          if (bindings.current.history) return bindings.current.history.search(query, cursor);
           const client = getHostRuntimeStore().getClient(serverId);
           if (!client) return Promise.reject(new Error("Host disconnected"));
           return client.searchAgentTimeline({ agentId, query, cursor });
         },
         load(targetEpoch, seq) {
+          if (bindings.current.history) return bindings.current.history.load(targetEpoch, seq);
           return getHostRuntimeStore().fetchAgentTimeline(
             serverId,
             agentId,
@@ -95,8 +98,10 @@ export function ChatFind({
   );
   const state = useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
   useEffect(() => {
-    model.updateHistory(epoch, items);
-  }, [model, epoch, items]);
+    model.updateHistory(history ? history.epoch : epoch, items);
+    // Loading another transcript page expands this surface's explicitly limited search scope.
+    if (history && model.getSnapshot().open) model.retry();
+  }, [model, epoch, items, history]);
   useEffect(() => () => model.close(), [model]);
   useEffect(() => {
     if (!active) model.close();
