@@ -307,6 +307,7 @@ describe("Arena v2 engine runtime", () => {
           },
         },
         shell: { hook: noOp },
+        event: { subscribe: () => Stream.empty },
         tool: {
           hook: noOp,
           transform: (callback: (editor: any) => void) =>
@@ -551,6 +552,7 @@ describe("Arena v2 engine runtime", () => {
         },
         permission: { hook: noOp },
         shell: { hook: noOp },
+        event: { subscribe: () => Stream.empty },
         tool: { hook: noOp, transform: () => Effect.void },
       }
       yield* createArenaEnginePlugin({ enabled: true, assignments, modelIdleTimeoutMs: 60, contestantFetch }).effect(

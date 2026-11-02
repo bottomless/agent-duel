@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
-import { Context as EffectContext, Effect } from "effect"
+import { Context as EffectContext, Effect, Stream } from "effect"
 import type { SystemPart } from "@opencode/ai"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { AISDK } from "@opencode/core/aisdk"
@@ -26,6 +26,7 @@ import {
 import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
 import { ArenaResponseRecovery } from "../response-recovery"
 import { idleBudgetFetch, idleExhausted, idleTimeout, resetIdleBudget } from "./idle"
+import { ArenaShellLedger } from "./shell-ledger"
 import {
   toolExecutionProvider,
   toolExecutionWorktree,
@@ -394,6 +395,28 @@ function install(context: Context, options: InstalledOptions) {
         Object.assign(event.env, options.previewEnvironment?.(sessionID, event.cwd) ?? previewEnvironment(sessionID))
         yield* Effect.promise(() => mkdir(tmpDirectory(sessionID), { recursive: true }))
       }),
+    )
+
+    // Core spawns each shell as its own process group, so one outlives an engine that dies without
+    // teardown. Keep them on disk for the next start to stop (`stopOrphanShells`). Every shell counts,
+    // since a chat with Battle off runs its commands here as well.
+    // Read now, so the first shell's record does not wait for it.
+    yield* Effect.promise(() => ArenaShellLedger.engineOwner().catch(() => undefined))
+    yield* context.event.subscribe().pipe(
+      Stream.runForEach((event) => {
+        const directory = ArenaRuntime.shellLedgerDirectory()
+        const change =
+          event.type === "shell.created"
+            ? () => ArenaShellLedger.recordShell(directory, event.data.info)
+            : event.type === "shell.exited" || event.type === "shell.deleted"
+              ? () => ArenaShellLedger.releaseShell(directory, event.data.id)
+              : undefined
+        if (!change) return Effect.void
+        return Effect.tryPromise(change).pipe(
+          Effect.catchCause((cause) => Effect.logWarning("Arena could not update the shell ledger", { cause })),
+        )
+      }),
+      Effect.forkScoped({ startImmediately: true }),
     )
 
     yield* context.tool.hook("execute.before", (event) => {

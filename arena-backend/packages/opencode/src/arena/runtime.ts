@@ -37,10 +37,19 @@ export function recoverOnce(run: () => Promise<void>) {
   return recovery
 }
 
+function localDirectory() {
+  return join(process.env.PASEO_HOME?.trim() || join(homedir(), ".paseo"), "arena")
+}
+
+/** Per home, like the store: an engine with another home never reads this engine's shells. */
+export function shellLedgerDirectory() {
+  return join(localDirectory(), "engine-shells")
+}
+
 async function openLocalStore() {
   const { connectLocalStore } = await import("./local-store")
   let uploader: ResearchUploader | undefined
-  const directory = join(process.env.PASEO_HOME?.trim() || join(homedir(), ".paseo"), "arena")
+  const directory = localDirectory()
   const local = await connectLocalStore({
     directory,
     onMutation: (mutation) => uploader?.enqueue(mutation),

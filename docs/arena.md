@@ -1320,6 +1320,17 @@ whose environment never finished copying (`environmentReadyAt`), since a resumed
 work without those files. Engines before this parked every interrupted battle as stopped; startup
 reopens those once (`reopenParkedInterruptedTurn`).
 
+Core gives each shell its own process group, so a shell survives an engine that dies without
+teardown. It would keep writing into the worktree, and a resumed contestant that runs the command
+again would do the work twice. So the engine lists each running shell in
+`$PASEO_HOME/arena/engine-shells/`, and the next start stops those shells before recovery commits a
+worktree (`arena/engine-runtime/shell-ledger.ts`). Stop only what that list names: the list is per
+home, so another home's engine is out of reach, and an entry whose engine still runs stays. An entry
+names the PID and when it started, since the system reuses PIDs; a group whose leader has gone is
+left alone, since nothing proves whose it is. Do not identify shells by an environment variable:
+macOS hides another process's environment. A contestant whose background shell was stopped gets no
+notice of it; the ones in the test found out by checking, and started it again.
+
 Payment failures belong to the service account, not the voter's account; in a BYOK build that
 account is the user's own OpenRouter key. Only a classified
 temporary request-budget failure is retried, on the same assignment and session, before any

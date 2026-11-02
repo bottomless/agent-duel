@@ -190,7 +190,8 @@ import type {
   WarmWorktreeRecord,
 } from "./records"
 import { battleMetricsSchemaVersion, reviewFlushLimit, runTelemetryVersion } from "./records"
-import { enabled, recoverOnce, registry, setTelemetry, store as runtimeStore } from "./runtime"
+import { enabled, recoverOnce, registry, setTelemetry, shellLedgerDirectory, store as runtimeStore } from "./runtime"
+import { stopOrphanShells } from "./engine-runtime/shell-ledger"
 import { create as createTelemetry } from "./telemetry"
 import { Recorder } from "./events"
 import {
@@ -1391,6 +1392,27 @@ export const layer: Layer.Layer<
     let idleUnloadStarted = false
     const reconciledComparisonStores = new WeakSet<Store>()
     let recoverInterrupted: (store: Store) => Effect.Effect<void, Error> = () => Effect.void
+
+    // On stderr, which the daemon keeps in its log: a process stopped at startup needs a trace.
+    const orphanShells = promise(() => stopOrphanShells(shellLedgerDirectory())).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          if (result.stopped.length === 0 && result.ownerRunning.length === 0) return
+          console.warn("Arena checked the shells of earlier engines", {
+            stopped: result.stopped.map((shell) => shell.pid),
+            killed: result.killed.map((shell) => shell.pid),
+            ownerRunning: result.ownerRunning.map((shell) => shell.pid),
+          })
+        }),
+      ),
+      Effect.asVoid,
+      // The ledger stays for the next start. Recovery goes on: a battle must still open.
+      Effect.catchCause((cause) =>
+        Effect.sync(() => console.warn("Arena could not stop the shells of an earlier engine", Cause.pretty(cause))),
+      ),
+    )
+    const stopOrphanShellsOnce = yield* Effect.cached(orphanShells)
+    if (enabled()) yield* stopOrphanShellsOnce.pipe(Effect.forkIn(scope))
 
     const getStore = promise(() => runtimeStore()).pipe(
       Effect.tap((store) =>
@@ -8910,6 +8932,9 @@ export const layer: Layer.Layer<
     })
 
     recoverInterrupted = Effect.fn("Arena.recoverInterrupted")(function* (store: Store) {
+      // First, so a shell the last engine left running cannot write into a worktree this recovery
+      // commits, and no Resume can start while it still runs.
+      yield* stopOrphanShellsOnce
       yield* reconcileComparisons(store)
       const chats = yield* promise(() => store.chats.find({}).toArray())
       // A restart can follow a crash that left one of Arena's refs empty or naming a lost object, and
