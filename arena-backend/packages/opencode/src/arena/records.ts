@@ -512,6 +512,12 @@ export type RunDocument = {
   /** How many times the voter retried this run after it failed. */
   manualRetries?: number
   retries: ReadonlyArray<GenerationRetry>
+  /**
+   * What this run's telemetry records; absent on runs from before it was versioned. 1: one request ID
+   * spans a request's retries, and each generation records its request kind. Older runs gave every
+   * attempt its own ID and recorded no kind, so their retry count and first-token time are unknown.
+   */
+  telemetryVersion?: number
   resolvedProviders?: string[]
   permissionOutcomes: ReadonlyArray<Readonly<Record<string, unknown>>>
   autoAccept?: boolean
@@ -573,6 +579,8 @@ export type GenerationDocument = {
   readonly requestedReasoning: Readonly<Record<string, unknown>>
   readonly enforcedReasoning: Readonly<Record<string, unknown>>
   readonly classification: "root" | "subagent" | "compaction"
+  /** The engine's request: a contestant step, a compaction, or a utility call such as the title. */
+  readonly requestKind?: "generation" | "compaction" | "utility"
   readonly startedAt: Date
   responseHeadersAt?: Date
   firstTokenAt?: Date
@@ -580,6 +588,11 @@ export type GenerationDocument = {
   usage?: UsageTotals
   finishReason?: string
   error?: string
+  /**
+   * The attempt failed on the user's side, and the engine waited instead of retrying: no network, or
+   * a session the control plane rejected. Not a provider error, and its resend is not a retry.
+   */
+  wait?: "network" | "sign-in"
   requestArtifactID?: Identifier
   responseArtifactID?: Identifier
   readonly payloadHashes?: {
@@ -812,7 +825,10 @@ export type ReviewEventInput = {
 export const reviewFlushLimit = 500
 
 /** Bump when a derived field changes meaning, then recompute the whole table. */
-export const battleMetricsSchemaVersion = 8
+export const battleMetricsSchemaVersion = 9
+
+/** The current `RunDocument.telemetryVersion`; see there. */
+export const runTelemetryVersion = 1
 
 export type ReviewEffort = {
   /**
@@ -868,10 +884,18 @@ export type ReviewEffort = {
  */
 /** One contestant's side of a battle. */
 export type BattleSideMetrics = {
-  readonly model: string
+  /** Absent when the battle ended without a reveal; the engine never learns the model then. */
+  readonly model?: string
   readonly providers: readonly string[]
   readonly llmCalls: number
   readonly latencyMs: number
+  /**
+   * First token of the contestant's first answer: the earliest root-session step request
+   * (`requestKind` "generation") that got a token, refusals and waits excepted. The token is the
+   * first chunk with model output (`carriesModelOutput` in telemetry.ts), not a comment, heartbeat or
+   * role-only line. Absent on runs
+   * without `RunDocument.telemetryVersion`, which cannot tell a title request from a step.
+   */
   readonly ttftMs?: number
   readonly tokensPerSec?: number
   readonly promptTokens: number
@@ -882,8 +906,14 @@ export type BattleSideMetrics = {
   readonly cacheWriteTokens: number
   readonly cost: number
   readonly upstreamInferenceCost?: number
+  /** Refused or failed attempts, except those that waited on the user's network or sign-in. */
   readonly providerErrors: number
-  readonly retries: number
+  /**
+   * Attempts the engine sent again after a failure, waits on the user's network or sign-in excepted.
+   * Absent on runs without `RunDocument.telemetryVersion`: their count is unknown, not 0. A row of
+   * schemaVersion 8 or older carries 0 there, which means unknown too.
+   */
+  readonly retries?: number
   readonly finishReason?: string
   readonly runState: RunDocument["runState"]
   readonly runErrored: boolean

@@ -6,7 +6,14 @@ import { streamText } from "ai"
 import { Provider as ProviderV2 } from "@opencode/schema/provider"
 import { SessionV1 } from "@opencode/schema/v1/session"
 import { Effect } from "effect"
-import { AssignmentRegistry, proxy, rewriteBody, sanitizePayload, streamProgress } from "../../src/arena/proxy"
+import {
+  AssignmentRegistry,
+  ArenaWaitError,
+  proxy,
+  rewriteBody,
+  sanitizePayload,
+  streamProgress,
+} from "../../src/arena/proxy"
 import { SessionRetry } from "../../src/session/retry"
 import { createArenaService } from "@agent-duel/arena-service"
 import { isNetworkUnavailable } from "@agent-duel/arena-service/network"
@@ -235,6 +242,67 @@ describe("ArenaProxy", () => {
     },
     2000,
   )
+
+  test("records a refused upstream response as a failed generation", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const calls: string[] = []
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () => Response.json({ error: { message: "provider/hidden-model failed" } }, { status: 500 }),
+      telemetry: {
+        complete: () => {
+          calls.push("complete")
+        },
+        error: () => {
+          calls.push("error")
+        },
+      },
+    })
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({
+      error: { message: "Arena contestant request failed", type: "arena_upstream_error" },
+    })
+    expect(calls).toEqual(["error"])
+  })
+
+  test("tells a wait on the user's network or sign-in apart from a refusing provider", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const errors: unknown[] = []
+    const answer = async (status: number, body: unknown) =>
+      proxy(request(), registry, {
+        upstream: "https://unit.invalid",
+        fetch: async () => Response.json(body, { status }),
+        telemetry: { error: (_metadata, error) => void errors.push(error) },
+      })
+    await answer(503, { error: { message: "Arena network is unavailable", type: "arena_network_unavailable" } })
+    await answer(401, { error: { message: "Sign in again", type: "arena_session_rejected" } })
+    await answer(503, { error: { message: "overloaded" } })
+    await answer(401, { error: { message: "invalid key" } })
+    expect(errors.map((error) => (error instanceof ArenaWaitError ? error.wait : "provider"))).toEqual([
+      "network",
+      "sign-in",
+      "provider",
+      "provider",
+    ])
+  })
+
+  test("records which kind of engine request a generation is", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const kinds: unknown[] = []
+    for (const kind of ["utility", "generation", "bogus"]) {
+      const incoming = request()
+      incoming.headers.set("x-arena-generation-classification", kind)
+      await proxy(incoming, registry, {
+        upstream: "https://unit.invalid",
+        fetch: async () => Response.json({ choices: [] }),
+        telemetry: { start: (metadata) => void kinds.push(metadata.requestKind) },
+      })
+    }
+    expect(kinds).toEqual(["utility", "generation", undefined])
+  })
 
   test("maps only known pre-header connection failures to a neutral retryable response", async () => {
     for (const code of ["ConnectionRefused", "ECONNREFUSED", "ECONNRESET"]) {

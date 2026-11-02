@@ -300,6 +300,11 @@ export function textMessageCount(transcript: unknown): number {
     .filter((text) => text.trim().length > 0).length
 }
 
+function refused(generation: GenerationDocument) {
+  const status = generation.routing?.status
+  return typeof status === "number" && status >= 400
+}
+
 function offsetFrom(base: Date, at: Date | undefined) {
   return at ? at.getTime() - base.getTime() : undefined
 }
@@ -353,7 +358,22 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
     const runGenerations = generations.filter((generation) => generation.runID === run._id)
     const usage = run.usage
     const latencyMs = runGenerations.reduce((total, generation) => total + (generation.usage?.latencyMs ?? 0), 0)
-    const first = runGenerations.find((generation) => generation.firstTokenAt && generation.startedAt)
+    const tracked = (run.telemetryVersion ?? 0) >= 1
+    // The contestant's first answer, not the title request that usually goes out first. A refused
+    // attempt or a wait has no token from the model.
+    const first = tracked
+      ? runGenerations
+          .filter(
+            (generation) =>
+              generation.requestKind === "generation" &&
+              generation.sessionID === run.rootSessionID &&
+              generation.firstTokenAt &&
+              !refused(generation) &&
+              !generation.wait,
+          )
+          .toSorted((left, right) => left.startedAt.getTime() - right.startedAt.getTime())
+          .at(0)
+      : undefined
     const completionTokens = usage?.completionTokens ?? 0
     const transcript = transcripts[side]
     const read = transcript !== undefined
@@ -365,7 +385,9 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
     const other = side === "a" ? "b" : "a"
 
     sides[side] = {
-      model: assignment.model ?? assignment.assignmentID,
+      // Models are written to the turn only on a revealing resolution. A battle discarded before
+      // either side showed output is never revealed, so the model stays unknown here.
+      ...(assignment.model === undefined ? {} : { model: assignment.model }),
       providers: run.resolvedProviders ?? [],
       llmCalls: runGenerations.length,
       latencyMs,
@@ -381,8 +403,11 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
       cacheWriteTokens: usage?.cacheWriteTokens ?? 0,
       cost: usage?.cost ?? 0,
       ...(usage?.upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost: usage.upstreamInferenceCost }),
-      providerErrors: runGenerations.filter((generation) => generation.error !== undefined).length,
-      retries: run.retries.length,
+      // A refused attempt saved before refusals were marked as errors still has its status.
+      providerErrors: runGenerations.filter(
+        (generation) => (generation.error !== undefined || refused(generation)) && !generation.wait,
+      ).length,
+      ...(tracked ? { retries: run.retries.length } : {}),
       ...(runGenerations.at(-1)?.finishReason ? { finishReason: runGenerations.at(-1)?.finishReason } : {}),
       runState: run.runState,
       runErrored: run.error !== undefined,

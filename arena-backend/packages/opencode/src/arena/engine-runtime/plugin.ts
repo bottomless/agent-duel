@@ -14,7 +14,7 @@ import { tmpDirectory } from "../contestant"
 import { ArenaEngineAssignment, type ArenaAssignmentRegistry } from "./assignment"
 import { ArenaEngineModels, CONTESTANT_IDENTITY, PROVIDER_ID, modelReference } from "./models"
 import { OUTPUT_TOKEN_LIMIT } from "../model-profile"
-import { classification, promptCacheKey, requestHeaders, requestNeedsCompaction } from "./request"
+import { classification, promptCacheKey, requestHeaders, requestNeedsCompaction, sessionRequestIDs } from "./request"
 import { ArenaEngineSandbox, previewEnvironment } from "./sandbox"
 import type { ToolExecutionGate } from "./gate"
 import { getArenaAutoAccept } from "./auto-accept"
@@ -272,6 +272,7 @@ function install(context: Context, options: InstalledOptions) {
                     kind: event.kind,
                     parentSessionID: session.parentID,
                     rootSessionID: assignment?.rootSessionID,
+                    requestID: sessionRequestIDs.next(String(event.sessionID), event.kind),
                   }),
                 }
               }),
@@ -333,6 +334,29 @@ function install(context: Context, options: InstalledOptions) {
           if (options.retryDelayMs !== undefined && event.decision.retry) event.decision.delay = options.retryDelayMs
         }),
       { providerID: String(PROVIDER_ID) },
+    )
+
+    // Registered after the Arena retry policy above, so it sees the final decision. A retried
+    // request keeps its request ID, which is how telemetry counts the retry.
+    yield* context.session.hook(
+      "retry",
+      (event) =>
+        Effect.sync(() => {
+          if (arenaSession(options, String(event.sessionID)) && event.decision.retry)
+            sessionRequestIDs.retryScheduled(String(event.sessionID), event.decision.delay)
+        }),
+      { providerID: String(PROVIDER_ID) },
+    )
+    // A prompt to a subagent session is a new task from its parent, so a retry its last step decided
+    // but never sent is over. A prompt to a root session is a steer, and its pending retry still runs;
+    // a new turn starts a new run, which telemetry links nothing across.
+    yield* context.session.hook("prompt", (event) =>
+      context.session.get({ sessionID: event.sessionID }).pipe(
+        Effect.map((session) => {
+          if (session.parentID) sessionRequestIDs.reset(String(event.sessionID))
+        }),
+        Effect.orElseSucceed(() => undefined),
+      ),
     )
 
     yield* context.permission.hook("evaluate", (event) =>
@@ -407,8 +431,8 @@ function install(context: Context, options: InstalledOptions) {
       }
     })
 
-    // A model request ID is intentionally generated at the request boundary. This keeps request
-    // headers unique while preserving provider state and native context replay in Core.
+    // `model.request` sets the request ID, and its retries reuse it. This covers a request that did
+    // not pass through that hook, without touching provider state or native context replay in Core.
     yield* context.session.hook(
       "http.request",
       (event) =>

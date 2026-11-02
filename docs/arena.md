@@ -54,6 +54,11 @@ to 3 MiB and a record to 2 MiB; oversized records are logged and dropped while t
 intact. The control plane still owns authentication, the OpenRouter proxy, and research
 ingestion.
 
+Read a `battleMetrics` side's `retries` and `ttftMs` only where they are present in a row of
+`schemaVersion` 9 or later: an older row's `retries: 0` and `ttftMs` (often the title request's)
+mean unknown, and engine recovery rebuilds old rows only on desktops that upgrade, for turns still
+stored locally (`BattleSideMetrics` in `arena/records.ts`).
+
 A session holds its images inline: a pasted one and every screenshot a contestant reads. A long
 run's transcript is then mostly images, and over the 10 MB artifact limit it is not kept at all,
 which stops the turn instead of asking for a vote. So the archive keeps each image as its own `image`

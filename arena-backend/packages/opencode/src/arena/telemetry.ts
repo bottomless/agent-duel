@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 import type { Store } from "./mongo"
-import type { RequestMetadata, Telemetry } from "./proxy"
+import { ArenaWaitError, type RequestMetadata, type Telemetry } from "./proxy"
 import type { GenerationMetrics, UsageTotals } from "./records"
 import { ArenaPrivacy } from "./privacy"
 
@@ -18,6 +18,8 @@ type ActiveGeneration = {
 type Attempt = {
   readonly generationID: string
   readonly attemptIndex: number
+  /** The attempt waited on the user's network or sign-in: its resend is not a retry (docs/arena.md). */
+  waited?: boolean
 }
 
 type PendingMetrics = GenerationMetrics & {
@@ -147,6 +149,49 @@ function payloads(raw: string) {
   } catch {
     return []
   }
+}
+
+function filled(value: unknown) {
+  if (typeof value === "string") return value.length > 0
+  if (Array.isArray(value)) return value.length > 0
+  return false
+}
+
+/** A chat-completions delta or message that carries text, reasoning or a tool call. */
+function messageOutput(value: unknown) {
+  if (!record(value)) return false
+  return ["content", "reasoning", "reasoning_content", "reasoning_details", "tool_calls", "refusal"].some((key) =>
+    filled(value[key]),
+  )
+}
+
+/** A Responses API output item that carries text, reasoning or a tool call. */
+function itemOutput(value: unknown) {
+  if (!record(value)) return false
+  if (value.type === "function_call" || value.type === "custom_tool_call") return true
+  return filled(value.content) || filled(value.summary)
+}
+
+/**
+ * Whether a response chunk carries model output: a content, reasoning or tool-call delta in a
+ * chat-completions stream, a Responses API `*.delta` event or a new tool-call item, or a complete
+ * non-streamed message. Blank lines, `:` comments, heartbeats, role-only deltas, usage and finish
+ * events are not output, so they do not make a first token.
+ */
+export function carriesModelOutput(chunk: string) {
+  return payloads(chunk).some((value) => {
+    if (!record(value)) return false
+    if (Array.isArray(value.choices))
+      return value.choices.some(
+        (choice) => record(choice) && (messageOutput(choice.delta) || messageOutput(choice.message)),
+      )
+    if (typeof value.type === "string") {
+      if (value.type.endsWith(".delta")) return filled(value.delta)
+      if (value.type === "response.output_item.added") return itemOutput(value.item)
+      return false
+    }
+    return Array.isArray(value.output) && value.output.some(itemOutput)
+  })
 }
 
 function terminalPayload(raw: string) {
@@ -286,7 +331,8 @@ export function create(store: Store): Telemetry {
       const id = metadata.generationID
       const runAttempts = attempts.get(metadata.assignment.runID) ?? new Map<string, Attempt>()
       const previous = runAttempts.get(metadata.requestID)
-      const attemptIndex = previous ? previous.attemptIndex + 1 : 0
+      // Counts real attempts: the resend after a wait keeps the index of the attempt that waited.
+      const attemptIndex = previous ? previous.attemptIndex + (previous.waited ? 0 : 1) : 0
       await store.saveGeneration({
         _id: id,
         runID: metadata.assignment.runID,
@@ -295,6 +341,7 @@ export function create(store: Store): Telemetry {
         parentSessionID: metadata.parentSessionID,
         callIndex,
         requestID: metadata.requestID,
+        ...(metadata.requestKind ? { requestKind: metadata.requestKind } : {}),
         ...(previous ? { retryParentID: previous.generationID } : {}),
         assignmentID: metadata.assignment.assignmentID,
         requestedModel: metadata.requestedModel,
@@ -306,7 +353,7 @@ export function create(store: Store): Telemetry {
       })
       runAttempts.set(metadata.requestID, { generationID: id, attemptIndex })
       attempts.set(metadata.assignment.runID, runAttempts)
-      if (previous) {
+      if (previous && !previous.waited) {
         await store.recordGenerationRetry(metadata.assignment.runID, {
           requestID: metadata.requestID,
           generationID: id,
@@ -334,7 +381,7 @@ export function create(store: Store): Telemetry {
     rawChunk(metadata, chunk) {
       const generation = active.get(metadata)
       if (!generation) return
-      if (!generation.firstChunkAt && chunk.length > 0) generation.firstChunkAt = new Date()
+      if (!generation.firstChunkAt && carriesModelOutput(chunk)) generation.firstChunkAt = new Date()
       generation.chunks.push(chunk)
     },
     async complete(metadata, completedAt) {
@@ -375,11 +422,18 @@ export function create(store: Store): Telemetry {
         })
       }
     },
-    async error(metadata, _error, at) {
+    async error(metadata, error, at) {
       if (!metadata) return
       const generation = active.get(metadata)
       if (!generation) return
       active.delete(metadata)
+      const wait = error instanceof ArenaWaitError ? error.wait : undefined
+      if (wait) {
+        const attempt = attempts.get(metadata.assignment.runID)?.get(metadata.requestID)
+        if (attempt?.generationID === generation.id) attempt.waited = true
+      }
+      // A refused attempt's only chunk is the error body Arena wrote, not a token from the model.
+      const refused = generation.status !== undefined && generation.status >= 400
       const raw = generation.chunks.join("")
       const response = sanitizeStoredResponse(raw)
       const hasResponse = generation.responseAt !== undefined || response.length > 0
@@ -398,11 +452,12 @@ export function create(store: Store): Telemetry {
       }
       await store.updateGeneration(generation.id, {
         completedAt: at,
-        ...(generation.firstChunkAt ? { firstTokenAt: generation.firstChunkAt } : {}),
+        ...(generation.firstChunkAt && !refused ? { firstTokenAt: generation.firstChunkAt } : {}),
         ...(hasResponse ? { responseArtifactID } : {}),
         ...(response ? { providerGenerationID: providerGenerationID(response) } : {}),
         ...(hasResponse ? { payloadHashes: { response: hash(response) } } : {}),
         error: "Arena contestant request failed",
+        ...(wait ? { wait } : {}),
       })
       const measured = usageFromPayload(terminalPayload(raw), Math.max(0, at.getTime() - metadata.startedAt.getTime()))
       const finished = finishReason(raw)
