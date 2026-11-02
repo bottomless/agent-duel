@@ -176,7 +176,8 @@ export class ArenaApiError extends Schema.TaggedError<ArenaApiError>()(
   "ArenaApiError",
   {
     name: Schema.Literal("ArenaApiError"),
-    data: Schema.Struct({ message: Schema.String }),
+    // `code` names a refusal the client words itself; most failures carry only `message`.
+    data: Schema.Struct({ message: Schema.String, code: Schema.optional(Schema.String) }),
   },
   { httpApiStatus: 400 },
 ) {}

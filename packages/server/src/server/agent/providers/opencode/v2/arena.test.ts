@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, expect, test } from "vitest";
 import { createArenaSessionApi } from "./arena.js";
+import { ArenaRefusalError } from "../../../../arena/refusal.js";
 import { managedV2ProcessEvents } from "./runtime.js";
 import { OpenCodeV2AgentClient } from "./agent.js";
 import { createTestLogger } from "../../../../../test-utils/test-logger.js";
@@ -64,6 +65,42 @@ test("an Arena request uses the replacement generation after reconnecting", asyn
     },
   ]);
   expect(api.streamKey).toContain(replacement.serverUrl);
+});
+
+test("an engine refusal the app words itself keeps its code; other failures do not", async () => {
+  const failures = [
+    {
+      name: "ArenaApiError",
+      data: {
+        message: "Agent B is finishing its turn. Send your message again.",
+        code: "arena_side_closing",
+      },
+    },
+    { name: "ArenaApiError", data: { message: "Cannot write file", code: "ENOENT" } },
+  ];
+  const server = createServer((_request, response) => {
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify(failures.shift()));
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const api = createArenaSessionApi({
+    connection: () => ({
+      serverUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      controlToken: "refusal-test",
+    }),
+    sessionId: "ses_canonical",
+    directory: "/tmp/arena-project",
+  });
+  const refused = await api.reply("turn", "steer", "b", []).catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(ArenaRefusalError);
+  expect(refused).toMatchObject({
+    code: "arena_side_closing",
+    message: "Agent B is finishing its turn. Send your message again.",
+  });
+  const failed = await api.reply("turn", "steer", "b", []).catch((error: unknown) => error);
+  expect(failed).not.toBeInstanceOf(ArenaRefusalError);
+  expect(failed).toMatchObject({ message: "Cannot write file" });
 });
 
 test("managed V2 generations report process exit even to late subscribers", async () => {

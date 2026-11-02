@@ -1421,6 +1421,10 @@ export const fr: TranslationResources = {
   arenaByok: {
     keyMissing: "Ajoutez votre clé OpenRouter dans les Paramètres pour lancer un duel.",
   },
+  arenaSteer: {
+    sideClosing: "Agent {{side}} termine son tour. Renvoyez votre message.",
+    sideClosingBoth: "Un agent termine son tour. Renvoyez votre message.",
+  },
   battleRepository: {
     title: "Agent Duel a besoin d'un commit",
     notGitMessage: "Créer un dépôt Git avec un premier commit vide ?",

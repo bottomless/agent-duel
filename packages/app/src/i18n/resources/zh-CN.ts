@@ -1375,6 +1375,10 @@ export const zhCN: TranslationResources = {
   arenaByok: {
     keyMissing: "请在设置中添加你的 OpenRouter 密钥以开始对战。",
   },
+  arenaSteer: {
+    sideClosing: "Agent {{side}} 正在结束本轮。请重新发送消息。",
+    sideClosingBoth: "有一个 Agent 正在结束本轮。请重新发送消息。",
+  },
   battleRepository: {
     title: "Agent Duel 需要一个提交",
     notGitMessage: "要创建一个带空初始提交的 Git 仓库吗？",

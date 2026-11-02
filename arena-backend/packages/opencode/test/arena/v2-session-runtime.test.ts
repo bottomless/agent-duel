@@ -28,7 +28,7 @@ import {
   promptNode,
   sessionNode,
 } from "../../src/arena/session-runtime"
-import { project } from "../../src/arena/session-runtime/projection"
+import { ARENA_SENT_AT, project } from "../../src/arena/session-runtime/projection"
 import { globalProjectNode } from "../../../core/test/lib/project"
 import { promptLocationNode } from "../../../core/test/fixture/prompt-location"
 import { offlineModels } from "../../../core/test/fixture/models"
@@ -339,6 +339,79 @@ describe("Arena V2 native session storage", () => {
       yield* arena.removeMessage({ sessionID: session.id, messageID: pending.id })
       const cancelled = yield* sessions.inbox(session.id)
       expect(cancelled.some((item) => item.id === pending.id)).toBe(false)
+    }),
+  )
+
+  it.effect("shows queued steers from the native inbox, withdraws one, and keeps a cut-off one as a message", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-steer-queue-test") })
+      const session = yield* sessions.create({ location })
+      const prompt = yield* ArenaPrompt
+      const arena = yield* ArenaSession
+
+      // The execution layer is a no-op here, so nothing promotes the steers: they stay queued the
+      // way they do while a contestant's tool call runs.
+      yield* prompt.steer({ sessionID: session.id, text: "STEER-ONE" })
+      yield* prompt.steer({
+        sessionID: session.id,
+        text: "STEER-TWO",
+        parts: [{ type: "file", url: "data:text/plain;base64,aGVsbG8=", filename: "note.txt" }],
+        metadata: { [ARENA_SENT_AT]: 1_700_000_000_123 },
+      })
+      expect(yield* arena.messages({ sessionID: session.id })).toEqual([])
+      const queued = yield* arena.pending({ sessionID: session.id })
+      expect(queued.map((entry) => entry.info.role)).toEqual(["user", "user"])
+      expect(queued.map((entry) => entry.parts[0])).toMatchObject([
+        { type: "text", text: "STEER-ONE" },
+        { type: "text", text: "STEER-TWO" },
+      ])
+      expect(queued[1]?.parts.some((part) => part.type === "file" && part.filename === "note.txt")).toBe(true)
+      const [one, two] = queued.map((entry) => entry.info.id)
+      if (!one || !two) throw new Error("queued steers missing")
+
+      yield* arena.cancelPending({ sessionID: session.id, messageIDs: [one] })
+      expect((yield* arena.pending({ sessionID: session.id })).map((entry) => entry.info.id)).toEqual([two])
+
+      expect(yield* arena.deliverPending(session.id)).toBe(1)
+      expect(yield* arena.pending({ sessionID: session.id })).toEqual([])
+      const delivered = yield* arena.messages({ sessionID: session.id })
+      expect(delivered.map((entry) => entry.info.id)).toEqual([two])
+      expect(delivered[0]?.parts[0]).toMatchObject({ type: "text", text: "STEER-TWO" })
+      // Core stamps the delivery time on the row; the thread shows when the user sent it.
+      expect(delivered[0]?.info.time.created).toBe(1_700_000_000_123)
+
+      // A delivered steer is no longer the user's to withdraw: the model may already have read it.
+      const late = yield* Effect.flip(arena.cancelPending({ sessionID: session.id, messageIDs: [two] }))
+      expect(late.message).toBe("Arena pending steer was already consumed")
+      expect(yield* arena.deliverPending(session.id)).toBe(0)
+    }),
+  )
+
+  it.effect("withdraws several queued steers all or none", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-steer-atomic-test") })
+      const session = yield* sessions.create({ location })
+      const prompt = yield* ArenaPrompt
+      const arena = yield* ArenaSession
+
+      yield* prompt.steer({ sessionID: session.id, text: "STEER-READ" })
+      yield* arena.deliverPending(session.id)
+      const [read] = (yield* arena.messages({ sessionID: session.id })).map((entry) => entry.info.id)
+      yield* prompt.steer({ sessionID: session.id, text: "STEER-WAIT" })
+      yield* prompt.steer({ sessionID: session.id, text: "STEER-ALSO" })
+      const [wait, also] = (yield* arena.pending({ sessionID: session.id })).map((entry) => entry.info.id)
+      if (!read || !wait || !also) throw new Error("steers missing")
+
+      // One of them was already delivered, so none is withdrawn.
+      const refused = yield* Effect.flip(arena.cancelPending({ sessionID: session.id, messageIDs: [wait, read] }))
+      expect(refused.message).toBe("Arena pending steer was already consumed")
+      expect((yield* arena.pending({ sessionID: session.id })).map((entry) => entry.info.id)).toEqual([wait, also])
+
+      yield* arena.cancelPending({ sessionID: session.id, messageIDs: [wait, also] })
+      expect(yield* arena.pending({ sessionID: session.id })).toEqual([])
+      expect((yield* arena.messages({ sessionID: session.id })).map((entry) => entry.info.id)).toEqual([read])
     }),
   )
 })

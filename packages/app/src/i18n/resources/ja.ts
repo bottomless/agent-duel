@@ -1404,6 +1404,12 @@ export const ja: TranslationResources = {
   arenaByok: {
     keyMissing: "バトルを開始するには、設定で OpenRouter キーを追加してください。",
   },
+  arenaSteer: {
+    sideClosing:
+      "Agent {{side}} がターンを終えようとしています。メッセージをもう一度送信してください。",
+    sideClosingBoth:
+      "エージェントがターンを終えようとしています。メッセージをもう一度送信してください。",
+  },
   battleRepository: {
     title: "Agent Duel にはコミットが必要です",
     notGitMessage: "空の最初のコミットで Git リポジトリを作成しますか？",

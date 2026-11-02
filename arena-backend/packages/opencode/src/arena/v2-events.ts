@@ -8,7 +8,7 @@ import * as SessionV1 from "@opencode/schema/v1/session"
 import { Context, Effect, Layer, Option, Stream } from "effect"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { GlobalBus } from "@/bus/global"
-import { partID, project } from "./session-runtime/projection"
+import { partID, pendingMessage, project } from "./session-runtime/projection"
 import { ArenaService } from "./service"
 import { MessageID, SessionID } from "@/session/schema"
 
@@ -262,6 +262,27 @@ const layer: Layer.Layer<Service, never, Bus.Service | CoreSession.Service> = La
         if (event.type === "session.inbox.enqueued" || event.type === "session.inbox.delivered") {
           const inboxID = stringField(data, "inboxID")
           if (inboxID) pendingNormalTurns.set(id, inboxID)
+        }
+        // A steer waits in Core's inbox until a step boundary delivers it. Publish it as the user
+        // message it becomes, under the same ID, so the thread can show it queued, and drop it when
+        // it is withdrawn. Delivery publishes the transcript row that replaces it.
+        if (event.type === "session.inbox.enqueued") {
+          const inboxID = stringField(data, "inboxID")
+          const item = inboxID
+            ? (yield* sessions.inbox(id as Session.ID)).find((candidate) => candidate.id === inboxID)
+            : undefined
+          const message = item ? pendingMessage(item) : undefined
+          if (message) publishMessage(event, context, message)
+        }
+        if (event.type === "session.inbox.cancelled") {
+          const inboxID = stringField(data, "inboxID")
+          if (inboxID) emit(event, "message.removed", { messageID: inboxID }, context)
+        }
+        if (event.type === "session.inbox.delivered") {
+          const inboxID = stringField(data, "inboxID")
+          const message = inboxID ? yield* messageFor(id, inboxID, true) : undefined
+          if (message?.type === "user" || message?.type === "synthetic") publishMessage(event, context, message)
+          if (inboxID) deleteMessage(id, inboxID)
         }
         if (
           event.type === "session.execution.succeeded" ||

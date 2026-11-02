@@ -281,7 +281,20 @@ queue. Each queued message has its own delete, always visible because a hover-on
 unnoticed; it removes that message without interrupting the current work. **Send now** interrupts
 the running work and resumes the stored messages; unlike Stop, it must not submit them again or
 finish the contestant's battle run. Paseo's ordinary queue waits for an entire run, so the battle
-owns delivery. The toolbar stays on one row.
+owns delivery. OpenCode 2 keeps a queued steer in the session inbox, not the transcript, until a step
+boundary delivers it under the same ID, so the run's thread, delete, and Send now read both
+(`steerTranscript` in `arena/service.ts`). Delete cancels its messages together and fails, cancelling
+none, once one was delivered. Core stamps a delivered steer with the delivery time; the thread and
+the daemon's chat timeline (`opencode/v2/timeline.ts`) show the send time (`ARENA_SENT_AT`), which
+`lastTurnStart` also needs to tell a steer from a new prompt.
+A steer can arrive just as a side's answer ends, after the runner's last boundary check. The side's
+prompt fiber closes its turn under a per-run gate only when no steer waits and no runner works, and
+otherwise answers it first; a steer is admitted under the same gate and refused once the side is
+closing. The refusal carries the code `arena_side_closing` through the daemon, and the app words it
+(`arena/steer-refusal.ts`) and keeps the draft. A steer still queued when Stop or an early choice cuts the run off
+is delivered as an unanswered message, as 1.x left it, so the thread and a kept side's history agree.
+An engine restart leaves it in the inbox: the interrupted run's archive shows it, and Resume delivers it.
+The toolbar stays on one row.
 When its own available width is narrow, shorten the target labels, show tool permissions as a
 status icon, and use the send arrow; retain the target-specific placeholder and accessible labels. Tool permissions use a quiet
 status menu: `Auto Accept` or `Ask before tools`. The choice applies to the chat, or to both

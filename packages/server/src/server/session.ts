@@ -14,6 +14,7 @@ import {
   withStreamImageRefs,
 } from "./arena/history-images.js";
 import { ArenaPayloadTooLargeError } from "./arena/payload-limit.js";
+import { ArenaRefusalError } from "./arena/refusal.js";
 import { type WorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
 import type { AgentMessageDelivery } from "./agent/agent-messages/index.js";
 import { AgentDirectory } from "./agent/directory.js";
@@ -2288,11 +2289,12 @@ export class Session {
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.sessionLogger.error({ err }, "Error handling message");
-        // An Arena answer too large to send says so in its own words, without the generic prefix.
-        const tooLarge = err instanceof ArenaPayloadTooLargeError;
+        // An Arena answer too large to send, and an engine refusal the app words itself, keep their
+        // own text and code, without the generic prefix.
+        const coded = err instanceof ArenaPayloadTooLargeError || err instanceof ArenaRefusalError;
         const failure = {
-          error: tooLarge ? err.message : `Request failed: ${err.message}`,
-          code: tooLarge ? err.code : "handler_error",
+          error: coded ? err.message : `Request failed: ${err.message}`,
+          code: coded ? err.code : "handler_error",
         };
         if (
           msg.type.startsWith("arena.stream.") &&
