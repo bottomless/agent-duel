@@ -909,6 +909,7 @@ export const ko: TranslationResources = {
           deletedLines: "삭제된 줄 {{count}}개",
           unpushedCommit: "푸시되지 않은 커밋 {{count}}개",
           unpushedCommits: "푸시되지 않은 커밋 {{count}}개",
+          workSaved: "Agent Duel이 이 작업을 저장하며, 복원하면 다시 가져옵니다.",
         },
       },
       diff: {
@@ -1258,7 +1259,7 @@ export const ko: TranslationResources = {
       confirmations: {
         removeTitle: "프로젝트를 제거할까요?",
         removeMessage:
-          '"{{projectName}}"을(를) 사이드바에서 제거할까요?\n\n디스크의 파일은 변경되지 않습니다.',
+          '"{{projectName}}"을(를) 사이드바에서 제거할까요?\n\n디스크의 파일은 변경되지 않습니다. Agent Duel이 보관된 채팅을 위해 저장한 코드는 삭제됩니다.',
         removeConfirm: "제거",
         cancel: "취소",
       },
@@ -1328,6 +1329,17 @@ export const ko: TranslationResources = {
         hostDisconnected: "호스트가 연결되어 있지 않습니다",
         hideFailed: "워크스페이스를 숨기지 못했습니다",
         archiveFailed: "워크스페이스를 보관하지 못했습니다.",
+        archiveKeptFiles:
+          "보관했지만 이 채팅의 작업을 저장할 수 없어 파일이 디스크에 남아 있습니다. 파일을 열려면 채팅 보관을 해제하세요. {{reason}}",
+        archiveKeptReasons: {
+          too_large:
+            "새 파일과 변경된 파일이 {{changed}}MB로, Agent Duel이 저장하는 {{limit}}MB를 넘습니다.",
+          unsupported_state:
+            "워크트리에 진행 중인 병합, 충돌, 서브모듈 또는 중첩된 저장소가 있습니다.",
+          changed_during_save: "Agent Duel이 저장하는 동안 파일이 변경되었습니다.",
+          in_use: "다른 작업이 파일을 사용 중이었습니다.",
+          failed: "Agent Duel이 파일을 저장할 수 없었습니다.",
+        },
         createBranchFailed: "브랜치를 만들지 못했습니다",
       },
     },

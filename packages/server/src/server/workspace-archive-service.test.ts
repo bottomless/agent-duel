@@ -169,6 +169,7 @@ function createArchiveDeps(input: ArchiveDepsInput): ArchiveTestDependencies {
     emitWorkspaceUpdatesForWorkspaceIds: vi.fn(async () => {}),
     markWorkspaceArchiving: vi.fn(),
     clearWorkspaceArchiving: vi.fn(),
+    preserveWorktree: null,
     killTerminalsForWorkspace: vi.fn(async () => {}),
     sessionLogger: createLogger(),
     activeWorkspaces: active,
@@ -217,6 +218,56 @@ describe("archiveByScope", () => {
       removedDirectory: true,
     });
     expect(existsSync(worktree.worktreePath)).toBe(false);
+  });
+
+  test("workspace scope saves the worktree code before removing the directory", async () => {
+    const { tempDir, repoDir } = createGitRepo();
+    const paseoHome = path.join(tempDir, ".paseo");
+    const worktree = await createPaseoOwnedWorktree(repoDir, paseoHome, "preserved-workspace");
+    const workspaceId = "ws-preserved";
+    const events: string[] = [];
+    const deps = createArchiveDeps({
+      paseoHome,
+      activeWorkspaces: [{ workspaceId, cwd: worktree.worktreePath, kind: "worktree" }],
+    });
+    deps.preserveWorktree = async (worktreePath) => {
+      events.push(`saved ${existsSync(worktreePath)}`);
+      return {
+        finish: async () => {
+          events.push(`finished ${existsSync(worktreePath)}`);
+        },
+      };
+    };
+
+    const result = await archiveByScope(deps, {
+      scope: { kind: "workspace", workspaceId },
+      requestId: "req-preserved-workspace",
+    });
+
+    assertArchiveResult(result, { archivedWorkspaceIds: [workspaceId], removedDirectory: true });
+    expect(events).toEqual(["saved true", "finished false"]);
+  });
+
+  test("workspace scope keeps the directory when its code cannot be saved", async () => {
+    const { tempDir, repoDir } = createGitRepo();
+    const paseoHome = path.join(tempDir, ".paseo");
+    const worktree = await createPaseoOwnedWorktree(repoDir, paseoHome, "unsaved-workspace");
+    const workspaceId = "ws-unsaved";
+    const deps = createArchiveDeps({
+      paseoHome,
+      activeWorkspaces: [{ workspaceId, cwd: worktree.worktreePath, kind: "worktree" }],
+    });
+    deps.preserveWorktree = async () => {
+      throw new Error("Cannot snapshot an unmerged index");
+    };
+
+    const result = await archiveByScope(deps, {
+      scope: { kind: "workspace", workspaceId },
+      requestId: "req-unsaved-workspace",
+    });
+
+    assertArchiveResult(result, { archivedWorkspaceIds: [workspaceId], removedDirectory: false });
+    expect(existsSync(worktree.worktreePath)).toBe(true);
   });
 
   test("workspace scope keeps a directory referenced by a sibling workspace", async () => {

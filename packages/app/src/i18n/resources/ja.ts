@@ -916,6 +916,7 @@ export const ja: TranslationResources = {
           deletedLines: "{{count}}行削除",
           unpushedCommit: "{{count}}件の未プッシュコミット",
           unpushedCommits: "{{count}}件の未プッシュコミット",
+          workSaved: "Agent Duel はこの作業を保存し、復元で元に戻します。",
         },
       },
       diff: {
@@ -1266,7 +1267,7 @@ export const ja: TranslationResources = {
       confirmations: {
         removeTitle: "プロジェクトを削除しますか？",
         removeMessage:
-          '"{{projectName}}"をサイドバーから削除しますか？\n\nディスク上のファイルは変更されません。',
+          '"{{projectName}}"をサイドバーから削除しますか？\n\nディスク上のファイルは変更されません。アーカイブ済みチャットのために Agent Duel が保存したコードは削除されます。',
         removeConfirm: "削除",
         cancel: "キャンセル",
       },
@@ -1336,6 +1337,17 @@ export const ja: TranslationResources = {
         hostDisconnected: "ホストが接続されていません",
         hideFailed: "ワークスペースの非表示に失敗しました",
         archiveFailed: "ワークスペースのアーカイブに失敗しました",
+        archiveKeptFiles:
+          "アーカイブしましたが、このチャットの作業を保存できなかったため、ファイルはディスクに残っています。開くにはチャットのアーカイブを解除してください。{{reason}}",
+        archiveKeptReasons: {
+          too_large:
+            "新規・変更ファイルが {{changed}} MB あり、Agent Duel が保存できる {{limit}} MB を超えています。",
+          unsupported_state:
+            "ワークツリーにマージ中の変更、競合、サブモジュール、または入れ子のリポジトリがあります。",
+          changed_during_save: "Agent Duel が保存している間にファイルが変更されました。",
+          in_use: "別の操作がファイルを使用していました。",
+          failed: "Agent Duel はファイルを保存できませんでした。",
+        },
         createBranchFailed: "ブランチの作成に失敗しました",
       },
     },

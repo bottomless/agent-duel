@@ -109,6 +109,7 @@ function createHarness(overrides?: {
     markWorkspaceArchiving: vi.fn(),
     clearWorkspaceArchiving: vi.fn(),
     emitWorkspaceUpdatesForWorkspaceIds: vi.fn(),
+    preserveWorktree: null,
   };
   const archiveByScope = vi.fn(
     overrides?.archiveByScope ??
@@ -327,6 +328,7 @@ function createRealOutcomeHarness(input: {
     markWorkspaceArchiving: () => {},
     clearWorkspaceArchiving: () => {},
     emitWorkspaceUpdatesForWorkspaceIds: vi.fn(),
+    preserveWorktree: null,
   };
 
   return {
@@ -441,8 +443,22 @@ describe("archiveIfSafe", () => {
         cwd: CWD,
         branch: "feature",
         pullRequestUrl: "https://github.com/acme/repo/pull/123",
+        removedDirectory: false,
       },
       "Auto-archived worktree after PR merge",
+    );
+  });
+
+  test("saves the worktree code through the archive preserve hook", async () => {
+    const harness = createHarness();
+    const preserveWorktree = vi.fn(async () => null);
+    harness.options.preserveWorktree = preserveWorktree;
+
+    await runArchiveIfSafe(harness);
+
+    expect(harness.deps.archiveByScope).toHaveBeenCalledWith(
+      expect.objectContaining({ preserveWorktree }),
+      expect.anything(),
     );
   });
 
@@ -558,6 +574,43 @@ describe("archiveIfSafe", () => {
 
     expect(archivedWorkspaceIds.has(workspaceA)).toBe(true);
     expect(existsSync(worktree.worktreePath)).toBe(false);
+  });
+
+  test("real outcome: keeps the directory and logs why when the code cannot be saved", async () => {
+    const { tempDir, repoDir } = createGitRepo();
+    const paseoHome = path.join(tempDir, ".paseo");
+    const worktree = await createPaseoOwnedWorktree(repoDir, paseoHome, "merged-too-large");
+    const workspaceA = "ws-merged-too-large";
+    const archivedWorkspaceIds = new Set<string>();
+    const harness = createRealOutcomeHarness({
+      paseoHome,
+      repoDir,
+      worktreePath: worktree.worktreePath,
+      activeWorkspaces: [{ workspaceId: workspaceA, cwd: worktree.worktreePath, kind: "worktree" }],
+      archivedWorkspaceIds,
+    });
+    const tooLarge = new Error("New and changed files hold 101 MB, more than the 100 MB limit");
+    harness.options.preserveWorktree = async () => {
+      throw tooLarge;
+    };
+
+    await archiveIfSafe({
+      workspaceId: workspaceA,
+      snapshot: { ...createSnapshot(), cwd: worktree.worktreePath },
+      options: harness.options,
+      log: harness.log,
+    });
+
+    expect(archivedWorkspaceIds.has(workspaceA)).toBe(true);
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: tooLarge, targetPath: worktree.worktreePath }),
+      "Worktree code could not be saved during archive; keeping the directory",
+    );
+    expect(harness.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: workspaceA, removedDirectory: false }),
+      "Auto-archived worktree after PR merge",
+    );
   });
 
   test("real outcome: an unarchived workspace is not archived again for the same merged PR", async () => {

@@ -1,7 +1,7 @@
 import { seedSessionHosts } from "@/test/seed-session";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearWorkspaceArchivePending,
   isWorkspaceArchivePending,
@@ -10,8 +10,10 @@ import { useSessionStore, type WorkspaceDescriptor } from "@/stores/session-stor
 import {
   archiveWorkspaceOptimistically,
   archiveWorkspacesOptimistically,
+  describeWorktreeKept,
   type WorkspaceArchiveTarget,
 } from "@/workspace/workspace-archive";
+import { i18n } from "@/i18n/i18next";
 
 const SERVER_ID = "workspace-archive-test";
 const SECOND_SERVER_ID = "workspace-archive-test-2";
@@ -27,6 +29,7 @@ function archivePayload(input: {
     workspaceId: input.workspaceId,
     archivedAt: null,
     error: input.error ?? null,
+    worktreeKept: null,
   };
 }
 
@@ -222,5 +225,26 @@ describe("archiveWorkspacesOptimistically", () => {
     );
     expect(storedWorkspaceOn(SERVER_ID, first.id)).toBeUndefined();
     expect(storedWorkspaceOn(SECOND_SERVER_ID, second.id)).toBeUndefined();
+  });
+});
+
+describe("describeWorktreeKept", () => {
+  const tooLarge = { reason: "too_large", changedMegabytes: 100.3, limitMegabytes: 100 } as const;
+
+  beforeAll(async () => {
+    await i18n.loadLanguages(["fr", "ja"]);
+  });
+
+  it("writes the sizes with the reader's decimal separator", () => {
+    const fr = describeWorktreeKept(tooLarge, "fr", i18n.getFixedT("fr"));
+    expect(fr).toContain("100,3 Mo");
+    expect(fr).toContain("100 Mo");
+    const en = describeWorktreeKept(tooLarge, "en", i18n.getFixedT("en"));
+    expect(en).toContain("100.3 MB");
+  });
+
+  it("joins the two sentences without a space in Japanese", () => {
+    const ja = describeWorktreeKept(tooLarge, "ja", i18n.getFixedT("ja"));
+    expect(ja).toContain("ください。新規");
   });
 });

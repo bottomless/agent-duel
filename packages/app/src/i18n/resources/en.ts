@@ -908,6 +908,7 @@ export const en = {
           deletedLines: "{{count}} deleted lines",
           unpushedCommit: "{{count}} unpushed commit",
           unpushedCommits: "{{count}} unpushed commits",
+          workSaved: "Agent Duel saves this work, and Restore brings it back.",
         },
       },
       diff: {
@@ -1257,7 +1258,7 @@ export const en = {
       confirmations: {
         removeTitle: "Remove project?",
         removeMessage:
-          'Remove "{{projectName}}" from the sidebar?\n\nFiles on disk will not be changed.',
+          'Remove "{{projectName}}" from the sidebar?\n\nFiles on disk will not be changed. Code that Agent Duel saved for its archived chats is deleted.',
         removeConfirm: "Remove",
         cancel: "Cancel",
       },
@@ -1327,6 +1328,17 @@ export const en = {
         hostDisconnected: "Host is not connected",
         hideFailed: "Failed to hide workspace",
         archiveFailed: "Failed to archive workspace",
+        archiveKeptFiles:
+          "Archived, but this chat's work could not be saved, so its files stay on disk. Unarchive the chat to open them. {{reason}}",
+        archiveKeptReasons: {
+          too_large:
+            "New and changed files hold {{changed}} MB, more than the {{limit}} MB that Agent Duel saves.",
+          unsupported_state:
+            "The worktree has a merge in progress, a conflict, a submodule, or a nested repository.",
+          changed_during_save: "Files changed while Agent Duel saved them.",
+          in_use: "Another operation was using the files.",
+          failed: "Agent Duel could not save the files.",
+        },
         createBranchFailed: "Failed to create branch",
       },
     },

@@ -1212,6 +1212,12 @@ export async function createPaseoDaemon(
       session.markWorkspaceArchivingForExternalMutation(workspaceIdList, archivingAt);
     }
   };
+  // Agent Duel: before the WebSocket server exists there is nothing to save the code with, so the
+  // throw keeps the worktree directory.
+  const preserveArchivedWorktreeExternal = async (worktreePath: string) => {
+    if (!wsServer) throw new Error("Daemon cannot save worktree code before it is ready");
+    return wsServer.preserveArchivedWorktree(worktreePath);
+  };
   const clearWorkspaceArchivingExternal = (workspaceIds: Iterable<string>) => {
     const workspaceIdList = Array.from(workspaceIds);
     for (const session of wsServer?.listSessions() ?? []) {
@@ -1272,6 +1278,7 @@ export async function createPaseoDaemon(
     markWorkspaceArchiving: markWorkspaceArchivingExternal,
     clearWorkspaceArchiving: clearWorkspaceArchivingExternal,
     emitWorkspaceUpdatesForWorkspaceIds: emitWorkspaceUpdatesExternal,
+    preserveWorktree: preserveArchivedWorktreeExternal,
   });
 
   const createPaseoWorktreeForTools = async (
@@ -1432,6 +1439,7 @@ export async function createPaseoDaemon(
     }),
     markWorkspaceArchiving: markWorkspaceArchivingExternal,
     clearWorkspaceArchiving: clearWorkspaceArchivingExternal,
+    preserveWorktree: preserveArchivedWorktreeExternal,
     ensureWorkspaceForCreate: createAgentCommandDependencies.ensureWorkspaceForCreate,
     createPaseoWorktree: createAgentCommandDependencies.createPaseoWorktree,
     browserToolsEnabled: browserToolsPolicy.isEnabled(),

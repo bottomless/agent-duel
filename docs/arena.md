@@ -407,7 +407,9 @@ the name it was attached with. A head that moved is a different checkout than th
 built on; only turn completion and the blocked-checkout restore record that. So when another chat's
 vote moves the shared checkout to a new branch and commit, this chat's branch answer keeps
 disagreeing with its record, and the stream poll runs the full inspection once per new answer, not
-every second.
+every second. Unarchive is the exception: it records the name git answers with even when the head moved,
+because Restore files can bring the worktree back detached or on a branch that moved meanwhile, and
+the header would otherwise keep naming the old branch.
 
 Chats in the same checkout share its index, so a read must never take `index.lock`: the
 lock it holds is the one another chat's vote or prompt needs at that moment. `--no-optional-locks`
@@ -679,11 +681,46 @@ protected. If no safe candidate exists, the count can remain above the limit wit
 Before removing files, cleanup saves the exact commit, staged state, and working files, including
 non-ignored new files. Git refs in the surviving source repository retain the snapshot through garbage
 collection. Ignored files—including local configuration and databases—and running processes are
-excluded. Conflicted indexes and unsupported repository states are skipped. A retained contestant
-with newer, unpreserved code also prevents parent cleanup.
+excluded. Conflicted indexes, unsupported repository states, and more than 100 MB of new and changed
+files (`SNAPSHOT_MAX_CHANGED_BYTES`) are skipped: every saved file is a blob in the user's `.git`,
+and a file that large is usually a build output or dataset that belongs in `.gitignore`. A retained
+contestant with newer, unpreserved code also prevents parent cleanup. The snapshot refs live under
+`refs/agent-duel/`, so `git log --all` shows them and `git push --mirror` pushes them, untracked
+files included, as it does `refs/battles/`.
+
+Archive takes the same snapshot before it removes an app-owned worktree (`preserveForArchive`,
+called from the archive's directory removal). Every archive path passes that hook as
+`preserveWorktree`: the app, `paseo worktree archive`, the MCP archive tool, auto-archive after
+merge, and an agent's auto-archive. `ArchiveDependencies.preserveWorktree` is required (`null` only
+in tests) and the MCP tool host throws without it, so a new archive caller cannot leave it out by
+accident and remove the directory unsaved. Paseo's restore rebuilds an archived worktree from the
+branch in its workspace record and drops the uncommitted files. A New worktree records no branch: it
+starts detached, and "Create branch here" or an agent's `git switch -c` does not reach the record
+until it is next refreshed. Without the snapshot, Restore would start a new branch at the base and
+drop the chat's work. The archived workspace then reads as cleaned up, and Restore recreates the code
+as below before it unarchives the chat. If the snapshot fails, archive keeps the directory and
+unarchiving opens it as it was. The app's archive says why in a toast. Auto-archive after merge has
+no UI, so only the daemon log says why ("Worktree code could not be saved during archive", then
+`removedDirectory: false` on the auto-archive line). The archive dialog says the work is saved for these
+workspaces (`archiveKeepsWork` on the workspace descriptor).
+
+A snapshot is released (refs and manifest) once Restore files has brought it back, when its project
+is removed (a project added again gets a new id, so nothing could restore it), and when its
+workspace record is removed. Project removal also deletes the archived records it released, their
+stored agents (with the fence, close, flush and `agent_deleted` of Paseo's delete), the agents' empty
+folders, and their creation and `agent-requests/` receipts. Two projects share a worktree root when you
+add an app-owned worktree's path as a project and start a Local chat there: both records name that root
+and, once both are archived, one snapshot. Project removal releases that snapshot only when no record of
+another project still uses it, and it removes the records before it releases the snapshot, so a failure
+on the way never leaves a record without its saved code.
+Paseo
+keeps a removed project's archived records, but these have no directory and no saved code, so a
+record that something re-linked later would restore to the base commit.
 
 Cleanup leaves the workspace and conversation available. Restore files recreates the saved code at
-the same path, with a detached HEAD, and never overwrites an occupied directory. It then seeds the
+the same path and never overwrites an occupied directory. HEAD goes back on the branch it was on when
+that branch still points at the saved commit and no other worktree has it; otherwise it stays
+detached. It then seeds the
 checkout's ignored content from the source the way a new worktree is seeded, so dependencies and
 local configuration come back without being stored; seeding failures cost that content, not the
 restore. It does not rerun setup or restart services. This is recovery from workspace cleanup, not

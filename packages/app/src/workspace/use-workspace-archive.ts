@@ -8,10 +8,14 @@ import {
   type WorktreeArchiveWarningLabels,
 } from "@/git/worktree-archive-warning";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
+import { useWorkspaceFields } from "@/stores/session-store-hooks";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
-import { archiveWorkspaceOptimistically } from "@/workspace/workspace-archive";
+import {
+  archiveWorkspaceOptimistically,
+  describeWorktreeKept,
+} from "@/workspace/workspace-archive";
 
 function purgeArchivedWorkspaceState(input: { serverId: string; workspaceId: string }): void {
   const workspaceKey = buildWorkspaceTabPersistenceKey(input);
@@ -50,8 +54,10 @@ export function useWorkspaceArchive(input: ArchiveWorkspaceInput): WorkspaceArch
     onArchiveStarted,
     onSetHiding,
   } = input;
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const toast = useToast();
+  const keepsWork =
+    useWorkspaceFields(serverId, workspaceId, (workspace) => workspace.archiveKeepsWork) ?? false;
   // Pressing the shortcut again while the dialog is open must not queue a second one.
   const isConfirmingRef = useRef(false);
 
@@ -64,7 +70,7 @@ export function useWorkspaceArchive(input: ArchiveWorkspaceInput): WorkspaceArch
     onSetHiding?.(true);
     try {
       onArchiveStarted();
-      await archiveWorkspaceOptimistically({
+      const outcome = await archiveWorkspaceOptimistically({
         client,
         workspace: {
           serverId,
@@ -72,6 +78,9 @@ export function useWorkspaceArchive(input: ArchiveWorkspaceInput): WorkspaceArch
         },
       });
       purgeArchivedWorkspaceState({ serverId, workspaceId });
+      if (outcome.worktreeKept) {
+        toast.error(describeWorktreeKept(outcome.worktreeKept, i18n.resolvedLanguage, t));
+      }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : t("sidebar.workspace.toasts.archiveFailed"),
@@ -79,7 +88,7 @@ export function useWorkspaceArchive(input: ArchiveWorkspaceInput): WorkspaceArch
     } finally {
       onSetHiding?.(false);
     }
-  }, [onArchiveStarted, onSetHiding, serverId, t, toast, workspaceId]);
+  }, [i18n, onArchiveStarted, onSetHiding, serverId, t, toast, workspaceId]);
 
   const archive = useCallback(() => {
     if (isConfirmingRef.current) {
@@ -94,6 +103,7 @@ export function useWorkspaceArchive(input: ArchiveWorkspaceInput): WorkspaceArch
             {
               workspaceName: name,
               isWorktree: workspaceKind === "worktree",
+              keepsWork,
               isDirty,
               aheadOfOrigin,
               diffStat,
@@ -114,6 +124,7 @@ export function useWorkspaceArchive(input: ArchiveWorkspaceInput): WorkspaceArch
     archiveWorkspaceRecord,
     diffStat,
     isDirty,
+    keepsWork,
     name,
     warningLabels,
     workspaceKind,

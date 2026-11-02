@@ -116,6 +116,7 @@ export interface WorkspaceDescriptor {
   projectRootPath: string;
   workspaceDirectory: string;
   filesState?: WorkspaceDescriptorPayload["filesState"];
+  archiveKeepsWork?: boolean;
   worktreeSlug?: WorkspaceDescriptorPayload["worktreeSlug"];
   setupStatus?: WorkspaceDescriptorPayload["setupStatus"];
   projectKind: WorkspaceDescriptorPayload["projectKind"];
@@ -160,6 +161,7 @@ export function normalizeWorkspaceDescriptor(
     // usable directory" (older daemons may omit it; the wire field is optional).
     workspaceDirectory: normalizeWorkspacePath(payload.workspaceDirectory) ?? "",
     filesState: payload.filesState ?? "available",
+    archiveKeepsWork: payload.archiveKeepsWork ?? false,
     worktreeSlug: payload.worktreeSlug,
     // COMPAT(workspaceSetupObservation): added in v0.12.0, old hosts omit metadata; remove after 2027-04-19.
     setupStatus: payload.setupStatus ?? null,

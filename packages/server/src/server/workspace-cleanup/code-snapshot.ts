@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -8,6 +9,13 @@ const SNAPSHOT_REF_ROOT = "refs/agent-duel/workspace-snapshots";
 const SNAPSHOT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const HEX_OBJECT_PATTERN = /^[0-9a-f]{40,64}$/;
 const SNAPSHOT_GIT_TIMEOUT = 120_000;
+/**
+ * A snapshot writes every new and changed file into the repository's object store, where it stays
+ * while the snapshot refs do. Above this many bytes the checkout is not snapshotted: the caller keeps
+ * the directory rather than grow the user's `.git` by a dataset or a build output that belongs in
+ * `.gitignore`.
+ */
+export const SNAPSHOT_MAX_CHANGED_BYTES = 100 * 1024 * 1024;
 
 export type CodeSnapshotErrorCode =
   | "invalid-input"
@@ -15,15 +23,24 @@ export type CodeSnapshotErrorCode =
   | "unsupported-state"
   | "occupied-path"
   | "unstable-source"
+  | "too-large"
+  | "in-use"
   | "invalid-snapshot";
 
 export class CodeSnapshotError extends Error {
   readonly code: CodeSnapshotErrorCode;
+  /** For `too-large`: the bytes of new and changed files. */
+  readonly changedBytes?: number;
 
-  constructor(code: CodeSnapshotErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(
+    code: CodeSnapshotErrorCode,
+    message: string,
+    options?: { cause?: unknown; changedBytes?: number },
+  ) {
     super(message, options);
     this.name = "CodeSnapshotError";
     this.code = code;
+    if (options?.changedBytes !== undefined) this.changedBytes = options.changedBytes;
   }
 }
 
@@ -215,10 +232,46 @@ async function assertNoNestedRepositories(worktreeRoot: string): Promise<void> {
   }
 }
 
+const MEBIBYTE = 1024 * 1024;
+export const SNAPSHOT_LIMIT_MEGABYTES = SNAPSHOT_MAX_CHANGED_BYTES / MEBIBYTE;
+
+/**
+ * Changed bytes over the limit, in megabytes as the log and the app show them: the nearest whole
+ * megabyte when that is above the limit, else the nearest tenth. Only in the last twentieth of a
+ * megabyte above the limit, where even the tenth rounds down to the limit ("100 MB, more than
+ * 100 MB"), it shows the limit plus a tenth.
+ */
+export function snapshotChangedMegabytes(bytes: number): number {
+  const whole = Math.round(bytes / MEBIBYTE);
+  if (whole > SNAPSHOT_LIMIT_MEGABYTES) return whole;
+  const tenths = Math.round((bytes * 10) / MEBIBYTE) / 10;
+  return tenths > SNAPSHOT_LIMIT_MEGABYTES ? tenths : SNAPSHOT_LIMIT_MEGABYTES + 0.1;
+}
+
+async function assertSnapshotSize(worktreeRoot: string): Promise<void> {
+  const changed = await git(
+    ["ls-files", "--modified", "--others", "--exclude-standard", "-z"],
+    worktreeRoot,
+  );
+  let bytes = 0;
+  for (const relativePath of new Set(changed.split("\0").filter(Boolean))) {
+    const stats = await lstat(path.join(worktreeRoot, relativePath)).catch(() => null);
+    if (stats?.isFile()) bytes += stats.size;
+  }
+  if (bytes > SNAPSHOT_MAX_CHANGED_BYTES) {
+    throw new CodeSnapshotError(
+      "too-large",
+      `New and changed files hold ${snapshotChangedMegabytes(bytes)} MB, more than the ${SNAPSHOT_LIMIT_MEGABYTES} MB a workspace snapshot keeps`,
+      { changedBytes: bytes },
+    );
+  }
+}
+
 async function assertSupportedCheckout(worktreeRoot: string): Promise<void> {
   await assertNoInProgressOperation(worktreeRoot);
   await assertSupportedIndex(worktreeRoot);
   await assertNoNestedRepositories(worktreeRoot);
+  await assertSnapshotSize(worktreeRoot);
 }
 
 function createTemporaryIndex(): TemporaryIndex {
@@ -517,9 +570,32 @@ function assertRestorePathIsFree(worktreeRoot: string): void {
   throw new CodeSnapshotError("occupied-path", `Restore path already exists: ${worktreeRoot}`);
 }
 
+/**
+ * Put HEAD back on the branch the snapshot was taken on, when that branch still points at the saved
+ * commit and no other worktree has it checked out. The commit is the same, so the index and the files
+ * stay as restored. Otherwise HEAD stays detached; the branch, if any, is untouched.
+ */
+async function reattachSnapshotBranch(
+  worktreeRoot: string,
+  snapshot: CodeSnapshot,
+): Promise<string | null> {
+  if (!snapshot.branch) return null;
+  const ref = `refs/heads/${snapshot.branch}`;
+  try {
+    const tip = await git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], worktreeRoot);
+    if (tip !== snapshot.head) return null;
+    const worktrees = await git(["worktree", "list", "--porcelain"], worktreeRoot);
+    if (worktrees.split("\n").includes(`branch ${ref}`)) return null;
+    await git(["symbolic-ref", "HEAD", ref], worktreeRoot);
+    return snapshot.branch;
+  } catch {
+    return null;
+  }
+}
+
 export async function restoreCodeSnapshot(
   input: RestoreCodeSnapshotInput,
-): Promise<{ worktreeRoot: string; branch: null }> {
+): Promise<{ worktreeRoot: string; branch: string | null }> {
   const worktreeRoot = validateDirectory(input.worktreeRoot, "worktreeRoot");
   const sourceRepoRoot = validateDirectory(input.sourceRepoRoot, "sourceRepoRoot");
   const snapshot = input.snapshot;
@@ -541,7 +617,7 @@ export async function restoreCodeSnapshot(
     await git(["read-tree", "--reset", "-u", `${snapshot.workingCommit}^{tree}`], worktreeRoot);
     await git(["read-tree", `${snapshot.indexCommit}^{tree}`], worktreeRoot);
     await verifyCodeSnapshotCheckout({ worktreeRoot, sourceRepoRoot, snapshot });
-    return { worktreeRoot, branch: null };
+    return { worktreeRoot, branch: await reattachSnapshotBranch(worktreeRoot, snapshot) };
   } catch (error) {
     if (worktreeAdded) {
       try {

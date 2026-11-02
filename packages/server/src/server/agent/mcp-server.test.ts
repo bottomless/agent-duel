@@ -2264,6 +2264,10 @@ describe("create_agent MCP tool", () => {
       const emitWorkspaceUpdatesForWorkspaceIds = vi.fn(async () => undefined);
       const markWorkspaceArchiving = vi.fn();
       const clearWorkspaceArchiving = vi.fn();
+      const finishPreservation = vi.fn(async () => undefined);
+      const preserveWorktree = vi.fn(async (_worktreePath: string) => ({
+        finish: finishPreservation,
+      }));
       const listActiveWorkspaces = vi.fn(async () => []);
       const server = await createAgentMcpServer({
         agentManager,
@@ -2281,6 +2285,7 @@ describe("create_agent MCP tool", () => {
         emitWorkspaceUpdatesForWorkspaceIds,
         markWorkspaceArchiving,
         clearWorkspaceArchiving,
+        preserveWorktree,
         github: createGitHubServiceStub(),
         logger,
       });
@@ -2315,6 +2320,9 @@ describe("create_agent MCP tool", () => {
         expect.any(String),
       );
       expect(clearWorkspaceArchiving).toHaveBeenCalledWith(["ws-archive-tool-worktree"]);
+      // Agent Duel: the MCP archive saves the worktree's code before its directory goes.
+      expect(preserveWorktree).toHaveBeenCalledWith(createdWorktreePath);
+      expect(finishPreservation).toHaveBeenCalledTimes(1);
       expect(Array.from(emitWorkspaceUpdatesForWorkspaceIds.mock.calls[0]?.[0] ?? [])).toEqual([
         "ws-archive-tool-worktree",
       ]);
@@ -2394,6 +2402,7 @@ describe("create_agent MCP tool", () => {
         emitWorkspaceUpdatesForWorkspaceIds: vi.fn(async () => undefined),
         markWorkspaceArchiving: vi.fn(),
         clearWorkspaceArchiving: vi.fn(),
+        preserveWorktree: vi.fn(async () => null),
         github: createGitHubServiceStub(),
         logger,
       });
@@ -2471,6 +2480,7 @@ describe("create_agent MCP tool", () => {
         emitWorkspaceUpdatesForWorkspaceIds: vi.fn(async () => undefined),
         markWorkspaceArchiving: vi.fn(),
         clearWorkspaceArchiving: vi.fn(),
+        preserveWorktree: vi.fn(async () => null),
         github: createGitHubServiceStub(),
         logger,
       });

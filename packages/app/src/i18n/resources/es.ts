@@ -118,7 +118,7 @@ export const es: TranslationResources = {
   },
   composer: {
     placeholders: {
-      desktop: "Envíe un mensaje al agente, etiquete@fileso use/commandsy/skills",
+      desktop: "Envía un mensaje al agente, etiqueta @files o usa /commands y /skills",
       mobile: "Mensaje,@files,/commands",
       fallback: "Mensaje...",
       terminal: "Prompt",
@@ -128,7 +128,7 @@ export const es: TranslationResources = {
       terminalAccessibilityLabel: "Terminal prompt",
       fullscreen: "Pantalla completa",
       exitFullscreen: "Salir de pantalla completa",
-      focusHint: "{{shortcut}}para enfocar",
+      focusHint: "{{shortcut}} para enfocar",
       addAttachment: "Agregar archivo adjunto",
       interruptAgent: "agente de interrupción",
       queueMessage: "mensaje de cola",
@@ -257,7 +257,7 @@ export const es: TranslationResources = {
       updating: "Actualizando mensajes",
       timelineSyncFailed: "No se pudo actualizar el historial del agente.",
       timelineSyncRetrying: "Reintentando…",
-      archivingTitle: "Agente de archivo...",
+      archivingTitle: "Archivando agente...",
       archivingSubtitle: "Espere mientras archivamos este agente.",
     },
     unavailable: {
@@ -668,11 +668,11 @@ export const es: TranslationResources = {
           "{{count}} pestaña(s) tienen cambios sin guardar. Al cerrar se descartarán esos borradores.",
         close: "Cerrar",
         cancel: "Cancelar",
-        archive: "Archivo",
+        archive: "Archivar",
         closeTerminalTitle: "¿Cerrar terminal?",
         closeTerminalMessage:
           "Cualquier proceso en ejecución en esta terminal se detendrá inmediatamente.",
-        archiveRunningAgentTitle: "¿Agente de ejecución de archivos?",
+        archiveRunningAgentTitle: "¿Archivar el agente en ejecución?",
         archiveRunningAgentMessage:
           "Este agente todavía está ejecutándose. Archivarlo detendrá al agente y cerrará la pestaña.",
         closeTabsLeftTitle: "¿Cerrar pestañas a la izquierda?",
@@ -772,9 +772,9 @@ export const es: TranslationResources = {
         moreOptions: "Más opciones",
         moreActions: "Más acciones",
         commit: {
-          label: "Comprometerse",
-          pending: "Comprometiéndose...",
-          success: "Comprometido",
+          label: "Confirmar",
+          pending: "Confirmando...",
+          success: "Confirmado",
         },
         pull: {
           label: "Jalar",
@@ -890,7 +890,7 @@ export const es: TranslationResources = {
           mergePrNoGithub:
             "FusionarPRno está disponible en este momento porqueGitHubno está conectado",
           archiveNotWorktree:
-            "El archivo no está disponible aquí porque este espacio de trabajo no se creó como un árbol de trabajo Agent Duel",
+            "Archivar no está disponible aquí porque este espacio de trabajo no se creó como un worktree de Agent Duel",
           mergePrNoForge:
             "Fusionar {{noun}} no está disponible en este momento porque {{brand}} no está conectado",
           mergePrMissing:
@@ -924,18 +924,19 @@ export const es: TranslationResources = {
           failedMergeFromBase: "No se pudo fusionar desde la base",
         },
         archiveWarning: {
-          title: '¿Archivo "{{workspaceName}}"?',
-          confirm: "Archivo",
+          title: '¿Archivar "{{workspaceName}}"?',
+          confirm: "Archivar",
           cancel: "Cancelar",
           message: "El chat pasa a Archivados, donde puedes desarchivarlo.",
           uncommittedChanges: "Cambios no confirmados",
           uncommittedChangesWithDiff: "Cambios no confirmados ({{diffStat}})",
-          addedLine: "Línea añadida{{count}}",
-          addedLines: "{{count}}agregó líneas",
-          deletedLine: "Línea eliminada de{{count}}",
-          deletedLines: "{{count}}líneas eliminadas",
-          unpushedCommit: "Confirmación no enviada de{{count}}",
-          unpushedCommits: "Confirmaciones no enviadas de{{count}}",
+          addedLine: "{{count}} línea añadida",
+          addedLines: "{{count}} líneas añadidas",
+          deletedLine: "{{count}} línea eliminada",
+          deletedLines: "{{count}} líneas eliminadas",
+          unpushedCommit: "{{count}} confirmación sin enviar",
+          unpushedCommits: "{{count}} confirmaciones sin enviar",
+          workSaved: "Agent Duel guarda este trabajo y Restaurar lo recupera.",
         },
       },
       diff: {
@@ -1282,14 +1283,14 @@ export const es: TranslationResources = {
         openNewWindowFailed: "Couldn't open a new window",
         openFolder: "Open in file manager",
         openFolderFailed: "Couldn't open folder",
-        remove: "Eliminar proyecto",
+        remove: "Quitar proyecto",
         removing: "Eliminando...",
       },
       confirmations: {
         removeTitle: "¿Quitar proyecto?",
         removeMessage:
-          '¿Quitar "{{projectName}}" de la barra lateral?\n\nLos archivos en el disco no se cambiarán.',
-        removeConfirm: "Eliminar",
+          '¿Quitar "{{projectName}}" de la barra lateral?\n\nLos archivos en el disco no se cambiarán. Se elimina el código que Agent Duel guardó para sus chats archivados.',
+        removeConfirm: "Quitar",
         cancel: "Cancelar",
       },
       toasts: {
@@ -1328,7 +1329,7 @@ export const es: TranslationResources = {
         rename: "Cambiar nombre del espacio de trabajo",
         pin: "Anclar arriba",
         unpin: "Desanclar",
-        archive: "Archivo",
+        archive: "Archivar",
         archiveWorkspace: "Archivar espacio de trabajo",
         hideFromSidebar: "Ocultar de la barra lateral",
         archiving: "Archivando...",
@@ -1358,6 +1359,17 @@ export const es: TranslationResources = {
         hostDisconnected: "Hostno está conectado",
         hideFailed: "No se pudo ocultar el espacio de trabajo",
         archiveFailed: "No se pudo archivar el espacio de trabajo",
+        archiveKeptFiles:
+          "Archivado, pero no se pudo guardar el trabajo de este chat, así que sus archivos siguen en el disco. Desarchiva el chat para abrirlos. {{reason}}",
+        archiveKeptReasons: {
+          too_large:
+            "Los archivos nuevos y modificados ocupan {{changed}} MB, más de los {{limit}} MB que guarda Agent Duel.",
+          unsupported_state:
+            "El worktree tiene una fusión en curso, un conflicto, un submódulo o un repositorio anidado.",
+          changed_during_save: "Los archivos cambiaron mientras Agent Duel los guardaba.",
+          in_use: "Otra operación estaba usando los archivos.",
+          failed: "Agent Duel no pudo guardar los archivos.",
+        },
         createBranchFailed: "No se pudo crear la rama",
       },
     },
@@ -1540,10 +1552,11 @@ export const es: TranslationResources = {
       saveFailed: "No se puede guardar la configuración del escritorio.",
     },
     rosetta: {
-      title: "Descargue la compilaciónApple Silicon",
-      runningIntel: "Estás ejecutando la compilaciónIntelde Agent Duel enRosettaenApple Silicon.",
+      title: "Descarga la compilación para Apple Silicon",
+      runningIntel:
+        "Estás ejecutando la compilación para Intel de Agent Duel en Rosetta en Apple Silicon.",
       highCpu:
-        "Esto provoca un uso elevado de la CPU. Descargue la compilaciónApple Siliconpara solucionarlo.",
+        "Esto provoca un uso elevado de la CPU. Descarga la compilación para Apple Silicon para solucionarlo.",
       download: "Descargar",
     },
     permissions: {
@@ -1813,8 +1826,8 @@ export const es: TranslationResources = {
     pillLabelReadyToReview: "{{count}} para revisar",
     detachAction: "Separar {{label}}",
     detachTooltip: "Separar subagente",
-    archiveAction: "Archivo{{label}}",
-    archiveTooltip: "Subagente de archivo",
+    archiveAction: "Archivar {{label}}",
+    archiveTooltip: "Archivar subagente",
     archiveFinishedAction: "Archivar subagentes finalizados",
     archiveFinishedRetry: "Reintentar ({{failed}}/{{total}})",
   },

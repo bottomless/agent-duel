@@ -900,6 +900,7 @@ export const ar: TranslationResources = {
           deletedLines: "الخطوط المحذوفة{{count}}",
           unpushedCommit: "التزام{{count}}غير المدفوعة",
           unpushedCommits: "التزامات{{count}}غير المدفوعة",
+          workSaved: "يحفظ Agent Duel هذا العمل، وتعيده الاستعادة.",
         },
       },
       diff: {
@@ -1249,7 +1250,7 @@ export const ar: TranslationResources = {
       confirmations: {
         removeTitle: "هل تريد إزالة المشروع؟",
         removeMessage:
-          'هل تريد إزالة "{{projectName}}" من الشريط الجانبي؟\n\n لن يتم تغيير الملفات الموجودة على القرص.',
+          'هل تريد إزالة "{{projectName}}" من الشريط الجانبي؟\n\n لن يتم تغيير الملفات الموجودة على القرص. يُحذف الكود الذي حفظه Agent Duel لدردشاته المؤرشفة.',
         removeConfirm: "يزيل",
         cancel: "يلغي",
       },
@@ -1319,6 +1320,17 @@ export const ar: TranslationResources = {
         hostDisconnected: "Host غير متصل",
         hideFailed: "فشل في إخفاء مساحة العمل",
         archiveFailed: "فشل في أرشفة مساحة العمل",
+        archiveKeptFiles:
+          "تمت الأرشفة، لكن تعذّر حفظ عمل هذه الدردشة، لذا تبقى ملفاتها على القرص. ألغِ أرشفة الدردشة لفتحها. {{reason}}",
+        archiveKeptReasons: {
+          too_large:
+            "تبلغ الملفات الجديدة والمعدّلة {{changed}} ميغابايت، وهذا أكثر من {{limit}} ميغابايت التي يحفظها Agent Duel.",
+          unsupported_state:
+            "في مساحة العمل دمج قيد التنفيذ أو تعارض أو وحدة فرعية أو مستودع متداخل.",
+          changed_during_save: "تغيّرت الملفات أثناء حفظ Agent Duel لها.",
+          in_use: "كانت عملية أخرى تستخدم الملفات.",
+          failed: "تعذّر على Agent Duel حفظ الملفات.",
+        },
         createBranchFailed: "فشل إنشاء الفرع",
       },
     },

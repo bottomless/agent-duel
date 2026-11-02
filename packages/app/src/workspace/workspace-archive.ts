@@ -6,14 +6,41 @@ import {
 import { useSessionStore, type WorkspaceDescriptor } from "@/stores/session-store";
 import { resolveWorkspaceMapKeyByIdentity } from "@/utils/workspace-identity";
 import { i18n } from "@/i18n/i18next";
+import type { ArchiveWorkspaceResponseMessage } from "@getpaseo/protocol/messages";
+import type { TFunction } from "i18next";
 
 export interface WorkspaceArchiveTarget {
   serverId: string;
   workspaceId: string;
 }
 
+export type WorktreeKept = NonNullable<ArchiveWorkspaceResponseMessage["payload"]["worktreeKept"]>;
+
+/** The toast for an archive that kept the worktree's files, with sizes in the reader's locale. */
+export function describeWorktreeKept(
+  kept: WorktreeKept,
+  locale: string | undefined = i18n.resolvedLanguage,
+  t: TFunction = i18n.t,
+): string {
+  const megabytes = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
+  const format = (value: number | undefined) =>
+    value === undefined ? undefined : megabytes.format(value);
+  const reason = t(`sidebar.workspace.toasts.archiveKeptReasons.${kept.reason}`, {
+    changed: format(kept.changedMegabytes),
+    limit: format(kept.limitMegabytes),
+  });
+  return t("sidebar.workspace.toasts.archiveKeptFiles", { reason });
+}
+
 interface WorkspaceArchiveClient {
-  archiveWorkspace: (workspaceId: string) => Promise<{ error: string | null }>;
+  archiveWorkspace: (
+    workspaceId: string,
+  ) => Promise<{ error: string | null; worktreeKept?: WorktreeKept | null }>;
+}
+
+export interface WorkspaceArchiveOutcome {
+  /** Set when the worktree's code could not be saved, so the daemon kept its directory. */
+  worktreeKept: WorktreeKept | null;
 }
 
 interface OptimisticWorkspaceArchiveSnapshot {
@@ -72,21 +99,22 @@ function restoreOptimisticallyHiddenWorkspace(input: {
 async function archiveWorkspaceOrThrow(input: {
   client: WorkspaceArchiveClient;
   workspaceId: string;
-}): Promise<void> {
+}): Promise<WorkspaceArchiveOutcome> {
   const payload = await input.client.archiveWorkspace(input.workspaceId);
   if (payload.error) {
     throw new Error(payload.error);
   }
+  return { worktreeKept: payload.worktreeKept ?? null };
 }
 
 export async function archiveWorkspaceOptimistically(input: {
   client: WorkspaceArchiveClient;
   workspace: WorkspaceArchiveTarget;
-}): Promise<void> {
+}): Promise<WorkspaceArchiveOutcome> {
   const snapshot = hideWorkspaceOptimistically(input.workspace);
 
   try {
-    await archiveWorkspaceOrThrow({
+    return await archiveWorkspaceOrThrow({
       client: input.client,
       workspaceId: input.workspace.workspaceId,
     });

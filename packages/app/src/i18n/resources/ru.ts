@@ -919,6 +919,7 @@ export const ru: TranslationResources = {
           deletedLines: "Удалено строк: {{count}}",
           unpushedCommit: "Неотправленных коммитов: {{count}}",
           unpushedCommits: "Неотправленных коммитов: {{count}}",
+          workSaved: "Agent Duel сохраняет эту работу, и восстановление вернёт её.",
         },
       },
       diff: {
@@ -1269,7 +1270,7 @@ export const ru: TranslationResources = {
       confirmations: {
         removeTitle: "Удалить проект?",
         removeMessage:
-          "Удалить проект «{{projectName}}» с боковой панели?\n\nФайлы на диске не будут изменены.",
+          "Удалить проект «{{projectName}}» с боковой панели?\n\nФайлы на диске не будут изменены. Код, который Agent Duel сохранил для архивных чатов, будет удалён.",
         removeConfirm: "Удалить",
         cancel: "Отмена",
       },
@@ -1339,6 +1340,17 @@ export const ru: TranslationResources = {
         hostDisconnected: "Хост не подключён",
         hideFailed: "Не удалось скрыть рабочее пространство",
         archiveFailed: "Не удалось архивировать рабочее пространство",
+        archiveKeptFiles:
+          "Чат архивирован, но его работу не удалось сохранить, поэтому файлы остались на диске. Разархивируйте чат, чтобы открыть их. {{reason}}",
+        archiveKeptReasons: {
+          too_large:
+            "Новые и изменённые файлы занимают {{changed}} МБ — больше {{limit}} МБ, которые сохраняет Agent Duel.",
+          unsupported_state:
+            "В рабочем дереве идёт слияние, есть конфликт, подмодуль или вложенный репозиторий.",
+          changed_during_save: "Файлы изменились, пока Agent Duel их сохранял.",
+          in_use: "Файлы использовала другая операция.",
+          failed: "Agent Duel не смог сохранить файлы.",
+        },
         createBranchFailed: "Не удалось создать ветку",
       },
     },

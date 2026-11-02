@@ -16,6 +16,7 @@ import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import { SortablePager } from "./pagination/sortable-pager.js";
 import type { PersistedProjectRecord, PersistedWorkspaceRecord } from "./workspace-registry.js";
 import { resolveProjectDisplayName } from "./workspace-registry.js";
+import { archiveKeepsWorkspaceWork } from "./workspace-cleanup/workspace-cleanup-service.js";
 import {
   deriveTerminalActivityStatusBucket,
   type TerminalActivity,
@@ -270,6 +271,7 @@ export class WorkspaceDirectory {
       descriptorsByWorkspaceId.set(workspaceId, {
         ...workspaceDescriptors[i],
         filesState: resolveWorkspaceFilesState(includedWorkspaces[i]),
+        archiveKeepsWork: archiveKeepsWorkspaceWork(includedWorkspaces[i]),
         createdAt: includedWorkspaces[i].createdAt,
         lastUserMessageAt: lastUserMessageTimes.get(workspaceId) ?? null,
         archivingAt: this.archivingByWorkspaceId.get(workspaceId) ?? null,

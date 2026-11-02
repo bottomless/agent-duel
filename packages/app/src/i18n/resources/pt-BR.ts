@@ -925,6 +925,7 @@ export const ptBR: TranslationResources = {
           deletedLines: "{{count}} linhas removidas",
           unpushedCommit: "{{count}} commit não enviado",
           unpushedCommits: "{{count}} commits não enviados",
+          workSaved: "O Agent Duel salva este trabalho, e Restaurar o traz de volta.",
         },
       },
       diff: {
@@ -1277,7 +1278,7 @@ export const ptBR: TranslationResources = {
       confirmations: {
         removeTitle: "Remover projeto?",
         removeMessage:
-          'Remover "{{projectName}}" da barra lateral?\n\nOs arquivos no disco não serão alterados.',
+          'Remover "{{projectName}}" da barra lateral?\n\nOs arquivos no disco não serão alterados. O código que o Agent Duel salvou para os chats arquivados é excluído.',
         removeConfirm: "Remover",
         cancel: "Cancelar",
       },
@@ -1347,6 +1348,17 @@ export const ptBR: TranslationResources = {
         hostDisconnected: "Host não está conectado",
         hideFailed: "Falha ao ocultar workspace",
         archiveFailed: "Falha ao arquivar workspace",
+        archiveKeptFiles:
+          "Arquivado, mas o trabalho deste chat não pôde ser salvo, então os arquivos continuam no disco. Desarquive o chat para abri-los. {{reason}}",
+        archiveKeptReasons: {
+          too_large:
+            "Os arquivos novos e alterados somam {{changed}} MB, mais que os {{limit}} MB que o Agent Duel salva.",
+          unsupported_state:
+            "O worktree tem uma mesclagem em andamento, um conflito, um submódulo ou um repositório aninhado.",
+          changed_during_save: "Os arquivos mudaram enquanto o Agent Duel os salvava.",
+          in_use: "Outra operação estava usando os arquivos.",
+          failed: "O Agent Duel não conseguiu salvar os arquivos.",
+        },
         createBranchFailed: "Falha ao criar a branch",
       },
     },
