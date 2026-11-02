@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaPromptAttachments } from "@getpaseo/client/internal/daemon-client";
 import { retainAttachmentForGarbageCollection } from "@/attachments/gc-retention";
 import type { ComposerAttachment } from "@/attachments/types";
@@ -13,7 +14,7 @@ export async function encodeArenaPromptAttachments(
   const images = (await encodeImages(wire.images)) ?? [];
   // Sending without an image the composer still shows would start a battle on a different prompt.
   if (images.length < wire.images.length) {
-    throw new Error("An attached image could not be read. Attach it again and resend.");
+    throw new Error(i18n.t("arena.imageReadFailed"));
   }
   return { images, attachments: wire.attachments };
 }

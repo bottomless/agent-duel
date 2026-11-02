@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { i18n } from "@/i18n/i18next";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   ARENA_CONFLICT_RESOLUTION_PROMPT,
@@ -65,9 +66,9 @@ describe("deriveArenaReplyState", () => {
     const result = deriveArenaReplyState(snapshot("running", { a: "pending", b: "pending" }));
 
     expect(result.replyActions).toEqual([
-      { target: "a", label: "Steer A" },
-      { target: "b", label: "Steer B" },
-      { target: "both", label: "Steer both", isDefault: true },
+      { target: "a", label: "Steer A", steering: true },
+      { target: "b", label: "Steer B", steering: true },
+      { target: "both", label: "Steer both", steering: true, isDefault: true },
     ]);
   });
 
@@ -75,16 +76,18 @@ describe("deriveArenaReplyState", () => {
     const result = deriveArenaReplyState(snapshot("running", { a: "pending", b: "complete" }));
 
     expect(result.replyActions).toEqual([
-      { target: "a", label: "Steer A" },
-      { target: "b", label: "Message B" },
-      { target: "both", label: "Message both", isDefault: true },
+      { target: "a", label: "Steer A", steering: true },
+      { target: "b", label: "Message B", steering: false },
+      { target: "both", label: "Message both", steering: false, isDefault: true },
     ]);
   });
 
   it("defaults to steering the contestant still working when the other cannot take a message", () => {
     const result = deriveArenaReplyState(snapshot("running", { a: "error", b: "pending" }));
 
-    expect(result.replyActions).toEqual([{ target: "b", label: "Steer B", isDefault: true }]);
+    expect(result.replyActions).toEqual([
+      { target: "b", label: "Steer B", steering: true, isDefault: true },
+    ]);
   });
 
   it("offers message actions after both contestants have finished", () => {
@@ -94,9 +97,9 @@ describe("deriveArenaReplyState", () => {
 
     expect(result.replyableBattleTurn?.id).toBe("turn-1");
     expect(result.replyActions).toEqual([
-      { target: "a", label: "Message A" },
-      { target: "b", label: "Message B" },
-      { target: "both", label: "Message both", isDefault: true },
+      { target: "a", label: "Message A", steering: false },
+      { target: "b", label: "Message B", steering: false },
+      { target: "both", label: "Message both", steering: false, isDefault: true },
     ]);
   });
 
@@ -290,18 +293,34 @@ describe("arenaConflictResolutionTurnID", () => {
 
 describe("arenaSteeringQueuedMessage", () => {
   it("acknowledges queued steering for one contestant", () => {
-    expect(arenaSteeringQueuedMessage({ target: "a", label: "Steer A" })).toBe(
+    expect(arenaSteeringQueuedMessage({ target: "a", label: "Steer A", steering: true })).toBe(
       "Steering queued for contestant A.",
     );
   });
 
   it("acknowledges queued steering for both contestants", () => {
-    expect(arenaSteeringQueuedMessage({ target: "both", label: "Steer both" })).toBe(
-      "Steering queued for both contestants.",
-    );
+    expect(
+      arenaSteeringQueuedMessage({ target: "both", label: "Steer both", steering: true }),
+    ).toBe("Steering queued for both contestants.");
   });
 
   it("does not describe a completed-result message as steering", () => {
-    expect(arenaSteeringQueuedMessage({ target: "b", label: "Message B" })).toBeNull();
+    expect(
+      arenaSteeringQueuedMessage({ target: "b", label: "Message B", steering: false }),
+    ).toBeNull();
   });
+});
+
+afterEach(async () => {
+  await i18n.changeLanguage("en");
+});
+it("keeps reply defaults and steering acknowledgements after labels are translated", async () => {
+  await i18n.changeLanguage("fr");
+  const { replyActions } = deriveArenaReplyState(snapshot("running", { a: "error", b: "pending" }));
+  expect(replyActions).toEqual([
+    { target: "b", label: "Guider B", steering: true, isDefault: true },
+  ]);
+  expect(arenaSteeringQueuedMessage(replyActions[0])).toBe(
+    "Guidage en attente pour le concurrent B.",
+  );
 });

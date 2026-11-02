@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { memo, useCallback } from "react";
 import { View } from "react-native";
 import { Wrench } from "lucide-react-native";
@@ -22,6 +23,7 @@ export const ArenaChatReasoning = memo(function ArenaChatReasoning({
   expanded: boolean;
   onExpandedChange: (itemId: string, expanded: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const toggle = useCallback(
     () => onExpandedChange(itemId, !expanded),
     [expanded, itemId, onExpandedChange],
@@ -37,7 +39,7 @@ export const ArenaChatReasoning = memo(function ArenaChatReasoning({
   return (
     <ExpandableBadge
       testID="arena-chat-reasoning"
-      label={active ? "Reasoning…" : "Reasoned"}
+      label={active ? t("arena.reasoning") : t("arena.reasoned")}
       icon={Wrench}
       isLoading={active}
       isExpanded={expanded}

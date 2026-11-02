@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 import { Check, Circle, CircleSlash, X } from "lucide-react-native";
@@ -47,11 +49,14 @@ function TimelineMarker({
 
 function rowStatus(row: TransitionTimelineRow, now: number): string {
   if (row.state === "waiting") return "";
-  if (row.state === "failed") return "Failed";
-  if (row.state === "interrupted") return "Interrupted";
+  if (row.state === "failed") return i18n.t("arena.failed");
+  if (row.state === "interrupted") return i18n.t("arena.interrupted");
   const duration =
     row.startedAt === null ? "" : transitionDuration((row.finishedAt ?? now) - row.startedAt);
-  if (row.state === "running") return duration ? `In progress · ${duration}` : "In progress";
+  if (row.state === "running")
+    return duration
+      ? i18n.t("arena.progressDuration", { duration: duration })
+      : i18n.t("arena.inProgress");
   return duration;
 }
 
@@ -66,10 +71,14 @@ function TimelineRow({
   now: number;
   panelActive: boolean;
 }) {
+  const { t } = useTranslation();
   const active = row.state === "running";
   const status = rowStatus(row, now);
   return (
-    <View style={styles.row} accessibilityLabel={`${row.label}. ${row.state}. ${status}`}>
+    <View
+      style={styles.row}
+      accessibilityLabel={`${row.label}. ${t({ waiting: "arena.pending", running: "arena.inProgress", completed: "arena.completed", failed: "arena.failed", interrupted: "arena.interrupted" }[row.state])}. ${status}`}
+    >
       <View style={styles.rail}>
         <View style={styles.marker}>
           <TimelineMarker state={row.state} active={panelActive} />
@@ -93,6 +102,7 @@ export function ArenaTransitionTimeline({
   phase: TransitionPhase;
   turn?: TimelineTurn;
 }) {
+  const { t } = useTranslation();
   const panelActive = useRetainedPanelActive();
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -105,8 +115,10 @@ export function ArenaTransitionTimeline({
   return (
     <View style={styles.panel} testID={`arena-transition-timeline-${phase}`}>
       <View style={styles.header}>
-        <Text style={styles.title}>{setup ? "Setting up battle" : "Applying selected result"}</Text>
-        <Text style={styles.caption}>In progress</Text>
+        <Text style={styles.title}>
+          {setup ? t("arena.setupBattle") : t("arena.applySelected")}
+        </Text>
+        <Text style={styles.caption}>{t("arena.inProgress")}</Text>
       </View>
       <View style={[styles.timeline, setup ? styles.setupTimeline : styles.resolutionTimeline]}>
         {rows.map((row, index) => (

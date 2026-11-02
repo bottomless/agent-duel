@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type {
   CheckoutPipelineJob,
   CheckoutPrStatusResponse,
@@ -815,4 +815,15 @@ describe("getActivityVerbKey", () => {
     expect(english(getActivityVerbKey(item))).toBe(englishVerb);
     expect(french(getActivityVerbKey(item))).toBe(frenchVerb);
   });
+});
+
+afterEach(async () => {
+  await i18n.changeLanguage("en");
+});
+it("localizes PR relative times without changing month and year thresholds", async () => {
+  await i18n.changeLanguage("fr");
+  const now = Date.UTC(2026, 0, 1, 12);
+  expect(formatAge(now - 5 * 60_000, now)).toBe("il y a 5 min");
+  expect(formatAge(now - 90 * 24 * 60 * 60_000, now)).toBe("il y a 3m");
+  expect(formatAge(now - 365 * 24 * 60 * 60_000, now)).toBe("il y a 1a");
 });

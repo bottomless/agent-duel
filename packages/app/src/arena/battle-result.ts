@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaHistoryItem, ArenaRun, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 
 export function battleWinnerSide(item: ArenaHistoryItem): ArenaSide | undefined {
@@ -24,7 +25,9 @@ export function settledHistoryRun(run: ArenaRun | undefined): ArenaRun | undefin
 }
 
 /** What a stopped contestant pane says in place of the provider's abort. */
-export const STOPPED_BY_EARLY_PICK_NOTE = "Stopped when you picked the other agent's result.";
+export function stoppedByEarlyPickNote(): string {
+  return i18n.t("arena.stoppedEarly");
+}
 
 /**
  * The run's error as the pane should show it, beside the stopped note.
@@ -132,20 +135,20 @@ function conflictedFileCount(application: ArenaHistoryItem["gitApplication"]): n
 export function resolutionRetryDetail(application: ArenaHistoryItem["gitApplication"]): string {
   if (application?.state === "conflicted") {
     const count = conflictedFileCount(application);
-    let lead = "Unresolved merge conflicts remain.";
-    if (count === 1) lead = "1 file has unresolved merge conflicts.";
-    else if (count > 1) lead = `${count} files have unresolved merge conflicts.`;
-    const each = count === 1 ? "Resolve it" : "Resolve each one";
-    return `${lead} ${each}, then retry.`;
+    let lead = i18n.t("arena.unresolvedRemain");
+    if (count === 1) lead = i18n.t("arena.oneUnresolved");
+    else if (count > 1) lead = i18n.t("arena.manyUnresolved", { total: count });
+    const each = count === 1 ? i18n.t("arena.resolveIt") : i18n.t("arena.resolveEach");
+    return i18n.t("arena.resolveRetry", { lead: lead, instruction: each });
   }
   if (application?.state === "applied") {
-    return "The winning Git state is already in this workspace. Retry to finish updating the conversation and environments.";
+    return i18n.t("arena.winningInWorkspace");
   }
-  return "The winning state is preserved. Retry applying it to this workspace.";
+  return i18n.t("arena.winningPreservedRetry");
 }
 
 export function divergenceFilesLabel(conflicts: readonly string[]): string {
-  return `Conflicting files (${conflicts.length})`;
+  return i18n.t("arena.conflictingCount", { total: conflicts.length });
 }
 
 /** Keep Git recovery language consistent in the collapsed and expanded battle views. */
@@ -155,8 +158,8 @@ export function gitApplicationNotice(item: ArenaHistoryItem): GitApplicationNoti
   if (application.state === "discarded") {
     return {
       tone: "info",
-      title: "Winning changes discarded",
-      detail: "The winning agent’s changes were not applied.",
+      title: i18n.t("arena.winningDiscarded"),
+      detail: i18n.t("arena.winningNotAppliedDetail"),
       conflicts: [],
     };
   }
@@ -166,8 +169,13 @@ export function gitApplicationNotice(item: ArenaHistoryItem): GitApplicationNoti
     const others = refApplicationNotice(application)?.detail;
     return {
       tone: "info",
-      title: "Your changes were set aside",
-      detail: `Your uncommitted changes could not be merged with the winning result, so Arena kept them at ${application.discardedRef}: reset --hard ${application.discardedRef}^ returns HEAD, and checkout ${application.discardedRef} -- . returns the files.${others ? ` ${others}` : ""}`,
+      title: i18n.t("arena.yoursSetAside"),
+      detail: i18n.t("arena.setAsideHelp", {
+        ref: application.discardedRef,
+        reset: `reset --hard ${application.discardedRef}^`,
+        checkout: `checkout ${application.discardedRef} -- .`,
+        others: others ? ` ${others}` : "",
+      }),
       conflicts: [],
     };
   }
@@ -183,18 +191,16 @@ export function gitApplicationNotice(item: ArenaHistoryItem): GitApplicationNoti
   if (application.state === "manual" || application.state === "blocked") {
     return {
       tone: "warning",
-      title: "Git application needs attention",
-      detail:
-        application.reason ??
-        "The winning result is preserved, but Arena could not apply it automatically to this workspace.",
+      title: i18n.t("arena.applicationAttention"),
+      detail: application.reason ?? i18n.t("arena.winningPreserved"),
       conflicts: application.conflicts ?? [],
     };
   }
   if (application.state === "failed") {
     return {
       tone: "danger",
-      title: "Git application failed",
-      detail: application.reason ?? "Arena could not apply the winning result.",
+      title: i18n.t("arena.applicationFailed"),
+      detail: application.reason ?? i18n.t("arena.couldNotApply"),
       conflicts: application.conflicts ?? [],
     };
   }
@@ -209,9 +215,9 @@ function refApplicationNotice(application: GitApplication): GitApplicationNotice
   // means a fifth `RefOutcome["action"]` fails to compile right here instead of rendering
   // "undefined" to the user.
   const verb: Record<Exclude<RefOutcomeAction, "skipped">, string> = {
-    created: "Created",
-    updated: "Updated",
-    deleted: "Deleted",
+    created: i18n.t("arena.created"),
+    updated: i18n.t("arena.updated"),
+    deleted: i18n.t("arena.deleted"),
   };
   const applied = outcomes.filter(
     (
@@ -224,34 +230,39 @@ function refApplicationNotice(application: GitApplication): GitApplicationNotice
   // A skip reason is already a sentence that names its own ref, so it is rendered alone rather
   // than behind another copy of the name. One cause carries git's own message, so clamp it.
   const because = (outcome: { ref: string; reason?: string }) =>
-    outcome.reason ? clampReason(outcome.reason) : `${refLabel(outcome.ref)} was not updated.`;
+    outcome.reason
+      ? clampReason(outcome.reason)
+      : i18n.t("arena.refNotUpdated", { name: refLabel(outcome.ref) });
   // A branch both sides changed says how Arena combined them, since it chose without asking.
   const how = (outcome: RefOutcome) => {
-    if (outcome.how === "agent_on_yours") return ": the agent’s commits now follow yours";
-    if (outcome.how === "yours_on_agent") return ": your commits now follow the agent’s version";
+    if (outcome.how === "agent_on_yours") return i18n.t("arena.agentOnYours");
+    if (outcome.how === "yours_on_agent") return i18n.t("arena.yoursOnAgent");
     return "";
   };
   // A write that dropped commits names where they are kept, so the developer can get them back.
   const kept = (outcome: RefOutcome) => {
     if (!outcome.backupRef) return "";
-    if (!outcome.removed) return ` Its old value is kept at ${outcome.backupRef}.`;
-    const commits = outcome.removed === 1 ? "old commit is" : `${outcome.removed} old commits are`;
-    return ` Its ${commits} kept at ${outcome.backupRef}.`;
+    if (!outcome.removed) return i18n.t("arena.oldValueKept", { ref: outcome.backupRef });
+    return i18n.t(outcome.removed === 1 ? "arena.oldCommitKept" : "arena.oldCommitsKept", {
+      total: outcome.removed,
+      ref: outcome.backupRef,
+    });
   };
   const switchedRef = switchedTo ? `refs/heads/${switchedTo}` : undefined;
   const sentences = [
     ...applied.map((outcome) => {
-      const here = outcome.ref === switchedRef ? ", and this workspace is now on it" : "";
+      const here = outcome.ref === switchedRef ? i18n.t("arena.workspaceOnIt") : "";
       return `${verb[outcome.action]} ${refLabel(outcome.ref)}${how(outcome)}${here}.${kept(outcome)}`;
     }),
     ...(switchedTo && !applied.some((outcome) => outcome.ref === switchedRef)
-      ? [`This workspace is now on ${switchedTo}.`]
+      ? [i18n.t("arena.workspaceOnBranch", { branch: switchedTo })]
       : []),
     ...skipped.map(because),
   ];
   return {
     tone: skipped.length > 0 ? "warning" : "info",
-    title: skipped.length > 0 ? "Some branches were not updated" : "Branches updated",
+    title:
+      skipped.length > 0 ? i18n.t("arena.branchesNotUpdated") : i18n.t("arena.branchesUpdated"),
     detail: sentences.join(" "),
     conflicts: [],
   };

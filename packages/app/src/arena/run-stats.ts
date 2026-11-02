@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { arenaLongRunningTool, isArenaRunPossiblyStalled } from "./run-liveness";
 
@@ -7,12 +8,12 @@ export const ARENA_SIGN_IN_WAIT_MESSAGE = "Waiting for sign-in";
 /** The engine's retry status while a contestant waits for the network. */
 export const ARENA_NETWORK_WAIT_MESSAGE = "Waiting for network";
 
-const RETRY_MESSAGES = new Set([
-  ARENA_NETWORK_WAIT_MESSAGE,
-  ARENA_SIGN_IN_WAIT_MESSAGE,
-  "Continuing after response limit",
-  "Continuing after model timeout",
-]);
+const RETRY_MESSAGES: Record<string, string> = {
+  [ARENA_NETWORK_WAIT_MESSAGE]: "arena.waitingNetwork",
+  [ARENA_SIGN_IN_WAIT_MESSAGE]: "arena.waitingSignIn",
+  "Continuing after response limit": "arena.continuingLimit",
+  "Continuing after model timeout": "arena.continuingTimeout",
+};
 
 type ArenaRunTiming = Pick<
   ArenaRun,
@@ -58,8 +59,8 @@ export function arenaRunClockStart(
 export function arenaRunStatusLabel(run: ArenaRun, now: number): string {
   switch (run.runState) {
     case "pending":
-      if (run.questions?.length) return "Waiting for your answer";
-      if (run.permissions?.length) return "Waiting for permission";
+      if (run.questions?.length) return i18n.t("arena.waitingAnswer");
+      if (run.permissions?.length) return i18n.t("arena.permissionWait");
       if (
         typeof run.status === "object" &&
         run.status !== null &&
@@ -69,30 +70,32 @@ export function arenaRunStatusLabel(run: ArenaRun, now: number): string {
         // The engine's neutral recovery and offline-wait messages preserve blinding.
         return "message" in run.status &&
           typeof run.status.message === "string" &&
-          RETRY_MESSAGES.has(run.status.message)
-          ? run.status.message
-          : "Retrying";
+          Object.hasOwn(RETRY_MESSAGES, run.status.message)
+          ? i18n.t(RETRY_MESSAGES[run.status.message])
+          : i18n.t("arena.retryingStatus");
       switch (arenaLongRunningTool(run, now)) {
         case "command":
-          return "Running a command";
+          return i18n.t("arena.runningCommand");
         case "tool":
-          return "Running a tool";
+          return i18n.t("arena.runningTool");
       }
-      return isArenaRunPossiblyStalled(run, now) ? "No recent activity" : "Working";
+      return isArenaRunPossiblyStalled(run, now)
+        ? i18n.t("arena.noRecentActivity")
+        : i18n.t("arena.workingStatus");
     case "complete":
-      return "Finished";
+      return i18n.t("arena.finished");
     case "stopped":
-      return "Stopped";
+      return i18n.t("arena.stopped");
     case "interrupted":
-      return "Interrupted";
+      return i18n.t("arena.interrupted");
     case "error":
-      return "Failed";
+      return i18n.t("arena.failed");
   }
 }
 
 export function arenaRunFilesLabel(diff: ArenaRun["diff"]): string | null {
   if (!diff) return null;
-  return `${diff.files} ${diff.files === 1 ? "file" : "files"}`;
+  return i18n.t(diff.files === 1 ? "arena.oneFile" : "arena.fileCount", { total: diff.files });
 }
 
 /** The wait of a contestant whose session the app should recheck, if any. */

@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
 import { buildToolCallDisplayModel } from "@/utils/tool-call-display";
@@ -179,9 +180,9 @@ export function presentArenaWork({
   }
 
   const waitingForModel = awaitingResponse && runState === "pending";
-  if (waitingForModel) return { kind: "reasoning", label: "Thinking…", active: true };
+  if (waitingForModel) return { kind: "reasoning", label: i18n.t("arena.thinking"), active: true };
   if (responding && runState === "pending") {
-    return { kind: "reasoning", label: "Responding…", active: true };
+    return { kind: "reasoning", label: i18n.t("arena.responding"), active: true };
   }
 
   // Completion can arrive out of order. It controls animation, never recency.
@@ -189,7 +190,11 @@ export function presentArenaWork({
   const active = arenaWorkPartIsActive(current, runState);
   const record = asRecord(current);
   if (record?.type !== "tool") {
-    return { kind: "reasoning", label: active ? "Reasoning…" : "Reasoned", active };
+    return {
+      kind: "reasoning",
+      label: active ? i18n.t("arena.reasoning") : i18n.t("arena.reasoned"),
+      active,
+    };
   }
   const state = asRecord(record.state) ?? {};
   const toolName = typeof record.tool === "string" ? record.tool : "tool";
@@ -302,8 +307,15 @@ export function summarizeArenaWork(parts: readonly unknown[]): ArenaWorkSummary 
   };
 }
 
-function countLabel(count: number, singular: string, plural: string): string {
-  return `${count} ${count === 1 ? singular : plural}`;
+function countLabel(count: number, kind: "file" | "command" | "search" | "other tool"): string {
+  const keys = {
+    file: ["arena.oneFile", "arena.fileCount"],
+    command: ["arena.commandOne", "arena.commandMany"],
+    search: ["arena.searchOne", "arena.searchMany"],
+    "other tool": ["arena.toolOne", "arena.toolMany"],
+  } as const;
+  const labels = keys[kind];
+  return i18n.t(count === 1 ? labels[0] : labels[1], { total: count });
 }
 
 function hasWork(summary: ArenaWorkSummary): boolean {
@@ -318,36 +330,46 @@ function hasWork(summary: ArenaWorkSummary): boolean {
 }
 
 export function arenaWorkSummaryLabel(summary: ArenaWorkSummary, active: boolean): string {
-  if (!hasWork(summary)) return active ? "Working…" : "Worked";
+  if (!hasWork(summary)) return active ? i18n.t("arena.workingEllipsis") : i18n.t("arena.worked");
 
   const labels: string[] = [];
   if (summary.readFileCount > 0) {
     labels.push(
-      `${active ? "Reading" : "Read"} ${countLabel(summary.readFileCount, "file", "files")}`,
+      i18n.t(active ? "arena.readingFiles" : "arena.readFiles", {
+        files: countLabel(summary.readFileCount, "file"),
+      }),
     );
   }
   if (summary.commandCount > 0) {
     labels.push(
-      `${active ? "Running" : "Ran"} ${countLabel(summary.commandCount, "command", "commands")}`,
+      i18n.t(active ? "arena.runningCommands" : "arena.ranCommands", {
+        commands: countLabel(summary.commandCount, "command"),
+      }),
     );
   }
   if (summary.editedFileCount > 0) {
     labels.push(
-      `${active ? "Editing" : "Edited"} ${countLabel(summary.editedFileCount, "file", "files")}`,
+      i18n.t(active ? "arena.editingFiles" : "arena.editedFiles", {
+        files: countLabel(summary.editedFileCount, "file"),
+      }),
     );
   }
   if (summary.searchCount > 0) {
     labels.push(
-      `${active ? "Running" : "Ran"} ${countLabel(summary.searchCount, "search", "searches")}`,
+      i18n.t(active ? "arena.runningSearches" : "arena.ranSearches", {
+        searches: countLabel(summary.searchCount, "search"),
+      }),
     );
   }
   if (summary.otherToolCount > 0) {
     labels.push(
-      `${active ? "Using" : "Used"} ${countLabel(summary.otherToolCount, "other tool", "other tools")}`,
+      i18n.t(active ? "arena.usingTools" : "arena.usedTools", {
+        tools: countLabel(summary.otherToolCount, "other tool"),
+      }),
     );
   }
   if (summary.reasoningCount > 0 && labels.length === 0) {
-    labels.push(active ? "Reasoning…" : "Reasoned");
+    labels.push(active ? i18n.t("arena.reasoning") : i18n.t("arena.reasoned"));
   }
   return labels.join(" · ");
 }

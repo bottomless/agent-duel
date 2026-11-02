@@ -2399,9 +2399,10 @@ function ActiveAgentComposer({
     [agentInputDraft, arenaStart, toast],
   );
 
+  const { t } = useTranslation();
   const { battleIsActive, canQueueNextTurn, replyableBattleTurn, replyActions } = useMemo(
-    () => deriveArenaReplyState(arenaSession.data),
-    [arenaSession.data],
+    () => deriveArenaReplyState(arenaSession.data, t),
+    [arenaSession.data, t],
   );
   const conflictResolutionTurnID = useMemo(
     () => arenaConflictResolutionTurnID(arenaSession.data),

@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import type { ArenaReplyTarget } from "@getpaseo/protocol/arena/rpc-schemas";
 import { StyleSheet } from "react-native-unistyles";
@@ -11,15 +13,15 @@ import { useArenaReplyTargetStore } from "./reply-target-store";
 const TARGETS: readonly ArenaReplyTarget[] = ["both", "a", "b"];
 
 /** "Agent A" where there is room for it; the letter alone on a compact composer. */
-function targetLabel(target: ArenaReplyTarget, compact: boolean): string {
-  if (target === "both") return "Both";
+function targetLabel(target: ArenaReplyTarget, compact: boolean, t = i18n.t): string {
+  if (target === "both") return t("arena.both");
   const letter = target.toUpperCase();
-  return compact ? letter : `Agent ${letter}`;
+  return compact ? letter : t("arena.agentSide", { side: letter });
 }
 
-function unavailableLabel(target: ArenaReplyTarget): string {
-  if (target === "both") return "Both contestants cannot take the same message right now";
-  return `Agent ${target.toUpperCase()} cannot take a message right now`;
+function unavailableLabel(target: ArenaReplyTarget, t = i18n.t): string {
+  if (target === "both") return t("arena.bothUnavailable");
+  return t("arena.agentUnavailable", { side: target.toUpperCase() });
 }
 
 /**
@@ -37,6 +39,7 @@ export function ArenaReplyTargetControl({
   value: ArenaReplyTarget | null;
   onValueChange: (target: ArenaReplyTarget) => void;
 }) {
+  const { t } = useTranslation();
   const compact = useCompactComposerToolbar();
   const options = useMemo<SegmentedControlOption<ArenaReplyTarget>[]>(
     () =>
@@ -47,15 +50,15 @@ export function ArenaReplyTargetControl({
         else if (target === "b") selectedStyle = styles.selectedB;
         return {
           value: target,
-          label: targetLabel(target, compact),
-          accessibilityLabel: action ? action.label : unavailableLabel(target),
+          label: targetLabel(target, compact, t),
+          accessibilityLabel: action ? action.label : unavailableLabel(target, t),
           disabled: !action,
           selectedStyle,
           selectedLabelStyle: target === "both" ? undefined : styles.selectedSideLabel,
           testID: `arena-reply-target-${target}`,
         };
       }),
-    [actions, compact],
+    [actions, compact, t],
   );
   return (
     <SegmentedControl
@@ -84,6 +87,7 @@ export function useArenaReplyComposerControls({
   submit: (payload: MessagePayload) => Promise<void>;
   selectedAction: ArenaReplyAction | undefined;
 } {
+  const { t } = useTranslation();
   const storedSelection = useArenaReplyTargetStore((state) =>
     turnId ? (state.selections[turnId] ?? null) : null,
   );
@@ -102,10 +106,10 @@ export function useArenaReplyComposerControls({
   );
   const submit = useCallback(
     async (payload: MessagePayload) => {
-      if (!selectedTarget) throw new Error("Choose a contestant before sending.");
+      if (!selectedTarget) throw new Error(t("arena.chooseContestant"));
       await onSubmit(selectedTarget, payload);
     },
-    [onSubmit, selectedTarget],
+    [onSubmit, selectedTarget, t],
   );
   const leftContent = useMemo(() => {
     if (!enabled) return undefined;

@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import {
   buildLineDiffFromLines,
   splitIntoLines,
@@ -66,10 +67,10 @@ export interface CombinedDiff {
 export function baseReadNote(diff: CombinedDiff): string | null {
   if (diff.mode !== "merged") return null;
   if (diff.baseRead === "text") {
-    return "The original was too large to align line by line; lines both wrote are marked by their text, and lines both dropped are not shown.";
+    return i18n.t("arena.largeOriginal");
   }
   if (diff.baseRead === "none") {
-    return "The original was not sent, so lines both wrote read as unchanged.";
+    return i18n.t("arena.noOriginalShared");
   }
   return null;
 }

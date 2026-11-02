@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ScrollView,
@@ -174,6 +175,7 @@ function BattlePane({
   paneView: ArenaPaneView;
   onPaneViewChange: (value: ArenaPaneView) => void;
 }) {
+  const { t } = useTranslation();
   const active = useRetainedPanelActive();
   const threadScrollRef = useRef<ScrollView>(null);
   const autoScrollEnabledRef = useRef(true);
@@ -288,7 +290,9 @@ function BattlePane({
     <View style={paneStyle} testID={`arena-pane-${side}`}>
       <View style={styles.paneHeader}>
         <View style={styles.paneHeading}>
-          <Text style={styles.agentName}>Agent {side.toUpperCase()}</Text>
+          <Text style={styles.agentName}>
+            {t("arena.agent")} {side.toUpperCase()}
+          </Text>
           {dispatched ? (
             <ArenaRunMeta
               run={dispatched}
@@ -297,7 +301,7 @@ function BattlePane({
               onOpenChanges={openChanges}
             />
           ) : (
-            <Text style={styles.status}>Preparing</Text>
+            <Text style={styles.status}>{t("arena.preparing")}</Text>
           )}
         </View>
         <View style={styles.paneHeaderActions}>
@@ -314,7 +318,9 @@ function BattlePane({
           <PaneIconAction
             onPress={expanded ? handleRestore : handleExpand}
             accessibilityLabel={
-              expanded ? "Restore split view" : `Expand Agent ${side.toUpperCase()}`
+              expanded
+                ? t("arena.restoreSplit")
+                : t("arena.expandAgent", { side: side.toUpperCase() })
             }
             testID={`arena-pane-expand-${side}`}
           >
@@ -362,7 +368,7 @@ function BattlePane({
                 variant="outline"
                 style={styles.latestButton}
                 leftIcon={ArrowDown}
-                accessibilityLabel={`Jump to latest in Agent ${side.toUpperCase()}`}
+                accessibilityLabel={t("arena.latestAgent", { side: side.toUpperCase() })}
                 onPress={jumpToLatest}
                 testID={`arena-latest-${side}`}
               />
@@ -388,6 +394,7 @@ function useBattleDiff(
   runB: ArenaRun | undefined,
   phase: BattleReviewPhase,
 ) {
+  const { t } = useTranslation();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   return useFetchQuery({
     queryKey: [
@@ -397,7 +404,7 @@ function useBattleDiff(
     dataShape: "value",
     staleTimeMs: 0,
     queryFn: async () => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
+      if (!client) throw new Error(t("arena.connectionUnavailable"));
       try {
         return await client.arenaDiff(agentId, turnId);
       } catch (error) {
@@ -677,6 +684,7 @@ export function ArenaBattleView({
   /** Keeps the submitted prompt visible until its turn arrives. */
   startingPrompt?: StartingArenaBattle;
 }) {
+  const { t } = useTranslation();
   // Only the battle this view owns. A ready chat still carries the last resolved turn; while
   // the next battle is starting, rendering that turn would bring the previous battle back.
   const turn = isArenaBattleOnScreen(snapshot) ? snapshot.turn : undefined;
@@ -767,7 +775,7 @@ export function ArenaBattleView({
             <View style={styles.rootSection} accessibilityRole="alert">
               <Alert
                 variant="error"
-                title="Battle action failed"
+                title={t("arena.actionFailed")}
                 description={actions.actionError}
               />
             </View>
@@ -793,7 +801,7 @@ export function ArenaBattleView({
             <View style={styles.rootSection}>
               <Alert
                 variant="warning"
-                title="Trunk unavailable"
+                title={t("arena.trunkUnavailable")}
                 description={snapshot.chat.blockedReason}
                 testID="arena-environment-problem"
               />

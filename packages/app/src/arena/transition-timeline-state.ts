@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   ARENA_OPERATION_LABELS,
@@ -44,7 +45,7 @@ export function transitionTimelineRows({
     const fallback = setup ? arenaSetupStatus(turn) : arenaResolutionStatus(turn);
     rows.push({
       id: "starting",
-      label: fallback ?? "Preparing the transition",
+      label: fallback ?? i18n.t("arena.prepareTransition"),
       state: "running",
       startedAt: null,
       finishedAt: null,
@@ -52,7 +53,7 @@ export function transitionTimelineRows({
   }
   rows.push({
     id: "ready",
-    label: setup ? "Agents ready" : "Ready for your next prompt",
+    label: setup ? i18n.t("arena.agentsReady") : i18n.t("arena.readyNextPrompt"),
     state: "waiting",
     startedAt: null,
     finishedAt: null,
@@ -62,7 +63,10 @@ export function transitionTimelineRows({
 
 export function transitionDuration(durationMs: number): string {
   const seconds = Math.max(0, durationMs) / 1000;
-  if (seconds < 1) return "<1s";
-  if (seconds < 60) return `${Math.floor(seconds)}s`;
-  return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+  if (seconds < 1) return i18n.t("time.lessSecond");
+  if (seconds < 60) return i18n.t("time.secondsCompact", { total: Math.floor(seconds) });
+  return i18n.t("time.shortDuration", {
+    minutes: Math.floor(seconds / 60),
+    seconds: Math.floor(seconds % 60),
+  });
 }

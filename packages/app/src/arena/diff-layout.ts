@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import { create } from "zustand";
 
 /**
@@ -16,8 +17,20 @@ export function defaultDiffLayout(width: number | null): ArenaDiffLayout {
 
 export const DIFF_LAYOUT_OPTIONS: Array<{ value: ArenaDiffLayout; label: string; testID: string }> =
   [
-    { value: "split", label: "Side by side", testID: "arena-diff-layout-split" },
-    { value: "single", label: "One column", testID: "arena-diff-layout-single" },
+    {
+      value: "split",
+      get label() {
+        return i18n.t("arena.sideBySide");
+      },
+      testID: "arena-diff-layout-split",
+    },
+    {
+      value: "single",
+      get label() {
+        return i18n.t("arena.oneColumn");
+      },
+      testID: "arena-diff-layout-single",
+    },
   ];
 
 interface ArenaDiffLayoutStore {

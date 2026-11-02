@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo } from "react";
 import { Text, View } from "react-native";
 import { useContainerWidth } from "@/hooks/use-container-width";
@@ -47,12 +49,13 @@ function Verdict({
   retrying: boolean;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <View style={styles.section}>
       {pending ? (
         <View style={styles.loading}>
           <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />
-          <Text style={styles.status}>Comparing results…</Text>
+          <Text style={styles.status}>{t("arena.comparing")}</Text>
         </View>
       ) : null}
       {output ? (
@@ -63,9 +66,9 @@ function Verdict({
       ) : null}
       {failed ? (
         <View style={styles.loading}>
-          <Text style={styles.error}>The difference summary failed to generate.</Text>
+          <Text style={styles.error}>{t("arena.summaryFailed")}</Text>
           <Button size="xs" variant="ghost" loading={retrying} onPress={onRetry}>
-            Retry summary
+            {t("arena.retrySummary")}{" "}
           </Button>
         </View>
       ) : null}
@@ -73,16 +76,17 @@ function Verdict({
   );
 }
 
-const sideName = (side: ArenaSide) => `Agent ${side.toUpperCase()}`;
+const sideName = (side: ArenaSide) => i18n.t("arena.agentSide", { side: side.toUpperCase() });
 const otherSide = (side: ArenaSide): ArenaSide => (side === "a" ? "b" : "a");
 
 /** The summary tab while one side still works: nothing to compare yet, and it says so. */
 function WaitingSummary({ waitingFor }: { waitingFor: ArenaSide }) {
+  const { t } = useTranslation();
+
   return (
     <View style={styles.section} testID="arena-summary-waiting">
       <Text style={styles.status}>
-        {sideName(waitingFor)} is still working. The difference summary compares both results once
-        it finishes.
+        {sideName(waitingFor)} {t("arena.waitingSummary")}{" "}
       </Text>
     </View>
   );
@@ -116,6 +120,7 @@ function ChangesTab({
   onRetry: () => void;
   retrying: boolean;
 }) {
+  const { t } = useTranslation();
   const revision = diff ? comparisonRevision(diff) : undefined;
   const renderDiff = useCallback(
     (file: string) => (
@@ -136,7 +141,7 @@ function ChangesTab({
     return (
       <View style={styles.loading}>
         <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />
-        <Text style={styles.status}>Loading changes from base…</Text>
+        <Text style={styles.status}>{t("arena.loadingBaseChanges")}</Text>
       </View>
     );
   }
@@ -145,20 +150,21 @@ function ChangesTab({
       <View style={styles.loading} accessibilityRole="alert">
         <Text style={styles.error}>{toErrorMessage(error)}</Text>
         <Button size="xs" variant="ghost" loading={retrying} onPress={onRetry}>
-          Retry changes
+          {t("arena.retryChanges")}{" "}
         </Button>
       </View>
     );
   if (waitingFor && diff && rows.length === 0) {
     return (
       <Text style={styles.status} testID="arena-changes-none">
-        {sideName(otherSide(waitingFor))} made no changes · {sideName(waitingFor)} is still working
+        {sideName(otherSide(waitingFor))} {t("arena.noChangesWhile")} {sideName(waitingFor)}{" "}
+        {t("arena.workingStill")}{" "}
       </Text>
     );
   }
   if (diff?.treesEqual && rows.length === 0) return <IdenticalBattleResult />;
   if (rows.length === 0 || !diff) {
-    return <Text style={styles.status}>Changes from base are unavailable</Text>;
+    return <Text style={styles.status}>{t("arena.baseUnavailable")}</Text>;
   }
   return (
     <View style={styles.block}>
@@ -225,11 +231,12 @@ function ReviewTabs({
   changesLabel: string;
   onChange: (tab: ArenaReviewTab) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <View style={styles.tabs} accessibilityRole="tablist" testID="arena-review-tabs">
       <ReviewTab
         value="verdict"
-        label="Difference summary"
+        label={t("arena.summary")}
         selected={tab === "verdict"}
         onSelect={onChange}
         testID="arena-review-tab-verdict"
@@ -272,7 +279,9 @@ function ReviewHeader({
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
-  const sectionName = tabs ? "the difference summary and changes" : "the changes";
+  const { t } = useTranslation();
+
+  const sectionName = tabs ? t("arena.reviewSections") : t("arena.reviewChanges");
   return (
     <View style={styles.header} testID="arena-review-header">
       {tabs ? (
@@ -283,7 +292,9 @@ function ReviewHeader({
       <View style={styles.spacer} />
       {layoutControl ? <DiffLayoutControl agentId={agentId} width={width} /> : null}
       <PaneIconAction
-        accessibilityLabel={`${collapsed ? "Show" : "Hide"} ${sectionName}`}
+        accessibilityLabel={t(collapsed ? "arena.showReview" : "arena.hideReview", {
+          section: sectionName,
+        })}
         onPress={onToggleCollapsed}
         testID="arena-review-collapse"
       >
@@ -338,6 +349,7 @@ export function BattleReview({
   onRetryDiff: () => void;
   retryingDiff: boolean;
 }) {
+  const { t } = useTranslation();
   // The reader's choices live in the review store so review telemetry can
   // observe them without this component knowing telemetry exists. Absent means
   // no choice yet and the default below stands.
@@ -421,7 +433,8 @@ export function BattleReview({
       );
     }
   }, [arrivalFile, rows, setShownFile, showChanges, turnId]);
-  const changesLabel = rows.length > 0 ? `Changes (${rows.length})` : "Changes";
+  const changesLabel =
+    rows.length > 0 ? t("arena.changesCount", { total: rows.length }) : t("arena.changes");
   // Review telemetry listens to scrolls on the whole document; this tells it which diffs are
   // this battle's.
   const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);

@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaReviewItem, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 
@@ -89,8 +90,7 @@ export function canStartBattleOnChat(chat: GuardChat): boolean {
  * "Let one agent resolve them" used to live here too, which is what the button says. Two lines
  * of prose competing with the action is what made the callout feel crowded.
  */
-export const CONFLICT_CALLOUT_DETAIL =
-  "The files below have unresolved merge conflicts. Battles resume once the trunk is clean.";
+export const CONFLICT_CALLOUT_DETAIL = i18n.t("arena.conflictsPause");
 
 export function resolveConflictGuard(input: ConflictGuardInput): ConflictGuardDecision {
   const conflictKey = trunkConflictKey(input.trunkConflicts);
@@ -207,7 +207,7 @@ export function arenaParkedPromotion(
  * there is nothing to stage and no Git operation left to continue.
  */
 export function conflictRepairDetail(_input: { conflicts: readonly string[] }): string {
-  return "The changes were merged into this workspace, with conflicts in the files below. Resolve them yourself or ask an agent — clearing the conflict markers is all that is left. You can keep chatting.";
+  return i18n.t("arena.conflictsChat");
 }
 
 /**

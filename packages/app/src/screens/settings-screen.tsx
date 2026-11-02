@@ -444,8 +444,8 @@ function SettingsSidebar({
       <EditingTextInput
         initialValue={search}
         onChangeText={onSearchChange}
-        placeholder="Search settings"
-        accessibilityLabel="Search settings"
+        placeholder={t("settings.searchPlaceholder")}
+        accessibilityLabel={t("settings.searchPlaceholder")}
         style={sidebarStyles.search}
       />
       {items.length === 0 && (!hasHosts || hostItems.length === 0) ? (

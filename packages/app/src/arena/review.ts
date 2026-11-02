@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type {
   ArenaBranchAction,
   ArenaReviewAnswer,
@@ -39,7 +40,9 @@ function folderName(path: string): string {
 function filesNote(paths: readonly string[]): string {
   const [first, ...rest] = paths;
   if (!first) return "";
-  return rest.length === 0 ? ` in ${first}` : ` in ${first} and ${rest.length} more`;
+  return rest.length === 0
+    ? i18n.t("arena.inFile", { file: first })
+    : i18n.t("arena.inFiles", { file: first, total: rest.length });
 }
 
 /** Whether the two sides of a ref need combining, rather than one replacing the other. */
@@ -48,11 +51,11 @@ function overlaps(item: RefItem): boolean {
 }
 
 function commits(count: number): string {
-  return `${count} commit${count === 1 ? "" : "s"}`;
+  return i18n.t(count === 1 ? "arena.oneCommit" : "arena.commitCount", { total: count });
 }
 
 function quoted(subject: string | undefined): string {
-  return subject ? `“${subject}”` : "an older commit";
+  return subject ? `“${subject}”` : i18n.t("arena.olderCommit");
 }
 
 /** Which of the developer's commits would leave the branch, named, so the loss is plain. */
@@ -60,14 +63,14 @@ function leaving(item: RefItem): string[] {
   const lost = item.lost ?? 0;
   const subjects = (item.lostSubjects ?? []).toReversed();
   const more = lost - subjects.length;
-  return more > 0 ? [...subjects, `and ${more} more`] : subjects;
+  return more > 0 ? [...subjects, i18n.t("arena.more", { total: more })] : subjects;
 }
 
 /** The line the bullet list of removed commits hangs from. */
 function leavingLead(item: RefItem, name: string): string {
   return (item.lost ?? 0) === 1
-    ? `This commit is removed from ${name}:`
-    : `These ${commits(item.lost ?? 0)} are removed from ${name}:`;
+    ? i18n.t("arena.removedCommit", { name: name })
+    : i18n.t("arena.removedCommits", { commits: commits(item.lost ?? 0), name: name });
 }
 
 /**
@@ -87,87 +90,96 @@ interface ReviewStory {
   winner: string;
 }
 
+function overlapDetail(bothRewrote: boolean, item: RefItem, name: string): string {
+  if (bothRewrote) return i18n.t("arena.rewroteConflictDetail", { name });
+  return i18n.t("arena.linesConflictDetail", { files: filesNote(item.clash ?? []) });
+}
+
 function refStory(item: RefItem): ReviewStory {
   const name = refDisplayName(item.key);
   const lost = item.lost ?? 0;
   const folder = item.checkedOutAt ? folderName(item.checkedOutAt) : undefined;
   const elsewhere = folder
-    ? [`${folder} has ${name} checked out. It stays on its current commit.`]
+    ? [i18n.t("arena.folderCheckedOut", { folder: folder, name: name })]
     : [];
-  const backup = `Arena keeps a backup of ${name} as it is now, so you can restore it.`;
+  const backup = i18n.t("arena.backupRef", { name: name });
   const lists = (item.lost ?? 0) > 0;
   if (overlaps(item)) {
-    const what =
-      item.agentMove === "rewrote" && item.yourMove === "rewrote"
-        ? "both rewrote it"
-        : `both changed the same lines${filesNote(item.clash ?? [])}`;
+    const bothRewrote = item.agentMove === "rewrote" && item.yourMove === "rewrote";
+    const what = bothRewrote
+      ? i18n.t("arena.bothRewrote")
+      : i18n.t("arena.bothSameLines", { files: filesNote(item.clash ?? []) });
     return {
-      title: `You and the winner both changed ${name}`,
-      note: `you and the agent ${what}`,
-      detail: `You and the winning agent ${what.replace(" it", ` ${name}`)}. Git cannot combine the two versions by itself.`,
-      mine: "Keep mine",
-      winner: "Use the agent’s",
+      title: i18n.t("arena.bothChangedRef", { name: name }),
+      note: i18n.t("arena.youAgentNote", { change: what }),
+      detail: overlapDetail(bothRewrote, item, name),
+      mine: i18n.t("arena.keepMine"),
+      winner: i18n.t("arena.useAgents"),
     };
   }
   if (item.agentMove === "deleted") {
     return {
-      title: `The winner deletes ${name}`,
-      note: "the agent deleted it",
-      detail: `If you apply it, ${name} is deleted.`,
+      title: i18n.t("arena.winnerDeletes", { name: name }),
+      note: i18n.t("arena.agentDeleted"),
+      detail: i18n.t("arena.applyDeletes", { name: name }),
       asides: [backup, ...elsewhere],
-      mine: `Keep ${name}`,
-      winner: `Delete ${name}`,
+      mine: i18n.t("arena.keepSide", { side: name }),
+      winner: i18n.t("arena.deleteRef", { name: name }),
     };
   }
   if (item.namespace === "tag") {
     return {
-      title: `The winner moves ${name}`,
-      note: `the agent moved it to ${quoted(item.agentSubject)}`,
-      detail: `If you apply it, ${name} points at ${quoted(item.agentSubject)} instead of its current commit.`,
+      title: i18n.t("arena.winnerMoves", { name: name }),
+      note: i18n.t("arena.agentMoved", { commit: quoted(item.agentSubject) }),
+      detail: i18n.t("arena.applyMoves", { name: name, commit: quoted(item.agentSubject) }),
       asides: [backup],
-      mine: "Keep the tag where it is",
-      winner: "Move the tag",
+      mine: i18n.t("arena.keepTag"),
+      winner: i18n.t("arena.moveTag"),
     };
   }
   if (item.rewound) {
     return {
-      title: `The winner moves ${name} back to an older commit`,
-      note: `the agent moved it back, which removes ${commits(lost)} from it`,
-      detail: `If you apply it, ${name} moves back to ${quoted(item.agentSubject)}.${lists ? ` ${leavingLead(item, name)}` : ""}`,
+      title: i18n.t("arena.winnerRewinds", { name: name }),
+      note: i18n.t("arena.agentRewound", { commits: commits(lost) }),
+      detail: i18n.t("arena.applyRewinds", {
+        name: name,
+        commit: quoted(item.agentSubject),
+        details: lists ? ` ${leavingLead(item, name)}` : "",
+      }),
       leaving: leaving(item),
       asides: [backup, ...elsewhere],
-      mine: `Keep ${name} as it is`,
-      winner: `Move ${name} back`,
+      mine: i18n.t("arena.keepRefAsIs", { name: name }),
+      winner: i18n.t("arena.moveRefBack", { name: name }),
     };
   }
   if (item.agentMove === "rewrote") {
-    let detail = `If you apply it, ${name} takes the agent’s history.`;
+    let detail = i18n.t("arena.applyHistory", { name: name });
     if (item.proposal === "yours_on_agent") {
-      detail = `If you apply it, ${name} takes the agent’s history with your new commits on top, and the commits the agent rewrote are removed from ${name}.`;
+      detail = i18n.t("arena.applyHistoryWithYours", { name: name });
     } else if (lists) {
       detail = `${detail} ${leavingLead(item, name)}`;
     }
     return {
-      title: `The winner rewrites ${name}`,
+      title: i18n.t("arena.winnerRewrites", { name: name }),
       note:
         lost > 0
-          ? `the agent rewrote it, which removes ${commits(lost)} from it`
-          : "the agent rewrote it",
+          ? i18n.t("arena.agentRewritesLost", { commits: commits(lost) })
+          : i18n.t("arena.agentRewrote"),
       detail,
       ...(item.proposal === "yours_on_agent" ? {} : { leaving: leaving(item) }),
       asides: [backup, ...elsewhere],
-      mine: `Keep my ${name}`,
-      winner: `Use the agent’s ${name}`,
+      mine: i18n.t("arena.keepMyRef", { name: name }),
+      winner: i18n.t("arena.useAgentRef", { name: name }),
     };
   }
   // A write that removes nothing; it waits only because another worktree has the branch.
-  const where = folder ?? "another worktree";
+  const where = folder ?? i18n.t("arena.anotherWorktree");
   return {
-    title: `${name} is checked out in another worktree`,
-    note: `checked out in ${where}`,
-    detail: `If you apply it, ${name} gets the winner’s commits, and ${where} stays on its current commit without the branch.`,
-    mine: `Leave ${name} as it is`,
-    winner: `Update ${name}`,
+    title: i18n.t("arena.refCheckedElsewhere", { name: name }),
+    note: i18n.t("arena.checkedOutAt", { folder: where }),
+    detail: i18n.t("arena.applyElsewhere", { name: name, folder: where }),
+    mine: i18n.t("arena.leaveRef", { name: name }),
+    winner: i18n.t("arena.updateRef", { name: name }),
   };
 }
 
@@ -178,21 +190,20 @@ function story(item: Exclude<ArenaReviewItem, BusyItem>): ReviewStory {
     case "occupied": {
       const folder = folderName(item.path);
       return {
-        title: `${item.branch} is checked out in another worktree`,
-        note: `the winner ended on it; checked out in ${folder}`,
-        detail: `The winner ended on ${item.branch}. If you apply it, this workspace switches to ${item.branch}, and ${folder} stays on its current commit without the branch.`,
-        mine: "Stay on this branch",
-        winner: `Switch to ${item.branch}`,
+        title: i18n.t("arena.refCheckedElsewhere", { name: item.branch }),
+        note: i18n.t("arena.winnerEndedElsewhere", { folder: folder }),
+        detail: i18n.t("arena.applySwitchElsewhere", { branch: item.branch, folder: folder }),
+        mine: i18n.t("arena.stayBranch"),
+        winner: i18n.t("arena.switchBranch", { branch: item.branch }),
       };
     }
     case "edits":
       return {
-        title: "The winner conflicts with changes in this workspace",
+        title: i18n.t("arena.winnerEditsConflict"),
         note: "",
-        detail:
-          "This workspace has changes since the battle started, and the winner changes the same lines.",
-        mine: "Keep my changes",
-        winner: "Apply winning changes",
+        detail: i18n.t("arena.workspaceChanged"),
+        mine: i18n.t("arena.keepChanges"),
+        winner: i18n.t("arena.applyWinning"),
       };
   }
 }
@@ -205,17 +216,23 @@ export function readySentence(
   const names = planned.map((entry) => refDisplayName(entry.ref));
   const parts: string[] = [];
   if (names.length > 0) {
-    parts.push(`${names.join(", ")} ${names.length === 1 ? "gets" : "get"} the winner’s commits`);
+    parts.push(
+      i18n.t(names.length === 1 ? "arena.refGetsCommits" : "arena.refsGetCommits", {
+        names: names.join(", "),
+      }),
+    );
   }
   if (switchTo) {
     parts.push(
       names.length === 1 && names[0] === switchTo
-        ? "this workspace switches to it"
-        : `this workspace switches to ${switchTo}`,
+        ? i18n.t("arena.workspaceSwitches")
+        : i18n.t("arena.workspaceSwitchesTo", { branch: switchTo }),
     );
   }
   if (parts.length === 0) return null;
-  return `Ready once you answer: ${parts.join(", and ")}.`;
+  return i18n.t("arena.readyAnswer", {
+    changes: parts.reduce((first, last) => i18n.t("arena.listReady", { first, last })),
+  });
 }
 
 export interface ReviewRow {
@@ -262,16 +279,16 @@ export function reviewCallout(
   const single = questions.length === 1 ? questions[0] : undefined;
   const told = single ? story(single) : undefined;
   const labels: Record<ReviewMode, string> = {
-    resolve: "Let an agent resolve",
-    winner: told?.winner ?? "Apply winning changes",
-    mine: told?.mine ?? "Keep my changes",
+    resolve: i18n.t("arena.letResolve"),
+    winner: told?.winner ?? i18n.t("arena.applyWinning"),
+    mine: told?.mine ?? i18n.t("arena.keepChanges"),
   };
   // An agent is always on offer, and it is the filled button: it keeps the developer's work and
   // asks before removing any of it.
   const modes: ReviewMode[] = ["resolve", "winner", "mine"];
   return {
-    title: told?.title ?? "Some of the winner’s changes need your answer",
-    detail: told?.detail ?? "Nothing is applied until you answer.",
+    title: told?.title ?? i18n.t("arena.answerNeeded"),
+    detail: told?.detail ?? i18n.t("arena.nothingApplied"),
     leaving: told?.leaving ?? [],
     notes: [...(told?.asides ?? []), ...(ready ? [ready] : [])],
     files,
@@ -358,7 +375,7 @@ export function resolvePrompt(items: readonly ArenaReviewItem[]): string {
       ];
     }
     const lost = item.lost ?? 0;
-    const losing = lost > 0 ? `, which takes ${commits(lost)} off it` : "";
+    const losing = lost > 0 ? `, which takes ${lost} commit${lost === 1 ? "" : "s"} off it` : "";
     if (item.agentMove === "deleted") {
       return [`The winning agent deleted ${name}. I kept it. Tell me if it should go.`];
     }
@@ -390,8 +407,8 @@ export function resolvePrompt(items: readonly ArenaReviewItem[]): string {
 /** The busy callout: a Git operation in the way is a wait, not a choice. */
 export function busyCallout(item: BusyItem) {
   return {
-    title: `A ${item.operation} is in progress`,
-    detail: `Arena applies the winning changes once the ${item.operation} in this workspace is finished or aborted.`,
+    title: i18n.t("arena.busyTitle", { operation: item.operation }),
+    detail: i18n.t("arena.busyHelp", { operation: item.operation }),
     prompt: `A ${item.operation} is in progress in this workspace. Show me where it stands, then finish it. Ask me before you abort it.`,
   };
 }
@@ -403,11 +420,18 @@ export function stoppedPrompt(reason: string | undefined): string {
 }
 
 export const DISCARD_WINNER_CONFIRMATION: ConfirmDialogInput = {
-  title: "Discard winning changes?",
-  message:
-    "This will discard the winning agent’s work from this battle. Your workspace stays as it is.",
-  confirmLabel: "Discard winning changes",
-  cancelLabel: "Cancel",
+  get title() {
+    return i18n.t("arena.discardWinningTitle");
+  },
+  get message() {
+    return i18n.t("arena.discardWinningHelp");
+  },
+  get confirmLabel() {
+    return i18n.t("arena.discardWinning");
+  },
+  get cancelLabel() {
+    return i18n.t("arena.cancel");
+  },
   destructive: true,
 };
 

@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { i18n } from "@/i18n/i18next";
+import { afterEach, describe, it, expect } from "vitest";
 import {
   describeCompactTimeAgo,
   describeTimeAgo,
@@ -151,5 +152,33 @@ describe("formatMessageTimestamp", () => {
     const formatted = formatMessageTimestamp(date, now);
     expect(formatted).toMatch(/Apr|April/);
     expect(formatted).toMatch(/2026/);
+  });
+});
+
+afterEach(async () => {
+  await i18n.changeLanguage("en");
+});
+describe("localized relative times", () => {
+  it.each([
+    ["en", "5m ago", "5m", "just now"],
+    ["ar", "قبل 5د", "5د", "الآن للتو"],
+    ["es", "hace 5min", "5min", "justo ahora"],
+    ["fr", "il y a 5 min", "5 min", "à l’instant"],
+    ["ja", "5分前", "5分", "たった今"],
+    ["ko", "5분 전", "5분", "방금"],
+    ["pt-BR", "há 5min", "5min", "agora mesmo"],
+    ["ru", "5м назад", "5м", "только что"],
+    ["zh-CN", "5分钟前", "5分钟", "刚刚"],
+  ])("formats elapsed and current times in %s", async (language, prose, compact, immediate) => {
+    await i18n.changeLanguage(language);
+    const now = new Date("2026-07-16T12:00:00Z");
+    const date = new Date(now.getTime() - 300_000);
+    expect(describeTimeAgo(date, now)).toEqual({ label: prose, resolution: "minute" });
+    expect(describeCompactTimeAgo(date, now)).toEqual({ label: compact, resolution: "minute" });
+    expect(formatCompactTimeAgoAsProse(compact)).toBe(prose);
+    expect(formatTimeAgo(now, now)).toBe(immediate);
+    expect(formatCompactTimeAgoAsProse(formatCompactTimeAgo(now, now))).toBe(immediate);
+    const absolute = formatCompactTimeAgo(new Date(2026, 0, 15), now);
+    expect(formatCompactTimeAgoAsProse(absolute)).toBe(absolute);
   });
 });

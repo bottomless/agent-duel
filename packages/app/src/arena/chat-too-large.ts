@@ -1,12 +1,11 @@
+import { i18n } from "@/i18n/i18next";
 /**
  * A battle whose state is past what the daemon sends a window. Reconnecting gets the same answer, so
  * the stream stops retrying and the chat says what to do instead of failing quietly.
  */
 export class ArenaChatTooLargeError extends Error {
   constructor() {
-    super(
-      "This battle is too large to show. Start a new chat to keep going. Your code changes are already in your project.",
-    );
+    super(i18n.t("arena.chatTooLarge"));
     this.name = "ArenaChatTooLargeError";
   }
 }
@@ -27,10 +26,10 @@ export function arenaSizeErrorOr(error: unknown): unknown {
   const code = error instanceof Error && "code" in error ? error.code : undefined;
   if (code === "arena_chat_too_large") return new ArenaChatTooLargeError();
   if (code === "arena_diff_too_large") {
-    return new ArenaItemTooLargeError("This comparison is too large to show.");
+    return new ArenaItemTooLargeError(i18n.t("arena.comparisonTooLarge"));
   }
   if (code === "arena_part_too_large")
-    return new ArenaItemTooLargeError("This item is too large to show.");
+    return new ArenaItemTooLargeError(i18n.t("arena.itemTooLarge"));
   return error;
 }
 

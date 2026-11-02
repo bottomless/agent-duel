@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -43,6 +44,7 @@ export const ArenaRunMeta = memo(function ArenaRunMeta({
   active: boolean;
   onOpenChanges?: () => void;
 }) {
+  const { t } = useTranslation();
   const [now, setNow] = useState(() => Date.now());
   const isPending = run.runState === "pending";
   useEffect(() => {
@@ -87,7 +89,7 @@ export const ArenaRunMeta = memo(function ArenaRunMeta({
         <>
           <Text style={styles.text}>·</Text>
           <Text style={styles.text} testID={`arena-run-diff-${side}`}>
-            No changes
+            {t("arena.noChanges")}{" "}
           </Text>
         </>
       ) : null}
@@ -121,6 +123,8 @@ function RunDiffStat({
   side: ArenaSide;
   onOpenChanges?: () => void;
 }) {
+  const { t } = useTranslation();
+
   const [hovered, setHovered] = useState(false);
   const handlePointerEnter = useCallback(() => setHovered(true), []);
   const handlePointerLeave = useCallback(() => setHovered(false), []);
@@ -144,7 +148,7 @@ function RunDiffStat({
         onPress={onOpenChanges}
         style={[styles.stat, styles.statPressable, hovered && styles.statHovered]}
         accessibilityRole="button"
-        accessibilityLabel={`Show Agent ${side.toUpperCase()}'s changes`}
+        accessibilityLabel={t("arena.agentChanges", { side: side.toUpperCase() })}
         testID={`arena-run-diff-open-${side}`}
       >
         {stat}

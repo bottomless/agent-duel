@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback } from "react";
 import { Text, View } from "react-native";
 import { RotateCcw } from "lucide-react-native";
@@ -21,6 +22,7 @@ export function ArenaRunRetry({
   serverId: string;
   agentId: string;
 }) {
+  const { t } = useTranslation();
   const mutation = useArenaTurnMutation(serverId, agentId);
   const pending = useArenaTurnPending(serverId, agentId);
   const retrying = mutation.isPending && mutation.variables?.kind === "retry_run";
@@ -43,11 +45,11 @@ export function ArenaRunRetry({
         loading={retrying}
         testID={`arena-run-retry-${run.side}`}
       >
-        {retrying ? "Retrying…" : "Retry"}
+        {retrying ? t("arena.retrying") : t("arena.retry")}
       </Button>
       {failed ? (
         <Text style={styles.error} role="alert">
-          Couldn’t retry this agent. Try again.
+          {t("arena.retryAgentFailed")}{" "}
         </Text>
       ) : null}
     </View>

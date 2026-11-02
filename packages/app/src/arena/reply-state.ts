@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaReplyTarget, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { activeTrunkConflicts } from "./conflict-guard";
 
@@ -7,6 +8,7 @@ export interface ArenaReplyAction {
   target: ArenaReplyTarget;
   label: string;
   isDefault?: boolean;
+  steering?: boolean;
 }
 
 export interface ArenaReplySelection {
@@ -59,42 +61,57 @@ export function arenaConflictResolutionTurnID(snapshot: ArenaSnapshot | undefine
 }
 
 export function arenaSteeringQueuedMessage(action: ArenaReplyAction): string | null {
-  if (!action.label.startsWith("Steer ")) return null;
-  if (action.target === "both") return "Steering queued for both contestants.";
-  return `Steering queued for contestant ${action.target.toUpperCase()}.`;
+  if (!action.steering) return null;
+  if (action.target === "both") return i18n.t("arena.steeringBothQueued");
+  return i18n.t("arena.steeringSideQueued", { side: action.target.toUpperCase() });
 }
 
-function sideAction(side: "a" | "b", runState: "pending" | "complete"): ArenaReplyAction {
+function sideAction(
+  side: "a" | "b",
+  runState: "pending" | "complete",
+  t = i18n.t,
+): ArenaReplyAction {
   return {
     target: side,
-    label: `${runState === "pending" ? "Steer" : "Message"} ${side.toUpperCase()}`,
+    label: t(runState === "pending" ? "arena.steerSide" : "arena.messageSide", {
+      side: side.toUpperCase(),
+    }),
+    steering: runState === "pending",
   };
 }
 
-function deriveReplyActions(runs: ArenaSnapshot["runs"]): readonly ArenaReplyAction[] {
+function deriveReplyActions(runs: ArenaSnapshot["runs"], t = i18n.t): readonly ArenaReplyAction[] {
   const a = runs.find((run) => run.side === "a");
   const b = runs.find((run) => run.side === "b");
   const replyableRunState = (runState: ArenaSnapshot["runs"][number]["runState"]) =>
     runState === "pending" || runState === "complete";
   const replyActions: ArenaReplyAction[] = [];
-  if (a && replyableRunState(a.runState)) replyActions.push(sideAction("a", a.runState));
-  if (b && replyableRunState(b.runState)) replyActions.push(sideAction("b", b.runState));
+  if (a && replyableRunState(a.runState)) replyActions.push(sideAction("a", a.runState, t));
+  if (b && replyableRunState(b.runState)) replyActions.push(sideAction("b", b.runState, t));
   // Both whenever each side can take a message, even when one is still working and the other has
   // finished: the engine steers the one and resumes the other with the same message.
   if (a && b && replyableRunState(a.runState) && replyableRunState(b.runState)) {
     replyActions.push({
       target: "both",
-      label: `${a.runState === "pending" && b.runState === "pending" ? "Steer" : "Message"} both`,
+      label: t(
+        a.runState === "pending" && b.runState === "pending"
+          ? "arena.steerBoth"
+          : "arena.messageBoth",
+      ),
+      steering: a.runState === "pending" && b.runState === "pending",
       isDefault: true,
     });
     return replyActions;
   }
-  const steeringAction = replyActions.find((action) => action.label.startsWith("Steer "));
+  const steeringAction = replyActions.find((action) => action.steering);
   if (steeringAction) steeringAction.isDefault = true;
   return replyActions;
 }
 
-export function deriveArenaReplyState(snapshot: ArenaSnapshot | undefined): {
+export function deriveArenaReplyState(
+  snapshot: ArenaSnapshot | undefined,
+  t = i18n.t,
+): {
   battleIsActive: boolean;
   canQueueNextTurn: boolean;
   replyableBattleTurn: ArenaSnapshot["turn"] | null;
@@ -125,6 +142,6 @@ export function deriveArenaReplyState(snapshot: ArenaSnapshot | undefined): {
     battleIsActive,
     canQueueNextTurn,
     replyableBattleTurn,
-    replyActions: deriveReplyActions(snapshot?.runs ?? []),
+    replyActions: deriveReplyActions(snapshot?.runs ?? [], t),
   };
 }

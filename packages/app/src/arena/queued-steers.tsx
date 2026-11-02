@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useMemo } from "react";
 import { Text, View } from "react-native";
 import { Clock, X } from "lucide-react-native";
@@ -32,6 +33,7 @@ export function ArenaQueuedSteers({
   serverId: string;
   agentId: string;
 }) {
+  const { t } = useTranslation();
   const queued = useMemo(() => arenaQueuedSteering(run), [run]);
   const mutation = useArenaTurnMutation(serverId, agentId);
   const pending = useArenaTurnPending(serverId, agentId);
@@ -86,7 +88,7 @@ export function ArenaQueuedSteers({
               loading={interrupting}
               testID={`arena-steering-interrupt-${run.side}`}
             >
-              {interrupting ? "Sending…" : "Send now"}
+              {interrupting ? t("arena.sending") : t("arena.sendNow")}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">
@@ -96,13 +98,12 @@ export function ArenaQueuedSteers({
       </View>
       {interruptFailed ? (
         <Text style={styles.error} role="alert">
-          Couldn’t send it now. Your message is still queued. Try again, or wait for the current
-          work to finish.
+          {t("arena.sendNowFailed")}{" "}
         </Text>
       ) : null}
       {discardFailed ? (
         <Text style={styles.error} role="alert">
-          Couldn’t delete the queued message. Try again.
+          {t("arena.deleteQueuedFailed")}{" "}
         </Text>
       ) : null}
     </View>
@@ -120,6 +121,7 @@ function QueuedSteer({
   disabled: boolean;
   onDelete: (messageId: string) => void;
 }) {
+  const { t } = useTranslation();
   const handleDelete = useCallback(() => onDelete(message.id), [message.id, onDelete]);
   const attached = arenaQueuedSteerAttachments(message);
   // Always visible: a delete that appears only on hover reads as no delete at all.
@@ -129,7 +131,7 @@ function QueuedSteer({
         size="xs"
         variant="ghost"
         leftIcon={X}
-        accessibilityLabel="Delete queued message"
+        accessibilityLabel={t("arena.deleteQueued")}
         onPress={handleDelete}
         disabled={disabled}
         loading={deleting}

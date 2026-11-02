@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react-native";
@@ -68,6 +69,7 @@ export function ArenaCallout({
   /** A battle prompt held until the pause lifts. One truncated line: information, not a task. */
   pendingPrompt?: string;
 }) {
+  const { t } = useTranslation();
   const hasPaths = (paths?.length ?? 0) > 0;
   const actionsBelow =
     Boolean(footer) || (actions?.length ?? 0) > 2 || Boolean(pathsLabel) || Boolean(list);
@@ -125,7 +127,7 @@ export function ArenaCallout({
       ) : null}
       {pendingPrompt ? (
         <View style={styles.calloutPending} testID="arena-pending-battle">
-          <Text style={styles.calloutPendingLabel}>Waiting to send</Text>
+          <Text style={styles.calloutPendingLabel}>{t("arena.waitingSend")}</Text>
           <Text style={styles.calloutPendingPrompt} numberOfLines={1} ellipsizeMode="tail">
             {pendingPrompt}
           </Text>
