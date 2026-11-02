@@ -205,6 +205,7 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
           settings: runtimeSettings,
           managedProcesses: options?.managedProcesses,
           getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
+          uploadsRoot: options?.uploadsRoot,
           arenaMode: true,
         })
       : new OpenCodeRuntimeClient(logger, runtimeSettings, openCodeOptions);

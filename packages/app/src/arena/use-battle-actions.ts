@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
 import type {
   ArenaReviewAnswer,
@@ -58,6 +58,10 @@ export function useArenaBattleActions(
     errorBelongsToBattle && feedback?.status === "error" ? toErrorMessage(feedback.error) : null;
   const turnId = turn?.id;
   const turnState = turn?.state;
+  const earlyConfirmation = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => earlyConfirmation.current?.abort();
+  }, [turnId, turnState]);
 
   const showError = useCallback(
     (error: unknown) => {
@@ -86,16 +90,22 @@ export function useArenaBattleActions(
   // is gone the moment the vote lands.
   const pickEarly = useCallback(
     async (side: ArenaSide) => {
+      earlyConfirmation.current?.abort();
+      const controller = new AbortController();
+      earlyConfirmation.current = controller;
       const label = sideLabel(side);
       const other = sideLabel(side === "a" ? "b" : "a");
-      const confirmed = await confirmDialog({
-        title: t("arena.chooseEarlyTitle", { side: label }),
-        message: t("arena.chooseEarlyHelp", { other: other, side: label }),
-        confirmLabel: t("arena.choose", { side: label }),
-        cancelLabel: t("arena.cancel"),
-        destructive: true,
-      });
-      if (!confirmed) return;
+      const confirmed = await confirmDialog(
+        {
+          title: t("arena.chooseEarlyTitle", { side: label }),
+          message: t("arena.chooseEarlyHelp", { other: other, side: label }),
+          confirmLabel: t("arena.choose", { side: label }),
+          cancelLabel: t("arena.cancel"),
+          destructive: true,
+        },
+        controller.signal,
+      );
+      if (!confirmed || controller.signal.aborted) return;
       await choose(side);
     },
     [choose, t],
