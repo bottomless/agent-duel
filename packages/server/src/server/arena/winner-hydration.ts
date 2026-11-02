@@ -51,10 +51,15 @@ export async function hydrateArenaWinner(
   while (state.running) {
     const running = state.running;
     if (running.key === key) return running.promise;
+    if (applied.index < running.index) {
+      // An older winner never takes over from a newer one; its caller bounds its own wait.
+      await running.promise.catch(() => {});
+      continue;
+    }
     // A failed earlier winner must not prevent a newer canonical version from loading, and one
     // that never settles must not hold it: the newer history contains the older winner too.
     const settled = await settlesWithin(running.promise, supersedeAfterMs);
-    if (!settled && state.running === running && applied.index >= running.index) {
+    if (!settled && state.running === running) {
       running.abort.abort();
       state.running = undefined;
     }

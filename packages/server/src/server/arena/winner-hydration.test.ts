@@ -274,3 +274,16 @@ it("does not let an older winner take over from a newer one that is still runnin
   await Promise.all([newer, older]);
   expect(calls).toEqual([2]);
 });
+
+it("keeps an older winner waiting on a newer stuck one without polling", async () => {
+  vi.useFakeTimers();
+  try {
+    const owner = {};
+    void hydrateArenaWinner(owner, snapshot(2), () => new Promise<void>(() => {}), WAIT);
+    void hydrateArenaWinner(owner, snapshot(1), async () => {}, WAIT);
+    await vi.advanceTimersByTimeAsync(WAIT * 10);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
