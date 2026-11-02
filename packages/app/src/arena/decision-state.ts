@@ -40,6 +40,11 @@ export type ArenaDecisionPhase =
       /** A failed side can still be retried, which the hint beside Discard offers. */
       canRetry: boolean;
       /**
+       * The one side that failed while the other can be chosen. Choosing the other still applies
+       * it, but the engine records the vote as not counted, so the hint says so first.
+       */
+      failedSide: ArenaSide | null;
+      /**
        * The engine's restart cut off a side. Resume continues every such side together, and until
        * then Discard is the only other choice.
        */
@@ -110,15 +115,23 @@ function awaitingVotePhase(
   runA: ArenaRun | undefined,
   runB: ArenaRun | undefined,
 ): Extract<ArenaDecisionPhase, { kind: "awaiting_vote" }> {
+  const canChooseA = !turn.canResumeBattle && canChooseArenaRun(turn.state, runA);
+  const canChooseB = !turn.canResumeBattle && canChooseArenaRun(turn.state, runB);
   return {
     kind: "awaiting_vote",
-    canChooseA: !turn.canResumeBattle && canChooseArenaRun(turn.state, runA),
-    canChooseB: !turn.canResumeBattle && canChooseArenaRun(turn.state, runB),
+    canChooseA,
+    canChooseB,
     canTie: turn.canTie,
     canDiscard: turn.canDiscardBattle,
     canRetry: runA?.canRetry === true || runB?.canRetry === true,
     canResume: turn.canResumeBattle,
+    failedSide: failedSide(canChooseA, canChooseB),
   };
+}
+
+function failedSide(canChooseA: boolean, canChooseB: boolean): ArenaSide | null {
+  if (canChooseA === canChooseB) return null;
+  return canChooseA ? "b" : "a";
 }
 
 export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase {

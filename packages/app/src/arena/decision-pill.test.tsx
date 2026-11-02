@@ -111,6 +111,9 @@ describe("ArenaDecisionPill", () => {
     expect(view.getByText("Both agents failed · retry or discard")).toBeTruthy();
     expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
     expect(view.queryByTestId("arena-choose-tie")).toBeNull();
+    // Neither failure can be voted for, so neither Choose is offered at all.
+    expect(view.queryByTestId("arena-choose-a")).toBeNull();
+    expect(view.queryByTestId("arena-choose-b")).toBeNull();
   });
 
   it("drops retry from the hint once neither side can be retried", () => {
@@ -144,6 +147,9 @@ describe("ArenaDecisionPill", () => {
     expect(view.queryByTestId("arena-choose-tie")).not.toBeNull();
     expect(view.queryByTestId("arena-stopped-discard")).toBeNull();
     expect(view.queryByText(/Both agents failed/)).toBeNull();
+    // The finished side can still be chosen, and the voter learns first that the vote won't count.
+    expect(view.getByText("Agent A failed · choosing B won't count as a vote")).toBeTruthy();
+    expect(view.queryByTestId("arena-choose-b")).not.toBeNull();
   });
 
   const interrupted = (side: "a" | "b") =>

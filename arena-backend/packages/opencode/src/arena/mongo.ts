@@ -17,6 +17,7 @@ import {
   type Resolution,
   type Side,
   type Vote,
+  type VoteDiscardedReason,
 } from "./domain"
 import { ArenaActivity } from "./activity"
 import { bound, boundPrepared } from "./artifact"
@@ -74,6 +75,7 @@ const historyProjection = {
   state: 1,
   resolution: 1,
   vote: 1,
+  voteDiscardedReason: 1,
   selectedEarly: 1,
   appliedSide: 1,
   canonicalUserMessageID: 1,
@@ -1215,6 +1217,7 @@ export class Store {
     readonly turnID: string
     readonly resolution: Resolution
     readonly vote?: Vote
+    readonly voteDiscardedReason?: VoteDiscardedReason
     readonly participantID?: string
     readonly appliedSide?: Side
     /** Left out for a discard that names nobody (`identitiesRevealed`). */
@@ -1231,6 +1234,7 @@ export class Store {
         $set: {
           resolution: input.resolution,
           ...(input.vote ? { vote: input.vote } : {}),
+          ...(input.voteDiscardedReason ? { voteDiscardedReason: input.voteDiscardedReason } : {}),
           ...(input.participantID ? { voteParticipantID: input.participantID } : {}),
           ...(input.resolution.kind === "vote" ? { selectedEarly: false } : {}),
           ...(input.resolution.kind === "vote"

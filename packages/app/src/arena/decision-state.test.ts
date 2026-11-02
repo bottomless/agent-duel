@@ -182,6 +182,7 @@ describe("arenaDecisionPhase", () => {
       canDiscard: false,
       canRetry: false,
       canResume: false,
+      failedSide: "b",
     });
   });
 
@@ -205,6 +206,7 @@ describe("arenaDecisionPhase", () => {
       canDiscard: true,
       canRetry: true,
       canResume: false,
+      failedSide: null,
     });
   });
 

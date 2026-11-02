@@ -317,6 +317,8 @@ export const ArenaHistoryItemSchema = z
     state: ArenaBattleStateSchema,
     resolution: ArenaResolutionSchema.optional(),
     vote: ArenaVoteSchema.optional(),
+    // The chosen side applied, but the vote does not count because a side failed.
+    voteDiscardedReason: z.enum(["contestant_failed"]).optional(),
     selectedEarly: z.boolean().optional(),
     appliedSide: ArenaSideSchema.optional(),
     canonicalUserMessageID: z.string().optional(),

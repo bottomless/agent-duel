@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { BattleState, Side, StopResolution, Vote } from "./domain"
+import { BattleState, Side, StopResolution, Vote, VoteDiscardedReason } from "./domain"
 import { ArenaActiveOperation } from "./operation-tracker"
 
 const Identity = Schema.Struct({ name: Schema.String })
@@ -206,6 +206,7 @@ const HistoryItem = Schema.Struct({
   state: Schema.Literals(BattleState),
   resolution: Schema.optional(Resolution),
   vote: Schema.optional(Schema.Literals(Vote)),
+  voteDiscardedReason: Schema.optional(Schema.Literals(VoteDiscardedReason)),
   selectedEarly: Schema.optional(Schema.Boolean),
   appliedSide: Schema.optional(Schema.Literals(Side)),
   canonicalUserMessageID: Schema.optional(Schema.String),

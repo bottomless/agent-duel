@@ -545,6 +545,42 @@ describe("ArenaMetrics outcome", () => {
     expect([battleFor("b").sides.a?.won, battleFor("b").sides.b?.won]).toEqual([false, true])
   })
 
+  test("a vote cast while a side failed does not count, even from before the turn recorded it", () => {
+    const finished = { ...runFor("a"), selectable: true, finalizedAt: new Date(0) }
+    const failed = { ...runFor("b"), runState: "error" as const, selectable: false, finalizedAt: new Date(0) }
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn: turnFor("a"),
+      runs: [finished, failed],
+      generations: [],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.voteDiscardedReason).toBe("contestant_failed")
+    expect(battle.vote).toBe("a")
+    expect([battle.sides.a?.won, battle.sides.b?.won]).toEqual([false, false])
+    expect(battleFor("a")).not.toHaveProperty("voteDiscardedReason")
+  })
+
+  test("a side kept after Stop while the other side failed does not count as a win", () => {
+    const { vote: _vote, ...voted } = turnFor("a")
+    const turn = { ...voted, resolution: { kind: "stopped", resolution: "apply_a", appliedSide: "a" } } as TurnDocument
+    const stopped = { ...runFor("a"), runState: "stopped" as const, finalizedAt: new Date(0) }
+    const failed = { ...runFor("b"), runState: "error" as const, selectable: false, finalizedAt: new Date(0) }
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn,
+      runs: [stopped, failed],
+      generations: [],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.voteDiscardedReason).toBe("contestant_failed")
+    expect([battle.sides.a?.won, battle.sides.b?.won]).toEqual([false, false])
+  })
+
   test("carries upstream inference cost into resolved battle research metrics", () => {
     const battle = computeBattleMetrics({
       chat: { _id: "chat" } as ChatDocument,
