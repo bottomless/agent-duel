@@ -878,7 +878,10 @@ checkout's `.agent-duel` and other sides' temp directories are closed to reads t
 (`/tmp`, `/var/tmp` and the system temp directory) stay readable but not writable. Children inherit
 the side's rules and share its temp directory, even if a child was created before the parent moved.
 These restrictions apply with either permission mode; a blocked filesystem request returns a denial
-to the model without waiting for a permission card. Battle off keeps its own permission behavior.
+to the model without waiting for a permission card. Battle off keeps its own filesystem permission behavior.
+In both modes, Agent Duel owns session names, session locations, worktree management and model
+selection. Hide OpenCode's tools for those operations and their prompt guidance from the model,
+including child agents. File tools, shell, child agents and MCP tools stay available through `execute`.
 
 The checkout's `.git` is readable too. A side's result is imported into it under `refs/battles/`
 as soon as the side finishes, before the vote. Git objects can contain other contestants' work;

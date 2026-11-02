@@ -184,6 +184,35 @@ export function registerArenaEnginePlugin(
 
 function install(context: Context, options: InstalledOptions) {
   return Effect.gen(function* () {
+    // Arena owns session locations and worktree lifecycle, including with Battle off.
+    yield* context.tool.transform((editor) => {
+      editor.namespace({ name: "opencode", description: "Tools for reading MCP resources." })
+      const blocked = [
+        "session_rename",
+        "session_move",
+        "worktree_create",
+        "worktree_list",
+        "worktree_remove",
+        "models",
+      ]
+      for (const tool of editor.list()) {
+        if (tool.options?.namespace === "opencode" && blocked.includes(tool.name)) editor.remove(tool.id)
+      }
+    })
+    // Core's OpenCodeTools hooks run first. Remove only their worktree advice; tool removal
+    // already keeps the Code Mode catalog and execute's callable inventory in agreement.
+    for (const name of ["context", "compaction", "generate"] as const) {
+      yield* context.session.hook(name, (event) =>
+        Effect.sync(() => {
+          event.system = event.system.filter(
+            (part) =>
+              part.text !==
+              "When you create a worktree outside the current working directory and intend to use it as your primary working directory, consider using `execute` to call `tools.opencode.session_move` and make the worktree the session's working directory.",
+          )
+        }),
+      )
+    }
+
     yield* context.provider.transform((editor) => {
       if (editor.get(String(PROVIDER_ID))) return
       editor.add({ info: ArenaEngineModels.provider, models: ArenaEngineModels.models })

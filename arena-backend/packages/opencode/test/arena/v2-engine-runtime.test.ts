@@ -319,6 +319,9 @@ describe("Arena v2 engine runtime", () => {
                 },
               }
               callback({
+                list: () => [],
+                namespace: () => {},
+                remove: () => {},
                 get: (id: string) => (id === "subagent" ? subagent : undefined),
                 update: (_id: string, update: (tool: typeof subagent) => void) => {
                   update(subagent)
@@ -349,7 +352,7 @@ describe("Arena v2 engine runtime", () => {
       ]
       const runSessionHooks = (name: string, event: any) =>
         Effect.forEach(sessionCallbacks.get(name) ?? [], (callback) => callback(event), { discard: true })
-      expect(sessionCallbacks.get("context")?.length).toBe(2)
+      expect(sessionCallbacks.get("context")?.length).toBe(3)
       const contextEvent = {
         sessionID: "ses_probe",
         model: { providerID: PROVIDER_ID } as Model.Ref,
