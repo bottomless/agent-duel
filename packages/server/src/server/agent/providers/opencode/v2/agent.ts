@@ -4,6 +4,7 @@ import {
   features,
   permissionRules,
   applyResumeOverrides,
+  type DeferredSelection,
   requiresDedicatedV2Server,
   arenaModelRef,
 } from "./configuration.js";
@@ -374,8 +375,18 @@ export class OpenCodeV2AgentClient implements AgentClient {
       const info = await connection.client.session.get({
         sessionID: handle.nativeHandle ?? handle.sessionId,
       });
-      await applyResumeOverrides(connection.client, info, overrides, this.arenaMode);
-      return await this.attach(connection, info, config, launch, true);
+      const deferred = await applyResumeOverrides(
+        connection.client,
+        info,
+        overrides,
+        this.arenaMode,
+      );
+      if (deferred.agent || deferred.model)
+        this.options.logger.warn(
+          { sessionId: info.id, deferred, current: { agent: info.agent, model: info.model } },
+          "Arena refused the stored agent or model on resume; applying it after the battle resolves",
+        );
+      return await this.attach(connection, info, config, launch, true, deferred);
     } catch (error) {
       await connection.release();
       throw error;
@@ -387,6 +398,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
     config: AgentSessionConfig,
     launch: AgentLaunchContext | undefined,
     persist: boolean,
+    deferred?: DeferredSelection,
   ) {
     const acquire = () =>
       this.runtime.acquire(
@@ -434,6 +446,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
       acquire,
       moved,
     );
+    if (deferred) session.defer(deferred);
     try {
       if (this.options.bridge) {
         const location = { directory: config.cwd };

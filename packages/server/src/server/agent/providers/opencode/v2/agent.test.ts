@@ -1,9 +1,10 @@
 import type { FormInfo, ModelInfo, SessionMessageInfo } from "@opencode/client";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../../../../test-utils/test-logger.js";
 import type { AgentStreamEvent } from "../../../agent-sdk-types.js";
 import { OpenCodeV2AgentClient } from "./agent.js";
+import { SELECTION_TIMEOUT_MS } from "./session.js";
 import { V2Harness } from "../test-utils/v2-harness.js";
 import type { V2Api } from "./api.js";
 
@@ -764,6 +765,148 @@ describe("OpenCode v2 session lifecycle", () => {
     }
   });
 
+  test("applies the stored model Arena refused on resume before the next variant change or turn", async () => {
+    const arenaClient = (harness: V2Harness) => {
+      const unavailable = async () => {
+        throw new Error("Arena server manager is not used by this test");
+      };
+      return new OpenCodeV2AgentClient({
+        logger: createTestLogger(),
+        runtime: harness.runtime,
+        arenaMode: true,
+        serverManager: {
+          acquireCurrent: unavailable,
+          acquireNew: unavailable,
+          acquireDedicated: unavailable,
+          acquireExisting: () => undefined,
+          shutdown: async () => undefined,
+        },
+      } as ConstructorParameters<typeof OpenCodeV2AgentClient>[0]);
+    };
+    const migrated = (battleOpen: { value: boolean }) => {
+      const harness = new V2Harness();
+      // A canonical session migrated from OpenCode 1.x has no agent and no model.
+      harness.info.agent = undefined;
+      harness.info.model = undefined;
+      const refuse = () => {
+        if (battleOpen.value)
+          throw Object.assign(new Error("This chat has an unresolved battle."), {
+            name: "ArenaRefusal",
+          });
+      };
+      harness.api.session.switchAgent = async ({ agent }) => {
+        refuse();
+        harness.info.agent = agent;
+      };
+      harness.api.session.switchModel = async ({ model }) => {
+        refuse();
+        harness.info.model = model;
+      };
+      return harness;
+    };
+    const handle = {
+      provider: "opencode",
+      sessionId: "session",
+      nativeHandle: "session",
+      metadata: { cwd: "/tmp/project" },
+    } as const;
+    const stored = { modeId: "build", model: "arena/contestant", thinkingOptionId: "high" };
+
+    const variantBattle = { value: true };
+    const variantHarness = migrated(variantBattle);
+    const variantSession = await arenaClient(variantHarness).resumeSession(handle, stored);
+    try {
+      expect(variantHarness.info.model).toBeUndefined();
+      variantBattle.value = false;
+      await variantSession.setThinkingOption!("high");
+      expect(variantHarness.info.agent).toBe("build");
+      expect(variantHarness.info.model).toEqual({
+        providerID: "arena",
+        id: "contestant",
+        variant: "high",
+      });
+    } finally {
+      await variantSession.close();
+    }
+
+    const turnBattle = { value: true };
+    const turnHarness = migrated(turnBattle);
+    let modelAtPrompt: unknown;
+    turnHarness.prompt = async (input) => {
+      modelAtPrompt = turnHarness.info.model;
+      turnHarness.prompts.push(input.text);
+      turnHarness.startExecution();
+    };
+    const turnSession = await arenaClient(turnHarness).resumeSession(handle, stored);
+    try {
+      turnBattle.value = false;
+      await turnSession.startTurn("after the vote");
+      await expect.poll(() => turnHarness.prompts).toEqual(["after the vote"]);
+      expect(modelAtPrompt).toEqual({ providerID: "arena", id: "contestant", variant: "high" });
+    } finally {
+      await turnSession.close();
+    }
+  });
+
+  test.each(["model first", "variant first"])(
+    "keeps an explicit size over a deferred one when the size and its variant overlap (%s)",
+    async (order) => {
+      const harness = new V2Harness();
+      // Migrated from 1.x: no agent, no model. The daemon stored Frontier; the app shows Medium.
+      harness.info.agent = undefined;
+      harness.info.model = undefined;
+      let battleOpen = true;
+      const switches: string[] = [];
+      harness.api.session.switchModel = async ({ model }) => {
+        if (battleOpen)
+          throw Object.assign(new Error("This chat has an unresolved battle."), {
+            name: "ArenaRefusal",
+          });
+        // A network hop, so overlapping calls interleave as they did live.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        switches.push(`${model.id}/${model.variant ?? "default"}`);
+        harness.info.model = model;
+      };
+      const unavailable = async () => {
+        throw new Error("Arena server manager is not used by this test");
+      };
+      const client = new OpenCodeV2AgentClient({
+        logger: createTestLogger(),
+        runtime: harness.runtime,
+        arenaMode: true,
+        serverManager: {
+          acquireCurrent: unavailable,
+          acquireNew: unavailable,
+          acquireDedicated: unavailable,
+          acquireExisting: () => undefined,
+          shutdown: async () => undefined,
+        },
+      } as ConstructorParameters<typeof OpenCodeV2AgentClient>[0]);
+      const session = await client.resumeSession(
+        {
+          provider: "opencode",
+          sessionId: "session",
+          nativeHandle: "session",
+          metadata: { cwd: "/tmp/project" },
+        },
+        { model: "arena/contestant", thinkingOptionId: "high" },
+      );
+      try {
+        battleOpen = false;
+        // The Battle-off toggle sends both requests without waiting (agent-panel.tsx).
+        const calls =
+          order === "model first"
+            ? [session.setModel!("arena/medium"), session.setThinkingOption!("xhigh")]
+            : [session.setThinkingOption!("xhigh"), session.setModel!("arena/medium")];
+        await Promise.all(calls);
+        expect(switches.some((entry) => entry.startsWith("contestant/"))).toBe(false);
+        expect(harness.info.model).toMatchObject({ providerID: "arena", id: "medium" });
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   test("resumes the native session ID and never replaces a missing session", async () => {
     const harness = new V2Harness();
     const client = new OpenCodeV2AgentClient({
@@ -1069,6 +1212,420 @@ describe("OpenCode v2 session lifecycle", () => {
       harness.autoComplete = true;
       await session.startTurn("retry");
       await expect.poll(() => harness.prompts).toEqual(["first", "retry"]);
+    } finally {
+      await session.close();
+    }
+  });
+});
+
+const SIZES = {
+  medium: { model: "arena/medium", thinking: "xhigh" },
+  frontier: { model: "arena/contestant", thinking: "high" },
+} as const;
+
+function wait(ms: number) {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+interface ArenaChatOptions {
+  /** Engine write delay in ms. */
+  writeHop?: number;
+  /** Engine read delay in ms. */
+  readHop?: number;
+  /** A chat migrated from 1.x: no agent and no model on the session, Frontier stored. */
+  migrated?: boolean;
+}
+
+// A v2 Arena chat on Medium (or a migrated 1.x chat), with a network hop on every engine call so
+// overlapping calls interleave, and reads that return the state from when they were sent.
+// `state.battleOpen` makes the engine refuse agent and model writes, as Arena does before the
+// vote; `state.landThenHang` makes a model write land and never answer.
+async function arenaChat(options: ArenaChatOptions | number = {}) {
+  const {
+    writeHop = 5,
+    readHop,
+    migrated = false,
+  } = typeof options === "number" ? { writeHop: options } : options;
+  const harness = new V2Harness();
+  harness.info.agent = migrated ? undefined : "build";
+  harness.info.model = migrated
+    ? undefined
+    : { providerID: "arena", id: "medium", variant: "xhigh" };
+  const state = { battleOpen: migrated, landThenHang: false };
+  const switches: string[] = [];
+  const refusal = () =>
+    Object.assign(new Error("This chat has an unresolved battle."), { name: "ArenaRefusal" });
+  harness.api.session.switchAgent = async ({ agent }) => {
+    await wait(writeHop);
+    if (state.battleOpen) throw refusal();
+    harness.info.agent = agent;
+  };
+  harness.api.session.switchModel = async ({ model }) => {
+    await wait(writeHop);
+    if (state.battleOpen) {
+      switches.push(`refused ${model.id}/${model.variant ?? "default"}`);
+      throw refusal();
+    }
+    switches.push(`${model.id}/${model.variant ?? "default"}`);
+    harness.info.model = model;
+    if (state.landThenHang) await new Promise<void>(() => undefined);
+  };
+  harness.api.session.get = async () => {
+    const snapshot = structuredClone(harness.info);
+    await wait(readHop ?? writeHop * 3);
+    return snapshot;
+  };
+  let modelAtPrompt: unknown;
+  harness.prompt = async (input) => {
+    modelAtPrompt = structuredClone(harness.info.model);
+    harness.prompts.push(input.text);
+    harness.startExecution();
+  };
+  const unavailable = async () => {
+    throw new Error("Arena server manager is not used by this test");
+  };
+  const client = new OpenCodeV2AgentClient({
+    logger: createTestLogger(),
+    runtime: harness.runtime,
+    arenaMode: true,
+    serverManager: {
+      acquireCurrent: unavailable,
+      acquireNew: unavailable,
+      acquireDedicated: unavailable,
+      acquireExisting: () => undefined,
+      shutdown: async () => undefined,
+    },
+  } as ConstructorParameters<typeof OpenCodeV2AgentClient>[0]);
+  const session = await client.resumeSession(
+    {
+      provider: "opencode",
+      sessionId: "session",
+      nativeHandle: "session",
+      metadata: { cwd: "/tmp/project" },
+    },
+    migrated
+      ? { model: SIZES.frontier.model, thinkingOptionId: SIZES.frontier.thinking }
+      : { modeId: "build", model: SIZES.medium.model, thinkingOptionId: SIZES.medium.thinking },
+  );
+  switches.length = 0;
+  // What the Battle-off toggle and the size menu do (agent-panel.tsx): send the model and the
+  // variant without waiting, then (AgentManager.setAgentThinkingOption) read the runtime info.
+  const pick = (size: keyof typeof SIZES) =>
+    Promise.all([
+      session.setModel!(SIZES[size].model),
+      session.setThinkingOption!(SIZES[size].thinking).then(() => session.getRuntimeInfo()),
+    ]);
+  return { harness, session, switches, pick, state, modelAtPrompt: () => modelAtPrompt };
+}
+
+// A switchModel that never answers. It records the abort reason of each request.
+function hangingSwitch(aborts: unknown[]): V2Api["session"]["switchModel"] {
+  const record = (signal?: AbortSignal) => () => aborts.push(signal?.reason);
+  return (_input, options) => {
+    options?.signal?.addEventListener("abort", record(options.signal));
+    return new Promise<void>(() => undefined);
+  };
+}
+
+function variantsReported(events: AgentStreamEvent[]) {
+  return events.flatMap((event) =>
+    event.type === "thinking_option_changed" ? [event.thinkingOptionId] : [],
+  );
+}
+
+function outcome(promise: Promise<unknown>): Promise<string> {
+  return promise.then(
+    () => "applied",
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+}
+
+describe("a size change in an Arena chat (R19)", () => {
+  test.each([
+    { picks: ["frontier"], expected: "contestant/high" },
+    { picks: ["frontier", "medium"], expected: "medium/xhigh" },
+    { picks: ["medium", "frontier"], expected: "contestant/high" },
+    { picks: ["frontier", "medium", "frontier"], expected: "contestant/high" },
+  ] as const)("the last pick wins: $picks", async ({ picks, expected }) => {
+    const { harness, session, switches, pick, modelAtPrompt } = await arenaChat();
+    try {
+      const pending: Promise<unknown>[] = [];
+      for (const size of picks) {
+        pending.push(pick(size));
+        // The next pick lands while this one is still in flight.
+        await wait(7);
+      }
+      await Promise.all(pending);
+      const { model } = harness.info;
+      expect(`${model?.id}/${model?.variant}`).toBe(expected);
+      // The variant call never writes a model, so no size the user left comes back.
+      expect(switches).toEqual(
+        picks.map((size) => (size === "medium" ? "medium/xhigh" : "contestant/high")),
+      );
+      const [id, variant] = expected.split("/");
+      expect(await session.getRuntimeInfo()).toMatchObject({
+        model: `arena/${id}`,
+        thinkingOptionId: variant,
+      });
+      // The next turn runs the size the session holds.
+      await session.startTurn("next turn");
+      await expect.poll(() => harness.prompts).toEqual(["next turn"]);
+      expect(modelAtPrompt()).toMatchObject({ id });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a hung write gives up the queue after the timeout", async () => {
+    const { harness, session } = await arenaChat(0);
+    const answering = harness.api.session.switchModel;
+    const aborts: unknown[] = [];
+    harness.api.session.switchModel = hangingSwitch(aborts);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const first = outcome(session.setModel!(SIZES.frontier.model));
+      await vi.advanceTimersByTimeAsync(0);
+      harness.api.session.switchModel = answering;
+      const second = session.setModel!(SIZES.medium.model);
+      await vi.advanceTimersByTimeAsync(SELECTION_TIMEOUT_MS);
+      vi.useRealTimers();
+      expect(await first).toBe("OpenCode did not apply the agent or model change in time");
+      expect(aborts).toHaveLength(1);
+      await second;
+      expect(harness.info.model).toMatchObject({ id: "medium", variant: "xhigh" });
+    } finally {
+      vi.useRealTimers();
+      await session.close();
+    }
+  });
+
+  test("a read inside a deferred apply reports the applied model (I1)", async () => {
+    const { session, state, modelAtPrompt, harness } = await arenaChat({
+      migrated: true,
+      writeHop: 40,
+      readHop: 5,
+    });
+    try {
+      state.battleOpen = false;
+      // The prompt applies the deferred Frontier first; its write takes 40 ms.
+      const turn = session.startTurn("after the vote");
+      await wait(10);
+      // AgentManager reads the runtime info while that write is in flight.
+      const during = await session.getRuntimeInfo();
+      await turn;
+      await expect.poll(() => harness.prompts).toEqual(["after the vote"]);
+      expect(modelAtPrompt()).toMatchObject({ id: "contestant" });
+      expect(during).toMatchObject({ model: "arena/contestant", thinkingOptionId: "high" });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a write that lands but answers after the timeout counts as applied (I2)", async () => {
+    const { session, state } = await arenaChat({ writeHop: 0, readHop: 0 });
+    state.landThenHang = true;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const result = outcome(session.setModel!(SIZES.frontier.model));
+      await vi.advanceTimersByTimeAsync(SELECTION_TIMEOUT_MS + 10);
+      vi.useRealTimers();
+      expect(await result).toBe("applied");
+      state.landThenHang = false;
+      expect(session.describePersistence().metadata?.model).toBe(SIZES.frontier.model);
+      expect(await session.getRuntimeInfo()).toMatchObject({
+        model: "arena/contestant",
+        thinkingOptionId: "high",
+      });
+    } finally {
+      vi.useRealTimers();
+      await session.close();
+    }
+  });
+
+  test("a read beside a variant call takes a model the engine set itself (I3)", async () => {
+    const { session, harness } = await arenaChat({ writeHop: 0, readHop: 20 });
+    try {
+      // The engine switches the model on its own, as it does at the start of a turn.
+      harness.info.model = { providerID: "arena", id: "contestant", variant: "high" };
+      const read = session.getRuntimeInfo();
+      await wait(2);
+      // An Arena variant call writes nothing, so it must not hold back the read.
+      await session.setThinkingOption!("high");
+      expect(await read).toMatchObject({ model: "arena/contestant" });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("keeps the deferral when two overlapping choices are both refused (R12 E3)", async () => {
+    const { session, state, harness, modelAtPrompt } = await arenaChat({ migrated: true });
+    try {
+      const results = await Promise.allSettled([
+        session.setModel!(SIZES.medium.model),
+        session.setModel!(SIZES.frontier.model),
+      ]);
+      expect(results.map((entry) => entry.status)).toEqual(["rejected", "rejected"]);
+      state.battleOpen = false;
+      await session.startTurn("after the vote");
+      await expect.poll(() => harness.prompts).toEqual(["after the vote"]);
+      expect(modelAtPrompt()).toMatchObject({ id: "contestant", variant: "high" });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a size picked during a running turn applies when the turn ends (N2)", async () => {
+    const { session, harness, switches, pick, modelAtPrompt } = await arenaChat();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.startTurn("a long turn on Medium");
+      await expect.poll(() => harness.prompts).toEqual(["a long turn on Medium"]);
+      await pick("frontier");
+      // The running turn keeps its size; the daemon already reports the new choice.
+      expect(switches).toEqual([]);
+      expect(harness.info.model).toMatchObject({ id: "medium", variant: "xhigh" });
+      expect(session.describePersistence().metadata?.model).toBe(SIZES.frontier.model);
+      expect(session.describePersistence().metadata?.thinkingOptionId).toBe("high");
+      harness.finishExecution();
+      await expect.poll(() => terminalEvents(events)).toHaveLength(1);
+      expect(terminalEvents(events)[0]).toMatchObject({ type: "turn_completed" });
+      await expect.poll(() => switches).toEqual(["contestant/high"]);
+      await session.startTurn("the next turn");
+      await expect.poll(() => harness.prompts).toHaveLength(2);
+      expect(modelAtPrompt()).toMatchObject({ id: "contestant", variant: "high" });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a job that timed out in a slow reconnect cannot count a write later (N1)", async () => {
+    const { session, harness } = await arenaChat({ writeHop: 0, readHop: 0 });
+    let gets = 0;
+    const get = harness.api.session.get;
+    harness.api.session.get = (input, options) => {
+      gets += 1;
+      return get(input, options);
+    };
+    const internals = session as unknown as {
+      exited: boolean;
+      reconnecting: Promise<void> | null;
+    };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // A reconnect that takes longer than the timeout and then succeeds.
+      internals.exited = true;
+      internals.reconnecting = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          internals.exited = false;
+          internals.reconnecting = null;
+          resolve();
+        }, SELECTION_TIMEOUT_MS + 1_000);
+      });
+      const first = outcome(session.setModel!(SIZES.frontier.model));
+      await vi.advanceTimersByTimeAsync(SELECTION_TIMEOUT_MS + 5);
+      expect(await first).toBe("OpenCode did not apply the agent or model change in time");
+      // The reconnect ends and the timed-out job goes on to its write.
+      await vi.advanceTimersByTimeAsync(2_000);
+    } finally {
+      vi.useRealTimers();
+    }
+    try {
+      expect(harness.info.model).toMatchObject({ id: "medium" });
+      // The engine changes the model itself; the next read takes it at once.
+      harness.info.model = { providerID: "arena", id: "contestant", variant: "high" };
+      expect(await session.getRuntimeInfo()).toMatchObject({ model: "arena/contestant" });
+      // And nothing keeps reading while the session is idle.
+      const before = gets;
+      await wait(300);
+      expect(gets - before).toBeLessThanOrEqual(2);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("during a hold the runtime info and the events report the held size (F1)", async () => {
+    const { session, harness, pick } = await arenaChat();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.startTurn("a long turn on Medium");
+      await expect.poll(() => harness.prompts).toHaveLength(1);
+      // AgentManager stores this runtime info after the variant call.
+      const [, during] = await pick("frontier");
+      expect(during).toMatchObject({ model: "arena/contestant", thinkingOptionId: "high" });
+      events.length = 0;
+      harness.finishExecution();
+      await expect.poll(() => harness.info.model).toMatchObject({ id: "contestant" });
+      // The apply tells AgentManager the size and variant that now hold.
+      await expect.poll(() => variantsReported(events)).toContain("high");
+      expect(session.describePersistence().metadata).toMatchObject({
+        model: SIZES.frontier.model,
+        thinkingOptionId: "high",
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a pick that timed out in a slow reconnect during a turn is not held (F2)", async () => {
+    const { session, harness, switches } = await arenaChat({ writeHop: 0, readHop: 0 });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    const internals = session as unknown as {
+      exited: boolean;
+      reconnecting: Promise<void> | null;
+    };
+    await session.startTurn("a long turn on Medium");
+    await expect.poll(() => harness.prompts).toHaveLength(1);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      internals.exited = true;
+      internals.reconnecting = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          internals.exited = false;
+          internals.reconnecting = null;
+          resolve();
+        }, SELECTION_TIMEOUT_MS + 1_000);
+      });
+      const first = outcome(session.setModel!(SIZES.frontier.model));
+      await vi.advanceTimersByTimeAsync(SELECTION_TIMEOUT_MS + 5);
+      expect(await first).toBe("OpenCode did not apply the agent or model change in time");
+      // The reconnect ends and the timed-out job goes on to its hold.
+      await vi.advanceTimersByTimeAsync(2_000);
+    } finally {
+      vi.useRealTimers();
+    }
+    try {
+      expect(events.filter((event) => event.type === "model_changed")).toEqual([]);
+      expect(session.describePersistence().metadata?.model).toBe(SIZES.medium.model);
+      harness.finishExecution();
+      await expect.poll(() => terminalEvents(events)).toHaveLength(1);
+      await wait(50);
+      expect(switches).toEqual([]);
+      expect(harness.info.model).toMatchObject({ id: "medium" });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a held size equal to the running size sends no switch after the turn (F3)", async () => {
+    const { session, harness, switches, pick, modelAtPrompt } = await arenaChat();
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.startTurn("a long turn on Medium");
+      await expect.poll(() => harness.prompts).toHaveLength(1);
+      await pick("frontier");
+      await pick("medium");
+      harness.finishExecution();
+      await expect.poll(() => terminalEvents(events)).toHaveLength(1);
+      await wait(50);
+      expect(switches).toEqual([]);
+      await session.startTurn("the next turn");
+      await expect.poll(() => harness.prompts).toHaveLength(2);
+      expect(modelAtPrompt()).toMatchObject({ id: "medium", variant: "xhigh" });
+      expect(switches).toEqual([]);
     } finally {
       await session.close();
     }
