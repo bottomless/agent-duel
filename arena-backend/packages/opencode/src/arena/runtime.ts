@@ -5,7 +5,6 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { ResearchUploader } from "./research"
 import { arenaCredentials, type ArenaCredentials } from "./credentials"
-import { markInitialDispatch } from "./dispatch"
 import { createArenaBackend, type ArenaBackend } from "./backend"
 
 export const providerID = "arena"
@@ -128,7 +127,6 @@ export async function contestantFetch(input: string | URL | Request, init?: Requ
     upstream: `${target.url}/api/openrouter`,
     fetch: target.fetch,
     telemetry,
-    onDispatch: (metadata) => markInitialDispatch(metadata.sessionID),
   })
 }
 

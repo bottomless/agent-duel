@@ -147,4 +147,28 @@ describe("sanitizeV2", () => {
     expect(encoded).not.toContain("vendor failure")
     expect(encoded).not.toContain("private replay")
   })
+
+  test("reports the original text of each error it hides, and only those", () => {
+    const hidden: unknown[] = []
+    const value = sanitizeV2(
+      [
+        { type: "session.execution.failed", data: { error: { type: "unknown", message: "Session not found: ses_1" } } },
+        {
+          type: "session.error",
+          data: { error: { name: "APIError", data: { message: "vendor failure", statusCode: 503 } } },
+        },
+        { type: "session.step.failed", data: { error: "The agent could not complete this run." } },
+      ],
+      (error) => hidden.push(error),
+    ) as any
+    expect(value[0].data.error.message).toBe("The agent could not complete this run.")
+    expect(hidden).toEqual([
+      { message: "Session not found: ses_1", type: "unknown" },
+      { message: "vendor failure", name: "APIError", statusCode: 503 },
+    ])
+
+    // The reporter belongs to one call.
+    sanitizeV2({ error: "another failure" })
+    expect(hidden).toHaveLength(2)
+  })
 })

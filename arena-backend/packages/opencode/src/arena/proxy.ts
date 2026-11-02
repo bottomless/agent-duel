@@ -55,7 +55,6 @@ export type ProxyOptions = {
   readonly upstream: string
   readonly fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
   readonly telemetry?: Telemetry
-  readonly onDispatch?: (metadata: RequestMetadata) => void
 }
 
 type StreamProgress = {
@@ -633,12 +632,6 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       body: JSON.stringify(rewritten),
       signal: dispatch.signal,
     })
-    if (
-      request.headers.get("x-arena-generation-classification") === "generation" &&
-      sessionID === assignment.rootSessionID
-    ) {
-      options.onDispatch?.(metadata)
-    }
     let response: Response
     try {
       response = await responsePromise

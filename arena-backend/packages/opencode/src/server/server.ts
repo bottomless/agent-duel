@@ -8,7 +8,7 @@ import { Provider } from "@opencode/schema/provider"
 import { createRoutes } from "@opencode/server/routes"
 import type { ServerOptions } from "@opencode/server/options"
 import { Api } from "@opencode/server/api"
-import { sanitizeV2 } from "@/arena/v2-privacy"
+import { sanitizeV2, type HiddenError } from "@/arena/v2-privacy"
 import { arenaCredentials, hashArenaControlToken } from "@/arena/credentials"
 import { routeLayer as arenaRouteLayer } from "@/arena/http-runtime"
 import { ArenaRuntime } from "@/arena/runtime"
@@ -162,10 +162,25 @@ function copyHeaders(source: Response) {
   return headers
 }
 
+// History reads and every event subscriber carry the same error again. Log each one once.
+const loggedHiddenErrors = new Set<string>()
+
+/**
+ * The client gets generic text for most engine errors. Write the original to stderr, which the
+ * daemon keeps in its log, so a failed run can still be diagnosed.
+ */
+function logHiddenError(error: HiddenError) {
+  const key = JSON.stringify(error)
+  if (loggedHiddenErrors.has(key)) return
+  if (loggedHiddenErrors.size >= 500) loggedHiddenErrors.clear()
+  loggedHiddenErrors.add(key)
+  console.error(`Arena hid an engine error from the client ${key}`)
+}
+
 async function sanitizeJson(response: Response) {
   try {
     const body = await response.json()
-    return new Response(JSON.stringify(sanitizeV2(body)), {
+    return new Response(JSON.stringify(sanitizeV2(body, logHiddenError)), {
       status: response.status,
       statusText: response.statusText,
       headers: copyHeaders(response),
@@ -235,7 +250,7 @@ function sanitizeSseFrame(frame: string) {
       const prefix = line.slice(0, 5)
       const text = line.slice(5).trimStart()
       try {
-        return `${prefix} ${JSON.stringify(sanitizeV2(JSON.parse(text)))}`
+        return `${prefix} ${JSON.stringify(sanitizeV2(JSON.parse(text), logHiddenError))}`
       } catch {
         return line
       }

@@ -176,7 +176,6 @@ import type {
 } from "./records"
 import { battleMetricsSchemaVersion, reviewFlushLimit } from "./records"
 import { enabled, recoverOnce, registry, setTelemetry, store as runtimeStore } from "./runtime"
-import { waitForInitialDispatch } from "./dispatch"
 import { create as createTelemetry } from "./telemetry"
 import { Recorder } from "./events"
 import {
@@ -1294,14 +1293,11 @@ export const layer: Layer.Layer<
     const repositoryMutationLocks = new Map<string, Semaphore.Semaphore>()
     const checkoutCleanupLocks = new Map<string, Semaphore.Semaphore>()
     const turnCopyManifests = new Map<string, CopyManifest>()
-    // Root sessions whose request another instance hosts: the canonical checkout's, while their
-    // worktree is staged. Their runner is registered there, so cancels and steers go there too.
-    const promptHosts = new Map<SessionID, string>()
     // A queued steer can be promoted by interrupting the current request. Keep this marker in
     // memory so the prompt fiber that owns finalization resumes the persisted user message after
     // its runner is cancelled. A separate reply fiber must not call prompts.loop: doing so would
     // let the original settleSide finalize the run while the replacement is still starting.
-    const interruptingSteers = new Map<string, { readonly messageID: string; readonly hostDirectory: string }>()
+    const interruptingSteers = new Map<string, { readonly messageID: string }>()
     const discardingSteers = new Set<string>()
     // Aborted by Stop, so a stopped battle resolves without waiting for the rest of its copy.
     const environmentCopyStops = new Map<string, AbortController>()
@@ -1728,9 +1724,7 @@ export const layer: Layer.Layer<
                       ),
                     ),
                 status: bestEffort(
-                  inDirectory(promptHosts.get(sessionID) ?? run.worktree, statuses.get(sessionID)).pipe(
-                    Effect.map(ArenaPrivacy.status),
-                  ),
+                  inDirectory(run.worktree, statuses.get(sessionID)).pipe(Effect.map(ArenaPrivacy.status)),
                 ),
                 permissions: bestEffort(
                   permissions
@@ -4277,7 +4271,6 @@ export const layer: Layer.Layer<
       prompt: ArenaAttachments.ContestantPrompt | undefined,
       agent: string,
       preservePromptBoundary = false,
-      hostDirectory = run.worktree.directory,
     ) {
       const turn = yield* promise(() => store.turn(run.turnID))
       if (turn?.state === "stopping" || turn?.state === "early_selected") return Exit.void
@@ -4301,10 +4294,9 @@ export const layer: Layer.Layer<
       const system =
         (yield* startedSystem(run.worktree.directory, run.sessionID, storedRun?.promptMessageID)) ??
         contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID))
-      if (hostDirectory !== run.worktree.directory) promptHosts.set(run.sessionID, hostDirectory)
       let result = yield* Effect.exit(
         inDirectory(
-          hostDirectory,
+          run.worktree.directory,
           prompt
             ? prompts.prompt({
                 sessionID: run.sessionID,
@@ -4321,12 +4313,6 @@ export const layer: Layer.Layer<
             : // A retry adds no message: the loop answers the last user message again, from the
               // last step that finished.
               prompts.loop({ sessionID: run.sessionID }),
-        ).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (promptHosts.get(run.sessionID) === hostDirectory) promptHosts.delete(run.sessionID)
-            }),
-          ),
         ),
       )
       while (true) {
@@ -4341,19 +4327,7 @@ export const layer: Layer.Layer<
         // at once, so the steer's own reply can start the next loop first, and this result is then
         // that loop's unfinished message. prompts.loop joins a running loop and returns at once
         // when nothing is left to answer.
-        promptHosts.set(run.sessionID, steer.hostDirectory)
-        result = yield* Effect.exit(
-          inDirectory(
-            steer.hostDirectory,
-            prompts.loop({ sessionID: run.sessionID }).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  if (promptHosts.get(run.sessionID) === steer.hostDirectory) promptHosts.delete(run.sessionID)
-                }),
-              ),
-            ),
-          ),
-        )
+        result = yield* Effect.exit(inDirectory(run.worktree.directory, prompts.loop({ sessionID: run.sessionID })))
       }
       if (Exit.isSuccess(result) && result.value?.info.role === "assistant") {
         const env = previewEnvironment(run.worktree.directory)
@@ -4440,15 +4414,14 @@ export const layer: Layer.Layer<
       return outcome
     })
 
-    // A session runner is registered against the instance that dispatched its prompt: the worktree's,
-    // or for an early cold or refreshed request the canonical checkout's. Cancelling from any other
-    // instance finds no runner and silently does nothing, leaving the contestant running to
-    // completion. Descendant sessions start from tools, which always run in the worktree.
+    // A session runner is registered against the instance that dispatched its prompt, which is
+    // always the contestant's worktree. Cancelling from any other instance finds no runner and
+    // silently does nothing, leaving the contestant running to completion.
     const cancelRun = Effect.fn("Arena.cancelRun")(function* (directory: string, sessionID: SessionID) {
       const children = yield* descendants(sessionID)
       yield* Effect.all(
         [
-          inDirectory(promptHosts.get(sessionID) ?? directory, prompts.cancel(sessionID)),
+          inDirectory(directory, prompts.cancel(sessionID)),
           inDirectory(
             directory,
             Effect.forEach(children, (id) => prompts.cancel(id), { discard: true }),
@@ -4491,12 +4464,11 @@ export const layer: Layer.Layer<
         if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${run.turnID}`))
         return yield* respond(store, turn.chatID)
       }
-      const hostDirectory = promptHosts.get(sessionID) ?? run.worktree
-      const status = yield* inDirectory(hostDirectory, statuses.get(sessionID))
+      const status = yield* inDirectory(run.worktree, statuses.get(sessionID))
       if (status.type === "idle") {
         return yield* Effect.fail(new Error("Arena contestant is no longer running"))
       }
-      const messages = yield* inDirectory(hostDirectory, sessions.messages({ sessionID }))
+      const messages = yield* inDirectory(run.worktree, sessions.messages({ sessionID }))
       const expectedIndex = messages.findIndex(
         (message) => message.info.id === expectedMessageID && message.info.role === "user",
       )
@@ -4523,7 +4495,7 @@ export const layer: Layer.Layer<
       ) {
         return yield* Effect.fail(new Error("Arena pending steer is not the latest queued message"))
       }
-      interruptingSteers.set(runID, { messageID: expectedMessageID, hostDirectory })
+      interruptingSteers.set(runID, { messageID: expectedMessageID })
       const cancelled = yield* Effect.exit(cancelRun(run.worktree, sessionID))
       if (Exit.isFailure(cancelled)) {
         if (interruptingSteers.get(runID)?.messageID === expectedMessageID) interruptingSteers.delete(runID)
@@ -4564,12 +4536,11 @@ export const layer: Layer.Layer<
         ) {
           return yield* Effect.fail(new Error("Arena pending steer message IDs must be unique and nonempty"))
         }
-        const hostDirectory = promptHosts.get(sessionID) ?? run.worktree
-        const status = yield* inDirectory(hostDirectory, statuses.get(sessionID))
+        const status = yield* inDirectory(run.worktree, statuses.get(sessionID))
         if (status.type === "idle") {
           return yield* Effect.fail(new Error("Arena contestant is no longer running"))
         }
-        const messages = yield* inDirectory(hostDirectory, sessions.messages({ sessionID }))
+        const messages = yield* inDirectory(run.worktree, sessions.messages({ sessionID }))
         const boundaryIndex = run.promptMessageID
           ? messages.findIndex((message) => message.info.id === run.promptMessageID)
           : -1
@@ -4599,7 +4570,7 @@ export const layer: Layer.Layer<
         yield* Effect.forEach(
           expectedMessageIDs,
           (messageID) =>
-            inDirectory(hostDirectory, sessions.removeMessage({ sessionID, messageID: MessageID.make(messageID) })),
+            inDirectory(run.worktree, sessions.removeMessage({ sessionID, messageID: MessageID.make(messageID) })),
           { discard: true },
         )
         return yield* respond(store, turn.chatID)
@@ -4991,14 +4962,6 @@ export const layer: Layer.Layer<
         { readonly removedPaths: readonly string[]; readonly complete: Effect.Effect<SlotSyncTimings, Error> }
       >()
       const executionGates = new Map<Side, ReturnType<typeof gateToolExecution>>()
-      const earlyPrompts = new Map<
-        Side,
-        {
-          readonly fiber: Fiber.Fiber<Exit.Exit<SessionV1.WithParts | void, unknown>, unknown>
-          readonly sessionID: SessionID
-          readonly directory: string
-        }
-      >()
       const environmentSettled = {
         a: yield* Deferred.make<void>(),
         b: yield* Deferred.make<void>(),
@@ -5029,8 +4992,8 @@ export const layer: Layer.Layer<
         const warm =
           turn.warmPreparation?.state === "ready" || refreshing ? turn.warmPreparation?.worktrees[side] : undefined
         const context = { chatID: chat._id, turnID: turn._id, side }
-        // A reused side is complete and prompts in its own instance. A cold or refreshed side is
-        // staged at a path known now, so its request can leave from the canonical instance first.
+        // A reused side is complete and its session is already in its worktree. A cold or refreshed
+        // side is staged at a path known now, and its session moves there before its first prompt.
         const reused = warm !== undefined && !refreshing
         // In the resolved form the claim uses, since the request is bound to this exact path.
         const canonicalRoot = yield* promise(() => realpath(chat.repository.root))
@@ -5100,9 +5063,9 @@ export const layer: Layer.Layer<
           const forked = yield* forkInto({
             sessionID: sourceID,
             destination: info.directory,
-            // A cold slot is still a reservation when the first prompt is admitted. Keep the
-            // session on the canonical host until staging completes; Core execution resolves its
-            // runner from the persisted location and cannot boot an empty reservation.
+            // A cold slot is still an empty reservation here. Core execution resolves its runner
+            // from the persisted location and cannot boot an empty reservation, so the session
+            // moves once staging completes, before its first prompt.
             moveSession: reused,
             roots: { canonical: chat.repository.root, worktree: info.directory },
             pathMode: "transcript",
@@ -5209,7 +5172,6 @@ export const layer: Layer.Layer<
           assignment: selected,
         } satisfies SideRuntime
 
-        let earlyPrompt: Fiber.Fiber<Exit.Exit<SessionV1.WithParts | void, unknown>, unknown> | undefined
         if (!reused) {
           const directory = info.directory
           const base = Promise.withResolvers<boolean>()
@@ -5230,29 +5192,6 @@ export const layer: Layer.Layer<
             () => base.resolve(false),
           )
           executionGates.set(side, gate)
-          const dispatch = waitForInitialDispatch(forkedID)
-          const fiber = yield* runPrompt(store, runtime, prompt, agent, false, chat.repository.root).pipe(
-            Effect.forkIn(scope, { startImmediately: true }),
-          )
-          earlyPrompts.set(side, { fiber, sessionID: forkedID, directory })
-          const settledBeforeDispatch = Fiber.join(fiber).pipe(
-            Effect.flatMap(() => promise(() => store.turn(turn._id))),
-            Effect.flatMap((current) =>
-              current?.state === "stopping" || current?.state === "early_selected"
-                ? Effect.void
-                : Effect.fail(new Error(`Arena side ${side.toUpperCase()} settled before its request was dispatched`)),
-            ),
-            Effect.tap(() => Effect.sync(() => dispatch.cancel(new Error("Arena prompt stopped before dispatch")))),
-          )
-          // Staging starts once the request has left, so it cannot compete with the dispatch.
-          yield* Effect.raceFirst(
-            promise(() => dispatch.promise),
-            settledBeforeDispatch,
-          ).pipe(
-            Effect.tapError((dispatchError) => Effect.sync(() => dispatch.cancel(dispatchError))),
-            preparationPhase("dispatch-initial-request", context),
-          )
-          earlyPrompt = fiber
         }
 
         const prepareStartedAt = Date.now()
@@ -5383,7 +5322,7 @@ export const layer: Layer.Layer<
           yield* promise(() => store.updateRun(runID, { readyAt: new Date() }))
         }
         sideTimings.set(side, { totalMs: Date.now() - sideStartedAt, prepareMs, forkMs, forkedAtWarmup, ...sync })
-        return { run: { ...runtime, worktree: info } satisfies SideRuntime, earlyPrompt }
+        return { run: { ...runtime, worktree: info } satisfies SideRuntime }
       })
 
       const repositoryLock = chat.canonicalCheckout?.commonGitDir ?? chat.repository.root
@@ -5392,16 +5331,6 @@ export const layer: Layer.Layer<
           Effect.sync(() => {
             for (const gate of executionGates.values()) gate.fail(new Error("Arena side setup did not complete"))
           }),
-          // A request that already left must not keep running for a battle that will not start.
-          Effect.forEach(
-            Array.from(earlyPrompts.values()),
-            (early) =>
-              cancelRun(early.directory, early.sessionID).pipe(
-                Effect.andThen(Fiber.interrupt(early.fiber)),
-                Effect.ignore,
-              ),
-            { concurrency: 2, discard: true },
-          ),
           Effect.forEach(
             Array.from(previewWorktrees),
             (directory) => promise(() => endOwnership(directory)).pipe(Effect.ignore),
@@ -5654,21 +5583,7 @@ export const layer: Layer.Layer<
       const settlePreparedSide = Effect.fnUntraced(function* (side: typeof preparedA) {
         const run = side.run
         const settled = Deferred.await(environmentSettled[run.side])
-        const early = side.earlyPrompt
-        const settle = early
-          ? Fiber.await(early).pipe(
-              Effect.flatMap((joined) =>
-                settlePromptExit(
-                  store,
-                  turn,
-                  run,
-                  Exit.isSuccess(joined) ? joined.value : Exit.failCause(joined.cause),
-                  settled,
-                  () => stoppedBySibling.has(run.side),
-                ),
-              ),
-            )
-          : settleSide(store, turn, run, prompt, agent, false, settled, () => stoppedBySibling.has(run.side))
+        const settle = settleSide(store, turn, run, prompt, agent, false, settled, () => stoppedBySibling.has(run.side))
         const [prepared, outcome] = yield* Effect.all([finishEnvironments, settle], { concurrency: "unbounded" })
         const setup = prepared.get(run.side)
         // A copy cut short by Stop leaves the tracked files the contestant worked on intact. The
@@ -6304,12 +6219,11 @@ export const layer: Layer.Layer<
       const dispatch = Effect.forEach(
         working,
         (run) => {
-          // A working contestant whose request started early is still run by its host's runner.
           return allowReading(run.worktree, SessionID.make(run.rootSessionID), prompt.readable).pipe(
             Effect.andThen(startedSystem(run.worktree, SessionID.make(run.rootSessionID), run.promptMessageID)),
             Effect.flatMap((system) =>
               inDirectory(
-                promptHosts.get(SessionID.make(run.rootSessionID)) ?? run.worktree,
+                run.worktree,
                 prompts.prompt({
                   sessionID: SessionID.make(run.rootSessionID),
                   model: {
