@@ -17,9 +17,11 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function delegation(part: unknown) {
   const tool = record(part);
-  if (tool?.type !== "tool" || tool.tool !== "task") return null;
+  if (tool?.type !== "tool") return null;
+  if (tool.tool !== "task" && tool.tool !== "subagent") return null;
   const state = record(tool.state);
-  const sessionId = record(state?.metadata)?.sessionId;
+  const metadata = record(state?.metadata);
+  const sessionId = tool.tool === "subagent" ? metadata?.sessionID : metadata?.sessionId;
   if (typeof sessionId !== "string") return null;
   const description = record(state?.input)?.description;
   const name = typeof description === "string" ? description.trim() : "";
@@ -102,9 +104,12 @@ export function arenaSubagentRunState(
   task: unknown,
   child: Pick<ArenaRun, "messages" | "parts"> = {},
 ): ArenaRun["runState"] {
-  const state = record(record(task)?.state);
+  const tool = record(task);
+  const state = record(tool?.state);
+  const metadata = record(state?.metadata);
+  const nativeBackground = tool?.tool === "subagent" && metadata?.status === "running";
   // A background task's completed tool call only acknowledges its launch.
-  if (state?.status === "completed" && record(state.metadata)?.background === true) {
+  if (state?.status === "completed" && (metadata?.background === true || nativeBackground)) {
     return backgroundRunState(runState, child);
   }
   if (state?.status === "completed") return "complete";

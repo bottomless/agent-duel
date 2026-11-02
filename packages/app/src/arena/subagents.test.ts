@@ -69,6 +69,51 @@ describe("projectArenaSessions", () => {
 });
 
 describe("arenaSubagentRunState", () => {
+  it("settles a native background child while its parent and sibling keep working", () => {
+    const task = {
+      type: "tool",
+      tool: "subagent",
+      state: {
+        status: "completed",
+        input: { description: "QUICK", agent: "general", background: true },
+        metadata: { sessionID: "quick", status: "running" },
+      },
+    };
+    const quick = {
+      id: "quick-answer",
+      role: "assistant",
+      sessionID: "quick",
+      finish: "stop",
+      time: { completed: 10 },
+    };
+    const long = { id: "long-answer", role: "assistant", sessionID: "long" };
+    const parts = {
+      parent: [task],
+      "quick-answer": [
+        { type: "reasoning", text: "Done", time: { start: 1, end: 2 } },
+        { type: "text", text: "QUICK done" },
+      ],
+      "long-answer": [{ type: "tool", tool: "shell", state: { status: "running" } }],
+    };
+    const sessions = projectArenaSessions({
+      sessionID: "root",
+      messages: [{ id: "parent", sessionID: "root" }, quick, long],
+      parts,
+    });
+    const child = sessions.byTask.get(task);
+    expect(child).toEqual({ id: "quick", name: "QUICK", task, messages: [quick] });
+    expect(
+      arenaSubagentRunState("pending", child?.task, { messages: child?.messages, parts }),
+    ).toBe("complete");
+    expect(arenaSubagentRunState("pending", task, { messages: [long], parts })).toBe("pending");
+    expect(
+      arenaSubagentRunState("pending", task, {
+        messages: [quick, { id: "follow-up", role: "user", sessionID: "quick" }],
+        parts,
+      }),
+    ).toBe("pending");
+  });
+
   it("stops stale child activity when its delegation finishes", () => {
     expect(arenaSubagentRunState("pending", { state: { status: "completed" } })).toBe("complete");
     expect(arenaSubagentRunState("pending", { state: { status: "running" } })).toBe("pending");

@@ -107,6 +107,7 @@ export const ArenaChatSubagent = memo(function ArenaChatSubagent({
   description,
   status,
   renderTranscript,
+  transcriptRevision,
 }: {
   /** The delegating call; the chat keeps the open state under it, since rows unmount off screen. */
   callId: string;
@@ -117,7 +118,7 @@ export const ArenaChatSubagent = memo(function ArenaChatSubagent({
   subagentId: string;
   description: string;
   status: string;
-  renderTranscript: (timeline: ArenaChatSubagentTimeline) => ReactNode;
+  renderTranscript: (timeline: ArenaChatSubagentTimeline, revision: unknown) => ReactNode;
   /** Changes when a row inside the transcript opens or closes, so the transcript draws again. */
   transcriptRevision?: unknown;
 }) {
@@ -176,7 +177,8 @@ export const ArenaChatSubagent = memo(function ArenaChatSubagent({
         />
         {expanded ? (
           <View testID="arena-chat-subagent-transcript">
-            {renderTranscript(timeline ?? EMPTY_TIMELINE)}
+            {/* The compiler must invalidate this call even when the render port is stable. */}
+            {renderTranscript(timeline ?? EMPTY_TIMELINE, transcriptRevision)}
           </View>
         ) : null}
       </View>
