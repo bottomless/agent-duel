@@ -22,6 +22,7 @@ import { Model } from "@opencode/schema/model"
 import * as Prompt from "@opencode/schema/prompt"
 import { Session } from "@opencode/schema/session"
 import { SessionMessage } from "@opencode/schema/session-message"
+import { SessionEvent } from "@opencode/schema/session-event"
 import {
   Session as ArenaSession,
   SessionPrompt as ArenaPrompt,
@@ -98,6 +99,26 @@ const at = DateTime.makeUnsafe(1_700_000_000_000)
 const sessionID = Session.ID.make("ses_arena_projection")
 const userID = SessionMessage.ID.make("msg_user")
 const assistantID = SessionMessage.ID.make("msg_assistant")
+
+function seedGraftMessage(input: { sessionID: Session.ID; message: SessionMessage.Info; seq: number }) {
+  return Effect.gen(function* () {
+    const database = yield* Database.Service
+    const { id, type, ...data } = Schema.encodeSync(SessionMessage.Info)(input.message)
+    const created = DateTime.toEpochMillis(input.message.time.created)
+    yield* database.db
+      .insert(SessionMessageTable)
+      .values({
+        id,
+        session_id: input.sessionID,
+        type,
+        seq: input.seq,
+        time_created: created,
+        time_updated: created,
+        data,
+      })
+      .run()
+  })
+}
 
 describe("Arena V2 session projection", () => {
   test("projects canonical messages and keeps content identifiers stable", () => {
@@ -237,6 +258,134 @@ describe("Arena V2 session projection", () => {
 })
 
 describe("Arena V2 native session storage", () => {
+  it.effect("keeps losing and earlier-turn children outside the winning fork's family", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const arena = yield* ArenaSession
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-graft-family-test") })
+      const canonical = yield* sessions.create({ location })
+      const earlier = yield* sessions.create({ parentID: canonical.id, title: "Earlier winner's child" })
+      yield* seedGraftMessage({
+        sessionID: canonical.id,
+        seq: 0,
+        message: {
+          id: SessionMessage.ID.make("msg_graft_family_history"),
+          type: "user",
+          text: `Earlier child: ${earlier.id}`,
+          time: { created: at },
+        },
+      })
+      const winner = yield* arena.fork({ sessionID: canonical.id })
+      const loser = yield* arena.fork({ sessionID: canonical.id })
+      const winningChild = yield* sessions.create({ parentID: winner.id, title: "Winning child" })
+      const winningGrandchild = yield* sessions.create({ parentID: winningChild.id, title: "Nested winning child" })
+      const losingChild = yield* sessions.create({ parentID: loser.id, title: "Losing child" })
+      const internalFork = yield* arena.fork({ sessionID: winner.id })
+      const internalChild = yield* sessions.create({ parentID: internalFork.id, title: "Internal fork's child" })
+      const promptID = SessionMessage.ID.make("msg_graft_family_prompt")
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 1,
+        message: { id: promptID, type: "user", text: "Current turn", time: { created: at } },
+      })
+
+      // Core forks copy messages, not the parent's child family. Graft starts its walk at winner.id.
+      expect(winner.parentID).toBeUndefined()
+      expect(loser.parentID).toBeUndefined()
+      expect(internalFork.parentID).toBeUndefined()
+      expect((yield* arena.children(canonical.id)).map((child) => child.id)).toEqual([earlier.id])
+      expect((yield* arena.children(winner.id)).map((child) => child.id)).toEqual([winningChild.id])
+      expect((yield* arena.children(winningChild.id)).map((child) => child.id)).toEqual([winningGrandchild.id])
+      expect((yield* arena.children(loser.id)).map((child) => child.id)).toEqual([losingChild.id])
+      expect((yield* arena.children(internalFork.id)).map((child) => child.id)).toEqual([internalChild.id])
+      expect(JSON.stringify(yield* arena.canonicalMessages(winner.id))).toContain(earlier.id)
+      // Command-created children need no parent tool call; both child levels are still discoverable.
+      const retained = messagesToGraft(yield* arena.canonicalMessages(winner.id), promptID)
+      expect(retained.map((message) => message.id)).toEqual([promptID])
+      expect(JSON.stringify(retained)).not.toContain(winningChild.id)
+    }),
+  )
+
+  it.effect("keeps a child discoverable after its delegation is rewound, without a surviving tool reference", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const arena = yield* ArenaSession
+      const bus = yield* Bus.Service
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-graft-rewind-test") })
+      const winner = yield* sessions.create({ location })
+      const child = yield* sessions.create({
+        parentID: winner.id,
+        title: "Delegated work",
+        agent: Agent.ID.make("general"),
+      })
+      const promptID = SessionMessage.ID.make("msg_graft_rewind_prompt")
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 0,
+        message: { id: promptID, type: "user", text: "Delegate work", time: { created: at } },
+      })
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 1,
+        message: {
+          id: SessionMessage.ID.make("msg_graft_rewind_delegation"),
+          type: "assistant",
+          agent: Agent.ID.make("build"),
+          model: { providerID: Provider.ID.make("arena"), id: Model.ID.make("contestant") },
+          content: [
+            {
+              type: "tool",
+              id: "call_graft_child",
+              name: "subagent",
+              state: {
+                status: "completed",
+                input: { agent: "general", description: "Delegated work", prompt: "Inspect files" },
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({ sessionID: child.id, status: "completed", output: "Report" }),
+                  },
+                ],
+              },
+              time: { created: at, ran: at, completed: at },
+            },
+          ],
+          time: { created: at, completed: at },
+          finish: "tool-calls",
+        },
+      })
+      yield* seedGraftMessage({
+        sessionID: child.id,
+        seq: 0,
+        message: {
+          id: SessionMessage.ID.make("msg_graft_rewind_child_report"),
+          type: "user",
+          text: "Child's retained transcript",
+          time: { created: at },
+        },
+      })
+      expect(JSON.stringify(yield* arena.canonicalMessages(winner.id))).toContain(child.id)
+
+      // Stage the durable boundary directly: file snapshots are outside this storage test.
+      yield* bus.publish(SessionEvent.RevertEvent.Staged, {
+        sessionID: winner.id,
+        revert: { messageID: promptID, files: [] },
+      })
+      yield* sessions.revert.commit(winner.id)
+      const nextPromptID = SessionMessage.ID.make("msg_graft_rewind_replacement")
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 0,
+        message: { id: nextPromptID, type: "user", text: "Replacement prompt", time: { created: at } },
+      })
+      const retained = messagesToGraft(yield* arena.canonicalMessages(winner.id), nextPromptID)
+      expect(retained.map((message) => message.id)).toEqual([nextPromptID])
+      expect(JSON.stringify(retained)).not.toContain(child.id)
+      expect((yield* arena.children(winner.id)).map((entry) => entry.id)).toEqual([child.id])
+      expect((yield* arena.canonicalMessages(child.id)).map((message) => message.type)).toEqual(["user"])
+    }),
+  )
+
   it.effect("copies a canonical message with provider replay state through the real database", () =>
     Effect.gen(function* () {
       const sessions = yield* CoreSession.Service
