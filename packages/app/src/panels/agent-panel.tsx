@@ -1885,7 +1885,13 @@ const AgentStreamSection = memo(function AgentStreamSection({
             <>
               {chatCallouts}
               {filesRecoveryBanner}
-              {queuedBattlePreview}
+            </>
+          )}
+          {/* A battle queued during the apply waits below the open one. Once sent, it stays
+              queued until the start answers, while the starting battle already shows its prompt. */}
+          {startingBattle ? null : queuedBattlePreview}
+          {activeBattle ? null : (
+            <>
               {feedbackBattle && !queuedBattlePreview ? (
                 <ChatFeedbackCard
                   key={`battle-feedback-${feedbackBattle.id}`}
@@ -1910,6 +1916,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
       latestBattleSummary,
       queuedBattlePreview,
       singleAgentRating,
+      startingBattle,
       workspaceId,
     ],
   );
