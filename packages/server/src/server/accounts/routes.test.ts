@@ -12,13 +12,16 @@ import {
   type AccountUser,
 } from "./backend.js";
 import { createAccountsRouter } from "./routes.js";
-import { createAccountsService } from "./service.js";
+import { createAccountsService, type AccountsService } from "./service.js";
 import { verifySessionToken } from "./token.js";
 import type { AcceptTermsRequest } from "@getpaseo/protocol/accounts/schemas";
 import {
   clearArenaCredentials,
+  confirmArenaSessionRejection,
+  isArenaSessionRejected,
   issueArenaLaunchCredentials,
   readArenaCredentials,
+  rejectArenaSession,
   resolveArenaRuntimeCredentials,
   type HostedArenaCredentials,
 } from "./credentials.js";
@@ -111,10 +114,16 @@ class StubBackend {
   }
 
   async revokeSession() {}
+  /** Sessions the control plane revoked or expired; they still verify locally. */
+  revoked = new Set<string>();
+  /** Every token whose session was asked for, in order. */
+  checked: string[] = [];
+
   async currentSession(token: string) {
+    this.checked.push(token);
     this.guard();
     const session = verifySessionToken(token, keys.publicKey);
-    if (!session) throw new AccountsRequestError(401, "Not signed in");
+    if (!session || this.revoked.has(token)) throw new AccountsRequestError(401, "Not signed in");
     return { user: { ...session.user, legalAcceptance }, method: session.method };
   }
   async acceptTerms(token: string, input: AcceptTermsRequest) {
@@ -127,6 +136,7 @@ class StubBackend {
 
 let backend: StubBackend;
 let router: Router;
+let service: AccountsService;
 let server: Server;
 let baseUrl: string;
 let shutdownCalls = 0;
@@ -160,22 +170,24 @@ beforeEach(() => {
   backend.sent = null;
   backend.accepted = null;
   backend.claim = { status: "pending" };
+  backend.revoked.clear();
+  backend.checked = [];
   shutdownCalls = 0;
   clearArenaCredentials();
-  router = createAccountsRouter(
-    createAccountsService({
-      config,
-      logger: pino({ enabled: false }),
-      backend: backend as unknown as AccountsBackend,
-      shutdownArena: async () => {
-        shutdownCalls += 1;
-      },
-    }),
-  );
+  service = createAccountsService({
+    config,
+    logger: pino({ enabled: false }),
+    backend: backend as unknown as AccountsBackend,
+    shutdownArena: async () => {
+      shutdownCalls += 1;
+    },
+  });
+  router = createAccountsRouter(service);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await service.close();
 });
 
 async function authenticate(token: string) {
@@ -407,6 +419,98 @@ describe("account routes", () => {
 
     expect(shutdownCalls).toBe(0);
     expect(readArenaCredentials()?.credentials).toEqual(arenaCredentials(desktop));
+  });
+
+  it("stops forwarding a session the control plane rejected until a new sign-in replaces it", async () => {
+    const desktop = sessionToken({ name: "Desktop" });
+    await authenticate(desktop);
+    const installed = readArenaCredentials()!;
+    const runtime = issueRuntimeCapability();
+    shutdownCalls = 0;
+    backend.revoked.add(desktop);
+
+    expect(await confirmArenaSessionRejection(desktop)).toBe("rejected");
+
+    expect(isArenaSessionRejected()).toBe(true);
+    const fresh = sessionToken({ name: "Fresh" });
+    await authenticate(fresh);
+    // Replaced in place: the running Arena child keeps its capability, so a waiting contestant
+    // continues on the new session.
+    expect(shutdownCalls).toBe(0);
+    expect(isArenaSessionRejected()).toBe(false);
+    expect(readArenaCredentials()).toEqual({
+      credentials: arenaCredentials(fresh),
+      version: installed.version,
+    });
+    expect(resolveArenaRuntimeCredentials(runtime.token)).toEqual(arenaCredentials(fresh));
+
+    // It still verifies locally, but the control plane refuses it, so it is never forwarded again.
+    const again = await fetch(`${baseUrl}/api/auth/session`, {
+      headers: { "x-paseo-session": desktop },
+    });
+    expect(again.status).toBe(401);
+    expect(readArenaCredentials()?.credentials).toEqual(arenaCredentials(fresh));
+  });
+
+  it("does not reject a session the control plane's session route still accepts", async () => {
+    const desktop = sessionToken({ name: "Desktop" });
+    await authenticate(desktop);
+
+    expect(await confirmArenaSessionRejection(desktop)).toBe("accepted");
+    expect(isArenaSessionRejected()).toBe(false);
+  });
+
+  it("forwards a refused session again once the control plane accepts it", async () => {
+    const desktop = sessionToken({ name: "Desktop" });
+    await authenticate(desktop);
+    // Refused once, as a model's 401 used to be read.
+    rejectArenaSession(desktop);
+    expect(isArenaSessionRejected()).toBe(true);
+
+    // The app's recheck reaches the control plane, which accepts the session.
+    await authenticate(desktop);
+
+    expect(isArenaSessionRejected()).toBe(false);
+    expect(readArenaCredentials()?.credentials).toEqual(arenaCredentials(desktop));
+  });
+
+  it("falls back to another session of the account when the control plane rejects one", async () => {
+    const desktop = sessionToken({ name: "Desktop" });
+    const browser = sessionToken({ name: "Browser" });
+    await authenticate(desktop);
+    await authenticate(browser);
+
+    backend.revoked.add(browser);
+    expect(await confirmArenaSessionRejection(browser)).toBe("rejected");
+    // Credential changes run in order, so this request settles after the fallback.
+    await authenticate(desktop);
+
+    expect(isArenaSessionRejected()).toBe(false);
+    expect(readArenaCredentials()?.credentials).toEqual(arenaCredentials(desktop));
+  });
+
+  it("does not fall back to a session the control plane refuses too", async () => {
+    const desktop = sessionToken({ name: "Desktop" });
+    const browser = sessionToken({ name: "Browser" });
+    await authenticate(desktop);
+    await authenticate(browser);
+    // Both sessions of the account revoked together.
+    backend.revoked.add(browser);
+    backend.revoked.add(desktop);
+    backend.checked = [];
+
+    expect(await confirmArenaSessionRejection(browser)).toBe("rejected");
+    await vi.waitFor(() => expect(backend.checked).toEqual([browser, desktop]));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(isArenaSessionRejected()).toBe(true);
+    expect(readArenaCredentials()?.credentials).toEqual(arenaCredentials(browser));
+
+    // A new sign-in still replaces the refused session in place.
+    const fresh = sessionToken({ name: "Fresh" });
+    await authenticate(fresh);
+    expect(isArenaSessionRejected()).toBe(false);
+    expect(readArenaCredentials()?.credentials).toEqual(arenaCredentials(fresh));
   });
 
   it("remembers the latest four sessions of the account", async () => {

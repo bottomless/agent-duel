@@ -6,7 +6,9 @@ import {
   paymentError,
   readNetworkUnavailable,
   readPaymentError,
+  readSessionRejected,
   retryableStreamError,
+  sessionRejectedError,
 } from "@agent-duel/arena-service/request-error"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 
@@ -42,19 +44,6 @@ export class ArenaWaitError extends Error {
   override readonly name = "ArenaWaitError"
   constructor(readonly wait: "network" | "sign-in") {
     super(wait === "network" ? "Arena network is unavailable" : "Arena session was rejected")
-  }
-}
-
-// Keyed on the type string, not a helper, so the classification holds whichever side writes the body.
-const SESSION_REJECTED_TYPE = "arena_session_rejected"
-
-function sessionRejected(body: string | undefined) {
-  if (!body) return false
-  try {
-    const payload = JSON.parse(body) as unknown
-    return record(payload) && record(payload.error) && payload.error.type === SESSION_REJECTED_TYPE
-  } catch {
-    return false
   }
 }
 
@@ -683,14 +672,16 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const generationID = metadata.generationID
     const type = response.headers.get("content-type") ?? ""
     if (!response.ok) {
-      // Only these bodies carry a neutral code Arena acts on; every other body is dropped.
+      // Only these bodies carry a neutral code the engine acts on; every other body is dropped.
       const body = [401, 402, 503].includes(response.status) ? await response.text() : undefined
       const payload =
         response.status === 402
           ? paymentError(readPaymentError(body) ?? "arena_payment_required")
           : readNetworkUnavailable(body)
             ? networkUnavailableError()
-            : { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
+            : response.status === 401 && readSessionRejected(body)
+              ? sessionRejectedError()
+              : { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
       if (body === undefined) await response.body?.cancel().catch(() => undefined)
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
       // A refused attempt is a failed generation, not a completed one. A wait for the user's network
@@ -699,7 +690,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         metadata,
         readNetworkUnavailable(body)
           ? new ArenaWaitError("network")
-          : response.status === 401 && sessionRejected(body)
+          : response.status === 401 && readSessionRejected(body)
             ? new ArenaWaitError("sign-in")
             : new Error(`Arena upstream status ${response.status}`),
         new Date(),

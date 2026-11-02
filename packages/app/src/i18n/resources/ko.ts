@@ -1400,6 +1400,9 @@ export const ko: TranslationResources = {
     sideClosing: "Agent {{side}}가 차례를 마치는 중입니다. 메시지를 다시 보내세요.",
     sideClosingBoth: "에이전트가 차례를 마치는 중입니다. 메시지를 다시 보내세요.",
   },
+  battleStart: {
+    failed: "배틀을 시작하지 못했습니다. 다시 시도하세요.",
+  },
   battleRepository: {
     title: "Agent Duel에는 커밋이 필요합니다",
     notGitMessage: "빈 첫 커밋으로 Git 저장소를 만들까요?",

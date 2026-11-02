@@ -212,6 +212,42 @@ The client must distinguish an invalid local session from a control-plane outage
 A valid signed session remains locally accepted during an outage; there is no network cache or
 grace timer in the daemon.
 
+A session the control plane revoked or expired still verifies locally, so the daemon learns of it
+only from a forwarded Arena request (`accounts/arena-runtime-router.ts`). A 401 there is not enough:
+the control plane passes a model provider's own 401 through unchanged. The daemon asks the control
+plane's session route, and rejects the session only when that refuses it too. Then:
+
+- The daemon stops forwarding the token and answers Arena requests with a neutral
+  `arena_session_rejected` 401 itself, research uploads included.
+- A contestant waits on that answer with the status "Waiting for sign-in", as it waits for the
+  network, and continues once a new session is forwarded.
+- Arena requests that start model work are refused, and a request whose control-plane call was
+  refused fails with the RPC code `account_session_rejected` (`arena/account-session.ts`).
+- Arena keeps its credentials instead of restarting, so a new sign-in of the same account replaces
+  the token in place. Another remembered session of the account is used instead only after the
+  session route accepts it.
+- A 401 for a token that a newer sign-in replaced is sent again once with the new token.
+
+The app rechecks `GET /api/auth/session` on that code or that status, in place, without dropping
+the app shell. A 401 there shows sign-in with a "Your session expired" notice. An accepted session
+clears the daemon's rejection and is forwarded again. Drafts live in the persisted draft store.
+
+Other control-plane answers to an Arena request get their own RPC codes
+(`accounts/control-plane-outcomes.ts`). A 403 `terms_acceptance_required` becomes
+`account_terms_required` by the same counting, because terms hold for the whole account: the app
+reloads the account in place, and the terms show. A 403 `app_update_required` (this build is no
+longer supported) becomes `app_update_required`, counted the same way, with the control plane's
+text, which carries the download link. Any other failed assignment answer (not 402) can name a
+contestant model, so the runtime proxy logs its text and replaces it with fixed text that carries
+a mark. The request whose own error has that mark fails with `arena_control_plane_failed`; a
+failure elsewhere at the same time does not change it. The comparison and metadata routes fail
+with their status only. Every other refusal reaches the app in its own words.
+
+When the session check itself gets no answer (a 5xx, a timeout), neither side signs out: the
+daemon answers a contestant's 401 as "Waiting for network" and checks again after a backoff
+(2 s, doubling to 60 s). The app rechecks while a run waits for the network too, repeating every
+2 s to 10 s until the control plane answers, so sign-in shows soon after it is back.
+
 ## Two ordering traps
 
 - **The endpoint cannot come from a registered host.** A host is registered only after a successful

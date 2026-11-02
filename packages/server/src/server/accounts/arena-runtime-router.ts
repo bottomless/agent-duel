@@ -1,8 +1,19 @@
 import { once } from "node:events";
 import express from "express";
 import type { Logger } from "pino";
-import { resolveArenaRuntimeCredentials } from "./credentials.js";
-import { isNetworkUnavailable, networkUnavailableBody } from "./network-unavailable.js";
+import { ACCOUNT_SESSION_REJECTED_MESSAGE } from "@getpaseo/protocol/accounts/schemas";
+import {
+  confirmArenaSessionRejection,
+  isArenaSessionRejected,
+  noteArenaSessionRefusal,
+  resolveArenaRuntimeCredentials,
+} from "./credentials.js";
+import { requestNeverReachedControlPlane, networkUnavailableBody } from "./network-unavailable.js";
+import {
+  controlPlaneFailedBody,
+  noteArenaTermsRefusal,
+  noteArenaUpdateRequired,
+} from "./control-plane-outcomes.js";
 
 const allowedRoutes = new Set([
   "/api/arena/assignments",
@@ -18,13 +29,191 @@ const allowedRoutes = new Set([
 
 type Fetch = typeof fetch;
 
-// A contestant waits out an offline machine; every other failure answers 502.
+// The assignment route's error text reaches the user through the engine, and it can name a model.
+// The comparison and metadata routes fail with their status only.
+const assignmentsRoute = "/api/arena/assignments";
+// Routes whose terms refusal is the user's own action, not a contestant or a research upload.
+const userActionRoutes = new Set([
+  assignmentsRoute,
+  "/api/arena/comparison",
+  "/api/arena/metadata",
+]);
+
+type Warn = Pick<Logger, "warn">;
+
+/** The router's own failure answer; an assignment's carries the failure mark. */
+function sendUnavailable(res: express.Response, path: string): void {
+  res
+    .status(502)
+    .json(
+      path === assignmentsRoute
+        ? controlPlaneFailedBody
+        : { error: "Arena control plane is unavailable" },
+    );
+}
+
+/**
+ * Settles a control-plane error answer to a user's action. A terms or update refusal is named by
+ * its code and passes; a payment refusal carries fixed text and passes; any other assignment error
+ * is replaced with fixed, marked text, and its own text goes to the log only. Returns the answer to
+ * pass on.
+ */
+async function settleErrorAnswer(
+  path: string,
+  answered: Response,
+  logger: Warn,
+): Promise<Response> {
+  if (!userActionRoutes.has(path) || answered.status < 400 || answered.status === 402) {
+    return answered;
+  }
+  if (answered.status !== 403 && path !== assignmentsRoute) return answered;
+  const body = await answered.text().catch(() => "");
+  const code = answered.status === 403 ? readCode(body) : undefined;
+  // The control plane's coded refusals of the caller say what to do, and name no model: they
+  // pass in their own words (the update refusal carries the download link).
+  if (code === "terms_acceptance_required" || code === "app_update_required") {
+    if (code === "terms_acceptance_required") noteArenaTermsRefusal();
+    else noteArenaUpdateRequired();
+    return new Response(body, { status: answered.status, headers: answered.headers });
+  }
+  if (path !== assignmentsRoute) {
+    return new Response(body, { status: answered.status, headers: answered.headers });
+  }
+  logger.warn(
+    { path, status: answered.status, body: body.slice(0, 500) },
+    "Arena control plane refused an assignment",
+  );
+  return Response.json(controlPlaneFailedBody, { status: answered.status });
+}
+
+function readCode(body: string): unknown {
+  try {
+    const payload: unknown = JSON.parse(body);
+    return typeof payload === "object" && payload !== null && "code" in payload
+      ? payload.code
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// A contestant waits out an offline machine, or a control plane its request never reached; every
+// other failure answers 502 and spends the contestant's retry budget.
 function sendFailure(res: express.Response, path: string, error: unknown): void {
-  if (path.startsWith("/api/openrouter/") && isNetworkUnavailable(error)) {
+  if (path.startsWith("/api/openrouter/") && requestNeverReachedControlPlane(error)) {
     res.status(503).json(networkUnavailableBody);
     return;
   }
-  res.status(502).json({ error: "Arena control plane is unavailable" });
+  sendUnavailable(res, path);
+}
+
+function forwardedHeaders(req: express.Request, token: string): Record<string, string> {
+  return {
+    Accept: req.header("accept") ?? "application/json",
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    ...(req.header("x-arena-assignment-id")
+      ? { "X-Arena-Assignment-ID": req.header("x-arena-assignment-id")! }
+      : {}),
+    ...(req.header("x-arena-scope-id")
+      ? { "X-Arena-Scope-ID": req.header("x-arena-scope-id")! }
+      : {}),
+    ...(req.header("x-arena-generation-id")
+      ? { "X-Arena-Generation-ID": req.header("x-arena-generation-id")! }
+      : {}),
+  };
+}
+
+// The engine waits on a contestant request with this body until the session is replaced, instead
+// of failing the run. Twin of `arena-backend/packages/arena-service/src/request-error.ts`
+// (`sessionRejectedType`), which the daemon cannot import.
+const sessionRejectedType = "arena_session_rejected";
+
+// The session verifies here, but the control plane revoked or expired it. Answered here without
+// forwarding the token again, in the engine's error shapes. Research uploads retry on their own
+// schedule, so they do not count as a refusal of the user's request.
+function refuseRejectedSession(res: express.Response, path: string): void {
+  if (path !== "/api/research") noteArenaSessionRefusal();
+  res
+    .status(401)
+    .json(
+      path.startsWith("/api/openrouter/")
+        ? { error: { message: ACCOUNT_SESSION_REJECTED_MESSAGE, type: sessionRejectedType } }
+        : { error: ACCOUNT_SESSION_REJECTED_MESSAGE, type: sessionRejectedType },
+    );
+}
+
+/**
+ * A 401 is the session only when the control plane's session route refuses it too; a model's own
+ * 401, which the control plane passes through, goes back to the engine unchanged. When the session
+ * route gives no answer, the 401 means nothing yet: a contestant waits as for the network, and
+ * asks again, instead of failing on a session that may have expired. Returns the response to pass
+ * on, "replaced" when a newer session should carry the request instead, or null once the request
+ * is answered here.
+ */
+async function resolveUnauthorized(
+  upstream: Response,
+  token: string,
+  path: string,
+  res: express.Response,
+): Promise<Response | "replaced" | null> {
+  const body = await upstream.text().catch(() => "");
+  const verdict = await confirmArenaSessionRejection(token);
+  if (verdict === "replaced") return "replaced";
+  if (verdict === "rejected") {
+    refuseRejectedSession(res, path);
+    return null;
+  }
+  if (verdict === "unknown") {
+    if (path.startsWith("/api/openrouter/")) {
+      res.status(503).json(networkUnavailableBody);
+    } else {
+      sendUnavailable(res, path);
+    }
+    return null;
+  }
+  return new Response(body, { status: upstream.status, headers: upstream.headers });
+}
+
+type RuntimeCredentials = NonNullable<ReturnType<typeof resolveArenaRuntimeCredentials>>;
+
+/**
+ * Sends the request with the account session and settles a 401. A sign-in that replaced the session
+ * while it ran sends it once more on the new one. Returns the response to stream back, or null once
+ * the request is answered here.
+ */
+async function forward(
+  execute: Fetch,
+  logger: Warn,
+  req: express.Request,
+  res: express.Response,
+  runtimeToken: string,
+  credentials: RuntimeCredentials,
+  signal: AbortSignal,
+): Promise<Response | null> {
+  const body = Uint8Array.from(req.body as Buffer).buffer;
+  const attempt = async (session: RuntimeCredentials) => {
+    const answered = await execute(`${session.controlPlaneUrl}${req.path}`, {
+      signal,
+      method: "POST",
+      headers: forwardedHeaders(req, session.token),
+      body,
+    });
+    return answered.status === 401
+      ? resolveUnauthorized(answered, session.token, req.path, res)
+      : settleErrorAnswer(req.path, answered, logger);
+  };
+  const first = await attempt(credentials);
+  if (first !== "replaced") return first;
+  const replacement = resolveArenaRuntimeCredentials(runtimeToken);
+  if (!replacement || isArenaSessionRejected()) {
+    refuseRejectedSession(res, req.path);
+    return null;
+  }
+  const second = await attempt(replacement);
+  if (second !== "replaced") return second;
+  sendUnavailable(res, req.path);
+  return null;
 }
 
 export function createArenaRuntimeRouter(options: {
@@ -52,6 +241,11 @@ export function createArenaRuntimeRouter(options: {
       return;
     }
 
+    if (isArenaSessionRejected()) {
+      refuseRejectedSession(res, req.path);
+      return;
+    }
+
     // A contestant stream the runtime abandons would otherwise run, and bill, until the control
     // plane's own deadline.
     const disconnected = new AbortController();
@@ -59,25 +253,16 @@ export function createArenaRuntimeRouter(options: {
       if (!res.writableFinished) disconnected.abort();
     });
     try {
-      const upstream = await execute(`${credentials.controlPlaneUrl}${req.path}`, {
-        signal: disconnected.signal,
-        method: "POST",
-        headers: {
-          Accept: req.header("accept") ?? "application/json",
-          Authorization: `Bearer ${credentials.token}`,
-          "Content-Type": "application/json",
-          ...(req.header("x-arena-assignment-id")
-            ? { "X-Arena-Assignment-ID": req.header("x-arena-assignment-id")! }
-            : {}),
-          ...(req.header("x-arena-scope-id")
-            ? { "X-Arena-Scope-ID": req.header("x-arena-scope-id")! }
-            : {}),
-          ...(req.header("x-arena-generation-id")
-            ? { "X-Arena-Generation-ID": req.header("x-arena-generation-id")! }
-            : {}),
-        },
-        body: Uint8Array.from(req.body).buffer,
-      });
+      const upstream = await forward(
+        execute,
+        options.logger,
+        req,
+        res,
+        token,
+        credentials,
+        disconnected.signal,
+      );
+      if (!upstream) return;
       res.status(upstream.status);
       // x-arena-heartbeat-ms tells the engine the stream carries heartbeats it can time out on.
       for (const name of [

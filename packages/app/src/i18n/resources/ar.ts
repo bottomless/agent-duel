@@ -1391,6 +1391,9 @@ export const ar: TranslationResources = {
     sideClosing: "Agent {{side}} ينهي دوره. أرسل رسالتك مرة أخرى.",
     sideClosingBoth: "أحد الوكلاء ينهي دوره. أرسل رسالتك مرة أخرى.",
   },
+  battleStart: {
+    failed: "تعذّر بدء المعركة. حاول مرة أخرى.",
+  },
   battleRepository: {
     title: "يحتاج Agent Duel إلى commit",
     notGitMessage: "هل تريد إنشاء مستودع Git مع commit أول فارغ؟",

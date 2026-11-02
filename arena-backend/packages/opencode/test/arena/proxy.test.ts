@@ -978,6 +978,26 @@ describe("ArenaProxy", () => {
     }
   })
 
+  test("passes the daemon's refused-session answer through and drops every other 401 body", async () => {
+    const refused = { error: { message: "Arena session was rejected", type: "arena_session_rejected" } }
+    for (const [upstream, expected] of [
+      [{ error: { message: "Your session expired.", type: "arena_session_rejected" } }, refused],
+      [
+        { error: { message: "provider/hidden-model: invalid key", type: "invalid_request" } },
+        { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } },
+      ],
+    ] as const) {
+      const registry = new AssignmentRegistry()
+      registry.assign("session-root", assignment)
+      const response = await proxy(request(), registry, {
+        upstream: "https://unit.invalid",
+        fetch: async () => Response.json(upstream, { status: 401 }),
+      })
+      expect(response.status).toBe(401)
+      expect(await response.json()).toEqual(expected)
+    }
+  })
+
   test("does not retry permanent errors received mid-answer", () => {
     for (const code of [400, 401, 402, 403, "insufficient_quota", "context_length_exceeded"]) {
       const value = sanitizePayload({ error: { code, message: "private provider details" } }, "generation", true)

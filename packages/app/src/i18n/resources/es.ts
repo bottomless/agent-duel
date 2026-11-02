@@ -1430,6 +1430,9 @@ export const es: TranslationResources = {
     sideClosing: "Agent {{side}} está terminando su turno. Vuelve a enviar tu mensaje.",
     sideClosingBoth: "Un agente está terminando su turno. Vuelve a enviar tu mensaje.",
   },
+  battleStart: {
+    failed: "No se pudo iniciar la batalla. Inténtalo de nuevo.",
+  },
   battleRepository: {
     title: "Agent Duel necesita un commit",
     notGitMessage: "¿Crear un repositorio Git con un primer commit vacío?",

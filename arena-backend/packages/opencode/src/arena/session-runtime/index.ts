@@ -839,12 +839,13 @@ const statusLayer: Layer.Layer<SessionStatus, never, CoreSession.Service> = Laye
         normalizeError(
           Effect.gen(function* () {
             if (!(yield* sessions.active).has(sessionID)) return { type: "idle" } as const
-            // Core keeps a scheduled retry on the step's assistant until the next attempt starts.
-            // The pane shows it as "Waiting for network" or "Continuing after model timeout".
+            // Core keeps a scheduled retry on the open assistant until the next attempt starts. The
+            // pane shows it as "Waiting for network", "Waiting for sign-in" or "Continuing after
+            // model timeout".
             const [latest] = yield* sessions
               .messages({ sessionID, type: "assistant", order: "desc", limit: 1 })
               .pipe(Effect.orElseSucceed(() => []))
-            const retry = latest?.type === "assistant" ? latest.retry : undefined
+            const retry = latest?.type === "assistant" && !latest.time.completed ? latest.retry : undefined
             if (!retry) {
               // As in 1.x, the recovery attempt after a model timeout keeps its label until it ends.
               const recovery = idleRecovery(sessionID)

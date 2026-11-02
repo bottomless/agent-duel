@@ -1,14 +1,21 @@
 import type { Logger } from "pino";
 import type { AccountsConfig } from "./config.js";
-import { AccountsBackend } from "./backend.js";
+import { AccountsBackend, AccountsRequestError } from "./backend.js";
 import { SessionResolver } from "./session.js";
 import { resolveSessionPublicKey, verifySessionToken } from "./token.js";
 import { OpenCodeServerManager } from "../agent/providers/opencode/server-manager.js";
 import {
+  acceptArenaSession,
   clearArenaCredentials,
   installArenaCredentials,
+  onArenaSessionRejected,
+  rejectArenaSession,
   replaceArenaCredentialsToken,
+  setArenaSessionVerifier,
+  type ArenaSessionVerdict,
 } from "./credentials.js";
+
+const SESSION_CHECK_TIMEOUT_MS = 10_000;
 
 /** Enough for the desktop app, the browser QA harness, and a re-signed-in client. */
 const REMEMBERED_SESSIONS = 4;
@@ -25,6 +32,8 @@ export interface AccountsService {
   readonly sessions: SessionResolver;
   readonly logger: Logger;
   availableMethods(): ReturnType<AccountsBackend["methods"]>;
+  /** The control plane's session route answered for this token: forward it again, or stop. */
+  sessionChecked(token: string, accepted: boolean): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -53,6 +62,8 @@ export function createAccountsService(options: CreateAccountsServiceOptions): Ac
   // expires, and another tab or window can still hold it. Forwarded again, it would fail every
   // Arena call. Kept until expiry, which bounds it.
   const signedOut = new Set<string>();
+  // Sessions the control plane refused. Not forwarded again unless its session route accepts one.
+  const rejected = new Set<string>();
   let credentialTransition = Promise.resolve();
   const shutdownArena = options.shutdownArena ?? (() => OpenCodeServerManager.restartInstance());
   function transitionCredentials(action: () => Promise<void>): Promise<void> {
@@ -63,7 +74,7 @@ export function createAccountsService(options: CreateAccountsServiceOptions): Ac
   const sessions = new SessionResolver(publicKey, {
     async onAuthenticated(token, user) {
       await transitionCredentials(async () => {
-        if (signedOut.has(token)) return;
+        if (signedOut.has(token) || rejected.has(token)) return;
         if (account?.userId === user.id) {
           if (account.tokens.at(-1) === token) return;
           const others = account.tokens.filter((candidate) => candidate !== token);
@@ -109,12 +120,85 @@ export function createAccountsService(options: CreateAccountsServiceOptions): Ac
     },
   });
 
+  // The control plane refused the forwarded session: stop forwarding it. Without another usable
+  // session the credentials stay, marked rejected, rather than restarting Arena: a sign-in of the
+  // same account then replaces the token in place, and a contestant waiting on it continues.
+  const stopRejectedSessions = onArenaSessionRejected((token) => {
+    options.logger.warn("The control plane rejected the account session; sign-in is required");
+    void transitionCredentials(async () => {
+      for (const candidate of rejected) {
+        if (verifySessionToken(candidate, publicKey) === null) rejected.delete(candidate);
+      }
+      rejected.add(token);
+      if (!account?.tokens.includes(token)) return;
+      const isActive = account.tokens.at(-1) === token;
+      const remaining = account.tokens.filter((candidate) => candidate !== token);
+      if (!isActive) {
+        account = { userId: account.userId, tokens: remaining };
+        return;
+      }
+      // A fallback can be refused too: two sessions of the account revoked together, or an older
+      // one that expired while the session route was down. Ask the control plane before forwarding
+      // one, newest first; without an answer, none is used and the rejection stands until a
+      // sign-in or a recheck.
+      let fallback: string | null = null;
+      for (const candidate of remaining.toReversed()) {
+        if (verifySessionToken(candidate, publicKey) === null) continue;
+        const verdict = await verifySession(candidate);
+        if (verdict === "accepted") fallback = candidate;
+        else if (verdict === "rejected") rejected.add(candidate);
+        if (verdict !== "rejected") break;
+      }
+      const usable = fallback ? remaining.slice(0, remaining.indexOf(fallback) + 1) : [];
+      account = {
+        userId: account.userId,
+        tokens: usable.filter((candidate) => !rejected.has(candidate)),
+      };
+      if (fallback) replaceArenaCredentialsToken(fallback);
+    });
+  });
+
+  // Bounded: a contestant request and the credential queue wait on it.
+  async function verifySession(token: string): Promise<ArenaSessionVerdict> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<ArenaSessionVerdict>((resolve) => {
+      timer = setTimeout(() => resolve("unknown"), SESSION_CHECK_TIMEOUT_MS);
+    });
+    const checked = backend.currentSession(token).then(
+      (): ArenaSessionVerdict => "accepted",
+      (error: unknown): ArenaSessionVerdict =>
+        error instanceof AccountsRequestError && error.status === 401 ? "rejected" : "unknown",
+    );
+    try {
+      return await Promise.race([checked, timedOut]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  setArenaSessionVerifier(verifySession);
+
+  async function sessionChecked(token: string, accepted: boolean): Promise<void> {
+    if (!accepted) {
+      rejectArenaSession(token);
+      return;
+    }
+    acceptArenaSession(token);
+    if (!rejected.delete(token)) return;
+    // Forward it again, as when it was first presented.
+    await sessions.resolve(token);
+  }
+
   return {
     config: options.config,
     backend,
     sessions,
     logger: options.logger,
     availableMethods: () => backend.methods(),
-    close: () => backend.close(),
+    sessionChecked,
+    close: () => {
+      stopRejectedSessions();
+      setArenaSessionVerifier(null);
+      return backend.close();
+    },
   };
 }

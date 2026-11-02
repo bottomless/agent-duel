@@ -1379,6 +1379,9 @@ export const zhCN: TranslationResources = {
     sideClosing: "Agent {{side}} 正在结束本轮。请重新发送消息。",
     sideClosingBoth: "有一个 Agent 正在结束本轮。请重新发送消息。",
   },
+  battleStart: {
+    failed: "无法开始对战。请重试。",
+  },
   battleRepository: {
     title: "Agent Duel 需要一个提交",
     notGitMessage: "要创建一个带空初始提交的 Git 仓库吗？",

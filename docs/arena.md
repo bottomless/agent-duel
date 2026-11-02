@@ -1303,12 +1303,18 @@ request already in flight.
 
 An offline machine spends no retry. When a contestant request cannot reach the network at all (DNS
 fails or there is no route), the daemon's runtime proxy in a hosted build, or the in-process service
-in a BYOK build, answers 503 `arena_network_unavailable`. The contestant then waits with backoff
-capped at 10 seconds for as long as the network is gone, shows **Waiting for network**, and the next
-real failure gets a fresh two-minute window. A closed lid is the common case: macOS wakes briefly for
-Power Nap before Wi-Fi reconnects, and the window's monotonic clock stops during sleep, so without
-this each wake spent one retry until the run failed. The control plane never sends this answer; its
-own outbound failures are not the user's network.
+in a BYOK build, answers 503 `arena_network_unavailable`. The hosted proxy answers the same in
+exactly two more cases: the control plane refused the connection (`ECONNREFUSED`), or the connect
+timed out (`UND_ERR_CONNECT_TIMEOUT`). Then no request was written, so runs wait out a restart.
+Every failure after a connection exists is a 502 that spends the retry budget: a reset, a closed
+socket, or a TLS handshake drop. The control plane can have started the model call, and every wait
+would start another. Node reports a reset just after connect the same way as one after the request
+(`read ECONNRESET`). An HTTP error from the control plane passes through. On a 503 the contestant
+waits with backoff capped at 10 seconds for as long as the network is gone, shows **Waiting for
+network**, and the next real failure gets a fresh two-minute window. A closed lid is the common
+case: macOS wakes briefly for Power Nap before Wi-Fi reconnects, and the window's monotonic clock
+stops during sleep, so without this each wake spent one retry until the run failed. The control
+plane never sends this answer; its own outbound failures are not the user's network.
 
 A stream that ends without a finish reason or `[DONE]` is broken too (`endsResponse` in
 `arena/proxy.ts`). The control plane's function time limit ends a response cleanly, mid-thought;

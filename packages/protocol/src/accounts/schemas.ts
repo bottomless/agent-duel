@@ -129,6 +129,40 @@ export const WS_CLOSE_ACCOUNTS_UNAVAILABLE = 4503;
 export const SIGN_IN_REQUIRED_REASON = "Sign in to use Agent Duel";
 export const ACCOUNTS_UNAVAILABLE_REASON = "Accounts service starting";
 
+/**
+ * RPC error code for an Arena request refused because the control plane rejected the account
+ * session (revoked or expired there) while the token still verifies locally. The app rechecks
+ * its session and shows sign-in.
+ */
+export const ACCOUNT_SESSION_REJECTED_CODE = "account_session_rejected";
+export const ACCOUNT_SESSION_REJECTED_MESSAGE = "Your session expired. Sign in again to continue.";
+
+/**
+ * RPC error code for an Arena request the control plane refused until the user accepts the
+ * current Terms of Service and Privacy Policy. The app reloads the account and shows the terms.
+ */
+export const ACCOUNT_TERMS_REQUIRED_CODE = "account_terms_required";
+export const ACCOUNT_TERMS_REQUIRED_MESSAGE =
+  "Accept the current Terms of Service and Privacy Policy to continue.";
+
+/**
+ * RPC error code for an Arena request the control plane refused because this build is no longer
+ * supported. Same code as the control plane's answer; the message is the control plane's own
+ * text, which carries the download link.
+ */
+export const APP_UPDATE_REQUIRED_CODE = "app_update_required";
+export const APP_UPDATE_REQUIRED_MESSAGE =
+  "This version of Agent Duel is no longer supported. Download the latest version.";
+
+/**
+ * RPC error code for an Arena request that failed because a control-plane request failed. The
+ * control plane's own text can name a contestant model or a provider, so the daemon replaces it
+ * with this message and keeps the text in its log.
+ */
+export const ARENA_CONTROL_PLANE_FAILED_CODE = "arena_control_plane_failed";
+export const ARENA_CONTROL_PLANE_FAILED_MESSAGE =
+  "Agent Duel could not complete this request. Try again.";
+
 /** WebSocket subprotocol prefix carrying the same token on the socket handshake. */
 export const SESSION_WS_PROTOCOL_PREFIX = "paseo.session.";
 

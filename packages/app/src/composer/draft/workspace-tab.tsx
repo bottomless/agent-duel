@@ -81,6 +81,8 @@ import {
   type FailedFirstSendDeps,
 } from "@/composer/draft/failed-first-send";
 import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
+import { noticeAccountSessionRejection } from "@/accounts/session-rejected";
+import { neutralBattleStartError } from "@/arena/battle-start-error";
 
 const EMPTY_PENDING_PERMISSIONS = new Map();
 const DRAFT_CAPABILITIES: AgentCapabilityFlags = {
@@ -169,7 +171,10 @@ async function submitDraftCreateRequest(input: {
     try {
       await startDraftBattle({ ...input, client, agentId: result.id, promptAttachments });
     } catch (error) {
-      throw new FirstSendError(error, result.id);
+      throw new FirstSendError(
+        neutralBattleStartError(noticeAccountSessionRejection(error)),
+        result.id,
+      );
     }
   }
 

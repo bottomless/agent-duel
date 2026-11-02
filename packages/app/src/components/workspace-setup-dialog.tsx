@@ -49,6 +49,7 @@ import {
 import { arenaComposerMaxImages } from "@/arena/composer-state";
 import { copyArenaPreferences, useArenaPreferences } from "@/arena/preferences";
 import { markArenaBattleHandoff } from "@/arena/battle-handoff";
+import { noticeAccountSessionRejection } from "@/accounts/session-rejected";
 import { arenaSessionQueryKey } from "@/arena/use-arena-session";
 import { ensureBattleRepository } from "@/arena/battle-repository";
 import { arenaByokKey } from "@/byok/key";
@@ -391,7 +392,7 @@ export function WorkspaceSetupDialog() {
         );
         navigateAfterCreation(ensuredWorkspace.id, { kind: "agent", agentId: agent.id });
       } catch (error) {
-        const message = toErrorMessage(error);
+        const message = toErrorMessage(noticeAccountSessionRejection(error));
         setErrorMessage(message);
         toast.error(message);
       } finally {

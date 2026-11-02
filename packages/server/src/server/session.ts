@@ -15,6 +15,7 @@ import {
 } from "./arena/history-images.js";
 import { ArenaPayloadTooLargeError } from "./arena/payload-limit.js";
 import { ArenaRefusalError } from "./arena/refusal.js";
+import { isArenaAccountError, runWithArenaAccountSession } from "./arena/account-session.js";
 import { type WorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
 import type { AgentMessageDelivery } from "./agent/agent-messages/index.js";
 import { AgentDirectory } from "./agent/directory.js";
@@ -2289,12 +2290,16 @@ export class Session {
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.sessionLogger.error({ err }, "Error handling message");
-        // An Arena answer too large to send, and an engine refusal the app words itself, keep their
-        // own text and code, without the generic prefix.
-        const coded = err instanceof ArenaPayloadTooLargeError || err instanceof ArenaRefusalError;
+        // An Arena answer too large to send, an engine refusal the app words itself, or an Arena
+        // failure on the account or the control plane (`arena/account-session.ts`) says so in its
+        // own words, without the generic prefix.
+        const ownWords =
+          err instanceof ArenaPayloadTooLargeError ||
+          err instanceof ArenaRefusalError ||
+          isArenaAccountError(err);
         const failure = {
-          error: coded ? err.message : `Request failed: ${err.message}`,
-          code: coded ? err.code : "handler_error",
+          error: ownWords ? err.message : `Request failed: ${err.message}`,
+          code: ownWords ? err.code : "handler_error",
         };
         if (
           msg.type.startsWith("arena.stream.") &&
@@ -5202,7 +5207,9 @@ export class Session {
     ];
     if (reads.includes(msg.type)) return this.handleArenaRequest(msg);
     const finishMutation = this.arenaActivity?.beginMutation(msg.agentId);
-    return this.handleArenaRequest(msg).finally(() => finishMutation?.());
+    return runWithArenaAccountSession(msg.type, () => this.handleArenaRequest(msg)).finally(() =>
+      finishMutation?.(),
+    );
   }
 
   private async handleArenaStreamAckOrUnsubscribe(

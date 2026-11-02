@@ -1412,6 +1412,9 @@ export const ru: TranslationResources = {
     sideClosing: "Agent {{side}} завершает свой ход. Отправьте сообщение ещё раз.",
     sideClosingBoth: "Один из агентов завершает свой ход. Отправьте сообщение ещё раз.",
   },
+  battleStart: {
+    failed: "Не удалось начать битву. Попробуйте ещё раз.",
+  },
   battleRepository: {
     title: "Agent Duel нужен коммит",
     notGitMessage: "Создать репозиторий Git с пустым первым коммитом?",

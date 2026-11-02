@@ -13,9 +13,15 @@ export interface AccountSession {
 
 interface AccountSessionState {
   session: AccountSession | null;
+  /** The daemon refused the stored session as expired or revoked; sign-in says so. Not persisted. */
+  expired: boolean;
+  /** Bumped to make the account gate recheck the stored session with the control plane. */
+  checkRequest: number;
   setSession: (session: AccountSession) => void;
   updateUser: (user: AccountUser) => void;
   clearSession: () => void;
+  expireSession: () => void;
+  requestCheck: () => void;
 }
 
 const accountSessionStorage = {
@@ -62,10 +68,14 @@ export const useAccountSessionStore = create<AccountSessionState>()(
   persist(
     (set) => ({
       session: null,
-      setSession: (session) => set({ session }),
+      expired: false,
+      checkRequest: 0,
+      setSession: (session) => set({ session, expired: false }),
       updateUser: (user) =>
         set((state) => (state.session ? { session: { ...state.session, user } } : state)),
-      clearSession: () => set({ session: null }),
+      clearSession: () => set({ session: null, expired: false }),
+      expireSession: () => set({ session: null, expired: true }),
+      requestCheck: () => set((state) => ({ checkRequest: state.checkRequest + 1 })),
     }),
     {
       name: "agent-duel-account-session",

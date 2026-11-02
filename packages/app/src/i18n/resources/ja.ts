@@ -1410,6 +1410,9 @@ export const ja: TranslationResources = {
     sideClosingBoth:
       "エージェントがターンを終えようとしています。メッセージをもう一度送信してください。",
   },
+  battleStart: {
+    failed: "バトルを開始できませんでした。もう一度お試しください。",
+  },
   battleRepository: {
     title: "Agent Duel にはコミットが必要です",
     notGitMessage: "空の最初のコミットで Git リポジトリを作成しますか？",

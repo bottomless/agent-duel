@@ -1419,6 +1419,9 @@ export const ptBR: TranslationResources = {
     sideClosing: "Agent {{side}} está terminando a vez dele. Envie sua mensagem novamente.",
     sideClosingBoth: "Um agente está terminando a vez dele. Envie sua mensagem novamente.",
   },
+  battleStart: {
+    failed: "Não foi possível iniciar a batalha. Tente novamente.",
+  },
   battleRepository: {
     title: "O Agent Duel precisa de um commit",
     notGitMessage: "Criar um repositório Git com um primeiro commit vazio?",
