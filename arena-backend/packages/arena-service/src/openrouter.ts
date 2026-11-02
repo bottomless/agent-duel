@@ -20,6 +20,7 @@ import {
   recordCalibration,
   type CalibrationSample,
 } from "./request-calibration"
+import { generationCapture, type CaptureState } from "./generation-capture"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -32,6 +33,12 @@ import {
 } from "./stream-recovery"
 
 type ReasoningRedactor = ReturnType<typeof createReasoningRedactor>
+
+/** One call's capture with the upstream status bound (`generation-capture.ts`). */
+type ResponseCapture = {
+  readonly record: (text: string) => void
+  readonly finish: (state: CaptureState) => Promise<void>
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -187,6 +194,7 @@ function sanitizeStream(
   startedAt: number,
   complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
   recovery?: ReplayRecorder,
+  capture?: ResponseCapture,
 ) {
   const reader = stream.getReader()
   const decoder = new TextDecoder()
@@ -236,7 +244,9 @@ function sanitizeStream(
           const next = await reader.read()
           if (cancelled) return
           if (next.done) {
-            pending += decoder.decode()
+            const rest = decoder.decode()
+            capture?.record(rest)
+            pending += rest
             if (pending) writeLine(controller, sanitizeLine(pending, generationID, reasoning, metrics.observe))
             if (open) writeLine(controller, "")
             const tail = reasoning.flush()
@@ -244,11 +254,13 @@ function sanitizeStream(
             reasoning.clear()
             stopHeartbeat()
             // Recorded before the close: a hosted function may stop once its response ends.
-            await Promise.all([complete(metrics.value()), recovery?.complete()])
+            await Promise.all([complete(metrics.value()), recovery?.complete(), capture?.finish("complete")])
             controller.close()
             return
           }
-          pending += decoder.decode(next.value, { stream: true })
+          const text = decoder.decode(next.value, { stream: true })
+          capture?.record(text)
+          pending += text
           const lines = pending.split("\n")
           pending = lines.pop() ?? ""
           if (!lines.length) continue
@@ -259,7 +271,7 @@ function sanitizeStream(
         reasoning.clear()
         stopHeartbeat()
         if (cancelled) return
-        await recovery?.fail()
+        await Promise.all([recovery?.fail(), capture?.finish("failed")])
         controller.enqueue(
           encoder.encode(
             `${open ? "\n" : ""}data: ${JSON.stringify({
@@ -275,6 +287,7 @@ function sanitizeStream(
       stopHeartbeat()
       reasoning.clear()
       void recovery?.fail()
+      void capture?.finish("cancelled")
       return reader.cancel(reason)
     },
   })
@@ -484,12 +497,15 @@ async function sanitizeAssignedResponse(
   startedAt: number,
   complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
   recovery?: () => ReplayRecorder | undefined,
+  capture?: ResponseCapture,
 ) {
   const { generationID } = refusal
   const headers = assignedHeaders(response.headers)
   if (!response.ok) {
     const upstream = await response.text().catch(() => "")
     logRefusal(refusal, response.status, upstream)
+    capture?.record(upstream)
+    await capture?.finish("failed")
     if (isContextOverflow(response.status, upstream)) {
       return Response.json(compactionRequiredError(), { status: 413, headers })
     }
@@ -510,15 +526,17 @@ async function sanitizeAssignedResponse(
   if ((response.headers.get("content-type") ?? "").includes("text/event-stream") && response.body) {
     const recorder = recovery?.()
     if (recorder) headers.set(HEARTBEAT_HEADER, String(HEARTBEAT_MS))
-    return new Response(sanitizeStream(response.body, generationID, reasoning, startedAt, complete, recorder), {
-      status: response.status,
-      headers,
-    })
+    return new Response(
+      sanitizeStream(response.body, generationID, reasoning, startedAt, complete, recorder, capture),
+      { status: response.status, headers },
+    )
   }
-  const raw = await response.json()
+  const text = await response.text()
+  capture?.record(text)
+  const raw = JSON.parse(text) as unknown
   const metrics = metricsCollector(generationID, startedAt)
   metrics.observe(raw)
-  await complete(metrics.value())
+  await Promise.all([complete(metrics.value()), capture?.finish("complete")])
   const payload = reasoning.redact(sanitizePayload(raw, generationID))
   headers.set("content-type", "application/json")
   return Response.json(payload, { status: response.status, headers })
@@ -644,12 +662,23 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       return Response.json(compactionRequiredError(), { status: 413 })
     }
     body = new TextEncoder().encode(budget.body).buffer
-    const response = await context.fetch(upstream, {
+    const sending = context.fetch(upstream, {
       method: request.method,
       headers,
       body,
       signal: request.signal,
     })
+    // Battles only: a single-agent chat is never compared, so nothing reads its calls.
+    const capture =
+      context.captureGenerations && routeAssignment.modelSize === undefined
+        ? generationCapture(
+            db,
+            { userId: caller.id, ...assignment, generationID, model: routeAssignment.model.slug, endpoint },
+            context.now,
+          )
+        : undefined
+    capture?.request(budget.body)
+    const response = await sending
     // Awaited so a body that fails to read or parse still gets the 502 below.
     const refusal = {
       userId: caller.id,
@@ -686,7 +715,19 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       context.streamRecovery && requestedGenerationID
         ? replayRecorder(db, { userId: caller.id, ...assignment, generationID: requestedGenerationID }, context.now)
         : undefined
-    return await sanitizeAssignedResponse(response, refusal, reasoning, startedAt, recordMetrics, recovery)
+    const responseCapture = capture && {
+      record: capture.record,
+      finish: (state: CaptureState) => capture.finish(state, response.status),
+    }
+    return await sanitizeAssignedResponse(
+      response,
+      refusal,
+      reasoning,
+      startedAt,
+      recordMetrics,
+      recovery,
+      responseCapture,
+    )
   } catch (error) {
     if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")

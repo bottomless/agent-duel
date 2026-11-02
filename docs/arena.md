@@ -64,6 +64,14 @@ by a checksum manifest in the original collection. Research readers resolve that
 Deploy the control plane's updated arena-service dependency before shipping this desktop protocol;
 an older server refuses chunks, and the desktop retains them for automatic recovery after the server upgrade.
 
+The desktop's per-call copies are scrubbed, so in hosted battles the control plane keeps each
+contestant call as OpenRouter received it, with the real model, routing, cache key and restored
+reasoning, and its raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`).
+Messages, tools and images are stored once per account by content, because each call resends the
+whole history. Single-agent chats, keep-alive pings and the service's own comparison and metadata
+calls are not kept. BYOK leaves capture off: its store is on the voter's machine, and those fields
+name the model.
+
 `archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
 the previous cloud archive until its replacement arrives. Transcript and image archives are kept
 whole without the per-call artifact size budgets; disk errors fail the local write rather than
