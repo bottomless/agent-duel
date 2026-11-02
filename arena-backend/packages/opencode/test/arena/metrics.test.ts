@@ -8,7 +8,7 @@ import {
   wordCount,
 } from "@/arena/metrics"
 import { earlyResolution } from "@/arena/domain"
-import type { ChatDocument, ReviewEventDocument, RunDocument, TurnDocument } from "@/arena/records"
+import type { ChatDocument, GenerationDocument, ReviewEventDocument, RunDocument, TurnDocument } from "@/arena/records"
 
 function event(offsetMs: number, rest: Partial<ReviewEventDocument>): ReviewEventDocument {
   return {
@@ -680,4 +680,131 @@ describe("ArenaMetrics outcome", () => {
     // A race nobody finished is not a race won.
     expect(battle.sides.a?.finishedFirst).toBeUndefined()
   })
+
+  test("leaves the model out of a battle that was never revealed, not an assignment ID", () => {
+    const turn = turnFor("a")
+    // A discard before either side showed output records no models on the placement.
+    turn.placement.a = {
+      assignmentID: "aa4ac6b3-d1b8-4f00-8000-000000000000",
+      requestedReasoning: {},
+      enforcedReasoning: {},
+    }
+    turn.placement.b = {
+      assignmentID: "bb4ac6b3-d1b8-4f00-8000-000000000000",
+      requestedReasoning: {},
+      enforcedReasoning: {},
+    }
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn,
+      runs: [runFor("a"), runFor("b")],
+      generations: [],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.modelPair).toEqual([])
+    expect(battle.sides.a).not.toHaveProperty("model")
+    expect(battle.sides.b).not.toHaveProperty("model")
+    expect(battleFor("a").sides.a?.model).toBe("Contestant")
+  })
+
+  test("counts retried attempts and refused responses, and times the first token from a real one", () => {
+    const a = { ...runFor("a"), telemetryVersion: 1 }
+    a.retries = [1, 2].map((attemptIndex) => ({
+      requestID: "request",
+      generationID: `gen-${attemptIndex}`,
+      retryParentID: `gen-${attemptIndex - 1}`,
+      attemptIndex,
+      observedAt: new Date(attemptIndex),
+    }))
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn: turnFor("a"),
+      runs: [a, { ...runFor("b"), telemetryVersion: 1 }],
+      generations: [
+        generationFor("gen-0", 0, 5, 500),
+        generationFor("gen-1", 100, 104, 500),
+        generationFor("gen-2", 200, 1200, 200),
+      ],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.sides.a).toMatchObject({ retries: 2, providerErrors: 2, llmCalls: 3, ttftMs: 1000 })
+    expect(battle.sides.b).toMatchObject({ retries: 0, providerErrors: 0, llmCalls: 0 })
+  })
+
+  test("rebuilds an old row: refusals count, the unknown retry count stays out", () => {
+    // Before the fix a refused attempt was saved as completed (no `error`) and every attempt had its
+    // own request ID, so `run.retries` is empty whatever happened.
+    const legacy = (id: string, startedAt: number, status: number) => {
+      const { error: _error, ...generation } = generationFor(id, startedAt, startedAt + 5, status)
+      return generation as GenerationDocument
+    }
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn: turnFor("a"),
+      runs: [runFor("a"), runFor("b")],
+      generations: [legacy("gen-0", 0, 500), legacy("gen-1", 100, 500), legacy("gen-2", 200, 200)],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.sides.a).toMatchObject({ providerErrors: 2, llmCalls: 3 })
+    // Without request kinds the title request cannot be told from the contestant's first step.
+    expect(battle.sides.a).not.toHaveProperty("ttftMs")
+    expect(battle.sides.a).not.toHaveProperty("retries")
+    expect(battle.sides.b).not.toHaveProperty("retries")
+  })
+
+  test("does not count a wait on the user's network as a provider error", () => {
+    const offline = { ...generationFor("gen-0", 0, 5, 503), wait: "network" as const }
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn: turnFor("a"),
+      runs: [{ ...runFor("a"), telemetryVersion: 1 }, runFor("b")],
+      generations: [offline, generationFor("gen-1", 100, 104, 500), generationFor("gen-2", 200, 1200, 200)],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.sides.a).toMatchObject({ providerErrors: 1, retries: 0, llmCalls: 3, ttftMs: 1000 })
+  })
+
+  test("times the first token of the contestant's first step, not the title request before it", () => {
+    const title = { ...generationFor("gen-0", 0, 300, 200), requestKind: "utility" as const }
+    const child = { ...generationFor("gen-2", 50, 60, 200), sessionID: "ses-child" }
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn: turnFor("a"),
+      runs: [{ ...runFor("a"), telemetryVersion: 1 }, runFor("b")],
+      generations: [title, generationFor("gen-1", 10, 2010, 200), child],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.sides.a?.ttftMs).toBe(2000)
+  })
 })
+
+function generationFor(id: string, startedAt: number, firstTokenAt: number, status: number) {
+  return {
+    _id: id,
+    runID: "run-a",
+    rootSessionID: "ses-a",
+    sessionID: "ses-a",
+    callIndex: Number(id.at(-1)),
+    requestID: "request",
+    assignmentID: "assignment",
+    requestedModel: "contestant",
+    requestedReasoning: {},
+    enforcedReasoning: {},
+    classification: "root",
+    startedAt: new Date(startedAt),
+    firstTokenAt: new Date(firstTokenAt),
+    routing: { status, headers: {} },
+    requestKind: "generation",
+    ...(status >= 400 ? { error: "Arena contestant request failed" } : {}),
+  } as GenerationDocument
+}

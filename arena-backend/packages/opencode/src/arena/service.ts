@@ -174,7 +174,7 @@ import type {
   WarmPreparation,
   WarmWorktreeRecord,
 } from "./records"
-import { battleMetricsSchemaVersion, reviewFlushLimit } from "./records"
+import { battleMetricsSchemaVersion, reviewFlushLimit, runTelemetryVersion } from "./records"
 import { enabled, recoverOnce, registry, setTelemetry, store as runtimeStore } from "./runtime"
 import { waitForInitialDispatch } from "./dispatch"
 import { create as createTelemetry } from "./telemetry"
@@ -218,6 +218,7 @@ import {
   terminalOpenUnder,
 } from "./services"
 import { buildEnvironmentTransition } from "./transition"
+import { forgetScheduledRetry } from "./engine-runtime/request"
 import { createIgnoredJournal, createSlotWatch, watcherBackendUnavailable, type JournalMark } from "./environment-watch"
 import type { Store } from "./mongo"
 
@@ -4286,6 +4287,8 @@ export const layer: Layer.Layer<
         (yield* startedSystem(run.worktree.directory, run.sessionID, storedRun?.promptMessageID)) ??
         contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID))
       if (hostDirectory !== run.worktree.directory) promptHosts.set(run.sessionID, hostDirectory)
+      // The failed step may have decided on a retry it never sent; this run's next request is new.
+      if (!prompt) forgetScheduledRetry(run.sessionID)
       let result = yield* Effect.exit(
         inDirectory(
           hostDirectory,
@@ -4440,6 +4443,10 @@ export const layer: Layer.Layer<
         ],
         { concurrency: 2, discard: true },
       )
+      // A cancel during a retry wait drops that retry. Whatever runs next (a Send now steer's loop, a
+      // resume) is a new request. Cleared here, not before the next loop: by then the steer's own
+      // prompt may already be running and have decided on a retry of its own.
+      for (const id of [sessionID, ...children]) forgetScheduledRetry(id)
     })
 
     const cancelUntilSettled = Effect.fn("Arena.cancelUntilSettled")(function* (
@@ -5154,6 +5161,7 @@ export const layer: Layer.Layer<
           durationMs: null,
           selectable: false,
           retries: [],
+          telemetryVersion: runTelemetryVersion,
           permissionOutcomes: [],
           autoAccept: currentTurn?.autoAccept ?? autoAccept,
           questionOutcomes: [],

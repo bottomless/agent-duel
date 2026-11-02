@@ -1,9 +1,9 @@
 import { createHash } from "crypto"
 import { describe, expect, test } from "bun:test"
-import { create } from "@/arena/telemetry"
+import { carriesModelOutput, create } from "@/arena/telemetry"
 import { Store } from "@/arena/mongo"
 import type { GenerationDocument, GenerationRetry } from "@/arena/records"
-import type { RequestMetadata } from "@/arena/proxy"
+import { ArenaWaitError, type RequestMetadata } from "@/arena/proxy"
 
 function store(value: object): Store {
   return Object.assign(Object.create(Store.prototype), value)
@@ -392,6 +392,144 @@ describe("ArenaTelemetry", () => {
         observedAt: second.startedAt,
       },
     ])
+  })
+
+  test("keeps a refused attempt's error body out of the first token, and user-side waits out of the retries", async () => {
+    const generations: GenerationDocument[] = []
+    const updates = new Map<string, Record<string, unknown>>()
+    const retries: GenerationRetry[] = []
+    const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
+      saveGeneration: async (input: GenerationDocument) => {
+        generations.push(input)
+        return input
+      },
+      updateGeneration: async (id: string, update: Record<string, unknown>) => {
+        updates.set(id, { ...updates.get(id), ...update })
+      },
+      generationsForRuns: async () => generations,
+      recordGenerationRetry: async (_runID: string, retry: GenerationRetry) => {
+        retries.push(retry)
+      },
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const attempt = (index: number): RequestMetadata => ({
+      assignment: {
+        runID: "run-refused",
+        rootSessionID: "session-refused",
+        scopeID: "turn-refused",
+        assignmentID: "assignment-refused",
+        telemetry: true,
+      },
+      generationID: `gen_0000000000000000000000000000001${index}`,
+      requestID: "00000000-0000-4000-8000-000000000010",
+      sessionID: "session-refused",
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      requestKind: "generation",
+      startedAt: new Date(Date.UTC(2026, 9, 30, 12, 0, index)),
+    })
+    const refuse = async (metadata: RequestMetadata, status: number, error: unknown) => {
+      await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+      await telemetry.response?.({ metadata, status, headers: {}, receivedAt: new Date() })
+      telemetry.rawChunk?.(metadata, '{"error":{"message":"Arena contestant request failed"}}')
+      await telemetry.error?.(metadata, error, new Date())
+    }
+
+    // Offline, signed out, a provider error, then a success: one retry, not three.
+    await refuse(attempt(0), 503, new ArenaWaitError("network"))
+    await refuse(attempt(1), 401, new ArenaWaitError("sign-in"))
+    await refuse(attempt(2), 500, new Error("Arena upstream status 500"))
+    await telemetry.start?.(attempt(3), { model: "contestant", messages: [] })
+
+    expect(updates.get(attempt(0).generationID)).toMatchObject({ wait: "network" })
+    expect(updates.get(attempt(1).generationID)).toMatchObject({ wait: "sign-in" })
+    expect(updates.get(attempt(2).generationID)).not.toHaveProperty("wait")
+    for (const index of [0, 1, 2]) {
+      expect(updates.get(attempt(index).generationID)).toMatchObject({ error: "Arena contestant request failed" })
+      expect(updates.get(attempt(index).generationID)).not.toHaveProperty("firstTokenAt")
+    }
+    expect(generations.map((generation) => generation.retryParentID)).toEqual([
+      undefined,
+      attempt(0).generationID,
+      attempt(1).generationID,
+      attempt(2).generationID,
+    ])
+    expect(generations.every((generation) => generation.requestKind === "generation")).toBe(true)
+    // The waits are not attempts: the provider error is attempt 0 and its retry attempt 1.
+    expect(retries.map((retry) => [retry.generationID, retry.attemptIndex])).toEqual([[attempt(3).generationID, 1]])
+  })
+
+  test("knows model output from the other lines of every stream shape", () => {
+    const data = (value: unknown) => `data: ${JSON.stringify(value)}\n`
+    for (const chunk of [
+      data({ choices: [{ index: 0, delta: { content: "Hi" } }] }),
+      data({ choices: [{ index: 0, delta: { reasoning: "Thinking" } }] }),
+      data({ choices: [{ index: 0, delta: { reasoning_details: [{ type: "reasoning.text", text: "x" }] } }] }),
+      data({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { name: "read" } }] } }] }),
+      data({ type: "response.output_text.delta", delta: "Hi" }),
+      data({ type: "response.reasoning_summary_text.delta", delta: "x" }),
+      data({ type: "response.function_call_arguments.delta", delta: '{"' }),
+      data({ type: "response.output_item.added", item: { type: "function_call", name: "read" } }),
+      JSON.stringify({ choices: [{ message: { content: "Hi" } }] }),
+      JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: "Hi" }] }] }),
+    ])
+      expect(carriesModelOutput(chunk)).toBe(true)
+    for (const chunk of [
+      "\n",
+      ": OPENROUTER PROCESSING\n",
+      ": arena-heartbeat\n",
+      "data: [DONE]\n",
+      data({ choices: [{ index: 0, delta: { role: "assistant", content: "" } }] }),
+      data({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1 } }),
+      data({ type: "response.created", response: { id: "r" } }),
+      data({ type: "response.output_item.added", item: { type: "message", content: [] } }),
+      data({ error: { message: "Arena contestant request failed" } }),
+    ])
+      expect(carriesModelOutput(chunk)).toBe(false)
+  })
+
+  test("times the first token from the first chunk with model output", async () => {
+    const updates = new Map<string, Record<string, unknown>>()
+    const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
+      saveGeneration: async (input: GenerationDocument) => input,
+      updateGeneration: async (id: string, update: Record<string, unknown>) => {
+        updates.set(id, { ...updates.get(id), ...update })
+      },
+      generationsForRuns: async () => [],
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const metadata: RequestMetadata = {
+      assignment: {
+        runID: "run-first-token",
+        rootSessionID: "session-first-token",
+        scopeID: "turn-first-token",
+        assignmentID: "assignment-first-token",
+        telemetry: true,
+      },
+      generationID: "gen_00000000000000000000000000000020",
+      requestID: "00000000-0000-4000-8000-000000000020",
+      sessionID: "session-first-token",
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      startedAt: new Date(),
+    }
+    await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+    await telemetry.response?.({ metadata, status: 200, headers: {}, receivedAt: new Date() })
+    telemetry.rawChunk?.(metadata, "\n")
+    telemetry.rawChunk?.(metadata, ": arena-heartbeat\n")
+    telemetry.rawChunk?.(metadata, 'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}\n')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const beforeOutput = Date.now()
+    telemetry.rawChunk?.(metadata, 'data: {"choices":[{"index":0,"delta":{"content":"Hi"}}]}\n')
+    await telemetry.complete?.(metadata, new Date())
+    const firstTokenAt = updates.get(metadata.generationID)?.firstTokenAt
+    expect(firstTokenAt).toBeInstanceOf(Date)
+    expect((firstTokenAt as Date).getTime()).toBeGreaterThanOrEqual(beforeOutput)
   })
 
   test("continues a run's call numbering from its stored generations after an engine restart", async () => {

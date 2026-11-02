@@ -13,6 +13,7 @@ export function requestHeaders(input: {
   readonly kind: "primary" | "compaction" | "title" | "generate"
   readonly parentSessionID?: string
   readonly rootSessionID?: string
+  readonly requestID?: string
 }) {
   return {
     "x-session-affinity": input.sessionID,
@@ -21,9 +22,69 @@ export function requestHeaders(input: {
     "x-arena-root-session-id": input.rootSessionID ?? input.sessionID,
     ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
     ...(input.parentSessionID ? { "x-arena-parent-session-id": input.parentSessionID } : {}),
-    "x-arena-request-id": randomUUID(),
+    "x-arena-request-id": input.requestID ?? randomUUID(),
     "x-arena-generation-classification": classification(input.kind),
   }
+}
+
+/**
+ * One request ID per logical model request. Core rebuilds a step's request for each retry and runs
+ * `model.request` again, and telemetry counts a retry only when an ID arrives twice, so a fresh ID
+ * per call recorded no retries at all. A primary request that follows a scheduled retry reuses the ID
+ * of the primary request it replaces.
+ *
+ * Compaction resends its own prepared request, headers included, on each of its retries, so it never
+ * needs the mark: every compaction gets a fresh ID, and it ends the primary request before it (the
+ * step restarts under a new assistant message after a summary). Title and generate requests always
+ * get a fresh ID and leave the session's state alone.
+ *
+ * The mark is set when Core decides to retry, and a decision is not always followed by the retried
+ * request: a cancel can end the wait, and a step can still fail on an interrupted tool. So the mark
+ * lapses once its wait is over by `RETRY_MARK_SLACK_MS`, and whatever starts the session again inside
+ * that window without the retried request (a cancel, a manual Retry, a new subagent task) clears it
+ * with `reset`. New input to a busy session (a steer) does not: the retry still goes out.
+ */
+export function requestIdentity(now: () => number = Date.now) {
+  const lastPrimary = new Map<string, string>()
+  const retrying = new Map<string, number>()
+  return {
+    next(sessionID: string, kind: "primary" | "compaction" | "title" | "generate") {
+      if (kind === "title" || kind === "generate") return randomUUID()
+      const previous = lastPrimary.get(sessionID)
+      const until = retrying.get(sessionID)
+      retrying.delete(sessionID)
+      if (kind === "compaction") {
+        lastPrimary.delete(sessionID)
+        return randomUUID()
+      }
+      const retried = until !== undefined && now() <= until
+      const requestID = retried && previous !== undefined ? previous : randomUUID()
+      lastPrimary.set(sessionID, requestID)
+      return requestID
+    },
+    /** Core decided to send the session's last primary request again after `delayMs`. */
+    retryScheduled(sessionID: string, delayMs: number) {
+      if (lastPrimary.has(sessionID)) retrying.set(sessionID, now() + Math.max(0, delayMs) + RETRY_MARK_SLACK_MS)
+    },
+    /** The session starts again without the retried request, so the next request is a new one. */
+    reset(sessionID: string) {
+      retrying.delete(sessionID)
+    },
+  }
+}
+
+/**
+ * How long after its wait a retry mark still claims the next request. The resend first reloads the
+ * session's context, which takes well under this; a decision that was never sent lapses after it.
+ */
+export const RETRY_MARK_SLACK_MS = 30_000
+
+/** The engine's request IDs. Session IDs are unique across locations, so one instance serves them all. */
+export const sessionRequestIDs = requestIdentity()
+
+/** Call before resuming a session that failed, so its next request does not count as a retry. */
+export function forgetScheduledRetry(sessionID: string) {
+  sessionRequestIDs.reset(sessionID)
 }
 
 export function promptCacheKey(sessionID: string) {

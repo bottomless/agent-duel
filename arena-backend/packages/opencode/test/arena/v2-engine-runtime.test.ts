@@ -22,6 +22,8 @@ import {
   previewEnvironment,
   promptCacheKey,
   requestHeaders,
+  requestIdentity,
+  RETRY_MARK_SLACK_MS,
   resolveAssignment,
   requestNeedsCompaction,
   requestTokenEstimate,
@@ -58,6 +60,67 @@ describe("Arena v2 engine runtime", () => {
     expect(headers["x-arena-request-id"]).toMatch(/^[0-9a-f-]{36}$/)
     expect(promptCacheKey("ses_" + "a".repeat(64))).toBe("a".repeat(64))
     expect(CONTESTANT_IDENTITY).toContain("identity is hidden")
+  })
+
+  it("keeps one request ID across the retries of a request", () => {
+    const ids = requestIdentity()
+    const first = ids.next("ses_a", "primary")
+    expect(ids.next("ses_a", "primary")).not.toBe(first)
+    const failed = ids.next("ses_a", "primary")
+    ids.retryScheduled("ses_a", 2_000)
+    // A title request may run while the step waits; it neither takes nor clears the retry.
+    expect(ids.next("ses_a", "title")).not.toBe(failed)
+    expect(ids.next("ses_b", "primary")).not.toBe(failed)
+    expect(ids.next("ses_a", "primary")).toBe(failed)
+    ids.retryScheduled("ses_a", 2_000)
+    expect(ids.next("ses_a", "primary")).toBe(failed)
+    // Retried once, then sent again without a retry: a new logical request.
+    expect(ids.next("ses_a", "primary")).not.toBe(failed)
+
+    // The step compacted before its retried request, so the primary request starts fresh.
+    const beforeCompaction = ids.next("ses_a", "primary")
+    ids.retryScheduled("ses_a", 2_000)
+    ids.next("ses_a", "compaction")
+    expect(ids.next("ses_a", "primary")).not.toBe(beforeCompaction)
+    // Nothing to retry in a session that has sent nothing.
+    ids.retryScheduled("ses_new", 2_000)
+    expect(ids.next("ses_new", "primary")).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it("does not merge a request into a retry that was decided but never sent", () => {
+    const ids = requestIdentity()
+    // Compaction resends its own request on a retry, without `model.request`. Its retry decision
+    // must not make the next compaction, or the primary request after it, look like a resend.
+    const primary = ids.next("ses_a", "primary")
+    const compaction = ids.next("ses_a", "compaction")
+    ids.retryScheduled("ses_a", 2_000)
+    expect(ids.next("ses_a", "compaction")).not.toBe(compaction)
+    ids.retryScheduled("ses_a", 2_000)
+    expect(ids.next("ses_a", "primary")).not.toBe(primary)
+
+    // A step decides on a retry, then fails on an interrupted tool, or a Send now cancels the wait.
+    // The manual Retry and the cancel (`cancelRun` in service.ts) clear the decision first.
+    const interrupted = ids.next("ses_b", "primary")
+    ids.retryScheduled("ses_b", 2_000)
+    ids.reset("ses_b")
+    expect(ids.next("ses_b", "primary")).not.toBe(interrupted)
+  })
+
+  it("keeps a retry linked through a steer, and lets an unsent retry lapse", () => {
+    let clock = 0
+    const ids = requestIdentity(() => clock)
+    // A steer queued during the wait fires no reset for a root session: the retry still goes out.
+    const failed = ids.next("ses_a", "primary")
+    ids.retryScheduled("ses_a", 40_000)
+    clock += 40_500
+    expect(ids.next("ses_a", "primary")).toBe(failed)
+
+    // A step decided on a retry and then failed; nothing cleared the mark. Long after its wait the
+    // next request in the session is a new one.
+    const abandoned = ids.next("ses_a", "primary")
+    ids.retryScheduled("ses_a", 2_000)
+    clock += 2_000 + RETRY_MARK_SLACK_MS + 1
+    expect(ids.next("ses_a", "primary")).not.toBe(abandoned)
   })
 
   it("keeps automatic permission approval scoped to a session", () => {
@@ -348,6 +411,7 @@ describe("Arena v2 engine runtime", () => {
     let idleMode = false
     let idleRequests = 0
     let providerRuns = 0
+    let refusals = 0
     let executionEnvironment: ReturnType<typeof gateToolExecution> | undefined
     let server: ReturnType<typeof Bun.serve> | undefined
     for (let attempt = 0; attempt < 20 && !server; attempt++) {
@@ -361,6 +425,10 @@ describe("Arena v2 engine runtime", () => {
               headers: new Headers(request.headers),
               body: (await request.clone().json()) as Record<string, unknown>,
             })
+            if (refusals > 0) {
+              refusals--
+              return Response.json({ error: { message: "upstream failed", code: 500 } }, { status: 500 })
+            }
             if (idleMode && idleRequests++ === 0) {
               const body = new ReadableStream<Uint8Array>({
                 start(controller) {
@@ -537,6 +605,25 @@ describe("Arena v2 engine runtime", () => {
             message.content.some((part) => part.type === "text" && part.text.includes("Arena core reply")),
         ),
       ).toBe(true)
+
+      // Core rebuilds the request for each retry; every attempt of one step carries one request ID,
+      // which is what telemetry counts retries by. The next step gets a new one.
+      idleMode = false
+      const sent = requests.length
+      refusals = 2
+      await Effect.runPromise(sessions.prompt({ sessionID: info.id, text: "retry twice", resume: true }))
+      await Effect.runPromise(sessions.wait(info.id).pipe(Effect.timeout("15 seconds")))
+      const attempts = requests
+        .slice(sent)
+        .filter((entry) => entry.headers.get("x-arena-generation-classification") === "generation")
+        .map((entry) => entry.headers.get("x-arena-request-id"))
+      expect(attempts).toHaveLength(3)
+      expect(new Set(attempts).size).toBe(1)
+      await Effect.runPromise(sessions.prompt({ sessionID: info.id, text: "no retry", resume: true }))
+      await Effect.runPromise(sessions.wait(info.id).pipe(Effect.timeout("10 seconds")))
+      const next = requests.at(-1)?.headers.get("x-arena-request-id")
+      expect(next).toMatch(/^[0-9a-f-]{36}$/)
+      expect(next).not.toBe(attempts[0])
     } finally {
       if (infoForTest !== "pending") clearArenaAutoAccept(infoForTest)
       if (infoForTest !== "pending") clearToolExecutionEnvironment(SessionID.make(infoForTest))
