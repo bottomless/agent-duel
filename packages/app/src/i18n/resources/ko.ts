@@ -1396,6 +1396,9 @@ export const ko: TranslationResources = {
   arenaByok: {
     keyMissing: "배틀을 시작하려면 설정에서 OpenRouter 키를 추가하세요.",
   },
+  battleStart: {
+    failed: "배틀을 시작하지 못했습니다. 다시 시도하세요.",
+  },
   battleRepository: {
     title: "Agent Duel에는 커밋이 필요합니다",
     notGitMessage: "빈 첫 커밋으로 Git 저장소를 만들까요?",

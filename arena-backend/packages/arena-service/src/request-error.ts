@@ -83,6 +83,29 @@ export function readNetworkUnavailable(body: string | undefined) {
   return isRecord(payload) && isRecord(payload.error) && payload.error.type === networkUnavailableType
 }
 
+// A contestant request answers 401 with this when the control plane refused the user's session,
+// which only a new sign-in fixes. The engine waits for it, as for the network. The daemon's runtime
+// proxy writes the same body (`packages/server/src/server/accounts/arena-runtime-router.ts`).
+export const sessionRejectedType = "arena_session_rejected"
+
+/** The retry status while a contestant waits for a new sign-in. The app labels it by this text. */
+export const SESSION_REJECTED_RETRY_MESSAGE = "Waiting for sign-in"
+
+export function sessionRejectedError() {
+  return { error: { message: "Arena session was rejected", type: sessionRejectedType } }
+}
+
+export function readSessionRejected(body: string | undefined) {
+  if (!body) return false
+  let payload: unknown
+  try {
+    payload = JSON.parse(body)
+  } catch {
+    return false
+  }
+  return isRecord(payload) && isRecord(payload.error) && payload.error.type === sessionRejectedType
+}
+
 export function paymentMessage(status: number | undefined, body: string | undefined) {
   if (status !== 402) return
   return paymentMessages[readPaymentError(body) ?? "arena_payment_required"]

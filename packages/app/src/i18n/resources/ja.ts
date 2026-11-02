@@ -1404,6 +1404,9 @@ export const ja: TranslationResources = {
   arenaByok: {
     keyMissing: "バトルを開始するには、設定で OpenRouter キーを追加してください。",
   },
+  battleStart: {
+    failed: "バトルを開始できませんでした。もう一度お試しください。",
+  },
   battleRepository: {
     title: "Agent Duel にはコミットが必要です",
     notGitMessage: "空の最初のコミットで Git リポジトリを作成しますか？",

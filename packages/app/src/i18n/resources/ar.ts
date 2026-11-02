@@ -1387,6 +1387,9 @@ export const ar: TranslationResources = {
   arenaByok: {
     keyMissing: "أضف مفتاح OpenRouter في الإعدادات لبدء معركة.",
   },
+  battleStart: {
+    failed: "تعذّر بدء المعركة. حاول مرة أخرى.",
+  },
   battleRepository: {
     title: "يحتاج Agent Duel إلى commit",
     notGitMessage: "هل تريد إنشاء مستودع Git مع commit أول فارغ؟",

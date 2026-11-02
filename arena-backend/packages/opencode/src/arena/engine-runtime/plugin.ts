@@ -16,7 +16,11 @@ import { promptCacheKey, requestHeaders, requestNeedsCompaction } from "./reques
 import { ArenaEngineSandbox, previewEnvironment } from "./sandbox"
 import type { ToolExecutionGate } from "./gate"
 import { getArenaAutoAccept } from "./auto-accept"
-import { readNetworkUnavailable } from "@agent-duel/arena-service/request-error"
+import {
+  readNetworkUnavailable,
+  readSessionRejected,
+  SESSION_REJECTED_RETRY_MESSAGE,
+} from "@agent-duel/arena-service/request-error"
 import {
   toolExecutionProvider,
   toolExecutionWorktree,
@@ -75,6 +79,15 @@ function arenaNetworkUnavailable(error: {
   readonly response?: { readonly body: string }
 }) {
   return error.type === "provider.internal" && error.status === 503 && readNetworkUnavailable(error.response?.body)
+}
+
+// The control plane refused the user's session. Only a new sign-in fixes it, and the daemon then
+// forwards the new session, so the contestant waits as it does for the network.
+function arenaSessionRejected(error: {
+  readonly status?: number
+  readonly response?: { readonly body: string }
+}) {
+  return error.status === 401 && readSessionRejected(error.response?.body)
 }
 
 function stagedTool(tool: string, input: unknown): ToolExecution {
@@ -278,12 +291,13 @@ function install(context: Context, options: InstalledOptions) {
         Effect.sync(() => {
           if (!arenaSession(options, String(event.sessionID))) return
           const offline = arenaNetworkUnavailable(event.error)
-          if (offline) {
+          const signedOut = !offline && arenaSessionRejected(event.error)
+          if (offline || signedOut) {
             event.decision = {
               retry: true,
               delay: Math.min(Math.max(event.decision.retry ? event.decision.delay : 2_000, 2_000), 10_000),
               persistent: true,
-              message: "Waiting for network",
+              message: offline ? "Waiting for network" : SESSION_REJECTED_RETRY_MESSAGE,
             }
             return
           }

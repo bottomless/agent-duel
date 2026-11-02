@@ -49,6 +49,7 @@ import {
 import { ArenaPathList } from "./path-list";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { useArenaDiffLayout } from "./diff-layout";
+import { noticeAccountSessionRejection } from "@/accounts/session-rejected";
 import { DiffLayoutControl } from "./diff-layout-control";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { VerdictBody } from "./verdict-body";
@@ -524,7 +525,9 @@ function ExpandedBattleSummary({
     onSettled: (_data, _error, _variables, resume) => resume?.(),
     mutationFn: async () => {
       if (!client) throw new Error("Arena daemon connection is unavailable");
-      return client.arenaRetryComparison(agentId, item.id);
+      return client
+        .arenaRetryComparison(agentId, item.id)
+        .catch((error: unknown) => Promise.reject(noticeAccountSessionRejection(error)));
     },
     onSuccess: (snapshot) => {
       queryClient.setQueryData(turnQueryKey, snapshot);

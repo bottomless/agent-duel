@@ -1426,6 +1426,9 @@ export const es: TranslationResources = {
   arenaByok: {
     keyMissing: "Añade tu clave de OpenRouter en Ajustes para iniciar una batalla.",
   },
+  battleStart: {
+    failed: "No se pudo iniciar la batalla. Inténtalo de nuevo.",
+  },
   battleRepository: {
     title: "Agent Duel necesita un commit",
     notGitMessage: "¿Crear un repositorio Git con un primer commit vacío?",

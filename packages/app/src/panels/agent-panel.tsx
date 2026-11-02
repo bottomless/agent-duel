@@ -178,6 +178,7 @@ import {
   useStartingArenaBattle,
 } from "@/arena/use-arena-session";
 import type { MessagePayload } from "@/composer/types";
+import { composerWorkspaceAttachment } from "@/composer/attachments/workspace";
 import { useToast } from "@/contexts/toast-context";
 import { getForkSourceAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
 import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
@@ -2378,11 +2379,24 @@ function ActiveAgentComposer({
           prompt: payload.text,
           attachments: payload.attachments,
         });
+      } catch (error) {
+        // This composer unmounts while the battle starts, so its own restore of the prompt and
+        // its error text are lost. Put the prompt back in the chat's draft, which the remounted
+        // composer reads, and say that it did not start (the start mutation words the error
+        // without naming a model).
+        if (!agentInputDraft.textSource.getSnapshot()) {
+          agentInputDraft.replaceText(payload.text);
+          agentInputDraft.setAttachments(
+            composerWorkspaceAttachment.userAttachmentsOnly(payload.attachments),
+          );
+        }
+        toast.error(toErrorMessage(error));
+        throw error;
       } finally {
         release();
       }
     },
-    [arenaStart],
+    [agentInputDraft, arenaStart, toast],
   );
 
   const { battleIsActive, canQueueNextTurn, replyableBattleTurn, replyActions } = useMemo(

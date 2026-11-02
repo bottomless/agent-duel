@@ -8,6 +8,7 @@ import type {
   AcceptTermsRequest,
 } from "@getpaseo/protocol/accounts/schemas";
 import { LegalCheckbox } from "./legal-checkbox";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FormTextInput } from "@/components/ui/form-field";
 import { githubMark, googleMark } from "./provider-marks";
@@ -146,9 +147,11 @@ export interface SignInScreenProps {
   endpoint: AccountsEndpoint;
   methods: readonly SignInMethod[];
   documents: LegalDocuments;
+  /** The stored session was refused as expired or revoked. */
+  expired?: boolean;
 }
 
-export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps) {
+export function SignInScreen({ endpoint, methods, documents, expired }: SignInScreenProps) {
   const [accepted, setAccepted] = useState(false);
   const acceptance = useMemo<AcceptTermsRequest | null>(
     () =>
@@ -244,6 +247,15 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
               Two blinded agents answer every prompt. You decide which one wins.
             </Text>
           </View>
+
+          {expired ? (
+            <Alert
+              variant="warning"
+              title="Your session expired"
+              description="Sign in again to continue. Your chats and unsent messages are kept."
+              testID="sign-in-session-expired"
+            />
+          ) : null}
 
           {methods.length === 0 ? (
             <Text style={styles.notice} testID="sign-in-unconfigured">

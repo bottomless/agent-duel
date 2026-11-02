@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { POSSIBLY_STALLED_AFTER_MS } from "./run-liveness";
-import { arenaRunElapsedMs, arenaRunFilesLabel, arenaRunStatusLabel } from "./run-stats";
+import {
+  arenaRunAccountWait,
+  arenaRunElapsedMs,
+  arenaRunFilesLabel,
+  arenaRunStatusLabel,
+  arenaRunWaitsForSignIn,
+} from "./run-stats";
 
 const NOW = Date.parse("2026-09-03T10:05:00.000Z");
 const STARTED_AT = "2026-09-03T10:00:00.000Z";
@@ -157,6 +163,34 @@ describe("arenaRunStatusLabel", () => {
     expect(
       arenaRunStatusLabel({ ...quiet, status: { type: "retry" }, questions: [{ id: "q1" }] }, NOW),
     ).toBe("Waiting for your answer");
+  });
+
+  it("names a contestant waiting for a new sign-in, and only that wait", () => {
+    const waiting = run({
+      startedAt: STARTED_AT,
+      lastEventAt: STARTED_AT,
+      status: { type: "retry", message: "Waiting for sign-in", next: NOW },
+    });
+    expect(arenaRunStatusLabel(waiting, NOW)).toBe("Waiting for sign-in");
+    expect(arenaRunWaitsForSignIn(waiting)).toBe(true);
+    expect(
+      arenaRunWaitsForSignIn({
+        ...waiting,
+        status: { type: "retry", message: "Waiting for network", next: NOW },
+      }),
+    ).toBe(false);
+    expect(arenaRunWaitsForSignIn({ ...waiting, runState: "error" })).toBe(false);
+  });
+
+  it("tells the waits the app rechecks the session for apart", () => {
+    const waiting = (message: string) =>
+      run({ status: { type: "retry", message, next: NOW }, startedAt: STARTED_AT });
+    expect(arenaRunAccountWait(waiting("Waiting for sign-in"))).toBe("sign-in");
+    expect(arenaRunAccountWait(waiting("Waiting for network"))).toBe("network");
+    expect(arenaRunAccountWait(waiting("Arena contestant is retrying"))).toBeNull();
+    expect(
+      arenaRunAccountWait({ ...waiting("Waiting for network"), runState: "error" }),
+    ).toBeNull();
   });
 
   it("names the engine's offline wait instead of a retry", () => {

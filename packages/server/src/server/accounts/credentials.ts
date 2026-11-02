@@ -23,6 +23,20 @@ export interface ArenaCredentialsSnapshot {
 let current: ArenaCredentials | null = null;
 let version = 0;
 const runtimeCredentials = new Map<string, number>();
+/** The forwarded account session the control plane refused; see `rejectArenaSession`. */
+let rejectedToken: string | null = null;
+const rejectionListeners = new Set<(token: string) => void>();
+/** Asks the control plane whether a session is still live; installed by the accounts service. */
+let sessionVerifier: ((token: string) => Promise<ArenaSessionVerdict>) | null = null;
+const pendingVerifications = new Map<string, Promise<ArenaSessionVerdict>>();
+/** A session check that got no answer; the next check of that token waits until `retryAt`. */
+let failedVerification: { token: string; retryAt: number; delayMs: number } | null = null;
+const FIRST_CHECK_RETRY_MS = 2_000;
+const MAX_CHECK_RETRY_MS = 60_000;
+/** Arena requests answered as a refused session; see `arenaSessionRefusals`. */
+let refusals = 0;
+
+export type ArenaSessionVerdict = "rejected" | "accepted" | "unknown";
 
 interface CredentialsHandover {
   readonly arrived: Promise<void>;
@@ -37,6 +51,8 @@ let handover: CredentialsHandover | null = null;
 export function installArenaCredentials(credentials: ArenaCredentials): void {
   current = credentials;
   version += 1;
+  rejectedToken = null;
+  failedVerification = null;
   runtimeCredentials.clear();
   endArenaCredentialsHandover();
 }
@@ -94,6 +110,8 @@ export function replaceArenaCredentialsToken(token: string): void {
 export function clearArenaCredentials(): void {
   current = null;
   version += 1;
+  rejectedToken = null;
+  failedVerification = null;
   runtimeCredentials.clear();
   endArenaCredentialsHandover();
 }
@@ -123,6 +141,109 @@ export function issueArenaLaunchCredentials(
       controlPlaneUrl: `${daemonBaseUrl.replace(/\/$/, "")}/api/arena-runtime`,
     },
     version,
+  };
+}
+
+/**
+ * The control plane refused the forwarded account session. The token still verifies locally until
+ * its own expiry, so only the control plane can say it was revoked or expired there. Holds until
+ * another session replaces the forwarded one, or the control plane accepts this one again.
+ */
+export function rejectArenaSession(token: string): void {
+  if (current?.mode !== "hosted" || current.token !== token || rejectedToken === token) return;
+  rejectedToken = token;
+  for (const listener of rejectionListeners) listener(token);
+}
+
+/** The control plane accepted this session, so an earlier refusal of it no longer holds. */
+export function acceptArenaSession(token: string): void {
+  if (rejectedToken === token) rejectedToken = null;
+}
+
+export function setArenaSessionVerifier(
+  verifier: ((token: string) => Promise<ArenaSessionVerdict>) | null,
+): void {
+  sessionVerifier = verifier;
+}
+
+/** A session check's outcome for a forwarded 401; "replaced" means a newer session took over. */
+export type ArenaUnauthorizedVerdict = ArenaSessionVerdict | "replaced";
+
+function isCurrentHostedToken(token: string): boolean {
+  return current?.mode === "hosted" && current.token === token;
+}
+
+/**
+ * A forwarded request came back 401. The control plane passes an upstream model's 401 through
+ * unchanged, so a 401 alone does not mean the session is gone: ask the control plane's session
+ * route, and reject the session only when that refuses it too. Concurrent checks of one token
+ * share one request. A check that gets no answer is "unknown" and is not repeated for that token
+ * until a backoff (2 s, doubling to 60 s) passes; it never rejects the session. A token that a
+ * newer session replaced, before or during the check, is "replaced": the request can go again
+ * with the new one.
+ */
+export async function confirmArenaSessionRejection(
+  token: string,
+): Promise<ArenaUnauthorizedVerdict> {
+  if (current?.mode === "hosted" && current.token !== token) return "replaced";
+  if (isArenaSessionRejected() && isCurrentHostedToken(token)) return "rejected";
+  const verdict = await checkArenaSession(token);
+  if (verdict !== "accepted" && current?.mode === "hosted" && current.token !== token) {
+    return "replaced";
+  }
+  return verdict;
+}
+
+function checkArenaSession(token: string): Promise<ArenaSessionVerdict> {
+  const pending = pendingVerifications.get(token);
+  if (pending) return pending;
+  const verify = sessionVerifier;
+  if (!verify) return Promise.resolve("unknown");
+  if (failedVerification?.token === token && Date.now() < failedVerification.retryAt) {
+    return Promise.resolve("unknown");
+  }
+  const check = verify(token)
+    .catch((): ArenaSessionVerdict => "unknown")
+    .then((verdict): ArenaSessionVerdict => {
+      if (verdict === "unknown") {
+        const delayMs =
+          failedVerification?.token === token
+            ? Math.min(failedVerification.delayMs * 2, MAX_CHECK_RETRY_MS)
+            : FIRST_CHECK_RETRY_MS;
+        failedVerification = { token, retryAt: Date.now() + delayMs, delayMs };
+        return "unknown";
+      }
+      if (failedVerification?.token === token) failedVerification = null;
+      if (verdict === "rejected") rejectArenaSession(token);
+      return verdict;
+    })
+    .finally(() => pendingVerifications.delete(token));
+  pendingVerifications.set(token, check);
+  return check;
+}
+
+/** Counts an Arena request answered as a refused session. */
+export function noteArenaSessionRefusal(): void {
+  refusals += 1;
+}
+
+/**
+ * How many Arena requests have been answered as a refused session. A failure is that refusal only
+ * when this moved while it ran.
+ */
+export function arenaSessionRefusals(): number {
+  return refusals;
+}
+
+/** Whether the control plane refuses the forwarded account session, so Arena work needs sign-in. */
+export function isArenaSessionRejected(): boolean {
+  return current?.mode === "hosted" && current.token === rejectedToken;
+}
+
+export function onArenaSessionRejected(listener: (token: string) => void): () => void {
+  rejectionListeners.add(listener);
+  return () => {
+    rejectionListeners.delete(listener);
   };
 }
 

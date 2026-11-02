@@ -1415,6 +1415,9 @@ export const ptBR: TranslationResources = {
   arenaByok: {
     keyMissing: "Adicione sua chave do OpenRouter em Configurações para iniciar uma batalha.",
   },
+  battleStart: {
+    failed: "Não foi possível iniciar a batalha. Tente novamente.",
+  },
   battleRepository: {
     title: "O Agent Duel precisa de um commit",
     notGitMessage: "Criar um repositório Git com um primeiro commit vazio?",

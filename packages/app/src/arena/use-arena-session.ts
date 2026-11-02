@@ -11,6 +11,7 @@ import type {
   ArenaRetryMode,
   ArenaReviewAnswer,
   ArenaReplyTarget,
+  ArenaRun,
   ArenaSnapshot,
   ArenaVote,
 } from "@getpaseo/protocol/arena/rpc-schemas";
@@ -23,6 +24,12 @@ import { ensureBattleRepository } from "./battle-repository";
 import type { ComposerAttachment } from "@/attachments/types";
 import { resolveAndStartArenaTurn } from "./start";
 import { ArenaChatTooLargeError, arenaSizeErrorOr } from "./chat-too-large";
+import {
+  noticeAccountSessionRejection,
+  requestAccountSessionCheck,
+} from "@/accounts/session-rejected";
+import { arenaRunAccountWait } from "./run-stats";
+import { neutralBattleStartError } from "./battle-start-error";
 import { encodeArenaPromptAttachments } from "./prompt-attachments";
 import { startingPromptImages } from "./prompt-images";
 import type { UserMessageImageAttachment } from "@/types/stream";
@@ -89,6 +96,14 @@ export function useArenaSessionQuery(serverId: string, agentId: string) {
     const timer = setInterval(() => void refresh(), CONFLICT_REFRESH_MS);
     return () => clearInterval(timer);
   }, [conflicted, tooLarge, refresh]);
+  // A contestant whose model request the control plane refused waits for a new sign-in, with no
+  // request of the user's to fail. Recheck the session so the app can ask for one. The network
+  // wait is rechecked too: the daemon answers a 401 it could not check that way, and the recheck
+  // (repeated until the control plane answers) brings sign-in once it is back.
+  const accountWait = accountWaitOf(snapshot?.runs ?? []);
+  useEffect(() => {
+    if (accountWait) requestAccountSessionCheck();
+  }, [accountWait]);
   return query;
 }
 
@@ -185,7 +200,7 @@ export function useArenaStartMutation(serverId: string, agentId: string) {
           queryClient.setQueryData(arenaSessionQueryKey(serverId, agentId), current);
         },
       }).catch((error: unknown) => {
-        throw arenaSizeErrorOr(error);
+        throw neutralBattleStartError(noticeAccountSessionRejection(arenaSizeErrorOr(error)));
       });
     },
     onSuccess: (snapshot) => {
@@ -270,7 +285,7 @@ export function useArenaTurnMutation(serverId: string, agentId: string) {
       try {
         return await runArenaTurnAction(client, agentId, action);
       } catch (error) {
-        throw arenaSizeErrorOr(error);
+        throw noticeAccountSessionRejection(arenaSizeErrorOr(error));
       }
     },
     onSuccess: (snapshot) =>
@@ -325,4 +340,10 @@ async function runArenaTurnAction(client: DaemonClient, agentId: string, action:
         action.response,
       );
   }
+}
+
+function accountWaitOf(runs: readonly Pick<ArenaRun, "runState" | "status">[]) {
+  const waits = new Set(runs.map(arenaRunAccountWait));
+  if (waits.has("sign-in")) return "sign-in";
+  return waits.has("network") ? "network" : null;
 }

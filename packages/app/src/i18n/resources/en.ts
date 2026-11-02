@@ -1395,6 +1395,9 @@ export const en = {
   arenaByok: {
     keyMissing: "Add your OpenRouter key in Settings to start a battle.",
   },
+  battleStart: {
+    failed: "The battle could not start. Try again.",
+  },
   battleRepository: {
     title: "Agent Duel needs a commit",
     notGitMessage: "Create a Git repository with an empty first commit?",

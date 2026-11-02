@@ -1408,6 +1408,9 @@ export const ru: TranslationResources = {
   arenaByok: {
     keyMissing: "Добавьте ключ OpenRouter в настройках, чтобы начать битву.",
   },
+  battleStart: {
+    failed: "Не удалось начать битву. Попробуйте ещё раз.",
+  },
   battleRepository: {
     title: "Agent Duel нужен коммит",
     notGitMessage: "Создать репозиторий Git с пустым первым коммитом?",

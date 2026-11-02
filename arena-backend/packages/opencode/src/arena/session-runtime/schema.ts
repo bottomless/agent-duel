@@ -79,7 +79,9 @@ export type ArenaPromptInput = {
   readonly noReply?: boolean
 }
 
-export type ArenaStatus = { readonly type: "idle" | "busy" }
+export type ArenaStatus =
+  | { readonly type: "idle" | "busy" }
+  | { readonly type: "retry"; readonly attempt: number; readonly message: string; readonly next: number }
 
 export type ArenaPermissionReply = {
   readonly requestID: string

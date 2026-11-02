@@ -1,8 +1,15 @@
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { arenaLongRunningTool, isArenaRunPossiblyStalled } from "./run-liveness";
 
+/** The engine's retry status while a contestant waits for a new sign-in. */
+export const ARENA_SIGN_IN_WAIT_MESSAGE = "Waiting for sign-in";
+
+/** The engine's retry status while a contestant waits for the network. */
+export const ARENA_NETWORK_WAIT_MESSAGE = "Waiting for network";
+
 const RETRY_MESSAGES = new Set([
-  "Waiting for network",
+  ARENA_NETWORK_WAIT_MESSAGE,
+  ARENA_SIGN_IN_WAIT_MESSAGE,
   "Continuing after response limit",
   "Continuing after model timeout",
 ]);
@@ -86,4 +93,28 @@ export function arenaRunStatusLabel(run: ArenaRun, now: number): string {
 export function arenaRunFilesLabel(diff: ArenaRun["diff"]): string | null {
   if (!diff) return null;
   return `${diff.files} ${diff.files === 1 ? "file" : "files"}`;
+}
+
+/** The wait of a contestant whose session the app should recheck, if any. */
+export function arenaRunAccountWait(
+  run: Pick<ArenaRun, "runState" | "status">,
+): "sign-in" | "network" | null {
+  if (
+    run.runState !== "pending" ||
+    typeof run.status !== "object" ||
+    run.status === null ||
+    !("type" in run.status) ||
+    run.status.type !== "retry" ||
+    !("message" in run.status)
+  ) {
+    return null;
+  }
+  if (run.status.message === ARENA_SIGN_IN_WAIT_MESSAGE) return "sign-in";
+  if (run.status.message === ARENA_NETWORK_WAIT_MESSAGE) return "network";
+  return null;
+}
+
+/** Whether a contestant is waiting because the control plane refused the account session. */
+export function arenaRunWaitsForSignIn(run: Pick<ArenaRun, "runState" | "status">): boolean {
+  return arenaRunAccountWait(run) === "sign-in";
 }

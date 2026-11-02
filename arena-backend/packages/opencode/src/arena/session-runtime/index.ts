@@ -706,7 +706,18 @@ const statusLayer: Layer.Layer<SessionStatus, never, CoreSession.Service> = Laye
       get: (sessionID) =>
         normalizeError(
           Effect.gen(function* () {
-            return { type: (yield* sessions.active).has(sessionID) ? "busy" : "idle" }
+            if (!(yield* sessions.active).has(sessionID)) return { type: "idle" as const }
+            // A scheduled retry stays on the open assistant message until its next step. Report it,
+            // so a contestant waiting for the network or a new sign-in says so.
+            const [latest] = yield* sessions.messages({ sessionID, type: "assistant", order: "desc", limit: 1 })
+            const retry = latest?.type === "assistant" && !latest.time.completed ? latest.retry : undefined
+            if (!retry) return { type: "busy" as const }
+            return {
+              type: "retry" as const,
+              attempt: retry.attempt,
+              message: retry.error.message,
+              next: DateTime.toEpochMillis(retry.at),
+            }
           }),
         ),
     })

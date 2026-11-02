@@ -269,6 +269,36 @@ describe("Arena v2 engine runtime", () => {
         persistent: true,
         message: "Waiting for network",
       })
+      // A refused session waits for a new sign-in the same way; a model's own 401 does not.
+      const sessionRejected = {
+        sessionID: "ses_probe",
+        model: { providerID: PROVIDER_ID },
+        error: {
+          type: "provider.auth",
+          status: 401,
+          response: { body: JSON.stringify({ error: { type: "arena_session_rejected" } }) },
+        },
+        decision: { retry: false },
+      }
+      yield* retry!(sessionRejected)
+      expect(sessionRejected.decision).toEqual({
+        retry: true,
+        delay: 2_000,
+        persistent: true,
+        message: "Waiting for sign-in",
+      })
+      const modelUnauthorized = {
+        sessionID: "ses_probe",
+        model: { providerID: PROVIDER_ID },
+        error: {
+          type: "provider.auth",
+          status: 401,
+          response: { body: JSON.stringify({ error: { type: "arena_upstream_error" } }) },
+        },
+        decision: { retry: false },
+      }
+      yield* retry!(modelUnauthorized)
+      expect(modelUnauthorized.decision).toEqual({ retry: false })
 
       // A child is assigned before its first model request, even if Core has not
       // emitted the prompt hook yet.

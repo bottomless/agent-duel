@@ -124,7 +124,18 @@ export function createAccountsRouter(service: AccountsService): Router {
         return;
       }
       // Acceptance is account data, not an immutable claim in a 30-day token.
-      res.json(await service.backend.currentSession(token!));
+      let current;
+      try {
+        current = await service.backend.currentSession(token!);
+      } catch (error) {
+        if (error instanceof AccountsRequestError && error.status === 401) {
+          await service.sessionChecked(token!, false);
+        }
+        throw error;
+      }
+      // The app rechecks here after a refused Arena request; an accepted session is forwarded again.
+      await service.sessionChecked(token!, true);
+      res.json(current);
     }),
   );
 

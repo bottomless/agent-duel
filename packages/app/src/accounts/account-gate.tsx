@@ -1,10 +1,11 @@
-import { useCallback, useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { ActivityIndicator, View, type ViewStyle } from "react-native";
 import {
   hasAcceptedLegalDocuments,
   legalAcceptanceSchema,
   type LegalDocuments,
 } from "@getpaseo/protocol/accounts/schemas";
+import { useQueryClient } from "@tanstack/react-query";
 import { useFetchQuery } from "@/data/query";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { fetchAuthMethods, fetchCurrentSession, type AccountsEndpoint } from "./client";
@@ -16,6 +17,7 @@ import {
   useAccountSessionStore,
   type AccountSession,
 } from "./session-store";
+import { recheckAccountSession } from "./session-rejected";
 import { SignInScreen } from "./sign-in-screen";
 import { DaemonUnreachable } from "./daemon-unreachable";
 import { TermsAcceptanceModal } from "./terms-acceptance-modal";
@@ -43,11 +45,14 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
   const endpoint = useAccountsEndpoint();
   const hydrated = useAccountSessionHydrated();
   const session = useAccountSessionStore((store) => store.session);
-  const clearSession = useAccountSessionStore((store) => store.clearSession);
+  const expired = useAccountSessionStore((store) => store.expired);
+  const checkRequest = useAccountSessionStore((store) => store.checkRequest);
+  const expireSession = useAccountSessionStore((store) => store.expireSession);
   const updateUser = useAccountSessionStore((store) => store.updateUser);
 
+  const queryClient = useQueryClient();
   const methodsQuery = useFetchQuery({
-    queryKey: ["accounts", "methods", endpoint?.baseUrl ?? null],
+    queryKey: methodsQueryKey(endpoint),
     dataShape: "value",
     enabled: endpoint !== null,
     staleTimeMs: STALE_TIME_MS,
@@ -56,7 +61,7 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
 
   const sessionToken = session?.token ?? null;
   const sessionQuery = useFetchQuery({
-    queryKey: ["accounts", "session", endpoint?.baseUrl ?? null, sessionToken],
+    queryKey: sessionQueryKey(endpoint, sessionToken),
     dataShape: "value",
     enabled: endpoint !== null && sessionToken !== null,
     staleTimeMs: STALE_TIME_MS,
@@ -74,11 +79,44 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
       return;
     }
     if (resolvedSession === null) {
-      clearSession();
+      expireSession();
       return;
     }
     updateUser(resolvedSession.user);
-  }, [clearSession, resolvedSession, updateUser]);
+  }, [expireSession, resolvedSession, updateUser]);
+
+  // A request refused for a rejected session asks for this check (`session-rejected.ts`). It asks
+  // the daemon directly rather than refetching the session query: a refetch can drop the app
+  // shell for a moment, and with it the composer that is putting the refused message back. A
+  // session the control plane still accepts is forwarded again by the same request.
+  // A check with no answer is asked again with backoff, so a short outage cannot leave a refused
+  // session without a sign-in screen; it never signs out on its own.
+  const handledCheckRequest = useRef(0);
+  const runningCheck = useRef<AbortController | null>(null);
+  useEffect(() => {
+    // Only a new request starts a check; a new token or endpoint revalidates through the query.
+    if (checkRequest === handledCheckRequest.current || !endpoint || !sessionToken) return;
+    handledCheckRequest.current = checkRequest;
+    runningCheck.current?.abort();
+    const controller = new AbortController();
+    runningCheck.current = controller;
+    void recheckAccountSession({
+      check: async () => {
+        const current = await fetchCurrentSession(endpoint, sessionToken);
+        if (current === null) return false;
+        // The account and the current documents, as the control plane has them now: a terms
+        // refusal asks for this check, and the terms show once the account has not accepted them.
+        // Set in place, so the app shell stays.
+        queryClient.setQueryData(sessionQueryKey(endpoint, sessionToken), current);
+        void queryClient.refetchQueries({ queryKey: methodsQueryKey(endpoint), exact: true });
+        return true;
+      },
+      isCurrent: () => useAccountSessionStore.getState().session?.token === sessionToken,
+      expire: expireSession,
+      signal: controller.signal,
+    });
+  }, [checkRequest, endpoint, expireSession, queryClient, sessionToken]);
+  useEffect(() => () => runningCheck.current?.abort(), []);
 
   // Every connection made while signed out is refused, so the host never comes online and there
   // is no client to reconnect — the probe closes the one it opened. All three of these are
@@ -118,6 +156,7 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
       gate={gate}
       endpoint={endpoint}
       session={session}
+      expired={expired}
       documents={documents}
       onRetry={retryMethods}
     >
@@ -126,10 +165,19 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
   );
 }
 
+function methodsQueryKey(endpoint: AccountsEndpoint | null) {
+  return ["accounts", "methods", endpoint?.baseUrl ?? null] as const;
+}
+
+function sessionQueryKey(endpoint: AccountsEndpoint | null, sessionToken: string | null) {
+  return ["accounts", "session", endpoint?.baseUrl ?? null, sessionToken] as const;
+}
+
 interface AccountGateContentProps {
   gate: AccountGateState;
   endpoint: AccountsEndpoint | null;
   session: AccountSession | null;
+  expired: boolean;
   documents: LegalDocuments | null | undefined;
   onRetry: () => void;
   children: ReactNode;
@@ -141,6 +189,7 @@ function AccountGateContent({
   gate,
   endpoint,
   session,
+  expired,
   documents,
   onRetry,
   children,
@@ -158,6 +207,7 @@ function AccountGateContent({
         endpoint={endpoint}
         methods={gate.methods}
         documents={documents}
+        expired={expired}
       />
     );
   }

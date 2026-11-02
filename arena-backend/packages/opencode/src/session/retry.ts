@@ -2,7 +2,12 @@ import { SessionV1 } from "@opencode/schema/v1/session"
 import { Cause, Clock, Duration, Effect, Schedule, Schema } from "effect"
 import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
-import { readNetworkUnavailable, readPaymentError } from "@agent-duel/arena-service/request-error"
+import {
+  readNetworkUnavailable,
+  readPaymentError,
+  readSessionRejected,
+  SESSION_REJECTED_RETRY_MESSAGE,
+} from "@agent-duel/arena-service/request-error"
 
 export type Err = NonNullable<SessionV1.Assistant["error"]>
 
@@ -99,10 +104,20 @@ function networkUnavailable(error: Err) {
   )
 }
 
+/** Whether the control plane refused the user's session (`arena_session_rejected`). */
+function sessionRejected(error: Err) {
+  return (
+    Schema.is(SessionV1.APIError.Schema)(error) &&
+    error.data.statusCode === 401 &&
+    readSessionRejected(error.data.responseBody)
+  )
+}
+
 export function retryable(error: Err, provider: string) {
   // context overflow errors should not be retried
   if (Schema.is(SessionV1.ContextOverflowError.Schema)(error)) return undefined
   if (provider === "arena" && networkUnavailable(error)) return { message: ARENA_OFFLINE_MESSAGE }
+  if (provider === "arena" && sessionRejected(error)) return { message: SESSION_REJECTED_RETRY_MESSAGE }
   if (Schema.is(SessionV1.APIError.Schema)(error)) {
     const status = error.data.statusCode
     if (provider === "arena" && status === 402) {
@@ -236,7 +251,8 @@ export function policy(opts: {
         if (opts.provider === "arena" && opts.canRestart?.() === false) return Cause.done(meta.attempt)
         // Offline is not a failure of the request: it waits for as long as the network is gone,
         // spends no retry, and gives the next real failure a fresh window once the network is back.
-        if (opts.provider === "arena" && networkUnavailable(error)) {
+        // A refused session waits the same way, for a new sign-in.
+        if (opts.provider === "arena" && (networkUnavailable(error) || sessionRejected(error))) {
           return Effect.gen(function* () {
             offlineAttempts += 1
             firstArenaFailure = undefined
