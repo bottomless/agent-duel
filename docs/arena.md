@@ -45,7 +45,7 @@ background to the authenticated control plane at `PASEO_CONTROL_PLANE_URL`. Uplo
 logged and dropped. There is no persistent upload queue, retry, or backfill, so local history and
 recovery continue when the control plane is unavailable. Account sessions are verified
 locally with the embedded public key, and signing out does not delete local data. A BYOK build
-creates no uploader, so nothing it records leaves the machine.
+creates no research uploader.
 
 Research uploads include chats, turns, runs, generation metadata, structured events, comparisons,
 single-agent ratings, session archives, and transcript or patch artifacts. Raw events and per-call
@@ -59,31 +59,24 @@ Read a `battleMetrics` side's `retries` and `ttftMs` only where they are present
 mean unknown, and engine recovery rebuilds old rows only on desktops that upgrade, for turns still
 stored locally (`BattleSideMetrics` in `arena/records.ts`).
 
-A session holds its images inline: a pasted one and every screenshot a contestant reads. A long
-run's transcript is then mostly images, and over the 10 MB artifact limit it is not kept at all,
-which stops the turn instead of asking for a vote. So the archive keeps each image as its own `image`
-artifact, named by the SHA-256 of its bytes, and the transcript refers to it as
-`arena-image:sha256:<hash>`, with `imageIDs` listing them (`arena/transcript-artifact.ts`). A
-tool result's attachments, the screenshots and PDFs a contestant reads, never go to the window: the
-app shows none of them, and a run that read many put one snapshot past the daemon's 64 MiB socket
-limit, which dropped the window's connection after a vote or a reply (`withoutAttachmentData` in
-`arena/live.ts`). Nor do earlier turns: a contestant session is a fork of the whole chat, so a run
-goes to the window from its prompt on (`fromPrompt` in `arena/transcript.ts`); sent whole, a long
-chat's two forks passed the same limit whenever it was opened or sent to. Within the turn, a tool
-call's large fields (command output, a read or written file, an edit's text) go as their start and
-end, listed in `state.previewed`, and the app fetches the part whole when the call is opened. An image
-pasted into the prompt or a follow-up goes without its data, live or archived, listed in the part's
-`previewed`, and the app loads it from its run when it shows it (`withPartPreviews` in
-`arena/live.ts`, `arena.run.get_part`, storage type `arena-part` in the app); sent whole, a turn of
-follow-ups with four photos each passed the limit at its eighth. Snapshots carry no stored `events`;
-no window reads them. A run's thread past 8 MiB goes without its oldest messages, counted in
-`activityOmitted`, and its pane says so, so voting and replying keep working (`withinBudget` in
-`arena/transcript.ts`). An Arena answer still over half the socket limit is refused with
-`chat_too_large`, or `arena_diff_too_large` for a comparison, rather than dropping the socket
-(`server/arena/payload-limit.ts`). Research gets the same transcript, sent first so a full upload buffer drops images
-rather than the transcript, and each image as an `images` record; both sides share a battle's images,
-so each is uploaded once. The control plane refuses a whole batch that names a collection it does not know, so
-deploy it before a desktop build that sends a new one.
+Keep inline images in separate content-addressed artifacts and refer to them from archived
+transcripts as `arena-image:sha256:<hash>` (`arena/transcript-artifact.ts`). Otherwise images can
+push a transcript past the 10 MB artifact limit and stop the turn before the vote. Research uploads
+send the transcript before images so a full buffer preserves the text; both sides share one set of
+image records. Deploy the control plane before a desktop build sends a new collection: an unknown
+collection causes the whole upload batch to be refused.
+
+Keep window payloads bounded (`arena/live.ts`, `arena/transcript.ts`):
+
+- Omit tool-result attachments, which the app does not display, and history before the run's prompt.
+  Each contestant is a fork of the whole chat; sending both complete forks can exceed the daemon's
+  64 MiB socket limit on opening a chat, voting, or replying.
+- Preview large tool fields and prompt images; fetch their full parts when opened or displayed
+  (`arena.run.get_part`, `arena-part`). Follow-up images can exceed the socket limit too.
+- Omit stored `events`, which no window reads. Trim the oldest messages once a run's thread exceeds
+  8 MiB, and show `activityOmitted` in its pane so the voter knows what is missing.
+- Refuse a response still over half the socket limit with `chat_too_large` or
+  `arena_diff_too_large` (`server/arena/payload-limit.ts`), preserving the connection.
 
 ## Live synchronization
 
@@ -138,7 +131,7 @@ hydrated winner.
 ## What this is for
 
 One prompt, two agents, one worktree each, and a vote. The winner's work becomes the chat's real
-history and the loser's is discarded. Battle mode is on by default; the single-agent path is the
+history; the losing environment is released after resolution. Battle mode is on by default; the single-agent path is the
 escape hatch for when you already know what you want done. Render client-owned battle copy,
 including composer prompts, diff controls, status text, and accessibility labels, in the selected
 app language without reopening the view. Keep contestant letters, model names, code, and agent output
@@ -148,78 +141,59 @@ The voter is a developer getting work done who happens to get two attempts to ch
 benchmark operator scoring models. Optimize the UI for deciding quickly and moving on: the two
 results side by side, the difference between them legible, and every decision in one place. The
 battle card in the transcript is for reading. The contestant responses and their inline review
-share one surface, without another Responses/Review switch. The response panes keep a fixed
-resting height and scroll internally. A small arrow appears when the reader scrolls away from the
-latest output. The battle uses no side panel tab: the card has the chat's width, and a panel beside it would only
-narrow the card to show the same thing.
+share one surface, without another Responses/Review switch. The battle uses no side panel tab:
+the card has the chat's width, and a panel beside it would narrow the card to show the same thing.
 
-Review has two tabs: **Difference summary**, the generated comparison, and **Changes**, the file rows with git's
-status for each pair. The review appears as soon as one side has a result (`battleReviewPhase` in
-`comparison-visibility.ts`), so the voter can read it before picking early. It opens on the
-summary tab, which says the other side is still working. Changes holds the finished side's files:
-its counts beside `working` for the other side, no verdict on a pair that is not in yet, and in
-each diff the working side's column is a hatched placeholder the size of the finished side's diff
-(one line per region in the one-column layout), so nothing moves when its result lands. Only the
-finished side expands. The engine's diff stands the
-unfinished side in as the frozen base, the shape a stopped battle already uses; a side working
-again after a reply keeps its last result's commit, so its run state decides, not the commit.
-The comparison and each file's read are keyed by the commits they compare (`arenaDiffQueryKey`,
-`comparisonRevision`), and the first result also by its phase, so they are fetched again when the
-other side lands; until they arrive the review keeps showing what it had. Keying by phase alone
-showed a side's old result after it finished a reply: the engine marks the run complete before it
-records the new commit, so the comparison fetched at that moment compares the old one. A run reads `complete`
-a moment before the engine records its commit, so a side counts as finished only once its commit is
-there; going by run state alone dropped the review out for that moment. A row opens its file's diff
-right under it and closes it again, several can be open at once, and the first diverging file opens
-on arrival. A file the card opened on the first result stays open when both are in, even though the
-first diverging file is then a different one. Past eight rows the rest wait behind Show more, so a
-battle that touched hundreds of files does not push the threads off screen; an open row past them still shows.
-The list names every file either side changed, in path order, without contents; each diff reads its own file
-when it opens (`arena.turn.get_file_diff`). Do not cap the list to bound the response: a cap hid every file B
-alone changed whenever A changed 25.
-The chevron at the end of the tab row folds the whole review away, and a tab opens it again. The review opens on the
-Difference summary, showing its progress while it generates; Changes opens first only when no summary
-is coming, as for a stopped battle or one where a side failed. The review mounts before the engine writes the comparison
-record, so read the turn's `comparisonState` until the record exists (`battleSummaryStatus` in
-`comparison-visibility.ts`); the review keeps the tab it opened on, and reading only the record
-opened every battle on Changes. Changes
-retries a failed read twice before showing a small manual retry. The summary generator retries
-transient network and service failures
-up to three attempts, while permanent failures such as payment or credentials remain actionable.
-Identical file results say nothing about whether the contestants' text answers agree. The threads
-are the headline and the review is their complement, so the review must never outweigh the agent
-headings above it: the tabs are text in a strip across the
-card with a 1px baseline (`battle-review.tsx`), the selected one in foreground at medium weight
-with a 2px underline sitting on that baseline, the other muted, so the strip reads as the heading
-of the section under it rather than a control floating in it; the summary renders as compact
-Markdown with flat headings (`flatHeadings` on `MarkdownRenderer`) so its headings sit one step
-above the body while the prose keeps the regular text colour, since muted prose was hard to read, and with
-its paragraphs capped at the reading measure (`proseMeasure`) while the differences table keeps
-the card's width, since a 1000px line of 14px prose is unreadable; and the diff's layout toggle
-uses the `xs` tier like the A | A+B | B control inside it. The agent names are the largest type
-on the card. The judge is asked for a short report (`arena/comparison.ts`,
-`arena-comparison-v12`): what each agent did, including shared violations of the task, then a table of where they differ, and nothing else.
-On the first turn it also ends with a `Title:` line, which the engine takes out of the report. A
-new battle chat's workspace shows the prompt's first line from the send and that title once the
-comparison arrives; a workspace with any other name keeps it
-(`arena-workspace-auto-name.ts`). When both sides leave identical trees there is no report to write,
-so the first turn sends the comparison route a request for the title alone; if it fails, the chat
-keeps its prompt's first line. A turn where either side failed gets no report either, since there
-is nothing to weigh the other side against: its comparison is `skipped`, the card shows only
-Changes, and the first turn still asks for the title alone. A chat started with Battle off also
-shows its prompt's first line from the send, and the same model renames it from that prompt
-through the metadata route below; if that fails it keeps the line. Nothing else names a chat:
-Paseo named workspaces with an agent, which here meant the user's installed Claude Code or a paid
-contestant with the full agent setup (up to $0.25 per new chat).
-The card shows it whole; only a report that measures longer than a screen of the card folds to its
-opening with `Show full summary` (`verdict-body.tsx`). Trimming at the prompt was Michael's call:
-the fold spent latency on prose the voter then had to unfold. The status is `git merge-tree
---write-tree` of A and B over the frozen base (`arena/git.ts`, `compare`), with
-`merge.conflictStyle=zdiff3`, so `diverging` means a real merge conflict and `compatible` means both
-touched the file in different places; no client heuristic decides it. Review each contestant against the frozen original, with corresponding regions aligned across
-A and B. A change made by either contestant must stay visible in the comparison; fold only
-context that neither changed. Keep shared additions and removals visible even when the entire
-results match, and label them `Both`. The voter still needs to see what will be applied.
+Review has two tabs: **Difference summary**, the generated comparison, and **Changes**, the file
+rows with Git's status for each pair. It appears when the first side has a result
+(`battleReviewPhase` in `comparison-visibility.ts`), before an early choice. The summary tab says
+the other side is working; Changes shows the finished side against a hatched placeholder sized to
+its diff, with no pair verdict yet. Only the finished side expands. The unfinished side stands in
+as the frozen base, as in a stopped battle.
+A side working again after a reply keeps its previous commit, so check its run state too.
+
+Key comparison and file reads by their commits (`arenaDiffQueryKey`, `comparisonRevision`), and
+partial review by its phase. Run completion precedes the new commit: keying by phase alone can
+reuse a reply's old result, while treating a completed run without a commit as finished can briefly
+hide review. Keep existing evidence visible until the new read arrives.
+
+List every changed file in path order, with contents fetched only when its row opens
+(`arena.turn.get_file_diff`). Capping the list can hide files changed only by B. Several rows can
+stay open; open the first diverging file automatically and preserve that choice when the other
+result arrives. After eight rows, use Show more while keeping open rows visible.
+
+Open on Difference summary while a report is pending or available; otherwise open Changes, as for
+a stopped battle or a failed side. Read the turn's `comparisonState` before the comparison record
+exists (`battleSummaryStatus`): the review keeps its initial tab, so relying on the record opens it
+on Changes too soon. The chevron folds review; choosing a tab opens it. Changes retries a failed
+read twice before offering manual retry. Summary generation allows three attempts for transient
+network or service failures; permanent payment or credential failures remain actionable.
+
+Keep agent responses above review in the visual hierarchy. Tabs use a baseline and selected
+underline, the summary uses compact Markdown with flat headings and paragraphs capped at
+`proseMeasure`, and the differences table keeps the card's width. The diff layout toggle uses the
+`xs` tier. [Design](design.md) owns the tokens and control conventions.
+
+The judge writes a short report (`arena/comparison.ts`): what each agent did, including shared task
+violations, then a table of differences. Show it whole unless it exceeds a screen of the card, when
+`Show full summary` folds it (`verdict-body.tsx`). Do not trim the requested report to make it fit:
+that spends latency on prose the voter must then unfold. Identical file results do not prove that
+the text answers agree, though equal trees skip the report. A failed side also skips it and leaves
+only Changes.
+
+On the first turn the judge also returns a `Title:` line, which the engine removes from the report.
+A new chat shows its prompt's first line until that title arrives; any other workspace name stays
+(`arena-workspace-auto-name.ts`). Equal trees or a failed side request only the title. Battle off
+uses the metadata route described under [Blinding](#blinding). A failed title request leaves the
+prompt's first line. Never start a coding agent to name a chat: it uses the full agent setup for a
+metadata task.
+
+Git's `merge-tree --write-tree` compares A and B over the frozen base with
+`merge.conflictStyle=zdiff3` (`compare` in `arena/git.ts`). `diverging` means a real merge conflict;
+`compatible` means both touched the file in different places. Review each side against the frozen
+original with corresponding regions aligned. Keep every change visible, shared additions and
+removals included, even when the results match; label shared changes `Both`. Fold only context
+neither side changed.
 
 The comparison has two layouts, **Side by side** and **One column**, shared by the active card and
 archived battles (`inline-file-diff.tsx`). In one column, show A and then B for each region so an
@@ -248,11 +222,11 @@ Bound comparison work across review requests and end-of-battle utilities; both s
 runtime with contestants. A deadline or metadata limit must fail the comparison instead of
 presenting partial evidence as a complete result.
 
-While the contestants work, each pane reads its thread with the work summarized inline (PR #57's
-activity groups, behind the `toolCallDetailLevel` setting). The battle is one card
+While the contestants work, each pane reads its thread with inline activity groups, controlled by
+`toolCallDetailLevel`. The battle is one card
 (`packages/app/src/arena/battle-view.tsx`). Up to `ARENA_MAX_CONTENT_WIDTH`, twice the chat's
-reading column, it runs edge to edge, keeping only its top and bottom borders; a 14" MacBook Pro
-never exceeds that. On a wider panel each pane would outrun the reading column, so the battle is
+reading column, it runs edge to edge, keeping only its top and bottom borders. On a wider panel
+each pane would outrun the reading column, so the battle is
 a bordered, rounded card centered at that width. `ArenaContentColumn` measures the host
 and decides. Everything in the battle shares the card's width — the two threads and the Changes
 review — so the page has two widths: the chat's reading column for the prompt and the
@@ -266,9 +240,8 @@ to the split. Both are
 pane chrome at the ghost `xs` tier, borderless and the same height. Headings have no status
 indicators; the status text below each heading reports progress. In the thread, the work summary
 rows (`Read 3 files · Ran 4 commands`) match the 14px prose they follow and hug their icon, so a
-muted summary never outranks the text, and the thread keeps one 12px rhythm between a text, its
-summary, and the next text; uneven spacing around the summary read as lopsided. Changing the view
-keeps both panes mounted, so each pane keeps its reading position and pending permission UI. Keep
+muted summary never outranks the text. Keep one 12px gap between text, its summary, and the next
+text. Changing the view keeps both panes mounted, preserving reading position and permission UI. Keep
 the active battle open and its threads height-limited so the prompt and composer remain
 reachable. The card has no link back to the history: the conversation is right above it.
 
@@ -302,12 +275,12 @@ boundary delivers it under the same ID, so the run's thread, delete, and Send no
 none, once one was delivered. Core stamps a delivered steer with the delivery time; the thread and
 the daemon's chat timeline (`opencode/v2/timeline.ts`) show the send time (`ARENA_SENT_AT`), which
 `lastTurnStart` also needs to tell a steer from a new prompt.
-A steer can arrive just as a side's answer ends, after the runner's last boundary check. The side's
+A steer can arrive as a side's answer ends, after the runner's last boundary check. The side's
 prompt fiber closes its turn under a per-run gate only when no steer waits and no runner works, and
 otherwise answers it first; a steer is admitted under the same gate and refused once the side is
 closing. The refusal carries the code `arena_side_closing` through the daemon, and the app words it
 (`arena/steer-refusal.ts`) and keeps the draft. A steer still queued when Stop or an early choice cuts the run off
-is delivered as an unanswered message, as 1.x left it, so the thread and a kept side's history agree.
+is delivered as an unanswered message so the thread and a kept side's history agree.
 An engine restart leaves it in the inbox: the interrupted run's archive shows it, and Resume delivers it.
 The toolbar stays on one row.
 When its own available width is narrow, shorten the target labels, show tool permissions as a
@@ -319,23 +292,22 @@ Accept accepts pending requests; explicit deny rules still apply.
 
 `Ask before tools` does not ask about work inside the project: OpenCode's agents allow it. It asks when
 a tool leaves the project through `external_directory`. OpenCode documents ask as its default, but
-upstream's rules allow it (upstream #54524). Agent Duel restores the documented default in
+its upstream rules allow it. Agent Duel restores the documented default in
 `schema/src/agent.ts` and the built-in agent rules (`arena/engine-runtime/outside-project.ts`). Keep
 this rule on the agent so existing chats, subagents, and agents defined in user config all get it.
 A user's configured rule and a contestant's sandbox come later and win. Directories the agent's own
 work fills never ask: long tool output, background command output, plans, skills, and uploads.
 
-OpenCode's shell tool checks only `cd` and its working directory (upstream #56288), so the plugin
+OpenCode's shell tool checks only `cd` and its working directory, so the plugin
 checks the shell call outside a battle. Literal writes outside the project ask through command
 wrappers and symlinks too, including files that do not exist yet. After a conditional directory
 change, a write asks if any possible location puts it outside the project. Ordinary project writes
 stay quiet. The short reader list is unchanged. Temp never asks: `/tmp`, `/var/tmp`, and the system
 temp directory are allowed, including their real paths.
 
-A path held in a variable or computed by a command, such as `$(echo /x)`, gets no card. Scripts and
-code piped into an interpreter are outside this check too. Inline shell commands such as `sh -c`
-are checked; inline interpreter text can still produce a false card. Do not treat Ask mode as a
-boundary. Asking for every shell command would also ask about work inside the project.
+Inline shell commands such as `sh -c` are checked; inline interpreter text can still produce a
+false card. See [Gotchas](#gotchas) for paths the scan misses. Ask mode does not confine arbitrary
+code. Asking for every shell command would also ask about work inside the project.
 
 Always allow cannot save a glob in a directory path, the root, home, or a directory above home,
 including aliases through symlinks or case (`tooWideToSave` in `core/src/permission.ts`, an Agent Duel
@@ -368,16 +340,16 @@ the other side finished. Transitional and recovery
 states use the **decision bar** (`packages/app/src/arena/decision-bar.tsx`) in the composer's
 slot, except setup and application progress, which stay in the conversation.
 
-Contestants are blinded so the vote lands on the output rather than the label. That is why the
-blinding has four layers instead of one hidden field, and why something as small as the shape of a
-tool-call ID counts as a leak — a voter who recognizes the model stops judging the diff.
+Keep identities hidden until resolution so the vote judges the output. Tool-call ID shapes can
+reveal a model too; [Blinding](#blinding) covers each boundary.
 
 Product decisions that are settled, so they do not get relitigated per feature:
 
 - The pool is fixed and small. Choosing models per battle is not a goal.
 - Both results are kept until the vote; nothing is auto-selected.
 - A vote is final. There is no rematch on the same prompt.
-- The loser's work survives only as a git ref, not as anything the UI offers to recover.
+- The loser's files remain on a Git ref. The UI offers no action to restore them; archived threads
+  remain readable.
 - Contestant text stays prominent. The newest activity block shows its latest tool or reasoning,
   even after it finishes. An older unfinished task must not replace newer activity. Animate only
   the displayed activity while it is running. Show thinking when the next model request has started
@@ -421,8 +393,7 @@ Product decisions that are settled, so they do not get relitigated per feature:
   unfinished; preserve that record without presenting it as ongoing work or carrying it into the
   composer's next turn.
 
-Inherited from Paseo and **not maintained here**: releases and packaging, native mobile, and the
-marketing site. Leave them alone rather than fixing them; report upstream defects separately.
+Follow [the agent guide](../CLAUDE.md#critical-rules) for the boundary on inherited Paseo changes.
 
 ## The canonical spine and contestant environments
 
@@ -477,9 +448,8 @@ Contestant worktrees are kept between turns. A chat owns a small pool of **slots
 `.agent-duel/worktrees/<chat>/`: a linked worktree plus the bare host repository it is registered in
 (`<dir>.git`). In steady state the pool holds three: the next turn's pair and the retained winner.
 A kept slot keeps its files, so preparing the next turn rewrites only what differs from the new
-frozen base. The pool is read from disk, not stored: a slot directory is owned while it is the
-worktree of a run without `worktreeRemovedAt`, or part of the chat's current warm pair, and free
-otherwise. Only Arena's own worktrees are slots: a `.git` link into the host beside it, whose entry
+frozen base. The pool is read from disk, not stored: a slot belongs to a run until
+`worktreeRemovedAt` or to the chat's current warm pair; otherwise it is free. Only Arena's own worktrees are slots: a `.git` link into the host beside it, whose entry
 names the directory back (`isPoolWorktree`). Every contestant sees the pool as `..`, and an agent's
 `git worktree add ../x` also leaves a directory with a `.git` link there, one into the contestant's
 host. Taken for a slot, it stayed as the pool's spare and every later contestant could read it. So
@@ -592,48 +562,34 @@ A chat's pool directory carries Time Machine's sticky exclusion attribute (`aren
 its slots are copies the next battle can build again. Spotlight already skips `.agent-duel`, whose
 name is hidden. Worktrees the user works in, under `.agent-duel/worktrees/<id>`, stay in backups.
 
-Each worktree a chat keeps, the retained winner and both warm sides, holds a loaded OpenCode instance
-(provider catalog, plugins, tool registry, location services). A ready chat with no open stream for
-five minutes unloads them: the instances are disposed and nothing else changes, so the warm pair
-stays trusted and the retained winner keeps its services. The next send boots them again, which
-`prepareContestant` does for a warm side anyway. The app streams only the chat it shows, so an open
-stream is the "in use" signal (`watchChat` in `arena/service.ts`).
-
-- The retained winner keeps its services running until the next send.
-- Warm A and B environments have no services until they are needed.
-- A human or agent environment transition stops retained services before the next turn and exposes
-  retained, warm, and trunk status.
+A ready chat with no open stream for five minutes unloads its OpenCode instances
+(`watchChat` in `arena/service.ts`). Its warm pair stays trusted and its retained winner keeps
+running services. The next send reloads the instances. The app streams only its current chat,
+so an open stream marks use. Warm sides have no services until needed. Human or agent environment
+transitions stop retained services and expose retained, warm, and trunk status.
 
 Services are found by working directory, so a terminal opened in a side worktree would look like
 one. The sweep skips the process that opened a terminal session — it holds a controlling terminal
 its parent does not — and stops what runs inside it as usual. That is what lets a contestant
 terminal outlive the turn it was opened in; see [side-panel.md](side-panel.md).
 
-Warm preparation runs once the vote has been applied. Preparing a chat's first pair when the chat is
-opened is off by default; `OPENCODE_ARENA_INITIAL_WARM=1` turns it on. The engine cannot tell a
-battle chat from a single-agent one, its host copies take the repository lock that normal prompts
-also take, and the draft composer sends too soon to use the pair. When it is on, the record lives on
-the chat as `initialWarmPreparation` until the first send consumes it, it waits a second before
-taking the chat's start lock, it is skipped while the chat's agent is working, and a failure backs
-off before the next try. Warm preparation adopts two free slots, or creates one when the pool is
-short (the first battle creates a spare in the background while it waits for the vote), and syncs
-both at once. Only the pool scan, the host copies, and the final mirror of the hosts take the
-repository lock; the file sync, the instances, and the forks run outside it under the chat's start
-lock, so a vote, a send, or a prompt in another chat of the same repository does not wait for them.
-Arena runs no project start command and no `paseo.json` hook in a slot, so a created slot and an
-adopted one start identical. Warm preparation also allocates each successor's port bank and forks
-the canonical session into it, paths retargeted, so the send has no transcript to copy. A send uses
-that fork only when the pair is trusted in this process and the canonical session, its transcript
-hash, and the port bank are unchanged; otherwise it forks then and disposes of the warm one. The
-bank is reserved only inside this process, so the send first checks that no other program has taken
-one of its ports; a taken port means a fresh bank and a fork at send. The send itself overlaps the
-assignment draw with the freeze.
+Prepare the next pair after application. Preparation on first opening a chat is off by default;
+`OPENCODE_ARENA_INITIAL_WARM=1` enables it. The engine cannot distinguish battle and single-agent
+chats, the draft composer sends too soon to use the pair, and host copies compete with prompts for
+the repository lock. Initial preparation waits a second, skips a working agent, and backs off on
+failure (`initialWarmPreparation`).
 
-A send reuses the pair when it is trusted in this process and nothing moved since warm preparation:
-the checkout's HEAD, branch, index and working tree, its ignored content, the git metadata a host
-copies once (config, hooks, `info`, and the stash, notes and replace refs the ref mirror skips), and
-both slots. Otherwise it adopts the same two slots again in place, which rebuilds their hosts and
-rewrites only the difference.
+Preparation adopts two free slots or creates missing ones; the first battle creates a spare while
+waiting for the vote. Only scanning the pool, copying hosts, and their final mirror take the
+repository lock. File sync, instances, and forks run under the chat's start lock so other chats'
+votes and prompts can proceed. Reserve port banks and fork canonical history with retargeted paths
+in advance; overlap assignment draw with the send's freeze.
+
+Trust is process-local. Reuse a pair only while the checkout's HEAD, branch, index, working tree,
+ignored content, copied Git metadata, and both slots remain unchanged. Otherwise adopt those slots
+again, rebuilding hosts and rewriting differences. Reuse its forks only while canonical session,
+transcript hash, pruning boundary, and port banks still match. Ports are reserved only in memory:
+a send must check for another program taking one and allocate a new bank and fork if needed.
 
 A cold or refreshed side waits for its base checkout before the model starts. Its path is known
 before staging (the planned slot, or the warm slot it refreshes in place), so the side forks its
@@ -641,9 +597,9 @@ session first and keeps it at the canonical checkout while the slot is an empty 
 Staging (claim or adopt, git sync, ref mirror) then runs, the session moves into the staged
 worktree, and only then is the first prompt sent. OpenCode 2.0 binds a whole drain, every tool,
 the shell's working directory, and each child agent's location to the session's saved location,
-and applies a move only at a step boundary. A first request sent from the canonical checkout ran
-its whole first step there: `pwd` printed the checkout, and files and children landed in it. This
-applies after an engine restart too, when no pair is trusted and both sides take this path.
+and applies a move only at a step boundary. Prompting before the move lets the whole first step,
+including writes and children, run in the canonical checkout. Follow this ordering after a restart
+too, when neither pair is trusted.
 
 Tools follow a two-phase guard (`session/tool-execution-gate.ts`). Before the base checkout exists,
 only tools with no filesystem dependency run: questions, task tracking, web access. Skills wait for
@@ -671,31 +627,28 @@ reported, so the journal renews every stream right before each mark (`renewStrea
 non-executable in both kept slots, and the pair comparison passes because both sides match.
 
 Each kept slot is followed by its own watch from the end of one sync to the start of the next.
-FSEvents replays the last few milliseconds before a stream starts, so a root the sync cloned just
-before arrives as an event on the root itself; the slot watch counts such an event only when the
+FSEvents replays the last few milliseconds before a stream starts, so a root cloned immediately
+beforehand arrives as an event on the root itself; the slot watch counts such an event only when the
 root's lstat identity changed since the watch began. The replay also leaves parcel remembering the
 root's mtime, and a root moved away and straight back keeps its mtime, so parcel then drops the move.
 A slot watch that let a replay through therefore takes a new native watcher a second
 later (`REPLAY_MS`).
 
-The send releases the retained winner (stops its services, records the transition, releases its
-slot) without waiting for it, unless one of the winner's ports still accepts connections: a
-contestant must not reach the previous preview through a URL in the history. The transition goes to
-the report in the UI and never into a contestant prompt, which is what lets the send skip the wait.
-A background release that fails marks the run `cleanup_failed`, and the next send retries it.
+Release the retained winner in the background at send, but wait if any of its ports still accepts
+connections: an old preview URL in history must not reach the previous environment. Put this
+transition in the UI report, never a contestant prompt. A failed release marks `cleanup_failed`
+and retries on the next send.
 
-OpenCode starts a directory's location services and takes its first snapshot on the first prompt
-there, and both took 1-3 s after the battle was already `running`. Arena starts them in the
-background when warm preparation finishes (`SessionPrompt.prepare`), so a warm send prompts
-contestants that are already booted. Cold and refreshed sides do this work when their session
-moves into the staged worktree, before their first prompt.
+Location services and initial snapshots start with the first prompt. The V2 adapter's
+`SessionPrompt.prepare` is a no-op (`arena/session-runtime/index.ts`); do not assume warm
+preparation has booted those services.
 
 Arena keeps snapshots for recovery but skips OpenCode's automatic per-step diff summaries.
 A branch switch can make a JavaScript diff block both contestants for minutes. Snapshot
 patches use native Git with time and output limits; battle review owns its separate comparison.
 
-Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service, use
-`.localhost` hostnames, and never retarget an old URL to a later process.
+Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service and use
+`.localhost` hostnames; old URLs must never reach a later process.
 
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
@@ -750,9 +703,8 @@ files included, as it does `refs/battles/`.
 Archive takes the same snapshot before it removes an app-owned worktree (`preserveForArchive`,
 called from the archive's directory removal). Every archive path passes that hook as
 `preserveWorktree`: the app, `paseo worktree archive`, the MCP archive tool, auto-archive after
-merge, and an agent's auto-archive. `ArchiveDependencies.preserveWorktree` is required (`null` only
-in tests) and the MCP tool host throws without it, so a new archive caller cannot leave it out by
-accident and remove the directory unsaved. Paseo's restore rebuilds an archived worktree from the
+merge, and an agent's auto-archive. Keep `ArchiveDependencies.preserveWorktree` required and the MCP tool host's missing-hook check,
+so a new archive caller cannot remove the directory unsaved. Paseo's restore rebuilds an archived worktree from the
 branch in its workspace record and drops the uncommitted files. A New worktree records no branch: it
 starts detached, and "Create branch here" or an agent's `git switch -c` does not reach the record
 until it is next refreshed. Without the snapshot, Restore would start a new branch at the base and
@@ -779,9 +731,7 @@ add an app-owned worktree's path as a project and start a Local chat there: both
 and, once both are archived, one snapshot. Project removal releases that snapshot only when no record of
 another project still uses it, and it removes the records before it releases the snapshot, so a failure
 on the way never leaves a record without its saved code.
-Paseo
-keeps a removed project's archived records, but these have no directory and no saved code, so a
-record that something re-linked later would restore to the base commit.
+Keeping those records as Paseo does would allow a later relink to restore only the base commit.
 
 Cleanup leaves the workspace and conversation available. Restore files recreates the saved code at
 the same path and never overwrites an occupied directory. HEAD goes back on the branch it was on when
@@ -795,7 +745,7 @@ APFS a slot's clones share blocks with the checkout until something writes to th
 
 ## A turn
 
-**Start** (`arena/service.ts:2432`). Refuses unless the chat is `ready`, no turn is active, and no
+**Start** (`startTurn` in `arena/service.ts`). Refuses unless the chat is `ready`, no turn is active, and no
 ordinary turn is in flight. A failed first send returns the saved message to New chat. Keep its
 error and retry instruction in the scrolling setup area until dismissed, so a long startup error
 cannot cover the composer. Freezes canonical `HEAD` together with the exact staged, unstaged, and
@@ -821,7 +771,7 @@ turn-scoped and idempotent for retries. The local turn and run records contain t
 model names or slugs, until resolution. Changing a pool does not change assignments already stored.
 
 In hosted mode the control plane draws from its active model set.
-Development is the default and uses `defaultPool`: GLM 5.3 FlashX, Qwen 3.8 Max, and Grok 4.6. Production
+Development is the default and uses `defaultPool` (`arena-service/src/default-pool.ts`). Production
 uses the [current hosted models](../README.md#current-models). Set `OPENCODE_ARENA_MODEL_SET=production`
 on the control plane to use it. The pool, its selection, and `arenaAssignmentSets` stay server-side; the local runtime never
 receives model slugs or stable aliases before reveal. A BYOK build always draws from `defaultPool`
@@ -888,16 +838,14 @@ side or a spare, becomes the checkout; its host repository, `<slot>.git`, become
 matched in every spelling a tool prints: after `file://`, under `/private`, behind `../`, and from
 `~` or `$HOME`. A slot is matched by the names Arena gives slots (`SLOT_PATH_PATTERN` in
 `arena/domain.ts`), not by reading up to the next separator, which swallowed a sentence's closing
-`.` and a JSON string's `\n` with the path. Before this, the read tool's `<path>` header and grep, glob and shell output kept
-the winner's worktree path, so later turns, and the chat's own agent in the checkout, re-read an
-earlier turn's slot; by then that path is gone or belongs to another side. Chats copied before the
+`.` and a JSON string's `\n` with the path. Unretargeted read headers and search or shell output send later turns back to a slot that can be
+gone or owned by another side. Chats copied before the
 change keep their old paths, so the fork never localizes a checkout path into `.agent-duel`: it
 would name a directory inside the contestant's own worktree that does not exist.
 
-The fork also clears, for the model, the output of older tool calls the contestant can repeat
-(`pruneToolOutputBefore` in `arena/fork.ts`): those from before the chat's last finished turn
-(`lastTurnStart` in `arena/service.ts`). The last turn keeps its output, since its test runs and
-reads are the freshest context. Output the contestant cannot get back stays: a question's answers,
+The fork clears repeatable tool output from before the last finished turn
+(`pruneToolOutputBefore` in `arena/fork.ts`, `lastTurnStart` in `arena/service.ts`). Keep the last
+turn's output as recent context. Output the contestant cannot get back stays: a question's answers,
 a subagent's report, a skill, an MCP tool's result, and a read outside the worktree, such as an
 earlier turn's upload, which the sandbox below closes. The call and its input stay, and the model
 sees OpenCode's "[Old tool result content cleared]" placeholder instead of the output. A battle
@@ -936,12 +884,12 @@ The checkout's `.git` is readable too. A side's result is imported into it under
 as soon as the side finishes, before the vote. Git objects can contain other contestants' work;
 these tool checks do not filter object contents.
 
-The shell check shares the parsed-tree walker with [Battle off](#battle-off), but distinguishes
+The shell check shares the parsed-tree walker used by Ask before tools, but distinguishes
 reads from writes so a checkout file can be a copy source. It checks literal command operands,
 redirects and inline shell code, and follows existing symlinks, including parents of new files.
-This is tool policy, not an operating-system sandbox: computed paths, scripts on disk and programs'
-internal file operations remain outside the scan. Searches from an ancestor can still enumerate
-restricted descendants. Do not claim that it confines arbitrary code.
+These tool checks provide no operating-system sandbox. See [Gotchas](#gotchas) for unscanned paths
+and code. Programs' internal file operations also escape the scan, and searches from an ancestor
+can enumerate restricted descendants. Do not claim that it confines arbitrary code.
 
 Each side has a temp directory under the system temp directory, `opencode/arena/<root session id>`.
 Shells in the side and its children export it as `TMPDIR`, `TMP` and `TEMP`. It is removed when the
@@ -949,44 +897,31 @@ run gives up its worktree: released for the
 next pair (`releaseRunSlot`) or removed by archive, eviction or an environment release
 (`removeStoppedRun`).
 
-Both sides run at once and `/tmp` is one shared folder, so a side that writes where a task says can
-overwrite or read the other side's file. Every model in the production pool writes `/tmp/word.txt`
-when a task names it. Keep the rule out of the system prompt: a contestant learns it from the
-denial, which directs it to `$TMPDIR`.
+Keep the shared-temp restriction out of the system prompt. A denied write tells the model to use
+its own worktree or `$TMPDIR`; a denied read says other Arena worktrees and other sides' temp
+directories are closed. Do not include absolute rule lists: they expose home-directory paths to
+transcripts and research uploads. Shared temp writes can otherwise overwrite the other side's work.
 
-A contestant denied a write gets a short instruction to use its own worktree or `$TMPDIR`.
-A denied read says that other Arena worktrees and other sides' temp directories are closed. Keep
-absolute rule lists out of these messages; they expose home-directory paths to the transcript and
-research uploads.
-
-The two sides are prepared **at once**, since each has its own host repository and session, and
-the host repository is a copy-on-write clone of the checkout's git directory where the
-filesystem allows it. Both are then prompted concurrently, each in its own worktree.
+Prepare and prompt both sides concurrently, each with its own host repository, session and worktree.
+Use copy-on-write host clones where the filesystem supports them.
 
 Contestant subagents share their parent's worktree and run in the background when the call sets
-`background=true`. Give independent children separate file scopes so they can work in parallel
-with the parent.
+`background=true`. Give independent children separate file scopes so they can work alongside the
+parent. Core can end the parent's run before its children and wake it in a new run for each result.
+The side's prompt fiber therefore follows those runs (`awaitChildren`) until the parent is idle,
+no child works, and every result has reached the parent. Join with `prompts.join`: `prompts.loop`
+on an idle session pays to answer the last message again.
 
-Ending the parent's response while children work does not finish the contestant. Core ends the
-parent's run there and wakes the parent in a new run for each child result, and nothing waits for
-those runs. So the side's prompt fiber follows them (`awaitChildren`), and the side ends when the
-parent is idle, no child works, and each result has reached the parent. It joins with
-`prompts.join`, never `prompts.loop`: `resume` on an idle session makes Core answer the last message
-again, which is a paid model request.
+Allow five hours before cancelling a hung child and failing the side. Store the reason in its error
+and the engine log, and let the battle reach a decision. Do not show a countdown.
 
-Allow five hours for this wait. The limit exists only to end a truly hung child: on expiry, cancel
-the children as Stop does and fail the side with the reason in its stored error and the engine log,
-so the battle can reach the vote. Do not show a countdown.
-
-Stop, early selection, terminal parent failures, and Send now on a queued steer cancel outstanding
-children. Core has no such call (anomalyco/opencode#36423), so `cancelRun` interrupts each child and
-cancels its job. Each cancelled child still leaves a cancelled result in the parent's history: the
-parent was told it would be notified, and Send now and Retry resume it. Core wakes the parent for
-each result, which after a Stop would send a model request for a battle that is over, so `cancelRun`
-first holds the parent's wake in memory (`SubagentJob.hold`) until its next `prompt` or `loop`.
-A child that runs during a crash does not continue after restart, as on main: the desktop engine
-does not call Core restart recovery. A side that ended waits for its cancelled children before finalization (`settleChildren`); a late result would
-otherwise arrive after Arena has captured the final Git state.
+Stop, early selection, terminal parent failures, and Send now cancel outstanding children. Core
+has no combined cancellation call, so `cancelRun` interrupts each child and cancels its job. Keep a
+cancelled result in the parent's history: it was promised a notification, and Send now or Retry
+resumes it. Hold the parent's wake (`SubagentJob.hold`) until its next prompt or loop so cancellation
+cannot spend another model request after Stop. Wait for cancelled children before finalization
+(`settleChildren`), or a late result can arrive after the final Git state was captured. See
+[Gotchas](#gotchas) for crash recovery limits.
 
 The contestant instruction (`contestantSystemInstruction`) rides on the user message as `system`,
 and each request builds its system prompt from the latest user message. The system text heads the
@@ -1032,7 +967,7 @@ the session's model, so a fill moves the canonical transcript hash. The guard re
 `message`: the generated client keeps an error body only for a status the route declares, every
 session route declares 400, and a 409 reached the app as a bare `UnexpectedStatus: 409`.
 
-**Finalize** (`arena/service.ts:1705`). Each side settles on its own: terminal state and the actual
+**Finalize** (`finalizeSide` in `arena/service.ts`). Each side settles on its own: terminal state and the actual
 Git state are recorded under the generation's private battle refs, numstat is stored, and
 applicability is set to `applicable` only when the frozen base is an ancestor of the result. A
 companion private ref transports the final index tree. Recording must preserve empty and multiple
@@ -1047,8 +982,7 @@ checkout does not ignore. The contestant is checked against the base, and in a c
 `node_modules` the exclude would drop a new package's files while its edits to tracked ones still
 apply. When both are in, the
 turn becomes `awaiting_vote` and the comparison starts in the background
-(`startUtility` in `arena/service.ts`). When a side failed it writes no report and skips the Git
-evidence: the comparison is `skipped` and only the first turn's title is requested. A failed
+(`startUtility` in `arena/service.ts`). A failed side skips comparison generation; see [review behavior](#what-this-is-for). A failed
 comparison never blocks a vote.
 
 ## Blinding
@@ -1119,8 +1053,8 @@ field. Each layer has its own file:
   after differences that exist only in private deliberation.
 
 A BYOK build runs the same layers, so the UI, the stored records, and the judge are blinded the
-same way. Nothing enforces it: the user owns the key, the process that routes the calls, and the
-SQLite store that holds the mapping. Treat BYOK blinding as a UI convention, and never upload a BYOK
+same way. The user owns the key, routing process, and SQLite mapping, so these layers cannot hide identities
+from them. Treat BYOK blinding as a UI convention, and never upload a BYOK
 vote.
 
 The comparison uses base-to-agent changes, direct A/B differences, and visible timelines. It uses the dedicated
@@ -1178,41 +1112,31 @@ Use one utility request; increase evidence quality before adding model passes.
   runs failed (`canDiscardBattle`). It is the stopped battle's discard: the control plane records
   `discard`, not a vote, and the checkout is left as it was.
 - **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
-  (`arena/service.ts:4527`). Keeping a side when the other had already failed, not just been
-  stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.
+  (`stop` in `arena/service.ts`). Keeping a side when the other had already failed carries the same `voteDiscardedReason`, so metrics do not file it as a win.
 
-**Applying** (`arena/service.ts:4039`) records the resolution and enters `applying` in one
-compare-and-set. The response and feed reveal that durable choice before transcript retention,
-application, cancellation, or timeline hydration continue in the background. A vote, a kept side
-after Stop, and an answer to a review all answer once the apply is claimed (`applyInBackground`):
-on a large checkout the plan and the write take minutes, longer than the client waits for an
-answer, and a timed-out answer read as a failure while the engine went on. A failure lands on the turn as `application_failed`. The battle stays open
-while the selected result is being applied, then collapses; expand it for the difference summary,
-changed files, both threads, and the transition report. Each contestant pane keeps its worktree menu
-in the header and its owned services below
-the thread. The workspace header shows the current branch beside Commit. Click the branch, or
-Environment in the header overflow, for checkout, retained environment, and service details.
-Show a timeline of the operations the engine records in the conversation: before the battle during
-setup and after the battle during application. Hide the contestant panes, reply controls, and early
-picks until setup finishes, including file copying that overlaps model startup. `Stop` stays from
-the moment the battle runs, since the engine aborts the copy rather than waiting for it. Keep completed
-steps beside active work, with each step's elapsed time. Concurrent steps can both be active; a failed
-or interrupted step never receives a completion check. Reserve the timeline's height while it fills
-so the chat does not move at each update.
-A retained winner with live services is not evidence of cleanup. Keep completed environment changes
-in the transition report. Normal background warm preparation stays silent; failures remain visible.
-See the decision controls above for the vote, composer, and transitional states.
+**Applying** (`promoteImpl` in `arena/service.ts`) records the resolution and enters `applying`
+in one compare-and-set. Acknowledge votes, kept sides, and review answers after that durable claim
+(`applyInBackground`); Git work can exceed the client's wait. The feed carries progress and failures,
+including `application_failed` and `canonicalization_failed`.
 
-The selected contestant's Git state is the source of truth. Preserve its no-commit dirty and index
-state, every actual commit (including empty or multiple commits), and commit-plus-residual state.
-Arena must not create a visible commit of its own. Finalize records every branch, tag, and
-remote-tracking ref the contestant moved, its own branch included, and imports their objects and its
-real `HEAD` under the run's permanent ref.
+Keep the battle open during application, then collapse it. Expanded history retains the summary,
+changes, threads, transition report, worktree menus, and services. The workspace header's branch
+control and Environment overflow item open checkout and environment details.
+
+Show recorded setup and application operations in the conversation. Hide panes, replies, and early
+choices until setup finishes, including copying that overlaps model startup. Keep Stop available
+from the running state; it aborts copying. Keep completed steps beside concurrent active steps,
+show elapsed time, and reserve timeline height. Failed or interrupted steps get no completion check.
+A retained winner with live services does not prove cleanup. Preserve completed transitions in the
+report; ordinary background preparation stays silent while failures remain visible.
+
+Apply the Git state captured at [Finalize](#a-turn). Include every branch, tag, and remote-tracking
+ref the winner moved, its own branch included; the run's permanent ref holds its real `HEAD`.
 
 ### The review
 
-The vote decides everything before it writes anything (`planWinner` in `arena/service.ts`). Each
-ref the winner moved is measured against the developer's repository now: what the agent did
+Plan every Git change before writing the checkout or refs (`planWinner` in `arena/service.ts`). Each
+ref the winner moved is compared with the developer's repository now: what the agent did
 (created, added commits, rewrote, deleted) against what the developer did in the meantime. The
 rules live in `arena/branch-review.ts` and are the product decision.
 
@@ -1236,7 +1160,7 @@ Everything else stops the vote and parks the turn in `application_failed` with G
 - A branch another worktree has checked out. Taking it detaches that worktree at its commit.
 - A merge, rebase, cherry-pick, or revert in progress. This one is a wait, with its own callout.
 
-All the other items share one callout in the shape of main's old divergence callout: the files, then
+All other items share one callout: the files, then
 the branches with what happened to each, and three answers that settle every item at once. With one
 item, the title, the buttons, and a bullet list of the commits an answer removes name that item. **Keep my
 changes** keeps the developer's version of each item. **Apply winning changes** takes the winner's;
@@ -1257,7 +1181,8 @@ chat, so an agent in that turn reads that its changes are done; `unappliedWinner
 synthetic part to the user's message that says they are not. A system line was not enough: the
 model trusted the transcript over it. The daemon keeps synthetic parts out of the chat.
 
-Nothing applies until every item has an answer, and then all of it applies or none of it.
+Git application waits until every item has an answer. Apply the checkout and refs together,
+rolling back a partial write on failure.
 `holdWinnerRefs` opens one `update-ref --stdin` transaction for every other ref and stops at
 `prepare`, which takes the locks and checks the values the plan saw; a ref that moved, or one
 another Git process holds, fails there while nothing has changed. `promoteWinnerState` then writes
@@ -1269,11 +1194,14 @@ mode of `retry_resolution`). The checkout branch and the switch target are never
 which is what lets the checkout be written while the locks are held. A promotion that stops for any
 other reason offers an agent too, with the reason in its prompt.
 
-A `conflicted` turn stays parked until the markers are cleared. After the Git
-state is applied, Arena grafts the winner's transcript into the canonical session
-(`arena/service.ts:3977`), dropping any partial remnant first so a retried graft cannot append a
-second copy. Worktrees are cleaned, the canonical transcript hash is re-recorded, and the turn
-completes. The loser survives only as its permanent ref.
+Copy the winner's transcript and retain its environment alongside Git application
+(`promoteImpl` in `arena/service.ts`). The graft drops any partial remnant before copying, so retry
+cannot append a second copy. Finish the graft before parking for review: a half-copy above later
+user messages cannot safely be replaced. Use `unappliedWinnerNote` above while those files are unapplied.
+
+A `conflicted` turn stays parked until its markers are cleared. Once application and grafting
+settle, release the loser's environment, re-record the canonical transcript hash, and complete the
+turn. Keep the winner's environment until its next send or cleanup.
 
 While application is running, the composer accepts one prompt for the next turn. Send captures the
 current Battle toggle, stops the retained environment as part of the human/agent environment
@@ -1284,29 +1212,23 @@ failed single-agent send stays in the queue for editing and retry.
 
 ## The reveal
 
-```
-const revealed = identitiesRevealed(turn.resolution)   // arena/domain.ts
-```
+`identitiesRevealed` in `arena/domain.ts` governs the public projection. Resolution reveals both
+identities once either side has shown text, reasoning, or a tool call. Two cases stay blind:
 
-That one rule governs the public projection. Every resolution reveals except the abort of a battle
-that failed while it was being created: neither side ran, so it is recorded without names before the
-control plane answers, and an unreachable service cannot hold it. The control plane resolves the
-assignments in the background, which stops their routing. Its usage is never persisted, since
-nothing reveals it. The chat shows **Battle couldn't start**, and **Try again** sends
-the same prompt as a new battle with a new pair. A discard of a battle in which neither side
-showed the voter anything, no text, reasoning or tool call after the prompt (both failed on their first
-request, or were stopped before answering), is recorded without names too (`anySideShowedOutput`);
-the card reads **Battle discarded**. One side's output is enough to reveal both. Before committing a vote, the service resolves the
-assignment on the control plane. Resolution accepts only the final decisions defined for that kind
-of assignment. The first decision is immutable; a retry returns that committed decision and the
-desktop honours it instead of applying a later choice. Only then does the control plane return
-display names. The local resolution and revealed names are written together, so an unresolved record
-never contains identities. The server keeps the assignment mapping permanently, so an old unresolved
-battle remains resolvable. Failed run text is masked to "Contestant run failed". The UI never has the
-names to leak, so nothing in `packages/app/` needs to enforce secrecy.
+- A battle that failed during creation ends locally before the control plane answers. The chat
+  shows **Battle couldn't start**; **Try again** sends the same prompt with a new pair.
+- A discarded battle with no output from either side shows **Battle discarded**
+  (`anySideShowedOutput`).
 
-`identity.name` is the profile's **display name** ("Qwen 3.8 Max"), not the slug — the app matches on
-it for vendor marks and pretty names.
+Resolve those assignments in the background to stop routing, without persisting their usage. For
+other decisions, resolve on the control plane before recording the local choice. It accepts only
+that assignment kind's decisions, and the first is immutable: a retry returns the committed
+decision, which the desktop must honor. Write the resolution and revealed names together so no
+unresolved record contains identities. The server retains assignments permanently, so an old
+unresolved battle remains resolvable. Mask failed run text as "Contestant run failed".
+
+`identity.name` is the profile's display name, which the app uses for vendor marks and labels.
+The app receives no names before reveal.
 
 ## Battle off
 
@@ -1357,30 +1279,29 @@ that the turn already ran sends no switch.
 
 ## States and failure
 
-`arena/domain.ts:63` holds the legal-transition table: 19 states, an explicit map, and
-`requireTransition` for the compare-and-set call sites. Read it before adding a state.
+`arena/domain.ts` holds the legal-transition table and `requireTransition` for compare-and-set
+call sites. Read it before adding a state.
 
 Failure has first-class states — `creation_failed`, `finalization_failed`, `application_failed`,
 `canonicalization_failed`. The last two come after the decision and transition back into the step
-they failed, so a resolution can be retried instead of losing the battle. A battle that fails
-before anyone decides it is aborted at once (`abortUnresolved` in `arena/service.ts`): its pending
+they failed, so a resolution can be retried instead of losing the battle. A turn-level failure
+before resolution aborts the battle at once (`abortUnresolved` in `arena/service.ts`): its pending
 sides are cancelled and settled, so no pane keeps reading as working, its worktrees go, and the chat
 is ready again. A turn startup finds in `creation_failed`, because the previous process stopped
 while ending it, is ended the same way rather than parked for Keep or Discard, which would name the
 pair. `interrupted_recovery` is where a turn lands when the daemon dies mid-battle.
 
-A battle the restart cut off goes back to the vote (`reopenInterruptedTurn`), because quitting the
-app is not a decision about the battle. A side that had finished keeps its result. A side that was
+A battle cut off by restart reopens for Resume or Discard (`reopenInterruptedTurn`); quitting the
+app records no decision. A side that had finished keeps its result. A side that was
 working is committed as `interrupted`: its cut-off response is closed the way a stop closes it, so
 its unfinished tool calls end interrupted and are never run again. The pill then holds only
 **Resume**, its one filled choice, and **Discard** (`canResumeBattle`). Resume (`resumeBattle`)
 claims every interrupted side at once and continues each from its cut-off response. No side resumes
 alone, and an interrupted run has no Retry, because a side that started first would get a head start
-on a battle meant to be fair. Nothing is voted on until it resumes, not even a side that had
-finished: the voter never saw the other side finish. The card hides the summary and changes until then too, since they
-compare work that is not finished. Resume costs no retry, since the models did
-nothing wrong. Never resume automatically at startup: that spends on both contestants
-before the voter is back, and a quit is sometimes meant as a stop. Two cases still recover as a
+on a battle meant to be fair. Until Resume, hide review and refuse every vote, including for a side
+that finished: the other side has not finished. Resume spends no manual retry. Never resume
+automatically at startup: it spends on both contestants before the voter returns, and a quit can
+be intended to stop the work. Two cases still recover as a
 stopped battle (`canReopenInterruptedBattle`): one the voter was already stopping, and one with a side
 whose environment never finished copying (`environmentReadyAt`), since a resumed contestant would
 work without those files. Engines before this parked every interrupted battle as stopped; startup
@@ -1400,25 +1321,24 @@ no note. With Battle off, the matching engine-exit error stays in its place in t
 “The engine restarted, and a running command stopped.” in the app's language. Other exits keep their
 existing text.
 
-Payment failures belong to the service account, not the voter's account; in a BYOK build that
-account is the user's own OpenRouter key. Only a classified
-temporary request-budget failure is retried, on the same assignment and session, before any
-response output. Retry is bounded to three additional attempts and two minutes of waiting;
-credit-limit and unknown payment failures need service-side attention. Keep billing details out
-of user-facing messages. Never change contestants
-or replay a partially received response to recover a payment failure.
+Payment failures belong to the service account; BYOK uses the user's OpenRouter account. Keep
+billing details out of user-facing messages. The service distinguishes temporary request-budget,
+credit-limit, and unknown payment failures, but Core classifies HTTP 402 as nonretryable quota
+failure (`ai/src/provider-error.ts`). There is no automatic temporary-budget retry in the V2 path.
+Never switch contestants or replay partial work to recover payment failures.
 
-An output-token cap continues from the saved response and tool results, under the same assignment.
-Never replay that response: completed tools may already have changed files. Unfinished tool calls
-must stay unexecuted; ask the model to replace them with smaller writes or patches. Allow three
-additional responses for each recovery sequence, including across compaction and loop restarts,
-then report the recovery failure visibly and preserve completed work. A successful complete response
-resets the budget so later cutoffs do not penalize a long run; failed tools and compaction summaries
-do not reset it. This budget is separate from transport retries.
+An output-token cap continues from saved output and tool results under the same assignment. Never
+replay completed tools. Leave unfinished calls unexecuted and request smaller writes or patches.
+Core allows two continuations, then fails on the third consecutive `length` response while
+preserving completed work (`core/src/session/runner/llm.ts`). It counts recent durable user and
+assistant rows: a user message or a non-`length` assistant response breaks the streak; compaction
+rows do not. Failed tool results are not a separate reset condition. This budget is independent
+of transport retries.
+
 OpenRouter can report a truncated tool call as `tool_calls`, even in its native finish reason.
-Treat incomplete arguments at the requested output cap as a cutoff too, including when usage arrives
-after the finish chunk. A complete call at the cap remains valid. Normalize before the SDK flushes
-arguments, or it can turn incomplete JSON into an executable empty object.
+Treat incomplete arguments at the requested output cap as a cutoff, including usage arriving
+after the finish chunk. A complete call at the cap stays valid. Normalize before the SDK flushes
+arguments, or incomplete JSON can become an executable empty object.
 
 The OpenRouter SDK ends a tool call as soon as its arguments parse as JSON and sends a delta for each
 later chunk of that call. Qwen 3.8 Max sends an empty chunk after the closing brace, which Core treats
@@ -1431,12 +1351,10 @@ before then leaves the call unexecuted, with the provider or cancellation error.
 stay in the failed call's history, so the model can see what it tried to send.
 
 Other retryable Arena failures use Core's ten-retry allowance per logical step: eleven attempts
-including the first. There is no two-minute wall-clock limit. Request time is additional to the
+including the first. There is no wall-clock limit. Request time is additional to the
 backoff, so repeated broken streams can take five minutes or longer. Provider retry hints can
 lengthen the waits, up to fifteen minutes per hint. Cancellation and permanent errors stay
-terminal. A failure before output retries the request; after output, Core keeps the partial
-response and asks the model to continue, under the same allowance. A completed step starts a new
-allowance. Model timeouts have the separate, smaller limit below.
+terminal. A completed step starts a new allowance. Model timeouts have the smaller limit below.
 
 An offline machine spends no retry. When a contestant request cannot reach the network at all (DNS
 fails or there is no route), the daemon's runtime proxy in a hosted build, or the in-process service
@@ -1445,7 +1363,7 @@ exactly two more cases: the control plane refused the connection (`ECONNREFUSED`
 timed out (`UND_ERR_CONNECT_TIMEOUT`). Then no request was written, so runs wait out a restart.
 Every failure after a connection exists is a 502 that spends the retry budget: a reset, a closed
 socket, or a TLS handshake drop. The control plane can have started the model call, and every wait
-would start another. Node reports a reset just after connect the same way as one after the request
+would start another. Node reports a reset immediately after connect the same way as one after the request
 (`read ECONNRESET`). An HTTP error from the control plane passes through. On a 503 the contestant
 waits with backoff capped at 10 seconds for as long as the network is gone, shows **Waiting for
 network**. These persistent waits have no wall-clock limit. A closed lid is the common
@@ -1458,22 +1376,18 @@ A stream that ends without a finish reason or `[DONE]` is broken too (`endsRespo
 accepted as a finish, the step has no tool call and the run completes with no answer. Each cut
 spends one of the step's ten retries; request duration does not reduce the count.
 
-A restart resends the request the failed attempt started from, so it removes that attempt's parts
-before the retry wait; otherwise the pane and the transcript show a half answer above the new one.
-Never restart once the attempt has started a local tool: the resent request does not contain that
-call, and the model can repeat its side effect. That failure ends the step instead, and the next
-step continues from the stored tool call and result (`session/processor.ts`).
+Core retries a request with no output from the same starting point. Once output begins, it keeps
+the partial response and asks the model to continue (`CONTINUE_AFTER_INCOMPLETE_STREAM` in
+`core/src/session/runner/llm.ts`), preserving stored tool calls and results so their side effects
+are not replayed. A declined or interrupted tool prevents this automatic continuation
+(`core/src/session/runner/step.ts`).
 
-Core continues a stream cut after output has started instead of restarting it. The half answer stays
-with its error, and a note after it tells the model to go on (`CONTINUE_AFTER_INCOMPLETE_STREAM` in
-`core/src/session/runner/llm.ts`). When that side wins, the graft copies its half answers, the notes
-and the continuation as written and in order (`messagesToGraft` in
-`arena/session-runtime/projection.ts`), so the next turn's model reads what the winner's model read.
-The chat shows each piece as its own block and can repeat text, because models often begin a line or
-a block again after a cut. The notes do not show: the timeline renders no synthetic row. Do not join,
-edit or deduplicate the pieces. Text rules that tried lost content at 64–76% of cut points for a
-re-opened JSON, HTML or SQL block in an offline simulation. To make the pieces read as one answer,
-change the display and leave the rows as they are.
+If that side wins, graft its half answers, continuation notes, and completed answer in order
+(`messagesToGraft` in `arena/session-runtime/projection.ts`). The next model must read what the
+winner read. The chat shows separate blocks and can repeat text because models often restart a
+line after a cut; synthetic notes stay hidden. Do not join, edit, or deduplicate stored pieces:
+text rules can lose content inside reopened JSON, HTML, or SQL blocks. Improve the display without
+rewriting the rows.
 
 A run that fails after the budget can be retried by hand. A failed run cannot be chosen or tied, so
 without a retry the voter is left with the other side alone, or with Discard when both failed (see
@@ -1486,21 +1400,20 @@ of it. A half answer that ran a tool stays, because the tool's work is in the wo
 keeps working, and the turn finalizes
 again once both have settled, as after a reply. Each run gets two retries
 (`MAX_MANUAL_RUN_RETRIES`): every retry is paid for, and a failure that keeps repeating is answered
-by the other side or a new prompt. `canRetryRun` in `arena/domain.ts` is the one rule; the service
-refuses what it refuses, and the app shows the button from it.
+by the other side or a new prompt. Use `canRetryRun` in `arena/domain.ts` for both the service
+refusal and the app's button.
 
 An Arena model request that gets no response headers, or no SSE event, for 150 seconds fails with
-`Response headers timed out` or `SSE read timed out`. Core restarts the request when it had no
-output, or keeps the partial response and asks the model to continue. The pane shows **Continuing
-after model timeout** until that recovery request's stream ends. As in 1.x, three timeouts in a row
+`Response headers timed out` or `SSE read timed out`. Recovery uses the retry or continuation
+policy above. The pane shows **Continuing after model timeout** until the recovery stream ends. Three timeouts in a row
 are recovered; the fourth fails the run with only the neutral `IDLE_EXHAUSTED` text, and completed
 work stays. The label stays until the run settles, so the pane goes straight to Failed. Only the
 contestant's own model requests count; title and compaction requests neither count nor end a
 recovery. A new prompt, the end of the run, or a response whose SSE finish reason is `stop` or
 `tool_calls` starts the count again. A `length` cutoff or an error event inside the stream does not.
-1.x also kept counting after a complete step with a failed tool; the fetch layer cannot see tool
-results, so that step resets the count here. The count lives in memory. An engine restart marks the
-running turn interrupted, and only a new prompt continues it, which starts the count again in 1.x too.
+A normally finished response resets the count even if its tool failed: the fetch layer cannot
+see tool results. The counter lives in memory and resets after an engine restart; continuing an
+interrupted battle still requires Resume.
 
 The chunk deadline is Core's, inside `AISDK.providerFetch`. It moves on every parsed SSE event, so
 chunks that carry only OpenRouter `reasoning_details` keep a long thought alive, and keep-alive
@@ -1516,11 +1429,11 @@ A request above the estimated savings threshold triggers compaction. Keep a new 
 its attachments intact while summarizing the earlier history. The summary request must be allowed
 to exceed the savings threshold; the provider's context window still applies.
 
-A compaction summary that ends idle, at its output cap, or empty must never become the history. A
-finished summary hides everything before it, so the contestant continues with no memory of its task
-and asks what it was working on. `session/compaction.ts` removes the unusable summary and asks again,
-three more times, then fails the step with a retryable error and the history intact; Retry
-compacts again.
+Never replace history with an idle, truncated, or empty compaction summary: a completed checkpoint
+hides earlier history from the next request. Core retains the history on failure
+(`core/src/session/compaction.ts`). Transport failures use its retry policy; an output-limit summary
+fails immediately. A reply missing the required summary headings, including an empty reply, gets
+one reminder before failure.
 
 A connection can also die without closing. On some mobile networks the hosted function finishes the
 response while the desktop never receives another byte or a close, and only the 150-second deadline
@@ -1536,13 +1449,12 @@ gets no deadline, and the BYOK service turns recovery off: nothing sits between 
 The control plane deploys the replay route as its own function, and the daemon's runtime router
 allows it by path.
 
-The contestant sees only a neutral error, so diagnose a deadline from the engine log,
-`~/.local/share/opencode/log/opencode.log` for the packaged app too. Each timeout writes
-`arena model response idle` with the last part types the model produced and the proxy's record of
-that stream: when it last received a chunk, ended, started and finished saving the response, and
-closed. A stream that ended but never closed stalled inside the engine, not upstream. Compare it
-with the control plane's `arenaAssignmentGenerationMetrics` record for the same `generationID`,
-whose `createdAt` is when the hosted function reached the end of the response.
+Diagnose deadlines from the OpenCode engine log and the proxy's `streamProgress` timestamps
+(`arena/proxy.ts`). Compare chunk receipt, response end, artifact saving, and closure: a stream
+that ended but never closed stalled inside the engine. Correlate its `generationID` with the control
+plane's `arenaAssignmentGenerationMetrics`, whose `createdAt` marks the hosted function's response
+end. The legacy `arena model response idle` log is emitted by `session/llm.ts`; the V2 fetch adapter
+does not emit it.
 
 A request OpenRouter refuses reaches the contestant as the same neutral error, and only the service
 sees why. It logs `[arena-service] OpenRouter refused a contestant request` with the battle ID
@@ -1567,8 +1479,8 @@ makes it refuse the database instead. Installing 2.0 again keeps the work since 
 
 Before the first import, the engine backs up its database and `arena.sqlite` to
 `$PASEO_HOME/arena/pre-opencode-2-backup/`. Keep this copy as protection against an accidental old
-build. It takes about the size of both databases. The measured import growth was 21–23%; it does
-not need the same free space again. A failed backup still stops an unfinished import, because the
+build. Reserve space for copies of both databases and for import growth; the import does not need
+a second complete copy. A failed backup still stops an unfinished import, because the
 pre-upgrade copy is required protection. An already imported database starts without a backup.
 The first engine start after 14 days removes the copy; a removal failure logs a warning and does
 not stop startup. This is elapsed time, even if the app was not used.
@@ -1642,3 +1554,6 @@ the switch. These file-recovery steps do not make 1.x a supported continuation o
 - New turns use a fresh port bank and never retarget old `.localhost` routes.
 - The production pool lives only in the control-plane package; never import it from the engine.
   The engine bundles `defaultPool` for BYOK, and a hosted runtime must never read it.
+- A child agent running during a crash does not continue after restart; the desktop engine does not run Core restart recovery.
+- A background child of a shell can survive Stop.
+- Shell paths in variables, computed paths, scripts on disk, and code piped to an interpreter get no check.

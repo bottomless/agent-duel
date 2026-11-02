@@ -118,7 +118,7 @@ See [docs/development.md](docs/development.md) for full setup, build sync requir
 ## Critical rules
 
 - **Do not fix underlying Paseo issues in this repository.** Report shared Paseo defects upstream and keep changes here scoped to Agent Duel. Pull their fixes from upstream when this repository is updated.
-  Vikas approved an exception for these seven items to support the OpenCode 2.0 port: R46's silent 20,000-entry file-search limit, R54's invalid config key blocking valid settings, R38's spaced file links and Makefile links, R57's relative plugin path base, the core timeout message "All fibers interrupted without error", stale open Archived lists in another window, and duplicate `thought_…_0` reasoning keys. Each should still go upstream. This exception covers only these seven items.
+  The project owner approved an exception for these seven items to support the OpenCode 2.0 port: R46's silent 20,000-entry file-search limit, R54's invalid config key blocking valid settings, R38's spaced file links and Makefile links, R57's relative plugin path base, the core timeout message "All fibers interrupted without error", stale open Archived lists in another window, and duplicate `thought_…_0` reasoning keys. Each should still go upstream. This exception covers only these seven items.
 - **NEVER restart the main Paseo daemon on port 6767 without permission** — it manages all running agents. If you're an agent, restarting it kills your own process.
 - **NEVER assume a timeout means the service needs restarting** — timeouts can be transient.
 - **NEVER add auth checks to tests** — agent providers handle their own auth.
