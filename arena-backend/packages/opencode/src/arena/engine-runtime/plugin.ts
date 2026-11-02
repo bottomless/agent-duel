@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises"
 import { Context as EffectContext, Effect } from "effect"
 import type { SystemPart } from "@opencode/ai"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
+import { AISDK } from "@opencode/core/aisdk"
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import type { Model } from "@opencode/schema/model"
@@ -12,11 +13,14 @@ import { environment as previewForDirectory } from "../preview"
 import { tmpDirectory } from "../contestant"
 import { ArenaEngineAssignment, type ArenaAssignmentRegistry } from "./assignment"
 import { ArenaEngineModels, CONTESTANT_IDENTITY, PROVIDER_ID, modelReference } from "./models"
-import { promptCacheKey, requestHeaders, requestNeedsCompaction } from "./request"
+import { classification, promptCacheKey, requestHeaders, requestNeedsCompaction } from "./request"
 import { ArenaEngineSandbox, previewEnvironment } from "./sandbox"
 import type { ToolExecutionGate } from "./gate"
 import { getArenaAutoAccept } from "./auto-accept"
 import { readNetworkUnavailable } from "@agent-duel/arena-service/request-error"
+import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
+import { ArenaResponseRecovery } from "../response-recovery"
+import { idleBudgetFetch, idleExhausted, idleTimeout, resetIdleBudget } from "./idle"
 import {
   toolExecutionProvider,
   toolExecutionWorktree,
@@ -38,7 +42,7 @@ export interface ArenaEngineRuntimeOptions {
   readonly gate?: ToolExecutionGate | ((sessionID: string) => Effect.Effect<void>)
   /** Enables automatic permission approval for Arena runs. Questions are always left interactive. */
   readonly autoAccept?: boolean | ((sessionID: string) => boolean)
-  /** Maximum silence between streamed model chunks. Defaults to the Arena 150-second bound. */
+  /** Maximum time between streamed model events; heartbeat comments do not count. Defaults to 150 seconds. */
   readonly modelIdleTimeoutMs?: number
   /** Optional retry delay override for deterministic host-side recovery tests. */
   readonly retryDelayMs?: number
@@ -161,7 +165,26 @@ function install(context: Context, options: InstalledOptions) {
           // DynamicProviderPlugin may already have created a provider before this built-in plugin
           // runs. Recreate it here so the credential-bearing fetch is captured by the provider
           // closure; mutating options alone would leave the native network fetch active.
-          event.options.fetch = options.contestantFetch
+          // Wrap it in Core's provider fetch: it owns the header timeout and the SSE chunk deadline,
+          // which moves only on parsed events, so heartbeat comments cannot hide a stalled model.
+          // As in 1.x, one bound covers both the wait for headers and each silence after them.
+          // The header deadline is ours (see `idleBudgetFetch`), so Core's is turned off.
+          const idle = options.modelIdleTimeoutMs ?? MODEL_IDLE_TIMEOUT_MS
+          event.options.fetch = idleBudgetFetch(
+            AISDK.providerFetch(
+              { ...event.model, settings: { ...event.model.settings, headerTimeout: false, chunkTimeout: idle } },
+              options.contestantFetch,
+            ),
+            {
+              headerTimeoutMs: idle,
+              // Only the contestant's own model requests count, as in 1.x; not titles or compaction.
+              mainSession: (headers) => {
+                const sessionID = headers.get("x-arena-session-id")
+                if (!sessionID || headers.get("x-arena-generation-classification") !== classification("primary")) return
+                return { sessionID, rootSessionID: headers.get("x-arena-root-session-id") ?? sessionID }
+              },
+            },
+          )
           event.sdk = createOpenRouter({ ...event.options, apiKey: PROXY_KEY })
         }),
       { providerID: String(PROVIDER_ID) },
@@ -239,8 +262,6 @@ function install(context: Context, options: InstalledOptions) {
                     rootSessionID: assignment?.rootSessionID,
                   }),
                 }
-                if (arenaSession(options, String(event.sessionID)))
-                  event.chunkTimeout = options.modelIdleTimeoutMs ?? 150_000
               }),
               Effect.orElseSucceed(() => undefined),
             ),
@@ -260,16 +281,14 @@ function install(context: Context, options: InstalledOptions) {
     )
 
     yield* context.session.hook("prompt", (event) =>
-      context.session.get({ sessionID: event.sessionID }).pipe(
-        Effect.flatMap((session) =>
-          session.parentID
-            ? Effect.sync(() =>
-                ArenaEngineAssignment.registerChildAssignment(options.assignments, session.id, session.parentID!),
-              )
-            : Effect.void,
-        ),
-        Effect.orElseSucceed(() => undefined),
-      ),
+      Effect.gen(function* () {
+        // A new prompt starts a new turn, and with it a new model-timeout budget (1.x counted from
+        // the last real user message).
+        resetIdleBudget(String(event.sessionID))
+        const session = yield* context.session.get({ sessionID: event.sessionID })
+        if (session.parentID)
+          ArenaEngineAssignment.registerChildAssignment(options.assignments, session.id, session.parentID)
+      }).pipe(Effect.orElseSucceed(() => undefined)),
     )
 
     yield* context.session.hook(
@@ -293,6 +312,12 @@ function install(context: Context, options: InstalledOptions) {
               delay: event.decision.delay,
               persistent: false,
             }
+          if (idleExhausted(event.error)) {
+            event.decision = { retry: false }
+            return
+          }
+          if (event.decision.retry && idleTimeout(event.error))
+            event.decision.message = ArenaResponseRecovery.IDLE_RECOVERING
           if (options.retryDelayMs !== undefined && event.decision.retry) event.decision.delay = options.retryDelayMs
         }),
       { providerID: String(PROVIDER_ID) },

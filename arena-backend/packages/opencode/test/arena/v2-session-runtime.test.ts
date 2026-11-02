@@ -24,11 +24,14 @@ import { SessionMessage } from "@opencode/schema/session-message"
 import {
   Session as ArenaSession,
   SessionPrompt as ArenaPrompt,
+  SessionStatus as ArenaStatus,
   locationServiceMapNode,
   promptNode,
   sessionNode,
+  statusNode,
 } from "../../src/arena/session-runtime"
 import { project } from "../../src/arena/session-runtime/projection"
+import { ArenaEngineIdle } from "../../src/arena/engine-runtime/idle"
 import { globalProjectNode } from "../../../core/test/lib/project"
 import { promptLocationNode } from "../../../core/test/fixture/prompt-location"
 import { offlineModels } from "../../../core/test/fixture/models"
@@ -341,4 +344,60 @@ describe("Arena V2 native session storage", () => {
       expect(cancelled.some((item) => item.id === pending.id)).toBe(false)
     }),
   )
+})
+
+describe("Arena V2 session status", () => {
+  test("shows a scheduled retry while the session runs, and busy or idle otherwise", async () => {
+    const running = Session.ID.make("ses_arena_status")
+    let latest: SessionMessage.Assistant = {
+      id: assistantID,
+      type: "assistant",
+      agent: Agent.ID.make("build"),
+      model: { providerID: Provider.ID.make("arena"), id: Model.ID.make("contestant") },
+      content: [],
+      time: { created: at },
+      retry: { attempt: 2, at, error: { type: "provider.internal", message: "Waiting for network", status: 503 } },
+    }
+    const requests: unknown[] = []
+    const sessions = {
+      active: Effect.sync(() => new Set([running])),
+      messages: (input: unknown) => Effect.sync(() => (requests.push(input), [latest])),
+    } as unknown as CoreSession.Interface
+    const layer = AppNodeBuilder.build(LayerNode.group([statusNode]), [
+      CoreSession.node.replace(Layer.succeed(CoreSession.Service, sessions)),
+    ])
+    const read = (sessionID: Session.ID) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(layer)
+          return yield* Effect.gen(function* () {
+            return yield* (yield* ArenaStatus).get(sessionID)
+          }).pipe(Effect.provide(context))
+        }).pipe(Effect.scoped),
+      )
+
+    expect(await read(running)).toEqual({
+      type: "retry",
+      attempt: 2,
+      message: "Waiting for network",
+      next: DateTime.toEpochMillis(at),
+    })
+    expect(requests).toEqual([{ sessionID: running, type: "assistant", order: "desc", limit: 1 }])
+    // The next attempt's step clears the retry, so the session reads as busy again.
+    latest = { ...latest, retry: undefined }
+    expect(await read(running)).toEqual({ type: "busy" })
+    // After a model timeout, the recovery attempt keeps the 1.x label until its stream ends.
+    const timedOut = ArenaEngineIdle.idleBudgetFetch(() => Promise.reject(new Error("SSE read timed out")), {
+      mainSession: (headers) => {
+        const sessionID = headers.get("x-session")
+        return sessionID ? { sessionID, rootSessionID: sessionID } : undefined
+      },
+      headerTimeoutMs: 1_000,
+    })
+    await timedOut("https://arena.test", { headers: { "x-session": running } }).catch(() => undefined)
+    expect(await read(running)).toMatchObject({ type: "retry", attempt: 1, message: "Continuing after model timeout" })
+    ArenaEngineIdle.resetIdleBudget(running)
+    expect(await read(running)).toEqual({ type: "busy" })
+    expect(await read(Session.ID.make("ses_arena_stopped"))).toEqual({ type: "idle" })
+  })
 })

@@ -27,9 +27,14 @@ import {
   requestTokenEstimate,
   clearArenaAutoAccept,
   getArenaAutoAccept,
+  idleRecovery,
+  resetIdleBudget,
+  resetIdleRun,
+  ArenaEngineIdle,
   sandboxForSession,
   setArenaAutoAccept,
 } from "@/arena/engine-runtime"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { contestant } from "@/arena/model-profile"
 import type { Model } from "@opencode/schema/model"
 
@@ -331,6 +336,273 @@ describe("Arena v2 engine runtime", () => {
     expect(request.headers.get("authorization")).toBe("Bearer arena-local-proxy")
   })
 
+  it("bounds header and heartbeat-only stalls per turn but keeps a slow reasoning stream alive", async () => {
+    const encoder = new TextEncoder()
+    const chunk = (delta: Record<string, unknown>, finish: string | null = null) =>
+      encoder.encode(
+        `data: ${JSON.stringify({ id: "resp", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`,
+      )
+    let mode: "heartbeat" | "reasoning" | "no-headers" = "heartbeat"
+    const timers = new Set<ReturnType<typeof setInterval>>()
+    // Heartbeats every 5 ms in both modes: only parsed model events may move the 60 ms deadline.
+    const stream = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          const heartbeat = setInterval(() => controller.enqueue(encoder.encode(": keepalive\n\n")), 5)
+          timers.add(heartbeat)
+          controller.enqueue(chunk({ role: "assistant", content: "" }))
+          if (mode === "heartbeat") return
+          // Reasoning-only chunks 30 ms apart for 300 ms, five times the deadline, then the answer.
+          let sent = 0
+          const reasoning = setInterval(() => {
+            if (++sent <= 10) {
+              controller.enqueue(chunk({ reasoning_details: [{ type: "reasoning.encrypted", data: `e${sent}` }] }))
+              return
+            }
+            clearInterval(reasoning)
+            clearInterval(heartbeat)
+            controller.enqueue(chunk({ content: "slow answer" }))
+            controller.enqueue(chunk({}, "stop"))
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"))
+            controller.close()
+          }, 30)
+          timers.add(reasoning)
+        },
+        cancel() {
+          for (const timer of timers) clearInterval(timer)
+        },
+      })
+    // Like the hosted transport, an aborted request rejects with an interruption, not the abort reason.
+    const contestantFetch = (_input: string | URL | Request, init?: RequestInit) =>
+      mode === "no-headers"
+        ? new Promise<Response>((_, reject) =>
+            init?.signal?.addEventListener("abort", () => reject(new Error("All fibers interrupted without error")), {
+              once: true,
+            }),
+          )
+        : Promise.resolve(new Response(stream(), { headers: { "content-type": "text/event-stream" } }))
+    const sessionID = "ses_idle"
+    const assignments = new AssignmentRegistry()
+    assignments.assign(sessionID, {
+      runID: "run-idle",
+      rootSessionID: sessionID,
+      scopeID: "scope-idle",
+      assignmentID: "assignment-idle",
+      telemetry: false,
+    })
+    const callbacks = new Map<string, Array<(event: any) => Effect.Effect<void>>>()
+    const registrations = { dispose: Effect.void }
+    const noOp = () => Effect.succeed(registrations)
+    const clientLayer = LLMClient.layer.pipe(
+      Layer.provide(RequestExecutor.layer.pipe(Layer.provide(FetchHttpClient.layer))),
+    )
+    const runHooks = (name: string, event: unknown) =>
+      Effect.forEach(callbacks.get(name) ?? [], (callback) => callback(event), { discard: true })
+    const run = Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      const context: any = {
+        provider: { transform: noOp },
+        aisdk: {
+          hook: (name: string, callback: any) => (name === "sdk" ? aisdk.hook.sdk(callback) : noOp()),
+        },
+        session: {
+          hook: (name: string, callback: (event: any) => Effect.Effect<void>) => {
+            callbacks.set(name, [...(callbacks.get(name) ?? []), callback])
+            return Effect.succeed(registrations)
+          },
+          get: (input: { sessionID: string }) => Effect.succeed({ id: input.sessionID }),
+        },
+        permission: { hook: noOp },
+        shell: { hook: noOp },
+        tool: { hook: noOp, transform: () => Effect.void },
+      }
+      yield* createArenaEnginePlugin({ enabled: true, assignments, modelIdleTimeoutMs: 60, contestantFetch }).effect(
+        context,
+      )
+      const model = yield* aisdk.model({ ...contestantModel, settings: {} })
+      const send = (next: typeof mode, kind: "primary" | "title" = "primary") =>
+        Effect.suspend(() => {
+          mode = next
+          return LLM.stream({
+            model,
+            prompt: "hello",
+            http: { headers: requestHeaders({ sessionID, kind }) },
+          }).pipe(Stream.runCollect, Effect.provide(clientLayer), Effect.result)
+        })
+      const failure = Effect.fn(function* (next: typeof mode, kind: "primary" | "title" = "primary") {
+        const result = yield* send(next, kind)
+        if (result._tag !== "Failure") throw new Error(`A ${next} stall did not time out`)
+        return result.failure
+      })
+      const retryDecision = Effect.fn(function* (error: { type: string; message: string }) {
+        const event = { sessionID, error, decision: { retry: true, delay: 2_000 } as Record<string, unknown> }
+        yield* runHooks("retry", event)
+        return event.decision
+      })
+
+      // 1st timeout: heartbeats alone do not move the deadline.
+      const stalled = yield* failure("heartbeat")
+      expect(stalled.reason).toMatchObject({ _tag: "Transport", operation: "read", message: "SSE read timed out" })
+      expect(idleRecovery(sessionID)).toBe(1)
+      // The pane names the idle retry with the neutral recovery label, never the transport text.
+      expect(yield* retryDecision({ type: "provider.transport", message: "SSE read timed out" })).toEqual({
+        retry: true,
+        delay: 2_000,
+        message: "Continuing after model timeout",
+      })
+
+      // A title request neither counts nor ends the contestant's recovery, whether it times out or finishes.
+      expect((yield* failure("heartbeat", "title")).message).toContain("SSE read timed out")
+      expect(idleRecovery(sessionID)).toBe(1)
+      expect((yield* send("reasoning", "title"))._tag).toBe("Success")
+      expect(idleRecovery(sessionID)).toBe(1)
+
+      // A slow model that keeps sending reasoning-only events is not cut off. Its finished response
+      // ends the recovery and the timeout sequence, as in 1.x.
+      const slow = yield* send("reasoning")
+      if (slow._tag !== "Success") throw new Error(`A slow reasoning stream failed: ${slow.failure.message}`)
+      expect(
+        slow.success.some((event) => event.type === "text-delta" && "text" in event && event.text === "slow answer"),
+      ).toBe(true)
+      expect(idleRecovery(sessionID)).toBeUndefined()
+
+      // 1st timeout of a new sequence: no headers at all is bounded by the same deadline, as in 1.x.
+      const headless = yield* failure("no-headers")
+      expect(headless.reason).toMatchObject({
+        _tag: "Transport",
+        operation: "request",
+        message: "Response headers timed out",
+      })
+      expect(yield* retryDecision({ type: "provider.transport", message: "Response headers timed out" })).toMatchObject(
+        { retry: true, message: "Continuing after model timeout" },
+      )
+
+      // The 2nd and 3rd are recovered; the 4th in a row ends the run with the 1.x explanation.
+      expect((yield* failure("heartbeat")).message).toContain("SSE read timed out")
+      expect((yield* failure("heartbeat")).message).toContain("SSE read timed out")
+      expect(idleRecovery(sessionID)).toBe(3)
+      const exhausted = yield* failure("heartbeat")
+      expect(exhausted.message).toBe(ArenaResponseRecovery.IDLE_EXHAUSTED)
+      expect(yield* retryDecision({ type: "provider.unknown", message: exhausted.message })).toEqual({ retry: false })
+      // The label stays until the run settles, so the pane never reads "Working" before "Failed".
+      expect(idleRecovery(sessionID)).toBe(3)
+
+      // A new prompt ends a running sequence too.
+      expect((yield* failure("heartbeat")).message).toContain("SSE read timed out")
+      expect(idleRecovery(sessionID)).toBe(1)
+      yield* runHooks("prompt", { sessionID })
+      expect(idleRecovery(sessionID)).toBeUndefined()
+    }).pipe(Effect.provide(AISDK.locationLayer), Effect.scoped)
+
+    try {
+      await Effect.runPromise(run)
+    } finally {
+      for (const timer of timers) clearInterval(timer)
+      resetIdleBudget(sessionID)
+    }
+  })
+
+  it("ends a timeout sequence only on a normal finish, and drops a settled run's sessions", async () => {
+    const root = "ses_idle_root"
+    const child = "ses_idle_child"
+    const other = "ses_idle_other"
+    const sse = (...events: unknown[]) =>
+      new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", {
+        headers: { "content-type": "text/event-stream" },
+      })
+    const finish = (reason: string) => ({ id: "r", choices: [{ index: 0, delta: {}, finish_reason: reason }] })
+    let answer: () => Promise<Response> = () => Promise.reject(new Error("SSE read timed out"))
+    const fetch = ArenaEngineIdle.idleBudgetFetch(() => answer(), {
+      headerTimeoutMs: 1_000,
+      mainSession: (headers) => {
+        const sessionID = headers.get("x-session")
+        return sessionID ? { sessionID, rootSessionID: headers.get("x-root") ?? sessionID } : undefined
+      },
+    })
+    const request = async (sessionID: string, rootSessionID = sessionID) => {
+      const response = await fetch("https://arena.test", {
+        headers: { "x-session": sessionID, "x-root": rootSessionID },
+      })
+      await response.text()
+    }
+    const timeout = (sessionID: string, rootSessionID = sessionID) => {
+      answer = () => Promise.reject(new Error("SSE read timed out"))
+      return request(sessionID, rootSessionID).then(
+        () => "finished",
+        (error: Error) => error.message,
+      )
+    }
+    const respond = (response: () => Response, sessionID = root) => {
+      answer = () => Promise.resolve(response())
+      return request(sessionID)
+    }
+
+    try {
+      expect(await timeout(root)).toBe("SSE read timed out")
+      // A `length` cutoff or an error inside a 200 stream ends the recovery request but not the sequence.
+      await respond(() =>
+        sse({ id: "r", choices: [{ index: 0, delta: { content: "cut" }, finish_reason: null }] }, finish("length")),
+      )
+      expect(idleRecovery(root)).toBeUndefined()
+      expect(await timeout(root)).toBe("SSE read timed out")
+      expect(idleRecovery(root)).toBe(2)
+      await respond(() => sse({ error: { message: "upstream failed", code: 502 } }))
+      await respond(() => sse(finish("error")))
+      expect(await timeout(root)).toBe("SSE read timed out")
+      expect(idleRecovery(root)).toBe(3)
+      // So the next timeout in the sequence is the fourth, which ends the run.
+      expect(await timeout(root)).toBe(ArenaResponseRecovery.IDLE_EXHAUSTED)
+      resetIdleBudget(root)
+
+      // A `stop` or `tool_calls` finish ends the sequence, as a complete step did in 1.x.
+      expect(await timeout(root)).toBe("SSE read timed out")
+      await respond(() => sse(finish("tool_calls")))
+      expect(await timeout(root)).toBe("SSE read timed out")
+      expect(idleRecovery(root)).toBe(1)
+      await respond(() => sse(finish("stop")))
+      expect(idleRecovery(root)).toBeUndefined()
+
+      // Upstream bytes with a space after the colon are a normal finish too.
+      for (let count = 0; count < 3; count++) expect(await timeout(root)).toBe("SSE read timed out")
+      expect(idleRecovery(root)).toBe(3)
+      await respond(
+        () =>
+          new Response(
+            'data: {"id": "r", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}\n\ndata: [DONE]\n\n',
+          ),
+      )
+      expect(await timeout(root)).toBe("SSE read timed out")
+      expect(idleRecovery(root)).toBe(1)
+      resetIdleBudget(root)
+
+      // A settle step that fails before finalizing (such as a failing `store.turn`) still drops the run.
+      expect(await timeout(root)).toBe("SSE read timed out")
+      expect(await timeout(child, root)).toBe("SSE read timed out")
+      const settled = await Effect.runPromiseExit(
+        ArenaEngineIdle.withIdleCleanup(root, Effect.fail(new Error("store.turn failed"))),
+      )
+      expect(Exit.isFailure(settled)).toBe(true)
+      expect(idleRecovery(root)).toBeUndefined()
+      expect(idleRecovery(child)).toBeUndefined()
+
+      // A settled run drops the root and its child agents, and nothing of another run.
+      expect(await timeout(root)).toBe("SSE read timed out")
+      expect(await timeout(child, root)).toBe("SSE read timed out")
+      expect(await timeout(other)).toBe("SSE read timed out")
+      resetIdleRun(root)
+      expect(idleRecovery(root)).toBeUndefined()
+      expect(idleRecovery(child)).toBeUndefined()
+      expect(idleRecovery(other)).toBe(1)
+      // The child's count is gone too: three more timeouts are recovered again.
+      for (const attempt of [1, 2, 3]) {
+        expect(await timeout(child, root)).toBe("SSE read timed out")
+        expect(idleRecovery(child)).toBe(attempt)
+      }
+    } finally {
+      for (const sessionID of [root, child, other]) resetIdleBudget(sessionID)
+    }
+  })
+
   it("executes a real Core Session prompt through the in-memory Arena fetch", async () => {
     const assignment = {
       runID: "run-core",
@@ -422,7 +694,8 @@ describe("Arena v2 engine runtime", () => {
               enabled: true,
               assignments,
               contestantFetch,
-              modelIdleTimeoutMs: 5,
+              // Also the header deadline: loopback answers well within it.
+              modelIdleTimeoutMs: 5_000,
               retryDelayMs: 0,
             }),
           )

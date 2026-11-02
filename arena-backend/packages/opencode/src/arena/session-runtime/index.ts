@@ -28,7 +28,8 @@ import { makeGlobalNode, tags } from "@opencode/util/effect/app-node"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { project, projectSession, partID } from "./projection"
 import { CurrentDirectory } from "@/project/instance-context"
-import { getArenaAutoAccept, setArenaAutoAccept } from "@/arena/engine-runtime"
+import { getArenaAutoAccept, idleRecovery, setArenaAutoAccept } from "@/arena/engine-runtime"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { EXTERNAL_WRITE } from "@/arena/contestant"
 import type {
   ArenaMessageInfo,
@@ -706,7 +707,30 @@ const statusLayer: Layer.Layer<SessionStatus, never, CoreSession.Service> = Laye
       get: (sessionID) =>
         normalizeError(
           Effect.gen(function* () {
-            return { type: (yield* sessions.active).has(sessionID) ? "busy" : "idle" }
+            if (!(yield* sessions.active).has(sessionID)) return { type: "idle" } as const
+            // Core keeps a scheduled retry on the step's assistant until the next attempt starts.
+            // The pane shows it as "Waiting for network" or "Continuing after model timeout".
+            const [latest] = yield* sessions
+              .messages({ sessionID, type: "assistant", order: "desc", limit: 1 })
+              .pipe(Effect.orElseSucceed(() => []))
+            const retry = latest?.type === "assistant" ? latest.retry : undefined
+            if (!retry) {
+              // As in 1.x, the recovery attempt after a model timeout keeps its label until it ends.
+              const recovery = idleRecovery(sessionID)
+              if (recovery === undefined) return { type: "busy" } as const
+              return {
+                type: "retry",
+                attempt: recovery,
+                message: ArenaResponseRecovery.IDLE_RECOVERING,
+                next: Date.now(),
+              } as const
+            }
+            return {
+              type: "retry",
+              attempt: retry.attempt,
+              message: retry.error.message,
+              next: DateTime.toEpochMillis(retry.at),
+            } as const
           }),
         ),
     })
