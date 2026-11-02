@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback } from "react";
-import { Import, Plus } from "lucide-react-native";
+import { Plus } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -67,13 +67,7 @@ export function SidebarFilterEmptyState() {
   );
 }
 
-export function SidebarProjectEmptyState({
-  onAddProject,
-  onImportSession,
-}: {
-  onAddProject?: () => void;
-  onImportSession?: () => void;
-}) {
+export function SidebarProjectEmptyState({ onAddProject }: { onAddProject?: () => void }) {
   const { t } = useTranslation();
 
   return (
@@ -91,16 +85,6 @@ export function SidebarProjectEmptyState({
         onPress={onAddProject}
       >
         {t("sidebar.actions.addProject")}
-      </Button>
-      <Button
-        variant="outline"
-        size="xs"
-        leftIcon={Import}
-        style={styles.action}
-        textStyle={styles.actionText}
-        onPress={onImportSession}
-      >
-        {t("importSession.title")}
       </Button>
     </SidebarEmptyStateCard>
   );

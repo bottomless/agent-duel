@@ -336,7 +336,7 @@ export function applyMutableProviderConfigToOverrides(
 
 export class DaemonConfigStore {
   private current: MutableDaemonConfig;
-  private readonly paseoHome: string;
+  readonly paseoHome: string;
   private readonly logger: LoggerLike | undefined;
   private readonly changeListeners = new Set<ConfigListener>();
   private readonly applyListeners = new Set<ConfigApplyListener>();

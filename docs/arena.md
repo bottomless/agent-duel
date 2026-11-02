@@ -128,9 +128,12 @@ Release upstream readers, queues and timers when the last subscriber leaves.
 The request/response pairs are `arena.stream.subscribe`, `unsubscribe` and
 `ack`; `arena.stream.update` carries the data. App and daemon ship this contract
 together. Canonical winner hydration belongs to the daemon and is shared across windows per
-active agent. Hydrate each applied winner once after the chat becomes ready; serialize
-different winners and leave failed hydration eligible for retry. A reconnect or another
-state packet must not rebuild an already hydrated winner.
+active agent. Hydrate each applied winner once after the chat becomes ready, keeping native live
+delivery synchronized with canonical history replacement. Apply the same boundary after a rewind.
+Grafts arrive without an ordinary provider turn, so migrated winners and surviving replies can
+otherwise replay into history already on screen. Serialize different winners and leave failed
+hydration eligible for retry. A reconnect or another state packet must not rebuild an already
+hydrated winner.
 
 ## What this is for
 
@@ -351,7 +354,8 @@ can, both sides failed: `Discard` takes Tie's place and `Choose A` and `Choose B
 under `Both agents failed · retry or discard` while a side can still be retried and `Both agents
 failed` once neither can. When one side failed, the other can still be chosen under `Agent B failed
 · choosing A won't count as a vote`, and the resolved battle's header says `Vote not counted`.
-Choosing early stops the other side, so it confirms first. Discarding a battle also requires
+Choosing early stops the other side, so it confirms first. The confirmation belongs to that turn's
+running state; close it when the turn changes so it cannot cover the normal vote. Discarding a battle also requires
 confirmation. Action failures remain on the battle until another attempt; the normal
 action controls provide the retry so a destructive operation is never retried automatically.
 `Choose A` and `Choose B` carry their side's colour as a tint, the blue and amber of the diff's
@@ -762,7 +766,8 @@ Read transcript works after the archived chat's worktree is gone. Reading leaves
 agent record and saved history unchanged, and leaving the transcript releases its engine reference.
 Restore opens an interactive session. Find searches loaded messages only; load earlier messages
 to include them. The transcript owns its pages separately from the live chat store, which can
-still hold that chat's epoch and last turn from before archive.
+still hold that chat's epoch and last turn from before archive. Keep an open Archived list current
+when another window removes a chat, including one absent from that window's active chat directory.
 
 A snapshot is released (refs and manifest) once Restore files has brought it back, when its project
 is removed (a project added again gets a new id, so nothing could restore it), and when its
@@ -829,9 +834,10 @@ reply takes the same attachments as a chat message, and both contestants get ide
   file of any type travels as Paseo sends it to a single agent: a note with its path under
   `$PASEO_HOME/uploads/<id>/`, for the contestant to open with its own tools. The daemon resolves
   that path from the upload id, never from the client's path. Before each prompt and reply the engine
-  adds an `external_directory` allow for each upload's directory to the contestant session
-  (`allowReading`). It comes after the sandbox's rules (see **Setup**), so an upload stays
-  readable wherever `$PASEO_HOME` sits. Both sides get the same path.
+  opens each upload's directory to the contestant session (`allowReading`). Battle off opens the
+  same directories before sending a prompt or steer, including in a resumed chat. Uploads need no
+  approval card. Contestant grants come after the sandbox's rules (see **Setup**), so an upload
+  stays readable wherever `$PASEO_HOME` sits. Both sides get the same path.
 - Contestants take PDFs. OpenRouter passes one natively to a model that reads PDFs and parses it
   with mistral-ocr for one that does not, so the two sides can read different renderings of the
   same file.
@@ -903,57 +909,53 @@ again a side whose warm fork used another. The canonical session keeps every out
 history, its transcript hash, and single-agent turns, which continue one model whose cache does
 survive, are unchanged.
 
-Keep the winner's child transcripts available after a vote, including nested children. The run's
-own sessions are deleted with its worktree, so the graft copies its descendants under the chat and
-retargets their session references. Losing contestants and earlier turns have separate session
+Keep the winner's child transcripts available after a vote, including nested children. Open each
+child in the chat to read its task prompt, commands and result, even after the contestant releases
+its worktree. OpenCode 2.0's `subagent` calls use the same inline child view as 1.x's `task` calls.
+The graft copies descendants under the chat and retargets their session references; the run's own
+sessions are deleted on release. Losing contestants and earlier turns have separate session
 families. `canonicalSubagentSessionIDs` records the copies for an interrupted graft's cleanup.
 Rebuilding the chat's timeline drops the subagents the daemon knew of, so loading a winner reloads
-them from the session's children (`reloadProviderSubagents`). Do not infer that a child is disposable
+them from the session's children (`reloadProviderSubagents`), including unchanged children from
+earlier turns. Do not infer that a child is disposable
 from a missing tool call: commands can create children without one, and a committed rewind removes
 messages without deleting their children. Child sessions have no separate visible/internal
 classification; narrowing retention needs a rule for which of those transcripts the chat keeps.
 
-The sandbox (`arena/contestant.ts`) lets a contestant's own tools read the main checkout but not
-write to it, and keeps them out of the checkout's `.agent-duel`, which holds every Arena worktree:
-the other side's and every earlier turn's. The shared temp directories (`/tmp`, `/var/tmp` and the
-system temp directory) are readable but not writable, and every side's temp directory but its own is
-denied. Everything else is open, the home directory and skill directories included. The rules are
-the inherited permissions, then an `external_directory` allow for everything, then an
-`external_directory_write` deny for the shared temp directories, an `external_directory` deny for
-the parent of every side's temp directory, the same two for the checkout and `.agent-duel`, then
-read and write allows for the side's own worktree, host repository and temp directory. Rules match
-last first. The allow overrides the agent's
-own `ask`: never let a contestant ask, since a prompt the user answers for one side and not the
-other makes the sides unequal. Every path is listed in both its spelling and its real path, so
-`/private/tmp/...` cannot route around `/tmp/...`. Subagents inherit the rules.
+A contestant can read the main checkout but write only in its own worktree, host repository and
+side temp directory. File tools and literal shell targets follow the same rule. Direct targets in the
+checkout's `.agent-duel` and other sides' temp directories are closed to reads too. The shared temp directories
+(`/tmp`, `/var/tmp` and the system temp directory) stay readable but not writable. Children inherit
+the side's rules and share its temp directory, even if a child was created before the parent moved.
+These restrictions apply with either permission mode; a blocked filesystem request returns a denial
+to the model without waiting for a permission card. Battle off keeps its own permission behavior.
 
 The checkout's `.git` is readable too. A side's result is imported into it under `refs/battles/`
-as soon as the side finishes, before the vote. File tools see only ref names and commit ids there,
-since objects are compressed; `git` in the shell is not checked and reads them either way.
+as soon as the side finishes, before the vote. Git objects can contain other contestants' work;
+these tool checks do not filter object contents.
 
-The check sees only where a tool starts, so glob and grep leave `.agent-duel` out of a search that
-starts above it, from the checkout or `~/code` for example (`excludedBelow`,
-`tool/external-directory.ts`). Such a search skips the side's own worktree too; a search from inside
-it is unaffected. The shell checks
-only the path arguments of its file commands (`cd`, `rm`, `cp`, `mv`, `mkdir`, `touch`, `chmod`,
-`chown`, `cat`) and, for a contestant, the files it redirects output into and `tee`'s arguments;
-other programs reach anything the user can.
+The shell check shares the parsed-tree walker with [Battle off](#battle-off), but distinguishes
+reads from writes so a checkout file can be a copy source. It checks literal command operands,
+redirects and inline shell code, and follows existing symlinks, including parents of new files.
+This is tool policy, not an operating-system sandbox: computed paths, scripts on disk and programs'
+internal file operations remain outside the scan. Searches from an ancestor can still enumerate
+restricted descendants. Do not claim that it confines arbitrary code.
 
-Each side has a temp directory, `$TMPDIR/opencode/arena/<session id>`. The shell exports it as
-`TMPDIR`, the shell tool's description names it, and truncated tool output is saved under it, so
-the hint to read that file works. It is removed when the run gives up its worktree: released for the
+Each side has a temp directory under the system temp directory, `opencode/arena/<root session id>`.
+Shells in the side and its children export it as `TMPDIR`, `TMP` and `TEMP`. It is removed when the
+run gives up its worktree: released for the
 next pair (`releaseRunSlot`) or removed by archive, eviction or an environment release
 (`removeStoppedRun`).
 
 Both sides run at once and `/tmp` is one shared folder, so a side that writes where a task says can
 overwrite or read the other side's file. Every model in the production pool writes `/tmp/word.txt`
 when a task names it. Keep the rule out of the system prompt: a contestant learns it from the
-denial, which names the side's own directory to use instead.
+denial, which directs it to `$TMPDIR`.
 
-A contestant denied `.agent-duel`, another side's temp directory, or a write into the checkout or a
-shared temp directory, gets one sentence that says so, not the generic list of matching
-rules, which holds dozens of home-directory paths that contestants copy into their answers and that
-reach research uploads.
+A contestant denied a write gets a short instruction to use its own worktree or `$TMPDIR`.
+A denied read says that other Arena worktrees and other sides' temp directories are closed. Keep
+absolute rule lists out of these messages; they expose home-directory paths to the transcript and
+research uploads.
 
 The two sides are prepared **at once**, since each has its own host repository and session, and
 the host repository is a copy-on-write clone of the checkout's git directory where the
@@ -1387,8 +1389,11 @@ worktree (`arena/engine-runtime/shell-ledger.ts`). Stop only what that list name
 home, so another home's engine is out of reach, and an entry whose engine still runs stays. An entry
 names the PID and when it started, since the system reuses PIDs; a group whose leader has gone is
 left alone, since nothing proves whose it is. Do not identify shells by an environment variable:
-macOS hides another process's environment. A contestant whose background shell was stopped gets no
-notice of it; the ones in the test found out by checking, and started it again.
+macOS hides another process's environment. After Resume, each affected side gets the same neutral
+note that its background shell stopped and can be started again. A side with no stopped shell gets
+no note. With Battle off, the matching engine-exit error stays in its place in the chat and reads
+“The engine restarted, and a running command stopped.” in the app's language. Other exits keep their
+existing text.
 
 Payment failures belong to the service account, not the voter's account; in a BYOK build that
 account is the user's own OpenRouter key. Only a classified
@@ -1497,9 +1502,9 @@ chunks that carry only OpenRouter `reasoning_details` keep a long thought alive,
 comments do not, so a stalled model still times out. The engine plugin wraps the Arena fetch with
 `providerFetch` (`engine-runtime/plugin.ts`). Assigning the Arena fetch to the SDK options directly
 drops every timeout, and a stalled stream then waits forever. The header deadline and the budget
-are ours (`engine-runtime/idle.ts`), and Core's header timeout is off for contestants: Core's HTTP
-hook middleware turns its header abort into "All fibers interrupted without error", which hides
-the timeout. When the runtime abandons a request, the daemon's Arena proxy aborts its control-plane
+are ours (`engine-runtime/idle.ts`), and Core's header timeout stays off for contestants so Arena
+owns that deadline and its recovery budget. Core's own header deadline reports `Response headers
+timed out` through HTTP hooks too. When the runtime abandons a request, the daemon's Arena proxy aborts its control-plane
 request too; otherwise the hosted function keeps streaming, and billing, until its own time limit.
 
 A request above the estimated savings threshold triggers compaction. Keep a new user message and

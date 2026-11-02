@@ -65,6 +65,7 @@ interface V2AgentOptions {
   bridge?: OpenCodeBridge;
   runtime?: Pick<V2Runtime, "acquire" | "shutdown">;
   arenaMode?: boolean;
+  uploadsRoot?: string;
   serverManager?: OpenCodeServerManagerLike;
   getArenaPreviewBaseUrl?: () => string | null;
 }
@@ -511,6 +512,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
       bindChild,
       acquire,
       moved,
+      this.options.uploadsRoot,
     );
     if (deferred) session.defer(deferred);
     try {

@@ -42,6 +42,7 @@ import { messages } from "./history.js";
 import { SessionPermissions } from "./permissions.js";
 import { SessionUsage } from "./usage.js";
 import { createArenaSessionApi } from "./arena.js";
+import { uploadDirectoriesForPrompt } from "../../opencode-agent.js";
 
 /** The longest one agent, model, or variant write may hold the selection queue. */
 export const SELECTION_TIMEOUT_MS = 60_000;
@@ -108,7 +109,8 @@ export class OpenCodeV2Session implements AgentSession {
   readonly provider = "opencode";
   readonly capabilities = V2_CAPABILITIES;
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
-  private readonly timeline = new V2Timeline();
+  private timeline = new V2Timeline();
+  private replacingHistory = false;
   private readonly abort = new AbortController();
   private readonly permissions: SessionPermissions;
   private readonly turns: SessionTurns;
@@ -152,6 +154,7 @@ export class OpenCodeV2Session implements AgentSession {
     bindChild?: (id: string) => void,
     private readonly acquire?: () => Promise<V2Connection>,
     private readonly moved?: (connection: V2Connection) => void,
+    private readonly uploadsRoot?: string,
   ) {
     this.arenaEnabled = Boolean(connection.arena);
     this.permissions = new SessionPermissions(
@@ -409,6 +412,32 @@ export class OpenCodeV2Session implements AgentSession {
     await this.reconnectIfExited();
     const history = new V2Timeline(false);
     yield* history.messages(await messages(this.client, this.id));
+  }
+  async replaceHistory(replace: (history: Iterable<AgentStreamEvent>) => Promise<void>) {
+    await this.reconnectIfExited();
+    this.sync = this.sync
+      .catch(() => undefined)
+      .then(async () => {
+        this.replacingHistory = true;
+        try {
+          const snapshot = await messages(this.client, this.id);
+          const live = new V2Timeline();
+          live.messages(snapshot);
+          await replace(new V2Timeline(false).messages(snapshot));
+          this.timeline = live;
+          this.history = snapshot;
+          return undefined;
+        } finally {
+          this.replacingHistory = false;
+          // Snapshot reconciliation recovers output received during the replacement.
+          // Its volatile deltas have no offsets and cannot safely cross this boundary.
+          this.scheduleReconcile();
+        }
+      });
+    return this.sync;
+  }
+  async reloadProviderSubagents(): Promise<void> {
+    await this.children.reload();
   }
   async getRuntimeInfo() {
     await this.reconnectIfExited();
@@ -883,10 +912,42 @@ export class OpenCodeV2Session implements AgentSession {
   async startTurn(prompt: AgentPromptInput, options?: AgentRunOptions) {
     await this.reconnectIfExited();
     await this.applyDeferred();
+    await this.allowReadingUploads(prompt);
     return this.turns.startTurn(prompt, options);
   }
-  steerActiveTurn(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult> {
+  async steerActiveTurn(
+    prompt: AgentPromptInput,
+    options: SteerActiveTurnOptions,
+  ): Promise<SteerResult> {
+    await this.allowReadingUploads(prompt);
     return this.turns.steerActiveTurn(prompt, options);
+  }
+  private async allowReadingUploads(prompt: AgentPromptInput): Promise<void> {
+    const directories = uploadDirectoriesForPrompt(prompt, this.uploadsRoot);
+    if (directories.length === 0) return;
+    try {
+      const current = await this.client.session.get({ sessionID: this.id });
+      const permissions = [...(current.permissions ?? [])];
+      for (const directory of directories) {
+        const resource = `${directory}/*`;
+        if (
+          permissions.some(
+            (rule) =>
+              rule.action === "external_directory" &&
+              rule.resource === resource &&
+              rule.effect === "allow",
+          )
+        )
+          continue;
+        permissions.push({ action: "external_directory", resource, effect: "allow" });
+      }
+      await this.client.session.update({ sessionID: this.id, permissions });
+    } catch (error) {
+      this.logger.warn(
+        { error: toDiagnosticErrorMessage(error), sessionId: this.id },
+        "OpenCode did not open uploaded files to the session",
+      );
+    }
   }
   interrupt() {
     return this.turns.interrupt();
@@ -965,6 +1026,7 @@ export class OpenCodeV2Session implements AgentSession {
     }
     if (!("sessionID" in event.data) || event.data.sessionID !== this.id) return;
     if (event.type === "session.text.started" || event.type === "session.reasoning.started") {
+      if (this.replacingHistory) return;
       if (event.type === "session.text.started" && this.turns.hasStructuredOutput) return;
       this.timeline.startPart({
         ...event.data,
@@ -973,6 +1035,7 @@ export class OpenCodeV2Session implements AgentSession {
       return;
     }
     if (event.type === "session.text.delta" || event.type === "session.reasoning.delta") {
+      if (this.replacingHistory) return;
       const isText = event.type === "session.text.delta";
       // A structured-output turn supplies its answer through a tool, so streamed
       // prose is not part of the result and must not reach the timeline.

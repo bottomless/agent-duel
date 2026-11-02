@@ -5,7 +5,7 @@ import path from "node:path"
 import { Permission } from "@opencode/core/permission"
 import { Agent } from "@opencode/schema/agent"
 import { Global } from "@opencode/util/global"
-import { Effect, Schema } from "effect"
+import { Effect, Schema, Stream } from "effect"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import type { PermissionEvaluation } from "@opencode/plugin/effect/permission"
 import type { ToolEditor } from "@opencode/plugin/effect/tool"
@@ -532,7 +532,7 @@ describe("round 3: the plugin owns one shell permission check", () => {
       expected: [{ resources: ["/work/out/*"], effect: "ask" }],
     },
     { mode: "auto", command: `touch ${OUT}/x`, expected: [{ resources: [`${OUT}/*`], effect: "allow" }] },
-    { mode: "battle", command: `touch ${OUT}/x`, expected: [] },
+    { mode: "battle", command: "touch ./inside.txt", expected: [] },
   ])("checks $mode: $command", async ({ mode, command, expected }) => {
     const call: Tool.Context = {
       sessionID: Session.ID.make("ses_scan"),
@@ -581,7 +581,16 @@ describe("round 3: the plugin owns one shell permission check", () => {
       provider: { transform: () => registration },
       agent: { transform: () => registration },
       aisdk: { hook: () => registration },
-      session: { hook: () => registration },
+      session: {
+        hook: () => registration,
+        get: () =>
+          Effect.succeed({
+            id: call.sessionID,
+            location: { directory: project },
+            permissions: permissionRules([], sandboxForSession(String(call.sessionID), project, "/work/checkout")),
+          }),
+      },
+      event: { subscribe: () => Stream.empty },
       shell: { hook: () => registration },
       skill: { list: () => Effect.succeed({ data: [] }) },
       permission: {
@@ -627,7 +636,7 @@ describe("round 3: the plugin owns one shell permission check", () => {
           source: { type: "tool", id: call.id, messageID: call.messageID },
         }
         yield* evaluate(after)
-        expect(after.effect).toBe(mode === "auto" ? "allow" : "ask")
+        expect(after.effect).toBe({ ask: "ask", auto: "allow", battle: "deny" }[mode])
       }).pipe(Effect.scoped),
     )
     expect(checks).toEqual(expected)

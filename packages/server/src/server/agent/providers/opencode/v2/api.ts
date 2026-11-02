@@ -5,6 +5,7 @@ export interface V2Api {
   session: Pick<
     OpenCodeClient["session"],
     | "create"
+    | "update"
     | "get"
     | "list"
     | "active"

@@ -1,7 +1,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAllByRole } from "@testing-library/dom";
+import { getAllByRole, getByRole, queryByText } from "@testing-library/dom";
 import { i18n as testI18n } from "@/i18n/i18next";
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "@/stores/panel-store";
 import { SidebarProjectEmptyState } from "./empty-states";
@@ -48,7 +48,7 @@ function expectActionsInsideCard(card: HTMLElement) {
   const cardRect = card.getBoundingClientRect();
   const buttons = getAllByRole(card, "button");
 
-  expect(buttons).toHaveLength(2);
+  expect(buttons).toHaveLength(1);
   for (const button of buttons) {
     const rect = button.getBoundingClientRect();
     expect(rect.left).toBeGreaterThanOrEqual(cardRect.left);
@@ -77,9 +77,10 @@ describe("SidebarProjectEmptyState", () => {
     },
   );
 
-  it("keeps English actions on one row when they fit", async () => {
+  it("offers Add project without the unsupported session import entry", async () => {
     const card = await mountEmptyState("en", DEFAULT_SIDEBAR_WIDTH);
-    const [addProject, importSession] = getAllByRole(card, "button");
-    expect(addProject.getBoundingClientRect().top).toBe(importSession.getBoundingClientRect().top);
+    expect(getByRole(card, "button", { name: "Add project" })).toBeDefined();
+    expect(getAllByRole(card, "button")).toHaveLength(1);
+    expect(queryByText(card, "importSession.title")).toBeNull();
   });
 });

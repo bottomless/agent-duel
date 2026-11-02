@@ -15,6 +15,54 @@ function assistant(content: SessionMessageAssistant["content"]): SessionMessageA
   };
 }
 
+test.each(["running", "completed"] as const)(
+  "a native %s subagent opens its saved child transcript",
+  (status) => {
+    const input = {
+      agent: "general",
+      description: "Create quick.txt",
+      prompt: "Write quick.txt and report done",
+      background: true,
+    };
+    const metadata = { sessionID: "ses_canonical_child", status };
+    const output = '<subagent sessionID="ses_canonical_child" state="completed">done</subagent>';
+    const events = new V2Timeline().messages([
+      assistant([
+        {
+          type: "tool",
+          id: "call-child",
+          name: "subagent",
+          state:
+            status === "running"
+              ? { status, input, metadata }
+              : { status, input, metadata, content: [{ type: "text", text: output }] },
+          time: { created: 2 },
+        },
+      ]),
+    ]);
+    expect(events).toMatchObject([
+      {
+        type: "timeline",
+        item: {
+          type: "tool_call",
+          name: "subagent",
+          status,
+          detail: {
+            type: "sub_agent",
+            subAgentType: "general",
+            description: "Create quick.txt",
+            childSessionId: "ses_canonical_child",
+            log: status === "running" ? "" : output,
+            actions: [],
+          },
+        },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('"model"');
+    expect(JSON.stringify(events)).not.toContain('"test"');
+  },
+);
+
 test("a completed edit carries the replaced and replacement text", () => {
   // Captured from OpenCode 2.0.18, whose edit tool takes `path` instead of `filePath`.
   const edit = assistant([

@@ -137,6 +137,7 @@ export class V2Harness {
         return this.info;
       },
       get: async () => this.info,
+      update: unexpected,
       list: async () => ({ data: [], cursor: {} }),
       active: async () => {
         this.activeReads += 1;

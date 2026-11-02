@@ -9,6 +9,7 @@ import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import type { Model } from "@opencode/schema/model"
 import type { Session } from "@opencode/schema/session"
+import { Tool } from "@opencode/schema/tool"
 import { ArenaRuntime } from "../runtime"
 import { environment as previewForDirectory } from "../preview"
 import { tmpDirectory } from "../contestant"
@@ -20,6 +21,7 @@ import { ArenaEngineSandbox, previewEnvironment } from "./sandbox"
 import type { ToolExecutionGate } from "./gate"
 import { getArenaAutoAccept } from "./auto-accept"
 import { askOutsideProject, isTrusted, shellOutsideDirectories } from "./outside-project"
+import { battlePathDenial, battleToolInput } from "./battle-sandbox"
 import {
   readNetworkUnavailable,
   readSessionRejected,
@@ -131,13 +133,17 @@ function allowedArenaModel(value: unknown, expected: string) {
   return value === expected
 }
 
-function ensureAssignment(context: Context, options: InstalledOptions, sessionID: string) {
+function ensureAssignment(context: Context, options: InstalledOptions, sessionID: string): Effect.Effect<void> {
   if (arenaSession(options, sessionID)) return Effect.void
   return context.session.get({ sessionID: sessionID as Session.ID }).pipe(
     Effect.flatMap((session) =>
       session.parentID
-        ? Effect.sync(() =>
-            ArenaEngineAssignment.registerChildAssignment(options.assignments, session.id, session.parentID!),
+        ? ensureAssignment(context, options, String(session.parentID)).pipe(
+            Effect.andThen(
+              Effect.sync(() =>
+                ArenaEngineAssignment.registerChildAssignment(options.assignments, session.id, session.parentID!),
+              ),
+            ),
           )
         : Effect.void,
     ),
@@ -404,6 +410,30 @@ function install(context: Context, options: InstalledOptions) {
 
     yield* context.permission.hook("evaluate", (event) =>
       Effect.gen(function* () {
+        yield* ensureAssignment(context, options, String(event.sessionID))
+        if (
+          options.assignments.assignments.get(String(event.sessionID))?.telemetry &&
+          ["edit", "read", "external_directory"].includes(event.action)
+        ) {
+          const session = yield* context.session.get({ sessionID: event.sessionID }).pipe(Effect.orDie)
+          const operation = event.action === "edit" ? "write" : "read"
+          const message = event.resources
+            .map((resource) =>
+              battlePathDenial(session.permissions ?? [], operation, resource, context.location.directory),
+            )
+            .find((message) => message !== undefined)
+          if (message) {
+            event.effect = "deny"
+            event.message = message
+            return
+          }
+          // There is no voter to answer a filesystem permission request for a side.
+          if (event.effect === "ask") {
+            event.effect = "deny"
+            event.message = "Arena contestants cannot request approval for filesystem access."
+          }
+          return
+        }
         if (event.action === "external_directory" && event.effect === "ask") {
           const checked = yield* CheckedShell
           if (event.source?.type === "tool" && checked === `${event.sessionID}:${event.source.id}`) {
@@ -432,8 +462,10 @@ function install(context: Context, options: InstalledOptions) {
         if (!sessionID || !arenaSession(options, sessionID)) return
         const worktree = toolExecutionWorktree(SessionID.make(sessionID)) ?? event.cwd
         Object.assign(event.env, previewForDirectory(worktree, process.env, event.cwd))
-        Object.assign(event.env, options.previewEnvironment?.(sessionID, event.cwd) ?? previewEnvironment(sessionID))
-        yield* Effect.promise(() => mkdir(tmpDirectory(sessionID), { recursive: true }))
+        const assignment = options.assignments.assignments.get(sessionID)
+        const owner = assignment?.telemetry ? assignment.rootSessionID : sessionID
+        Object.assign(event.env, options.previewEnvironment?.(owner, event.cwd) ?? previewEnvironment(owner))
+        yield* Effect.promise(() => mkdir(tmpDirectory(owner), { recursive: true }))
       }),
     )
 
@@ -518,9 +550,9 @@ function install(context: Context, options: InstalledOptions) {
       })
     })
 
-    // Core's v2 execute.before hook can hold a call while a contestant checkout is staged, but
-    // it cannot change the runtime that owns the tool effect. Wrap registered executors so calls
-    // hosted by the canonical instance run through the contestant's ToolExecutionProvider.
+    // Core tools capture Location when built; providing another layer cannot rehost them.
+    // Resolve battle paths against the side before calling them, and check writes independently
+    // of Core's location-relative permission names. Descendants use the root side's gate and paths.
     yield* context.tool.transform((editor) => {
       if (typeof editor.list !== "function") return
       for (const info of editor.list()) {
@@ -528,11 +560,39 @@ function install(context: Context, options: InstalledOptions) {
         editor.update(info.id, (tool) => {
           tool.execute = (input, call) => {
             const sessionID = String(call.sessionID)
-            if (!arenaSession(options, sessionID)) return original(input, call)
             return Effect.gen(function* () {
-              yield* Effect.promise(() => waitForToolExecution(sessionID as SessionID, stagedTool(info.name, input)))
-              const provide = toolExecutionProvider(SessionID.make(sessionID))
-              const execute = original(input, call).pipe(Effect.provideService(CurrentToolSession, sessionID))
+              yield* ensureAssignment(context, options, sessionID)
+              if (!arenaSession(options, sessionID)) return yield* original(input, call)
+              const assignment = options.assignments.assignments.get(sessionID)!
+              const owner = assignment.telemetry ? assignment.rootSessionID : sessionID
+              yield* Effect.promise(() => waitForToolExecution(SessionID.make(owner), stagedTool(info.name, input)))
+              let params = input
+              if (assignment.telemetry) {
+                const session = yield* context.session
+                  .get({ sessionID: call.sessionID })
+                  .pipe(
+                    Effect.mapError(() => new Tool.Error({ message: "Arena could not load the contestant sandbox." })),
+                  )
+                const root =
+                  owner === sessionID
+                    ? session
+                    : yield* context.session
+                        .get({ sessionID: owner as Session.ID })
+                        .pipe(
+                          Effect.mapError(
+                            () => new Tool.Error({ message: "Arena could not load the contestant sandbox." }),
+                          ),
+                        )
+                const directory = toolExecutionWorktree(SessionID.make(owner)) ?? root.location.directory
+                params = yield* battleToolInput({
+                  tool: info.name,
+                  args: input,
+                  directory,
+                  rules: root.permissions ?? [],
+                })
+              }
+              const provide = toolExecutionProvider(SessionID.make(owner))
+              const execute = original(params, call).pipe(Effect.provideService(CurrentToolSession, sessionID))
               return yield* provide ? provide(execute) : execute
             })
           }

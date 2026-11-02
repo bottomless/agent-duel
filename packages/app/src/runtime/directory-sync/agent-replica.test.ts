@@ -9,6 +9,9 @@ import {
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import type { DirectoryReplicaMutation } from "@/runtime/replica-cache";
 import { AgentDirectoryReplica } from "./agent-replica";
+import { QueryObserver } from "@tanstack/react-query";
+import { queryClient } from "@/data/query-client";
+import { agentHistoryQueryKey, allAgentHistoryQueryKey } from "@/hooks/agent-history-query-key";
 
 function payload(title: string): AgentSnapshotPayload {
   return {
@@ -57,6 +60,43 @@ function entry(agent: AgentSnapshotPayload): FetchAgentsEntry {
 }
 
 describe("AgentDirectoryReplica", () => {
+  it("refreshes an open Archived list when another window removes a row absent from the active directory", async () => {
+    const serverId = "archived-remove-other-window";
+    useSessionStore.getState().initializeSession(serverId, null);
+    const key = [...allAgentHistoryQueryKey([serverId]), "", "archived"];
+    const singleKey = [...agentHistoryQueryKey(serverId), "", "archived"];
+    const unrelatedKey = [...allAgentHistoryQueryKey(["other-host"]), "", "archived"];
+    queryClient.setQueryData(key, ["deleted-chat"]);
+    queryClient.setQueryData(singleKey, ["deleted-chat"]);
+    queryClient.setQueryData(unrelatedKey, ["keep-chat"]);
+    const observer = new QueryObserver<string[]>(queryClient, {
+      queryKey: key,
+      queryFn: async () => [],
+      staleTime: Infinity,
+    });
+    let unsubscribe = () => {};
+    const refreshed = new Promise<void>((resolve) => {
+      unsubscribe = observer.subscribe((result) => {
+        if (result.data?.length === 0) resolve();
+      });
+    });
+    try {
+      const replica = new AgentDirectoryReplica(
+        serverId,
+        () => {},
+        () => {},
+      );
+      replica.applyDelta({ kind: "remove", agentId: "deleted-chat" });
+      await refreshed;
+      expect(queryClient.getQueryData(key)).toEqual([]);
+      expect(queryClient.getQueryState(singleKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+      for (const queryKey of [key, singleKey, unrelatedKey])
+        queryClient.removeQueries({ queryKey });
+    }
+  });
   it.each(["delta", "snapshot"] as const)(
     "does not erase freshly fetched history when the active directory removes it by %s",
     (removal) => {

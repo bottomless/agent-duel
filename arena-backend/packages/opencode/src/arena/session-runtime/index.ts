@@ -36,6 +36,7 @@ import { failedAnswer, pendingMessage, project, projectSession, partID } from ".
 import { CurrentDirectory } from "@/project/instance-context"
 import { getArenaAutoAccept, idleRecovery, setArenaAutoAccept } from "@/arena/engine-runtime"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { shellRestartInput } from "@/arena/shell-restart"
 import { EXTERNAL_WRITE } from "@/arena/contestant"
 import type {
   ArenaMessageInfo,
@@ -145,6 +146,7 @@ export class Session extends Context.Service<Session, SessionInterface>()("@agen
 export interface PromptInterface {
   readonly prompt: (input: ArenaPromptInput) => Effect.Effect<import("./schema").WithParts | undefined, Error>
   readonly loop: (input: {
+    readonly stoppedShellIDs?: readonly string[]
     readonly sessionID: SessionSchema.ID
   }) => Effect.Effect<import("./schema").WithParts | undefined, Error>
   /**
@@ -781,10 +783,23 @@ const promptLayer: Layer.Layer<
       return yield* answer(sessionID, started, failure)
     })
     const loop = Effect.fn("ArenaSessionPrompt.loop")(function* (
-      input: { readonly sessionID: SessionSchema.ID },
+      input: { readonly sessionID: SessionSchema.ID; readonly stoppedShellIDs?: readonly string[] },
       /** When this run's work was admitted; a prompt admits it before the loop joins. */
       admittedAt?: number,
     ) {
+      const note = shellRestartInput(input.sessionID, input.stoppedShellIDs)
+      if (note) {
+        const messages = yield* sessions.messages({ sessionID: input.sessionID })
+        const inbox = yield* sessions.inbox(input.sessionID)
+        const exists = [...messages, ...inbox].some((message) => message.id === note.id)
+        if (!exists)
+          yield* sessions.synthetic({
+            sessionID: input.sessionID,
+            id: SessionMessage.ID.make(note.id),
+            text: note.text,
+            resume: false,
+          })
+      }
       yield* subagents.release(input.sessionID)
       return yield* settle(input.sessionID, admittedAt ?? (yield* Clock.currentTimeMillis))
     })

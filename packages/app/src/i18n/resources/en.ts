@@ -13,6 +13,7 @@ export const en = {
     lessSecond: "<1s",
   },
   arena: {
+    engineRestartedCommandStopped: "The engine restarted, and a running command stopped.",
     chooseMessageTarget: "Choose who to message",
     steerContestants: "Steer both contestants",
     steerAgent: "Steer Agent {{side}}",

@@ -16,6 +16,7 @@ export const ja: TranslationResources = {
     lessSecond: "1秒未満",
   },
   arena: {
+    engineRestartedCommandStopped: "エンジンが再起動し、実行中のコマンドが停止しました。",
     chooseMessageTarget: "メッセージの送信先を選択",
     steerContestants: "両方の参加者に指示",
     steerAgent: "エージェント {{side}} に指示",

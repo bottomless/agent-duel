@@ -42,13 +42,17 @@ function createUniqueTimelineId(
   prefix: string,
   text: string,
   timestamp: Date,
+  reservedItemIds?: ReadonlySet<string>,
 ): string {
   const base = createTimelineId(prefix, text, timestamp);
-  // We only ever append new timeline items, and we incorporate the current
-  // length as a monotonic suffix, so uniqueness is guaranteed without an O(n)
-  // collision scan (important for large hydration snapshots).
-  const suffixSeed = state.length;
-  return `${base}_${suffixSeed.toString(36)}`;
+  // The active head starts empty after each flush. Reserve IDs already committed to the tail too.
+  let suffixSeed = state.length;
+  let id = `${base}_${suffixSeed.toString(36)}`;
+  while (reservedItemIds?.has(id)) {
+    suffixSeed += 1;
+    id = `${base}_${suffixSeed.toString(36)}`;
+  }
+  return id;
 }
 
 function createAssistantItemId(
@@ -1040,6 +1044,7 @@ function appendThought(
   text: string,
   timestamp: Date,
   timelineCursor?: TimelinePosition,
+  reservedItemIds?: ReadonlySet<string>,
 ): StreamItem[] {
   const { chunk, hasContent } = normalizeChunk(text);
   if (!chunk) {
@@ -1065,7 +1070,7 @@ function appendThought(
   const idSeed = chunk.trim() || chunk;
   const item: ThoughtItem = {
     kind: "thought",
-    id: createUniqueTimelineId(state, "thought", idSeed, timestamp),
+    id: createUniqueTimelineId(state, "thought", idSeed, timestamp, reservedItemIds),
     ...(timelineCursor ? { timelineCursor } : {}),
     text: chunk,
     timestamp,
@@ -1594,7 +1599,7 @@ function reduceTimelineEvent(
         ),
       );
     case "reasoning":
-      return appendThought(state, item.text, timestamp, timelineCursor);
+      return appendThought(state, item.text, timestamp, timelineCursor, reservedItemIds);
     case "tool_call":
       return finalizeActiveThoughts(
         reduceTimelineToolCall(state, event, item, timestamp, timelineCursor),
@@ -2102,7 +2107,8 @@ export function applyStreamEvent(params: {
   // For streamable kinds, apply to head
   if (incomingKind !== null && isStreamableKind(incomingKind)) {
     const reservedItemIds =
-      incomingKind === "assistant_message" && getActiveAssistantHeadIndex(nextHead) < 0
+      (incomingKind === "assistant_message" && getActiveAssistantHeadIndex(nextHead) < 0) ||
+      (incomingKind === "thought" && nextHead.length === 0)
         ? new Set(nextTail.map((item) => item.id))
         : undefined;
     const reduced = reduceStreamUpdate(nextHead, event, timestamp, {
