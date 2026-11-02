@@ -12,6 +12,7 @@ import { environment as previewForDirectory } from "../preview"
 import { tmpDirectory } from "../contestant"
 import { ArenaEngineAssignment, type ArenaAssignmentRegistry } from "./assignment"
 import { ArenaEngineModels, CONTESTANT_IDENTITY, PROVIDER_ID, modelReference } from "./models"
+import { OUTPUT_TOKEN_LIMIT } from "../model-profile"
 import { promptCacheKey, requestHeaders, requestNeedsCompaction } from "./request"
 import { ArenaEngineSandbox, previewEnvironment } from "./sandbox"
 import type { ToolExecutionGate } from "./gate"
@@ -86,6 +87,11 @@ function stagedTool(tool: string, input: unknown): ToolExecution {
 
 function arenaModel(ref: Model.Ref) {
   return String(ref.providerID) === String(PROVIDER_ID)
+}
+
+function capOutput(event: { model: Model.Ref; options: { maxTokens?: number } }) {
+  if (!arenaModel(event.model)) return
+  event.options.maxTokens = Math.min(event.options.maxTokens ?? OUTPUT_TOKEN_LIMIT, OUTPUT_TOKEN_LIMIT)
 }
 
 function arenaSession(options: ArenaEngineRuntimeOptions, sessionID: string) {
@@ -205,11 +211,17 @@ function install(context: Context, options: InstalledOptions) {
       (event) =>
         ensureAssignment(context, options, String(event.sessionID)).pipe(
           Effect.andThen(Effect.sync(() => identity(event))),
+          Effect.andThen(Effect.sync(() => capOutput(event))),
         ),
       {
         providerID: String(PROVIDER_ID),
       },
     )
+    // Core sends no output limit for titles and generate requests, so the provider would reserve the
+    // drawn model's whole output. Primary and compaction requests already carry the catalog limit.
+    yield* context.session.hook("title", (event) => Effect.sync(() => capOutput(event)), {
+      providerID: String(PROVIDER_ID),
+    })
     yield* context.session.hook(
       "context",
       (event) =>

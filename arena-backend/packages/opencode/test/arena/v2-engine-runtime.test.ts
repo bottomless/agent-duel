@@ -493,6 +493,8 @@ describe("Arena v2 engine runtime", () => {
       expect(request.headers.get("x-arena-root-session-id")).toBe(info.id)
       expect(request.headers.get("x-session-id")).toBe(info.id)
       expect(request.headers.get("authorization")).toBeNull()
+      // Every Arena request asks for the 1.x output cap.
+      expect(request.body.max_tokens).toBe(32_000)
 
       delegateMode = true
       await Effect.runPromise(sessions.prompt({ sessionID: info.id, text: "delegate once", resume: true }))
@@ -506,6 +508,7 @@ describe("Arena v2 engine runtime", () => {
       const childRequest = delegated.find((entry) => entry.headers.get("x-arena-parent-session-id") === info.id)
       expect(childRequest).toBeDefined()
       expect(childRequest?.headers.get("x-arena-root-session-id")).toBe(info.id)
+      expect(childRequest?.body.max_tokens).toBe(32_000)
       expect(providerRuns).toBeGreaterThan(0)
 
       const deniedPath = `${import.meta.dir}/.agent-duel/arena-v2-${info.id}.txt`
@@ -537,6 +540,10 @@ describe("Arena v2 engine runtime", () => {
             message.content.some((part) => part.type === "text" && part.text.includes("Arena core reply")),
         ),
       ).toBe(true)
+      // Core sends the title request in the background and without an output limit; Arena adds the cap.
+      const titles = requests.filter((entry) => entry.headers.get("x-arena-generation-classification") === "utility")
+      expect(titles.length).toBeGreaterThan(0)
+      expect(titles.map((entry) => entry.body.max_tokens)).toEqual(titles.map(() => 32_000))
     } finally {
       if (infoForTest !== "pending") clearArenaAutoAccept(infoForTest)
       if (infoForTest !== "pending") clearToolExecutionEnvironment(SessionID.make(infoForTest))

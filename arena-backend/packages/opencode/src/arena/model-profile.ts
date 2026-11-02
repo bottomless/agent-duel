@@ -1,16 +1,21 @@
+// The output budget of every Arena request, whatever model the control plane draws. OpenCode 2.0
+// sends a model's output limit as max_tokens, so this limit is the cap 1.x sent: a larger one raises
+// the credit OpenRouter reserves per request and makes battles differ from 1.x battles.
+export const OUTPUT_TOKEN_LIMIT = 32_000
+
 // The desktop runtime intentionally knows one capability envelope and no model
 // identities. The control plane replaces this placeholder after authenticating
 // the account and matching a battle-scoped opaque assignment ID.
 export const contestant = {
   id: "contestant",
   contextWindow: 500_000,
-  outputLimit: 131_072,
+  outputLimit: OUTPUT_TOKEN_LIMIT,
 } as const
 
 export const medium = {
   id: "medium",
   contextWindow: 1_050_000,
-  outputLimit: 128_000,
+  outputLimit: OUTPUT_TOKEN_LIMIT,
 } as const
 
 // Session creation can carry this non-contestant placeholder before Arena has
