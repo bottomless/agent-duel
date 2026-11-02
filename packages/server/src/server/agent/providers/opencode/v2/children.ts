@@ -20,6 +20,12 @@ export class SessionChildren {
   private readonly children = new Map<string, V2Timeline>();
   private readonly childStates = new Map<string, string>();
   constructor(private readonly options: ChildrenOptions) {}
+  async reload() {
+    // Winner hydration drops the daemon's store, including unchanged children from earlier turns.
+    this.children.clear();
+    this.childStates.clear();
+    await this.reconcile(this.options.id);
+  }
   async observe(event: import("@opencode/client").OpenCodeEvent) {
     if (
       event.type === "session.created" &&

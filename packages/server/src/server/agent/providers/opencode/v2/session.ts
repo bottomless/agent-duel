@@ -410,6 +410,9 @@ export class OpenCodeV2Session implements AgentSession {
     const history = new V2Timeline(false);
     yield* history.messages(await messages(this.client, this.id));
   }
+  async reloadProviderSubagents(): Promise<void> {
+    await this.children.reload();
+  }
   async getRuntimeInfo() {
     await this.reconnectIfExited();
     await this.readInfo(true);
