@@ -1286,6 +1286,23 @@ function promptFailed(promptExit: Exit.Exit<SessionV1.WithParts | void, unknown>
   return answer?.role === "assistant" && answer.error !== undefined && answer.error.name !== "MessageAbortedError"
 }
 
+function singleAgentResponse(transcript: readonly SessionV1.WithParts[], messageID: string) {
+  const last = transcript.findLast(
+    (message) => message.info.role === "assistant" && message.info.parentID === messageID,
+  )?.info
+  if (last?.role !== "assistant") return "failed"
+  if (last.error?.name === "MessageAbortedError") return "stopped"
+  if (
+    last.error ||
+    last.time.completed === undefined ||
+    !last.finish ||
+    ["error", "tool-calls", "tool_calls", "unknown"].includes(last.finish) ||
+    ArenaResponseRecovery.reason(last.finish)
+  )
+    return "failed"
+  return "complete"
+}
+
 export const layer: Layer.Layer<
   Service,
   never,
@@ -1980,7 +1997,7 @@ export const layer: Layer.Layer<
     const snapshot = Effect.fn("Arena.snapshot")(function* (id: string, afterSequence = -1) {
       const store = yield* available()
       const chat = yield* promise(() => store.chat(id))
-      if (chat) yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
+      if (chat) yield* recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID)
       yield* reconcileRewoundTurns(store, id)
       const current = yield* promise(() => store.snapshot(id))
       return yield* projectSnapshot(current, afterSequence)
@@ -1991,7 +2008,7 @@ export const layer: Layer.Layer<
       const turn = yield* promise(() => store.turn(id))
       if (turn) {
         const chat = yield* promise(() => store.chat(turn.chatID))
-        if (chat) yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
+        if (chat) yield* recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID)
         yield* reconcileRewoundTurns(store, turn.chatID)
       }
       const current = yield* promise(() => store.snapshotTurn(id))
@@ -2445,12 +2462,24 @@ export const layer: Layer.Layer<
       return rating
     })
 
-    const recoverInterruptedSingleAgentRating = async (store: Store, sessionID: string) => {
-      const pending = await store.pendingSingleAgentRating(sessionID)
-      if (!pending || pending.completedAt || activeNormalTurns.active(sessionID)) return pending
-      await store.completeSingleAgentRating({ sessionID, messageID: pending.messageID })
-      return store.pendingSingleAgentRating(sessionID)
-    }
+    const recoverInterruptedSingleAgentRating = Effect.fn("Arena.recoverInterruptedSingleAgentRating")(function* (
+      store: Store,
+      sessionID: string,
+    ) {
+      const pending = yield* promise(() => store.pendingSingleAgentRating(sessionID))
+      if (!pending || activeNormalTurns.active(sessionID)) return pending
+      const transcript = yield* sessions.messages({ sessionID: SessionID.make(sessionID) })
+      const response = singleAgentResponse(transcript, pending.messageID)
+      if (response === "failed") {
+        // Older engines also completed ratings for failed responses. Recheck them before gating.
+        yield* promise(() => store.abandonSingleAgentRating({ sessionID, messageID: pending.messageID }))
+      } else if (!pending.completedAt) {
+        yield* promise(() =>
+          store.completeSingleAgentRating({ sessionID, messageID: pending.messageID, stopped: response === "stopped" }),
+        )
+      }
+      return yield* promise(() => store.pendingSingleAgentRating(sessionID))
+    })
 
     const turnStartLock = (chatID: string) => {
       const existing = turnStartLocks.get(chatID)
@@ -3844,23 +3873,18 @@ export const layer: Layer.Layer<
         yield* promise(() => store.abandonSingleAgentRating(input))
         return
       }
-      const responses = transcript.filter(
-        (candidate) => candidate.info.role === "assistant" && candidate.info.parentID === message.info.id,
-      )
-      const last = responses.at(-1)
-      if (!last) {
+      const response = singleAgentResponse(transcript, message.info.id)
+      if (response === "failed") {
         yield* promise(() => store.abandonSingleAgentRating(input))
-        return
+      } else {
+        // Stop keeps its existing optional rating.
+        yield* promise(() => store.completeSingleAgentRating({ ...input, stopped: response === "stopped" }))
       }
-      // Stop ends the response with `MessageAbortedError`; the user chose not to finish it, so its
-      // rating is optional.
-      const stopped = last.info.role === "assistant" && last.info.error?.name === "MessageAbortedError"
-      yield* promise(() => store.completeSingleAgentRating({ ...input, stopped }))
       const chat = yield* promise(() => store.chatForSession(input.sessionID))
       if (!chat || chat.status !== "ready" || chat.canonicalSessionID !== input.sessionID) return
       const state = yield* withGit(inspectCanonical(chat.repository.root)).pipe(Effect.mapError(error))
       if (state.root !== chat.repository.root) return
-      if (state.conflicts.length === 0) {
+      if (response !== "failed" && state.conflicts.length === 0) {
         const result = yield* withRepositoryMutation(
           chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
           withGit(
@@ -3950,7 +3974,7 @@ export const layer: Layer.Layer<
         input.model?.modelID === ModelV2.ID.make("contestant") || input.model?.modelID === ModelV2.ID.make("frontier")
           ? "frontier"
           : "medium"
-      const pending = yield* promise(() => recoverInterruptedSingleAgentRating(store, input.sessionID))
+      const pending = yield* recoverInterruptedSingleAgentRating(store, input.sessionID)
       if (pending) return yield* Effect.fail(new Error("Arena frontier result must be rated before another turn"))
       const assignModel = ensureSingleAgentRating(input.sessionID, input.messageID, requestedModelSize).pipe(
         Effect.map(
@@ -5976,7 +6000,7 @@ export const layer: Layer.Layer<
       })
       const storedChat = yield* promise(() => store.chat(id))
       if (!storedChat) return yield* Effect.fail(new Error(`Arena chat not found: ${id}`))
-      if (yield* promise(() => recoverInterruptedSingleAgentRating(store, storedChat.canonicalSessionID))) {
+      if (yield* recoverInterruptedSingleAgentRating(store, storedChat.canonicalSessionID)) {
         return yield* Effect.fail(new Error("Arena frontier result must be rated before starting a battle"))
       }
       if (storedChat.checkoutEvicted) {
@@ -10914,7 +10938,7 @@ export const layer: Layer.Layer<
           Effect.gen(function* () {
             const chat = yield* promise(() => store.chatForSession(rawSessionID))
             if (!chat) return yield* Effect.fail(new Error("Arena chat unavailable"))
-            yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
+            yield* recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID)
             const current = yield* promise(() =>
               turnID
                 ? store.snapshotTurn(turnID, Number.MAX_SAFE_INTEGER)
