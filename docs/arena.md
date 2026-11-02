@@ -1404,6 +1404,16 @@ Treat incomplete arguments at the requested output cap as a cutoff too, includin
 after the finish chunk. A complete call at the cap remains valid. Normalize before the SDK flushes
 arguments, or it can turn incomplete JSON into an executable empty object.
 
+The OpenRouter SDK ends a tool call as soon as its arguments parse as JSON and sends a delta for each
+later chunk of that call. Qwen 3.8 Max sends an empty chunk after the closing brace, which Core treats
+as a defect that kills the run. Core also starts the tool at the call, so `{}` followed by the real
+arguments would run it with `{}`. `arena/engine-runtime/tool-stream.ts` holds each ended call until the
+model finishes, as Core's native routes do, and passes everything the model sent. Late text other than
+whitespace fails the JSON parse, so the tool does not run and the model is asked to send the call again.
+Tools therefore start when the model's response ends, not when their arguments end. A stream cut
+before then leaves the call unexecuted, with the provider or cancellation error. Complete arguments
+stay in the failed call's history, so the model can see what it tried to send.
+
 Other retryable Arena failures share an eight-retry, two-minute budget per execution. A missing or
 malformed retry hint uses bounded backoff so a persistent 5xx cannot spin indefinitely. A known
 connection failure before response headers becomes a retryable upstream error; cancellation and

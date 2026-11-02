@@ -1,5 +1,5 @@
 import { castDraft, produce, type WritableDraft } from "immer"
-import { DateTime, Effect, Match, pipe, Schema } from "effect"
+import { DateTime, Effect, Match, Option, pipe, Schema } from "effect"
 import { SessionEvent } from "./event.js"
 import { SessionMessage } from "./message.js"
 
@@ -18,6 +18,8 @@ export interface Adapter {
 }
 
 type DraftAssistant = WritableDraft<SessionMessage.Assistant>
+
+const decodeToolInput = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))
 
 const projectTerminalSnapshot = (draft: DraftAssistant, event: SessionEvent.Step.Ended | SessionEvent.Step.Failed) => {
   if (event.data.snapshot || event.data.files)
@@ -362,6 +364,11 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.id)
           if (match && (match.state.status === "streaming" || match.state.status === "running")) {
+            let input = typeof match.state.input === "string" ? {} : match.state.input
+            // Arena holds complete calls until the response finishes. Preserve their arguments
+            // on failure without marking the call as run or releasing it for execution.
+            if (draft.model.providerID === "arena" && match.state.status === "streaming")
+              input = Option.getOrElse(decodeToolInput(match.state.input), () => ({}))
             match.executed = event.data.executed || match.executed === true
             match.providerResultState = event.data.resultState
             match.time.completed = created
@@ -369,7 +376,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
               SessionMessage.ToolStateError.make({
                 status: "error",
                 error: event.data.error,
-                input: typeof match.state.input === "string" ? {} : match.state.input,
+                input,
                 ...(event.data.content === undefined ? {} : { content: event.data.content }),
                 ...(event.data.metadata === undefined ? {} : { metadata: event.data.metadata }),
               }),
