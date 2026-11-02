@@ -35,6 +35,16 @@ if (args.includes("--arena-credentials-stdin") && args[0] !== "generate") {
   }
 }
 
+if (args[0] !== "generate") {
+  const { backUpEngineDatabases } = await import("./arena/database-upgrade")
+  try {
+    await backUpEngineDatabases()
+  } catch (error) {
+    console.error(`Arena could not back up its databases before the upgrade: ${error}`)
+    process.exit(1)
+  }
+}
+
 const { Server } = await import("./server/server")
 if (args[0] === "generate") {
   console.log(JSON.stringify(await Server.openapi()))

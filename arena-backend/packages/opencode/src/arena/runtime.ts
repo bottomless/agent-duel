@@ -1,8 +1,7 @@
 import { AssignmentRegistry, proxy, type Telemetry } from "./proxy"
 import type { Store } from "./mongo"
 import { isFinalState, isParkedPromotion } from "./domain"
-import { homedir } from "node:os"
-import { join } from "node:path"
+import { arenaDirectory } from "./database-upgrade"
 import { ResearchUploader } from "./research"
 import { arenaCredentials, type ArenaCredentials } from "./credentials"
 import { createArenaBackend, type ArenaBackend } from "./backend"
@@ -40,9 +39,8 @@ export function recoverOnce(run: () => Promise<void>) {
 async function openLocalStore() {
   const { connectLocalStore } = await import("./local-store")
   let uploader: ResearchUploader | undefined
-  const directory = join(process.env.PASEO_HOME?.trim() || join(homedir(), ".paseo"), "arena")
   const local = await connectLocalStore({
-    directory,
+    directory: arenaDirectory(),
     onMutation: (mutation) => uploader?.enqueue(mutation),
     onClose: () => uploader?.close(),
   })

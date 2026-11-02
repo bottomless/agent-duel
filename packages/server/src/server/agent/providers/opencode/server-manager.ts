@@ -18,6 +18,7 @@ import {
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
 import { resolveOpenCodeHomeDir } from "./paths.js";
+import { openCodeStartupTimeoutMessage } from "./startup-timeout.js";
 import {
   isArenaCredentialsCurrent,
   issueArenaLaunchCredentials,
@@ -664,7 +665,11 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       };
       timeout = setTimeout(() => {
         if (!started) {
-          failStartup(new Error(buildStartupErrorMessage("OpenCode server startup timeout")));
+          failStartup(
+            new Error(
+              buildStartupErrorMessage(openCodeStartupTimeoutMessage(isArenaLaunch, stdoutBuffer)),
+            ),
+          );
         }
       }, OPENCODE_SERVER_STARTUP_TIMEOUT_MS);
 

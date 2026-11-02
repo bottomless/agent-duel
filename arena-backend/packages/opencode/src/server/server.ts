@@ -10,6 +10,7 @@ import type { ServerOptions } from "@opencode/server/options"
 import { Api } from "@opencode/server/api"
 import { sanitizeV2, type HiddenError } from "@/arena/v2-privacy"
 import { arenaCredentials, hashArenaControlToken } from "@/arena/credentials"
+import { engineDatabaseFilename, fenceLegacyEnginesLayer } from "@/arena/database-upgrade"
 import { routeLayer as arenaRouteLayer } from "@/arena/http-runtime"
 import { ArenaRuntime } from "@/arena/runtime"
 import { ArenaService, type NormalTurnStart } from "@/arena/service"
@@ -65,16 +66,7 @@ function unauthorized() {
 
 function databaseOptions(options: ServerOptions): ServerOptions {
   if (options.database) return options
-  const configured = process.env.OPENCODE_DB
-  const channel = "local"
-  const filename =
-    configured ??
-    (["latest", "dev", "beta", "next", "prod"].includes(channel) ||
-    process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
-    process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
-      ? "opencode.db"
-      : `opencode-${channel}.db`)
-  return { ...options, database: { path: filename } }
+  return { ...options, database: { path: engineDatabaseFilename() } }
 }
 
 async function protectedSessionMutation(
@@ -449,7 +441,7 @@ async function buildRuntime(options: ServerOptions): Promise<Runtime> {
       },
       () => [],
       [],
-      arenaRouteLayer,
+      Layer.merge(arenaRouteLayer, fenceLegacyEnginesLayer),
     )
     // The Bun host supplies the platform services at runtime. The official route
     // graph carries a broad inferred environment through its extension layer; keep

@@ -1469,6 +1469,64 @@ event too, and must not put a long command back to `Working` for another 90 seco
 stays `Working` so the label does not flicker from call to call. That UI label alone must not stop
 or restart a contestant.
 
+## Guard against an accidental 1.x build
+
+Stay on OpenCode 2.0 after the switch. Do not ship a 1.x rollback to people who already run 2.0.
+A released 1.x engine has no version check and would hide every turn since the upgrade. The fence
+makes it refuse the database instead. Installing 2.0 again keeps the work since the switch.
+
+Before the first import, the engine backs up its database and `arena.sqlite` to
+`$PASEO_HOME/arena/pre-opencode-2-backup/`. Keep this copy as protection against an accidental old
+build. It takes about the size of both databases. The measured import growth was 21–23%; it does
+not need the same free space again. A failed backup still stops an unfinished import, because the
+pre-upgrade copy is required protection. An already imported database starts without a backup.
+The first engine start after 14 days removes the copy; a removal failure logs a warning and does
+not stop startup. This is elapsed time, even if the app was not used.
+
+Only the default `~/.paseo` home may upgrade the packaged engine's legacy database in
+`~/.local/share/opencode/`. Every other home must keep its engine database inside `PASEO_HOME`,
+including when `OPENCODE_DB` overrides its name. The engine refuses an outside path before opening
+it or cleaning backups. For a dev or second-home stack, set `XDG_DATA_HOME` inside that stack's
+`PASEO_HOME` before its first start. Setting `PASEO_HOME` alone does not isolate OpenCode's database.
+Do not point a dev stack at a packaged database to get its history.
+
+After import, the fence renames the old `session` table to `_arena_v1_session`. A 1.x engine then
+refuses to start with `Database is not empty and has no session table`. Keep the fence. At an
+OpenCode update, check migrations against a database without `session`; fresh 2.0 databases lack
+it too.
+
+The backup is inside the daemon's 30-second engine startup limit. If it takes too long, startup
+fails with an explicit message that it was waiting for the backup to report completion. The import
+requires a complete backup. A slower or very large copy can still prevent startup; the timeout
+does not provide a way to skip the backup.
+
+For emergency file recovery from the backup, stop the app **and its daemon** first; quitting alone
+can leave the daemon running when Keep running after quit is on. Set `PASEO_HOME` to the affected
+home and `engine_database` to its engine database's full path. Confirm the backup still exists.
+The following moves the current files into a new `pre-recovery` directory, preserving the WAL
+and SHM beside each database under matching names, then copies the backup into place. It stops
+if `pre-recovery` already exists; preserve that directory before choosing another unused name.
+Never delete the moved-aside WAL: after a crash, it can hold committed 2.0 tables and turns that
+have not reached the main file.
+
+```sh
+set -e
+saved="$PASEO_HOME/arena/pre-recovery"
+mkdir "$saved"
+for database in "$engine_database" "$PASEO_HOME/arena/arena.sqlite"; do
+  for suffix in "" -wal -shm; do
+    if [ -e "$database$suffix" ]; then
+      mv "$database$suffix" "$saved/$(basename "$database")$suffix"
+    fi
+  done
+done
+cp "$PASEO_HOME/arena/pre-opencode-2-backup/$(basename "$engine_database")" "$engine_database"
+cp "$PASEO_HOME/arena/pre-opencode-2-backup/arena.sqlite" "$PASEO_HOME/arena/arena.sqlite"
+```
+
+The restored files contain only pre-upgrade work. Keep the moved-aside files for the work since
+the switch. These file-recovery steps do not make 1.x a supported continuation of a 2.0 chat.
+
 ## Gotchas
 
 - Both sides are prepared concurrently, directory claims included.
