@@ -37,6 +37,7 @@ import {
   type ToolExecution,
 } from "../../session/tool-execution-gate"
 import { SessionID } from "../../session/schema"
+import { GlobalBus } from "../../bus/global"
 
 export interface ArenaEngineRuntimeOptions {
   /** Defaults to the process Arena runtime switch. */
@@ -220,7 +221,15 @@ function install(context: Context, options: InstalledOptions) {
       (event) =>
         Effect.sync(() => {
           if (!arenaModel(event.model)) return
-          event.language = withHeldToolCalls(event.sdk.languageModel(event.model.modelID ?? event.model.id))
+          event.language = withHeldToolCalls(
+            event.sdk.languageModel(event.model.modelID ?? event.model.id),
+            (sessionID) => {
+              GlobalBus.emit("event", {
+                directory: "",
+                payload: { type: "arena.model.activity", properties: { sessionID } },
+              })
+            },
+          )
         }),
       { providerID: String(PROVIDER_ID) },
     )

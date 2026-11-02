@@ -614,6 +614,8 @@ export const ko: TranslationResources = {
     },
     errors: {
       error: "오류",
+      firstSendDiskFull: "메시지가 저장되었습니다. 디스크 공간을 확보한 후 다시 보내세요.",
+      firstSendRetry: "메시지가 저장되었습니다. 위 오류를 해결한 후 다시 보내세요.",
       unableToSave: "저장할 수 없습니다",
       unableToCopy: "복사할 수 없습니다",
       nameRequired: "이름을 입력하세요",

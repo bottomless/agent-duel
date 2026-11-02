@@ -15,6 +15,7 @@ import {
 import { waitForMetro } from "./dev-runner-readiness.mjs";
 import { resolveDevElectronArgs } from "./dev-runner-args.mjs";
 import { prepareDevApplication } from "./dev-application.mjs";
+import { removeOlderDevApplications } from "./dev-application-cleanup.mjs";
 import { ensureDevSessionKeys } from "./dev-session-keys.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -48,6 +49,7 @@ const devBuildLabel = execFileSync("git", ["branch", "--show-current"], {
   cwd: rootDir,
   encoding: "utf8",
 }).trim();
+if (process.platform === "darwin") await removeOlderDevApplications({ rootDir });
 const electron = await prepareDevApplication({ electronPath: require("electron"), rootDir });
 if (process.platform === "darwin") {
   // Register the sender identity before the first notification reaches macOS.

@@ -633,6 +633,10 @@ export const fr: TranslationResources = {
     },
     errors: {
       error: "Erreur",
+      firstSendDiskFull:
+        "Votre message est enregistré. Libérez de l’espace disque, puis renvoyez-le.",
+      firstSendRetry:
+        "Votre message est enregistré. Corrigez l’erreur ci-dessus, puis renvoyez-le.",
       unableToSave: "Impossible d’enregistrer",
       unableToCopy: "Impossible de copier",
       nameRequired: "Le nom est requis",

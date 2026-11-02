@@ -195,6 +195,10 @@ export class Recorder {
       const previous = this.queues.get(binding.turnID) ?? Promise.resolve()
       const next = previous
         .then(async () => {
+          if (eventType(event) === "arena.model.activity") {
+            await this.recordActivity(binding, new Date())
+            return
+          }
           const firstToolAt = toolStartedAt(event)
           if (firstToolAt && !this.firstToolRuns.has(binding.runID)) {
             await this.store.writeRun(

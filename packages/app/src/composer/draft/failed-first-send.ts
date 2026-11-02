@@ -1,5 +1,19 @@
 import type { Href } from "expo-router";
 import type { DraftInput } from "@/stores/draft-store";
+import { create } from "zustand";
+
+interface FailedFirstSendNoticeState {
+  message: string | null;
+  show: (message: string) => void;
+  dismiss: () => void;
+}
+
+// Survives the redirect back to New chat, without persisting an old error across launches.
+export const useFailedFirstSendNotice = create<FailedFirstSendNoticeState>((set) => ({
+  message: null,
+  show: (message) => set({ message }),
+  dismiss: () => set({ message: null }),
+}));
 
 /**
  * The first send of a new chat failed after its agent was created. Carries that agent, so the
@@ -30,6 +44,8 @@ export interface FailedFirstSendDeps {
   saveNewChatDraft: (draft: DraftInput) => void;
   navigate: (route: Href) => void;
   showError: (message: string) => void;
+  retryMessage: string;
+  diskFullMessage: string;
   archiveWorkspace: (serverId: string, workspaceId: string) => Promise<void>;
 }
 
@@ -52,7 +68,11 @@ export function returnFailedFirstSendToNewChat(
   const route = deps.resolveNewChatRoute(input.serverId, input.workspaceId);
   deps.saveNewChatDraft(input.draft);
   deps.navigate(route);
-  deps.showError(input.error instanceof Error ? input.error.message : String(input.error));
+  const message = input.error instanceof Error ? input.error.message : String(input.error);
+  const nextStep = /ENOSPC|no space left on device/i.test(message)
+    ? deps.diskFullMessage
+    : deps.retryMessage;
+  deps.showError(`${message}\n\n${nextStep}`);
   void deps.archiveWorkspace(input.serverId, input.workspaceId).catch((error) => {
     console.error("[WorkspaceDraft] Failed to archive the chat of a failed first send", error);
   });

@@ -628,6 +628,8 @@ export const es: TranslationResources = {
     },
     errors: {
       error: "Error",
+      firstSendDiskFull: "Tu mensaje está guardado. Libera espacio en disco y vuelve a enviarlo.",
+      firstSendRetry: "Tu mensaje está guardado. Resuelve el error anterior y vuelve a enviarlo.",
       unableToSave: "No se puede guardar",
       unableToCopy: "No se pudo copiar",
       nameRequired: "El nombre es obligatorio",

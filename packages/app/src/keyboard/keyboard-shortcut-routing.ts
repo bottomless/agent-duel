@@ -2,6 +2,14 @@ import {
   parseHostAgentRouteFromPathname,
   parseHostWorkspaceRouteFromPathname,
 } from "@/utils/host-routes";
+import type { WorkspaceRouteState } from "@/screens/workspace/workspace-route-state";
+
+export function canUseWorkspaceLayoutShortcuts(
+  isRouteFocused: boolean,
+  state: WorkspaceRouteState,
+): boolean {
+  return isRouteFocused && state.kind === "ready";
+}
 
 export function canToggleFileExplorerShortcut(input: {
   selectedAgentId?: string;

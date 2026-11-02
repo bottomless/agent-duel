@@ -22,7 +22,7 @@ type HeldCall = {
  * a finish into a provider error. Core settles held calls with `provider.internal`,
  * `provider.transport`, or `aborted`; complete arguments stay in the failed history.
  */
-function holdEndedToolCalls() {
+function holdEndedToolCalls(activity?: () => void) {
   const held = new Map<string, HeldCall>()
   return new TransformStream<LanguageModelV3StreamPart, LanguageModelV3StreamPart>({
     transform(part, controller) {
@@ -31,6 +31,7 @@ function holdEndedToolCalls() {
           held.set(part.id, { end: part, late: "" })
           return
         case "tool-input-delta": {
+          if (part.delta.length > 0) activity?.()
           const call = held.get(part.id)
           if (call) {
             if (part.delta.length === 0) return
@@ -61,7 +62,7 @@ function holdEndedToolCalls() {
 }
 
 /** The same language model, with each tool call delivered once its arguments can no longer change. */
-export function withHeldToolCalls(language: LanguageModelV3): LanguageModelV3 {
+export function withHeldToolCalls(language: LanguageModelV3, activity?: (sessionID: string) => void): LanguageModelV3 {
   return {
     specificationVersion: language.specificationVersion,
     provider: language.provider,
@@ -70,7 +71,15 @@ export function withHeldToolCalls(language: LanguageModelV3): LanguageModelV3 {
     doGenerate: (options) => language.doGenerate(options),
     doStream: async (options) => {
       const result = await language.doStream(options)
-      return { ...result, stream: result.stream.pipeThrough(holdEndedToolCalls()) }
+      const sessionID = options.headers?.["x-arena-session-id"]
+      let lastActivity = -Infinity
+      const progress = () => {
+        const now = Date.now()
+        if (!sessionID || now - lastActivity < 5_000) return
+        lastActivity = now
+        activity?.(sessionID)
+      }
+      return { ...result, stream: result.stream.pipeThrough(holdEndedToolCalls(progress)) }
     },
   }
 }

@@ -709,10 +709,11 @@ describe("ArenaProxy", () => {
     const body = await response.text()
     expect(body).toContain("hello")
     expect(body).toContain('"code":"server_error"')
+    expect(body).not.toContain("Arena contestant stream failed")
     expect(body).not.toContain("provider/hidden-model")
     expect(chunks.join("")).toContain("hello")
     expect(errors).toHaveLength(1)
-    expect((errors[0] as Error).message).toBe("Arena contestant stream failed")
+    expect((errors[0] as Error).message).toBe("Provider response stream failed")
   })
 
   test("does not retry a stream read failure after cancellation", async () => {
@@ -740,7 +741,7 @@ describe("ArenaProxy", () => {
           { headers: { "content-type": "text/event-stream" } },
         ),
     })
-    await expect(response.text()).rejects.toThrow("Arena contestant stream failed")
+    await expect(response.text()).rejects.toThrow("Provider response stream failed")
   })
 
   test("restarts a request after a mid-answer connection break, transient OpenRouter error, or cut-off", async () => {
@@ -1006,7 +1007,7 @@ describe("ArenaProxy", () => {
     for (const code of [408, 429, 500, 503, "server_error", undefined]) {
       const value = sanitizePayload({ error: { code, message: "private provider details" } }, "generation", true)
       expect(value).toEqual({
-        error: { message: "Arena contestant stream failed", type: "error", error: { code: "server_error" } },
+        error: { message: "Provider response stream failed", type: "error", error: { code: "server_error" } },
       })
     }
   })

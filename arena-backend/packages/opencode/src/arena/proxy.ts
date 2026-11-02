@@ -222,7 +222,7 @@ function retryableStreamPayload() {
   // The provider SDK forwards value.error as the stream error; keep the retry marker inside it.
   return {
     error: {
-      message: "Arena contestant stream failed",
+      message: "Provider response stream failed",
       type: "error",
       error: { code: "server_error" },
     },
@@ -369,7 +369,7 @@ function sanitizeLine(line: string, generationID: string, normalize: (value: unk
     return `data: ${JSON.stringify(normalize(sanitizePayload(JSON.parse(raw), generationID, true)))}`
   } catch {
     return (
-      "data: " + JSON.stringify({ error: { message: "Arena contestant stream failed", type: "arena_stream_error" } })
+      "data: " + JSON.stringify({ error: { message: "Provider response stream failed", type: "arena_stream_error" } })
     )
   }
 }
@@ -572,7 +572,7 @@ function sanitizeStream(
             ? "save"
             : "forward"
         try {
-          await telemetry?.error?.(metadata, new Error("Arena contestant stream failed"), new Date())
+          await telemetry?.error?.(metadata, new Error("Provider response stream failed"), new Date())
         } catch {
           controller.error(new Error("Arena telemetry persistence failed"))
           return
@@ -582,7 +582,7 @@ function sanitizeStream(
           controller.close()
           return
         }
-        controller.error(new Error("Arena contestant stream failed"))
+        controller.error(new Error("Provider response stream failed"))
       }
     },
     async cancel(reason) {

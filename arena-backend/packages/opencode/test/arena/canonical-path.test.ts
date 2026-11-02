@@ -15,6 +15,32 @@ const BOTH = { worktrees: [WORKTREE_A, WORKTREE_B], canonical: CANONICAL }
 const TEMP = "/var/folders/xy/abc/T/opencode/arena"
 
 describe("Arena canonical path", () => {
+  test("retargets a grafted read result header along with its worktree argument", async () => {
+    const part = {
+      type: "tool",
+      tool: "read",
+      state: {
+        status: "completed",
+        input: { path: WORKTREE_A },
+        output: `Read directory ${WORKTREE_A}, entries 1-2\nREADME.md\nsrc/`,
+      },
+    }
+    const canonical = await canonicalizeTranscriptPaths(part, { ...BOTH, temp: TEMP }, "assistant")
+    const localized = await localizeTranscriptPaths(
+      canonical,
+      { canonical: CANONICAL, worktree: WORKTREE_B },
+      "assistant",
+    )
+    expect(localized.state.input.path).toBe(WORKTREE_B)
+    expect(localized.state.output).toBe(`Read directory ${WORKTREE_B}, entries 1-2\nREADME.md\nsrc/`)
+    const file = {
+      ...part,
+      state: { ...part.state, output: `Read file ${CANONICAL}/README.md, lines 1-1\n1: ${CANONICAL}` },
+    }
+    const next = await localizeTranscriptPaths(file, { canonical: CANONICAL, worktree: WORKTREE_B }, "assistant")
+    expect(next.state.output).toBe(`Read file ${WORKTREE_B}/README.md, lines 1-1\n1: ${CANONICAL}`)
+  })
+
   test("rewrites historical preview URLs and ports to current environment variables", () => {
     const result = canonicalizeArenaEnvironment(
       {

@@ -34,6 +34,7 @@ const make: Effect.Effect<Interface, never, Session.Service | Job.Service | Scop
   const context = yield* Effect.context<never>()
   // One observer per job generation, including continuations of the same child.
   const notifications = new Set<string>()
+  const held = new Set<SessionSchema.ID>()
 
   const notify = Effect.fn("SubagentJob.notify")(function* (recovery: Recovery, startedAt: number) {
     const key = `${recovery.childSessionID}:${startedAt}`
@@ -45,8 +46,8 @@ const make: Effect.Effect<Interface, never, Session.Service | Job.Service | Scop
         yield* SubagentCompletion.deliver(sessions, jobs, {
           ...info,
           recovery,
-          // Consult the durable hold at delivery: Stop may land while this observer waits.
-          ...((yield* jobs.subagentResultsHeld(recovery.parentSessionID)) ? { resume: false } : {}),
+          // Stop may land while this observer waits for the child.
+          ...(held.has(recovery.parentSessionID) ? { resume: false } : {}),
         })
     }).pipe(
       Effect.ensuring(Effect.sync(() => notifications.delete(key))),
@@ -80,8 +81,8 @@ const make: Effect.Effect<Interface, never, Session.Service | Job.Service | Scop
       if (info) yield* notify(recovery, info.started_at)
     }),
     notify,
-    hold: jobs.holdSubagentResults,
-    release: jobs.releaseSubagentResults,
+    hold: (parent) => Effect.sync(() => void held.add(parent)),
+    release: (parent) => Effect.sync(() => void held.delete(parent)),
   })
 })
 

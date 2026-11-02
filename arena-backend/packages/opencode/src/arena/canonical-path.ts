@@ -161,7 +161,21 @@ async function transcript<T>(
     : value.state
   const input = value.state.input
   if (typeof value.tool === "string" && FILE_TOOLS.has(value.tool)) {
-    return { ...value, state: { ...state, input: fields(input, ["path", "filePath", "directory"]) } }
+    const output =
+      typeof state.output === "string" && value.tool === "read"
+        ? state.output.replace(
+            /^(Read (?:directory|file) )(.+)(, (?:entries \d+-\d+|lines \d+-\d+|0 entries|0 lines))(?=\n|$)/,
+            (_match, prefix, original, suffix) => prefix + path(original) + suffix,
+          )
+        : state.output
+    return {
+      ...value,
+      state: {
+        ...state,
+        input: fields(input, ["path", "filePath", "directory"]),
+        ...(typeof output === "string" ? { output } : {}),
+      },
+    }
   }
   // This adapter owns POSIX bash inputs. Other tools and free-form text retain their original bytes.
   if (value.tool !== "bash" || process.platform === "win32" || typeof input.command !== "string") {

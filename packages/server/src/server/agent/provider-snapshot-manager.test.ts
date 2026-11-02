@@ -238,87 +238,38 @@ describe("ProviderSnapshotManager public surface", () => {
     }
   });
 
-  test("validates catalog choices while leaving provider options opaque", async () => {
+  test("publishes catalog choices through the current snapshot API", async () => {
+    const model = {
+      provider: "codex",
+      id: "gpt-5.5",
+      aliases: ["gpt-latest"],
+      label: "GPT 5.5",
+      thinkingOptions: [{ id: "xhigh", label: "Extra high" }],
+    };
+    const modes = [{ id: "auto-review", label: "Auto review" }];
     const manager = new ProviderSnapshotManager({
       logger: createTestLogger(),
       extraClients: {
         codex: createExtraClient("codex", {
           isAvailable: async () => true,
-          fetchCatalog: async () => ({
-            models: [
-              {
-                provider: "codex",
-                id: "gpt-5.5",
-                aliases: ["gpt-latest"],
-                label: "GPT 5.5",
-                thinkingOptions: [{ id: "xhigh", label: "Extra high" }],
-              },
-            ],
-            modes: [{ id: "auto-review", label: "Auto review" }],
-          }),
+          fetchCatalog: async () => ({ models: [model], modes }),
         }),
       },
     });
-
     try {
-      await expect(
-        manager.validateAgentConfiguration({
-          provider: "codex",
-          model: "gpt-latest",
-          modeId: "auto-review",
-          thinkingOptionId: "xhigh",
-          providerOptions: {
-            sandbox_workspace_write: {
-              writable_roots: ["/var/cache/npm"],
-              network_access: false,
-            },
-          },
-        }),
-      ).resolves.toEqual([]);
-
-      await expect(
-        manager.validateAgentConfiguration({
-          provider: "codex",
-          model: "missing",
-          modeId: "missing",
-          thinkingOptionId: "missing",
-          providerOptions: {
-            sandbox_workspace_write: { network_access: "sometimes" },
-          },
-        }),
-      ).resolves.toEqual([
-        { path: ["model"], message: "Model 'missing' is not available for provider 'codex'" },
-        { path: ["modeId"], message: "Mode 'missing' is not available for provider 'codex'" },
-        {
-          path: ["thinkingOptionId"],
-          message: "Thinking option 'missing' is not available for provider 'codex'",
-        },
-      ]);
-      await expect(
-        manager.validateAgentConfiguration({
-          provider: "codex",
-          model: "gpt-latest",
-          modeId: "auto-review",
-          thinkingOptionId: "xhigh",
-          providerOptions: {
-            sandbox_workspace_write: { network_access: "sometimes" },
-            arbitrary: true,
-          },
-        }),
-      ).resolves.toEqual([]);
+      expect(await manager.listModels({ provider: "codex", wait: true })).toEqual([model]);
+      expect(await manager.listModes({ provider: "codex", wait: true })).toEqual(modes);
     } finally {
       manager.destroy();
     }
   });
 
-  test("reports an unavailable Hub agent provider at the authored provider field", async () => {
+  test("reports an unregistered provider through the current snapshot API", async () => {
     const manager = new ProviderSnapshotManager({ logger: createTestLogger() });
     try {
-      await expect(
-        manager.validateAgentConfiguration({ provider: "not-installed" }),
-      ).resolves.toEqual([
-        { path: ["provider"], message: "Provider 'not-installed' is not configured" },
-      ]);
+      await expect(manager.getProvider({ provider: "not-installed", wait: true })).rejects.toThrow(
+        "Provider not-installed is not configured",
+      );
     } finally {
       manager.destroy();
     }
@@ -3770,6 +3721,39 @@ test("model overrides preserve negotiated plugin capabilities and connection shu
     expect(closed).toBe(1);
   } finally {
     await manager.shutdown();
+    manager.destroy();
+  }
+});
+
+test("new Arena chats retry an old engine-start error without replacing a healthy engine", async () => {
+  let broken = true;
+  const fetchCatalog = vi.fn(async () => {
+    if (broken) throw new Error("ENOSPC: backup failed");
+    return {
+      models: [{ provider: "opencode" as const, id: "arena/contestant", label: "Contestant" }],
+      modes: [],
+    };
+  });
+  const manager = new ProviderSnapshotManager({
+    logger: createTestLogger(),
+    extraClients: {
+      opencode: createExtraClient("opencode", { isAvailable: async () => true, fetchCatalog }),
+    },
+  });
+  try {
+    expect(
+      await manager.getProvider({
+        provider: "opencode",
+        cwd: "/tmp/arena-start-repair",
+        wait: true,
+      }),
+    ).toMatchObject({ status: "error" });
+    broken = false;
+    const input = { provider: "opencode" as const, cwd: "/tmp/arena-start-repair", wait: true };
+    expect(await manager.listModels(input)).toMatchObject([{ id: "arena/contestant" }]);
+    expect(await manager.listModels(input)).toMatchObject([{ id: "arena/contestant" }]);
+    expect(fetchCatalog).toHaveBeenCalledTimes(2);
+  } finally {
     manager.destroy();
   }
 });

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test, spyOn } from "bun:test"
 import { LLM, LLMEvent } from "@opencode/ai"
 import { LLMClient, RequestExecutor } from "@opencode/ai/route"
 import { AISDK } from "@opencode/core/aisdk"
@@ -13,6 +13,8 @@ import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message"
 import { SessionSchema } from "@opencode/core/session/schema"
 import { Agent } from "@opencode/core/agent"
 import { Event } from "@opencode/schema/event"
+import { MockLanguageModelV3 } from "ai/test"
+import type { LanguageModelV3StreamPart } from "@ai-sdk/provider"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { withHeldToolCalls } from "../../src/arena/engine-runtime/tool-stream"
@@ -294,4 +296,42 @@ describe("withHeldToolCalls", () => {
     expect(seen.filter((event) => event.type === "text-delta").map((event) => event.text)).toEqual(["hi"])
     expect(toolEvents(seen)).toEqual(["finish"])
   })
+})
+
+test("long tool argument streams keep reporting activity without executing a held call", async () => {
+  let now = 1_000
+  const clock = spyOn(Date, "now").mockImplementation(() => now)
+  let source!: ReadableStreamDefaultController<LanguageModelV3StreamPart>
+  const activity: string[] = []
+  try {
+    const language = withHeldToolCalls(
+      new MockLanguageModelV3({
+        doStream: async () => ({
+          stream: new ReadableStream({
+            start(controller) {
+              source = controller
+            },
+          }),
+        }),
+      }),
+      (sessionID) => activity.push(sessionID),
+    )
+    const result = await language.doStream({ prompt: [], headers: { "x-arena-session-id": "streaming-session" } })
+    const reader = result.stream.getReader()
+    source.enqueue({ type: "tool-input-start", id: "call", toolName: "read" })
+    await reader.read()
+    for (let seconds = 0; seconds < 360; seconds += 6) {
+      now += 6_000
+      source.enqueue({ type: "tool-input-delta", id: "call", delta: "bytes" })
+      expect((await reader.read()).value?.type).toBe("tool-input-delta")
+    }
+    expect(activity).toEqual(Array(60).fill("streaming-session"))
+    source.enqueue({ type: "tool-input-delta", id: "call", delta: "" })
+    await reader.read()
+    expect(activity).toHaveLength(60)
+    source.close()
+    await reader.cancel()
+  } finally {
+    clock.mockRestore()
+  }
 })
