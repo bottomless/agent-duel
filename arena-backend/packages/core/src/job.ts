@@ -35,6 +35,7 @@ export type Status = Background["status"]
 
 const decodeBackground = Schema.decodeUnknownResult(Background)
 const backgroundPrefix = "job.background/"
+const subagentHoldPrefix = "job.subagent-hold/"
 const COMPLETED_LIMIT = 25
 
 export type Info = {
@@ -134,6 +135,9 @@ export interface Interface {
   readonly cancel: (id: string) => Effect.Effect<Info | undefined>
   readonly pendingBackground: Effect.Effect<readonly Background[]>
   readonly completeBackground: (notificationID: SessionMessage.ID) => Effect.Effect<void>
+  readonly holdSubagentResults: (parentSessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly releaseSubagentResults: (parentSessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly subagentResultsHeld: (parentSessionID: SessionSchema.ID) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Job") {}
@@ -472,6 +476,11 @@ export const make = Effect.gen(function* () {
     cancel,
     pendingBackground,
     completeBackground,
+    // Write before cancelling children; a crash can leave their completion notices pending.
+    holdSubagentResults: (parentSessionID) => kv.set(`${subagentHoldPrefix}${parentSessionID}`, true),
+    releaseSubagentResults: (parentSessionID) => kv.remove(`${subagentHoldPrefix}${parentSessionID}`),
+    subagentResultsHeld: (parentSessionID) =>
+      kv.get(`${subagentHoldPrefix}${parentSessionID}`).pipe(Effect.map((value) => value === true)),
   })
 })
 

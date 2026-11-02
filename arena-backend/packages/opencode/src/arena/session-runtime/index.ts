@@ -5,6 +5,7 @@ import { Bus } from "@opencode/core/bus"
 import { Database } from "@opencode/core/database/database"
 import { Form } from "@opencode/core/form"
 import { Permission as CorePermission } from "@opencode/core/permission"
+import { Job } from "@opencode/core/job"
 import { Location } from "@opencode/core/location"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
 import { Session as CoreSession } from "@opencode/core/session"
@@ -13,6 +14,7 @@ import { SessionMove } from "@opencode/core/session/move"
 import { SessionInbox } from "@opencode/core/session/inbox"
 import { SessionMessageTable } from "@opencode/core/session/sql"
 import { StepFailedError } from "@opencode/core/session/error"
+import { SubagentJob } from "@opencode/core/session/subagent-job"
 import { toSessionError } from "@opencode/core/session/to-session-error"
 import { SessionMessage } from "@opencode/schema/session-message"
 import { Session as SessionSchema } from "@opencode/schema/session"
@@ -146,11 +148,23 @@ export interface PromptInterface {
     readonly sessionID: SessionSchema.ID
   }) => Effect.Effect<import("./schema").WithParts | undefined, Error>
   /**
+   * The session's latest answer, after the run it has now ends. Unlike `loop` it never starts a
+   * run: Core answers the last message again when `resume` finds the session idle.
+   */
+  readonly join: (input: {
+    readonly sessionID: SessionSchema.ID
+  }) => Effect.Effect<import("./schema").WithParts | undefined, Error>
+  /**
    * Admit input into a session that may be working and wake its runner, without waiting for the
    * answer. The runner that owns the turn delivers it at its next step boundary.
    */
   readonly steer: (input: ArenaPromptInput) => Effect.Effect<void, Error>
+  /** Interrupts the session and, for a child, its job. Core has no call that cancels a parent's children. */
   readonly cancel: (sessionID: SessionSchema.ID) => Effect.Effect<void, Error>
+  /** Child results stop starting runs of these sessions until the next `prompt` or `loop` of each. */
+  readonly holdChildResults: (sessionIDs: readonly SessionSchema.ID[]) => Effect.Effect<void, Error>
+  /** Whether the session has a run, a running job, or a job result that has not reached its parent. */
+  readonly working: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, Error>
   readonly prepare: () => Effect.Effect<void, Error>
 }
 
@@ -727,36 +741,57 @@ export const sessionNode = makeGlobalNode({
 })
 export const node = sessionNode
 
-const promptLayer: Layer.Layer<SessionPrompt, never, CoreSession.Service | Session | Directory> = Layer.effect(
+const promptLayer: Layer.Layer<
+  SessionPrompt,
+  never,
+  CoreSession.Service | Session | Directory | Job.Service | SubagentJob.Service
+> = Layer.effect(
   SessionPrompt,
   Effect.gen(function* () {
     const sessions = yield* CoreSession.Service
     const arena = yield* Session
     const directory = yield* Directory
-    const loop = Effect.fn("ArenaSessionPrompt.loop")(function* (
-      input: { readonly sessionID: SessionSchema.ID },
-      /** When this run's work was admitted; a prompt admits it before the loop joins. */
-      admittedAt?: number,
+    const jobs = yield* Job.Service
+    const subagents = yield* SubagentJob.Service
+    // A failed drain comes back as an error, not as the errored assistant that 1.x returned.
+    // Settle on that assistant instead, so the run fails the way Arena classifies (and offers
+    // Retry for). Interruption is not an error here and still ends the loop.
+    const answer = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      started: number,
+      failure?: Parameters<typeof toSessionError>[0],
     ) {
-      // A failed drain comes back as an error, not as the errored assistant that 1.x returned.
-      // Settle on that assistant instead, so the run fails the way Arena classifies (and offers
-      // Retry for). Interruption is not an error here and still ends the loop.
-      const started = admittedAt ?? (yield* Clock.currentTimeMillis)
-      const failure = yield* sessions.resume(input.sessionID).pipe(
-        Effect.as(undefined),
-        Effect.catch((cause) => Effect.succeed(cause)),
-      )
-      yield* sessions.wait(input.sessionID)
-      const transcript = yield* arena.messages({ sessionID: input.sessionID })
+      yield* sessions.wait(sessionID)
+      const transcript = yield* arena.messages({ sessionID })
       if (failure === undefined) return transcript.findLast((entry) => entry.info.role === "assistant")
-      const answer = failedAnswer(
+      const failed = failedAnswer(
         transcript,
         toSessionError(failure),
         { started, now: yield* Clock.currentTimeMillis },
         incompleteStream(failure),
       )
-      if (!answer) return yield* Effect.fail(failure)
-      return answer
+      if (!failed) return yield* Effect.fail(failure)
+      return failed
+    })
+    const settle = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, started: number) {
+      const failure = yield* sessions.resume(sessionID).pipe(
+        Effect.as(undefined),
+        Effect.catch((cause) => Effect.succeed(cause)),
+      )
+      return yield* answer(sessionID, started, failure)
+    })
+    const loop = Effect.fn("ArenaSessionPrompt.loop")(function* (
+      input: { readonly sessionID: SessionSchema.ID },
+      /** When this run's work was admitted; a prompt admits it before the loop joins. */
+      admittedAt?: number,
+    ) {
+      yield* subagents.release(input.sessionID)
+      return yield* settle(input.sessionID, admittedAt ?? (yield* Clock.currentTimeMillis))
+    })
+    const join = Effect.fn("ArenaSessionPrompt.join")(function* (input: { readonly sessionID: SessionSchema.ID }) {
+      const started = yield* Clock.currentTimeMillis
+      if ((yield* sessions.active).has(input.sessionID)) return yield* settle(input.sessionID, started)
+      return yield* answer(input.sessionID, started)
     })
     // Admission is durable once it returns. `wake` starts the runner, or rings the doorbell of the
     // one already running so it drains again before it goes idle.
@@ -818,7 +853,21 @@ const promptLayer: Layer.Layer<SessionPrompt, never, CoreSession.Service | Sessi
         ),
       steer: (input) => normalizeError(admit(input, true).pipe(Effect.asVoid)),
       loop: (input) => normalizeError(loop(input)),
-      cancel: (sessionID) => normalizeError(sessions.interrupt(sessionID, { resume: false })),
+      join: (input) => normalizeError(join(input)),
+      cancel: (sessionID) =>
+        normalizeError(
+          sessions.interrupt(sessionID, { resume: false }).pipe(Effect.andThen(jobs.cancel(sessionID)), Effect.asVoid),
+        ),
+      holdChildResults: (sessionIDs) =>
+        Effect.forEach(sessionIDs, (sessionID) => subagents.hold(sessionID), { discard: true }),
+      working: (sessionID) =>
+        Effect.gen(function* () {
+          if ((yield* sessions.active).has(sessionID)) return true
+          const job = yield* jobs.get(sessionID)
+          // Delivery removes a job that has a notification, so a finished one still has a result to
+          // deliver. Foreground jobs have none, and their results are already in the tool call.
+          return job !== undefined && (job.status === "running" || job.notificationID !== undefined)
+        }),
       prepare: () => Effect.void,
     })
   }),
@@ -827,7 +876,7 @@ const promptLayer: Layer.Layer<SessionPrompt, never, CoreSession.Service | Sessi
 export const promptNode = makeGlobalNode({
   service: SessionPrompt,
   layer: promptLayer,
-  deps: [CoreSession.node, sessionNode, directoryNode],
+  deps: [CoreSession.node, sessionNode, directoryNode, Job.node, SubagentJob.node],
 })
 
 const statusLayer: Layer.Layer<SessionStatus, never, CoreSession.Service> = Layer.effect(
