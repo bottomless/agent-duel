@@ -898,12 +898,15 @@ again a side whose warm fork used another. The canonical session keeps every out
 history, its transcript hash, and single-agent turns, which continue one model whose cache does
 survive, are unchanged.
 
-The winner's subagent sessions are copied too, under the chat's session, and its `task` calls point
-at the copies (`canonicalSubagentSessionIDs` records them so a retried graft can remove a partial
-copy). The run's own sessions are deleted with its worktree, so without the copies the chat would
-lose every subagent transcript. Rebuilding the chat's timeline from history drops the subagents the
-daemon knew of, and OpenCode's history carries none, so loading a winner reloads them from the
-session's children (`reloadProviderSubagents`).
+Keep the winner's child transcripts available after a vote, including nested children. The run's
+own sessions are deleted with its worktree, so the graft copies its descendants under the chat and
+retargets their session references. Losing contestants and earlier turns have separate session
+families. `canonicalSubagentSessionIDs` records the copies for an interrupted graft's cleanup.
+Rebuilding the chat's timeline drops the subagents the daemon knew of, so loading a winner reloads
+them from the session's children (`reloadProviderSubagents`). Do not infer that a child is disposable
+from a missing tool call: commands can create children without one, and a committed rewind removes
+messages without deleting their children. Child sessions have no separate visible/internal
+classification; narrowing retention needs a rule for which of those transcripts the chat keeps.
 
 The sandbox (`arena/contestant.ts`) lets a contestant's own tools read the main checkout but not
 write to it, and keeps them out of the checkout's `.agent-duel`, which holds every Arena worktree:
