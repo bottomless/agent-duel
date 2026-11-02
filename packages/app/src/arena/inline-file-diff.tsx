@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -75,6 +76,7 @@ export function InlineFileDiff({
   revision?: string;
   embedded?: boolean;
 }) {
+  const { t } = useTranslation();
   const query = useArenaFileDiff({ serverId, agentId, turnId, file, revision });
   const { refetch } = query;
   const retry = useCallback(() => void refetch(), [refetch]);
@@ -102,7 +104,7 @@ export function InlineFileDiff({
       <View style={styles.status} accessibilityRole="alert" testID="arena-inline-diff-error">
         <Text style={styles.error}>{toErrorMessage(query.error)}</Text>
         <Button size="xs" variant="ghost" loading={query.isFetching} onPress={retry}>
-          Retry diff
+          {t("arena.retryDiff")}{" "}
         </Button>
       </View>
     );
@@ -110,7 +112,7 @@ export function InlineFileDiff({
   return (
     <View style={styles.status} testID="arena-inline-diff-loading">
       <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />
-      <Text style={styles.caption}>Loading diff…</Text>
+      <Text style={styles.caption}>{t("arena.loadingDiff")}</Text>
     </View>
   );
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useMemo } from "react";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
 import type {
@@ -10,7 +11,7 @@ import { useToast } from "@/contexts/toast-context";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { toErrorMessage } from "@/utils/error-messages";
 import { DISCARD_WINNER_CONFIRMATION } from "./review";
-import { EARLY_BATTLE_TOAST } from "./constants";
+import { earlyBattleToast } from "./constants";
 import type { ArenaPendingPermission, ArenaPermissionReply } from "./permission";
 import { arenaQuestionAnswers, type ArenaPendingQuestion } from "./question";
 import {
@@ -39,6 +40,7 @@ export function useArenaBattleActions(
   agentId: string,
   turn: ArenaSnapshot["turn"],
 ) {
+  const { t } = useTranslation();
   const toast = useToast();
   const mutation = useArenaTurnMutation(serverId, agentId);
   const pending = useArenaTurnPending(serverId, agentId);
@@ -71,7 +73,7 @@ export function useArenaBattleActions(
       try {
         await mutateTurn({ kind: "vote", turnId, vote: side });
         if (early) {
-          toast.show(EARLY_BATTLE_TOAST, { variant: "info", durationMs: 4_000 });
+          toast.show(earlyBattleToast(), { variant: "info", durationMs: 4_000 });
         }
       } catch (error) {
         showError(error);
@@ -87,16 +89,16 @@ export function useArenaBattleActions(
       const label = sideLabel(side);
       const other = sideLabel(side === "a" ? "b" : "a");
       const confirmed = await confirmDialog({
-        title: `Choose ${label} early?`,
-        message: `Agent ${other} stops immediately and its work is discarded. Agent ${label}'s work so far becomes this turn's result.`,
-        confirmLabel: `Choose ${label}`,
-        cancelLabel: "Cancel",
+        title: t("arena.chooseEarlyTitle", { side: label }),
+        message: t("arena.chooseEarlyHelp", { other: other, side: label }),
+        confirmLabel: t("arena.choose", { side: label }),
+        cancelLabel: t("arena.cancel"),
         destructive: true,
       });
       if (!confirmed) return;
       await choose(side);
     },
-    [choose],
+    [choose, t],
   );
 
   const tie = useCallback(async () => {
@@ -122,11 +124,10 @@ export function useArenaBattleActions(
       if (!turnId) return;
       if (resolution === "discard") {
         const confirmed = await confirmDialog({
-          title: "Discard this battle?",
-          message:
-            "Both agents' work from this turn will be discarded. Your previous chat history and project stay unchanged.",
-          confirmLabel: "Discard battle",
-          cancelLabel: "Cancel",
+          title: t("arena.discardBattleTitle"),
+          message: t("arena.discardBattleHelp"),
+          confirmLabel: t("arena.discardBattle"),
+          cancelLabel: t("arena.cancel"),
           destructive: true,
         });
         if (!confirmed) return;
@@ -137,7 +138,7 @@ export function useArenaBattleActions(
         showError(error);
       }
     },
-    [mutateTurn, showError, turnId],
+    [mutateTurn, showError, turnId, t],
   );
 
   const resume = useCallback(async () => {

@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
 /** The contestant environment one side's terminal tab is pointed at right now. */
@@ -26,7 +27,7 @@ const EMPTY_SIDES: readonly ArenaSide[] = [];
 
 /** Turn indices are 0-based on the wire; a battle a person is looking at is the first one. */
 export function arenaTurnLabel(turnIndex: number): string {
-  return `turn ${Math.max(0, Math.trunc(turnIndex)) + 1}`;
+  return i18n.t("arena.turn", { number: Math.max(0, Math.trunc(turnIndex)) + 1 });
 }
 
 /**

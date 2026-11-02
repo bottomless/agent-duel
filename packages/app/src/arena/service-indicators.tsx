@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useMemo } from "react";
 import { View } from "react-native";
 import { Globe2 } from "lucide-react-native";
@@ -38,6 +39,7 @@ export function PreviewButton({
   side: ArenaSide;
   testID: string;
 }) {
+  const { t } = useTranslation();
   const addPreviewOpened = useArenaReviewStore((state) => state.addPreviewOpened);
   const openUrl = useOpenArenaServiceUrl();
   const handlePress = useCallback(() => {
@@ -63,10 +65,12 @@ export function PreviewButton({
       onPress={handlePress}
       leftIcon={icon}
       textStyle={ready ? styles.previewText : styles.previewTextMuted}
-      accessibilityLabel={`${ready ? "Open" : "Starting"} ${agentLabel(side)} preview`}
+      accessibilityLabel={t(ready ? "arena.openPreview" : "arena.startingPreview", {
+        agent: agentLabel(side),
+      })}
       testID={testID}
     >
-      Preview
+      {t("arena.preview")}{" "}
     </Button>
   );
 }

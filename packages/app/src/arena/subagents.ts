@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 
 export interface ArenaSessionThread {
@@ -25,7 +26,10 @@ function delegation(part: unknown) {
   return { sessionId, name };
 }
 
-export function projectArenaSessions(run: Pick<ArenaRun, "sessionID" | "messages" | "parts">) {
+export function projectArenaSessions(
+  run: Pick<ArenaRun, "sessionID" | "messages" | "parts">,
+  t = i18n.t,
+) {
   const root: ArenaSessionThread = {
     id: run.sessionID ?? "root",
     name: "",
@@ -39,7 +43,7 @@ export function projectArenaSessions(run: Pick<ArenaRun, "sessionID" | "messages
     if (existing) return existing;
     const child: ArenaSessionThread = {
       id,
-      name: `Task ${sessions.size}`,
+      name: t("arena.taskName", { number: sessions.size }),
       messages: [],
       task: null,
     };

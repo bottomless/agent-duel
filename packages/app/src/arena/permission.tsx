@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+import { useTranslation } from "react-i18next";
 import { useCallback, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -46,8 +48,8 @@ export function arenaPendingPermissions(run: ArenaRun): ArenaPendingPermission[]
 }
 
 function permissionTitle(permission: string): string {
-  if (permission === "external_directory") return "Access outside the battle worktree";
-  return `Allow ${permission.replaceAll("_", " ")}`;
+  if (permission === "external_directory") return i18n.t("arena.outsideWorktree");
+  return i18n.t("arena.allowPermission", { permission: permission.replaceAll("_", " ") });
 }
 
 export function ArenaPermissionCard({
@@ -59,6 +61,7 @@ export function ArenaPermissionCard({
   responding: boolean;
   onRespond: (permission: ArenaPendingPermission, response: ArenaPermissionReply) => void;
 }) {
+  const { t } = useTranslation();
   const [submitted, setSubmitted] = useState<ArenaPermissionReply | null>(null);
   const respond = useCallback(
     (response: ArenaPermissionReply) => {
@@ -74,7 +77,7 @@ export function ArenaPermissionCard({
   return (
     <View style={styles.card} testID={`arena-permission-${permission.id}`}>
       <Text style={styles.title}>{permissionTitle(permission.permission)}</Text>
-      <Text style={styles.description}>This agent is waiting for your permission to continue.</Text>
+      <Text style={styles.description}>{t("arena.waitingPermission")}</Text>
       {permission.patterns.map((pattern) => (
         <Text key={pattern} style={styles.pattern} selectable>
           {pattern}
@@ -88,7 +91,7 @@ export function ArenaPermissionCard({
           loading={responding && submitted === "reject"}
           onPress={deny}
         >
-          Deny
+          {t("arena.deny")}{" "}
         </Button>
         <Button
           size="xs"
@@ -97,7 +100,7 @@ export function ArenaPermissionCard({
           loading={responding && submitted === "once"}
           onPress={allowOnce}
         >
-          Allow once
+          {t("arena.allowOnce")}{" "}
         </Button>
         <Button
           size="xs"
@@ -105,7 +108,7 @@ export function ArenaPermissionCard({
           loading={responding && submitted === "always"}
           onPress={allowAlways}
         >
-          Always allow
+          {t("arena.alwaysAllow")}{" "}
         </Button>
       </View>
     </View>

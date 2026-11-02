@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -41,12 +42,14 @@ export function ArenaSideChoiceButton({
   onPress: () => void;
   testID: string;
 }) {
+  const { t } = useTranslation();
+
   const sideLabel = side.toUpperCase();
   if (kind === "early") {
     return (
       <ArenaRunningPillButton
         hoverSide={side}
-        label={label ?? `Choose ${sideLabel} early`}
+        label={label ?? t("arena.chooseEarly", { side: sideLabel })}
         loading={loading}
         disabled={disabled}
         onPress={onPress}
@@ -54,7 +57,10 @@ export function ArenaSideChoiceButton({
       />
     );
   }
-  const buttonLabel = kind === "keep" ? `Keep ${sideLabel}` : `Choose ${sideLabel}`;
+  const buttonLabel =
+    kind === "keep"
+      ? t("arena.keepSide", { side: sideLabel })
+      : t("arena.choose", { side: sideLabel });
   return (
     <Button
       variant="secondary"
@@ -136,6 +142,7 @@ export function VoteDecision({
   actions: ArenaBattleActions;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
   const { pending, pendingAction } = actions;
   const tie = useCallback(() => {
     void actions.tie();
@@ -148,11 +155,11 @@ export function VoteDecision({
       loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
       disabled={pending || disabled}
       onPress={tie}
-      accessibilityLabel="Tie battle"
-      accessibilityHint="A tie keeps Agent A's work."
+      accessibilityLabel={t("arena.tieBattle")}
+      accessibilityHint={t("arena.tieHelp")}
       testID="arena-choose-tie"
     >
-      Tie
+      {t("arena.tie")}{" "}
     </Button>
   );
 }
@@ -162,6 +169,7 @@ export function VoteDecision({
  * one filled choice in the pill, so it reads apart from Discard beside it.
  */
 export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
+  const { t } = useTranslation();
   const { pending, pendingAction } = actions;
   const resume = useCallback(() => {
     void actions.resume();
@@ -174,10 +182,10 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
       loading={pendingAction?.kind === "resume_battle"}
       disabled={pending}
       onPress={resume}
-      accessibilityLabel="Resume battle"
+      accessibilityLabel={t("arena.resumeBattle")}
       testID="arena-resume-interrupted"
     >
-      Resume
+      {t("arena.resume")}{" "}
     </Button>
   );
 }
@@ -187,6 +195,7 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
  * after the engine's restart cut the battle off.
  */
 export function DiscardDecision({ actions }: { actions: ArenaBattleActions }) {
+  const { t } = useTranslation();
   const { pending, pendingAction } = actions;
   const discard = useCallback(() => {
     void actions.resolveStop("discard");
@@ -201,7 +210,7 @@ export function DiscardDecision({ actions }: { actions: ArenaBattleActions }) {
       onPress={discard}
       testID="arena-stopped-discard"
     >
-      Discard
+      {t("arena.discard")}{" "}
     </Button>
   );
 }
@@ -229,6 +238,7 @@ function RetryResolutionDecision({
   phase: Extract<ArenaDecisionPhase, { kind: "retry_resolution" }>;
   actions: ArenaBattleActions;
 }) {
+  const { t } = useTranslation();
   const { pending, pendingAction } = actions;
   return (
     <View style={styles.retry} testID="arena-resolution-retry-notice">
@@ -243,7 +253,7 @@ function RetryResolutionDecision({
         onPress={actions.retryResolution}
         testID="arena-retry-resolution"
       >
-        Retry resolution
+        {t("arena.retryResolution")}{" "}
       </Button>
     </View>
   );
@@ -326,7 +336,8 @@ export const ArenaDecisionBar = memo(function ArenaDecisionBar({
   snapshot: ArenaSnapshot;
   onHeightChange: (height: number) => void;
 }) {
-  const phase = useMemo(() => arenaDecisionPhase(snapshot), [snapshot]);
+  useTranslation();
+  const phase = arenaDecisionPhase(snapshot);
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const lastHeightRef = useRef<number | null>(null);
   const handleLayout = useCallback(

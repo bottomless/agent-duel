@@ -1,12 +1,28 @@
+import { i18n } from "@/i18n/i18next";
 export const ARENA_PROVIDER = "opencode";
 // Agent creation needs an initial model. The Arena backend replaces it with the
 // selected single-agent tier before every prompt.
 export const ARENA_BOOTSTRAP_MODEL = "arena/medium";
 
 export const ARENA_THINKING_OPTIONS = [
-  { id: "low", label: "Low" },
-  { id: "high", label: "High" },
-  { id: "max", label: "Max" },
+  {
+    id: "low",
+    get label() {
+      return i18n.t("arena.low");
+    },
+  },
+  {
+    id: "high",
+    get label() {
+      return i18n.t("arena.high");
+    },
+  },
+  {
+    id: "max",
+    get label() {
+      return i18n.t("arena.max");
+    },
+  },
 ] as const;
 
 export type ArenaThinkingLevel = (typeof ARENA_THINKING_OPTIONS)[number]["id"];
@@ -16,7 +32,9 @@ export const DEFAULT_ARENA_THINKING: ArenaThinkingLevel = "high";
 // arena-backend/packages/opencode/src/arena/attachments.ts); the composer holds a battle message to it.
 export const ARENA_MAX_IMAGES = 4;
 
-export const EARLY_BATTLE_TOAST = "Battle decided early, data marked accordingly.";
+export function earlyBattleToast(): string {
+  return i18n.t("arena.earlyToast");
+}
 
 export function arenaAgentPreferenceKey(serverId: string, agentId: string): string {
   return `${serverId}:agent:${agentId}`;

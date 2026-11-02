@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Fragment, memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -51,6 +52,7 @@ export const ArenaChangesList = memo(function ArenaChangesList({
   /** The diff that opens under a row. */
   renderDiff: (file: string) => ReactNode;
 }) {
+  const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
   // Rows past the first ones that have been open while the rest were hidden. Closing one leaves
   // it where it is, so the row the reader just pressed does not vanish from under the pointer.
@@ -97,8 +99,8 @@ export const ArenaChangesList = memo(function ArenaChangesList({
           testID="arena-changes-more"
         >
           {hidden > 0
-            ? `Show ${hidden} more ${hidden === 1 ? "file" : "files"}`
-            : "Show fewer files"}
+            ? t(hidden === 1 ? "arena.moreFile" : "arena.moreFiles", { total: hidden })
+            : t("arena.fewerFiles")}
         </Button>
       ) : null}
     </View>
@@ -122,6 +124,7 @@ function ChangesRow({
   onToggle: (file: string) => void;
   open: boolean;
 }) {
+  const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const handlePointerEnter = useCallback(() => setHovered(true), []);
   const handlePointerLeave = useCallback(() => setHovered(false), []);
@@ -138,7 +141,7 @@ function ChangesRow({
         style={[styles.row, hovered && styles.rowHovered, open && styles.rowOpen]}
         accessibilityRole="button"
         accessibilityState={accessibilityState}
-        accessibilityLabel={`${open ? "Hide" : "Show"} the diff of ${row.file}`}
+        accessibilityLabel={t(open ? "arena.hideDiff" : "arena.showDiff", { file: row.file })}
         testID={`arena-changes-row-${row.file}`}
       >
         {open ? (
@@ -173,16 +176,17 @@ function SideStat({
   /** The side is still working, so it has no counts yet. */
   waiting: boolean;
 }) {
+  const { t } = useTranslation();
   const changed = row.changedBy === "both" || row.changedBy === side;
   const additions = side === "a" ? row.additionsA : row.additionsB;
   const deletions = side === "a" ? row.deletionsA : row.deletionsB;
   let stat: ReactNode;
   if (waiting) {
-    stat = <Text style={styles.waiting}>working</Text>;
+    stat = <Text style={styles.waiting}>{t("arena.working")}</Text>;
   } else if (!changed) {
-    stat = <Text style={styles.untouched}>unchanged</Text>;
+    stat = <Text style={styles.untouched}>{t("arena.unchanged")}</Text>;
   } else if (row.binary) {
-    stat = <Text style={styles.untouched}>binary</Text>;
+    stat = <Text style={styles.untouched}>{t("arena.binary")}</Text>;
   } else {
     stat = <DiffStat additions={additions} deletions={deletions} />;
   }

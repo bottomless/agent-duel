@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useMemo } from "react";
 import { Text, View } from "react-native";
 import { ChevronUp, ExternalLink } from "lucide-react-native";
@@ -25,6 +26,7 @@ const ThemedExternalLink = withUnistyles(ExternalLink);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
 function ServiceMenuItem({ entry, side }: { entry: LifecycleServiceEntry; side: string }) {
+  const { t } = useTranslation();
   const openUrl = useOpenArenaServiceUrl();
   const handleSelect = useCallback(() => {
     if (entry.url) openUrl(entry.url);
@@ -34,11 +36,13 @@ function ServiceMenuItem({ entry, side }: { entry: LifecycleServiceEntry; side: 
     () =>
       entry.url ? (
         <View style={styles.trailing}>
-          <Text style={styles.trailingText}>{entry.live ? "Open" : "Starting"}</Text>
+          <Text style={styles.trailingText}>
+            {entry.live ? t("arena.open") : t("arena.starting")}
+          </Text>
           {entry.live ? <ThemedExternalLink size={14} uniProps={mutedColorMapping} /> : null}
         </View>
       ) : null,
-    [entry.live, entry.url],
+    [entry.live, entry.url, t],
   );
   return (
     <DropdownMenuItem
@@ -60,6 +64,8 @@ function ServiceMenuItem({ entry, side }: { entry: LifecycleServiceEntry; side: 
  * the proxied app.
  */
 export function ArenaServicesStrip({ turnId, run }: { turnId: string; run: ArenaRun }) {
+  const { t } = useTranslation();
+
   const entries = useMemo(() => lifecycleServiceEntries(run), [run]);
   const summary = summarizeServices(entries);
   if (!summary) return null;
@@ -69,7 +75,10 @@ export function ArenaServicesStrip({ turnId, run }: { turnId: string; run: Arena
     <View style={styles.strip} testID={`arena-services-${side}`}>
       <DropdownMenu>
         <DropdownMenuTrigger
-          accessibilityLabel={`${summary.label}. Show ${agentLabel(side)} services`}
+          accessibilityLabel={t("arena.servicesLabel", {
+            summary: summary.label,
+            agent: agentLabel(side),
+          })}
           accessibilityRole="button"
           style={styles.trigger}
           testID={`arena-services-${side}-toggle`}
@@ -84,10 +93,12 @@ export function ArenaServicesStrip({ turnId, run }: { turnId: string; run: Arena
           side="top"
           align="start"
           width={300}
-          sheetTitle={`${agentLabel(side)} services`}
+          sheetTitle={t("arena.agentServices", { agent: agentLabel(side) })}
           testID={`arena-services-${side}-content`}
         >
-          <DropdownMenuLabel>{`Services in ${agentLabel(side)}'s worktree`}</DropdownMenuLabel>
+          <DropdownMenuLabel>
+            {t("arena.servicesWorktree", { agent: agentLabel(side) })}
+          </DropdownMenuLabel>
           {entries.map((entry) => (
             <ServiceMenuItem key={entry.key} entry={entry} side={side} />
           ))}

@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaRun, ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { arenaSetupStatus } from "./transition-progress";
 import { resolutionRetryDetail } from "./battle-result";
@@ -75,7 +76,7 @@ export function decisionBarShowsPhase(phase: ArenaDecisionPhase): boolean {
 export function arenaRunningDecisionHint(phase: ArenaDecisionPhase): string | null {
   if (phase.kind !== "running" || phase.waitingFor === null) return null;
   if (!phase.canPickA && !phase.canPickB) return null;
-  return `Agent ${phase.waitingFor.toUpperCase()} is still working`;
+  return i18n.t("arena.agentWaiting", { side: phase.waitingFor.toUpperCase() });
 }
 
 export function arenaRunningDecisionOrder({
@@ -93,7 +94,6 @@ export function arenaRunningDecisionOrder({
  * Setup reports its steps in the conversation and the bar stays hidden until it is done
  * (`decision-bar.tsx`), so this phase never reaches the screen and needs no step names.
  */
-const PREPARING_WORKSPACES = "Preparing workspaces";
 
 function transitional(label: string, busy: boolean): ArenaDecisionPhase {
   return { kind: "transitional", label, busy };
@@ -143,11 +143,11 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
   if (turn?.canRetryResolution) {
     return { kind: "retry_resolution", detail: resolutionRetryDetail(turn.gitApplication) };
   }
-  if (!turn) return transitional(PREPARING_WORKSPACES, true);
+  if (!turn) return transitional(i18n.t("arena.prepareWorkspaces"), true);
   switch (turn.state) {
     case "creating":
     case "worktrees_ready":
-      return transitional(PREPARING_WORKSPACES, true);
+      return transitional(i18n.t("arena.prepareWorkspaces"), true);
     case "running": {
       // The panes stay hidden while files are still copying, so a result cannot be judged yet.
       // Stop stays: the engine aborts the copy instead of waiting for it.
@@ -163,11 +163,11 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
       };
     }
     case "finalizing":
-      return transitional("Finishing up", true);
+      return transitional(i18n.t("arena.finishing"), true);
     case "awaiting_vote":
       return awaitingVotePhase(turn, runA, runB);
     case "stopping":
-      return transitional("Stopping the battle", true);
+      return transitional(i18n.t("arena.stoppingBattle"), true);
     case "awaiting_stop_resolution":
       return {
         kind: "awaiting_stop_resolution",
@@ -175,13 +175,13 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
         canKeepB: canKeepStoppedArenaRun(turn.state, runB),
       };
     case "creation_failed":
-      return transitional("Battle failed to start", false);
+      return transitional(i18n.t("arena.failedStart"), false);
     case "finalization_failed":
-      return transitional("Battle failed to finish", false);
+      return transitional(i18n.t("arena.failedFinish"), false);
     case "interrupted_recovery":
-      return transitional("Recovering the interrupted battle", true);
+      return transitional(i18n.t("arena.recovering"), true);
     default:
       // This only covers a snapshot caught between two polls.
-      return transitional("Resolving the battle", true);
+      return transitional(i18n.t("arena.resolving"), true);
   }
 }

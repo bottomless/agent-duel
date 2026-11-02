@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { arenaUserMessageContent, type ArenaUserMessageContent } from "./prompt-images";
 import { arenaRunningTool } from "./run-liveness";
@@ -52,17 +53,17 @@ export function arenaQueuedSteering(run: ArenaRun): QueuedArenaSteer[] {
  */
 export function arenaQueuedSteerDelivery(run: ArenaRun): string {
   const tool = arenaRunningTool(run);
-  if (tool === "command") return "Sends when the current command finishes";
-  if (tool === "tool") return "Sends when the current tool finishes";
-  return "Sends after the current reply";
+  if (tool === "command") return i18n.t("arena.queuedCommand");
+  if (tool === "tool") return i18n.t("arena.queuedTool");
+  return i18n.t("arena.queuedReply");
 }
 
 /** Send now cuts the running work short but, unlike Stop, keeps the contestant going. */
 export function arenaSendNowHint(run: ArenaRun): string {
   const tool = arenaRunningTool(run);
-  if (tool === "command") return "Interrupts the current command";
-  if (tool === "tool") return "Interrupts the current tool";
-  return "Interrupts the current reply";
+  if (tool === "command") return i18n.t("arena.interruptCommand");
+  if (tool === "tool") return i18n.t("arena.interruptTool");
+  return i18n.t("arena.interruptReply");
 }
 
 /** What a queued steer attaches, as one line under its text: `2 images · notes.md`. */
@@ -71,6 +72,9 @@ export function arenaQueuedSteerAttachments(
 ) {
   const images = steer.images.length;
   const parts = steer.attachments.map((attachment) => attachment.label);
-  if (images > 0) parts.unshift(images === 1 ? "1 image" : `${images} images`);
+  if (images > 0)
+    parts.unshift(
+      images === 1 ? i18n.t("arena.oneImage") : i18n.t("arena.imageCount", { total: images }),
+    );
   return parts.join(" · ");
 }

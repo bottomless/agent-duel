@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { ThumbsDown, ThumbsUp } from "lucide-react-native";
@@ -22,6 +23,7 @@ export function SingleAgentRatingDialog({
   ratingId,
   onSkip,
 }: SingleAgentRatingDialogProps) {
+  const { t } = useTranslation();
   const rating = useArenaTurnMutation(serverId, agentId);
   const connected = useSessionStore((state) => Boolean(state.sessions[serverId]?.client));
   const disabled = !connected || rating.isPending;
@@ -41,16 +43,16 @@ export function SingleAgentRatingDialog({
     <View style={styles.column}>
       <View
         role="dialog"
-        accessibilityLabel="Rate this frontier response"
+        accessibilityLabel={t("arena.rateFrontier")}
         testID="arena-single-agent-rating"
         style={[settingsStyles.card, styles.dialog]}
       >
         <View style={styles.heading}>
-          <Text style={styles.title}>{onSkip ? "Rate this response?" : "Rating required"}</Text>
+          <Text style={styles.title}>
+            {onSkip ? t("arena.rateResponse") : t("arena.ratingRequired")}
+          </Text>
           <Text style={styles.description}>
-            {onSkip
-              ? "You stopped this response, so a rating is optional. Rate it to reveal the model."
-              : "How did this response do? Rate it to reveal the model and continue."}
+            {onSkip ? t("arena.optionalRating") : t("arena.ratingHelp")}
           </Text>
         </View>
         <View style={styles.actions}>
@@ -63,7 +65,7 @@ export function SingleAgentRatingDialog({
             onPress={voteUp}
             testID="arena-single-agent-thumbs-up"
           >
-            Thumbs up
+            {t("arena.thumbsUp")}{" "}
           </Button>
           <Button
             variant="secondary"
@@ -74,7 +76,7 @@ export function SingleAgentRatingDialog({
             onPress={voteDown}
             testID="arena-single-agent-thumbs-down"
           >
-            Thumbs down
+            {t("arena.thumbsDown")}{" "}
           </Button>
           {onSkip ? (
             <Button
@@ -84,14 +86,16 @@ export function SingleAgentRatingDialog({
               onPress={onSkip}
               testID="arena-single-agent-rating-skip"
             >
-              Skip
+              {t("arena.skip")}{" "}
             </Button>
           ) : null}
         </View>
-        {rating.isPending ? <Text style={styles.description}>Saving rating…</Text> : null}
+        {rating.isPending ? (
+          <Text style={styles.description}>{t("arena.savingRating")}</Text>
+        ) : null}
         {rating.isError ? (
           <Text style={styles.error} accessibilityRole="alert">
-            Couldn’t save your rating. Please try again.
+            {t("arena.ratingFailed")}{" "}
           </Text>
         ) : null}
       </View>
@@ -110,9 +114,8 @@ export function SingleAgentComposerTooltip({
   completed,
   children,
 }: SingleAgentComposerTooltipProps) {
-  const explanation = completed
-    ? "Rate the frontier response above with a thumbs up or thumbs down to continue."
-    : "When the frontier response finishes, rate it above to continue.";
+  const { t } = useTranslation();
+  const explanation = completed ? t("arena.rateToContinue") : t("arena.rateWhenFinished");
   return (
     <Tooltip enabledOnDesktop={locked} delayDuration={300}>
       <TooltipTrigger asChild>

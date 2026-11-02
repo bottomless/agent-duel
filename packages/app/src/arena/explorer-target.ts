@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
 /** A contestant worktree the explorer can browse while the battle owns it. */
@@ -39,7 +40,7 @@ export function parseArenaExplorerOptionId(optionId: string): ArenaSide | null {
 }
 
 export function arenaExplorerOptionLabel(side: ArenaSide): string {
-  return `Current agent ${side.toUpperCase()}`;
+  return i18n.t("arena.currentAgent", { side: side.toUpperCase() });
 }
 
 export function selectArenaExplorerTargets(

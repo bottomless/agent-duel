@@ -1,3 +1,4 @@
+import { i18n } from "@/i18n/i18next";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { isResolvingBattleState } from "./battle-result";
 
@@ -13,31 +14,69 @@ export const ARENA_OPERATION_LABELS: Record<
   ArenaOperation,
   { running: string; completed: string }
 > = {
-  preparing_workspaces: { running: "Preparing workspaces", completed: "Workspaces prepared" },
+  preparing_workspaces: {
+    get running() {
+      return i18n.t("arena.prepareWorkspaces");
+    },
+    get completed() {
+      return i18n.t("arena.preparedWorkspaces");
+    },
+  },
   copying_environment: {
-    running: "Copying files and dependencies",
-    completed: "Files and dependencies copied",
+    get running() {
+      return i18n.t("arena.copyEnvironment");
+    },
+    get completed() {
+      return i18n.t("arena.copiedEnvironment");
+    },
   },
   checking_workspace: {
-    running: "Checking workspace changes",
-    completed: "Workspace changes checked",
+    get running() {
+      return i18n.t("arena.checkWorkspace");
+    },
+    get completed() {
+      return i18n.t("arena.checkedWorkspace");
+    },
   },
   releasing_environment: {
-    running: "Releasing the previous environment",
-    completed: "Previous environment released",
+    get running() {
+      return i18n.t("arena.releasePrevious");
+    },
+    get completed() {
+      return i18n.t("arena.releasedPrevious");
+    },
   },
-  preserving_results: { running: "Saving battle results", completed: "Battle results saved" },
+  preserving_results: {
+    get running() {
+      return i18n.t("arena.saveResults");
+    },
+    get completed() {
+      return i18n.t("arena.savedResults");
+    },
+  },
   applying_changes: {
-    running: "Applying changes to your workspace",
-    completed: "Changes applied to your workspace",
+    get running() {
+      return i18n.t("arena.applyChanges");
+    },
+    get completed() {
+      return i18n.t("arena.appliedChanges");
+    },
   },
   updating_conversation: {
-    running: "Updating the conversation",
-    completed: "Conversation updated",
+    get running() {
+      return i18n.t("arena.updateConversation");
+    },
+    get completed() {
+      return i18n.t("arena.updatedConversation");
+    },
   },
   releasing_loser: {
-    running: "Releasing the other environment",
-    completed: "Other environment released",
+    get running() {
+      return i18n.t("arena.releaseOther");
+    },
+    get completed() {
+      return i18n.t("arena.releasedOther");
+    },
   },
 };
 
@@ -57,7 +96,7 @@ function operationStatus(operations: readonly ArenaOperation[]): string | null {
 }
 
 export function arenaSetupStatus(turn: ProgressTurn | undefined): string | null {
-  if (!turn) return "Preparing workspaces";
+  if (!turn) return i18n.t("arena.prepareWorkspaces");
   const preparing = turn.state === "creating" || turn.state === "worktrees_ready";
   if (!preparing && turn.state !== "running") return null;
   const operations = (turn.activeOperations ?? []).filter((operation) =>
@@ -65,8 +104,8 @@ export function arenaSetupStatus(turn: ProgressTurn | undefined): string | null 
   );
   const active = operationStatus(operations);
   if (active) return active;
-  if (turn.state === "creating") return "Preparing workspaces";
-  if (turn.state === "worktrees_ready") return "Starting agents";
+  if (turn.state === "creating") return i18n.t("arena.prepareWorkspaces");
+  if (turn.state === "worktrees_ready") return i18n.t("arena.startingAgents");
   return null;
 }
 
@@ -76,12 +115,12 @@ export function arenaResolutionStatus(turn: ProgressTurn | undefined): string | 
   if (active) return active;
   switch (turn.state) {
     case "early_selected":
-      return "Finishing the other agent's run";
+      return i18n.t("arena.finishingOther");
     case "applying":
-      return "Preparing the selected result";
+      return i18n.t("arena.prepareSelected");
     case "canonicalizing":
-      return "Finalizing the conversation";
+      return i18n.t("arena.finalizeConversation");
     default:
-      return "Preparing the next turn";
+      return i18n.t("arena.prepareNext");
   }
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { ArenaComparisonFileDiff } from "@getpaseo/protocol/arena/rpc-schemas";
 import { useFetchQuery } from "@/data/query";
 import { useSessionStore } from "@/stores/session-store";
@@ -20,6 +21,7 @@ export function useArenaFileDiff(input: {
    */
   revision?: string;
 }) {
+  const { t } = useTranslation();
   const { serverId, agentId, turnId, file, revision } = input;
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   return useFetchQuery<ArenaComparisonFileDiff>({
@@ -35,8 +37,8 @@ export function useArenaFileDiff(input: {
     dataShape: "value",
     staleTimeMs: 0,
     queryFn: async () => {
-      if (!client) throw new Error("Arena daemon connection is unavailable");
-      if (file === null) throw new Error("No file to read");
+      if (!client) throw new Error(t("arena.connectionUnavailable"));
+      if (file === null) throw new Error(t("arena.noFile"));
       return client.arenaFileDiff(agentId, turnId, file);
     },
     enabled: Boolean(client) && file !== null,

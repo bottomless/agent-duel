@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { useCallback } from "react";
 import type { MenuTriggerState } from "@/components/ui/menu";
@@ -28,6 +29,9 @@ export function SingleAgentSizeControl({
   singleAgent?: ArenaSnapshot["singleAgent"];
   onChange?: (value: SingleAgentModelSize) => void;
 }) {
+  const { t } = useTranslation();
+  const sizeLabel = t(value === "medium" ? "arena.mediumValue" : "arena.frontierValue");
+  const modelSizeLabel = t("arena.modelSizeLabel", { size: sizeLabel });
   const selectMedium = useCallback(() => onChange?.("medium"), [onChange]);
   const selectFrontier = useCallback(() => onChange?.("frontier"), [onChange]);
   const triggerStyle = useCallback(
@@ -52,7 +56,7 @@ export function SingleAgentSizeControl({
       <DropdownMenu>
         <DropdownMenuTrigger
           accessibilityRole="button"
-          accessibilityLabel="About model sizes and required ratings"
+          accessibilityLabel={t("arena.modelSizesHelp")}
           testID="arena-single-agent-help"
           style={helpStyle}
         >
@@ -60,24 +64,20 @@ export function SingleAgentSizeControl({
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="start" offset={8} width={300}>
           <Text style={styles.explanation}>
-            Medium uses GPT Luna 5.6 Xhigh and can be used unlimitedly without a rating.
+            {t("arena.mediumHelp", { model: "GPT Luna 5.6 Xhigh" })}
           </Text>
-          <Text style={styles.explanation}>
-            With frontier, the model stays hidden until you rate it. After the agent finishes, you
-            must give a thumbs up or thumbs down to continue. Chat controls stay disabled until your
-            rating is saved.
-          </Text>
+          <Text style={styles.explanation}>{t("arena.frontierHelp")}</Text>
         </DropdownMenuContent>
       </DropdownMenu>
       <DropdownMenu>
         <DropdownMenuTrigger
           accessibilityRole="button"
           disabled={disabled}
-          accessibilityLabel={`Model size: ${value}`}
+          accessibilityLabel={modelSizeLabel}
           testID="arena-single-agent-size-trigger"
           style={triggerStyle}
         >
-          <Text style={styles.label}>Model size: {value}</Text>
+          <Text style={styles.label}>{modelSizeLabel}</Text>
           <ThemedChevronDown size={12} uniProps={mutedMapping} />
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="start" offset={8} width={260}>
@@ -85,22 +85,24 @@ export function SingleAgentSizeControl({
             selected={value === "medium"}
             disabled={disabled}
             onSelect={selectMedium}
-            description="GPT Luna 5.6 Xhigh · Unlimited use"
+            description={t("arena.unlimitedModel", { model: "GPT Luna 5.6 Xhigh" })}
             testID="arena-single-agent-size-medium"
           >
-            Medium
+            {t("arena.medium")}
           </DropdownMenuItem>
           <DropdownMenuItem
             selected={value === "frontier"}
             disabled={disabled}
             onSelect={selectFrontier}
-            description="Model hidden · Rating required"
+            description={t("arena.hiddenRating")}
             testID="arena-single-agent-size-frontier"
           >
-            Frontier
+            {t("arena.frontier")}
           </DropdownMenuItem>
           {frontierIdentity ? (
-            <Text style={styles.explanation}>Last rated model: {frontierIdentity}</Text>
+            <Text style={styles.explanation}>
+              {t("arena.lastRatedModel", { model: frontierIdentity })}
+            </Text>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>

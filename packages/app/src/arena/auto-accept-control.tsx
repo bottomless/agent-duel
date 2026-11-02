@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback } from "react";
 import { Text, View } from "react-native";
 import { useCompactComposerToolbar } from "@/composer/toolbar-layout";
@@ -30,6 +31,7 @@ export function ArenaAutoAcceptControl({
   battleActive: boolean;
   onChange: (enabled: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const compact = useCompactComposerToolbar();
   const enable = useCallback(() => onChange(true), [onChange]);
   const disable = useCallback(() => onChange(false), [onChange]);
@@ -42,7 +44,7 @@ export function ArenaAutoAcceptControl({
     ],
     [compact, disabled],
   );
-  const label = enabled ? "Auto Accept" : "Ask before tools";
+  const label = enabled ? t("arena.autoAccept") : t("arena.askBeforeTools");
   return (
     <DropdownMenu>
       <Tooltip>
@@ -52,7 +54,7 @@ export function ArenaAutoAcceptControl({
               style={triggerStyle}
               disabled={disabled}
               accessibilityRole="button"
-              accessibilityLabel={`Tool permissions: ${label}`}
+              accessibilityLabel={t("arena.toolPermissionsLabel", { label: label })}
               testID="arena-auto-accept-menu-trigger"
             >
               {enabled ? (
@@ -80,27 +82,27 @@ export function ArenaAutoAcceptControl({
         width={300}
         testID="arena-auto-accept-menu"
       >
-        <DropdownMenuLabel>Tool permissions</DropdownMenuLabel>
+        <DropdownMenuLabel>{t("arena.toolPermissions")}</DropdownMenuLabel>
         <DropdownMenuItem
           selected={!enabled}
           onSelect={disable}
           testID="arena-auto-accept-off"
-          description="Review requests that need your permission."
+          description={t("arena.reviewPermissions")}
         >
-          Ask before tools
+          {t("arena.askBeforeTools")}{" "}
         </DropdownMenuItem>
         <DropdownMenuItem
           selected={enabled}
           onSelect={enable}
           testID="arena-auto-accept-on"
-          description="Accept tool requests, including pending ones."
+          description={t("arena.acceptPermissions")}
         >
-          Auto Accept
+          {t("arena.autoAccept")}{" "}
         </DropdownMenuItem>
         {/* Both composers also save the choice as the provider's default (useDraftAgentFeatures,
             AgentControls' handleSetFeature): new chats start with it, other chats keep theirs. */}
         <Text style={styles.hint}>
-          {`Applies to ${battleActive ? "both contestants" : "this chat"} and becomes the default for new chats. Explicit deny rules still apply.`}
+          {t(battleActive ? "arena.permissionsBoth" : "arena.permissionsChat")}
         </Text>
       </DropdownMenuContent>
     </DropdownMenu>

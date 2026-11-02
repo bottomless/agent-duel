@@ -1,3 +1,5 @@
+import { i18n } from "@/i18n/i18next";
+
 /**
  * How often a relative label can change, which is all a caller needs to know to keep it honest.
  * `static` means it never will again.
@@ -42,19 +44,28 @@ function describeAge(date: Date, now: Date): Age {
   if (elapsedMs < HOUR_MS) {
     return {
       kind: "elapsed",
-      value: `${Math.floor(elapsedMs / MINUTE_MS)}m`,
+      value: i18n.t("time.minutesCompact", { total: Math.floor(elapsedMs / MINUTE_MS) }),
       resolution: "minute",
     };
   }
   if (elapsedMs < DAY_MS) {
-    return { kind: "elapsed", value: `${Math.floor(elapsedMs / HOUR_MS)}h`, resolution: "hour" };
+    return {
+      kind: "elapsed",
+      value: i18n.t("time.hoursCompact", { total: Math.floor(elapsedMs / HOUR_MS) }),
+      resolution: "hour",
+    };
   }
   if (elapsedMs < ABSOLUTE_AFTER_MS) {
-    return { kind: "elapsed", value: `${Math.floor(elapsedMs / DAY_MS)}d`, resolution: "day" };
+    return {
+      kind: "elapsed",
+      value: i18n.t("time.daysCompact", { total: Math.floor(elapsedMs / DAY_MS) }),
+      resolution: "day",
+    };
   }
 
-  const month = date.toLocaleDateString("en-US", { month: "short" });
-  return { kind: "date", value: `${month} ${date.getDate()}`, resolution: "static" };
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const value = date.toLocaleDateString(locale, { month: "short", day: "numeric" });
+  return { kind: "date", value, resolution: "static" };
 }
 
 /**
@@ -63,8 +74,9 @@ function describeAge(date: Date, now: Date): Age {
  */
 export function describeTimeAgo(date: Date, now: Date = new Date()): RelativeTimeLabel {
   const age = describeAge(date, now);
-  if (age.kind === "now") return { label: "just now", resolution: age.resolution };
-  if (age.kind === "elapsed") return { label: `${age.value} ago`, resolution: age.resolution };
+  if (age.kind === "now") return { label: i18n.t("time.justNow"), resolution: age.resolution };
+  if (age.kind === "elapsed")
+    return { label: i18n.t("time.ago", { time: age.value }), resolution: age.resolution };
   return { label: age.value, resolution: age.resolution };
 }
 
@@ -79,7 +91,7 @@ export function formatTimeAgo(date: Date, now: Date = new Date()): string {
  */
 export function describeCompactTimeAgo(date: Date, now: Date = new Date()): RelativeTimeLabel {
   const age = describeAge(date, now);
-  if (age.kind === "now") return { label: "now", resolution: age.resolution };
+  if (age.kind === "now") return { label: i18n.t("time.now"), resolution: age.resolution };
   return { label: age.value, resolution: age.resolution };
 }
 
@@ -92,8 +104,14 @@ export function formatCompactTimeAgo(date: Date, now: Date = new Date()): string
  * "now" → "just now", "5m" → "5m ago", "Jan 15" stays a date.
  */
 export function formatCompactTimeAgoAsProse(label: string): string {
-  if (label === "now") return "just now";
-  if (/^\d/.test(label)) return `${label} ago`;
+  if (label === i18n.t("time.now")) return i18n.t("time.justNow");
+  const units = ["time.minutesCompact", "time.hoursCompact", "time.daysCompact"];
+  for (const key of units) {
+    const [prefix, suffix] = i18n.t(key, { total: "{value}" }).split("{value}");
+    if (!label.startsWith(prefix) || !label.endsWith(suffix)) continue;
+    const value = label.slice(prefix.length, label.length - suffix.length);
+    if (/^\d+$/.test(value)) return i18n.t("time.ago", { time: label });
+  }
   return label;
 }
 

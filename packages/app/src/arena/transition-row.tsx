@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { AlertTriangle, ChevronDown, ChevronRight, Monitor } from "lucide-react-native";
@@ -25,13 +26,14 @@ export function arenaTransitionRowVisible(transition: ArenaTransition | undefine
 }
 
 function TransitionDetails({ transition }: { transition: ArenaTransition }) {
+  const { t } = useTranslation();
   const commands = transition.stoppedCommands;
   const omissions = transition.copyOmissions;
   return (
     <View style={styles.details}>
       {commands.length > 0 ? (
         <View style={styles.section}>
-          <Text style={styles.title}>Stopped commands</Text>
+          <Text style={styles.title}>{t("arena.stoppedCommands")}</Text>
           {commands.map((command) => {
             const listenerLabels = transitionListenerLabels(command);
             return (
@@ -40,7 +42,13 @@ function TransitionDetails({ transition }: { transition: ArenaTransition }) {
                 key={`${command.relativeCwd}-${command.command}-${command.status}-${command.verified}-${command.error ?? ""}`}
               >
                 <StatusBadge
-                  label={command.status === "already_absent" ? "Already absent" : command.status}
+                  label={t(
+                    {
+                      stopped: "arena.stoppedCommand",
+                      failed: "arena.failedCommand",
+                      already_absent: "arena.alreadyAbsent",
+                    }[command.status],
+                  )}
                   variant={command.status === "failed" ? "error" : "muted"}
                 />
                 <View style={styles.copy}>
@@ -50,11 +58,13 @@ function TransitionDetails({ transition }: { transition: ArenaTransition }) {
                   <Text style={styles.meta}>{command.relativeCwd}</Text>
                   {listenerLabels.length > 0 ? (
                     <Text style={styles.meta}>
-                      Released listeners: {listenerLabels.join(" · ")}
+                      {t("arena.releasedListeners")} {listenerLabels.join(" · ")}
                     </Text>
                   ) : null}
                   <Text style={styles.meta}>
-                    {command.verified ? "Termination verified" : "Termination not verified"}
+                    {command.verified
+                      ? t("arena.terminationVerified")
+                      : t("arena.terminationUnverified")}
                   </Text>
                   {command.error ? <Text style={styles.failure}>{command.error}</Text> : null}
                 </View>
@@ -65,7 +75,7 @@ function TransitionDetails({ transition }: { transition: ArenaTransition }) {
       ) : null}
       {omissions.length > 0 ? (
         <View style={styles.section}>
-          <Text style={styles.title}>Paths skipped when copying</Text>
+          <Text style={styles.title}>{t("arena.pathsSkipped")}</Text>
           {omissions.map((omission) => (
             <View
               style={styles.row}
@@ -88,6 +98,7 @@ function TransitionDetails({ transition }: { transition: ArenaTransition }) {
  * line, only when something actually happened; the details stay behind a toggle.
  */
 export function ArenaTransitionRow({ transition }: { transition?: ArenaTransition }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const handleToggle = useCallback(() => setExpanded((value) => !value), []);
   const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
@@ -102,7 +113,7 @@ export function ArenaTransitionRow({ transition }: { transition?: ArenaTransitio
         style={styles.header}
         accessibilityRole="button"
         accessibilityState={accessibilityState}
-        accessibilityLabel={`${expanded ? "Collapse" : "Expand"} environment transition details`}
+        accessibilityLabel={t(expanded ? "arena.collapseTransition" : "arena.expandTransition")}
         testID="arena-environment-transition-toggle"
       >
         <Icon size={14} uniProps={failed ? dangerColorMapping : mutedColorMapping} />
@@ -110,7 +121,7 @@ export function ArenaTransitionRow({ transition }: { transition?: ArenaTransitio
           {label}
         </Text>
         <View style={styles.toggle}>
-          <Text style={styles.toggleText}>Details</Text>
+          <Text style={styles.toggleText}>{t("arena.details")}</Text>
           {expanded ? (
             <ThemedChevronDown size={14} uniProps={mutedColorMapping} />
           ) : (

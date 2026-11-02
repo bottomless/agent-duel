@@ -73,6 +73,7 @@ function InspectRow({ label, children }: { label: string; children: React.ReactN
 }
 
 function OpenLink({ url, label }: { url: string; label: string }) {
+  const { t } = useTranslation();
   const openUrl = useOpenArenaServiceUrl();
   const handlePress = useCallback(() => {
     openUrl(url);
@@ -85,7 +86,7 @@ function OpenLink({ url, label }: { url: string; label: string }) {
       textStyle={styles.openText}
       accessibilityLabel={label}
     >
-      Open
+      {t("arena.open")}{" "}
     </Button>
   );
 }
@@ -107,23 +108,24 @@ function InspectPanel({
   retainedRun: ArenaRun | undefined;
   retainedEntries: readonly LifecycleServiceEntry[];
 }) {
+  const { t } = useTranslation();
   return (
     <View style={styles.inspect} testID="arena-inspect-environment">
       <View style={styles.inspectSection}>
-        <Text style={styles.inspectTitle}>Your checkout</Text>
-        <InspectRow label="Branch">
+        <Text style={styles.inspectTitle}>{t("arena.checkout")}</Text>
+        <InspectRow label={t("arena.branch")}>
           <Text style={styles.inspectMono}>{branchLabel(trunk.branch)}</Text>
         </InspectRow>
-        <InspectRow label="Worktree">
+        <InspectRow label={t("arena.worktree")}>
           <Text style={styles.inspectMonoMuted}>{trunk.worktreeName}</Text>
         </InspectRow>
       </View>
       {retained ? (
         <View style={styles.inspectSectionDivided}>
           <Text style={styles.inspectTitle}>
-            {`${agentLabel(retained.side)}'s environment, kept until your next send`}
+            {t("arena.retainedEnvironment", { agent: agentLabel(retained.side) })}
           </Text>
-          <InspectRow label="Worktree">
+          <InspectRow label={t("arena.worktree")}>
             <View style={styles.inspectValue}>
               <WrappedPath
                 path={contestantWorktreeDisplayPath(retainedRun?.worktree, retained.worktreeName)}
@@ -155,13 +157,13 @@ function InspectPanel({
                 </View>
               </View>
               {entry.url && entry.live ? (
-                <OpenLink url={entry.url} label={`Open ${entry.name}`} />
+                <OpenLink url={entry.url} label={t("arena.openEntry", { name: entry.name })} />
               ) : null}
             </InspectRow>
           ))}
           {retainedEntries.length === 0 ? (
-            <InspectRow label="Services">
-              <Text style={styles.inspectMuted}>None running</Text>
+            <InspectRow label={t("arena.services")}>
+              <Text style={styles.inspectMuted}>{t("arena.noneRunning")}</Text>
             </InspectRow>
           ) : null}
         </View>
@@ -210,6 +212,7 @@ export function ArenaChatCallouts({
   };
   pendingPrompt?: string;
 }) {
+  const { t } = useTranslation();
   const trunkConflicts = activeTrunkConflicts(snapshot.chat);
   const parked = arenaParkedPromotion(snapshot);
   const conflictFiles = useMemo(
@@ -225,14 +228,14 @@ export function ArenaChatCallouts({
           cwd={cwd}
           activeFile={conflictFiles[0]}
           additionalFiles={additionalConflictFiles}
-          buttonLabel="Open in editor"
+          buttonLabel={t("arena.openEditor")}
         />
       ) : null,
-    [serverId, cwd, conflictFiles, additionalConflictFiles],
+    [serverId, cwd, conflictFiles, additionalConflictFiles, t],
   );
   const resolveAction = onResolveConflicts
     ? {
-        label: "Let an agent resolve",
+        label: t("arena.letResolve"),
         onPress: onResolveConflicts,
         loading: resolvingConflicts,
         testID: "arena-resolve-conflicts",
@@ -242,21 +245,21 @@ export function ArenaChatCallouts({
     <View style={styles.callouts}>
       {snapshot.environment.warmPair?.error && !trunkConflicts ? (
         <ArenaCallout
-          title="Next battle preparation failed"
+          title={t("arena.nextFailed")}
           detail={snapshot.environment.warmPair.error}
           testID="arena-warm-pair-error"
         />
       ) : null}
       {snapshot.chat.blockedReason ? (
         <ArenaCallout
-          title="Battles are paused"
+          title={t("arena.battlesPaused")}
           detail={snapshot.chat.blockedReason}
           testID="arena-trunk-blocked"
         />
       ) : null}
       {trunkConflicts ? (
         <ArenaCallout
-          title="Battles are paused"
+          title={t("arena.battlesPaused")}
           tone="warning"
           detail={CONFLICT_CALLOUT_DETAIL}
           paths={trunkConflicts}
@@ -270,7 +273,7 @@ export function ArenaChatCallouts({
         // No button to finish with: the winner applies itself once the files are resolved and
         // staged. The vote already asked for it, so pressing anything again is ceremony.
         <ArenaCallout
-          title="Some files have merge conflicts"
+          title={t("arena.mergeConflicts")}
           tone="warning"
           detail={conflictRepairDetail(parked)}
           paths={parked.conflicts}
@@ -316,12 +319,13 @@ function ArenaStoppedCallout({
   review: ArenaReviewHandlers;
   askingAgent: boolean;
 }) {
+  const { t } = useTranslation();
   if (parked.partial) return <ArenaPartialCallout parked={parked} review={review} />;
   const actions: ArenaCalloutAction[] = [];
   const { onAskAgent } = review;
   if (onAskAgent) {
     actions.push({
-      label: "Let an agent resolve",
+      label: t("arena.letResolve"),
       onPress: () => onAskAgent(stoppedPrompt(parked.reason)),
       loading: askingAgent,
       disabled: askingAgent || review.pending !== null,
@@ -330,7 +334,7 @@ function ArenaStoppedCallout({
   }
   if (parked.canRetry) {
     actions.push({
-      label: "Try again",
+      label: t("arena.tryAgain"),
       onPress: review.onRetry,
       loading: review.pending === "apply",
       disabled: review.pending !== null || askingAgent,
@@ -340,7 +344,7 @@ function ArenaStoppedCallout({
   }
   if (parked.canDiscard) {
     actions.push({
-      label: "Discard winning changes",
+      label: t("arena.discardWinning"),
       onPress: review.onDiscard,
       loading: review.pending === "discard",
       disabled: review.pending !== null,
@@ -350,12 +354,9 @@ function ArenaStoppedCallout({
   }
   return (
     <ArenaCallout
-      title="The winning changes were not applied"
+      title={t("arena.winningNotApplied")}
       tone="warning"
-      detail={
-        parked.reason ??
-        "The winning result is kept, but Arena could not apply it to this workspace."
-      }
+      detail={parked.reason ?? t("arena.winningKept")}
       testID="arena-application-stopped"
       actions={actions}
     />
@@ -373,9 +374,10 @@ function ArenaPartialCallout({
   parked: Extract<ArenaParkedPromotion, { kind: "stopped" }>;
   review: ArenaReviewHandlers;
 }) {
+  const { t } = useTranslation();
   const actions: ArenaCalloutAction[] = [
     {
-      label: "Restore my workspace",
+      label: t("arena.restoreWorkspace"),
       onPress: review.onRestore,
       loading: review.pending === "apply",
       disabled: review.pending !== null,
@@ -384,7 +386,7 @@ function ArenaPartialCallout({
   ];
   if (parked.canDiscard) {
     actions.push({
-      label: "Discard winning changes",
+      label: t("arena.discardWinning"),
       onPress: review.onDiscard,
       loading: review.pending === "discard",
       disabled: review.pending !== null,
@@ -394,8 +396,8 @@ function ArenaPartialCallout({
   }
   return (
     <ArenaCallout
-      title="Only part of the winning changes were applied"
-      detail="Arena could not finish the apply, and it could not undo it. This workspace is partly changed. Your work from before the apply is saved. Restore it before you continue."
+      title={t("arena.partlyApplied")}
+      detail={t("arena.partialApplyHelp")}
       testID="arena-application-partial"
       actions={actions}
     />
@@ -434,7 +436,7 @@ export function ArenaEnvironmentButton({
   const remote = useRemoteSignIn({ serverId, cwd });
   const accessibilityLabel = remote.required
     ? t("workspace.git.remoteSignIn.trigger", { host: remote.host })
-    : `Inspect environment for ${environmentLabel}`;
+    : t("arena.inspectEnvironment", { name: environmentLabel });
   return (
     <DropdownMenu open={open} onOpenChange={setInspecting}>
       <DropdownMenuTrigger
@@ -495,6 +497,7 @@ export function ArenaEnvironmentDetails({
   agentId: string;
   snapshot: ArenaSnapshot;
 }) {
+  const { t } = useTranslation();
   const { retainedWinner: retained, warmPair: warm } = snapshot.environment;
   const retainedRun = retained ? snapshot.runs.find((run) => run.id === retained.runID) : undefined;
   const retainedEntries = useMemo(
@@ -520,10 +523,10 @@ export function ArenaEnvironmentDetails({
               size="xs"
               variant="ghost"
               onPress={handleOpenPreview}
-              accessibilityLabel="Open the retained preview"
+              accessibilityLabel={t("arena.retainedPreview")}
               testID="arena-readiness-open-preview"
             >
-              Open
+              {t("arena.open")}{" "}
             </Button>
           ) : null}
         </View>

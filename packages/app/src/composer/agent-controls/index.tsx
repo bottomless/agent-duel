@@ -413,6 +413,7 @@ function ArenaModeControls({
   | "singleAgent"
   | "singleAgentLocked"
 >) {
+  const { t } = useTranslation();
   const autoAccept = features?.find(
     (feature): feature is Extract<AgentFeature, { type: "toggle" }> =>
       feature.id === "auto_accept" && feature.type === "toggle",
@@ -428,12 +429,12 @@ function ArenaModeControls({
     <View style={styles.arenaControls} testID="arena-agent-controls">
       {!battleToggleHidden ? (
         <View style={styles.battleToggle}>
-          <Text style={styles.battleLabel}>Battle</Text>
+          <Text style={styles.battleLabel}>{t("arena.battle")}</Text>
           <Switch
             value={battleMode}
             onValueChange={onBattleModeChange}
             disabled={controlsDisabled || battleModeDisabled}
-            accessibilityLabel="Battle mode"
+            accessibilityLabel={t("arena.battleMode")}
             testID="arena-battle-toggle"
           />
         </View>
