@@ -261,6 +261,9 @@ export function project(snapshot: BattleSnapshot) {
       status: snapshot.chat.status,
       canonicalSessionID: snapshot.chat.canonicalSessionID,
       canonicalSHA: snapshot.chat.currentCanonicalSHA,
+      shellStops: snapshot.chat.shellStops
+        ?.filter((stop) => stop.sessionID === snapshot.chat.canonicalSessionID)
+        .map(({ startedAt, stoppedAt }) => ({ startedAt, stoppedAt })),
       ...(snapshot.chat.blockedReason ? { blockedReason: snapshot.chat.blockedReason } : {}),
       ...(snapshot.chat.trunkConflicts?.length ? { trunkConflicts: snapshot.chat.trunkConflicts } : {}),
       trunk: {

@@ -193,6 +193,7 @@ import type {
 import { battleMetricsSchemaVersion, reviewFlushLimit, runTelemetryVersion } from "./records"
 import { enabled, recoverOnce, registry, setTelemetry, shellLedgerDirectory, store as runtimeStore } from "./runtime"
 import { stopOrphanShells } from "./engine-runtime/shell-ledger"
+import { recordStoppedShells } from "./shell-restart"
 import { create as createTelemetry } from "./telemetry"
 import { Recorder } from "./events"
 import {
@@ -1413,10 +1414,13 @@ export const layer: Layer.Layer<
           })
         }),
       ),
-      Effect.asVoid,
+      Effect.map((result) => ({ ...result, stoppedAt: Date.now() })),
       // The ledger stays for the next start. Recovery goes on: a battle must still open.
       Effect.catchCause((cause) =>
-        Effect.sync(() => console.warn("Arena could not stop the shells of an earlier engine", Cause.pretty(cause))),
+        Effect.sync(() => {
+          console.warn("Arena could not stop the shells of an earlier engine", Cause.pretty(cause))
+          return { stopped: [], killed: [], ownerRunning: [], stoppedAt: Date.now() }
+        }),
       ),
     )
     const stopOrphanShellsOnce = yield* Effect.cached(orphanShells)
@@ -4536,6 +4540,11 @@ export const layer: Layer.Layer<
         contestantSystemInstruction(run.worktree.directory, isToolExecutionGated(run.sessionID))
       // The failed step may have decided on a retry it never sent; this run's next request is new.
       if (!prompt) forgetScheduledRetry(run.sessionID)
+      const resumedChat =
+        preservePromptBoundary && !prompt && turn ? yield* promise(() => store.chat(turn.chatID)) : undefined
+      const stoppedShellIDs = resumedChat?.shellStops
+        ?.filter((stop) => stop.sessionID === run.sessionID)
+        .map((stop) => stop.id)
       let result = yield* Effect.exit(
         inDirectory(
           run.worktree.directory,
@@ -4554,7 +4563,7 @@ export const layer: Layer.Layer<
               })
             : // A retry adds no message: the loop answers the last user message again, from the
               // last step that finished.
-              prompts.loop({ sessionID: run.sessionID }),
+              prompts.loop({ sessionID: run.sessionID, stoppedShellIDs }),
         ),
       )
       const triedSteers = new Set<string>()
@@ -6631,8 +6640,8 @@ export const layer: Layer.Layer<
 
     /**
      * Resume every side the engine's restart cut off, together; see `canResumeBattle`. Each continues
-     * its session from the response the restart cut off, which keeps the work it did, and adds no
-     * message, so the battle stays blind.
+     * its session from the response the restart cut off. A stopped shell adds a neutral synthetic
+     * note so the contestant can restart it without changing the user prompt.
      */
     const resumeBattle = Effect.fn("Arena.resumeBattle")(function* (turnID: string) {
       const store = yield* available()
@@ -9039,7 +9048,10 @@ export const layer: Layer.Layer<
     recoverInterrupted = Effect.fn("Arena.recoverInterrupted")(function* (store: Store) {
       // First, so a shell the last engine left running cannot write into a worktree this recovery
       // commits, and no Resume can start while it still runs.
-      yield* stopOrphanShellsOnce
+      const stopped = yield* stopOrphanShellsOnce
+      yield* recordStoppedShells(store, stopped.stopped, stopped.stoppedAt, (sessionID) =>
+        sessions.get(SessionID.make(sessionID)).pipe(Effect.map((session) => session.parentID)),
+      )
       yield* reconcileComparisons(store)
       const chats = yield* promise(() => store.chats.find({}).toArray())
       // A restart can follow a crash that left one of Arena's refs empty or naming a lost object, and
