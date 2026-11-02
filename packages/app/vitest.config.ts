@@ -23,8 +23,10 @@ export default defineConfig({
       name: "compile-usage-components",
       enforce: "pre",
       transform(source, id) {
-        // These labels must react to time and language in the compiled app too.
-        if (!id.includes("/src/usage/") || !id.endsWith(".tsx") || id.includes(".test.")) return;
+        // Exercise invalidation across the compiler's caches as well as React.memo.
+        const compiledComponent =
+          id.includes("/src/usage/") || id.endsWith("/src/arena/chat-subagent.tsx");
+        if (!compiledComponent || !id.endsWith(".tsx") || id.includes(".test.")) return;
         const result = transformSync(source, {
           filename: id,
           babelrc: false,

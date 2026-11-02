@@ -383,7 +383,8 @@ Product decisions that are settled, so they do not get relitigated per feature:
   Thinking content stays hidden, including inside expanded activity and subagent rows.
   Give each subagent a static, named, expandable heading with its latest activity on an indented
   line beneath it. Animate only the activity text. When the subagent ends, replace that activity
-  with its final status on the same indented line. Keep its transcript inside that group so
+  with its final status on the same indented line, even while its parent or siblings keep working.
+  A background launch acknowledgement does not mean the child has finished. Keep its transcript inside that group so
   concurrent agents cannot replace each other's current tool.
   Use the activity row for thinking and the pane heading for elapsed time, without a second
   thinking control or timer below the transcript.
@@ -905,7 +906,8 @@ survive, are unchanged.
 
 Keep the winner's child transcripts available after a vote, including nested children. Open each
 child in the chat to read its task prompt, commands and result, even after the contestant releases
-its worktree. OpenCode 2.0's `subagent` calls use the same inline child view as 1.x's `task` calls.
+its worktree. Task prompt and command rows open and close immediately inside the open child.
+OpenCode 2.0's `subagent` calls use the same inline child view as 1.x's `task` calls.
 The graft copies descendants under the chat and retargets their session references; the run's own
 sessions are deleted on release. Losing contestants and earlier turns have separate session
 families. `canonicalSubagentSessionIDs` records the copies for an interrupted graft's cleanup.
