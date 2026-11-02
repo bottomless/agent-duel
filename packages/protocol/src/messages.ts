@@ -4227,6 +4227,9 @@ export const WorkspaceDescriptorPayloadSchema = z
     // COMPAT(workspaceFilesState): older daemons omit this while files are
     // available; clients normalize the missing value to "available".
     filesState: z.enum(["available", "cleaning", "cleaned", "restoring"]).optional(),
+    // Archive saves this worktree's commits and uncommitted files for Restore, or keeps its
+    // directory when it cannot. Absent means archive removes the directory as Paseo does.
+    archiveKeepsWork: z.boolean().optional(),
     // COMPAT(workspaceSetupObservation): added in v0.12.0, remove optional after 2027-04-19.
     setupStatus: z.enum(["running", "completed", "failed", "blocked"]).nullable().optional(),
     // COMPAT(worktreeSlug): added in v0.2.6, remove optional after 2027-01-31.
@@ -4824,6 +4827,21 @@ export const ArchiveWorkspaceResponseMessageSchema = z.object({
     workspaceId: z.string(),
     archivedAt: z.string().nullable(),
     error: z.string().nullable(),
+    // Archived, but the worktree's code could not be saved, so its directory was kept. Why, as a
+    // code the app words in the user's language.
+    worktreeKept: z
+      .object({
+        reason: z.enum([
+          "too_large",
+          "unsupported_state",
+          "changed_during_save",
+          "in_use",
+          "failed",
+        ]),
+        changedMegabytes: z.number().optional(),
+        limitMegabytes: z.number().optional(),
+      })
+      .nullable(),
   }),
 });
 

@@ -5,6 +5,7 @@ import {
 } from "./workspace-cleanup/workspace-cleanup-service.js";
 import { isRealpathInsideRoot } from "../utils/path.js";
 import { workspaceAccess } from "./workspace-cleanup/workspace-access.js";
+import { removeWorkspaceAgents } from "./workspace-cleanup/workspace-agent-removal.js";
 import {
   ArenaActivityService,
   selectArenaNotificationRecipient,
@@ -592,6 +593,12 @@ export class VoiceAssistantWebSocketServer {
   toolHosts() {
     return createToolHosts(this.connectedHosts);
   }
+
+  // Agent Duel: every archive path (app, CLI, MCP tool, auto-archive) saves an owned worktree's code
+  // before its directory goes, so Restore can bring the work back.
+  preserveArchivedWorktree(worktreePath: string) {
+    return this.workspaceCleanup.preserveForArchive(worktreePath);
+  }
   private readonly passwordHash: string | undefined;
   private readonly credentialSource: DaemonAuthConfig | undefined;
   private readonly worktreesRoot: string | undefined;
@@ -854,6 +861,20 @@ export class VoiceAssistantWebSocketServer {
       seedIgnoredContent: (seedInput) => this.agentManager.seedWorktreeIgnoredContent(seedInput),
       environmentRetention: () => this.daemonConfigStore.get().arenaEnvironmentRetention,
       worktreeRetention: () => this.daemonConfigStore.get().worktreeRetention,
+      deleteWorkspaceAgents: (workspaceId) =>
+        removeWorkspaceAgents(
+          {
+            paseoHome: this.paseoHome,
+            agentStorage: this.agentStorage,
+            agentManager: this.agentManager,
+            logger: this.logger,
+            onAgentDeleted: async (agentId) => {
+              for (const session of this.listSessions())
+                await session.removeAgentForExternalDelete(agentId, "project.remove");
+            },
+          },
+          workspaceId,
+        ),
       stopTerminals: async (parent) => {
         for (const cwd of this.terminalManager?.listDirectories() ?? []) {
           if (!isRealpathInsideRoot(parent.root, cwd)) continue;
@@ -880,6 +901,8 @@ export class VoiceAssistantWebSocketServer {
 
   private subscribeWorkspaceCleanup(): void {
     const unsubscribeRegistry = this.workspaceRegistry.subscribeToMutations?.((mutation) => {
+      if (mutation.kind === "remove" && mutation.workspace?.cleanup)
+        return this.workspaceCleanup.releaseRemovedWorkspaceSnapshot(mutation.workspace);
       if (
         mutation.workspace &&
         !mutation.workspace.cleanup &&
@@ -888,6 +911,11 @@ export class VoiceAssistantWebSocketServer {
         this.workspaceCleanup.schedule();
     });
     if (unsubscribeRegistry) this.cleanupSubscriptions.push(unsubscribeRegistry);
+    const unsubscribeProjects = this.projectRegistry.subscribeToMutations?.((mutation) => {
+      if (mutation.kind === "remove")
+        return this.workspaceCleanup.releaseProjectSnapshots(mutation.projectId);
+    });
+    if (unsubscribeProjects) this.cleanupSubscriptions.push(unsubscribeProjects);
     this.cleanupSubscriptions.push(
       this.agentManager.subscribe(
         (event) => {
@@ -1719,6 +1747,7 @@ export class VoiceAssistantWebSocketServer {
       arenaActivity: this.arenaActivity,
       arenaByok: this.arenaByok,
       restoreCleanedWorkspace: (workspaceId) => this.workspaceCleanup.restore(workspaceId),
+      preserveArchivedWorktree: (worktreePath) => this.preserveArchivedWorktree(worktreePath),
       trimArenaEnvironments: (keep) => this.workspaceCleanup.trimEnvironments(keep),
       getArenaEnvironmentStatus: () => this.workspaceCleanup.environmentStatus(),
       waitForWorkspaceCleanupReady: () => this.workspaceCleanupReady,

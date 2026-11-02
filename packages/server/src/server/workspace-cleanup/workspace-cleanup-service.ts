@@ -11,12 +11,19 @@ import type {
   ArenaEnvironmentStatus,
   ArenaEnvironmentTrim,
 } from "@getpaseo/protocol/arena/rpc-schemas";
-import { DEFAULT_WORKTREE_RETENTION } from "@getpaseo/protocol/messages";
+import {
+  DEFAULT_WORKTREE_RETENTION,
+  type ArchiveWorkspaceResponseMessage,
+} from "@getpaseo/protocol/messages";
 import type { ArenaCheckoutCleanupSource } from "../agent/agent-sdk-types.js";
 import { writeJsonFileAtomic } from "../atomic-file.js";
 import type { PersistedWorkspaceRecord, WorkspaceRegistry } from "../workspace-registry.js";
 import {
   captureCodeSnapshot,
+  CodeSnapshotError,
+  SNAPSHOT_LIMIT_MEGABYTES,
+  snapshotChangedMegabytes,
+  releaseCodeSnapshot,
   restoreCodeSnapshot,
   verifyCodeSnapshotCheckout,
   parseCodeSnapshot,
@@ -60,12 +67,50 @@ export function groupWorkspaceParents(workspaces: PersistedWorkspaceRecord[]): W
   return [...groups.values()];
 }
 
+export type ArchiveKeptWorktree = NonNullable<
+  ArchiveWorkspaceResponseMessage["payload"]["worktreeKept"]
+>;
+
+/** Why archive kept a worktree's directory, as a code the app words in the user's language. */
+export function describeArchiveKeptWorktree(error: unknown): ArchiveKeptWorktree {
+  if (!(error instanceof CodeSnapshotError)) return { reason: "failed" };
+  switch (error.code) {
+    case "too-large":
+      return {
+        reason: "too_large",
+        ...(error.changedBytes !== undefined
+          ? { changedMegabytes: snapshotChangedMegabytes(error.changedBytes) }
+          : {}),
+        limitMegabytes: SNAPSHOT_LIMIT_MEGABYTES,
+      };
+    case "unsupported-state":
+      return { reason: "unsupported_state" };
+    case "unstable-source":
+      return { reason: "changed_during_save" };
+    case "in-use":
+      return { reason: "in_use" };
+    default:
+      return { reason: "failed" };
+  }
+}
+
+/** Whether archive saves this workspace's code (`preserveForArchive`): an app-owned worktree. */
+export function archiveKeepsWorkspaceWork(workspace: PersistedWorkspaceRecord): boolean {
+  return groupWorkspaceParents([workspace]).length === 1;
+}
+
 interface CleanupManifest {
   version: 1;
   root: string;
   sourceRepoRoot: string;
   trashPath: string;
   snapshot: Awaited<ReturnType<typeof captureCodeSnapshot>>;
+}
+
+/** Code an archive saved before it removes a worktree; see `preserveForArchive`. */
+export interface ArchivePreservation {
+  /** Call once the removal is over, whether or not the directory went. */
+  finish(): Promise<void>;
 }
 
 interface CleanupDeps {
@@ -83,6 +128,8 @@ interface CleanupDeps {
   worktreeRetention?(): number | null;
   /** Free bytes on the volume holding `path`, or null when unknown. */
   freeBytes?(path: string): Promise<number | null>;
+  /** Delete a workspace's stored agents and their timelines, before its record goes. */
+  deleteWorkspaceAgents?(workspaceId: string): Promise<void>;
 }
 
 export class WorkspaceCleanupService {
@@ -430,6 +477,124 @@ export class WorkspaceCleanupService {
     }
   }
 
+  /**
+   * Save an app-owned worktree's code before archive removes it. Paseo's restore rebuilds an
+   * archived worktree from the branch in its workspace record, and an Arena New worktree records
+   * none: it starts detached, and a branch made later in it ("Create branch here", or an agent's
+   * `git switch -c`) is not recorded until the record is next refreshed. Even with a branch,
+   * Paseo's restore drops the uncommitted files. The snapshot keeps the commits and the files, and
+   * the workspace then reads as cleaned up: Restore files brings the code back at the same path,
+   * on its branch when it can, as it does after eviction. Returns null when the worktree is not
+   * one this service owns. Throws when the code cannot be saved; archive then keeps the directory.
+   */
+  async preserveForArchive(worktreeRoot: string): Promise<ArchivePreservation | null> {
+    const root = normalizePathForIdentity(worktreeRoot);
+    const parent = groupWorkspaceParents(await this.deps.registry.list()).find(
+      (item) => item.root === root,
+    );
+    if (!parent || parent.workspaces.some((workspace) => workspace.cleanup)) return null;
+    if (!workspaceAccess.claim(parent.root))
+      throw new CodeSnapshotError("in-use", "Workspace files are in use");
+    const snapshotId = createHash("sha256").update(parent.root).digest("hex");
+    const keep = async () => {
+      await this.setPhase(parent, undefined);
+      workspaceAccess.release(parent.root);
+    };
+    try {
+      // A crash from here on is finished by `recoverInterrupted`, as an interrupted eviction is.
+      await this.setPhase(parent, { snapshotId, phase: "cleaning" });
+      const snapshot = await captureCodeSnapshot({
+        worktreeRoot: parent.root,
+        sourceRepoRoot: parent.sourceRepoRoot,
+        snapshotId,
+      });
+      await writeJsonFileAtomic(this.manifestPath(snapshotId), {
+        version: 1,
+        root: parent.root,
+        sourceRepoRoot: parent.sourceRepoRoot,
+        snapshot,
+        trashPath: join(dirname(parent.root), ".trash", `workspace-${snapshotId}`),
+      } satisfies CleanupManifest);
+      await this.readManifest(snapshotId, parent);
+    } catch (err) {
+      await keep().catch((releaseError) =>
+        this.deps.logger.warn(
+          { err: releaseError, root: parent.root },
+          "Workspace archive snapshot claim retained for recovery",
+        ),
+      );
+      throw err;
+    }
+    return {
+      finish: async () => {
+        if (await pathExists(parent.root)) await keep();
+        else await this.setPhase(parent, { snapshotId, phase: "cleaned" });
+      },
+    };
+  }
+
+  /**
+   * Drop the snapshots of a removed project's cleaned-up workspaces, and their archived records and
+   * agents.
+   * Nothing can restore them any more (a project added again gets a new id), and their refs would
+   * keep every saved file in the repository's object store. The records go too: with no directory
+   * and no saved code, a record that something re-linked later would restore to the base commit.
+   */
+  async releaseProjectSnapshots(projectId: string): Promise<void> {
+    const parents = groupWorkspaceParents(await this.deps.registry.list()).filter((parent) =>
+      parent.workspaces.some(
+        (workspace) => workspace.projectId === projectId && workspace.cleanup?.phase === "cleaned",
+      ),
+    );
+    for (const parent of parents) {
+      const snapshotId = parent.workspaces.find((workspace) => workspace.cleanup)?.cleanup
+        ?.snapshotId;
+      if (!snapshotId || (await pathExists(parent.root))) continue;
+      // Records first, release last: a failure on the way then leaves a record that still has its
+      // snapshot, never a record whose snapshot is gone (that one would restore to the base commit).
+      // The snapshot belongs to every record on this root, so it goes only once no record of
+      // another project still uses it.
+      try {
+        for (const workspace of parent.workspaces) {
+          if (workspace.projectId !== projectId || !workspace.archivedAt) continue;
+          await this.deps.deleteWorkspaceAgents?.(workspace.workspaceId);
+          await this.deps.registry.remove(workspace.workspaceId);
+        }
+        const stillUsed = (await this.deps.registry.list()).some(
+          (record) => record.cleanup?.snapshotId === snapshotId,
+        );
+        if (!stillUsed) {
+          await this.releaseSnapshot(parent.sourceRepoRoot, snapshotId);
+          workspaceAccess.release(parent.root);
+        }
+      } catch (err) {
+        this.deps.logger.warn({ err, root: parent.root }, "Workspace snapshot release failed");
+      }
+    }
+  }
+
+  /** Drop a removed workspace record's snapshot when no other record still uses it. */
+  async releaseRemovedWorkspaceSnapshot(workspace: PersistedWorkspaceRecord): Promise<void> {
+    const snapshotId = workspace.cleanup?.snapshotId;
+    if (!snapshotId || !workspace.mainRepoRoot) return;
+    const records = await this.deps.registry.list();
+    if (records.some((record) => record.cleanup?.snapshotId === snapshotId)) return;
+    try {
+      await this.releaseSnapshot(workspace.mainRepoRoot, snapshotId);
+      if (workspace.worktreeRoot) workspaceAccess.release(workspace.worktreeRoot);
+    } catch (err) {
+      this.deps.logger.warn(
+        { err, workspaceId: workspace.workspaceId },
+        "Workspace snapshot release failed",
+      );
+    }
+  }
+
+  private async releaseSnapshot(sourceRepoRoot: string, snapshotId: string): Promise<void> {
+    if (await pathExists(sourceRepoRoot)) await releaseCodeSnapshot({ sourceRepoRoot, snapshotId });
+    await fs.rm(this.manifestPath(snapshotId), { force: true });
+  }
+
   async restore(workspaceId: string): Promise<void> {
     const workspace = await this.deps.registry.get(workspaceId);
     if (!workspace?.cleanup) throw new Error("This workspace has no cleanup snapshot");
@@ -444,6 +609,7 @@ export class WorkspaceCleanupService {
       const manifest = await this.readManifest(workspace.cleanup.snapshotId, parent);
       const wasRestoring = workspace.cleanup.phase === "restoring";
       await this.setPhase(parent, { snapshotId: workspace.cleanup.snapshotId, phase: "restoring" });
+      let branch: string | null = null;
       if (wasRestoring && (await pathExists(parent.root))) {
         await verifyCodeSnapshotCheckout({
           worktreeRoot: parent.root,
@@ -451,11 +617,11 @@ export class WorkspaceCleanupService {
           snapshot: manifest.snapshot,
         });
       } else {
-        await restoreCodeSnapshot({
+        ({ branch } = await restoreCodeSnapshot({
           worktreeRoot: parent.root,
           sourceRepoRoot: parent.sourceRepoRoot,
           snapshot: manifest.snapshot,
-        });
+        }));
       }
       for (const record of parent.workspaces) {
         if (!(await fs.stat(record.cwd)).isDirectory())
@@ -473,11 +639,15 @@ export class WorkspaceCleanupService {
       for (const record of parent.workspaces) {
         await this.deps.registry.update(record.workspaceId, (current) => ({
           ...current,
-          branch: null,
+          branch,
           cleanup: undefined,
         }));
       }
       workspaceAccess.release(parent.root);
+      // The code is back in the worktree; a later cleanup or archive takes a new snapshot.
+      await this.releaseSnapshot(parent.sourceRepoRoot, workspace.cleanup.snapshotId).catch((err) =>
+        this.deps.logger.warn({ err, root: parent.root }, "Workspace snapshot release failed"),
+      );
     } finally {
       this.restoring.delete(parent.root);
     }

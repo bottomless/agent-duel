@@ -1151,5 +1151,6 @@ function getWorktreeArchiveWarningLabels(
           : "workspace.git.actions.archiveWarning.unpushedCommits",
         { count },
       ),
+    workSaved: t("workspace.git.actions.archiveWarning.workSaved"),
   };
 }

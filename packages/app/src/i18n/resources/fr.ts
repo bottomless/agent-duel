@@ -930,6 +930,7 @@ export const fr: TranslationResources = {
           deletedLines: "{{count}} lignes supprimées",
           unpushedCommit: "{{count}} commit non poussé",
           unpushedCommits: "{{count}} commits non poussés",
+          workSaved: "Agent Duel enregistre ce travail, et Restaurer le rétablit.",
         },
       },
       diff: {
@@ -1283,7 +1284,7 @@ export const fr: TranslationResources = {
       confirmations: {
         removeTitle: "Retirer le projet ?",
         removeMessage:
-          "Retirer « {{projectName}} » de la barre latérale ?\n\nLes fichiers sur le disque ne seront pas modifiés.",
+          "Retirer « {{projectName}} » de la barre latérale ?\n\nLes fichiers sur le disque ne seront pas modifiés. Le code qu’Agent Duel a enregistré pour ses discussions archivées est supprimé.",
         removeConfirm: "Retirer",
         cancel: "Annuler",
       },
@@ -1353,6 +1354,17 @@ export const fr: TranslationResources = {
         hostDisconnected: "L’hôte n’est pas connecté",
         hideFailed: "Impossible de masquer l’espace de travail",
         archiveFailed: "Impossible d’archiver l’espace de travail",
+        archiveKeptFiles:
+          "Archivé, mais le travail de cette discussion n’a pas pu être enregistré : ses fichiers restent sur le disque. Désarchivez la discussion pour les ouvrir. {{reason}}",
+        archiveKeptReasons: {
+          too_large:
+            "Les fichiers nouveaux et modifiés pèsent {{changed}} Mo, plus que les {{limit}} Mo qu’Agent Duel enregistre.",
+          unsupported_state:
+            "Le worktree a une fusion en cours, un conflit, un sous-module ou un dépôt imbriqué.",
+          changed_during_save: "Des fichiers ont changé pendant qu’Agent Duel les enregistrait.",
+          in_use: "Une autre opération utilisait les fichiers.",
+          failed: "Agent Duel n’a pas pu enregistrer les fichiers.",
+        },
         createBranchFailed: "Échec de la création de la branche",
       },
     },

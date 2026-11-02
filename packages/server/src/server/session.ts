@@ -6,6 +6,10 @@ import {
   type ArenaPromptAttachment,
 } from "./arena/prompt-attachments.js";
 import { workspaceAccess } from "./workspace-cleanup/workspace-access.js";
+import {
+  describeArchiveKeptWorktree,
+  type ArchiveKeptWorktree,
+} from "./workspace-cleanup/workspace-cleanup-service.js";
 import type { ArenaActivity } from "@getpaseo/protocol/arena/activity";
 import { arenaStreamHub, type ArenaStreamHandle } from "./arena-stream-hub.js";
 import {
@@ -287,7 +291,11 @@ import {
   handleWorkspaceSetupStatusRequest as handleWorkspaceSetupStatusRequestMessage,
   handleWorkspaceSetupRunRequest as handleWorkspaceSetupRunRequestMessage,
 } from "./worktree-session.js";
-import { archiveByScope, type ActiveWorkspaceRef } from "./workspace-archive-service.js";
+import {
+  archiveByScope,
+  type ActiveWorkspaceRef,
+  type ArchiveDependencies,
+} from "./workspace-archive-service.js";
 import { WorkspaceSetupRuntime } from "./workspace-setup-runtime.js";
 import { SessionAuthorization, type DaemonPermission } from "./authorization/index.js";
 
@@ -536,6 +544,7 @@ export interface SessionOptions {
   onLifecycleIntent?: (intent: SessionLifecycleIntent) => void;
   onWorkspaceRecovered?: (workspace: PersistedWorkspaceRecord) => Promise<void>;
   restoreCleanedWorkspace?: (workspaceId: string) => Promise<void>;
+  preserveArchivedWorktree?: ArchiveDependencies["preserveWorktree"];
   trimArenaEnvironments?: (keep: number) => Promise<ArenaEnvironmentTrim>;
   getArenaEnvironmentStatus?: () => Promise<ArenaEnvironmentStatus>;
   waitForWorkspaceCleanupReady?: () => Promise<void>;
@@ -834,6 +843,7 @@ export class Session {
   private readonly agentStorage: AgentStorage;
   private readonly arenaActivity: ArenaActivityService | undefined;
   private readonly trimArenaEnvironments: SessionOptions["trimArenaEnvironments"];
+  private readonly preserveArchivedWorktree: SessionOptions["preserveArchivedWorktree"];
   private readonly getArenaEnvironmentStatus: SessionOptions["getArenaEnvironmentStatus"];
   private readonly arenaByok: ArenaByokService | null;
   private readonly projectRegistry: ProjectRegistry;
@@ -982,6 +992,7 @@ export class Session {
     } = options;
     this.arenaActivity = options.arenaActivity;
     this.trimArenaEnvironments = options.trimArenaEnvironments;
+    this.preserveArchivedWorktree = options.preserveArchivedWorktree;
     this.getArenaEnvironmentStatus = options.getArenaEnvironmentStatus;
     this.arenaByok = options.arenaByok ?? null;
     this.browserToolsBroker = options.browserToolsBroker;
@@ -1270,6 +1281,7 @@ export class Session {
       clearWorkspaceArchiving: (workspaceIds) => this.clearWorkspaceArchiving(workspaceIds),
       killTerminalsForWorkspace: (workspaceId) =>
         this.terminalController.killTerminalsForWorkspace(workspaceId),
+      preserveWorktree: this.archivePreserveHook(),
       logger: this.sessionLogger,
     });
     this.providerSnapshotManager = providerSnapshotManager;
@@ -1592,6 +1604,13 @@ export class Session {
 
   clearWorkspaceArchivingForExternalMutation(workspaceIds: Iterable<string>): void {
     this.clearWorkspaceArchiving(workspaceIds);
+  }
+
+  // Agent Duel: an agent deleted outside this session (Remove project deletes the agents of the
+  // archived chats it drops) leaves this client the way handleDeleteAgentRequest tells its own one.
+  async removeAgentForExternalDelete(agentId: string, requestId: string): Promise<void> {
+    this.emit({ type: "agent_deleted", payload: { agentId, requestId } });
+    await this.agentUpdates.removeAgent(agentId);
   }
 
   async emitWorkspaceUpdatesForExternalWorkspaceIds(workspaceIds: Iterable<string>): Promise<void> {
@@ -6155,6 +6174,12 @@ export class Session {
     );
   }
 
+  // Agent Duel: the hook that saves an owned worktree's code before archive removes it; null only
+  // in sessions built without a cleanup service (tests).
+  private archivePreserveHook(): ArchiveDependencies["preserveWorktree"] {
+    return this.preserveArchivedWorktree ?? null;
+  }
+
   private async handlePaseoWorktreeArchiveRequest(
     msg: Extract<SessionInboundMessage, { type: "paseo_worktree_archive_request" }>,
   ): Promise<void> {
@@ -6177,6 +6202,7 @@ export class Session {
         clearWorkspaceArchiving: (workspaceIds) => this.clearWorkspaceArchiving(workspaceIds),
         killTerminalsForWorkspace: (workspaceId) =>
           this.terminalController.killTerminalsForWorkspace(workspaceId),
+        preserveWorktree: this.archivePreserveHook(),
         sessionLogger: this.sessionLogger,
       },
       msg,
@@ -8524,6 +8550,9 @@ export class Session {
         if (snapshot) this.syncArenaPreviewRoutes(snapshot);
       }
 
+      // Archive keeps the directory when it cannot save the code; the app tells the user why.
+      let worktreeKept: ArchiveKeptWorktree | null = null;
+      const preserveArchivedWorktree = this.preserveArchivedWorktree;
       await archiveByScope(
         {
           paseoHome: this.paseoHome,
@@ -8546,6 +8575,16 @@ export class Session {
           killTerminalsForWorkspace: (workspaceId) =>
             this.terminalController.killTerminalsForWorkspace(workspaceId),
           stopWorkspaceSetup: (workspaceId) => this.workspaceSetupRuntime.stop(workspaceId),
+          preserveWorktree: preserveArchivedWorktree
+            ? async (worktreePath) => {
+                try {
+                  return await preserveArchivedWorktree(worktreePath);
+                } catch (error) {
+                  worktreeKept = describeArchiveKeptWorktree(error);
+                  throw error;
+                }
+              }
+            : null,
           sessionLogger: this.sessionLogger,
         },
         {
@@ -8563,6 +8602,7 @@ export class Session {
           workspaceId: request.workspaceId,
           archivedAt,
           error: null,
+          worktreeKept,
         },
       });
     } catch (error) {
@@ -8578,6 +8618,7 @@ export class Session {
           workspaceId: request.workspaceId,
           archivedAt: null,
           error: message,
+          worktreeKept: null,
         },
       });
     }

@@ -890,6 +890,7 @@ export const zhCN: TranslationResources = {
           deletedLines: "删除 {{count}} 行",
           unpushedCommit: "{{count}} 个未 push 的 commit",
           unpushedCommits: "{{count}} 个未 push 的 commit",
+          workSaved: "Agent Duel 会保存这些工作，恢复时会将其还原。",
         },
       },
       diff: {
@@ -1238,7 +1239,8 @@ export const zhCN: TranslationResources = {
       },
       confirmations: {
         removeTitle: "移除 project？",
-        removeMessage: "从侧边栏移除「{{projectName}}」？\n\n磁盘上的文件不会被更改。",
+        removeMessage:
+          "从侧边栏移除「{{projectName}}」？\n\n磁盘上的文件不会被更改。Agent Duel 为其已归档聊天保存的代码将被删除。",
         removeConfirm: "移除",
         cancel: "取消",
       },
@@ -1307,6 +1309,15 @@ export const zhCN: TranslationResources = {
         hostDisconnected: "Host 未连接",
         hideFailed: "隐藏 workspace 失败",
         archiveFailed: "归档工作区失败",
+        archiveKeptFiles:
+          "已归档，但无法保存此聊天的工作，因此其文件仍保留在磁盘上。取消归档该聊天即可打开它们。{{reason}}",
+        archiveKeptReasons: {
+          too_large: "新增和更改的文件共 {{changed}} MB，超过了 Agent Duel 可保存的 {{limit}} MB。",
+          unsupported_state: "工作树中有进行中的合并、冲突、子模块或嵌套仓库。",
+          changed_during_save: "Agent Duel 保存时文件发生了更改。",
+          in_use: "另一项操作正在使用这些文件。",
+          failed: "Agent Duel 无法保存这些文件。",
+        },
         createBranchFailed: "创建分支失败",
       },
     },

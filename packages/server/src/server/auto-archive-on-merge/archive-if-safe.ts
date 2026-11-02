@@ -6,6 +6,7 @@ import type { DaemonConfigStore } from "../daemon-config-store.js";
 import {
   archiveByScope,
   type ActiveWorkspaceRef,
+  type ArchiveDependencies,
   killTerminalsForWorkspace,
 } from "../workspace-archive-service.js";
 import type {
@@ -33,6 +34,7 @@ export interface AutoArchiveArchiveOptions {
   markWorkspaceArchiving: (workspaceIds: Iterable<string>, archivingAt: string) => void;
   clearWorkspaceArchiving: (workspaceIds: Iterable<string>) => void;
   emitWorkspaceUpdatesForWorkspaceIds: (workspaceIds: Iterable<string>) => Promise<void>;
+  preserveWorktree: ArchiveDependencies["preserveWorktree"];
 }
 
 export interface ArchiveIfSafeDependencies {
@@ -83,7 +85,7 @@ export async function archiveIfSafe(input: {
       return;
     }
 
-    await deps.archiveByScope(
+    const result = await deps.archiveByScope(
       {
         paseoHome: options.paseoHome,
         paseoWorktreesBaseRoot: options.paseoWorktreesBaseRoot,
@@ -100,6 +102,7 @@ export async function archiveIfSafe(input: {
         emitWorkspaceUpdatesForWorkspaceIds: options.emitWorkspaceUpdatesForWorkspaceIds,
         markWorkspaceArchiving: options.markWorkspaceArchiving,
         clearWorkspaceArchiving: options.clearWorkspaceArchiving,
+        preserveWorktree: options.preserveWorktree,
         killTerminalsForWorkspace: (workspaceIdToKill) =>
           deps.killTerminalsForWorkspace(
             {
@@ -116,7 +119,13 @@ export async function archiveIfSafe(input: {
       },
     );
     log.info(
-      { workspaceId, cwd, branch: pullRequest.headRefName, pullRequestUrl: pullRequest.url },
+      {
+        workspaceId,
+        cwd,
+        branch: pullRequest.headRefName,
+        pullRequestUrl: pullRequest.url,
+        removedDirectory: result.removedDirectory,
+      },
       "Auto-archived worktree after PR merge",
     );
   } catch (error) {

@@ -2488,6 +2488,14 @@ export const layer: Layer.Layer<
     const reconcileCanonicalAvailability = Effect.fn("Arena.reconcileCanonicalAvailability")(function* (
       store: Store,
       chat: ChatDocument,
+      options?: {
+        /**
+         * Record the branch git answers with even if the head moved too. Unarchive passes it: Restore
+         * can bring the worktree back detached, or on a branch that moved meanwhile, and a header
+         * still naming the old branch would have the developer commit on the wrong belief.
+         */
+        readonly recordBranch?: boolean
+      },
     ) {
       if (chat.checkoutEvicted || (chat.status !== "ready" && chat.status !== "blocked")) return chat
       if (yield* promise(() => store.checkoutEviction(chat.canonicalCheckout?.root ?? chat.repository.root)))
@@ -2534,7 +2542,9 @@ export const layer: Layer.Layer<
         // would show one branch and battle on another. Only the name moves here: a head that
         // moved is a different checkout than the chat's history was built on, and completeTurn
         // and the blocked-restore path below own that transition.
-        const renamed = state.head === chat.canonicalCheckout?.head && state.branch !== chat.canonicalCheckout.branch
+        const renamed =
+          (options?.recordBranch || state.head === chat.canonicalCheckout?.head) &&
+          state.branch !== chat.canonicalCheckout?.branch
         if (!renamed && sameConflicts(chat.trunkConflicts ?? [], state.conflicts)) return chat
         const refreshed = yield* recordTrunkState(store, chat._id, {
           conflicts: state.conflicts,
@@ -10702,7 +10712,7 @@ export const layer: Layer.Layer<
           yield* promise(() => store.updateChat({ _id: chat._id, status: "archived" }, { $set: { status: "ready" } }))
           // The checkout may have moved, gained conflicts, or gone while the chat was archived.
           const restored = yield* promise(() => store.chat(chat._id))
-          if (restored) yield* reconcileCanonicalAvailability(store, restored)
+          if (restored) yield* reconcileCanonicalAvailability(store, restored, { recordBranch: true })
           return yield* respond(store, chat._id)
         }),
       )

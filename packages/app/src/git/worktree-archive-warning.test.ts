@@ -101,6 +101,21 @@ describe("chat archive confirmation", () => {
     );
   });
 
+  it("says an Arena worktree's work is saved for Restore", () => {
+    expect(
+      buildWorkspaceArchiveConfirmation({
+        workspaceName: "feature",
+        isWorktree: true,
+        keepsWork: true,
+        ...risky,
+      }).message,
+    ).toBe(
+      "The chat moves to Archived, where you can unarchive it.\n\n" +
+        "Uncommitted changes (1 added line, 3 deleted lines)\n1 unpushed commit\n" +
+        "Agent Duel saves this work, and Restore brings it back.",
+    );
+  });
+
   it("leaves git state out for a chat that is not a worktree", () => {
     expect(
       buildWorkspaceArchiveConfirmation({ workspaceName: "feature", isWorktree: false, ...risky })

@@ -130,6 +130,7 @@ export interface PaseoToolHostDependencies {
   workspaceScripts?: Pick<WorkspaceScriptsService, "list" | "launch" | "stop">;
   markWorkspaceArchiving?: ArchiveDependencies["markWorkspaceArchiving"];
   clearWorkspaceArchiving?: ArchiveDependencies["clearWorkspaceArchiving"];
+  preserveWorktree?: ArchiveDependencies["preserveWorktree"];
   createPaseoWorktree?: CreatePaseoWorktreeWorkflowFn;
   // Mints a fresh directory workspace for a cwd and returns its id.
   ensureWorkspaceForCreate?: (
@@ -2583,6 +2584,9 @@ function archiveWorktreeDependencies(
   if (!options.clearWorkspaceArchiving) {
     throw new Error("Workspace archiving clearer is required to archive worktrees");
   }
+  if (!options.preserveWorktree) {
+    throw new Error("Worktree code preserver is required to archive worktrees");
+  }
   return {
     paseoHome: options.paseoHome,
     paseoWorktreesBaseRoot: options.worktreesRoot,
@@ -2596,6 +2600,7 @@ function archiveWorktreeDependencies(
     emitWorkspaceUpdatesForWorkspaceIds: options.emitWorkspaceUpdatesForWorkspaceIds,
     markWorkspaceArchiving: options.markWorkspaceArchiving,
     clearWorkspaceArchiving: options.clearWorkspaceArchiving,
+    preserveWorktree: options.preserveWorktree,
     killTerminalsForWorkspace: (workspaceId: string) =>
       killTerminalsForWorkspace(
         {

@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   renameSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -19,9 +20,18 @@ import {
   FileBackedWorkspaceRegistry,
 } from "../workspace-registry.js";
 import type { ArenaCheckoutCleanupSource } from "../agent/agent-sdk-types.js";
-import { captureCodeSnapshot, verifyCodeSnapshot } from "./code-snapshot.js";
+import {
+  captureCodeSnapshot,
+  CodeSnapshotError,
+  SNAPSHOT_MAX_CHANGED_BYTES,
+  verifyCodeSnapshot,
+} from "./code-snapshot.js";
 import { WorkspaceAccess, workspaceAccess } from "./workspace-access.js";
-import { groupWorkspaceParents, WorkspaceCleanupService } from "./workspace-cleanup-service.js";
+import {
+  describeArchiveKeptWorktree,
+  groupWorkspaceParents,
+  WorkspaceCleanupService,
+} from "./workspace-cleanup-service.js";
 
 const directories: string[] = [];
 const services: WorkspaceCleanupService[] = [];
@@ -39,7 +49,12 @@ function git(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-async function setup(options: { worktreeRetention?: () => number | null } = {}) {
+async function setup(
+  options: {
+    worktreeRetention?: () => number | null;
+    deleteWorkspaceAgents?: (workspaceId: string) => Promise<void>;
+  } = {},
+) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "workspace-cleanup-")));
   directories.push(directory);
   const repo = join(directory, "repo");
@@ -274,12 +289,15 @@ test("recovers a missing worktree from its durable cleaning snapshot", async () 
   expect(readFileSync(join(roots[0], "file.txt"), "utf8")).toBe("saved\n");
   expect((await registry.get("workspace-0"))?.cleanup).toBeUndefined();
   expect(released).toEqual([roots[0]]);
-  await verifyCodeSnapshot({
-    worktreeRoot: roots[0],
-    sourceRepoRoot: repo,
-    snapshot: persisted.snapshot,
-  });
-  expect(existsSync(persisted.manifestPath)).toBe(true);
+  // The code is back, so the snapshot is released.
+  await expect(
+    verifyCodeSnapshot({
+      worktreeRoot: roots[0],
+      sourceRepoRoot: repo,
+      snapshot: persisted.snapshot,
+    }),
+  ).rejects.toThrow();
+  expect(existsSync(persisted.manifestPath)).toBe(false);
 });
 
 test("an occupied restore path leaves the occupant and durable snapshot intact", async () => {
@@ -526,4 +544,256 @@ test("a limit changed during a sweep is applied by another sweep right after it"
   open();
   await vi.waitFor(() => expect(trims).toHaveLength(2));
   expect(trims[1]?.keep).toBe(2);
+});
+
+test("archive saves a detached worktree's commit and uncommitted files, and Restore files brings them back", async () => {
+  const { repo, registry, roots, service, seeded } = await setup({ worktreeRetention: () => null });
+  const root = roots[0]!;
+  writeFileSync(join(root, "committed.txt"), "c1\n");
+  git(root, "add", "committed.txt");
+  git(root, "-c", "commit.gpgsign=false", "commit", "-m", "chat work");
+  const head = git(root, "rev-parse", "HEAD");
+  writeFileSync(join(root, "file.txt"), "staged\n");
+  git(root, "add", "file.txt");
+  writeFileSync(join(root, "uncommitted.txt"), "u1\n");
+  await registry.update("workspace-0", (record) => ({
+    ...record,
+    archivedAt: "2026-03-01T00:00:00.000Z",
+  }));
+
+  const preserved = await service.preserveForArchive(root);
+  expect(preserved).not.toBeNull();
+  expect((await registry.get("workspace-0"))?.cleanup?.phase).toBe("cleaning");
+  // What archive does to the directory.
+  git(repo, "worktree", "remove", "--force", root);
+  await preserved!.finish();
+  expect((await registry.get("workspace-0"))?.cleanup?.phase).toBe("cleaned");
+  expect(workspaceAccess.isClaimed(root)).toBe(true);
+  // No branch holds the chat's commit; the snapshot refs do.
+  expect(git(repo, "branch", "--contains", head)).toBe("");
+  git(repo, "reflog", "expire", "--expire=now", "--all");
+  git(repo, "gc", "--prune=now");
+
+  await service.restore("workspace-0");
+  expect((await registry.get("workspace-0"))?.cleanup).toBeUndefined();
+  expect(workspaceAccess.isClaimed(root)).toBe(false);
+  expect(git(root, "rev-parse", "HEAD")).toBe(head);
+  expect(git(root, "log", "--format=%s", "-1")).toBe("chat work");
+  expect(readFileSync(join(root, "committed.txt"), "utf8")).toBe("c1\n");
+  expect(readFileSync(join(root, "uncommitted.txt"), "utf8")).toBe("u1\n");
+  expect(git(root, "show", ":file.txt")).toBe("staged");
+  expect(git(root, "status", "--porcelain")).toBe("M  file.txt\n?? uncommitted.txt");
+  expect(seeded).toEqual([{ sourceCwd: repo, worktreePath: root }]);
+  // The code is back; nothing keeps the snapshot.
+  expect(git(repo, "for-each-ref", "refs/agent-duel/")).toBe("");
+}, 45_000);
+
+test("archive saves a worktree on a branch the record does not know, and Restore puts HEAD back on it", async () => {
+  const { repo, registry, roots, service } = await setup({ worktreeRetention: () => null });
+  const root = roots[0]!;
+  // The app's "Create branch here" leaves the record's branch null.
+  git(root, "switch", "-c", "chat-branch");
+  writeFileSync(join(root, "committed.txt"), "c1\n");
+  git(root, "add", "committed.txt");
+  git(root, "-c", "commit.gpgsign=false", "commit", "-m", "branch work");
+  writeFileSync(join(root, "untracked.txt"), "u1\n");
+  const preserved = await service.preserveForArchive(root);
+  git(repo, "worktree", "remove", "--force", root);
+  await preserved!.finish();
+  expect((await registry.get("workspace-0"))?.cleanup?.phase).toBe("cleaned");
+
+  await service.restore("workspace-0");
+  expect(git(root, "symbolic-ref", "--short", "HEAD")).toBe("chat-branch");
+  expect(git(root, "log", "--format=%s", "-1")).toBe("branch work");
+  expect(readFileSync(join(root, "untracked.txt"), "utf8")).toBe("u1\n");
+  expect(git(root, "status", "--porcelain")).toBe("?? untracked.txt");
+});
+
+test("Restore leaves HEAD detached when the branch moved on, and releases the snapshot", async () => {
+  const { repo, roots, service } = await setup({ worktreeRetention: () => null });
+  const root = roots[0]!;
+  git(root, "switch", "-c", "moved-branch");
+  const head = git(root, "rev-parse", "HEAD");
+  const preserved = await service.preserveForArchive(root);
+  git(repo, "worktree", "remove", "--force", root);
+  await preserved!.finish();
+  git(repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "later");
+  git(repo, "branch", "-f", "moved-branch", "HEAD");
+
+  await service.restore("workspace-0");
+  expect(git(root, "rev-parse", "HEAD")).toBe(head);
+  expect(git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+  expect(git(repo, "for-each-ref", "refs/agent-duel/")).toBe("");
+});
+
+test("archive saves a workspace whose record names a branch too, since Paseo's restore drops its uncommitted files", async () => {
+  const { repo, registry, roots, service } = await setup({ worktreeRetention: () => null });
+  const root = roots[0]!;
+  git(root, "switch", "-c", "recorded");
+  await registry.update("workspace-0", (record) => ({ ...record, branch: "recorded" }));
+  writeFileSync(join(root, "untracked.txt"), "u1\n");
+  const preserved = await service.preserveForArchive(root);
+  git(repo, "worktree", "remove", "--force", root);
+  await preserved!.finish();
+  expect((await registry.get("workspace-0"))?.cleanup?.phase).toBe("cleaned");
+
+  await service.restore("workspace-0");
+  expect(git(root, "symbolic-ref", "--short", "HEAD")).toBe("recorded");
+  expect(readFileSync(join(root, "untracked.txt"), "utf8")).toBe("u1\n");
+  expect((await registry.get("workspace-0"))?.branch).toBe("recorded");
+});
+
+test("a kept directory clears the archive snapshot state", async () => {
+  const { registry, roots, service } = await setup({ worktreeRetention: () => null });
+  const preserved = await service.preserveForArchive(roots[1]!);
+  // The removal failed and the directory is still there.
+  await preserved!.finish();
+  expect((await registry.get("workspace-1"))?.cleanup).toBeUndefined();
+  expect(workspaceAccess.isClaimed(roots[1]!)).toBe(false);
+});
+
+test("archive keeps the directory instead of saving more than the snapshot size limit", async () => {
+  const { registry, roots, service } = await setup({ worktreeRetention: () => null });
+  writeFileSync(join(roots[0]!, "big.bin"), Buffer.alloc(SNAPSHOT_MAX_CHANGED_BYTES + 1));
+  const error = await service.preserveForArchive(roots[0]!).catch((caught: unknown) => caught);
+  expect(describeArchiveKeptWorktree(error)).toEqual({
+    reason: "too_large",
+    changedMegabytes: 100.1,
+    limitMegabytes: 100,
+  });
+  expect((await registry.get("workspace-0"))?.cleanup).toBeUndefined();
+  expect(workspaceAccess.isClaimed(roots[0]!)).toBe(false);
+});
+
+test("the kept-directory size rounds to the nearest megabyte and stays above the limit", () => {
+  const tooLarge = (changedBytes: number) =>
+    describeArchiveKeptWorktree(new CodeSnapshotError("too-large", "too large", { changedBytes }));
+  const mebibyte = 1024 * 1024;
+  expect(tooLarge(101 * mebibyte + 6)).toMatchObject({ changedMegabytes: 101 });
+  expect(tooLarge(101.6 * mebibyte)).toMatchObject({ changedMegabytes: 102 });
+  expect(tooLarge(105172173)).toMatchObject({ changedMegabytes: 100.3 });
+  expect(tooLarge(100.34 * mebibyte)).toMatchObject({ changedMegabytes: 100.3 });
+  expect(tooLarge(100.02 * mebibyte)).toMatchObject({ changedMegabytes: 100.1 });
+  expect(tooLarge(100.5 * mebibyte)).toMatchObject({ changedMegabytes: 101 });
+});
+
+test("removing a project or a workspace record releases its snapshot", async () => {
+  const agentsDeleted: string[] = [];
+  const { directory, repo, registry, roots, service } = await setup({
+    worktreeRetention: () => null,
+    deleteWorkspaceAgents: async (workspaceId) => {
+      agentsDeleted.push(workspaceId);
+    },
+  });
+  for (const index of [0, 1]) {
+    writeFileSync(join(roots[index]!, "untracked.txt"), "u1\n");
+    const preserved = await service.preserveForArchive(roots[index]!);
+    git(repo, "worktree", "remove", "--force", roots[index]!);
+    await preserved!.finish();
+  }
+  const snapshots = join(directory, "workspace-snapshots");
+  expect(
+    git(repo, "for-each-ref", "--format=%(refname)", "refs/agent-duel/").split("\n"),
+  ).toHaveLength(6);
+  expect(readdirSync(snapshots)).toHaveLength(2);
+
+  await service.releaseProjectSnapshots("other-project");
+  expect(readdirSync(snapshots)).toHaveLength(2);
+  await registry.update("workspace-1", (record) => ({
+    ...record,
+    projectId: "removed",
+    archivedAt: new Date().toISOString(),
+  }));
+  await service.releaseProjectSnapshots("removed");
+  // No directory and no saved code: the archived record goes with its project.
+  expect(await registry.get("workspace-1")).toBeNull();
+  expect(agentsDeleted).toEqual(["workspace-1"]);
+  expect(workspaceAccess.isClaimed(roots[1]!)).toBe(false);
+  expect(
+    git(repo, "for-each-ref", "--format=%(refname)", "refs/agent-duel/").split("\n"),
+  ).toHaveLength(3);
+
+  const removed = (await registry.get("workspace-0"))!;
+  await registry.remove("workspace-0");
+  await service.releaseRemovedWorkspaceSnapshot(removed);
+  expect(git(repo, "for-each-ref", "refs/agent-duel/")).toBe("");
+  expect(readdirSync(snapshots)).toHaveLength(0);
+});
+
+test("removing one project keeps a snapshot that another project's record on the same root owns", async () => {
+  const agentsDeleted: string[] = [];
+  const { repo, registry, roots, service } = await setup({
+    worktreeRetention: () => null,
+    deleteWorkspaceAgents: async (workspaceId) => {
+      agentsDeleted.push(workspaceId);
+    },
+  });
+  await registry.upsert(
+    createPersistedWorkspaceRecord({
+      workspaceId: "other-project-workspace",
+      projectId: "other-project",
+      cwd: roots[0]!,
+      kind: "worktree",
+      displayName: "Other project",
+      worktreeRoot: roots[0]!,
+      mainRepoRoot: repo,
+      isPaseoOwnedWorktree: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-02-01T00:00:00.000Z",
+    }),
+  );
+  writeFileSync(join(roots[0]!, "untracked.txt"), "kept\n");
+  const preserved = await service.preserveForArchive(roots[0]!);
+  git(repo, "worktree", "remove", "--force", roots[0]!);
+  await preserved!.finish();
+  for (const workspaceId of ["workspace-0", "other-project-workspace"])
+    await registry.archive(workspaceId, "2026-03-02T00:00:00.000Z");
+
+  await service.releaseProjectSnapshots("project");
+
+  expect(await registry.get("workspace-0")).toBeNull();
+  expect(agentsDeleted).toEqual(["workspace-0"]);
+  expect((await registry.get("other-project-workspace"))?.cleanup?.phase).toBe("cleaned");
+  expect(
+    git(repo, "for-each-ref", "--format=%(refname)", "refs/agent-duel/").split("\n"),
+  ).toHaveLength(3);
+  await service.restore("other-project-workspace");
+  expect(readFileSync(join(roots[0]!, "untracked.txt"), "utf8")).toBe("kept\n");
+});
+
+test("a failure before the record goes keeps its snapshot", async () => {
+  const { repo, registry, roots, service } = await setup({
+    worktreeRetention: () => null,
+    deleteWorkspaceAgents: async () => {
+      throw new Error("agent storage failed");
+    },
+  });
+  writeFileSync(join(roots[0]!, "untracked.txt"), "kept\n");
+  const preserved = await service.preserveForArchive(roots[0]!);
+  git(repo, "worktree", "remove", "--force", roots[0]!);
+  await preserved!.finish();
+  await registry.archive("workspace-0", "2026-03-02T00:00:00.000Z");
+
+  await service.releaseProjectSnapshots("project");
+
+  // The record is still there, so its snapshot must be too: Restore still brings the work back.
+  expect((await registry.get("workspace-0"))?.cleanup?.phase).toBe("cleaned");
+  expect(
+    git(repo, "for-each-ref", "--format=%(refname)", "refs/agent-duel/").split("\n"),
+  ).toHaveLength(3);
+  await service.restore("workspace-0");
+  expect(readFileSync(join(roots[0]!, "untracked.txt"), "utf8")).toBe("kept\n");
+});
+
+test("archive keeps the directory when the worktree code cannot be saved", async () => {
+  const { registry, roots, service } = await setup({ worktreeRetention: () => null });
+  mkdirSync(join(roots[0]!, "nested"));
+  git(join(roots[0]!, "nested"), "init");
+  const error = await service.preserveForArchive(roots[0]!).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toContain("nested repository");
+  expect(describeArchiveKeptWorktree(error)).toEqual({ reason: "unsupported_state" });
+  expect(describeArchiveKeptWorktree(new Error("disk full"))).toEqual({ reason: "failed" });
+  expect((await registry.get("workspace-0"))?.cleanup).toBeUndefined();
+  expect(workspaceAccess.isClaimed(roots[0]!)).toBe(false);
 });

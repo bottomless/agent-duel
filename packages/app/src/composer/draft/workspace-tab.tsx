@@ -238,11 +238,12 @@ function failedFirstSendDeps(input: {
       useDraftStore.getState().saveDraftInput({ draftKey: buildNewWorkspaceDraftKey(), draft }),
     navigate: (route) => router.replace(route),
     showError: input.showError,
-    archiveWorkspace: (serverId, workspaceId) =>
-      archiveWorkspaceOptimistically({
+    archiveWorkspace: async (serverId, workspaceId) => {
+      await archiveWorkspaceOptimistically({
         client: input.client,
         workspace: { serverId, workspaceId },
-      }),
+      });
+    },
   };
 }
 

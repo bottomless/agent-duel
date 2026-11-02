@@ -27,14 +27,24 @@ export interface WorktreeArchiveWarningLabels {
   addedLine: (count: number) => string;
   deletedLine: (count: number) => string;
   unpushedCommit: (count: number) => string;
+  workSaved: string;
 }
 
+// Getters, not values: the labels are read when a dialog opens, after the app language is known.
 export const DEFAULT_WORKTREE_ARCHIVE_WARNING_LABELS: WorktreeArchiveWarningLabels = {
   title: (workspaceName) => i18n.t("workspace.git.actions.archiveWarning.title", { workspaceName }),
-  confirm: i18n.t("workspace.git.actions.archiveWarning.confirm"),
-  cancel: i18n.t("workspace.git.actions.archiveWarning.cancel"),
-  message: i18n.t("workspace.git.actions.archiveWarning.message"),
-  uncommittedChanges: i18n.t("workspace.git.actions.archiveWarning.uncommittedChanges"),
+  get confirm() {
+    return i18n.t("workspace.git.actions.archiveWarning.confirm");
+  },
+  get cancel() {
+    return i18n.t("workspace.git.actions.archiveWarning.cancel");
+  },
+  get message() {
+    return i18n.t("workspace.git.actions.archiveWarning.message");
+  },
+  get uncommittedChanges() {
+    return i18n.t("workspace.git.actions.archiveWarning.uncommittedChanges");
+  },
   uncommittedChangesWithDiff: (diffStat) =>
     i18n.t("workspace.git.actions.archiveWarning.uncommittedChangesWithDiff", { diffStat }),
   addedLine: (count) =>
@@ -49,6 +59,9 @@ export const DEFAULT_WORKTREE_ARCHIVE_WARNING_LABELS: WorktreeArchiveWarningLabe
     count === 1
       ? i18n.t("workspace.git.actions.archiveWarning.unpushedCommit", { count })
       : i18n.t("workspace.git.actions.archiveWarning.unpushedCommits", { count }),
+  get workSaved() {
+    return i18n.t("workspace.git.actions.archiveWarning.workSaved");
+  },
 };
 
 export function toWorktreeArchiveRisk(input: WorktreeArchiveRiskInput): WorktreeArchiveRisk {
@@ -135,6 +148,8 @@ export async function confirmRiskyWorktreeArchive(
 
 export interface WorkspaceArchiveConfirmationInput extends WorktreeArchiveConfirmationInput {
   isWorktree: boolean;
+  /** Archive saves the worktree's work for Restore (an Arena New worktree). */
+  keepsWork?: boolean;
 }
 
 /** Archiving one chat always asks; a worktree's unsaved work is listed under the message. */
@@ -143,9 +158,10 @@ export function buildWorkspaceArchiveConfirmation(
   labels: WorktreeArchiveWarningLabels = DEFAULT_WORKTREE_ARCHIVE_WARNING_LABELS,
 ): ConfirmDialogInput {
   const risks = input.isWorktree ? buildWorktreeArchiveConfirmationMessage(input, labels) : null;
+  const details = risks && input.keepsWork ? `${risks}\n${labels.workSaved}` : risks;
   return {
     title: labels.title(input.workspaceName),
-    message: risks ? `${labels.message}\n\n${risks}` : labels.message,
+    message: details ? `${labels.message}\n\n${details}` : labels.message,
     confirmLabel: labels.confirm,
     cancelLabel: labels.cancel,
     destructive: true,

@@ -1,11 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import { captureCodeSnapshot, restoreCodeSnapshot } from "./code-snapshot.js";
+import {
+  captureCodeSnapshot,
+  restoreCodeSnapshot,
+  snapshotChangedMegabytes,
+} from "./code-snapshot.js";
 
 const cleanupPaths: string[] = [];
 
@@ -176,5 +180,28 @@ describe("code workspace snapshots", () => {
         snapshotId: "conflict",
       }),
     ).rejects.toMatchObject({ code: "unsupported-state" });
+  });
+
+  test("logs a too-large worktree with the size the app shows", async () => {
+    const { root } = createRepository();
+    // 100.3 MiB, sparse so the test writes no data.
+    writeFileSync(path.join(root, "big.bin"), "");
+    truncateSync(path.join(root, "big.bin"), 105172173);
+    await expect(
+      captureCodeSnapshot({ worktreeRoot: root, sourceRepoRoot: root, snapshotId: "big" }),
+    ).rejects.toMatchObject({
+      code: "too-large",
+      message:
+        "New and changed files hold 100.3 MB, more than the 100 MB a workspace snapshot keeps",
+    });
+  });
+
+  test("rounds the changed size to the nearest value above the limit", () => {
+    const mebibyte = 1024 * 1024;
+    expect(snapshotChangedMegabytes(101 * mebibyte + 6)).toBe(101);
+    expect(snapshotChangedMegabytes(101.6 * mebibyte)).toBe(102);
+    expect(snapshotChangedMegabytes(105172173)).toBe(100.3);
+    expect(snapshotChangedMegabytes(100.02 * mebibyte)).toBe(100.1);
+    expect(snapshotChangedMegabytes(100 * mebibyte + 1)).toBe(100.1);
   });
 });

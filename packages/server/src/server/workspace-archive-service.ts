@@ -52,8 +52,17 @@ export interface ArchiveDependencies {
   killTerminalsForWorkspace: (workspaceId: string) => Promise<void>;
   stopWorkspaceSetup?: (workspaceId: string) => Promise<void>;
   assertWorkspaceAutomationAllowed?: (workspaceId: string) => Promise<void>;
+  // Agent Duel: saves an owned worktree's code before its directory is removed, so a worktree
+  // without a branch can be restored (`WorkspaceCleanupService.preserveForArchive`). A throw keeps
+  // the directory. Required so that no archive path can leave it out by accident; `null` only
+  // where no cleanup service exists (tests).
+  preserveWorktree: PreserveWorktree | null;
   sessionLogger?: Logger;
 }
+
+export type PreserveWorktree = (
+  worktreePath: string,
+) => Promise<{ finish(): Promise<void> } | null>;
 
 export interface KillTerminalsForWorkspaceDependencies {
   detachTerminalStream?: (terminalId: string, options: { emitExit: boolean }) => void;
@@ -399,6 +408,17 @@ async function maybeRemoveDirectory(
     return false;
   }
 
+  let preserved: { finish(): Promise<void> } | null = null;
+  try {
+    preserved = (await dependencies.preserveWorktree?.(backing.path)) ?? null;
+  } catch (error) {
+    dependencies.sessionLogger?.warn(
+      { err: error, targetPath: backing.path, requestId: request.requestId },
+      "Worktree code could not be saved during archive; keeping the directory",
+    );
+    return false;
+  }
+
   try {
     await deletePaseoWorktree({
       cwd: backing.mainRepoRoot,
@@ -417,6 +437,15 @@ async function maybeRemoveDirectory(
       "Worktree disk removal failed during archive; workspace already archived",
     );
     return false;
+  } finally {
+    await preserved
+      ?.finish()
+      .catch((error: unknown) =>
+        dependencies.sessionLogger?.warn(
+          { err: error, targetPath: backing.path, requestId: request.requestId },
+          "Failed to record the saved worktree code after archive",
+        ),
+      );
   }
 }
 
