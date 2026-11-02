@@ -262,6 +262,12 @@ interface AgentManagerRescueTimeouts {
   arenaWinnerHydrationMs?: number;
 }
 
+interface ArenaWinnerHydrationProgress {
+  step: "history" | "subagents";
+  startedAt: number;
+  stalled: boolean;
+}
+
 function resolveRescueTimeouts(
   timeouts: AgentManagerRescueTimeouts | undefined,
 ): Required<AgentManagerRescueTimeouts> {
@@ -708,6 +714,11 @@ export class AgentManager {
   private onWorkspaceStateMayHaveChanged?: (params: { cwd: string }) => void;
   private logger: Logger;
   private readonly rescueTimeouts: Required<AgentManagerRescueTimeouts>;
+  // Same-key callers share one winner hydration run, so its progress lives on the agent.
+  private readonly arenaWinnerHydrations = new WeakMap<
+    ActiveManagedAgent,
+    ArenaWinnerHydrationProgress
+  >();
   private acceptingAgentRegistrations = true;
 
   constructor(options: AgentManagerOptions) {
@@ -2773,26 +2784,62 @@ export class AgentManager {
     const hydration = hydrateArenaWinner(
       agent,
       snapshot,
-      async (signal) => {
-        await this.forceHydrateTimelineFromLegacyProviderHistory(agent, true, true, signal);
-        if (signal.aborted) return;
-        // Rebuilding drops the chat's subagents, and OpenCode history carries none: the winner's,
-        // copied under the chat's session at the vote, come back from the provider.
-        await agent.session.reloadProviderSubagents?.();
-      },
+      (signal) => this.runArenaWinnerHydration(agent, signal),
       timeoutMs,
     );
     // Opening a chat and sending its next battle wait for the winner so they read a current
     // timeline. A hydration that never settles must not hold them; it broadcasts when it lands.
-    const result = await this.waitWithTimeout({
-      operation: hydration,
-      timeoutMs,
-      onLateError: (error) => {
-        this.logger.warn({ err: error, agentId }, "Arena winner hydration failed after timeout");
-      },
-    });
+    const result = await this.waitWithTimeout({ operation: hydration, timeoutMs });
     if (result === "timed_out") {
-      this.logger.warn({ agentId, timeoutMs }, "Timed out waiting for Arena winner hydration");
+      // Every request and stream frame of the chat waits on the same run: warn once per stall,
+      // naming the step it is stuck in.
+      const progress = this.arenaWinnerHydrations.get(agent);
+      if (progress?.stalled) return;
+      if (progress) progress.stalled = true;
+      this.logger.warn(
+        { agentId, timeoutMs, step: progress?.step },
+        "Timed out waiting for Arena winner hydration",
+      );
+    }
+  }
+
+  private async runArenaWinnerHydration(
+    agent: ActiveManagedAgent,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const progress: ArenaWinnerHydrationProgress = {
+      step: "history",
+      startedAt: Date.now(),
+      stalled: false,
+    };
+    this.arenaWinnerHydrations.set(agent, progress);
+    let failure: unknown;
+    try {
+      await this.forceHydrateTimelineFromLegacyProviderHistory(agent, true, true, signal);
+      if (signal.aborted) return;
+      progress.step = "subagents";
+      // Rebuilding drops the chat's subagents, and OpenCode history carries none: the winner's,
+      // copied under the chat's session at the vote, come back from the provider.
+      await agent.session.reloadProviderSubagents?.();
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      if (this.arenaWinnerHydrations.get(agent) === progress) {
+        this.arenaWinnerHydrations.delete(agent);
+      }
+      if (progress.stalled) {
+        this.logger.info(
+          {
+            agentId: agent.id,
+            step: progress.step,
+            aborted: signal.aborted,
+            elapsedMs: Date.now() - progress.startedAt,
+            ...(failure === undefined ? {} : { err: failure }),
+          },
+          "Arena winner hydration settled after timeout",
+        );
+      }
     }
   }
 

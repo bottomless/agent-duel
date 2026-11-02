@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { Writable } from "node:stream";
+import pino from "pino";
 import { ArenaSnapshotSchema } from "@getpaseo/protocol/arena/rpc-schemas";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
@@ -9719,6 +9721,88 @@ test("a stuck arena winner hydration releases its callers and yields to the next
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(texts()).toEqual(rebuilt);
     expect(reloads).toBe(1);
+  } finally {
+    release();
+    await manager.closeAgent(agent.id);
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});
+
+test("a stuck arena winner hydration logs its step once and when it settles", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "arena-winner-stall-log-"));
+  const lines: Record<string, unknown>[] = [];
+  const captured = pino(
+    { level: "info" },
+    new Writable({
+      write(chunk, _encoding, callback) {
+        lines.push(JSON.parse(chunk.toString("utf8")) as Record<string, unknown>);
+        callback();
+      },
+    }),
+  );
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  class StallingSession extends TestAgentSession {
+    async reloadProviderSubagents(): Promise<void> {
+      await gate;
+    }
+  }
+  class StallingClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new StallingSession(config);
+    }
+  }
+  const manager = new AgentManager({
+    clients: { codex: new StallingClient() },
+    logger: captured,
+    rescueTimeouts: { arenaWinnerHydrationMs: 20 },
+  });
+  const agent = await manager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+  const winner = ArenaSnapshotSchema.parse({
+    chat: {
+      id: "chat",
+      status: "ready",
+      canonicalSessionID: "canonical",
+      canonicalSHA: "sha",
+      trunk: { worktreeName: "trunk" },
+    },
+    environment: {},
+    runs: [],
+    events: [],
+    history: [
+      {
+        id: "turn-1",
+        index: 1,
+        state: "complete",
+        appliedSide: "a",
+        createdAt: "date",
+        updatedAt: "date",
+      },
+    ],
+  });
+  const logged = (msg: string) => lines.filter((line) => line.msg === msg);
+  try {
+    await manager.hydrateArenaWinner(agent.id, winner);
+    await manager.hydrateArenaWinner(agent.id, winner);
+    await manager.hydrateArenaWinner(agent.id, winner);
+    const stalls = logged("Timed out waiting for Arena winner hydration");
+    expect(stalls).toHaveLength(1);
+    expect(stalls[0]).toMatchObject({ agentId: agent.id, step: "subagents" });
+    expect(logged("Arena winner hydration settled after timeout")).toHaveLength(0);
+
+    release();
+    await vi.waitFor(() =>
+      expect(logged("Arena winner hydration settled after timeout")).toHaveLength(1),
+    );
+    expect(logged("Arena winner hydration settled after timeout")[0]).toMatchObject({
+      agentId: agent.id,
+      step: "subagents",
+      aborted: false,
+    });
   } finally {
     release();
     await manager.closeAgent(agent.id);
