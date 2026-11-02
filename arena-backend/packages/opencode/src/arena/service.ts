@@ -1977,6 +1977,7 @@ export const layer: Layer.Layer<
       const store = yield* available()
       const chat = yield* promise(() => store.chat(id))
       if (chat) yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
+      yield* reconcileRewoundTurns(store, id)
       const current = yield* promise(() => store.snapshot(id))
       return yield* projectSnapshot(current, afterSequence)
     })
@@ -1987,6 +1988,7 @@ export const layer: Layer.Layer<
       if (turn) {
         const chat = yield* promise(() => store.chat(turn.chatID))
         if (chat) yield* promise(() => recoverInterruptedSingleAgentRating(store, chat.canonicalSessionID))
+        yield* reconcileRewoundTurns(store, turn.chatID)
       }
       const current = yield* promise(() => store.snapshotTurn(id))
       return yield* projectSnapshot(current, afterSequence)
@@ -2454,6 +2456,28 @@ export const layer: Layer.Layer<
       return created
     }
 
+    const reconcileRewoundTurns = (store: Store, chatID: string) =>
+      turnStartLock(chatID)
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const chat = yield* promise(() => store.chat(chatID))
+            // A graft can temporarily remove its prompt before copying it again. The start lock
+            // keeps a new battle out; an already active turn owns reconciliation until it settles.
+            if (!chat || chat.activeTurnID || chat.status === "battle_active") return
+            yield* withRepositoryMutation(
+              chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
+              Effect.gen(function* () {
+                const messages = yield* sessions.canonicalMessages(SessionID.make(chat.canonicalSessionID))
+                const removed = yield* promise(() =>
+                  store.markRewoundTurns(chatID, new Set(messages.map((message) => String(message.id)))),
+                )
+                if (removed.length > 0) yield* Effect.logInfo("Arena rewind removed battle turns", { chatID, removed })
+              }),
+            )
+          }),
+        )
+        .pipe(Effect.catchCause((cause) => Effect.logError("Arena rewind reconciliation failed", { chatID, cause })))
+
     const blockCanonicalCheckout = Effect.fn("Arena.blockCanonicalCheckout")(function* (
       store: Store,
       chat: ChatDocument,
@@ -2726,6 +2750,7 @@ export const layer: Layer.Layer<
               yield* reconcileCanonicalAvailability(store, existing)
               yield* resumeResolvedPromotion(store, existing)
             }
+            yield* reconcileRewoundTurns(store, existing._id)
             const current = yield* promise(() => store.snapshot(existing._id))
             yield* warmInitialPair(store, current.chat)
             return yield* projectSnapshot(current, -1)
@@ -4065,12 +4090,7 @@ export const layer: Layer.Layer<
         const store = yield* getStore
         const chat = yield* promise(() => store.chatForSession(sessionID))
         if (!chat || chat.canonicalSessionID !== sessionID) return
-        const messages = yield* sessions.canonicalMessages(sessionID).pipe(Effect.mapError(error))
-        const removed = yield* promise(() =>
-          store.markRewoundTurns(chat._id, new Set(messages.map((message) => String(message.id)))),
-        )
-        if (removed.length > 0)
-          yield* Effect.logInfo("Arena rewind removed battle turns", { chatID: chat._id, removed })
+        yield* reconcileRewoundTurns(store, chat._id)
       }).pipe(Effect.catchCause((cause) => Effect.logError("Arena rewind reconciliation failed", { cause })))
 
     const singleAgentVote = Effect.fn("Arena.singleAgentVote")(function* (
@@ -9287,6 +9307,7 @@ export const layer: Layer.Layer<
               )
             }
           }).pipe(
+            Effect.tap(() => reconcileRewoundTurns(store, chat._id)),
             Effect.catchCause((cause) =>
               Effect.logError("Arena startup recovery failed", {
                 chatID: chat._id,
@@ -10867,6 +10888,7 @@ export const layer: Layer.Layer<
         else {
           yield* claimOwnership(store, chat, rawSessionID, accountID(rawUserID))
           yield* reconcileCanonicalAvailability(store, chat)
+          yield* reconcileRewoundTurns(store, chat._id)
           // A subscribe is the app's way of asking what is true now, so it re-reads the checkout
           // for both conflict callouts, not just the trunk's. A parked promotion clears when the
           // markers go, and nothing writes when they do -- so without this the callout would
