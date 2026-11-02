@@ -9,14 +9,16 @@ import { join } from "path"
 const NUMBERED_COPY = /^(.+) (\d+)(\.[^./]+)?$/
 
 /**
- * The path a numbered copy was made from, in the same directory, or undefined when the name is
- * not one. Paths use `/`, as git lists them.
+ * Possible originals in the same directory. A suffix can preserve an extension (`config 2.json`)
+ * or be added by the sync client (`.env 2.save`), so neither spelling alone identifies the original.
+ * Paths use `/`, as git lists them.
  */
-export function syncConflictOriginal(path: string): string | undefined {
+export function syncConflictOriginals(path: string): string[] {
   const slash = path.lastIndexOf("/")
   const match = NUMBERED_COPY.exec(path.slice(slash + 1))
-  if (!match) return undefined
-  return `${path.slice(0, slash + 1)}${match[1]}${match[3] ?? ""}`
+  if (!match) return []
+  const original = `${path.slice(0, slash + 1)}${match[1]}`
+  return match[3] ? [`${original}${match[3]}`, original] : [original]
 }
 
 async function sameRegularFile(left: string, right: string) {
@@ -38,10 +40,7 @@ export type SyncConflictCopy = { readonly copy: string; readonly original: strin
  * condition has to hold, so a user's own `report 2.pdf` stays.
  */
 export async function identicalNumberedCopies(root: string, paths: readonly string[]): Promise<SyncConflictCopy[]> {
-  const pairs = paths.flatMap((copy) => {
-    const original = syncConflictOriginal(copy)
-    return original ? [{ copy, original }] : []
-  })
+  const pairs = paths.flatMap((copy) => syncConflictOriginals(copy).map((original) => ({ copy, original })))
   if (pairs.length === 0) return []
   return (
     await Promise.all(

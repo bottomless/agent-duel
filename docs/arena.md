@@ -454,10 +454,12 @@ On macOS, Arena and the daemon set the `com.apple.fileprovider.ignore#P` extende
 `.agent-duel` whenever they create or reuse it, so iCloud Drive and other File Provider sync clients
 skip the pool. Synced, the pool's renamed slots and re-cloned ignored files came back as numbered
 conflict copies (`.env 2`, `generation-2-a 2.git`), and the provider removed objects from a host
-under a running contestant. Nothing ignores a copy like `.env 2`, so snapshots also leave out an
-untracked numbered copy whose original beside it is git-ignored and has the same bytes
-(`excludeSyncConflictCopies` in `arena/git.ts`); otherwise `add -A` would carry the secret into a
-result and on into the checkout.
+under a running contestant. Ignore rules can miss numbered copies, including `.env 2.save` when
+only `.env` is ignored. Keep these copies out of snapshots and contestant worktrees when an ignored
+original beside them has the same bytes (`excludeSyncConflictCopies` in `arena/git.ts`); otherwise
+`add -A` would carry the secret into a result and on into the checkout. A nested directory left
+with only its ignored original still prepares; it needs no public placeholder file. Already tracked
+files with similar names stay part of the battle.
 
 A slot serves one generation at a time, at that generation's path, `generation-<n>-<side>`. `n`
 counts from 1 so the directory reads as the turn number the UI shows; turn indices stay 0-based in

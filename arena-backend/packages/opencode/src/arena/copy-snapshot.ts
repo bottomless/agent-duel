@@ -285,13 +285,34 @@ export function parseIgnoredRoots(output: string): string[] {
   return roots.filter((entry) => !roots.some((other) => other !== entry && entry.startsWith(`${other}/`)))
 }
 
-/** The ignored roots of a checkout or worktree, exactly as git names them. */
+/** Ignored roots with directory collapsing determined by ignore rules, not public siblings. */
 export async function listIgnoredRoots(directory: string): Promise<string[]> {
   const result = await execFile("git", [...IGNORED_PATHS_COMMAND, "--", "."], {
     cwd: directory,
     maxBuffer: 32 * 1024 * 1024,
   })
-  return parseIgnoredRoots(result.stdout)
+  const entries = result.stdout.split("\0").filter((entry) => entry.length > 0)
+  const directories = entries.filter((entry) => entry.endsWith("/"))
+  if (directories.length === 0) return parseIgnoredRoots(result.stdout)
+  // --directory can list both conf/ and conf/.env when only the file is ignored. A public
+  // sibling prevents that collapse in the checkout, but filtering its sync copy removes it
+  // in the contestant. Keep only rule-ignored directories before folding away descendants;
+  // Git already lists the ignored children of the other containers without walking dependencies.
+  const checked = await new Promise<string>((resolve, reject) => {
+    const child = nodeExecFile(
+      "git",
+      ["check-ignore", "--stdin", "-z"],
+      { cwd: directory, maxBuffer: 32 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error && error.code !== 1) return reject(error)
+        resolve(stdout)
+      },
+    )
+    // Prefixing avoids pathspec magic for directory names beginning with a colon.
+    child.stdin?.end(`${directories.map((entry) => `./${entry}`).join("\0")}\0`)
+  })
+  const ignored = new Set(checked.split("\0").map((entry) => entry.replace(/^\.\//, "")))
+  return parseIgnoredRoots(entries.filter((entry) => !entry.endsWith("/") || ignored.has(entry)).join("\0"))
 }
 
 /**
