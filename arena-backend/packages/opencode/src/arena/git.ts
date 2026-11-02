@@ -440,13 +440,13 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
     if (stderr.includes("xcodebuild -license")) {
       return "Git can't run until the Xcode license is accepted. Run sudo xcodebuild -license in Terminal, then retry."
     }
+    // A Windows install reaches PATH only for processes started after it.
+    if (!gitOnPath && process.platform === "win32") {
+      return "Battles need Git, and Agent Duel couldn't find it. Install Git for Windows from git-scm.com, or with winget install Git.Git, then quit and reopen Agent Duel."
+    }
     // Without the Command Line Tools, macOS's /usr/bin/git is only a stub that points at them.
     if (!gitOnPath || stderr.includes("invalid active developer path")) {
-      // A Windows install reaches PATH only for processes started after it.
-      if (process.platform === "win32") {
-        return "Battles need Git, and Agent Duel couldn't find it. Install Git for Windows from git-scm.com, or with winget install Git.Git, then quit and reopen Agent Duel."
-      }
-      return "Battles need Git, and Agent Duel couldn't find it. Install Git, for example with xcode-select --install, then retry."
+      return `Battles need Git, and Agent Duel couldn't find it. Install Git, for example with ${gitInstallHint()}, then retry.`
     }
     // Git is there but failed: its own error says why better than a guess would.
     const detail = stderr.trim().split(/\r?\n/)[0] || `exit code ${result.exitCode}`
@@ -458,8 +458,17 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
   if (major !== MIN_BATTLE_GIT.major ? major > MIN_BATTLE_GIT.major : minor >= MIN_BATTLE_GIT.minor) return undefined
   // The engine keeps the git it found at startup first on PATH (`preferDirectGit`), so a newly
   // installed git is used only after a restart.
-  const update = process.platform === "win32" ? "git update-git-for-windows" : "brew install git"
-  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with ${update}, then quit and reopen Agent Duel.`
+  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with ${gitUpdateHint()}, then quit and reopen Agent Duel.`
+}
+
+// Windows never reaches this: its missing-Git message names the installer and asks for a restart.
+function gitInstallHint() {
+  return "xcode-select --install"
+}
+
+function gitUpdateHint() {
+  if (process.platform === "win32") return "git update-git-for-windows"
+  return "brew install git"
 }
 
 // Wrapper commits are transport objects, not user-authored history. A fixed
