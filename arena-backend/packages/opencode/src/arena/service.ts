@@ -1095,6 +1095,25 @@ function steered(transcript: readonly SessionV1.WithParts[], index: number) {
   )
 }
 
+/**
+ * Set a run's Auto Accept in its worktree, starting from a value just read from the run. The voter can
+ * toggle it between that read and the set. A toggle writes the run before it sets the worktree, so
+ * reading the run again after each set, until it stops changing, ends on the voter's value.
+ */
+export const settleAutoAccept = Effect.fnUntraced(function* <E1, R1, E2, R2>(
+  initial: boolean,
+  readAgain: Effect.Effect<boolean, E1, R1>,
+  set: (enabled: boolean) => Effect.Effect<void, E2, R2>,
+) {
+  let enabled = initial
+  while (true) {
+    yield* set(enabled)
+    const current = yield* readAgain
+    if (current === enabled) return
+    enabled = current
+  }
+})
+
 /** Turn activity used by checkout eviction; environment/setup timestamps are intentionally absent. */
 export function latestArenaChatActivity(turns: readonly TurnDocument[], runs: readonly RunDocument[]) {
   const dates = turns.flatMap((turn) => [
@@ -4392,9 +4411,10 @@ export const layer: Layer.Layer<
       // A new loop for this run opens its turn to steers again.
       closingRuns.delete(run.runID)
       const storedRun = yield* promise(() => store.run(run.runID))
-      yield* inDirectory(
-        run.worktree.directory,
-        permissions.setAutoAccept(run.sessionID, storedRun?.autoAccept === true),
+      yield* settleAutoAccept(
+        storedRun?.autoAccept === true,
+        promise(() => store.run(run.runID)).pipe(Effect.map((stored) => stored?.autoAccept === true)),
+        (enabled) => inDirectory(run.worktree.directory, permissions.setAutoAccept(run.sessionID, enabled)),
       )
       const startedAt = new Date()
       const promptMessageID = MessageID.ascending()
