@@ -213,6 +213,7 @@ const layer = Layer.effect(
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
+      let preflightCompacted = false
       while (true) {
         // Reuse boundary preparation once; retries refresh context without delivering more input.
         const loaded = initial ?? (yield* prepareContext(sessionID).pipe(Effect.flatMap(context.load)))
@@ -249,10 +250,21 @@ const layer = Layer.effect(
         // sent. Compaction is owned by the runner so the native transcript and durable checkpoint
         // remain intact; the next loop rebuilds the request after the summary is committed.
         const preflight = yield* prepared.preflight()
-        if (preflight.decision === "compact") {
+        // Compact at most once per Step, and never right after a completed compaction, like
+        // Core's own trigger. A request still over the ceiling after one would only summarize
+        // the summary again, so it goes to the provider, whose overflow recovery is bounded.
+        const last = loaded.messages.at(-1)
+        const compactedLast = last?.type === "compaction" && last.status === "completed"
+        if (preflight.decision === "compact" && (preflightCompacted || compactedLast))
+          yield* Effect.logWarning("request still exceeds the preflight ceiling after compaction; sending", {
+            sessionID,
+            model: loaded.model.ref,
+          })
+        else if (preflight.decision === "compact") {
           // Arena preflight is an explicit provider-neutral ceiling. `auto` may
           // legitimately skip below Core's larger catalog ceiling, which would
           // otherwise send the oversized request after this hook returned.
+          preflightCompacted = true
           const result = yield* compaction.compact({ reason: "overflow", context: loaded })
           if (result.status === "failed") return yield* new StepFailedError({ error: result.error })
           if (result.status === "completed") {

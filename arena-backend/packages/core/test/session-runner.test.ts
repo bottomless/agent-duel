@@ -3278,6 +3278,34 @@ describe("SessionRunnerLLM", () => {
     expect(yield* s.context).toMatchObject([{ type: "compaction" }, { type: "assistant", finish: "stop" }])
   })
 
+  scenario("compacts once when a preflight hook keeps asking for compaction", function* (s) {
+    yield* setupOverflowRecovery(s)
+    const hooks = yield* PluginHooks.Service
+    const decisions: string[] = []
+    yield* hooks.register("session", "preflight", (event) =>
+      Effect.sync(() => {
+        if (event.kind !== "primary") return
+        decisions.push("compact")
+        event.decision = "compact"
+      }),
+    )
+    yield* s.llm.push(
+      TestLLM.text("## Objective\n- Preflight summary", "preflight-summary"),
+      TestLLM.text("Sent after one compaction", "preflight-final"),
+      TestLLM.text("## Objective\n- Second summary", "preflight-loop"),
+    )
+    yield* s.runPrompt("Continue")
+
+    // The rebuilt request still asks for compaction, but it follows a completed one.
+    expect(decisions).toHaveLength(2)
+    expect(s.requests).toHaveLength(2)
+    expect(userTexts(s.requests[1])[0]).toContain("<summary>\n## Objective\n- Preflight summary\n</summary>")
+    expect(yield* s.context).toMatchObject([
+      { type: "compaction", summary: "## Objective\n- Preflight summary" },
+      { type: "assistant", finish: "stop" },
+    ])
+  })
+
   scenario("refreshes preparation after overflow compaction without promoting new input", function* (s) {
     yield* setupOverflowRecovery(s)
 
